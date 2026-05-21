@@ -130,7 +130,8 @@ import {
   PROCESS_STAGE_INSTRUCTION_IDS_KEY,
   instructionStatusOptions as INSTRUCTION_STATUS_OPTIONS,
 } from '../utils/instructionSupport';
-import InstructionQuickCreateModal from './instructions/InstructionQuickCreateModal';
+
+const InstructionQuickCreateModal = React.lazy(() => import('./instructions/InstructionQuickCreateModal'));
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -9240,24 +9241,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           />
         </>
       )}
-      <InstructionQuickCreateModal
-        open={isInstructionQuickCreateOpen}
-        onClose={() => setIsInstructionQuickCreateOpen(false)}
-        overlayZIndex={10120}
-        onCreated={(record) => {
-          const newInstruction = record as any;
-          setInstructionsForEditor((prev) => {
-            const exists = prev.some((item) => String(item?.id || '') === String(newInstruction?.id || ''));
-            return exists ? prev : [...prev, newInstruction];
-          });
-          if (newInstruction?.id) {
-            setDraftStageInstructionIds((prev) => {
-              const id = String(newInstruction.id);
-              return prev.includes(id) ? prev : [...prev, id];
-            });
-          }
-        }}
-      />
+      {isInstructionQuickCreateOpen ? (
+        <React.Suspense fallback={null}>
+          <InstructionQuickCreateModal
+            open={isInstructionQuickCreateOpen}
+            onClose={() => setIsInstructionQuickCreateOpen(false)}
+            overlayZIndex={10120}
+            onCreated={(record) => {
+              const newInstruction = record as any;
+              setInstructionsForEditor((prev) => {
+                const exists = prev.some((item) => String(item?.id || '') === String(newInstruction?.id || ''));
+                return exists ? prev : [...prev, newInstruction];
+              });
+              if (newInstruction?.id) {
+                setDraftStageInstructionIds((prev) => {
+                  const id = String(newInstruction.id);
+                  return prev.includes(id) ? prev : [...prev, id];
+                });
+              }
+            }}
+          />
+        </React.Suspense>
+      ) : null}
 
       <style>{`
         @media (max-width: 768px) {

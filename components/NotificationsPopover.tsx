@@ -1,11 +1,10 @@
-﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { App, Avatar, Badge, Button, Drawer, Empty, Input, List, Modal, Popover, Select, Skeleton, Tabs } from 'antd';
-import { BellOutlined, PlusOutlined, UserOutlined, TeamOutlined, EnterOutlined, CloseOutlined, EditOutlined, DeleteOutlined, CheckOutlined, ReloadOutlined, SearchOutlined, LeftOutlined, UpOutlined, DownOutlined, RobotOutlined, MessageOutlined, SnippetsOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { App, Avatar, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
+import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
-import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
@@ -13,20 +12,19 @@ import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import type { NoteAttachment } from '../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
-import { FieldType } from '../types';
-import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../utils/taskMeta';
-import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
-import TaskSummaryCard from './tasks/TaskSummaryCard';
-import SharedNoteCard from './notes/SharedNoteCard';
+import { resolveTaskSourceLink } from '../utils/taskMeta';
 import SharedNoteComposer from './notes/SharedNoteComposer';
-import RenderCardItem from './moduleList/RenderCardItem';
+import VoipCallsPanel from './notifications/VoipCallsPanel';
+import ResponsibilitiesPanel from './notifications/ResponsibilitiesPanel';
+import TasksPanel from './notifications/TasksPanel';
+import SmsMessagesPanel from './notifications/SmsMessagesPanel';
+import BotMessagesPanel from './notifications/BotMessagesPanel';
+import NotesPanel from './notifications/NotesPanel';
 import RelatedRecordPopover from './RelatedRecordPopover';
-import ProductionStagesField from './ProductionStagesField';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
-import { sendSmsViaGateway } from '../utils/smsGateway';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import AssistantPanel from './ai/AssistantPanel';
 import { renderRecordTemplate } from '../utils/recordMessaging';
@@ -46,12 +44,10 @@ import {
   getSmsThreadKey,
   getVoipThreadKey,
   normalizePhoneThreadValue,
-  resolveSmsCounterpartyPhone,
 } from '../utils/notificationViewModels';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { extractBotMessageAttachments } from '../utils/messageAttachments';
-import AdaptiveScopePicker from './messaging/AdaptiveScopePicker';
 import { useNotificationConversationList } from '../hooks/useNotificationConversationList';
 import { useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
 import { useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
@@ -59,6 +55,7 @@ import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSyn
 import type { NotificationConversationSummary } from '../utils/notificationConversationRpc';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
+const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
 const renderNotificationTemplate = async (
   template: string,
@@ -236,10 +233,11 @@ const SmsDrawerComposer = React.memo<SmsDrawerComposerProps>(({
 SmsDrawerComposer.displayName = 'SmsDrawerComposer';
 
 const MAX_ITEMS = 10;
-const NOTIFICATIONS_CACHE_TTL_MS = 45_000;
+const NOTIFICATIONS_CACHE_TTL_MS = 90_000;
 const ASSIGNED_NOTE_PAIRS_TTL_MS = 3 * 60 * 1000;
 const BOT_MEDIA_HYDRATION_MAX_FAILURES = 1;
 const BOT_MEDIA_HYDRATION_BACKOFF_MS = 30 * 60 * 1000;
+const BOT_MEDIA_AUTO_HYDRATION_BATCH_SIZE = 2;
 const SEEN_NOTES_STORAGE_KEY = 'notif_seen_notes_v1';
 const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
@@ -249,6 +247,16 @@ const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
 type AssigneeQueryMode = 'primary' | 'typed_legacy_role' | 'id_only' | 'owner_only' | 'none';
 const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, AssigneeQueryMode>();
+// Module-level directory cache: keeps users/roles across popover open-close cycles
+// so avatars load instantly on re-open instead of re-fetching each time.
+const _notifDirectoryCache: {
+  orgId: string | null;
+  users: Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
+  roles: Array<{ id: string; title: string }>;
+} = { orgId: null, users: [], roles: [] };
+// Module-level avatar preload set: tracks which image URLs have already been loaded
+// into the browser's in-memory cache within this session.
+const _preloadedAvatarUrls = new Set<string>();
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
 type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms' | 'voip_calls';
 type DrawerTabKey = NotificationSectionKey | 'assistant';
@@ -334,14 +342,6 @@ type CounterpartyBotMessageRow = {
   payload?: Record<string, any> | null;
   created_by?: string | null;
   created_at: string | null;
-};
-
-const BOT_STATUS_LABELS_FA: Record<string, string> = {
-  pending_join_link: 'در انتظار ثبت لینک',
-  pending_join: 'انتظار برای پیام در گروه',
-  active: 'فعال',
-  disabled: 'غیرفعال',
-  error: 'خطا',
 };
 
 const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
@@ -556,12 +556,6 @@ const persistSeenSet = (key: string, values: Set<string>) => {
   } catch {
     // ignore storage errors
   }
-};
-
-const resolveOptionLabel = (value: any, options?: { label: string; value: any }[]) => {
-  if (!options?.length) return null;
-  const found = options.find(opt => String(opt.value) === String(value));
-  return found?.label || null;
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -893,9 +887,12 @@ const getNoteMentionUserIds = (note: any) =>
     : [];
 
 const isSystemNote = (note: any) =>
-  String(note?.source_type || '').trim() === 'system'
+  !String(note?.metadata?.chat_group_id || '').trim()
+  && (String(note?.source_type || '').trim() === 'system'
   || String(note?.metadata?.source_type || '').trim() === 'system'
-  || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id);
+  || String(note?.source_type || '').trim() === 'ai'
+  || String(note?.metadata?.source_type || '').trim() === 'ai'
+  || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id));
 
 const isAiNote = (note: any) =>
   String(note?.source_type || '').trim() === 'ai'
@@ -909,6 +906,7 @@ const isDirectConversationNote = (
 ) => {
   if (!currentUserId || !otherUserId) return false;
   if (String(note?.metadata?.chat_group_id || '').trim()) return false;
+  if (isSystemNote(note) || isAiNote(note)) return false;
 
   const authorId = String(note?.author_id || '').trim();
   const mentionUserIds = getNoteMentionUserIds(note);
@@ -933,36 +931,6 @@ const isDirectConversationNote = (
     || (authorId === otherUserId && replyMentionUserIds.includes(currentUserId))
     || (authorId === currentUserId && replyMentionUserIds.includes(otherUserId))
   );
-};
-
-const renderLinkifiedText = (value: string, keyPrefix = 'link') => {
-  const source = String(value || '');
-  if (!source.trim()) return source;
-  const regex = /(https?:\/\/[^\s]+)/gi;
-  const matches = Array.from(source.matchAll(regex));
-  if (!matches.length) return source;
-  const nodes: React.ReactNode[] = [];
-  let cursor = 0;
-  matches.forEach((match, index) => {
-    const matched = String(match[0] || '');
-    const start = typeof match.index === 'number' ? match.index : -1;
-    if (!matched || start < 0) return;
-    if (start > cursor) nodes.push(source.slice(cursor, start));
-    nodes.push(
-      <a
-        key={`${keyPrefix}-${index}-${start}`}
-        href={matched}
-        target="_blank"
-        rel="noreferrer"
-        className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
-      >
-        {matched}
-      </a>
-    );
-    cursor = start + matched.length;
-  });
-  if (cursor < source.length) nodes.push(source.slice(cursor));
-  return nodes.length ? nodes : source;
 };
 
 const buildDirectoryMaps = async () => {
@@ -1046,8 +1014,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
   const [createdByNameMap, setCreatedByNameMap] = useState<Record<string, string>>({});
-  const [directoryUsers, setDirectoryUsers] = useState<Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>>([]);
-  const [directoryRoles, setDirectoryRoles] = useState<Array<{ id: string; title: string }>>([]);
+  const [directoryUsers, setDirectoryUsers] = useState<Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>>(() => _notifDirectoryCache.users);
+  const [directoryRoles, setDirectoryRoles] = useState<Array<{ id: string; title: string }>>(() => _notifDirectoryCache.roles);
   const [chatGroups, setChatGroups] = useState<ChatGroupRow[]>([]);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<ChatGroupRow | null>(null);
@@ -1087,6 +1055,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [taskProcessHostKey] = useState(0);
   const [noteViewportReady, setNoteViewportReady] = useState(true);
   const [botViewportReady, setBotViewportReady] = useState(true);
+  const [myNotesDisplayLimit, setMyNotesDisplayLimit] = useState(15);
   const [seenNoteIds, setSeenNoteIds] = useState<Set<string>>(() => loadSeenSet(SEEN_NOTES_STORAGE_KEY));
   const [seenTaskIds, setSeenTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_TASKS_STORAGE_KEY));
   const [seenResponsibilityIds, setSeenResponsibilityIds] = useState<Set<string>>(() => loadSeenSet(SEEN_RESP_STORAGE_KEY));
@@ -1117,6 +1086,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const skipNextDrawerPopStateRef = useRef(false);
   const drawerCloseSnapshotRef = useRef<DrawerCloseSnapshot | null>(null);
   const notesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingNoteScrollRestoreRef = useRef<number | null>(null);
   const noteShouldStickToBottomRef = useRef(true);
   const noteForceScrollToBottomRef = useRef(false);
   const lastLoadedAtRef = useRef<Record<NotificationSectionKey, number>>({
@@ -1145,6 +1115,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     pairs: { module_id: string; record_id: string }[];
   }>({ loadedAt: 0, userId: '', roleId: '', pairs: [] });
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const pendingBotScrollRestoreRef = useRef<number | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -1165,7 +1136,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
-  const priorityOptions = tasksConfig?.fields?.find((f: any) => f.key === 'priority')?.options || [];
   const toNumber = (value: any) => {
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -1198,6 +1168,25 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     section: 'notes',
     enabled: open && variant === 'chat' && Boolean(profile.id),
   });
+
+  // Debounced conversation summary refreshes — prevents N RPC calls when N messages are marked as read
+  const debouncedNoteRefreshTimerRef = useRef<number | null>(null);
+  const debouncedRefreshNoteConversationSummaries = useCallback(() => {
+    if (debouncedNoteRefreshTimerRef.current !== null) window.clearTimeout(debouncedNoteRefreshTimerRef.current);
+    debouncedNoteRefreshTimerRef.current = window.setTimeout(() => {
+      debouncedNoteRefreshTimerRef.current = null;
+      void refreshNoteConversationSummaries();
+    }, 500);
+  }, [refreshNoteConversationSummaries]);
+  const debouncedBotRefreshTimerRef = useRef<number | null>(null);
+  const debouncedRefreshBotConversationSummaries = useCallback(() => {
+    if (debouncedBotRefreshTimerRef.current !== null) window.clearTimeout(debouncedBotRefreshTimerRef.current);
+    debouncedBotRefreshTimerRef.current = window.setTimeout(() => {
+      debouncedBotRefreshTimerRef.current = null;
+      void refreshBotConversationSummaries();
+    }, 500);
+  }, [refreshBotConversationSummaries]);
+
   const botSummaryMap = useMemo(() => {
     const map = new Map<string, NotificationConversationSummary>();
     (rpcBotConversationSummaries || []).forEach((item) => {
@@ -1456,14 +1445,34 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   useEffect(() => () => {
     clearBotStatusWatchTimer();
   }, [clearBotStatusWatchTimer]);
-  const systemAvatarSrc = useMemo(() => {
+  const [systemAvatarSrc, setSystemAvatarSrc] = useState<string>(() => {
     if (typeof document === 'undefined') return '/favicon.svg';
-    const faviconHref = String(
-      document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.href
-      || '/favicon.svg'
-    ).trim();
-    return faviconHref || '/favicon.svg';
+    return String(document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.href || '/favicon.svg').trim() || '/favicon.svg';
+  });
+  // Update system avatar when org branding changes (e.g. company logo set as favicon)
+  useEffect(() => {
+    const readFavicon = () => {
+      const href = String(document.querySelector<HTMLLinkElement>("link[rel~='icon']")?.href || '/favicon.svg').trim();
+      if (href) setSystemAvatarSrc(href);
+    };
+    window.addEventListener('erp:branding-updated', readFavicon);
+    window.addEventListener('erp:branding-applied', readFavicon);
+    return () => {
+      window.removeEventListener('erp:branding-updated', readFavicon);
+      window.removeEventListener('erp:branding-applied', readFavicon);
+    };
   }, []);
+  // Preload all directory avatar URLs into browser memory cache
+  useEffect(() => {
+    const urls = directoryUsers.map(u => u.avatar_url).filter((url): url is string => Boolean(url));
+    if (systemAvatarSrc && !systemAvatarSrc.startsWith('/')) urls.push(systemAvatarSrc);
+    urls.forEach(url => {
+      if (_preloadedAvatarUrls.has(url)) return;
+      _preloadedAvatarUrls.add(url);
+      const img = new Image();
+      img.src = url;
+    });
+  }, [directoryUsers, systemAvatarSrc]);
   const selectedBotModuleId = useMemo(() => {
     if (!selectedBotGroup) return null;
     return String(selectedBotGroup.target_type || '').trim() === 'customers' ? 'customers' : 'suppliers';
@@ -1543,16 +1552,18 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
     return suggestedReply;
   }, []);
 
-  const activeTemplateModuleId = templateComposerContext === 'forward'
+  const activeTemplateModuleId = useMemo(() => templateComposerContext === 'forward'
     ? (
       String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'note'
         ? (String(forwardingNote?.module_id || '').trim() || null)
         : selectedBotModuleId
     )
-    : (templateComposerContext === 'bot' ? selectedBotModuleId : noteModuleId);
-  const activeTemplateRecord = templateComposerContext === 'forward'
+    : (templateComposerContext === 'bot' ? selectedBotModuleId : noteModuleId),
+    [templateComposerContext, forwardingNote, selectedBotModuleId, noteModuleId]);
+  const activeTemplateRecord = useMemo(() => templateComposerContext === 'forward'
     ? null
-    : (templateComposerContext === 'bot' ? botTemplateRecord : noteTemplateRecord);
+    : (templateComposerContext === 'bot' ? botTemplateRecord : noteTemplateRecord),
+    [templateComposerContext, botTemplateRecord, noteTemplateRecord]);
 useEffect(() => {
     let cancelled = false;
     if (!noteModuleId || !noteRecordId) {
@@ -1877,6 +1888,10 @@ useEffect(() => {
         if (cancelled) return;
       setDirectoryUsers(directory.users || []);
       setDirectoryRoles(directory.roles || []);
+      // Update module-level cache so next open skips re-fetch delay
+      _notifDirectoryCache.orgId = profile.org_id || null;
+      _notifDirectoryCache.users = directory.users || [];
+      _notifDirectoryCache.roles = directory.roles || [];
       setMentionOptions([
         ...directory.users.map((user) => ({ label: `عضو: ${user.display_name || user.id}`, value: `user:${user.id}` })),
         ...directory.roles.map((role) => ({ label: `نقش: ${role.title || role.id}`, value: `role:${role.id}` })),
@@ -2419,7 +2434,7 @@ useEffect(() => {
     if (roleIds.length) {
       const { roleTitleMap } = await buildDirectoryMaps();
       const map = roleIds.reduce<Record<string, string>>((acc, roleLookupId) => {
-        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || String(roleLookupId);
+        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || 'نقش';
         return acc;
       }, {});
       setRoleNameMap(map);
@@ -2556,7 +2571,7 @@ useEffect(() => {
     }
     if (roleIds.length) {
       const map = roleIds.reduce<Record<string, string>>((acc, roleLookupId) => {
-        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || String(roleLookupId);
+        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || 'نقش';
         return acc;
       }, {});
       setRoleNameMap((prev) => ({ ...prev, ...map }));
@@ -2601,6 +2616,17 @@ useEffect(() => {
     if (!options?.force && isSectionFresh(section)) return;
 
     if (section === 'notes') {
+      const shouldUseConversationScopedNotes = (
+        variant === 'chat'
+        && Boolean(selectedConversationKey)
+      );
+      if (shouldUseConversationScopedNotes) {
+        await safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
+        await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
+        lastLoadedAtRef.current.notes = Date.now();
+        return;
+      }
+
       const showSkeleton = notes.length === 0;
       if (showSkeleton) setLoadingNotes(true);
       const notesData = await safeSectionFetch(() => fetchNotes(), 'notes', [] as any[]);
@@ -2642,9 +2668,10 @@ useEffect(() => {
       const resolvedGroupId = String(selectedBotGroupId || groups[0]?.id || '').trim();
       await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       if (resolvedGroupId) {
-        if (botTimelineAvailable) {
-          await safeSectionFetch(() => refreshBotTimeline(), 'bot_messages', null as any);
-        } else {
+        // Skip refreshBotTimeline() here — the hook's useEffect will fire
+        // automatically when selectedBotGroupId propagates via React state.
+        // Calling it now would use stale state due to React batching.
+        if (!botTimelineAvailable) {
           await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
         }
       } else {
@@ -2752,7 +2779,13 @@ useEffect(() => {
     const shouldLoadBotMessages = sections.includes('bot_messages');
     const shouldLoadSmsMessages = sections.includes('sms_messages');
     const shouldLoadVoipCalls = sections.includes('voip_calls');
-    const showNotesSkeleton = shouldLoadNotes && notes.length === 0;
+    const shouldUseConversationScopedNotes = (
+      shouldLoadNotes
+      && variant === 'chat'
+      && Boolean(selectedConversationKey)
+    );
+    const shouldFetchGlobalNotes = shouldLoadNotes && !shouldUseConversationScopedNotes;
+    const showNotesSkeleton = shouldFetchGlobalNotes && notes.length === 0;
     const showTasksSkeleton = shouldLoadTasks && tasks.length === 0;
     const showResponsibilitiesSkeleton = shouldLoadResponsibilities && responsibilities.length === 0;
     const showBotSkeleton = shouldLoadBotMessages && botGroups.length === 0 && botMessages.length === 0;
@@ -2780,14 +2813,14 @@ useEffect(() => {
       }
     };
     const [notesData, tasksData, responsibilitiesData, botGroupsData, smsData, voipCallsData] = await Promise.all([
-      shouldLoadNotes ? safeFetch(() => fetchNotes(), 'notes', [] as any[]) : Promise.resolve(notes),
+      shouldFetchGlobalNotes ? safeFetch(() => fetchNotes(), 'notes', [] as any[]) : Promise.resolve(notes),
       shouldLoadTasks ? safeFetch(() => fetchTasks(), 'tasks', [] as any[]) : Promise.resolve(tasks),
       shouldLoadResponsibilities ? safeFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]) : Promise.resolve(responsibilities),
       shouldLoadBotMessages ? safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]) : Promise.resolve(botGroups),
       shouldLoadSmsMessages ? safeFetch(() => fetchSmsMessages(), 'sms_messages', [] as any[]) : Promise.resolve(smsMessages),
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
-    if (shouldLoadNotes) setNotes(notesData);
+    if (shouldFetchGlobalNotes) setNotes(notesData);
     if (shouldLoadNotes && selectedConversationKey) {
       await safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
     }
@@ -2806,9 +2839,9 @@ useEffect(() => {
       const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
       await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       if (resolvedGroupId) {
-        if (botTimelineAvailable) {
-          await safeFetch(() => refreshBotTimeline(), 'bot_messages', null as any);
-        } else {
+        // Skip refreshBotTimeline() here — the hook's useEffect will fire
+        // automatically when selectedBotGroupId propagates via React state.
+        if (!botTimelineAvailable) {
           await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
         }
       } else {
@@ -3382,6 +3415,11 @@ useEffect(() => {
   }, [activeDrawerSection, open, profile.id]);
 
   useEffect(() => {
+    if (!open || activeDrawerSection !== 'notes' || selectedNoteUserId) return;
+    void refreshSection('notes', { force: true });
+  }, [activeDrawerSection, open, profile.id, selectedNoteUserId]);
+
+  useEffect(() => {
     if (!open) return;
     if (activeDrawerSection !== 'bot_messages') return;
     if (!selectedBotGroupId) {
@@ -3427,7 +3465,7 @@ useEffect(() => {
     };
     const timer = window.setInterval(() => {
       refreshBotFallback();
-    }, realtimeDisabledRef.current ? 6000 : 15000);
+    }, 30000);
     return () => window.clearInterval(timer);
   }, [activeDrawerSection, botTimelineAvailable, open, selectedBotGroupId]);
 
@@ -3437,7 +3475,7 @@ useEffect(() => {
       if (open) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void refreshAll(true);
-    }, 30000);
+    }, 90000);
     return () => clearInterval(interval);
   }, [open, profile.id, profile.role_id, variant]);
 
@@ -3580,7 +3618,7 @@ useEffect(() => {
     },
   });
 
-  const notesCount = notes.filter((n: any) => {
+  const notesCount = useMemo(() => notes.filter((n: any) => {
     const authorId = String(n?.author_id || '').trim();
     return (
       (!authorId || authorId !== String(profile.id || ''))
@@ -3588,28 +3626,28 @@ useEffect(() => {
     );
   }).length + noteLikeNotifications.filter((item) => (
     !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
-  )).length;
-  const tasksCount = tasks.filter((t: any) => (
+  )).length, [notes, noteLikeNotifications, profile.id, isNotificationRead]);
+  const tasksCount = useMemo(() => tasks.filter((t: any) => (
     !isNotificationRead('tasks', 'task', String(t?.id || ''), seenTaskIds.has(String(t?.id || '')))
-  )).length;
-  const responsibilitiesCount = responsibilities.filter((r: any) => (
+  )).length, [tasks, seenTaskIds, isNotificationRead]);
+  const responsibilitiesCount = useMemo(() => responsibilities.filter((r: any) => (
     !isNotificationRead('responsibilities', getResponsibilitySourceType(r), String(r?.id || ''), seenResponsibilityIds.has(String(r?.id || '')))
-  )).length;
-  const botMessagesCount = botConversationSummaryAvailable && rpcBotConversationSummaries
+  )).length, [responsibilities, seenResponsibilityIds, isNotificationRead]);
+  const botMessagesCount = useMemo(() => botConversationSummaryAvailable && rpcBotConversationSummaries
     ? (rpcBotConversationSummaries || []).reduce((sum, item) => sum + Number(item?.unread_count || 0), 0)
     : botNotificationMessages.filter((row) => {
       const id = String(row?.id || '').trim();
       return String(row?.direction || '').trim() === 'inbound'
         && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
-    }).length;
-  const smsMessagesCount = smsMessages.filter((row: any) => (
+    }).length, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead]);
+  const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => (
     String(row?.direction || '').trim() === 'inbound'
     && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
-  )).length;
-  const voipCallsCount = voipCalls.filter((row: any) => (
+  )).length, [smsMessages, isNotificationRead]);
+  const voipCallsCount = useMemo(() => voipCalls.filter((row: any) => (
     String(row?.direction || '').trim() === 'incoming'
     && !isNotificationRead('voip_calls', 'voip_call', String(row?.id || '').trim(), seenVoipCallIds.has(String(row?.id || '').trim()))
-  )).length;
+  )).length, [voipCalls, seenVoipCallIds, isNotificationRead]);
   const chatTotalCount = notesCount + botMessagesCount + smsMessagesCount + voipCallsCount;
   const alertsTotalCount = tasksCount + responsibilitiesCount;
   const totalCount = variant === 'chat' ? chatTotalCount : alertsTotalCount;
@@ -3826,7 +3864,12 @@ useEffect(() => {
       const systemNoteIds = (inboxItems || [])
         .filter((item) => (
           String(item?.source_type || '').trim() === 'note'
-          && String(item?.category || '').trim() === 'system'
+          && (
+            String(item?.category || '').trim() === 'system'
+            || String(item?.category || '').trim() === 'assistant'
+            || String((item?.payload as any)?.conversation_key || '').trim() === 'system'
+            || String((item?.payload as any)?.note_source || '').trim() === 'ai'
+          )
         ))
         .map((item) => String(item?.source_id || '').trim())
         .filter(Boolean)
@@ -3888,6 +3931,21 @@ useEffect(() => {
     pageSize: 10,
     fallbackLoadInitial: loadLegacySelectedConversationNotes,
   });
+  const loadOlderNotesWithPreserve = useCallback(async () => {
+    const container = notesScrollContainerRef.current;
+    if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
+    await loadOlderSelectedConversationNotes();
+  }, [loadOlderSelectedConversationNotes]);
+  const loadOlderMyNotesWithPreserve = useCallback(() => {
+    const container = notesScrollContainerRef.current;
+    if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
+    setMyNotesDisplayLimit((prev) => prev + 15);
+  }, []);
+  const loadOlderBotWithPreserve = useCallback(async () => {
+    const container = botMessagesScrollContainerRef.current;
+    if (container) pendingBotScrollRestoreRef.current = container.scrollHeight;
+    await loadOlderBotMessages();
+  }, [loadOlderBotMessages]);
   const isUnreadNoteRow = useCallback((note: any) => {
     const noteId = String(note?.id || '').trim();
     if (!noteId) return false;
@@ -4081,16 +4139,44 @@ useEffect(() => {
     ? noteConversationsFromRpc.filter((item) => item.kind !== 'system')
     : noteConversations;
   const effectiveSystemNoteStats = useMemo(() => {
-    if (!(noteConversationSummaryAvailable && rpcNoteConversationSummaries)) return systemNoteStats;
-    const systemSummary = noteConversationsFromRpc.find((item) => item.kind === 'system');
-    return systemSummary
+    const systemSummary = noteConversationSummaryAvailable && rpcNoteConversationSummaries
+      ? noteConversationsFromRpc.find((item) => item.kind === 'system')
+      : null;
+    const baseStats = systemSummary
       ? {
           noteCount: systemSummary.noteCount,
           latestMessageAt: systemSummary.latestMessageAt,
           unreadCount: systemSummary.unreadCount,
         }
       : systemNoteStats;
-  }, [noteConversationSummaryAvailable, noteConversationsFromRpc, rpcNoteConversationSummaries, systemNoteStats]);
+    if (selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID) {
+      return baseStats;
+    }
+
+    const loadedSystemNotes = (selectedConversationNotes || []).filter((note: any) => isSystemNote(note));
+    if (loadedSystemNotes.length === 0) {
+      return baseStats;
+    }
+    const latestLoadedAt = loadedSystemNotes.reduce<number>((latest, note: any) => {
+      const createdAt = new Date(note?.created_at || '').getTime();
+      return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
+    }, 0);
+    const visibleUnreadCount = loadedSystemNotes.filter((note: any) => isUnreadNoteRow(note)).length;
+    return {
+      noteCount: Math.max(Number(baseStats.noteCount || 0), loadedSystemNotes.length),
+      latestMessageAt: Math.max(Number(baseStats.latestMessageAt || 0), latestLoadedAt),
+      unreadCount: systemSummary ? Number(baseStats.unreadCount || 0) : Math.max(Number(selectedConversationUnreadCount || 0), visibleUnreadCount),
+    };
+  }, [
+    isUnreadNoteRow,
+    noteConversationSummaryAvailable,
+    noteConversationsFromRpc,
+    rpcNoteConversationSummaries,
+    selectedConversationNotes,
+    selectedConversationUnreadCount,
+    selectedNoteUserId,
+    systemNoteStats,
+  ]);
   const visibleNoteConversations = useMemo(() => {
     const search = String(noteUserSearch || '').trim().toLowerCase();
     if (!search) return effectiveNoteConversations;
@@ -4193,8 +4279,12 @@ useEffect(() => {
     () => String(noteMessageSearch || '').trim().toLowerCase(),
     [noteMessageSearch]
   );
+  const myNotesHasMoreBefore = !selectedNoteUserId && orderedFilteredNotes.length > myNotesDisplayLimit;
   const displayedChatNotes = useMemo(() => {
-    if (!normalizedNoteMessageSearch) return orderedFilteredNotes;
+    if (!normalizedNoteMessageSearch) {
+      if (!selectedNoteUserId) return orderedFilteredNotes.slice(-myNotesDisplayLimit);
+      return orderedFilteredNotes;
+    }
     return orderedFilteredNotes.filter((note: any) => {
       const parsedContent = parseNoteContent(note.content);
       const authorLabel = String(
@@ -4207,7 +4297,7 @@ useEffect(() => {
       const haystack = `${parsedContent.text || ''} ${authorLabel} ${attachmentNames}`.toLowerCase();
       return haystack.includes(normalizedNoteMessageSearch);
     });
-  }, [authorNameMap, directoryUserMap, normalizedNoteMessageSearch, orderedFilteredNotes]);
+  }, [authorNameMap, directoryUserMap, myNotesDisplayLimit, normalizedNoteMessageSearch, orderedFilteredNotes, selectedNoteUserId]);
   const firstUnreadNoteDomId = useMemo(() => {
     const noteId = String(
       selectedConversationInitialAnchorId
@@ -4600,7 +4690,7 @@ useEffect(() => {
         return Boolean(url) && !hasBrokenRubikaStorageUrl(url);
       });
       return Boolean(fileId && !hasUsableAttachment);
-    });
+    }).slice(0, BOT_MEDIA_AUTO_HYDRATION_BATCH_SIZE);
     if (pendingRows.length === 0) return;
 
     const activeConnection = await getActiveChannelSettings('rubika');
@@ -4636,8 +4726,9 @@ useEffect(() => {
     }
   }, [getBotMessageAttachments, importBotMessageAttachment, selectedBotGroup?.channel_type]);
   useEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_messages') return;
     void hydrateBotMessagesMedia(botMessages);
-  }, [botMessages, hydrateBotMessagesMedia]);
+  }, [activeDrawerSection, botMessages, hydrateBotMessagesMedia, open]);
 
   const buildAttachmentNameText = useCallback((attachments: Array<{ name?: string; url?: string }>) => {
     const lines = (attachments || [])
@@ -4685,15 +4776,6 @@ useEffect(() => {
     if (responsibilityViews.some((view) => view.key === responsibilityViewKey)) return;
     setResponsibilityViewKey('all');
   }, [responsibilityViewKey, responsibilityViews]);
-  const getModuleCardFields = (moduleConfig: any) => {
-    const fields = moduleConfig?.fields || [];
-    return {
-      imageField: fields.find((field: any) => field?.type === FieldType.IMAGE)?.key,
-      tagsField: fields.find((field: any) => field?.type === FieldType.TAGS || field?.key === 'tags')?.key,
-      statusField: fields.find((field: any) => field?.type === FieldType.STATUS || field?.key === 'status')?.key,
-      categoryField: fields.find((field: any) => ['category', 'task_type'].includes(String(field?.key || '')))?.key,
-    };
-  };
   const openPreviewRecord = useCallback((moduleId: string, recordId: string, label?: string) => {
     if (!moduleId || !recordId) return;
     setPreviewRecord({ moduleId, recordId, label });
@@ -4884,10 +4966,10 @@ useEffect(() => {
       patchLocalNoteConversationSummary(selectedNoteUserId, { unreadCount: 0 });
     }
     if (noteConversationSummaryAvailable) {
-      void refreshNoteConversationSummaries();
+      debouncedRefreshNoteConversationSummaries();
     }
     void persistNoteReadReceipts(readableRows, readAt);
-  }, [buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, persistNoteReadReceipts, profile.id, refreshNoteConversationSummaries, selectedNoteUserId]);
+  }, [buildReadReceiptBox, debouncedRefreshNoteConversationSummaries, isNotificationRead, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, persistNoteReadReceipts, profile.id, selectedNoteUserId]);
 
   const persistBotReadReceipts = useCallback(async (rows: CounterpartyBotMessageRow[], readAt: string) => {
     const currentUserId = String(profile.id || '').trim();
@@ -4955,7 +5037,7 @@ useEffect(() => {
         patchLocalBotConversationSummary(selectedBotGroupId, { unreadCount: 0 });
       }
       if (botConversationSummaryAvailable) {
-        void refreshBotConversationSummaries();
+        debouncedRefreshBotConversationSummaries();
       }
     }
     if (messageIds.size === 0) return;
@@ -4968,7 +5050,7 @@ useEffect(() => {
     setBotMessages((prev) => prev.map(applyReceipt));
     setBotNotificationMessages((prev) => prev.map(applyReceipt));
     void persistBotReadReceipts(receiptRows, readAt);
-  }, [botConversationSummaryAvailable, buildReadReceiptBox, isNotificationRead, markNotificationEntriesRead, patchLocalBotConversationSummary, persistBotReadReceipts, profile.id, refreshBotConversationSummaries, selectedBotGroupId]);
+  }, [botConversationSummaryAvailable, buildReadReceiptBox, debouncedRefreshBotConversationSummaries, isNotificationRead, markNotificationEntriesRead, patchLocalBotConversationSummary, persistBotReadReceipts, profile.id, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const taskIds = (rows || [])
@@ -5098,7 +5180,8 @@ useEffect(() => {
 
   useEffect(() => {
     setSelectedConversationNotes([]);
-    setNoteViewportReady(!selectedNoteUserId);
+    setNoteViewportReady(false);
+    setMyNotesDisplayLimit(15);
     setNoteMessageSearch('');
     setNoteMessageSearchOpen(false);
     noteShouldStickToBottomRef.current = false;
@@ -5139,9 +5222,22 @@ useEffect(() => {
       setNoteViewportReady(true);
       return;
     }
+    // Preserve scroll position after loading older messages
+    if (pendingNoteScrollRestoreRef.current !== null) {
+      const savedScrollHeight = pendingNoteScrollRestoreRef.current;
+      pendingNoteScrollRestoreRef.current = null;
+      const container = notesScrollContainerRef.current;
+      if (container) {
+        const diff = container.scrollHeight - savedScrollHeight;
+        if (diff > 0) {
+          container.scrollTop += diff;
+          return;
+        }
+      }
+    }
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
-    // Use 'auto' (instant) on the very first scroll so "My Notes" doesn't animate from top to bottom
+    // Use 'auto' (instant) on the very first scroll so the chat doesn't animate from top to bottom
     const noteBehavior = shouldForceScroll || !noteInitialAnchorDoneRef.current ? 'auto' : 'smooth';
     noteInitialAnchorDoneRef.current = true;
     scrollNotesToBottom(noteBehavior);
@@ -5174,6 +5270,19 @@ useEffect(() => {
       botForceScrollToBottomRef.current = false;
       setBotViewportReady(true);
       return;
+    }
+    // Preserve scroll position after loading older messages
+    if (pendingBotScrollRestoreRef.current !== null) {
+      const savedScrollHeight = pendingBotScrollRestoreRef.current;
+      pendingBotScrollRestoreRef.current = null;
+      const container = botMessagesScrollContainerRef.current;
+      if (container) {
+        const diff = container.scrollHeight - savedScrollHeight;
+        if (diff > 0) {
+          container.scrollTop += diff;
+          return;
+        }
+      }
     }
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
@@ -6161,1254 +6270,148 @@ useEffect(() => {
     };
   }, [open, overlaySource]);
 
-  const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
-    const withUserSidebar = layout === 'desktop';
-    const withMobileUserRail = layout === 'mobile';
-    const data = displayedChatNotes;
-    const noteMap = new Map(notes.map((note: any) => [note.id, note]));
-    const showConversationSkeleton = loadingNotes || !isSelectedConversationLoaded;
-    const hideConversationUntilSettled = !showConversationSkeleton && !noteViewportReady;
-    const panelTitle = selectedChatGroup?.name || selectedNoteConversationListItem?.displayName || (selectedNoteUser ? selectedNoteUser.display_name : 'یادداشت‌های من');
-    const panelSubtitle = selectedChatGroup || selectedNoteUser
-      ? activeConversationRoleLabel
-      : `${toPersianNumber(String(myNoteStats.noteCount || 0))} یادداشت`;
+  const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
+    <NotesPanel
+      layout={layout}
+      context={{
+        displayedChatNotes,
+        notes,
+        loadingNotes,
+        isSelectedConversationLoaded,
+        noteViewportReady,
+        selectedChatGroup,
+        selectedNoteConversationListItem,
+        selectedNoteUser,
+        activeConversationRoleLabel,
+        myNoteStats,
+        setEditingGroup,
+        setGroupNameDraft,
+        setGroupMemberDrafts,
+        setGroupModalOpen,
+        noteUserSearch,
+        setNoteUserSearch,
+        setMobileNoteSearchOpen,
+        setSelectedNoteUserId,
+        selectedNoteUserId,
+        SYSTEM_MESSAGES_USER_ID,
+        systemConversationAvatar,
+        effectiveSystemNoteStats,
+        UnifiedConversationAvatar,
+        visibleNoteConversations,
+        buildNoteConversationAvatarModel,
+        systemAvatarSrc,
+        selectedNoteConversationAvatar,
+        profile,
+        setChatGroups,
+        noteMessageSearchOpen,
+        normalizedNoteMessageSearch,
+        setNoteMessageSearchOpen,
+        setNoteMessageSearch,
+        noteMessageSearch,
+        notesScrollContainerRef,
+        handleNotesScroll,
+        selectedConversationHasMoreBefore,
+        loadingOlderSelectedConversationNotes,
+        loadOlderSelectedConversationNotes: loadOlderNotesWithPreserve,
+        myNotesHasMoreBefore,
+        loadOlderMyNotes: loadOlderMyNotesWithPreserve,
+        recordTitleMap,
+        formatRecordLabel,
+        isSystemNote,
+        directoryUserMap,
+        authorNameMap,
+        roleLookup,
+        normalizeReadReceipts,
+        normalizeLikeReceipts,
+        isUnreadNoteRow,
+        likeReceiptMapFromBox,
+        resolveNoteBubbleAvatar,
+        shouldAnimateChatEntry,
+        renderReadReceiptStatus,
+        editingNoteId,
+        editingNoteValue,
+        setNotes,
+        setEditingNoteId,
+        setEditingNoteValue,
+        setNoteReplyTo,
+        setNoteModuleId,
+        setNoteRecordId,
+        openForwardModal,
+        toggleNoteLike,
+        message,
+        handleClose,
+        noteNewIncomingCount,
+        noteShouldStickToBottomRef,
+        noteForceScrollToBottomRef,
+        setNoteNewIncomingCount,
+        scrollNotesToBottom,
+        noteModuleId,
+        noteRecordId,
+        moduleOptions,
+        noteRecordOptions,
+        handleNoteScopeModuleChange,
+        handleNoteScopeRecordChange,
+        noteText,
+        handleNoteTextChange,
+        submitNote,
+        noteSending,
+        mentionOptions,
+        mentionValues,
+        setMentionValues,
+        noteMentionPickerOpen,
+        setNoteMentionPickerOpen,
+        noteAttachments,
+        setNoteAttachments,
+        noteLinkedAttachments,
+        setNoteLinkedAttachments,
+        noteSmsNotificationEnabled,
+        setNoteSmsNotificationEnabled,
+        openReadyTextsModal,
+        mobileNoteSearchOpen,
+        noteReplyTo,
+        scrollMessageIntoView,
+      }}
+    />
+  );
+  const renderSmsMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
+    <SmsMessagesPanel
+      layout={layout}
+      smsThreads={smsThreads}
+      selectedSmsThread={selectedSmsThread}
+      displayedSmsMessages={displayedSmsMessages}
+      loadingSmsMessages={loadingSmsMessages}
+      smsRecipient={smsRecipient}
+      setSmsRecipient={setSmsRecipient}
+      smsSending={smsSending}
+      setSmsSending={setSmsSending}
+      setSelectedSmsThreadKey={setSelectedSmsThreadKey}
+      setSmsMessages={setSmsMessages}
+      openPreviewRecord={openPreviewRecord}
+      getCentralRecordLabel={getCentralRecordLabel}
+      getPhoneMatchLabel={getPhoneMatchLabel}
+      getModuleFieldOptionLabel={getModuleFieldOptionLabel}
+      requestReplySuggestion={requestReplySuggestion}
+      refreshSection={refreshSection}
+    />
+  );
 
-    return (
-      <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
-        {withUserSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گفتگوها</div>
-                <Button
-                  size="small"
-                  shape="circle"
-                  icon={<PlusOutlined />}
-                  onClick={() => {
-                    setEditingGroup(null);
-                    setGroupNameDraft('');
-                    setGroupMemberDrafts([]);
-                    setGroupModalOpen(true);
-                  }}
-                />
-              </div>
-              <Input
-                size="small"
-                allowClear
-                value={noteUserSearch}
-                onChange={(event) => setNoteUserSearch(event.target.value)}
-                placeholder="جستجوی گفتگو"
-                prefix={<SearchOutlined className="text-gray-400" />}
-                className="mt-2"
-              />
-            </div>
-            <div className="overflow-y-auto h-full px-2 py-2 space-y-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileNoteSearchOpen(false);
-                  setSelectedNoteUserId(null);
-                }}
-                className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
-                  !selectedNoteUserId
-                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium">یادداشت‌های من</span>
-                  <span className="text-[11px] text-gray-400">{toPersianNumber(String(myNoteStats.noteCount || 0))}</span>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileNoteSearchOpen(false);
-                  setSelectedNoteUserId((prev) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID));
-                }}
-                className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
-                  selectedNoteUserId === SYSTEM_MESSAGES_USER_ID
-                    ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                    : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <UnifiedConversationAvatar
-                    size={36}
-                    src={systemConversationAvatar.src}
-                    className={systemConversationAvatar.className}
-                    fallback={systemConversationAvatar.fallback}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">پیام‌های سیستم</div>
-                    <div className="text-[11px] text-gray-400">
-                      {effectiveSystemNoteStats.noteCount > 0 ? `${toPersianNumber(String(effectiveSystemNoteStats.noteCount))} پیام` : 'بدون پیام'}
-                    </div>
-                  </div>
-                  {effectiveSystemNoteStats.unreadCount > 0 ? (
-                    <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                      {toPersianNumber(String(effectiveSystemNoteStats.unreadCount))}
-                    </span>
-                  ) : null}
-                </div>
-              </button>
-              {visibleNoteConversations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setMobileNoteSearchOpen(false);
-                    setSelectedNoteUserId((prev) => (prev === item.id ? null : item.id));
-                  }}
-                  className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
-                    selectedNoteUserId === item.id
-                      ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                      : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
-                  }`}
-                >
-                  {(() => {
-                    const avatar = buildNoteConversationAvatarModel({
-                      kind: item.kind,
-                      displayName: item.displayName,
-                      avatarUrl: item.avatarUrl,
-                      systemAvatarSrc,
-                    });
-                    return (
-                      <div className="flex items-center gap-3">
-                        <UnifiedConversationAvatar
-                          size={36}
-                          src={avatar.src}
-                          className={avatar.className}
-                          fallback={avatar.fallback}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium flex items-center gap-1.5">
-                            <span>{item.displayName}</span>
-                            {item.isGroup ? <TeamOutlined className="text-[11px] text-amber-500" /> : null}
-                          </div>
-                          <div className="text-[11px] text-gray-400">
-                            {item.noteCount > 0 ? `${toPersianNumber(String(item.noteCount))} پیام` : 'بدون پیام'}
-                          </div>
-                        </div>
-                        {item.unreadCount > 0 ? (
-                          <span className={`inline-flex min-w-5 h-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white ${item.isGroup ? 'bg-amber-500' : 'bg-red-500'}`}>
-                            {toPersianNumber(String(item.unreadCount))}
-                          </span>
-                        ) : null}
-                      </div>
-                    );
-                  })()}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="flex min-w-0 flex-1 flex-col min-h-0 overflow-hidden bg-white/82 dark:bg-[#1a1518]">
-          <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex items-center gap-3">
-                {selectedChatGroup || selectedNoteUser ? (
-                  <UnifiedConversationAvatar
-                    size={withMobileUserRail ? 32 : 36}
-                    src={selectedNoteConversationAvatar.src}
-                    className={selectedNoteConversationAvatar.className}
-                    fallback={selectedNoteConversationAvatar.fallback}
-                  />
-                ) : null}
-                <div className="min-w-0">
-                  <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{panelTitle}</div>
-                  <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">{panelSubtitle}</div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1">
-                {selectedChatGroup && selectedChatGroup.created_by === String(profile.id || '') ? (
-                  <>
-                    <Button
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => {
-                        setEditingGroup(selectedChatGroup);
-                        setGroupNameDraft(selectedChatGroup.name);
-                        setGroupMemberDrafts([
-                          ...(selectedChatGroup.user_ids || []).map((id) => `user:${id}`),
-                          ...(selectedChatGroup.role_ids || []).map((id) => `role:${id}`),
-                        ]);
-                        setGroupModalOpen(true);
-                      }}
-                    />
-                    <Button
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => {
-                        Modal.confirm({
-                          title: 'حذف گروه',
-                          content: 'این گفتگو حذف شود؟',
-                          okText: 'حذف',
-                          cancelText: 'انصراف',
-                          okButtonProps: { danger: true },
-                          onOk: async () => {
-                            const { error } = await supabase.from('chat_groups').delete().eq('id', selectedChatGroup.id);
-                            if (error) throw error;
-                            setChatGroups((prev) => prev.filter((group) => group.id !== selectedChatGroup.id));
-                            setSelectedNoteUserId(null);
-                          },
-                        });
-                      }}
-                    />
-                  </>
-                ) : null}
-                <Button
-                  size="small"
-                  type={noteMessageSearchOpen || normalizedNoteMessageSearch ? 'primary' : 'default'}
-                  icon={<SearchOutlined />}
-                  onClick={() => {
-                    setNoteMessageSearchOpen((prev) => {
-                      if (prev) {
-                        setNoteMessageSearch('');
-                      }
-                      return !prev;
-                    });
-                  }}
-                />
-              </div>
-            </div>
-            {noteMessageSearchOpen ? (
-              <Input
-                size="small"
-                allowClear
-                autoFocus
-                value={noteMessageSearch}
-                onChange={(event) => setNoteMessageSearch(event.target.value)}
-                placeholder={selectedChatGroup || selectedNoteUser ? 'جستجو در پیام‌های این گفتگو' : 'جستجو در یادداشت‌های من'}
-                prefix={<SearchOutlined className="text-gray-400" />}
-                className="mt-2"
-              />
-            ) : null}
-          </div>
-
-          <div
-            ref={notesScrollContainerRef}
-            onScroll={handleNotesScroll}
-            className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideConversationUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
-          >
-            {showConversationSkeleton ? (
-              <div className="space-y-3">
-                <Skeleton active paragraph={{ rows: 2 }} />
-                <Skeleton active paragraph={{ rows: 2 }} />
-                <Skeleton active paragraph={{ rows: 2 }} />
-              </div>
-            ) : data.length === 0 ? (
-              <Empty description={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'} />
-            ) : (
-              <>
-                {selectedNoteUserId && selectedConversationHasMoreBefore ? (
-                  <div className="flex justify-center pb-1">
-                    <Button
-                      size="small"
-                      loading={loadingOlderSelectedConversationNotes}
-                      onClick={() => void loadOlderSelectedConversationNotes()}
-                    >
-                      مشاهده پیام‌های قبلی
-                    </Button>
-                  </div>
-                ) : null}
-                {data.map((note: any) => {
-                const recordKey = `${note.module_id}:${note.record_id}`;
-                const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id, module_id: note.module_id }, note.module_id);
-                const isSystem = isSystemNote(note);
-                const isMine = !isSystem && note.author_id && profile.id && note.author_id === profile.id;
-                const author = directoryUserMap[String(note.author_id || '')];
-                const authorName = isSystem ? 'پیام‌های سیستم' : (isMine ? 'شما' : (note.author_name || author?.display_name || authorNameMap[note.author_id] || 'کاربر سیستم'));
-                const replyTarget = note.reply_to ? noteMap.get(note.reply_to) : null;
-                const replyParsedContent = replyTarget ? parseNoteContent(replyTarget.content) : null;
-                const replyAuthorName = replyTarget
-                  ? (
-                    replyTarget.author_id && profile.id && replyTarget.author_id === profile.id
-                      ? 'شما'
-                      : (
-                        replyTarget.author_name
-                        || directoryUserMap[String(replyTarget.author_id || '')]?.display_name
-                        || authorNameMap[replyTarget.author_id]
-                        || 'کاربر سیستم'
-                      )
-                  )
-                  : null;
-                const parsedContent = parseNoteContent(note.content);
-                const mentionUsers = (note.mention_user_ids || []).map((id: string) => directoryUserMap[String(id)]?.display_name || id);
-                const mentionRoles = (note.mention_role_ids || []).map((id: string) => roleLookup[String(id)] || id);
-                const noteReadReceipts = normalizeReadReceipts(note.metadata);
-                const noteLikeReceipts = normalizeLikeReceipts(note.metadata);
-                const isUnreadNote = isUnreadNoteRow(note);
-                const likedByMe = Boolean(likeReceiptMapFromBox(note.metadata)[String(profile.id || '').trim()]);
-                const noteAvatar = resolveNoteBubbleAvatar(note, Boolean(isMine), isSystem);
-
-                return (
-                  <div key={note.id}>
-                    <SharedNoteCard
-                      authorName={authorName}
-                      createdAtLabel={safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm')}
-                      text={parsedContent.text}
-                      attachments={parsedContent.attachments}
-                      avatarUrl={noteAvatar.src}
-                      avatarFallback={noteAvatar.fallback}
-                      avatarClassName={noteAvatar.className}
-                      mentionUsers={mentionUsers}
-                      mentionRoles={mentionRoles}
-                      replyText={replyParsedContent?.text || null}
-                      replyAuthorName={replyAuthorName}
-                      replyAttachments={replyParsedContent?.attachments || []}
-                      onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`note-message-${String(replyTarget.id)}`) : undefined}
-                      messageDomId={`note-message-${String(note.id)}`}
-                      isMine={Boolean(isMine)}
-                      animateOnMount={shouldAnimateChatEntry(note.created_at)}
-                      variant="default"
-                      renderTemplateBold={isSystem}
-                      statusNode={renderReadReceiptStatus(noteReadReceipts, noteLikeReceipts)}
-                      unreadIndicator={isUnreadNote}
-                      likeCount={noteLikeReceipts.length}
-                      likedByMe={likedByMe}
-                      isEdited={Boolean(note.is_edited)}
-                      isEditing={editingNoteId === note.id}
-                      editingValue={editingNoteValue}
-                      onEditingChange={setEditingNoteValue}
-                      onSaveEdit={async () => {
-                        if (!editingNoteValue.trim()) return;
-                        const nextContent = serializeNoteContent(editingNoteValue, parsedContent.attachments);
-                        await supabase.from('notes').update({ content: nextContent, is_edited: true }).eq('id', note.id);
-                        setNotes((prev) => prev.map((n: any) => (n.id === note.id ? { ...n, content: nextContent, is_edited: true } : n)));
-                        setEditingNoteId(null);
-                        setEditingNoteValue('');
-                      }}
-                      onCancelEdit={() => {
-                        setEditingNoteId(null);
-                        setEditingNoteValue('');
-                      }}
-                      onReply={() => {
-                        setNoteReplyTo(note.id);
-                        setNoteModuleId(note.module_id || null);
-                        setNoteRecordId(note.record_id || null);
-                      }}
-                      onForward={() => openForwardModal(note)}
-                      onLike={!isSystem ? () => {
-                        void toggleNoteLike(note).catch((error) => {
-                          console.warn('Could not toggle note like', error);
-                          message.error(toFaErrorMessage(error, 'ثبت پسندیدن پیام ناموفق بود.'));
-                        });
-                      } : undefined}
-                      onEdit={isMine ? () => {
-                        setEditingNoteId(note.id);
-                        setEditingNoteValue(parsedContent.text || '');
-                      } : undefined}
-                      onDelete={isMine ? async () => {
-                        await supabase.from('notes').delete().eq('id', note.id);
-                        setNotes((prev) => prev.filter((n: any) => n.id !== note.id));
-                      } : undefined}
-                      footer={note.module_id && note.record_id ? (
-                        <span>
-                          رکورد مرتبط:{' '}
-                          <Link to={`/${note.module_id}/${note.record_id}`} className="text-leather-600" onClick={handleClose}>
-                            {recordTitle}
-                          </Link>
-                        </span>
-                      ) : null}
-                    />
-                  </div>
-                );
-                })}
-              </>
-            )}
-          </div>
-          {selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID && noteNewIncomingCount > 0 ? (
-            <div className="pb-1 text-center">
-              <button
-                type="button"
-                className="inline-flex items-center rounded-full border border-slate-300/45 bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-slate-200"
-                onClick={() => {
-                  noteShouldStickToBottomRef.current = true;
-                  noteForceScrollToBottomRef.current = true;
-                  setNoteNewIncomingCount(0);
-                  scrollNotesToBottom('smooth');
-                }}
-              >
-                +{toPersianNumber(String(noteNewIncomingCount))} پیام جدید
-              </button>
-            </div>
-          ) : null}
-
-          <SharedNoteComposer
-            header={(
-              <div className="flex flex-col gap-2">
-                <AdaptiveScopePicker
-                  moduleId={noteModuleId}
-                  recordId={noteRecordId}
-                  moduleOptions={moduleOptions}
-                  recordOptions={noteRecordOptions}
-                  onModuleChange={handleNoteScopeModuleChange}
-                  onRecordChange={handleNoteScopeRecordChange}
-                  compact={withMobileUserRail}
-                  disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
-                />
-              </div>
-            )}
-            value={noteText}
-            onChange={handleNoteTextChange}
-            onSubmit={submitNote}
-            submitLoading={noteSending}
-            placeholder={
-              selectedNoteUserId === SYSTEM_MESSAGES_USER_ID
-                ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.'
-                : selectedChatGroup
-                  ? `پیام به گروه ${selectedChatGroup.name}...`
-                  : (selectedNoteUser ? `پیام به ${selectedNoteUser.display_name}...` : 'یادداشت جدید...')
-            }
-            mentionOptions={mentionOptions}
-            mentionValues={mentionValues}
-            onMentionChange={(values) => setMentionValues(values || [])}
-            mentionPickerOpen={noteMentionPickerOpen}
-            onToggleMentionPicker={() => setNoteMentionPickerOpen((prev) => !prev)}
-            attachments={noteAttachments}
-            linkedAttachments={noteLinkedAttachments}
-            onFilesSelected={(files) => {
-              setNoteAttachments((prev) => {
-                const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
-                files.forEach((file) => {
-                  map.set(`${file.name}-${file.size}-${file.lastModified}`, file);
-                });
-                return Array.from(map.values());
-              });
-            }}
-            onRemoveAttachment={(fileName) => {
-              setNoteAttachments((prev) => prev.filter((file) => file.name !== fileName));
-            }}
-            onLinkedAttachmentsSelected={(attachments) => {
-              setNoteLinkedAttachments((prev) => {
-                const map = new Map(prev.map((attachment) => [String(attachment.url || ''), attachment]));
-                attachments.forEach((attachment) => {
-                  const url = String(attachment.url || '').trim();
-                  if (url) map.set(url, attachment);
-                });
-                return Array.from(map.values());
-              });
-            }}
-            onRemoveLinkedAttachment={(url) => {
-              setNoteLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
-            }}
-            filePickerModuleId={noteModuleId}
-            filePickerRecordId={noteRecordId}
-            replyActive={Boolean(noteReplyTo)}
-            onClearReply={() => setNoteReplyTo(null)}
-            smsNotificationEnabled={noteSmsNotificationEnabled}
-            onSmsNotificationChange={setNoteSmsNotificationEnabled}
-            enableImagePasteAndDrop
-            submitDisabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0)}
-            extraActions={(
-              <Button
-                type="text"
-                size="small"
-                icon={<SnippetsOutlined />}
-                onClick={() => openReadyTextsModal('notes')}
-              />
-            )}
-          />
-        </div>
-        {withMobileUserRail ? (
-          <div dir="rtl" className="w-[54px] shrink-0 overflow-hidden border-l border-slate-200/45 bg-white/60 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="flex h-full flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
-              <div className="sticky top-0 z-10 flex w-full justify-center">
-                <Popover
-                  trigger="click"
-                  placement="leftTop"
-                  open={mobileNoteSearchOpen}
-                  onOpenChange={setMobileNoteSearchOpen}
-                  content={(
-                    <Input
-                      size="small"
-                      allowClear
-                      autoFocus
-                      value={noteUserSearch}
-                      onChange={(event) => setNoteUserSearch(event.target.value)}
-                      placeholder="جستجوی چت"
-                      prefix={<SearchOutlined className="text-gray-400" />}
-                      className="w-[170px]"
-                    />
-                  )}
-                >
-                  <Button
-                    type={noteUserSearch ? 'primary' : 'default'}
-                    shape="circle"
-                    size="small"
-                    icon={<SearchOutlined />}
-                    className="shadow-sm"
-                  />
-                </Popover>
-              </div>
-              <div className="sticky top-9 z-10 flex w-full justify-center">
-                <Button
-                  type="default"
-                  shape="circle"
-                  size="small"
-                  icon={<PlusOutlined />}
-                  className="shadow-sm"
-                  onClick={() => {
-                    setEditingGroup(null);
-                    setGroupNameDraft('');
-                    setGroupMemberDrafts([]);
-                    setGroupModalOpen(true);
-                  }}
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedNoteUserId(null)}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
-              >
-                <div className={`flex h-9 w-9 items-center justify-center rounded-2xl border text-[10px] font-bold ${
-                  !selectedNoteUserId
-                    ? 'border-[rgba(var(--brand-500-rgb),0.24)] bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                    : 'border-slate-200/45 bg-white/70 text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-gray-200'
-                }`}>
-                  من
-                </div>
-                <span className="text-[10px] text-gray-500 dark:text-gray-400">{toPersianNumber(String(myNoteStats.noteCount || 0))}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setSelectedNoteUserId((prev) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID))}
-                className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
-                title="پیام‌های سیستم"
-              >
-                <div className="relative">
-                  <Badge count={effectiveSystemNoteStats.unreadCount > 0 ? toPersianNumber(String(effectiveSystemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                    <UnifiedConversationAvatar
-                      size={38}
-                      src={systemConversationAvatar.src}
-                      className={`${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${systemConversationAvatar.className || ''}`.trim()}
-                      fallback={systemConversationAvatar.fallback}
-                    />
-                  </Badge>
-                </div>
-                <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
-                  سیستم
-                </span>
-              </button>
-
-              {visibleNoteConversations.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setSelectedNoteUserId((prev) => (prev === item.id ? null : item.id))}
-                  className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
-                  title={item.displayName}
-                >
-                  {(() => {
-                    const avatar = buildNoteConversationAvatarModel({
-                      kind: item.kind,
-                      displayName: item.displayName,
-                      avatarUrl: item.avatarUrl,
-                      systemAvatarSrc,
-                    });
-                    return (
-                      <div className="relative">
-                        <Badge count={item.unreadCount > 0 ? toPersianNumber(String(item.unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                          <UnifiedConversationAvatar
-                            size={38}
-                            src={avatar.src}
-                            className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''} ${avatar.className || ''}`.trim()}
-                            fallback={avatar.fallback}
-                          />
-                        </Badge>
-                        <span className="absolute -left-1 bottom-0 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:bg-[rgba(var(--app-dark-surface-rgb),0.96)] dark:text-[rgb(var(--brand-300-rgb))]">
-                          {item.isGroup ? <TeamOutlined /> : <LeftOutlined />}
-                        </span>
-                      </div>
-                    );
-                  })()}
-                  <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
-                    {item.displayName}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  };
-
-  const renderNotes = () => {
-    const data = showMore.notes ? notes : notes.slice(0, MAX_ITEMS);
-    const noteMap = new Map(data.map((n: any) => [n.id, n]));
-    return (
-      <div className="flex flex-col flex-1 min-h-0">
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          {loadingNotes ? (
-            <div className="space-y-3">
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-            </div>
-          ) : data.length === 0 ? (
-            <Empty description="نوتیفیکیشن جدیدی ندارید" />
-          ) : (
-            data.map((note: any) => {
-              const recordKey = `${note.module_id}:${note.record_id}`;
-              const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id, module_id: note.module_id }, note.module_id);
-              const isSystem = isSystemNote(note);
-              const isMine = !isSystem && note.author_id && profile.id && note.author_id === profile.id;
-              const authorName = isSystem ? 'پیام‌های سیستم' : (isMine ? 'شما' : (note.author_name || authorNameMap[note.author_id] || 'کاربر سیستم'));
-              const replyTarget = note.reply_to ? noteMap.get(note.reply_to) : null;
-              const parsedContent = parseNoteContent(note.content);
-              return (
-                <div key={note.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
-                  <div
-                    className={`w-[92%] rounded-2xl px-3 py-2 border shadow-[0_6px_18px_rgba(15,23,42,0.05)] ${
-                      isMine
-                        ? 'bg-[rgba(var(--brand-500-rgb),0.08)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] border-[rgba(var(--brand-500-rgb),0.18)] dark:border-[rgba(var(--brand-300-rgb),0.16)] rounded-tr-sm'
-                      : 'bg-white/85 dark:bg-[rgba(var(--app-dark-surface-rgb),0.86)] border-[rgba(var(--brand-200-rgb),0.24)] dark:border-[rgba(var(--brand-300-rgb),0.14)] rounded-tl-sm'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-[10px] text-gray-400 mb-1">
-                      <span>{authorName}</span>
-                      <span>{safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm')}</span>
-                    </div>
-                    {replyTarget && (
-                      <div className="text-[11px] text-gray-600 dark:text-gray-300 bg-slate-100/80 dark:bg-white/[0.055] rounded-lg p-2 mb-2">
-                        پاسخ به: {renderLinkifiedText(String(parseNoteContent(replyTarget.content).text || ''), `note-reply-${note.id}`)}
-                      </div>
-                    )}
-                    <div className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap leading-relaxed">
-                      {renderLinkifiedText(String(parsedContent.text || ''), `note-body-${note.id}`)}
-                    </div>
-                    {parsedContent.attachments.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {parsedContent.attachments.map((attachment) => (
-                          <a
-                            key={`${attachment.url}-${attachment.name}`}
-                            href={attachment.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full border border-slate-300/40 bg-slate-100/70 px-2.5 py-1 text-[11px] text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.045] dark:text-slate-200"
-                          >
-                            <span className="max-w-[180px] truncate">{attachment.name}</span>
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                    <div className="mt-2 text-[11px] text-gray-500">
-                      رکورد مرتبط: <Link to={`/${note.module_id}/${note.record_id}`} className="text-leather-600" onClick={handleClose}>{recordTitle}</Link>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 text-[11px] text-gray-500">
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<EnterOutlined />}
-                        onClick={() => {
-                          setNoteReplyTo(note.id);
-                          setNoteModuleId(note.module_id || null);
-                          setNoteRecordId(note.record_id || null);
-                        }}
-                      />
-                      {isMine && (
-                        <>
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<EditOutlined />}
-                            onClick={() => {
-                              setEditingNoteId(note.id);
-                              setEditingNoteValue(parsedContent.text || '');
-                            }}
-                          />
-                          <Button
-                            type="text"
-                            size="small"
-                            danger
-                            icon={<DeleteOutlined />}
-                            onClick={async () => {
-                              await supabase.from('notes').delete().eq('id', note.id);
-                              setNotes((prev) => prev.filter((n: any) => n.id !== note.id));
-                            }}
-                          />
-                        </>
-                      )}
-                    </div>
-                    {editingNoteId === note.id && (
-                      <div className="mt-2 flex flex-col gap-2">
-                        <Input.TextArea
-                          value={editingNoteValue}
-                          onChange={(e) => setEditingNoteValue(e.target.value)}
-                          autoSize={{ minRows: 2, maxRows: 4 }}
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            type="primary"
-                            size="small"
-                            icon={<CheckOutlined />}
-                            onClick={async () => {
-                              if (!editingNoteValue.trim()) return;
-                              const nextContent = serializeNoteContent(editingNoteValue, parsedContent.attachments);
-                              await supabase.from('notes').update({ content: nextContent, is_edited: true }).eq('id', note.id);
-                              setNotes((prev) => prev.map((n: any) => (n.id === note.id ? { ...n, content: nextContent, is_edited: true } : n)));
-                              setEditingNoteId(null);
-                              setEditingNoteValue('');
-                            }}
-                          >
-                            ذخیره
-                          </Button>
-                          <Button size="small" onClick={() => setEditingNoteId(null)}>
-                            انصراف
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-          {notes.length > MAX_ITEMS && (
-            <Button type="link" onClick={() => setShowMore(prev => ({ ...prev, notes: !prev.notes }))}>
-              {showMore.notes ? 'نمایش کمتر' : 'نمایش بیشتر'}
-            </Button>
-          )}
-        </div>
-      <div className="border-t border-[rgba(var(--brand-200-rgb),0.18)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white/90 dark:bg-white/[0.02] px-4 py-3">
-          <div className="mb-2">
-            <AdaptiveScopePicker
-              moduleId={noteModuleId}
-              recordId={noteRecordId}
-              moduleOptions={moduleOptions}
-              recordOptions={noteRecordOptions}
-              onModuleChange={handleNoteScopeModuleChange}
-              onRecordChange={handleNoteScopeRecordChange}
-              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Input.TextArea
-              placeholder={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'این گفتگو فقط پیام‌های سیستم را نمایش می‌دهد.' : 'یادداشت جدید...'}
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              autoSize={{ minRows: 2, maxRows: 4 }}
-              className="rounded-[0.9rem] !border-[rgba(var(--brand-200-rgb),0.28)] dark:!border-[rgba(var(--brand-300-rgb),0.16)]"
-              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
-            />
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              placeholder="منشن عضو یا تیم (اختیاری)"
-              value={mentionValues}
-              onChange={(v) => setMentionValues(v || [])}
-              options={mentionOptions}
-              optionFilterProp="label"
-              className="w-full"
-              disabled={selectedNoteUserId === SYSTEM_MESSAGES_USER_ID}
-              getPopupContainer={(node) => node.parentElement || document.body}
-              styles={{ popup: { root: { zIndex: 1100, minWidth: 240 } } }}
-            />
-            {noteReplyTo && (
-              <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
-                <EnterOutlined />
-                <span>پاسخ به یادداشت انتخاب شده</span>
-                <Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setNoteReplyTo(null)} />
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button
-                type="primary"
-                loading={noteSending}
-                disabled={noteSending || selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0)}
-                onClick={async () => {
-                  await submitNote();
-                }}
-              >
-                ارسال
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderSmsMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
-    const isDesktop = layout === 'desktop';
-    const activeThread = selectedSmsThread;
-    const threadMessages = displayedSmsMessages;
-
-    const sendSmsMessage = async (draftText: string) => {
-      const recipient = String(smsRecipient || '').trim();
-      const text = String(draftText || '').trim();
-      if (!recipient) {
-        message.warning('شماره گیرنده پیامک را وارد کنید.');
-        return false;
-      }
-      if (!text) {
-        message.warning('متن پیامک خالی است.');
-        return false;
-      }
-
-      const optimisticId = `optimistic-sms-${Date.now()}`;
-      const nowIso = new Date().toISOString();
-      const optimisticThreadKey = `sms:${normalizePhoneThreadValue(recipient) || recipient}`;
-      setSmsSending(true);
-      setSelectedSmsThreadKey(optimisticThreadKey);
-      setSmsMessages((prev) => [
-        ...prev,
-        {
-          id: optimisticId,
-          title: recipient,
-          module_id: null,
-          record_id: null,
-          direction: 'outbound',
-          recipient,
-          phone_number: recipient,
-          message_text: text,
-          status: 'pending',
-          message_at: nowIso,
-          created_at: nowIso,
-        },
-      ]);
-
-      try {
-        await sendSmsViaGateway({
-          to: [recipient],
-          text,
-          title: 'پیامک مستقیم',
-          metadata: { source: 'notifications_drawer_sms' },
-        });
-        await refreshSection('sms_messages', { force: true });
-        return true;
-      } catch (error: any) {
-        setSmsMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticId));
-        message.error(toFaErrorMessage(error, 'ارسال پیامک ناموفق بود.'));
-        return false;
-      } finally {
-        setSmsSending(false);
-      }
-    };
-
-    const suggestSmsReply = async (instruction = '') => {
-      if (!activeThread?.id && !smsRecipient.trim()) {
-        message.warning('ابتدا یک گفتگو یا شماره پیامک را انتخاب کنید.');
-        return null;
-      }
-      try {
-        const recentMessages = (threadMessages || []).slice(-16).map((row: any) => {
-          const direction = String(row?.direction || '').trim() || 'inbound';
-          const isMine = direction !== 'inbound';
-          return {
-            direction,
-            authorName: isMine ? 'کاربر سازمان' : (resolveSmsCounterpartyPhone(row) || 'مشتری'),
-            text: String(row?.message_text || '').trim(),
-            createdAt: row?.message_at || row?.created_at || null,
-          };
-        }).filter((item: any) => item.text);
-
-        const suggested = await requestReplySuggestion({
-          channel: 'sms',
-          phone: String(activeThread?.phone || smsRecipient || '').trim() || null,
-          instruction: String(instruction || '').trim() || null,
-          context: {
-            mode: activeThread?.moduleId && activeThread?.recordId ? 'record' : 'page',
-            moduleId: activeThread?.moduleId || null,
-            recordId: activeThread?.recordId || null,
-            route: '/notifications?sms=1',
-          },
-          counterparty: {
-            moduleId: activeThread?.moduleId || null,
-            recordId: activeThread?.recordId || null,
-          },
-          recentMessages,
-        });
-        return suggested;
-      } catch (error: any) {
-        message.error(toFaErrorMessage(error, 'پیشنهاد پاسخ پیامک ناموفق بود.'));
-        return null;
-      }
-    };
-
-    const openRelatedSmsRecord = () => {
-      if (!activeThread?.moduleId || !activeThread?.recordId) return;
-      openPreviewRecord(
-        activeThread.moduleId,
-        activeThread.recordId,
-        getCentralRecordLabel(activeThread.moduleId, activeThread.recordId, activeThread.title || activeThread.phone),
-      );
-    };
-
-    return (
-      <div className="h-full min-h-0 flex flex-col overflow-hidden">
-        <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[260px_minmax(0,1fr)]' : 'flex flex-col'}`}>
-          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0`}>
-            {loadingSmsMessages && smsThreads.length === 0 ? (
-              <div className="p-3">
-                <Skeleton active paragraph={{ rows: 4 }} />
-              </div>
-            ) : smsThreads.length === 0 ? (
-              <div className="p-3">
-                <Empty description="هنوز پیامکی ثبت نشده است." />
-              </div>
-            ) : isDesktop ? (
-              <div className="h-full overflow-y-auto p-2 space-y-2">
-                {smsThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedSmsThreadKey(thread.id);
-                      if (thread.phone) setSmsRecipient(thread.phone);
-                    }}
-                    className={`w-full rounded-xl border px-3 py-2 text-right transition-colors ${
-                      activeThread?.id === thread.id
-                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
-                        : 'border-transparent bg-white/60 hover:bg-white/90 dark:bg-transparent dark:hover:bg-white/[0.055]'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                        <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</div>
-                        {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                          <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
-                        ) : null}
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1">
-                        {thread.unreadCount > 0 ? (
-                          <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                            {toPersianNumber(String(thread.unreadCount))}
-                          </span>
-                        ) : null}
-                        <span className="text-[10px] text-gray-400">{safeJalaliFormat(thread.messages[thread.messages.length - 1]?.message_at || thread.messages[thread.messages.length - 1]?.created_at, 'MM/DD HH:mm')}</span>
-                      </div>
-                    </div>
-                    <div className="mt-2 line-clamp-2 text-[12px] leading-5 text-gray-500 dark:text-gray-300">{thread.preview}</div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
-                {smsThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedSmsThreadKey(thread.id);
-                      if (thread.phone) setSmsRecipient(thread.phone);
-                    }}
-                    className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
-                      activeThread?.id === thread.id
-                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
-                        : 'border-transparent bg-white/60 dark:bg-transparent'
-                    }`}
-                  >
-                    <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                    <div className="mt-1 flex items-center justify-between gap-2">
-                      <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</span>
-                      {thread.unreadCount > 0 ? (
-                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                          {toPersianNumber(String(thread.unreadCount))}
-                        </span>
-                      ) : null}
-                    </div>
-                    {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                      <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="min-h-0 flex flex-col overflow-hidden">
-            <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
-                    {activeThread?.title || 'ارسال پیامک'}
-                  </div>
-                  <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
-                    {activeThread?.phone || 'شماره انتخاب نشده'}
-                  </div>
-                  {getPhoneMatchLabel(activeThread?.phoneMatchStatus) ? (
-                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(activeThread?.phoneMatchStatus)}</div>
-                  ) : null}
-                </div>
-                {activeThread?.moduleId && activeThread?.recordId ? (
-                  <Button size="small" icon={<EyeOutlined />} onClick={openRelatedSmsRecord}>
-                    رکورد مرتبط
-                  </Button>
-                ) : null}
-              </div>
-              <div className="mt-3">
-                <Input
-                  value={smsRecipient}
-                  onChange={(event) => setSmsRecipient(event.target.value)}
-                  placeholder="شماره گیرنده، مثلا 0912..."
-                  dir="ltr"
-                  size={layout === 'mobile' ? 'middle' : 'large'}
-                />
-              </div>
-            </div>
-            <div ref={smsMessagesScrollContainerRef} className="flex-1 overflow-y-auto bg-slate-100/45 px-3 py-3 dark:bg-black/[0.08]">
-              {loadingSmsMessages && threadMessages.length === 0 && smsThreads.length === 0 ? (
-                <Skeleton active paragraph={{ rows: 5 }} />
-              ) : threadMessages.length === 0 ? (
-                <Empty description="برای این شماره هنوز پیامی ثبت نشده است." />
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {threadMessages.map((row: any) => {
-                    const direction = String(row?.direction || '').trim();
-                    const isMine = direction !== 'inbound';
-                    const phone = resolveSmsCounterpartyPhone(row);
-                    const statusLabel = getModuleFieldOptionLabel('sms_delivery_reports', 'status', row?.status);
-                    const phoneMatchLabel = getPhoneMatchLabel(row?.phone_match_status);
-                    const relatedTitle = row.module_id && row.record_id
-                      ? getCentralRecordLabel(row.module_id, row.record_id, row.title || phone)
-                      : '';
-                    return (
-                      <SharedNoteCard
-                        key={String(row.id)}
-                        authorName={isMine ? 'ارسال پیامک' : (phone || 'پیامک ورودی')}
-                        createdAtLabel={safeJalaliFormat(row.message_at || row.created_at, 'YYYY/MM/DD HH:mm')}
-                        text={String(row.message_text || '')}
-                        attachments={[]}
-                        avatarFallback={isMine ? 'SMS' : 'IN'}
-                        isMine={isMine}
-                        footer={(
-                          <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                            <span dir="ltr">{phone}</span>
-                            {statusLabel ? <span>{statusLabel}</span> : null}
-                            {phoneMatchLabel ? <span className="text-amber-600 dark:text-amber-300">{phoneMatchLabel}</span> : null}
-                            {row.module_id && row.record_id ? (
-                              <Button
-                                type="link"
-                                size="small"
-                                className="!px-0"
-                                onClick={() => openPreviewRecord(String(row.module_id), String(row.record_id), relatedTitle || 'رکورد مرتبط')}
-                              >
-                                {relatedTitle || 'رکورد مرتبط'}
-                              </Button>
-                            ) : null}
-                          </div>
-                        )}
-                        animateOnMount
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            <SmsDrawerComposer
-              recipient={smsRecipient}
-              activeThreadId={activeThread?.id || null}
-              sending={smsSending}
-              onSubmit={sendSmsMessage}
-              onSuggestReply={suggestSmsReply}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderVoipCallsPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
-    const isDesktop = layout === 'desktop';
-    const activeThread = selectedVoipThread;
-    const calls = displayedVoipCalls;
-
-    return (
-      <div className="h-full min-h-0 flex flex-col overflow-hidden">
-        <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[250px_minmax(0,1fr)]' : 'flex flex-col'}`}>
-          <div className={`${isDesktop ? 'border-l' : 'border-b'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0`}>
-            {voipThreads.length === 0 ? (
-              <div className="p-3">
-                <Empty description="تماس ورودی جدیدی ندارید." />
-              </div>
-            ) : isDesktop ? (
-              <div className="h-full overflow-y-auto p-2 space-y-2">
-                {voipThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    onClick={() => setSelectedVoipThreadKey(thread.id)}
-                    className={`w-full rounded-xl border px-3 py-2 text-right transition-colors ${
-                      activeThread?.id === thread.id
-                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
-                        : 'border-transparent bg-white/60 hover:bg-white/90 dark:bg-transparent dark:hover:bg-white/[0.055]'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                        <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</div>
-                        {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                          <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
-                        ) : null}
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-1">
-                        {thread.unreadCount > 0 ? (
-                          <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                            {toPersianNumber(String(thread.unreadCount))}
-                          </span>
-                        ) : null}
-                        <span className="text-[10px] text-gray-400">{safeJalaliFormat(thread.calls[0]?.started_at || thread.calls[0]?.created_at, 'MM/DD HH:mm')}</span>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
-                {voipThreads.map((thread) => (
-                  <button
-                    key={thread.id}
-                    type="button"
-                    onClick={() => setSelectedVoipThreadKey(thread.id)}
-                    className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
-                      activeThread?.id === thread.id
-                        ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
-                        : 'border-transparent bg-white/60 dark:bg-transparent'
-                    }`}
-                  >
-                    <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                    <div className="mt-1 flex items-center justify-between gap-2">
-                      <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</span>
-                      {thread.unreadCount > 0 ? (
-                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                          {toPersianNumber(String(thread.unreadCount))}
-                        </span>
-                      ) : null}
-                    </div>
-                    {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                      <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="min-h-0 flex flex-col overflow-hidden">
-            <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
-                    {activeThread?.title || 'تماس‌های ورودی'}
-                  </div>
-                  <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
-                    {activeThread?.phone || 'تماسی انتخاب نشده'}
-                  </div>
-                  {getPhoneMatchLabel(activeThread?.phoneMatchStatus) ? (
-                    <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(activeThread?.phoneMatchStatus)}</div>
-                  ) : null}
-                </div>
-                {activeThread?.moduleId && activeThread?.recordId ? (
-                  <Button
-                    size="small"
-                    icon={<EyeOutlined />}
-                    onClick={() => openPreviewRecord(
-                      activeThread.moduleId!,
-                      activeThread.recordId!,
-                      getCentralRecordLabel(activeThread.moduleId, activeThread.recordId, activeThread.title),
-                    )}
-                  >
-                    رکورد مرتبط
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto bg-slate-100/45 px-3 py-3 dark:bg-black/[0.08]">
-              {calls.length === 0 ? (
-                <Empty description="برای این شماره تماسی ثبت نشده است." />
-              ) : (
-                <div className="space-y-3">
-                  {calls.map((row: any) => {
-                    const startedAt = row?.started_at || row?.created_at;
-                    const statusLabel = getModuleFieldOptionLabel('voip_call_reports', 'status', row?.status);
-                    const phoneMatchLabel = getPhoneMatchLabel(row?.phone_match_status);
-                    const relatedLabel = row?.module_id && row?.record_id
-                      ? getCentralRecordLabel(row.module_id, row.record_id, row.title || row.source_number)
-                      : '';
-                    const operatorLabel = row?.assignee_id
-                      ? assigneeNameMap[String(row.assignee_id)] || ''
-                      : '';
-                    return (
-                      <div
-                        key={String(row?.id || '')}
-                        className="rounded-xl border border-slate-200/55 bg-white/86 px-3 py-2.5 shadow-[0_5px_16px_rgba(15,23,42,0.04)] dark:border-white/[0.08] dark:bg-white/[0.035]"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
-                              {String(row?.title || row?.source_number || 'تماس ورودی')}
-                            </div>
-                            <div className="mt-1 text-[11px] text-gray-500" dir="ltr">
-                              {String(row?.source_number || '').trim() || '-'}
-                              {String(row?.extension || '').trim() ? ` → ${String(row.extension).trim()}` : ''}
-                            </div>
-                          </div>
-                          <div className="text-[11px] text-gray-400">{safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm')}</div>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
-                          {statusLabel ? (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
-                              {statusLabel}
-                            </span>
-                          ) : null}
-                          {phoneMatchLabel ? (
-                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
-                              {phoneMatchLabel}
-                            </span>
-                          ) : null}
-                          {relatedLabel ? (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
-                              {relatedLabel}
-                            </span>
-                          ) : null}
-                          {operatorLabel ? (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
-                              اپراتور: {operatorLabel}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="mt-3 flex items-center gap-3 text-[12px]">
-                          <Button type="link" size="small" className="!px-0" onClick={() => openPreviewRecord('voip_call_reports', String(row.id), String(row?.title || 'تماس VoIP'))}>
-                            گزارش تماس
-                          </Button>
-                          {row?.module_id && row?.record_id ? (
-                            <Button
-                              type="link"
-                              size="small"
-                              className="!px-0"
-                              onClick={() => openPreviewRecord(String(row.module_id), String(row.record_id), relatedLabel || 'رکورد مرتبط')}
-                            >
-                              {relatedLabel || 'رکورد مرتبط'}
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  const renderVoipCallsPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
+    <VoipCallsPanel
+      layout={layout}
+      voipThreads={voipThreads}
+      selectedVoipThread={selectedVoipThread}
+      displayedVoipCalls={displayedVoipCalls}
+      assigneeNameMap={assigneeNameMap}
+      setSelectedVoipThreadKey={setSelectedVoipThreadKey}
+      openPreviewRecord={openPreviewRecord}
+      getCentralRecordLabel={getCentralRecordLabel}
+      getPhoneMatchLabel={getPhoneMatchLabel}
+      getModuleFieldOptionLabel={getModuleFieldOptionLabel}
+    />
+  );
 
   const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
-    const withDesktopSidebar = layout === 'desktop';
-    const withMobileUserRail = layout === 'mobile';
     const selectedGroup = selectedBotGroup;
-    const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
-    const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
-    const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
-    const canSend = Boolean(String(selectedGroup?.bot_chat_id || '').trim());
     const botMessageMap = new Map(botMessages.map((row) => [String(row.id), row]));
     const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
     const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
@@ -7664,1064 +6667,133 @@ useEffect(() => {
     };
 
     return (
-      <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
-        {withDesktopSidebar ? (
-          <div dir="rtl" className="order-last w-[208px] border-l border-slate-200/55 bg-white/72 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="px-4 py-3 border-b border-slate-200/45 bg-white/55 dark:border-white/[0.07] dark:bg-white/[0.025]">
-              <div className="text-xs font-bold text-gray-600 dark:text-gray-300">گروه‌های بات</div>
-              <Input
-                size="small"
-                allowClear
-                value={botGroupSearch}
-                onChange={(event) => setBotGroupSearch(event.target.value)}
-                placeholder="جستجوی گفتگو"
-                prefix={<SearchOutlined className="text-gray-400" />}
-                className="mt-2"
-              />
-            </div>
-            <div className="overflow-y-auto h-full px-2 py-2 space-y-1">
-              {filteredBotGroups.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گروه باتی ثبت نشده است." />
-              ) : filteredBotGroups.map((row) => {
-                const rowStatus = BOT_STATUS_LABELS_FA[String(row.status || '')] || String(row.status || '');
-                const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
-                const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
-                const active = String(selectedBotGroupId || '') === String(row.id);
-                const unreadCount = botUnreadByGroup[String(row.id)] || 0;
-                return (
-                  <button
-                    type="button"
-                    key={row.id}
-                    className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${
-                      active
-                        ? 'bg-[rgba(var(--brand-500-rgb),0.08)] text-[rgb(var(--brand-800-rgb))] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.12)] dark:bg-[rgba(var(--brand-500-rgb),0.12)] dark:text-white'
-                        : 'hover:bg-white/80 dark:hover:bg-white/[0.055] text-gray-700 dark:text-gray-200'
-                    }`}
-                    onClick={() => {
-                      setMobileBotSearchOpen(false);
-                      setSelectedBotGroupId(String(row.id));
-                    }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Avatar size={36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
-                        <RobotOutlined />
-                      </Avatar>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{rowTitle}</div>
-                        <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
-                      </div>
-                      {unreadCount > 0 ? (
-                        <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                          {toPersianNumber(String(unreadCount))}
-                        </span>
-                      ) : null}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        <div className="flex flex-col flex-1 min-h-0 min-w-0 bg-white/82 dark:bg-[#1a1518]">
-          <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 flex items-center gap-3">
-                <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
-                  <RobotOutlined />
-                </Avatar>
-                <div className="min-w-0">
-                  <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{groupTitle}</div>
-                  <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">وضعیت: {statusLabel} | پلتفرم: {channelLabel}</div>
-                </div>
-              </div>
-              <Button
-                size="small"
-                icon={<EditOutlined />}
-                disabled={!selectedGroup}
-                onClick={() => void handleOpenBotStatusModal()}
-              />
-            </div>
-            {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id) ? (
-              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                طرف مرتبط:{' '}
-                <Link
-                  to={`/${selectedGroup.customer_id ? 'customers' : 'suppliers'}/${selectedGroup.customer_id || selectedGroup.supplier_id}`}
-                  className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
-                  onClick={handleClose}
-                >
-                  {String(selectedGroup.counterparty_label || '').trim() || 'مشاهده رکورد'}
-                </Link>
-              </div>
-            ) : null}
-            <Input
-              size="small"
-              allowClear
-              value={botMessageSearch}
-              onChange={(event) => setBotMessageSearch(event.target.value)}
-              placeholder="جستجو در پیام های این گفتگو"
-              className="mt-2"
-              prefix={<SearchOutlined className="text-gray-400" />}
-            />
-            {!canSend ? (
-              <div className="mt-2 rounded-lg border border-amber-200/50 bg-amber-50/75 px-2 py-1.5 text-xs text-amber-700">
-                برای فعال شدن بات، بعد از عضویت بات در گروه، یک پیام داخل همان گروه ارسال کنید.
-              </div>
-            ) : null}
-          </div>
-
-          <div
-            ref={botMessagesScrollContainerRef}
-            onScroll={handleBotMessagesScroll}
-            className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideBotTimelineUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
-          >
-            {showBotTimelineSkeleton ? (
-              <div className="space-y-3">
-                <Skeleton active paragraph={{ rows: 2 }} />
-                <Skeleton active paragraph={{ rows: 2 }} />
-                <Skeleton active paragraph={{ rows: 2 }} />
-              </div>
-            ) : !selectedGroup ? (
-              <Empty description="یک گروه بات را انتخاب کنید." />
-            ) : filteredBotMessages.length === 0 ? (
-              <Empty description="پیامی برای این گروه ثبت نشده است." />
-            ) : (
-              <>
-                {botTimelineHasMoreBefore ? (
-                  <div className="flex justify-center pb-1">
-                    <Button
-                      size="small"
-                      loading={loadingOlderBotMessages}
-                      onClick={() => void loadOlderBotMessages()}
-                    >
-                      مشاهده پیام‌های قبلی
-                    </Button>
-                  </div>
-                ) : null}
-                {filteredBotMessages.map((row) => {
-                const outgoing = String(row.direction || '') === 'outbound';
-                const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-                const parsedAttachments = getBotMessageAttachments(row);
-                const fileId = String((payload as any)?.media_file_id || '').trim();
-                const displayAttachments = parsedAttachments.length > 0
-                  ? parsedAttachments
-                  : (String(row.file_name || '').trim() && fileId
-                    ? [{
-                      name: String(row.file_name || '').trim(),
-                      url: '',
-                      mimeType: String(row.mime_type || '').trim() || null,
-                      fileType: String(row.message_type || 'file').trim() || 'file',
-                    }]
-                    : []);
-                const replyToId = String(payload?.reply_to_message_id || '').trim();
-                const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
-                const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
-                const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item) => ({
-                  name: item.name,
-                  url: item.url,
-                  mimeType: item.mimeType,
-                  fileType: item.fileType,
-                } as any)) : [];
-                const body = String(row.content_text || '').trim()
-                  || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
-                const isEditing = editingBotMessageId === row.id;
-                const author = resolveBotMessageAuthor(row);
-                const botAvatar = resolveBotBubbleAvatar(author, outgoing);
-                const botReadReceipts = normalizeReadReceipts(payload);
-                const botMessageId = String(row.id || '').trim();
-                const isPersistedBotMessage = isUuidValue(botMessageId);
-                const isUnreadBotMessage = isUnreadBotRow(row);
-                return (
-                  <div key={row.id}>
-                    <SharedNoteCard
-                      authorName={author.name}
-                      createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
-                      text={body}
-                      attachments={displayAttachments.map((item) => ({
-                        name: item.name,
-                        url: item.url,
-                        mimeType: item.mimeType,
-                        fileType: item.fileType,
-                      } as any))}
-                      onAttachmentClick={async (attachment) => {
-                        const normalizedUrl = String(attachment?.url || '').trim();
-                        const isImage = attachment?.fileType === 'image';
-                        if (normalizedUrl) {
-                          if (!isImage && typeof document !== 'undefined') {
-                            const link = document.createElement('a');
-                            link.href = normalizedUrl;
-                            link.download = String(attachment?.name || 'file').trim() || 'file';
-                            link.target = '_blank';
-                            link.rel = 'noopener noreferrer';
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                          }
-                          return;
-                        }
-                        try {
-                          await importBotMessageAttachment(row, { force: true, downloadAfter: true });
-                        } catch (error) {
-                          message.error(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود.'));
-                        }
-                      }}
-                      avatarUrl={botAvatar.src}
-                      avatarFallback={botAvatar.fallback}
-                      avatarClassName={botAvatar.className}
-                      mentionUsers={[]}
-                      mentionRoles={[]}
-                      replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
-                      replyAuthorName={replyAuthorName}
-                      replyAttachments={replyAttachments}
-                      onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`bot-message-${String(replyTarget.id)}`) : undefined}
-                      messageDomId={`bot-message-${String(row.id)}`}
-                      isMine={outgoing}
-                      animateOnMount={shouldAnimateChatEntry(row.created_at)}
-                      statusNode={renderReadReceiptStatus(botReadReceipts, [])}
-                      unreadIndicator={isUnreadBotMessage}
-                      footer={!outgoing && author.metaLabel ? author.metaLabel : undefined}
-                      isEdited={Boolean(payload?.is_edited)}
-                      isEditing={isEditing}
-                      editingValue={editingBotMessageValue}
-                      onEditingChange={setEditingBotMessageValue}
-                      onSaveEdit={outgoing ? async () => {
-                        const nextText = String(editingBotMessageValue || '').trim();
-                        if (!nextText) return;
-                        await syncBotProviderMessageAction(selectedGroup, 'edit_message', row, nextText);
-                        const nextPayload = {
-                          ...(payload || {}),
-                          is_edited: true,
-                          edited_at: new Date().toISOString(),
-                        };
-                        const { error } = await supabase
-                          .from('counterparty_bot_messages')
-                          .update({
-                            content_text: nextText,
-                            payload: nextPayload,
-                          })
-                          .eq('id', row.id);
-                        if (error) throw error;
-                        setEditingBotMessageId(null);
-                        setEditingBotMessageValue('');
-                        if (botConversationSummaryAvailable) {
-                          await refreshBotConversationSummaries();
-                        }
-                        if (botTimelineAvailable) {
-                          await refreshBotTimeline();
-                        } else {
-                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
-                        }
-                      } : undefined}
-                      onCancelEdit={() => {
-                        setEditingBotMessageId(null);
-                        setEditingBotMessageValue('');
-                      }}
-                      onReply={isPersistedBotMessage ? () => setBotReplyToId(row.id) : undefined}
-                      onForward={() => openForwardModal(row, 'bot')}
-                      onEdit={outgoing && isPersistedBotMessage ? () => {
-                        setEditingBotMessageId(row.id);
-                        setEditingBotMessageValue(String(row.content_text || '').trim());
-                      } : undefined}
-                      onDelete={outgoing && isPersistedBotMessage ? async () => {
-                        await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
-                        const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
-                        if (error) throw error;
-                        if (botConversationSummaryAvailable) {
-                          await refreshBotConversationSummaries();
-                        }
-                        if (botTimelineAvailable) {
-                          await refreshBotTimeline();
-                        } else {
-                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
-                        }
-                      } : undefined}
-                    />
-                  </div>
-                );
-                })}
-              </>
-            )}
-          </div>
-          {selectedGroup && botNewIncomingCount > 0 ? (
-            <div className="pb-1 text-center">
-              <button
-                type="button"
-                className="inline-flex items-center rounded-full border border-slate-300/45 bg-white/95 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-white dark:border-white/[0.1] dark:bg-white/[0.08] dark:text-slate-200"
-                onClick={() => {
-                  botShouldStickToBottomRef.current = true;
-                  botForceScrollToBottomRef.current = true;
-                  setBotNewIncomingCount(0);
-                  markBotMessagesAsSeen(botMessages);
-                  scrollBotMessagesToBottom('smooth');
-                }}
-              >
-                +{toPersianNumber(String(botNewIncomingCount))} پیام جدید
-              </button>
-            </div>
-          ) : null}
-
-          <SharedNoteComposer
-            value={botMessageText}
-            onChange={handleBotMessageTextChange}
-            onSubmit={() => void sendBotMessage()}
-            submitLoading={botSending}
-            placeholder={canSend ? 'پیام به گروه بات...' : 'این گروه هنوز فعال نشده است.'}
-            mentionOptions={[]}
-            mentionValues={[]}
-            onMentionChange={() => undefined}
-            mentionPickerOpen={botMentionPickerOpen}
-            onToggleMentionPicker={() => setBotMentionPickerOpen((prev) => !prev)}
-            attachments={botAttachments}
-            linkedAttachments={botLinkedAttachments}
-            onFilesSelected={(files) => {
-              setBotAttachments((prev) => {
-                const map = new Map(prev.map((file) => [`${file.name}-${file.size}-${file.lastModified}`, file]));
-                files.forEach((file) => {
-                  map.set(`${file.name}-${file.size}-${file.lastModified}`, file);
-                });
-                return Array.from(map.values());
-              });
-            }}
-            onRemoveAttachment={(fileName) => {
-              setBotAttachments((prev) => prev.filter((file) => file.name !== fileName));
-            }}
-            onLinkedAttachmentsSelected={(attachments) => {
-              setBotLinkedAttachments((prev) => {
-                const map = new Map(prev.map((attachment) => [String(attachment.url || ''), attachment]));
-                attachments.forEach((attachment) => {
-                  const url = String(attachment.url || '').trim();
-                  if (url) map.set(url, attachment);
-                });
-                return Array.from(map.values());
-              });
-            }}
-            onRemoveLinkedAttachment={(url) => {
-              setBotLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
-            }}
-            filePickerModuleId={selectedBotModuleId || (selectedGroup?.target_type === 'customers' ? 'customers' : selectedGroup?.target_type === 'suppliers' ? 'suppliers' : null)}
-            filePickerRecordId={selectedGroup?.target_type === 'customers' ? String(selectedGroup?.customer_id || '') : selectedGroup?.target_type === 'suppliers' ? String(selectedGroup?.supplier_id || '') : null}
-            replyActive={Boolean(botReplyToId)}
-            onClearReply={() => setBotReplyToId(null)}
-            enableImagePasteAndDrop
-            submitDisabled={!selectedGroup || !canSend || botSending || botSuggesting || (!String(botMessageText || '').trim() && botAttachments.length === 0 && botLinkedAttachments.length === 0)}
-            extraActions={(
-              <>
-                <AiSuggestionPopoverAction
-                  open={botAiPopoverOpen}
-                  onOpenChange={setBotAiPopoverOpen}
-                  loading={botSuggesting}
-                  disabled={!selectedGroup || botSending || botSuggesting}
-                  onSubmit={(instruction) => suggestBotReply(instruction)}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<SnippetsOutlined />}
-                  onClick={() => openReadyTextsModal('bot')}
-                />
-              </>
-            )}
-          />
-        </div>
-
-        {withMobileUserRail ? (
-          <div dir="rtl" className="w-[54px] shrink-0 overflow-hidden border-l border-slate-200/45 bg-white/60 dark:border-white/[0.07] dark:bg-white/[0.025]">
-            <div className="flex h-full flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden px-1 py-1.5">
-              <div className="sticky top-0 z-10 flex w-full justify-center">
-                <Popover
-                  trigger="click"
-                  placement="leftTop"
-                  open={mobileBotSearchOpen}
-                  onOpenChange={setMobileBotSearchOpen}
-                  content={(
-                    <Input
-                      size="small"
-                      allowClear
-                      autoFocus
-                      value={botGroupSearch}
-                      onChange={(event) => setBotGroupSearch(event.target.value)}
-                      placeholder="جستجوی چت"
-                      prefix={<SearchOutlined className="text-gray-400" />}
-                      className="w-[170px]"
-                    />
-                  )}
-                >
-                  <Button
-                    type={botGroupSearch ? 'primary' : 'default'}
-                    shape="circle"
-                    size="small"
-                    icon={<SearchOutlined />}
-                    className="shadow-sm"
-                  />
-                </Popover>
-              </div>
-
-              {filteredBotGroups.map((row) => {
-                const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه';
-                const active = String(selectedBotGroupId || '') === String(row.id);
-                const unreadCount = botUnreadByGroup[String(row.id)] || 0;
-                return (
-                  <button
-                    key={`mobile-${row.id}`}
-                    type="button"
-                    onClick={() => {
-                      setMobileBotSearchOpen(false);
-                      setSelectedBotGroupId(String(row.id));
-                    }}
-                    className="flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors hover:bg-white/75 dark:hover:bg-white/5"
-                    title={rowTitle}
-                  >
-                    <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                      <Avatar
-                        size={38}
-                        className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
-                          active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.28)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.35)] dark:ring-offset-[#151113]' : ''
-                        }`}
-                      >
-                        <RobotOutlined />
-                      </Avatar>
-                    </Badge>
-                    <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
-                      {rowTitle}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-      </div>
+      <BotMessagesPanel
+        layout={layout}
+        selectedGroup={selectedGroup}
+        selectedBotGroupId={selectedBotGroupId}
+        setSelectedBotGroupId={setSelectedBotGroupId}
+        botGroupSearch={botGroupSearch}
+        setBotGroupSearch={setBotGroupSearch}
+        mobileBotSearchOpen={mobileBotSearchOpen}
+        setMobileBotSearchOpen={setMobileBotSearchOpen}
+        filteredBotGroups={filteredBotGroups}
+        botUnreadByGroup={botUnreadByGroup}
+        botMessageSearch={botMessageSearch}
+        setBotMessageSearch={setBotMessageSearch}
+        botMessages={botMessages}
+        filteredBotMessages={filteredBotMessages}
+        botMessageMap={botMessageMap}
+        loadingBotMessages={loadingBotMessages}
+        hideBotTimelineUntilSettled={hideBotTimelineUntilSettled}
+        botTimelineHasMoreBefore={botTimelineHasMoreBefore}
+        loadingOlderBotMessages={loadingOlderBotMessages}
+        loadOlderBotMessages={loadOlderBotWithPreserve}
+        botMessagesScrollContainerRef={botMessagesScrollContainerRef}
+        handleBotMessagesScroll={handleBotMessagesScroll}
+        getBotMessageAttachments={getBotMessageAttachments}
+        importBotMessageAttachment={importBotMessageAttachment}
+        resolveBotMessageAuthor={resolveBotMessageAuthor}
+        resolveBotBubbleAvatar={resolveBotBubbleAvatar}
+        normalizeReadReceipts={normalizeReadReceipts}
+        isUnreadBotRow={isUnreadBotRow}
+        isUuidValue={isUuidValue}
+        renderReadReceiptStatus={renderReadReceiptStatus}
+        shouldAnimateChatEntry={shouldAnimateChatEntry}
+        scrollMessageIntoView={scrollMessageIntoView}
+        editingBotMessageId={editingBotMessageId}
+        editingBotMessageValue={editingBotMessageValue}
+        setEditingBotMessageId={setEditingBotMessageId}
+        setEditingBotMessageValue={setEditingBotMessageValue}
+        syncBotProviderMessageAction={syncBotProviderMessageAction}
+        botConversationSummaryAvailable={botConversationSummaryAvailable}
+        botTimelineAvailable={botTimelineAvailable}
+        refreshBotConversationSummaries={refreshBotConversationSummaries}
+        refreshBotTimeline={refreshBotTimeline}
+        fetchBotMessages={fetchBotMessages}
+        openForwardModal={openForwardModal}
+        botNewIncomingCount={botNewIncomingCount}
+        setBotNewIncomingCount={setBotNewIncomingCount}
+        botShouldStickToBottomRef={botShouldStickToBottomRef}
+        botForceScrollToBottomRef={botForceScrollToBottomRef}
+        markBotMessagesAsSeen={markBotMessagesAsSeen}
+        scrollBotMessagesToBottom={scrollBotMessagesToBottom}
+        botMessageText={botMessageText}
+        handleBotMessageTextChange={handleBotMessageTextChange}
+        sendBotMessage={sendBotMessage}
+        botSending={botSending}
+        botSuggesting={botSuggesting}
+        botAttachments={botAttachments}
+        setBotAttachments={setBotAttachments}
+        botLinkedAttachments={botLinkedAttachments}
+        setBotLinkedAttachments={setBotLinkedAttachments}
+        botMentionPickerOpen={botMentionPickerOpen}
+        setBotMentionPickerOpen={setBotMentionPickerOpen}
+        selectedBotModuleId={selectedBotModuleId}
+        selectedBotRecordId={selectedBotRecordId}
+        botReplyToId={botReplyToId}
+        setBotReplyToId={setBotReplyToId}
+        botAiPopoverOpen={botAiPopoverOpen}
+        setBotAiPopoverOpen={setBotAiPopoverOpen}
+        suggestBotReply={suggestBotReply}
+        openReadyTextsModal={openReadyTextsModal}
+        handleOpenBotStatusModal={handleOpenBotStatusModal}
+        handleClose={handleClose}
+      />
     );
   };
-
-  const renderCreatedAtSortControls = (
-    direction: CreatedSortDirection,
-    setDirection: React.Dispatch<React.SetStateAction<CreatedSortDirection>>,
-  ) => (
-    <div className="flex items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-1 py-0.5 dark:border-gray-700 dark:bg-white/5">
-      <Button
-        type="text"
-        size="small"
-        icon={<DownOutlined />}
-        className={direction === 'desc' ? '!text-[rgb(var(--brand-700-rgb))]' : '!text-gray-400'}
-        onClick={() => setDirection('desc')}
-      />
-      <Button
-        type="text"
-        size="small"
-        icon={<UpOutlined />}
-        className={direction === 'asc' ? '!text-[rgb(var(--brand-700-rgb))]' : '!text-gray-400'}
-        onClick={() => setDirection('asc')}
-      />
-    </div>
+  const renderTasksPanel = (mode: 'list' | 'grid' = 'list') => (
+    <TasksPanel
+      mode={mode}
+      tasks={tasks}
+      filteredTasks={filteredTasks}
+      showMore={showMore.tasks}
+      setShowMore={(value: boolean) => setShowMore((prev) => ({ ...prev, tasks: value }))}
+      loadingTasks={loadingTasks}
+      taskViewKey={taskViewKey}
+      setTaskViewKey={setTaskViewKey}
+      taskSortDirection={taskSortDirection}
+      setTaskSortDirection={setTaskSortDirection}
+      directoryUsers={directoryUsers}
+      directoryRoles={directoryRoles}
+      openPreviewRecord={openPreviewRecord}
+      recordTitleMap={recordTitleMap}
+      formatRecordLabel={formatRecordLabel}
+      assigneeNameMap={assigneeNameMap}
+      roleNameMap={roleNameMap}
+      createdByNameMap={createdByNameMap}
+      handleClose={handleClose}
+      navigate={navigate}
+      setTasks={setTasks}
+      lastLoadedAtRef={lastLoadedAtRef}
+      handleTaskProducedQtyChange={handleTaskProducedQtyChange}
+      profile={{ id: String(profile.id || '') }}
+      maxItems={MAX_ITEMS}
+    />
   );
 
-  const renderTasksPanel = (mode: 'list' | 'grid' = 'list') => {
-    const data = showMore.tasks ? filteredTasks : filteredTasks.slice(0, MAX_ITEMS);
-    const relationOptionsByField = tasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
-      const sourceLink = resolveTaskSourceLink(task);
-      const relatedModuleId = String(sourceLink.moduleId || task?.related_to_module || '').trim();
-      const relatedRecordId = String(sourceLink.recordId || '').trim();
-      const fieldKey = getTaskRelationFieldKey(relatedModuleId);
-      if (!fieldKey || !relatedModuleId || !relatedRecordId) return acc;
-
-      const recordKey = buildRecordReferenceKey(relatedModuleId, relatedRecordId);
-      const label = recordTitleMap[recordKey]
-        || formatRecordLabel({ id: relatedRecordId, module_id: relatedModuleId }, relatedModuleId);
-      if (!label) return acc;
-
-      const current = acc[fieldKey] || [];
-      if (!current.some((item) => String(item.value) === relatedRecordId)) {
-        current.push({ label, value: relatedRecordId });
-      }
-      acc[fieldKey] = current;
-
-      return acc;
-    }, {});
-
-    return (
-      <div className="flex flex-col gap-3 h-full min-h-0">
-        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
-          {renderCreatedAtSortControls(taskSortDirection, setTaskSortDirection)}
-          <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-            {TASK_VIEW_PRESETS.map((view) => (
-              <div
-                key={view.key}
-                onClick={() => {
-                  setTaskViewKey(view.key);
-                  setShowMore((prev) => ({ ...prev, tasks: false }));
-                }}
-                className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
-                  taskViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
-                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                }`}
-              >
-                {view.label}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => navigate('/tasks/create')}
-          >
-            افزودن فعالیت
-          </Button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto min-h-0">
-          {loadingTasks ? (
-            <div className="space-y-2">
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-            </div>
-          ) : data.length === 0 ? (
-            <Empty description="فعالیتی یافت نشد" />
-          ) : mode === 'grid' ? (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {data.map((task: any) => (
-                <RenderCardItem
-                  key={task.id}
-                  item={task}
-                  moduleId="tasks"
-                  moduleConfig={tasksConfig}
-                  statusField="status"
-                  categoryField="task_type"
-                  tagsField="tags"
-                  allUsers={directoryUsers}
-                  allRoles={directoryRoles}
-                  selectedRowKeys={[]}
-                  setSelectedRowKeys={() => undefined}
-                    navigate={(path) => {
-                      const [, moduleId, recordId] = String(path || '').split('/');
-                      if (!moduleId || !recordId) return;
-                      if (moduleId === 'tasks') {
-                        openTaskProcessModal({ task });
-                        return;
-                      }
-                    openPreviewRecord(
-                      moduleId,
-                      recordId,
-                      recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel({ id: recordId, module_id: moduleId }, moduleId)
-                    );
-                  }}
-                  canViewField={() => true}
-                  relationOptions={relationOptionsByField}
-                  hideSelection
-                />
-              ))}
-            </div>
-          ) : (
-            <List
-              dataSource={data}
-              renderItem={(task: any) => {
-                const sourceLink = resolveTaskSourceLink(task);
-                const recordKey = sourceLink.moduleId && sourceLink.recordId ? `${sourceLink.moduleId}:${sourceLink.recordId}` : null;
-                const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
-                return (
-                  <TaskSummaryCard
-                    task={task}
-                    statusOptions={statusOptions}
-                    priorityOptions={priorityOptions}
-                    assigneeNameMap={assigneeNameMap}
-                    roleNameMap={roleNameMap}
-                    recordTitle={recordTitle}
-                    onClose={handleClose}
-                    onStatusChange={async (taskId, status) => {
-                      const currentTask = tasks.find((row: any) => String(row?.id) === String(taskId)) || null;
-                      const previousTask = currentTask ? { ...currentTask } : null;
-                      setTasks((prev) => prev.map((row: any) => (
-                        String(row?.id || '') === String(taskId)
-                          ? { ...row, status }
-                          : row
-                      )));
-                      try {
-                        const updatedTask = await updateTaskStatusWithAutomation({
-                          taskId,
-                          nextStatus: status,
-                          previousTask: currentTask,
-                          currentUser: {
-                            id: profile.id,
-                            fullName: createdByNameMap[String(profile.id || '')] || null,
-                          },
-                        });
-                        setTasks((prev) => prev.map((row: any) => (
-                          row.id === taskId ? { ...row, ...updatedTask } : row
-                        )));
-                        lastLoadedAtRef.current.tasks = 0;
-                      } catch (error) {
-                        if (previousTask) {
-                          setTasks((prev) => prev.map((row: any) => (
-                            String(row?.id || '') === String(taskId)
-                              ? { ...row, ...previousTask }
-                              : row
-                          )));
-                        }
-                        throw error;
-                      }
-                    }}
-                    onProducedQtyChange={async (taskId, value) => {
-                      await handleTaskProducedQtyChange(taskId, value);
-                    }}
-                    onTaskUpdated={async (updatedTask) => {
-                      setTasks((prev) => prev.map((row: any) => (
-                        String(row?.id || '') === String(updatedTask?.id || '')
-                          ? { ...row, ...updatedTask }
-                          : row
-                      )));
-                    }}
-                    currentUser={{
-                      id: profile.id,
-                      fullName: createdByNameMap[String(profile.id || '')] || null,
-                    }}
-                  />
-                );
-              }}
-            />
-          )}
-        </div>
-
-        {filteredTasks.length > MAX_ITEMS ? (
-          <Button type="link" onClick={() => setShowMore((prev) => ({ ...prev, tasks: !prev.tasks }))}>
-            {showMore.tasks ? 'نمایش کمتر' : 'نمایش بیشتر'}
-          </Button>
-        ) : null}
-      </div>
-    );
-  };
-
-  const renderTasks = () => {
-    const data = showMore.tasks ? filteredTasks : filteredTasks.slice(0, MAX_ITEMS);
-    return (
-      <div className="flex flex-col gap-3 h-full min-h-0">
-        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
-          {renderCreatedAtSortControls(taskSortDirection, setTaskSortDirection)}
-          <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-            {TASK_VIEW_PRESETS.map((view) => (
-              <div
-                key={view.key}
-                onClick={() => {
-                  setTaskViewKey(view.key);
-                  setShowMore((prev) => ({ ...prev, tasks: false }));
-                }}
-                className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
-                  taskViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
-                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                }`}
-              >
-                {view.label}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => navigate('/tasks/create')}
-          >
-            افزودن فعالیت
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto min-h-0">
-        {loadingTasks ? (
-          <div className="space-y-2">
-            <Skeleton active paragraph={{ rows: 2 }} />
-            <Skeleton active paragraph={{ rows: 2 }} />
-          </div>
-        ) : data.length === 0 ? (
-          <Empty description="فعالیتی یافت نشد" />
-        ) : (
-          <List
-            dataSource={data}
-            renderItem={(task: any) => {
-              const sourceLink = resolveTaskSourceLink(task);
-              const recordKey = sourceLink.moduleId && sourceLink.recordId ? `${sourceLink.moduleId}:${sourceLink.recordId}` : null;
-              const recordTitle = recordKey ? recordTitleMap[recordKey] : null;
-              return (
-                <TaskSummaryCard
-                  task={task}
-                  statusOptions={statusOptions}
-                  priorityOptions={priorityOptions}
-                  assigneeNameMap={assigneeNameMap}
-                  roleNameMap={roleNameMap}
-                  recordTitle={recordTitle}
-                  onClose={handleClose}
-                  onStatusChange={async (taskId, status) => {
-                    const currentTask = filteredTasks.find((row: any) => String(row?.id) === String(taskId)) || null;
-                    const previousTask = currentTask ? { ...currentTask } : null;
-                    setTasks((prev) => prev.map((row: any) => (
-                      String(row?.id || '') === String(taskId)
-                        ? { ...row, status }
-                        : row
-                    )));
-                    try {
-                      const updatedTask = await updateTaskStatusWithAutomation({
-                        taskId,
-                        nextStatus: status,
-                        previousTask: currentTask,
-                        currentUser: {
-                          id: profile.id,
-                          fullName: createdByNameMap[String(profile.id || '')] || null,
-                        },
-                      });
-                      setTasks((prev) => prev.map((row: any) => (
-                        row.id === taskId ? { ...row, ...updatedTask } : row
-                      )));
-                      lastLoadedAtRef.current.tasks = 0;
-                    } catch (error) {
-                      if (previousTask) {
-                        setTasks((prev) => prev.map((row: any) => (
-                          String(row?.id || '') === String(taskId)
-                            ? { ...row, ...previousTask }
-                            : row
-                        )));
-                      }
-                      throw error;
-                    }
-                  }}
-                  onProducedQtyChange={async (taskId, value) => {
-                    await handleTaskProducedQtyChange(taskId, value);
-                  }}
-                  onTaskUpdated={async (updatedTask) => {
-                    setTasks((prev) => prev.map((row: any) => (
-                      String(row?.id || '') === String(updatedTask?.id || '')
-                        ? { ...row, ...updatedTask }
-                        : row
-                    )));
-                  }}
-                  currentUser={{
-                    id: profile.id,
-                    fullName: createdByNameMap[String(profile.id || '')] || null,
-                  }}
-                />
-              );
-            }}
-          />
-        )}
-        </div>
-        {filteredTasks.length > MAX_ITEMS && (
-          <Button type="link" onClick={() => setShowMore(prev => ({ ...prev, tasks: !prev.tasks }))}>
-            {showMore.tasks ? 'نمایش کمتر' : 'نمایش بیشتر'}
-          </Button>
-        )}
-      </div>
-    );
-  };
-
-  const renderResponsibilitiesPanel = (mode: 'list' | 'grid' = 'list') => {
-    const data = showMore.responsibilities ? filteredResponsibilities : filteredResponsibilities.slice(0, MAX_ITEMS);
-
-    return (
-      <div className="flex flex-col gap-3 h-full min-h-0">
-        {mode === 'grid' ? (
-          <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
-            {renderCreatedAtSortControls(responsibilitySortDirection, setResponsibilitySortDirection)}
-            <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-              {responsibilityViews.map((view) => (
-                <div
-                  key={view.key}
-                  onClick={() => {
-                    setResponsibilityViewKey(view.key);
-                    setShowMore((prev) => ({ ...prev, responsibilities: false }));
-                  }}
-                  className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
-                    responsibilityViewKey === view.key
-                      ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
-                      : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                  }`}
-                >
-                  {view.label}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {loadingResponsibilities ? (
-          <div className="space-y-2">
-            <Skeleton active paragraph={{ rows: 3 }} />
-            <Skeleton active paragraph={{ rows: 3 }} />
-          </div>
-        ) : data.length === 0 ? (
-          <Empty description="مسئولیتی یافت نشد" />
-        ) : mode === 'grid' ? (
-          <div className="flex-1 overflow-y-auto min-h-0">
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-              {data.map((item: any) => {
-                const moduleConfig = MODULES[item.module_id];
-                if (!moduleConfig) return null;
-                const { imageField, tagsField, statusField, categoryField } = getModuleCardFields(moduleConfig);
-                return (
-                  <RenderCardItem
-                    key={`${item.module_id}:${item.id}`}
-                    item={item}
-                    moduleId={item.module_id}
-                    moduleConfig={moduleConfig}
-                    imageField={imageField}
-                    tagsField={tagsField}
-                    statusField={statusField}
-                    categoryField={categoryField}
-                    allUsers={directoryUsers}
-                    allRoles={directoryRoles}
-                    selectedRowKeys={[]}
-                    setSelectedRowKeys={() => undefined}
-                    navigate={(path) => {
-                      const [, moduleId, recordId] = String(path || '').split('/');
-                      if (!moduleId || !recordId) return;
-                      openPreviewRecord(
-                        moduleId,
-                        recordId,
-                        recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel({ ...item, id: recordId, module_id: moduleId }, moduleId)
-                      );
-                    }}
-                    canViewField={() => true}
-                    hideSelection
-                  />
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <List
-            dataSource={data}
-            renderItem={(item: any) => {
-              const recordKey = `${item.module_id}:${item.id}`;
-              const title = recordTitleMap[recordKey] || formatRecordLabel(item, item.module_id);
-              const moduleConfig = MODULES[item.module_id];
-              const statusField = moduleConfig?.fields?.find((f: any) => f.key === 'status');
-              const categoryField = moduleConfig?.fields?.find((f: any) => f.key === 'category');
-              const statusLabel = resolveOptionLabel(item.status, statusField?.options) || resolveStatusLabelFallback(item.status);
-              const categoryLabel = resolveOptionLabel(item.category, categoryField?.options);
-              const assigneeLabel = item.assignee_type === 'role'
-                ? (roleNameMap[String(getResolvedAssigneeId(item) || '')] || 'نقش')
-                : (assigneeNameMap[String(getResolvedAssigneeId(item) || '')] || 'کاربر');
-              const createdById = item.created_by || item.created_by_id;
-              const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
-              return (
-                <div className="mb-2">
-                  <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
-                    <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
-                    <Link
-                      to={`/${item.module_id}/${item.id}`}
-                      className="block w-full text-right text-sm font-semibold leading-5 text-gray-800 line-clamp-2 break-words overflow-hidden dark:text-gray-200"
-                      title={title}
-                      onClick={handleClose}
-                    >
-                      {title}
-                    </Link>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {categoryLabel ? (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                          {categoryLabel}
-                        </span>
-                      ) : null}
-                      {statusLabel ? (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                          {statusLabel}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
-                      <span className="flex items-center gap-1">
-                        {item.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
-                        {assigneeLabel}
-                      </span>
-                      <span>{safeJalaliFormat(item.created_at, 'YYYY/MM/DD HH:mm')}</span>
-                    </div>
-                    {createdByLabel ? (
-                      <div className="text-[11px] text-gray-400 mt-1">
-                        ایجاد کننده: {createdByLabel}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            }}
-          />
-        )}
-
-        {filteredResponsibilities.length > MAX_ITEMS ? (
-          <Button type="link" onClick={() => setShowMore((prev) => ({ ...prev, responsibilities: !prev.responsibilities }))}>
-            {showMore.responsibilities ? 'نمایش کمتر' : 'نمایش بیشتر'}
-          </Button>
-        ) : null}
-      </div>
-    );
-  };
-
-  const renderResponsibilities = () => {
-    const data = showMore.responsibilities ? filteredResponsibilities : filteredResponsibilities.slice(0, MAX_ITEMS);
-    return (
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2 rounded-xl border border-gray-200/80 bg-white/88 p-1 h-10 shadow-sm overflow-hidden dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)]">
-          {renderCreatedAtSortControls(responsibilitySortDirection, setResponsibilitySortDirection)}
-          <div className="flex items-center gap-1 overflow-x-auto flex-1 no-scrollbar px-1">
-            {responsibilityViews.map((view) => (
-              <div
-                key={view.key}
-                onClick={() => {
-                  setResponsibilityViewKey(view.key);
-                  setShowMore((prev) => ({ ...prev, responsibilities: false }));
-                }}
-                className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
-                  responsibilityViewKey === view.key
-                    ? 'bg-leather-600 text-white border-leather-600 shadow-sm font-bold'
-                    : 'bg-transparent border-transparent hover:bg-gray-100/80 dark:hover:bg-white/10 text-gray-600 dark:text-gray-300'
-                }`}
-              >
-                {view.label}
-              </div>
-            ))}
-          </div>
-        </div>
-        {loadingResponsibilities ? (
-          <div className="space-y-2">
-            <Skeleton active paragraph={{ rows: 3 }} />
-            <Skeleton active paragraph={{ rows: 3 }} />
-          </div>
-        ) : data.length === 0 ? (
-          <Empty description="مسئولیتی یافت نشد" />
-        ) : (
-          <List
-            dataSource={data}
-            renderItem={(item: any) => {
-              const recordKey = `${item.module_id}:${item.id}`;
-              const title = recordTitleMap[recordKey] || formatRecordLabel(item, item.module_id);
-              const moduleConfig = MODULES[item.module_id];
-              const statusField = moduleConfig?.fields?.find((f: any) => f.key === 'status');
-              const categoryField = moduleConfig?.fields?.find((f: any) => f.key === 'category');
-              const statusLabel = resolveOptionLabel(item.status, statusField?.options) || resolveStatusLabelFallback(item.status);
-              const categoryLabel = resolveOptionLabel(item.category, categoryField?.options);
-              const assigneeLabel = item.assignee_type === 'role'
-                ? (roleNameMap[String(getResolvedAssigneeId(item) || '')] || 'نقش')
-                : (assigneeNameMap[String(getResolvedAssigneeId(item) || '')] || 'کاربر');
-              const createdById = item.created_by || item.created_by_id;
-              const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
-              return (
-                <div className="mb-2">
-                  <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
-                    <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
-                    <Link
-                      to={`/${item.module_id}/${item.id}`}
-                      className="block w-full text-right text-sm font-semibold leading-5 text-gray-800 line-clamp-2 break-words overflow-hidden dark:text-gray-200"
-                      title={title}
-                      onClick={handleClose}
-                    >
-                      {title}
-                    </Link>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {categoryLabel && (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                          {categoryLabel}
-                        </span>
-                      )}
-                      {statusLabel && (
-                        <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                          {statusLabel}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
-                      <span className="flex items-center gap-1">
-                        {item.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
-                        {assigneeLabel}
-                      </span>
-                      <span>{safeJalaliFormat(item.created_at, 'YYYY/MM/DD HH:mm')}</span>
-                    </div>
-                    {createdByLabel && (
-                      <div className="text-[11px] text-gray-400 mt-1">
-                        ایجاد کننده: {createdByLabel}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            }}
-          />
-        )}
-        {filteredResponsibilities.length > MAX_ITEMS && (
-          <Button type="link" onClick={() => setShowMore(prev => ({ ...prev, responsibilities: !prev.responsibilities }))}>
-            {showMore.responsibilities ? 'نمایش کمتر' : 'نمایش بیشتر'}
-          </Button>
-        )}
-      </div>
-    );
-  };
-
-  const renderLegacyNotificationContent = false;
-  const contentDesktop = renderLegacyNotificationContent && (
-    <div className="w-[880px] max-w-[90vw] h-[90vh] p-4">
-      <div className="grid grid-cols-3 gap-4 h-full min-h-0">
-      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
-          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"> یادداشت‌ها</div>
-          <Badge count={formatBadgeCount(notesCount)} color={badgeColor} />
-        </div>
-        {renderNotes()}
-      </div>
-      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
-          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">فعالیت های من</div>
-          <Badge count={formatBadgeCount(tasksCount)} color={badgeColor} />
-        </div>
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
-          {renderTasks()}
-        </div>
-      </div>
-      <div className="flex flex-col border border-[rgba(var(--brand-300-rgb),0.35)] dark:border-[rgba(var(--brand-300-rgb),0.22)] rounded-2xl bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.62)] h-full overflow-hidden">
-        <div className="flex items-center justify-between px-4 pt-4 pb-2 sticky top-0 z-10 bg-[rgba(var(--brand-100-rgb),0.85)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)] border-b border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.18)]">
-          <div className="font-bold text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">مسئولیت‌های من</div>
-          <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor} />
-        </div>
-        <div className="flex-1 overflow-y-auto px-4 pb-4">
-          {renderResponsibilities()}
-        </div>
-      </div>
-      </div>
-    </div>
-  );
-
-  const contentMobile = renderLegacyNotificationContent && (
-    <div className="h-full min-h-0 flex flex-col bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]">
-      <Tabs
-        activeKey={mobileActiveKey}
-        onChange={(key) => setMobileActiveKey(key as DrawerTabKey)}
-        className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
-        items={[
-          {
-            key: 'notes',
-            label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌ها</span></Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderNotes()}</div>,
-          },
-          {
-            key: 'tasks',
-            label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت های من</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderTasks()}</div>,
-          },
-          {
-            key: 'responsibilities',
-            label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderResponsibilities()}</div>,
-          },
-          {
-            key: 'bot_messages',
-            label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden p-2">{renderBotMessagesPanel('mobile')}</div>,
-          },
-          {
-            key: 'sms_messages',
-            label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
-            children: <div className="h-full min-h-0 flex flex-col overflow-hidden">{renderSmsMessagesPanel('mobile')}</div>,
-          },
-        ]}
-      />
-    </div>
+  const renderResponsibilitiesPanel = (mode: 'list' | 'grid' = 'list') => (
+    <ResponsibilitiesPanel
+      mode={mode}
+      filteredResponsibilities={filteredResponsibilities}
+      showMore={showMore.responsibilities}
+      setShowMore={(value: boolean) => setShowMore((prev) => ({ ...prev, responsibilities: value }))}
+      loadingResponsibilities={loadingResponsibilities}
+      responsibilityViewKey={responsibilityViewKey}
+      setResponsibilityViewKey={setResponsibilityViewKey}
+      responsibilitySortDirection={responsibilitySortDirection}
+      setResponsibilitySortDirection={setResponsibilitySortDirection}
+      responsibilityViews={responsibilityViews}
+      directoryUsers={directoryUsers}
+      directoryRoles={directoryRoles}
+      openPreviewRecord={openPreviewRecord}
+      recordTitleMap={recordTitleMap}
+      formatRecordLabel={formatRecordLabel}
+      roleNameMap={roleNameMap}
+      assigneeNameMap={assigneeNameMap}
+      createdByNameMap={createdByNameMap}
+      handleClose={handleClose}
+      maxItems={MAX_ITEMS}
+    />
   );
 
   const renderLazyDrawerPane = (
@@ -8848,9 +6920,6 @@ useEffect(() => {
       />
     </div>
   );
-  void contentDesktop;
-  void contentMobile;
-
   const drawerContainer = typeof document === 'undefined' ? undefined : () => document.body;
   const triggerIcon = variant === 'chat'
     ? <MessageOutlined className="text-gray-500 dark:text-gray-400" />
@@ -8948,18 +7017,20 @@ useEffect(() => {
       ) : null}
       {taskProcessTarget ? (
         <div className="hidden" aria-hidden="true">
-          <ProductionStagesField
-            key={`${taskProcessHostKey}-${String(taskProcessModalTask?.id || '')}`}
-            recordId={taskProcessTarget.recordId}
-            moduleId={taskProcessTarget.moduleId}
-            autoOpenTaskId={taskProcessModalTask?.id ? String(taskProcessModalTask.id) : null}
-            readOnly
-            compact
-            cardCompact
-            allowReportEditInReadOnly
-            lazyLoad
-            onlyLineId={taskProcessTarget.lineId}
-          />
+          <React.Suspense fallback={null}>
+            <ProductionStagesField
+              key={`${taskProcessHostKey}-${String(taskProcessModalTask?.id || '')}`}
+              recordId={taskProcessTarget.recordId}
+              moduleId={taskProcessTarget.moduleId}
+              autoOpenTaskId={taskProcessModalTask?.id ? String(taskProcessModalTask.id) : null}
+              readOnly
+              compact
+              cardCompact
+              allowReportEditInReadOnly
+              lazyLoad
+              onlyLineId={taskProcessTarget.lineId}
+            />
+          </React.Suspense>
         </div>
       ) : null}
       <CounterpartyBotStatusModal

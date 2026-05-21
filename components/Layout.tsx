@@ -33,9 +33,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { signOutLocalSession } from '../utils/authSession';
 import { MODULES } from '../moduleRegistry';
-import NotificationsPopover from './NotificationsPopover';
-import GlobalTaskProcessModalHost from './tasks/GlobalTaskProcessModalHost';
-import GoalProgressSlider from './goals/GoalProgressSlider';
+import AppVersionUpdateBanner from './AppVersionUpdateBanner';
 import {
   ACCOUNTING_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
@@ -47,13 +45,7 @@ import {
 } from '../utils/permissions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
-import { runWorkflowsIntervalTick } from '../utils/workflowRuntime';
-import { runProcessAutomationsIntervalTick } from '../utils/processAutomationRuntime';
-import {
-  buildGlobalSearchModules,
-  searchGlobalRecords,
-  type GlobalSearchGroup,
-} from '../utils/globalSearch';
+import type { GlobalSearchGroup } from '../utils/globalSearch';
 import {
   clearCurrentOrgDemoData,
   getCurrentOrgDemoSeedStatus,
@@ -67,6 +59,9 @@ import {
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
+const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
+const GlobalTaskProcessModalHost = React.lazy(() => import('./tasks/GlobalTaskProcessModalHost'));
+const GoalProgressSlider = React.lazy(() => import('./goals/GoalProgressSlider'));
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -667,6 +662,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       intervalRunnerBusyRef.current = true;
       try {
+        const [{ runWorkflowsIntervalTick }, { runProcessAutomationsIntervalTick }] = await Promise.all([
+          import('../utils/workflowRuntime'),
+          import('../utils/processAutomationRuntime'),
+        ]);
         await runWorkflowsIntervalTick();
         await runProcessAutomationsIntervalTick();
       } catch (error) {
@@ -704,10 +703,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return mapSidebarMenuItems(visibleRawMenuItems);
   }, [visibleRawMenuItems]);
 
-  const searchableModules = useMemo(() => {
-    return buildGlobalSearchModules(MODULES, rolePermissions);
-  }, [rolePermissions]);
-
   useEffect(() => {
     const matchedPath = findMenuPath(rawMenuItems, location.pathname);
     const parentKeys = matchedPath.slice(0, -1);
@@ -733,6 +728,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const handle = setTimeout(async () => {
       try {
         setSearchLoading(true);
+        const { buildGlobalSearchModules, searchGlobalRecords } = await import('../utils/globalSearch');
+        const searchableModules = buildGlobalSearchModules(MODULES, rolePermissions);
         const results = await searchGlobalRecords(supabase, MODULES, searchableModules, {
           query: term,
           limitPerModule: 5,
@@ -752,7 +749,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }, 250);
 
     return () => clearTimeout(handle);
-  }, [globalSearch, searchableModules]);
+  }, [globalSearch, rolePermissions]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1133,11 +1130,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               className="pointer-events-auto absolute left-1/2 top-1/2 hidden w-[280px] -translate-x-1/2 -translate-y-1/2 md:block lg:w-[380px] xl:w-[460px]"
               style={{ animation: 'goalHeaderSlideIn 260ms ease-out both' }}
             >
-              <GoalProgressSlider
-                moduleId={activeModuleId}
-                placement="module_list"
-                className="w-full"
-              />
+              <React.Suspense fallback={null}>
+                <GoalProgressSlider
+                  moduleId={activeModuleId}
+                  placement="module_list"
+                  className="w-full"
+                />
+              </React.Suspense>
             </div>
           ) : null}
           <div className="flex items-center gap-2 md:gap-4">
@@ -1181,8 +1180,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </Popconfirm>
             )}
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
-            <NotificationsPopover isMobile={isMobile} variant="chat" requestedTab="notes" />
-            <NotificationsPopover isMobile={isMobile} variant="alerts" />
+            <React.Suspense fallback={null}>
+              <NotificationsPopover isMobile={isMobile} variant="chat" requestedTab="notes" />
+              <NotificationsPopover isMobile={isMobile} variant="alerts" />
+            </React.Suspense>
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
                 <div className="cursor-pointer transition-transform hover:scale-105">
                    <Avatar 
@@ -1195,6 +1196,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             </Dropdown>
           </div>
         </Header>
+
+        <AppVersionUpdateBanner />
 
         {/* ── Trial countdown banner ── */}
         {isDemoOrg && !orgIsReadonly && orgTrialDaysLeft !== null && orgTrialDaysLeft <= 7 && (
@@ -1302,7 +1305,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
              })}
           </div>
         )}
-        <GlobalTaskProcessModalHost />
+        <React.Suspense fallback={null}>
+          <GlobalTaskProcessModalHost />
+        </React.Suspense>
       </AntLayout>
     </AntLayout>
   );

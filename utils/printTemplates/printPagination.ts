@@ -258,6 +258,21 @@ export const buildSmartPrintPageOffsets = ({
       nextOffset = lineTopCandidates.length > 0 ? Math.max(...lineTopCandidates) : 0;
     }
 
+    // Last-resort snap: look for the closest anchor bottom within the final
+    // ~56 px before targetBreak (approx 2 line-heights). This avoids a hard
+    // mid-line cut while limiting the backward shift so per-page guard overhead
+    // stays small.
+    if (!nextOffset) {
+      const SNAP_LOOKBACK_PX = 56;
+      const snapMin = Math.max(currentOffset + minHardFill, targetBreak - SNAP_LOOKBACK_PX);
+      const nearbyBottomBeforeBreak = sortedAnchors
+        .map((anchor) => anchor.bottom)
+        .filter((bottom) => bottom > snapMin && bottom <= targetBreak);
+      if (nearbyBottomBeforeBreak.length > 0) {
+        nextOffset = Math.max(...nearbyBottomBeforeBreak);
+      }
+    }
+
     if (!nextOffset) {
       nextOffset = targetBreak;
     }

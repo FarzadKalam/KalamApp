@@ -174,6 +174,109 @@ const sanitizeModuleVisibleColumns = (
   return sanitized;
 };
 
+const MODULE_LIST_BASE_SELECT_KEYS = [
+  "id",
+  "org_id",
+  "created_at",
+  "updated_at",
+  "system_code",
+  "name",
+  "title",
+  "status",
+  "assignee_type",
+  "assignee_id",
+  "assignee_role_id",
+  "employee_id",
+  "metadata",
+] as const;
+
+const MODULE_LIST_EXTRA_SELECT_KEYS: Record<string, string[]> = {
+  cash_bank_operations: ["metadata", "employee_id"],
+};
+
+const MODULE_LIST_HEAVY_FIELD_TYPES = new Set<FieldType>([
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.JSON,
+  FieldType.CHECKLIST,
+  FieldType.PROGRESS_STAGES,
+]);
+
+const isSelectableColumnKey = (key?: string | null) => {
+  const value = String(key || "").trim();
+  return !!value && !value.startsWith("__") && !value.includes(".") && !value.includes("(") && !value.includes(")");
+};
+
+const collectCrudFilterFields = (filters?: CrudFilters | null): string[] => {
+  const keys = new Set<string>();
+  const visit = (item: any) => {
+    if (!item || typeof item !== "object") return;
+    const field = String(item.field || "").trim();
+    if (field) keys.add(field);
+    if (Array.isArray(item.value)) item.value.forEach(visit);
+    if (Array.isArray(item.filters)) item.filters.forEach(visit);
+  };
+  (filters || []).forEach(visit);
+  return Array.from(keys);
+};
+
+const buildModuleListRowSelect = (
+  moduleConfig: ModuleDefinition | null | undefined,
+  visibleColumns?: string[] | null,
+  options?: {
+    viewMode?: ViewMode;
+    kanbanGroupBy?: string | null;
+    calendarDateField?: string | null;
+    filters?: CrudFilters | null;
+  }
+) => {
+  if (!moduleConfig) return "*";
+
+  const selectedKeys = new Set<string>();
+  const moduleFieldKeys = new Set(
+    (moduleConfig.fields || []).map((field) => String(field?.key || "").trim()).filter(Boolean)
+  );
+  const extraSelectKeys = new Set(MODULE_LIST_EXTRA_SELECT_KEYS[moduleConfig.id] || []);
+  // ستون‌های سیستمی مدیریت‌شده که در همه جداول ماژول وجود دارند
+  const MANAGED_SYSTEM_COLUMNS = new Set(['assignee_type', 'assignee_id', 'assignee_role_id']);
+  const addKey = (key?: string | null) => {
+    if (isSelectableColumnKey(key)) selectedKeys.add(String(key).trim());
+  };
+  const addKnownKey = (key?: string | null) => {
+    const normalized = String(key || "").trim();
+    if (normalized === "id" || moduleFieldKeys.has(normalized) || extraSelectKeys.has(normalized) || MANAGED_SYSTEM_COLUMNS.has(normalized)) {
+      addKey(normalized);
+    }
+  };
+
+  MODULE_LIST_BASE_SELECT_KEYS.forEach(addKnownKey);
+  getModuleListVisibleFields(moduleConfig, visibleColumns || undefined).forEach((field) => addKnownKey(field.key));
+  collectCrudFilterFields(options?.filters).forEach(addKnownKey);
+
+  (moduleConfig.fields || []).forEach((field) => {
+    const key = String(field?.key || "").trim();
+    if (!isSelectableColumnKey(key)) return;
+    if (field.isKey || field.isTableColumn) addKnownKey(key);
+    if (!MODULE_LIST_HEAVY_FIELD_TYPES.has(field.type) && field.type !== FieldType.TAGS) {
+      addKnownKey(key);
+    }
+    const dependsOn = String(field.relationConfig?.dependsOn || "").trim();
+    if (dependsOn) addKnownKey(dependsOn);
+    if (field.type === FieldType.IMAGE || field.type === FieldType.LOCATION) addKnownKey(key);
+    if (field.type === FieldType.DATE || field.type === FieldType.DATETIME || field.type === FieldType.STATUS) addKnownKey(key);
+  });
+
+  if (options?.viewMode === ViewMode.KANBAN) addKnownKey(options.kanbanGroupBy);
+  if (options?.viewMode === ViewMode.CALENDAR) addKnownKey(options.calendarDateField);
+  if (options?.viewMode === ViewMode.MAP) {
+    (moduleConfig.fields || []).forEach((field) => {
+      if (field.type === FieldType.LOCATION || field.key === "location") addKnownKey(field.key);
+    });
+  }
+
+  return Array.from(selectedKeys).join(",");
+};
+
 const readPersistedModuleListState = (moduleId?: string | null, suffix?: string | null): PersistedModuleListState | null => {
   if (typeof window === "undefined" || !moduleId) return null;
   try {
@@ -544,6 +647,15 @@ export const ModuleListRefine: React.FC<{
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const [taskRelationOptionsLoading, setTaskRelationOptionsLoading] = useState(false);
   const [loadedTaskRelationOptionsSignature, setLoadedTaskRelationOptionsSignature] = useState("");
+  const moduleListRowSelect = useMemo(
+    () => buildModuleListRowSelect(moduleConfig, visibleColumns, {
+      viewMode,
+      kanbanGroupBy,
+      calendarDateField,
+      filters: effectiveInitialFilters,
+    }),
+    [calendarDateField, effectiveInitialFilters, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
+  );
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
   const autoSortSyncDoneRef = useRef(false);
@@ -572,6 +684,7 @@ export const ModuleListRefine: React.FC<{
 
   const { tableProps, tableQueryResult, setFilters, sorters, setSorters, current, setCurrent, pageSize, setPageSize } = useTable({
     resource: dataResource,
+    meta: { select: moduleListRowSelect },
     sorters: { initial: ensureStableCrudSorters(defaultSorters) },
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
@@ -707,6 +820,14 @@ export const ModuleListRefine: React.FC<{
           ...serverFilters,
           { field: "id", operator: "in", value: chunkIds } as any,
         ],
+        meta: {
+          select: buildModuleListRowSelect(moduleConfig, visibleColumns, {
+            viewMode,
+            kanbanGroupBy,
+            calendarDateField,
+            filters: serverFilters,
+          }),
+        },
       });
       const rows = Array.isArray(response?.data) ? response.data : [];
       rows.forEach((row: any) => {
@@ -720,7 +841,7 @@ export const ModuleListRefine: React.FC<{
     return ids
       .map((id) => rowById.get(id))
       .filter(Boolean);
-  }, [dataResource, refineProvider, resolvedModuleId, stableSorters]);
+  }, [calendarDateField, dataResource, refineProvider, kanbanGroupBy, moduleConfig, resolvedModuleId, stableSorters, viewMode, visibleColumns]);
 
   const fetchAllRowsForFilters = useCallback(async (serverFilters: CrudFilters) => {
     if (!resolvedModuleId) {
@@ -739,6 +860,14 @@ export const ModuleListRefine: React.FC<{
         pagination: { current: currentPage, pageSize: SCAN_PAGE_SIZE },
         sorters: stableSorters,
         filters: serverFilters,
+        meta: {
+          select: buildModuleListRowSelect(moduleConfig, visibleColumns, {
+            viewMode,
+            kanbanGroupBy,
+            calendarDateField,
+            filters: serverFilters,
+          }),
+        },
       });
 
       const pageRows = Array.isArray(response?.data) ? response.data : [];
@@ -765,7 +894,7 @@ export const ModuleListRefine: React.FC<{
       rows,
       total: resolvedTotal || rows.length,
     };
-  }, [dataResource, refineProvider, resolvedModuleId, stableSorters]);
+  }, [calendarDateField, dataResource, refineProvider, kanbanGroupBy, moduleConfig, resolvedModuleId, stableSorters, viewMode, visibleColumns]);
 
   const fetchOrderedIdsForFilters = useCallback(async (serverFilters: CrudFilters) => {
     if (!resolvedModuleId || !dataResource) return [];
@@ -4246,6 +4375,3 @@ export const ModuleListRefine: React.FC<{
 };
 
 export default ModuleListRefine;
-
-
-

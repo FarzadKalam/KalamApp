@@ -155,6 +155,23 @@ const routePreloaders = [
   loadGlobalSearchPage,
 ] as const;
 
+const ROUTE_PRELOAD_DELAY_MS = 8_000;
+const ROUTE_PRELOAD_GAP_MS = 350;
+
+const shouldPreloadRouteChunks = () => {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  if (document.visibilityState === "hidden") return false;
+  const connection = (navigator as any).connection;
+  if (connection?.saveData) return false;
+  const effectiveType = String(connection?.effectiveType || "").toLowerCase();
+  return effectiveType !== "slow-2g" && effectiveType !== "2g";
+};
+
+const waitForRoutePreloadGap = () =>
+  new Promise<void>((resolve) => {
+    globalThis.setTimeout(resolve, ROUTE_PRELOAD_GAP_MS);
+  });
+
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
   const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -343,18 +360,37 @@ function App() {
 
   useEffect(() => {
     if (!moduleSettingsReady || typeof window === "undefined") return undefined;
+    let cancelled = false;
+    let idleId: number | null = null;
 
-    const preloadRoutes = () => {
-      void Promise.allSettled(routePreloaders.map((preload) => preload())).catch(() => undefined);
+    const preloadRoutes = async () => {
+      if (!shouldPreloadRouteChunks()) return;
+      for (const preload of routePreloaders) {
+        if (cancelled || !shouldPreloadRouteChunks()) return;
+        await preload().catch(() => undefined);
+        if (!cancelled) {
+          await waitForRoutePreloadGap();
+        }
+      }
     };
 
-    if ("requestIdleCallback" in window) {
-      const idleId = window.requestIdleCallback(preloadRoutes, { timeout: 5000 });
-      return () => window.cancelIdleCallback?.(idleId);
-    }
+    const timeoutId = globalThis.setTimeout(() => {
+      if ("requestIdleCallback" in window) {
+        idleId = window.requestIdleCallback(() => {
+          void preloadRoutes();
+        }, { timeout: 15_000 });
+        return;
+      }
+      void preloadRoutes();
+    }, ROUTE_PRELOAD_DELAY_MS);
 
-    const timeoutId = globalThis.setTimeout(preloadRoutes, 1200);
-    return () => globalThis.clearTimeout(timeoutId);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timeoutId);
+      if (idleId !== null) {
+        window.cancelIdleCallback?.(idleId);
+      }
+    };
   }, [moduleSettingsReady]);
 
   useEffect(() => {

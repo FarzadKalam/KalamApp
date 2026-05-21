@@ -2612,8 +2612,18 @@ export const usePrintManager = ({
             dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
           })
         ),
-        ...pageStartOffsets.map((pageStartOffset, pageIndex) =>
-          React.createElement(
+        ...pageStartOffsets.map((pageStartOffset, pageIndex) => {
+          // Per-page effective body step: exactly the number of content pixels
+          // this page should display. For all pages except the last this equals
+          // (nextPageStartOffset - pageStartOffset), so the guard begins right
+          // where the next page begins — no overlap, no partial lines.
+          const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
+          const effectiveBodyStepPx = nextPageStartOffset !== undefined
+            ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
+            : pageBodyStepPx;
+          const perPageGuardHeightCss = toCssMm(pageBodyHeightPx - effectiveBodyStepPx);
+
+          return React.createElement(
             'div',
             {
               className: 'print-template-page',
@@ -2695,6 +2705,11 @@ export const usePrintManager = ({
                   dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
                 })
               ),
+              // Per-page bottom guard: covers exactly from effectiveBodyStepPx
+              // (= nextPageStartOffset - pageStartOffset) to pageBodyHeightPx.
+              // Because the guard starts at the exact pixel where the next page
+              // begins, there is no overlap (no duplicate content) and no
+              // partially-visible line at the bottom of this page.
               React.createElement('div', {
                 'aria-hidden': true,
                 className: 'print-template-body-edge-guard',
@@ -2703,9 +2718,7 @@ export const usePrintManager = ({
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  // Cover from pageBodyStepPx to pageBodyHeightPx so no text line
-                  // can be partially visible across the page boundary.
-                  height: toCssMm(pageBodyHeightPx - pageBodyStepPx),
+                  height: perPageGuardHeightCss,
                   background: '#fff',
                   pointerEvents: 'none',
                   zIndex: 2,
@@ -2751,8 +2764,8 @@ export const usePrintManager = ({
                   )
                 )
               : null
-          )
-        )
+          );
+        })
       );
     }
 

@@ -15,8 +15,12 @@ import { FieldType, ModuleField } from '../../types';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
-import { fetchAssigneeDirectory } from '../../utils/referenceData';
-import { doesProcessTemplateSupportModule } from '../../utils/processTargets';
+import {
+  fetchAssigneeDirectory,
+  fetchDynamicOptionsMap,
+  fetchProcessTemplateOptions,
+  fetchTagOptions,
+} from '../../utils/referenceData';
 import { getRelationOptionSelectVariants, getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { supportsSystemCode } from '../../utils/systemCode';
 import {
@@ -109,31 +113,16 @@ const loadWorkflowFieldOptions = async (
   }
 
   if (field.type === FieldType.TAGS) {
-    const { data, error } = await supabase
-      .from('tags')
-      .select('id, title')
-      .order('title', { ascending: true });
-    if (error) throw error;
-    return (data || []).map((row: any) => ({
-      label: String(row?.title || row?.id || ''),
-      value: String(row?.id || ''),
-    })).filter((item) => item.value);
+    return fetchTagOptions(supabase);
   }
 
   if (field.type === FieldType.USER) {
-    const { data, error } = await supabase.from('profiles').select('*').limit(300);
-    if (error) throw error;
-    const rows = data || [];
+    const directory = await fetchAssigneeDirectory(supabase);
 
-    return (rows || []).map((row: any) => {
-      const fullName = String(row?.full_name || '').trim();
-      const composedName = `${String(row?.first_name || '').trim()} ${String(row?.last_name || '').trim()}`.trim();
-      const contactLabel = String(row?.email || row?.mobile_1 || row?.mobile || '').trim();
-      return {
-        label: fullName || composedName || contactLabel || String(row?.id || ''),
-        value: String(row?.id || ''),
-      };
-    }).filter((item) => item.value);
+    return (directory.users || []).map((user) => ({
+      label: String(user?.display_name || user?.full_name || 'بدون عنوان').trim(),
+      value: String(user?.id || '').trim(),
+    })).filter((item) => item.value);
   }
 
   const targetModule = String(field?.relationConfig?.targetModule || '').trim();
@@ -142,20 +131,7 @@ const loadWorkflowFieldOptions = async (
   }
 
   if (targetModule === 'process_templates') {
-    const { data, error } = await supabase
-      .from('process_templates')
-      .select('id, name, module_id, module_ids, is_active')
-      .order('name', { ascending: true });
-    if (error) throw error;
-
-    const scopedRows = (data || []).filter((row: any) => {
-      return row?.is_active !== false && doesProcessTemplateSupportModule(row, scopeModuleId);
-    });
-
-    return scopedRows.map((row: any) => ({
-      label: String(row?.name || row?.id || ''),
-      value: String(row?.id || ''),
-    })).filter((item) => item.value);
+    return fetchProcessTemplateOptions(supabase, scopeModuleId);
   }
 
   const targetField = getPreferredRelationTargetField(targetModule, field?.relationConfig?.targetField);
@@ -205,21 +181,7 @@ const loadDynamicAndRelationOptions = async (
     )
   );
 
-  await Promise.all(
-    dynamicCategories.map(async (category) => {
-      const { data, error } = await supabase
-        .from('dynamic_options')
-        .select('label, value')
-        .eq('category', category)
-        .eq('is_active', true)
-        .order('display_order', { ascending: true });
-      if (error) throw error;
-      dynamicOptions[category] = (data || []).map((item: any) => ({
-        label: String(item?.label ?? item?.value ?? ''),
-        value: String(item?.value ?? item?.label ?? ''),
-      }));
-    })
-  );
+  Object.assign(dynamicOptions, await fetchDynamicOptionsMap(supabase, dynamicCategories));
 
   const optionFields = (fields || []).filter(
     (field) =>

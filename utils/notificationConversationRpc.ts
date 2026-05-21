@@ -44,12 +44,9 @@ export const isMissingRpcError = (error: any) => {
     code === '42883'
     || code === 'PGRST202'
     || code === 'PGRST204'
-    // 22P02: invalid UUID cast — function exists but has a schema bug; degrade gracefully
-    || code === '22P02'
     || message.includes('could not find the function')
     || message.includes('function public.')
     || message.includes('does not exist')
-    || message.includes('invalid input syntax for type uuid')
   );
 };
 

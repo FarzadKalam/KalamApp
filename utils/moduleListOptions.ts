@@ -190,6 +190,14 @@ const toUniqueRelationFields = (fields: ModuleFieldLike[]) => {
   });
 };
 
+const isCheapImmediateRelationField = (field: ModuleFieldLike) => {
+  const key = normalizeOptionValue(field.key);
+  if (field.isTableColumn) return true;
+  if (field.type === FieldType.TAGS) return true;
+  if (field.type === FieldType.USER) return true;
+  return key === 'assignee_id' || key === 'assignee_role_id' || key === 'assignee_user_id';
+};
+
 export const buildModuleListOptionPlan = (
   moduleConfig: ModuleDefinition | null | undefined,
   visibleColumns?: string[]
@@ -204,13 +212,16 @@ export const buildModuleListOptionPlan = (
   }
 
   const visibleFields = getModuleListVisibleFields(moduleConfig, visibleColumns);
+  const hasExplicitVisibleColumns = Array.isArray(visibleColumns) && visibleColumns.length > 0;
   const immediateDynamicFields = visibleFields.filter(
     (field) =>
       (field.type === FieldType.SELECT || field.type === FieldType.MULTI_SELECT || field.type === FieldType.STATUS) &&
       field.dynamicOptionsCategory
   );
   const immediateRelationFields = visibleFields.filter(
-    (field) => field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS
+    (field) =>
+      (field.type === FieldType.RELATION || field.type === FieldType.USER || field.type === FieldType.TAGS) &&
+      (hasExplicitVisibleColumns || isCheapImmediateRelationField(field))
   );
 
   const allDynamicFields = collectFullDynamicOptionFields(moduleConfig);
