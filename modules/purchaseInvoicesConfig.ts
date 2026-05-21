@@ -211,6 +211,9 @@ const BLOCKS = {
         received: 'total_received_amount',
         remaining: 'remaining_balance',
       },
+      labels: {
+        received: 'پرداخت شده',
+      },
     },
   },
 

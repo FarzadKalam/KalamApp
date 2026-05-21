@@ -491,6 +491,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           <SummaryCard 
             type={summaryConfig.calculationType || SummaryCalculationType.SUM_ALL_ROWS} 
             data={summaryData} 
+            labels={summaryConfig?.labels}
             onRefresh={refreshInvoiceSummary}
             refreshing={summaryRefreshing}
           />

@@ -4,6 +4,10 @@ const PAYMENT_INCLUDED_STATUSES = new Set(['received', 'paid', 'approved', 'clea
 const normalizePaymentStatus = (value: any) => String(value || '').trim().toLowerCase();
 const normalizeInvoiceGlobalDiscountType = (value: any): 'percent' | 'amount' =>
     String(value || '').trim().toLowerCase() === 'percent' ? 'percent' : 'amount';
+const toSafeNumber = (value: any) => {
+    const parsed = Number(value ?? 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
 
 const resolveInvoiceGlobalDiscountAmount = (subtotal: number, type: 'percent' | 'amount', rawValue: any) => {
     const safeSubtotal = Math.max(0, Number(subtotal) || 0);
@@ -61,10 +65,30 @@ export const calculateSummary = (data: any, blocks: any[], summaryConfig: any) =
 
     // حالت فاکتور
     if (type === SummaryCalculationType.INVOICE_FINANCIALS) {
+        const fieldMapping = summaryConfig?.fieldMapping || {};
+        const mappedTotalKey = typeof fieldMapping.total === 'string' ? fieldMapping.total.trim() : '';
+        const mappedReceivedKey = typeof fieldMapping.received === 'string' ? fieldMapping.received.trim() : '';
+        const mappedRemainingKey = typeof fieldMapping.remaining === 'string' ? fieldMapping.remaining.trim() : '';
         const invoiceBlock = blocks.find((b: any) => b.rowCalculationType === RowCalculationType.INVOICE_ROW)
             || blocks.find((b: any) => b.id === 'invoiceItems')
             || blocks.find((b: any) => b.id === 'items')
             || blocks.find((b: any) => b.type === BlockType.TABLE && b.id !== 'payments');
+
+        // Some modules (like employee advances) reuse invoice financial summary UI but have no invoice item table.
+        // In that case, use explicit field mapping from the record itself.
+        if (!invoiceBlock && (mappedTotalKey || mappedReceivedKey || mappedRemainingKey)) {
+            const mappedTotal = mappedTotalKey ? toSafeNumber(data?.[mappedTotalKey]) : 0;
+            const mappedReceived = mappedReceivedKey ? toSafeNumber(data?.[mappedReceivedKey]) : 0;
+            const mappedRemaining = mappedRemainingKey
+                ? toSafeNumber(data?.[mappedRemainingKey])
+                : mappedTotal - mappedReceived;
+            return {
+                total: mappedTotal,
+                received: mappedReceived,
+                remaining: mappedRemaining,
+            };
+        }
+
         const itemBlockId = invoiceBlock?.id || 'invoiceItems';
         const items = data[itemBlockId] || [];
         const itemRowCalculationType = invoiceBlock?.rowCalculationType || RowCalculationType.SIMPLE_MULTIPLY;

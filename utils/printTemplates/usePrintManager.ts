@@ -89,8 +89,8 @@ const hasPrintableValue = (value: any) => {
 const toNumberSafe = (value: any): number => {
   if (value === null || value === undefined || value === '') return 0;
   const normalized = String(value)
-    .replace(/[غ°-غ¹]/g, (d) => String('غ°غ±غ²غ³غ´غµغ¶غ·غ¸غ¹'.indexOf(d)))
-    .replace(/[ظ -ظ©]/g, (d) => String('ظ ظ،ظ¢ظ£ظ¤ظ¥ظ¦ظ§ظ¨ظ©'.indexOf(d)))
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
     .replace(/,/g, '')
     .trim();
   const parsed = Number(normalized);
@@ -98,11 +98,11 @@ const toNumberSafe = (value: any): number => {
 };
 
 const toPersianWords = (value: number): string => {
-  const ones = ['', 'غŒع©', 'ط¯ظˆ', 'ط³ظ‡', 'ع†ظ‡ط§ط±', 'ظ¾ظ†ط¬', 'ط´ط´', 'ظ‡ظپطھ', 'ظ‡ط´طھ', 'ظ†ظ‡'];
-  const teens = ['ط¯ظ‡', 'غŒط§ط²ط¯ظ‡', 'ط¯ظˆط§ط²ط¯ظ‡', 'ط³غŒط²ط¯ظ‡', 'ع†ظ‡ط§ط±ط¯ظ‡', 'ظ¾ط§ظ†ط²ط¯ظ‡', 'ط´ط§ظ†ط²ط¯ظ‡', 'ظ‡ظپط¯ظ‡', 'ظ‡ط¬ط¯ظ‡', 'ظ†ظˆط²ط¯ظ‡'];
-  const tens = ['', '', 'ط¨غŒط³طھ', 'ط³غŒ', 'ع†ظ‡ظ„', 'ظ¾ظ†ط¬ط§ظ‡', 'ط´طµطھ', 'ظ‡ظپطھط§ط¯', 'ظ‡ط´طھط§ط¯', 'ظ†ظˆط¯'];
-  const hundreds = ['', 'طµط¯', 'ط¯ظˆغŒط³طھ', 'ط³غŒطµط¯', 'ع†ظ‡ط§ط±طµط¯', 'ظ¾ط§ظ†طµط¯', 'ط´ط´طµط¯', 'ظ‡ظپطھطµط¯', 'ظ‡ط´طھطµط¯', 'ظ†ظ‡طµط¯'];
-  const scales = ['', 'ظ‡ط²ط§ط±', 'ظ…غŒظ„غŒظˆظ†', 'ظ…غŒظ„غŒط§ط±ط¯', 'طھط±غŒظ„غŒظˆظ†'];
+  const ones = ['', 'یک', 'دو', 'سه', 'چهار', 'پنج', 'شش', 'هفت', 'هشت', 'نه'];
+  const teens = ['ده', 'یازده', 'دوازده', 'سیزده', 'چهارده', 'پانزده', 'شانزده', 'هفده', 'هجده', 'نوزده'];
+  const tens = ['', '', 'بیست', 'سی', 'چهل', 'پنجاه', 'شصت', 'هفتاد', 'هشتاد', 'نود'];
+  const hundreds = ['', 'صد', 'دویست', 'سیصد', 'چهارصد', 'پانصد', 'ششصد', 'هفتصد', 'هشتصد', 'نهصد'];
+  const scales = ['', 'هزار', 'میلیون', 'میلیارد', 'تریلیون'];
 
   const convertHundreds = (num: number) => {
     const parts: string[] = [];
@@ -117,11 +117,11 @@ const toPersianWords = (value: number): string => {
       if (t > 0) parts.push(tens[t]);
       if (o > 0) parts.push(ones[o]);
     }
-    return parts.join(' ظˆ ');
+    return parts.join(' و ');
   };
 
   const n = Math.floor(Math.abs(value));
-  if (!Number.isFinite(n) || n === 0) return 'طµظپط±';
+  if (!Number.isFinite(n) || n === 0) return 'صفر';
 
   const chunks: string[] = [];
   let remaining = n;
@@ -136,7 +136,7 @@ const toPersianWords = (value: number): string => {
     remaining = Math.floor(remaining / 1000);
     scaleIndex += 1;
   }
-  return chunks.join(' ظˆ ');
+  return chunks.join(' و ');
 };
 
 const mmToPx = (value: number) => (value * 96) / 25.4;
@@ -235,26 +235,26 @@ const getAttachmentCount = (record: any) => {
 };
 
 const COMMON_VALUE_LABELS: Record<string, string> = {
-  active: 'ظپط¹ط§ظ„',
-  inactive: 'ط؛غŒط±ظپط¹ط§ظ„',
-  approved: 'طھط§غŒغŒط¯ ط´ط¯ظ‡',
-  rejected: 'ط±ط¯ ط´ط¯ظ‡',
-  pending: 'ط¯ط± ط§ظ†طھط¸ط§ط±',
-  draft: 'ظ¾غŒط´ ظ†ظˆغŒط³',
-  final: 'ظ†ظ‡ط§غŒغŒ',
-  received: 'ط¯ط±غŒط§ظپطھ ط´ط¯ظ‡',
-  paid: 'ظ¾ط±ط¯ط§ط®طھ ط´ط¯ظ‡',
-  unpaid: 'ظ¾ط±ط¯ط§ط®طھ ظ†ط´ط¯ظ‡',
-  partial: 'ط¬ط²ط¦غŒ',
-  card: 'ع©ط§ط±طھ',
-  cash: 'ظ†ظ‚ط¯',
-  cheque: 'ع†ع©',
-  bank_transfer: 'ط§ظ†طھظ‚ط§ظ„ ط¨ط§ظ†ع©غŒ',
-  transfer: 'ط§ظ†طھظ‚ط§ظ„',
-  legal: 'ط­ظ‚ظˆظ‚غŒ',
-  real: 'ط­ظ‚غŒظ‚غŒ',
-  official: 'ط±ط³ظ…غŒ',
-  unofficial: 'ط؛غŒط±ط±ط³ظ…غŒ',
+  active: 'فعال',
+  inactive: 'غیرفعال',
+  approved: 'تایید شده',
+  rejected: 'رد شده',
+  pending: 'در انتظار',
+  draft: 'پیش نویس',
+  final: 'نهایی',
+  received: 'دریافت شده',
+  paid: 'پرداخت شده',
+  unpaid: 'پرداخت نشده',
+  partial: 'جزئی',
+  card: 'کارت',
+  cash: 'نقد',
+  cheque: 'چک',
+  bank_transfer: 'انتقال بانکی',
+  transfer: 'انتقال',
+  legal: 'حقوقی',
+  real: 'حقیقی',
+  official: 'رسمی',
+  unofficial: 'غیررسمی',
 };
 
 const localizePlainText = (value: any): string => {
@@ -269,7 +269,7 @@ const localizePlainText = (value: any): string => {
 
 const getDisplayValue = (value: any): string => {
   if (value === null || value === undefined || value === '') return '-';
-  if (Array.isArray(value)) return value.map((item) => getDisplayValue(item)).join('طŒ ');
+  if (Array.isArray(value)) return value.map((item) => getDisplayValue(item)).join('، ');
   if (typeof value === 'object') {
     return localizePlainText(value.name || value.title || value.full_name || value.system_code || value.id || '-');
   }
@@ -292,7 +292,7 @@ const getAddressDisplay = (source: any) => {
     city ? `\u0634\u0647\u0631 ${localizePlainText(city)}` : '',
     address ? localizePlainText(address) : '',
   ].filter(Boolean);
-  return parts.join('طŒ ');
+  return parts.join('، ');
 };
 const getRecordImageUrl = (record: any, fields: any[] = []) => {
   const imageField = (fields || []).find((field: any) =>
@@ -329,7 +329,7 @@ const extractBillboardRelationLabel = (relationOptions: Record<string, any[]>, v
     const match = Array.isArray(options)
       ? options.find((item: any) =>
           String(item?.value || '').trim() === targetValue &&
-          (String(item?.module || '').trim() === 'billboards' || String(item?.tagLabel || '').trim() === 'ظ…ط­غŒط·غŒ')
+          (String(item?.module || '').trim() === 'billboards' || String(item?.tagLabel || '').trim() === 'محیطی')
         )
       : null;
     const label = String(match?.label || match?.name || '').trim();
@@ -555,7 +555,7 @@ export const usePrintManager = ({
     return availableTemplates.map((tpl) => ({
       id: `custom:${tpl.id}`,
       title: tpl.title,
-      description: tpl.description || 'ظ‚ط§ظ„ط¨ ط³ظپط§ط±ط´غŒ',
+      description: tpl.description || 'قالب سفارشی',
       isSystem: tpl.isSystem === true,
     }));
   }, [availableTemplates]);
@@ -659,90 +659,90 @@ export const usePrintManager = ({
     const commonSystemOptions = [
       {
         key: 'record.attachment_count',
-        labels: { fa: 'طھط¹ط¯ط§ط¯ ظ¾غŒظˆط³طھâ€Œظ‡ط§' },
+        labels: { fa: 'تعداد پیوست‌ها' },
         value: true,
         hasValue: true,
-        group: 'ظپغŒظ„ط¯ظ‡ط§غŒ ط±ع©ظˆط±ط¯',
+        group: 'فیلدهای رکورد',
         kind: 'record',
       },
       {
         key: 'company.logo_url',
-        labels: { fa: 'ظ„ظˆع¯ظˆغŒ ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'لوگوی سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'company.company_full_name',
-        labels: { fa: 'ظ†ط§ظ… ع©ط§ظ…ظ„ ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'نام کامل سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'company.trade_name',
-        labels: { fa: 'ظ†ط§ظ… طھط¬ط§ط±غŒ ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'نام تجاری سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'company.phone',
-        labels: { fa: 'طھظ„ظپظ† ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'تلفن سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'company.address',
-        labels: { fa: 'ط¢ط¯ط±ط³ ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'آدرس سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'company.slogan',
-        labels: { fa: 'ط´ط¹ط§ط± ط³ط§ط²ظ…ط§ظ†' },
+        labels: { fa: 'شعار سازمان' },
         value: true,
         hasValue: true,
-        group: 'ط§ط·ظ„ط§ط¹ط§طھ ط³ط§ط²ظ…ط§ظ†',
+        group: 'اطلاعات سازمان',
         kind: 'record',
       },
       {
         key: 'system.company_signatory_name',
-        labels: { fa: 'ظ†ط§ظ… ط§ظ…ط¶ط§ع©ظ†ظ†ط¯ظ‡' },
+        labels: { fa: 'نام امضاکننده' },
         value: true,
         hasValue: true,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
       {
         key: 'system.company_signatory_title',
-        labels: { fa: 'ط³ظ…طھ ط§ظ…ط¶ط§ع©ظ†ظ†ط¯ظ‡' },
+        labels: { fa: 'سمت امضاکننده' },
         value: true,
         hasValue: true,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
       {
         key: 'system.company_signature_image',
-        labels: { fa: 'طھطµظˆغŒط± ط§ظ…ط¶ط§' },
+        labels: { fa: 'تصویر امضا' },
         value: true,
         hasValue: true,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
       {
         key: 'system.company_stamp_image',
-        labels: { fa: 'طھطµظˆغŒط± ظ…ظ‡ط±' },
+        labels: { fa: 'تصویر مهر' },
         value: true,
         hasValue: true,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
     ];
@@ -762,26 +762,26 @@ export const usePrintManager = ({
         : []),
       {
         key: 'system.record_qr',
-        labels: { fa: 'ع©ط¯ QR ط±ع©ظˆط±ط¯' },
+        labels: { fa: 'کد QR رکورد' },
         value: true,
         hasValue: true,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
       {
         key: 'system.catalog_qr_section',
-        labels: { fa: 'QR ع©ط§طھط§ظ„ظˆع¯ (ط³ط§غŒط¯ط¨ط§ط±)' },
+        labels: { fa: 'QR کاتالوگ (سایدبار)' },
         value: true,
         hasValue: !!data?.catalog_link,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       },
       ...(moduleId === 'billboards' ? [{
         key: 'system.catalog_map_section',
-        labels: { fa: 'ظ†ظ‚ط´ظ‡ ع©ط§طھط§ظ„ظˆع¯ (ط³ط§غŒط¯ط¨ط§ط±)' },
+        labels: { fa: 'نقشه کاتالوگ (سایدبار)' },
         value: true,
         hasValue: !!data?.location_image,
-        group: 'ط³غŒط³طھظ…',
+        group: 'سیستم',
         kind: 'record',
       }] : []),
     ];
@@ -857,7 +857,7 @@ export const usePrintManager = ({
     () =>
       buildPrintOutputName({
         record: data,
-        fallbackLabel: getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || 'ع†ط§ظ¾',
+        fallbackLabel: getModuleTitle(moduleId, 'singular') || moduleConfig?.titles?.fa || 'چاپ',
       }),
     [data, moduleConfig, moduleId]
   );
@@ -1264,7 +1264,7 @@ export const usePrintManager = ({
     };
   }, [data?.products, moduleId]);
   const resolvedCurrencyLabel = useMemo(
-    () => localizePlainText(sellerInfo?.currency_label || sellerInfo?.currency_code || 'ط±غŒط§ظ„'),
+    () => localizePlainText(sellerInfo?.currency_label || sellerInfo?.currency_code || 'ریال'),
     [sellerInfo?.currency_code, sellerInfo?.currency_label]
   );
   const resolveBillboardPrintLabel = useCallback((row: any) => {
@@ -1314,13 +1314,13 @@ export const usePrintManager = ({
       <table style="width:100%; border-collapse:collapse; margin-top:8px; font-size:11px;">
         <tbody>
           <tr>
-            <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.36);">ط¬ظ…ط¹ ظ‚ط¨ظ„ ط§ط² طھط®ظپغŒظپ</td>
+            <td style="width:30%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.36);">جمع قبل از تخفیف</td>
             <td style="width:20%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">${formatPersianPrice(packageSummary.gross)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
-            <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.24);">ط¬ظ…ط¹ طھط®ظپغŒظپ</td>
+            <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.24);">جمع تخفیف</td>
             <td style="width:25%; border:1px solid var(--table-border-color, #d1d5db); padding:6px;">${formatPersianPrice(packageSummary.discount)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
           </tr>
           <tr>
-            <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08);">ظ…ط¨ظ„ط؛ ظ†ظ‡ط§غŒغŒ ظ¾ع©غŒط¬</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800; background:rgba(var(--brand-500-rgb),0.08);">مبلغ نهایی پکیج</td>
             <td colspan="3" style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:800;">${formatPersianPrice(packageSummary.final)} <span style="font-size:9px; color:#64748b;">${resolvedCurrencyLabel}</span></td>
           </tr>
         </tbody>
@@ -1416,7 +1416,7 @@ export const usePrintManager = ({
     const rowsHtml = regularRows.slice(0, 24).join('');
     const longTextRowsHtml = longTextRows.join('');
     if (!rowsHtml && !longTextRowsHtml) {
-      return '<div style="padding:8px;border:1px solid var(--table-border-color, #d1d5db);border-radius:8px;">ظ…ظ‚ط¯ط§ط± ظ‚ط§ط¨ظ„ ع†ط§ظ¾غŒ ط«ط¨طھ ظ†ط´ط¯ظ‡ ط§ط³طھ.</div>';
+      return '<div style="padding:8px;border:1px solid var(--table-border-color, #d1d5db);border-radius:8px;">مقدار قابل چاپی ثبت نشده است.</div>';
     }
     return [
       rowsHtml
@@ -1434,7 +1434,7 @@ export const usePrintManager = ({
 
   const buildInvoiceItemsTable = useCallback((items: any[]) => {
     if (!Array.isArray(items) || items.length === 0) {
-      return '<div style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;">ط§ظ‚ظ„ط§ظ…غŒ ط«ط¨طھ ظ†ط´ط¯ظ‡ ط§ط³طھ.</div>';
+      return '<div style="padding:8px;border:1px solid #e5e7eb;border-radius:6px;">اقلامی ثبت نشده است.</div>';
     }
 
     const itemsSubtotal = items.reduce((sum: number, item: any) => {
@@ -1456,7 +1456,7 @@ export const usePrintManager = ({
         );
         return `
           <tr>
-            <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${productName}</div>${deliveryTime ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">ط²ظ…ط§ظ† طھط­ظˆغŒظ„: ${deliveryTime}</div>` : ''}</td>
+            <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;vertical-align:top;"><div style="font-weight:700;">${productName}</div>${deliveryTime ? `<div style="margin-top:2px;font-size:${getReducedPrintFontSize(11)};color:#64748b;line-height:1.7;${MULTILINE_PRINT_STYLE}">زمان تحویل: ${deliveryTime}</div>` : ''}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${quantity}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${unitPrice}</td>
             <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">${vat || '-'}</td>
@@ -1468,7 +1468,7 @@ export const usePrintManager = ({
     const discountSummaryRow = invoiceSummary.globalDiscountAmount > 0
       ? `
         <tr>
-          <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:700;background:rgba(var(--brand-50-rgb),0.32);">طھط®ظپغŒظپ ع©ظ„ (${invoiceSummary.globalDiscountType === 'percent' ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}%` : `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`})</td>
+          <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:700;background:rgba(var(--brand-50-rgb),0.32);">تخفیف کل (${invoiceSummary.globalDiscountType === 'percent' ? `${toPersianNumber(String(invoiceSummary.globalDiscountValue))}%` : `${formatPersianPrice(invoiceSummary.globalDiscountValue)} ${resolvedCurrencyLabel}`})</td>
           <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;background:#fff;">-${formatPersianPrice(invoiceSummary.globalDiscountAmount)}</td>
         </tr>
       `
@@ -1476,7 +1476,7 @@ export const usePrintManager = ({
     const finalTotal = Math.max(itemsSubtotal - invoiceSummary.globalDiscountAmount, 0);
     const finalSummaryRow = `
       <tr>
-        <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:800;background:rgba(var(--brand-500-rgb),0.08);">ط¬ظ…ط¹ ع©ظ„ ظ†ظ‡ط§غŒغŒ</td>
+        <td colspan="4" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;font-weight:800;background:rgba(var(--brand-500-rgb),0.08);">جمع کل نهایی</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;font-weight:800;">${formatPersianPrice(finalTotal)}</td>
       </tr>
     `;
@@ -1485,11 +1485,11 @@ export const usePrintManager = ({
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
         <thead>
           <tr>
-            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ع©ط§ظ„ط§</th>
-            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">طھط¹ط¯ط§ط¯</th>
-            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ظ‚غŒظ…طھ ظˆط§ط­ط¯</th>
-            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ط§ط±ط²ط´ ط§ظپط²ظˆط¯ظ‡</th>
-            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ط¬ظ…ط¹</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">کالا</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">تعداد</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">قیمت واحد</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">ارزش افزوده</th>
+            <th style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;">جمع</th>
           </tr>
         </thead>
         <tbody>${rows}${discountSummaryRow}${finalSummaryRow}</tbody>
@@ -1551,7 +1551,7 @@ export const usePrintManager = ({
       if (key === 'dimensions') {
         const length = row?.length;
         const width = row?.width;
-        if (length || width) return `${toPersianPlain(length || 0)} أ— ${toPersianPlain(width || 0)}`;
+        if (length || width) return `${toPersianPlain(length || 0)} × ${toPersianPlain(width || 0)}`;
         return '-';
       }
 
@@ -1615,18 +1615,18 @@ export const usePrintManager = ({
       const descriptionValue = getDisplayValue(row?.description || row?.notes || '');
       if (descriptionValue && descriptionValue !== '-') optionalParts.push(descriptionValue);
       const deliveryTimeValue = getDisplayValue(row?.delivery_time || '');
-      if (deliveryTimeValue && deliveryTimeValue !== '-') optionalParts.push(`ط²ظ…ط§ظ† طھط­ظˆغŒظ„: ${deliveryTimeValue}`);
+      if (deliveryTimeValue && deliveryTimeValue !== '-') optionalParts.push(`زمان تحویل: ${deliveryTimeValue}`);
       if (row?.length || row?.width) {
         const countValue = Number(row?.dimension_count || 0) > 0
-          ? formatCellValue(blockId, { key: 'dimension_count', title: 'طھط¹ط¯ط§ط¯', type: 'number' }, row)
+          ? formatCellValue(blockId, { key: 'dimension_count', title: 'تعداد', type: 'number' }, row)
           : '-';
-        optionalParts.push(`ط§ط¨ط¹ط§ط¯: ${formatCellValue(blockId, { key: 'dimensions', title: 'ط§ط¨ط¹ط§ط¯', type: 'text' }, row)}${countValue !== '-' ? ` | طھط¹ط¯ط§ط¯: ${countValue}` : ''}`);
+        optionalParts.push(`ابعاد: ${formatCellValue(blockId, { key: 'dimensions', title: 'ابعاد', type: 'text' }, row)}${countValue !== '-' ? ` | تعداد: ${countValue}` : ''}`);
       }
-      if (row?.start_date) optionalParts.push(`ط´ط±ظˆط¹: ${formatCellValue(blockId, { key: 'start_date', title: 'طھط§ط±غŒط® ط´ط±ظˆط¹', type: 'date' }, row)}`);
-      if (row?.end_date) optionalParts.push(`ظ¾ط§غŒط§ظ†: ${formatCellValue(blockId, { key: 'end_date', title: 'طھط§ط±غŒط® ظ¾ط§غŒط§ظ†', type: 'date' }, row)}`);
+      if (row?.start_date) optionalParts.push(`شروع: ${formatCellValue(blockId, { key: 'start_date', title: 'تاریخ شروع', type: 'date' }, row)}`);
+      if (row?.end_date) optionalParts.push(`پایان: ${formatCellValue(blockId, { key: 'end_date', title: 'تاریخ پایان', type: 'date' }, row)}`);
       if (Number(row?.sub_quantity || 0) !== 0) {
-        const subQty = formatCellValue(blockId, { key: 'sub_quantity', title: 'طھط¹ط¯ط§ط¯ ظپط±ط¹غŒ', type: 'number' }, row);
-        const subUnit = formatCellValue(blockId, { key: 'sub_unit', title: 'ظˆط§ط­ط¯ ظپط±ط¹غŒ', type: 'text' }, row);
+        const subQty = formatCellValue(blockId, { key: 'sub_quantity', title: 'تعداد فرعی', type: 'number' }, row);
+        const subUnit = formatCellValue(blockId, { key: 'sub_unit', title: 'واحد فرعی', type: 'text' }, row);
         if (subQty !== '-') optionalParts.push(`${subQty}${subUnit && subUnit !== '-' ? ` ${subUnit}` : ''}`);
       }
       return optionalParts.join(' | ');
@@ -1713,7 +1713,7 @@ export const usePrintManager = ({
             Array.from(templateRow.cells || []).length,
             1
           );
-          tbody.innerHTML = `<tr><td colspan="${colspan}" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">ظ…ظˆط±ط¯غŒ ط«ط¨طھ ظ†ط´ط¯ظ‡ ط§ط³طھ.</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="${colspan}" style="border:1px solid var(--table-border-color, #d1d5db);padding:6px;text-align:center;">موردی ثبت نشده است.</td></tr>`;
         } else {
           const renderedRows = rows
             .map((row: any, rowIndex: number) =>
@@ -1746,7 +1746,7 @@ export const usePrintManager = ({
                 }
                 if (key === 'cheque_due_date') {
                   const due = row?.cheque_due_date || row?.due_date || '';
-                  return due ? formatCellValue(blockId, { key: 'cheque_due_date', title: 'طھط§ط±غŒط® ط³ط±ط±ط³غŒط¯', type: 'date' }, { cheque_due_date: due }) : '';
+                  return due ? formatCellValue(blockId, { key: 'cheque_due_date', title: 'تاریخ سررسید', type: 'date' }, { cheque_due_date: due }) : '';
                 }
                 if (key === 'cheque_bank_name') {
                   return getDisplayValue(row?.cheque_bank_name || row?.bank_name || '');
@@ -1755,10 +1755,10 @@ export const usePrintManager = ({
                 if (['product_id', 'product_name', 'selected_product_name'].includes(key)) {
                   const billboardLabel = resolveBillboardPrintLabel(row);
                   if (billboardLabel) return billboardLabel;
-                  return formatCellValue(blockId, { key, title: 'ظ…ط­طµظˆظ„', type: 'relation' }, row);
+                  return formatCellValue(blockId, { key, title: 'محصول', type: 'relation' }, row);
                 }
                 if (key === 'dimensions') {
-                  return formatCellValue(blockId, { key, title: 'ط§ط¨ط¹ط§ط¯', type: 'text' }, row);
+                  return formatCellValue(blockId, { key, title: 'ابعاد', type: 'text' }, row);
                 }
                 const block = Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks.find((item: any) => item.id === blockId) : null;
                 const column = block?.tableColumns?.find((item: any) => item.key === key) || { key, title: key, type: 'text' };
@@ -1817,7 +1817,7 @@ export const usePrintManager = ({
       }
 
       if (!block || !Array.isArray(block?.tableColumns)) {
-        return `<div style="padding:8px;border:1px dashed #d1d5db;border-radius:8px;">ط¨ظ„ط§ع© ${blockId} طھط¹ط±غŒظپ ظ†ط´ط¯ظ‡ ط§ط³طھ.</div>`;
+        return `<div style="padding:8px;border:1px dashed #d1d5db;border-radius:8px;">بلاک ${blockId} تعریف نشده است.</div>`;
       }
 
       if (!Array.isArray(rows) || rows.length === 0) {
@@ -1828,14 +1828,14 @@ export const usePrintManager = ({
       if (moduleId === 'price_lists' && blockId === 'items') {
         columns = columns.map((column: any) => (
           String(column?.key || '').trim() === 'price'
-            ? { ...column, title: 'ظ…ط¨ظ„ط؛ ظ†ظ‡ط§غŒغŒ' }
+            ? { ...column, title: 'مبلغ نهایی' }
             : column
         ));
       }
       if (moduleId === 'product_bundles' && blockId === 'products') {
         columns = columns.map((column: any) => (
           String(column?.key || '').trim() === 'total_price'
-            ? { ...column, title: 'ظ…ط¨ظ„ط؛ ظ†ظ‡ط§غŒغŒ' }
+            ? { ...column, title: 'مبلغ نهایی' }
             : column
         ));
       }
@@ -1883,9 +1883,9 @@ export const usePrintManager = ({
 
       return `
         <div style="margin-top:8px;">
-          <div style="font-size:11px;font-weight:800;margin-bottom:4px;color:rgb(var(--brand-500-rgb));">${block?.titles?.fa || 'ط¬ط¯ظˆظ„'}</div>
+          <div style="font-size:11px;font-weight:800;margin-bottom:4px;color:rgb(var(--brand-500-rgb));">${block?.titles?.fa || 'جدول'}</div>
           <table style="width:100%;border-collapse:collapse;font-size:11px;">
-          <thead><tr><th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;width:44px;">ط±ط¯غŒظپ</th>${header}</tr></thead>
+          <thead><tr><th style="border:1px solid var(--table-border-color, #d1d5db);padding:4px 5px;width:44px;">ردیف</th>${header}</tr></thead>
           <tbody>${body}</tbody>
           </table>
         </div>
@@ -1989,7 +1989,7 @@ export const usePrintManager = ({
       }
       if (path === 'system.compact_fields_table') return buildCompactFieldsTableHtml();
       if (path === 'system.compact_fields_inline') {
-        // Renders selected fields as inline text: "ط§ط¨ط¹ط§ط¯: غ´أ—غ³ آ· ط§ط¬ط§ط±ظ‡: غµ ظ… آ· ظˆط¶ط¹غŒطھ: ط¢ط²ط§ط¯"
+        // Renders selected fields as inline text: "ابعاد: ۴×۳ · اجاره: ۵ م · وضعیت: آزاد"
         const fields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
         const parts: string[] = [];
         fields
@@ -2011,10 +2011,10 @@ export const usePrintManager = ({
             const label = getFieldLabelFa(field, { moduleId, fallback: field.key });
             parts.push(`<span style="white-space:nowrap;">${label}: ${displayValue}</span>`);
           });
-        return parts.join(' <span style="color:rgba(255,255,255,0.35); margin:0 2px;">آ·</span> ');
+        return parts.join(' <span style="color:rgba(255,255,255,0.35); margin:0 2px;">·</span> ');
       }
       if (path === 'system.record_image_url') {
-        // Returns just the image URL (no HTML wrapper) â€” for use in src="" attributes
+        // Returns just the image URL (no HTML wrapper) — for use in src="" attributes
         return recordImageUrl || '';
       }
       if (path === 'system.compact_tables_blocks') return buildCompactTablesBlocksHtml();
@@ -2028,7 +2028,7 @@ export const usePrintManager = ({
         return `<div style="display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;">${recordQrSvgMarkup}</div>`;
       }
       if (path === 'system.catalog_qr_section') {
-        // Compact square QR box â€” designed for side-by-side placement in catalogFullPageLayout
+        // Compact square QR box — designed for side-by-side placement in catalogFullPageLayout
         const publicLink = String(data?.catalog_link || '').trim();
         if (!publicLink) return '';
         try {
@@ -2036,14 +2036,14 @@ export const usePrintManager = ({
             React.createElement(QRCode, { value: publicLink, type: 'svg', size: 56, bordered: false })
           );
           const safeLink = publicLink.replace(/"/g, '&quot;');
-          const displayLink = publicLink.length > 32 ? publicLink.slice(0, 30) + 'â€¦' : publicLink;
-          return `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR ع©ط§طھط§ظ„ظˆع¯</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${qrSvg}</div><a href="${safeLink}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${displayLink}</a></div>`;
+          const displayLink = publicLink.length > 32 ? publicLink.slice(0, 30) + '…' : publicLink;
+          return `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR کاتالوگ</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${qrSvg}</div><a href="${safeLink}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${displayLink}</a></div>`;
         } catch {
           return '';
         }
       }
       if (path === 'system.catalog_map_section') {
-        // Compact square map box â€” full-cover image, designed for side-by-side placement
+        // Compact square map box — full-cover image, designed for side-by-side placement
         const mapImageUrl = String(data?.location_image || '').trim();
         if (!mapImageUrl) return '';
         const locationRaw = data?.location;
@@ -2057,7 +2057,7 @@ export const usePrintManager = ({
           }
         } catch { /* ignore */ }
         const safeImg = mapImageUrl.replace(/"/g, '&quot;');
-        return `<a href="${googleUrl}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${safeImg}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">ًں“چ ظ…ظˆظ‚ط¹غŒطھ ظ…ع©ط§ظ†غŒ</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${locationText}</div>` : ''}</div></a>`;
+        return `<a href="${googleUrl}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${safeImg}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${locationText}</div>` : ''}</div></a>`;
       }
       if (path === 'system.compact_fields_sidebar') {
         // Renders fields in user-selected order (orderedSidebarFieldDefs respects templateSelectedKeySet order)
@@ -2069,8 +2069,8 @@ export const usePrintManager = ({
             try { displayValue = String(formatPrintValue(field, raw) || '').trim(); } catch { displayValue = ''; }
             if (!displayValue) displayValue = localizePlainText(raw);
             if (!displayValue || displayValue === '-') return;
-            // Move currency label from start to end (e.g. "طھظˆظ…ط§ظ† غ±,غ°غ°غ°" â†’ "غ±,غ°غ°غ° طھظˆظ…ط§ظ†")
-            for (const unit of ['طھظˆظ…ط§ظ†', 'ط±غŒط§ظ„', 'IRR', 'IRT']) {
+            // Move currency label from start to end (e.g. "تومان ۱,۰۰۰" → "۱,۰۰۰ تومان")
+            for (const unit of ['تومان', 'ریال', 'IRR', 'IRT']) {
               if (displayValue.startsWith(unit + ' ') || displayValue.startsWith(unit + '\u00a0')) {
                 displayValue = displayValue.slice(unit.length + 1).trim() + ' ' + unit;
                 break;
@@ -2093,19 +2093,19 @@ export const usePrintManager = ({
               `<span style="display:inline-flex; align-items:baseline; gap:4px; direction:rtl; unicode-bidi:isolate;"><span>${label}:</span><span style="direction:ltr; unicode-bidi:isolate; font-family:monospace;">${String(raw)}</span></span>`
             );
           });
-        return parts.join(' <span style="color:rgba(255,255,255,0.38); margin:0 4px;">آ·</span> ');
+        return parts.join(' <span style="color:rgba(255,255,255,0.38); margin:0 4px;">·</span> ');
       }
       if (path === 'system.company_signature_image') {
         if (!isSystemFieldVisible('system.company_signature_image')) return '';
         const src = String(sellerInfo?.signature_image_url || '').trim();
         if (!src) return '';
-        return `<img src="${src}" alt="ط§ظ…ط¶ط§" style="display:block; max-width:120px; max-height:56px; object-fit:contain;" />`;
+        return `<img src="${src}" alt="امضا" style="display:block; max-width:120px; max-height:56px; object-fit:contain;" />`;
       }
       if (path === 'system.company_stamp_image') {
         if (!isSystemFieldVisible('system.company_stamp_image')) return '';
         const src = String(sellerInfo?.stamp_image_url || '').trim();
         if (!src) return '';
-        return `<img src="${src}" alt="ظ…ظ‡ط±" style="display:block; max-width:92px; max-height:92px; object-fit:contain; opacity:0.88;" />`;
+        return `<img src="${src}" alt="مهر" style="display:block; max-width:92px; max-height:92px; object-fit:contain; opacity:0.88;" />`;
       }
       if (path === 'system.company_signatory_name') {
         if (!isSystemFieldVisible('system.company_signatory_name')) return '';
@@ -2113,7 +2113,7 @@ export const usePrintManager = ({
       }
       if (path === 'system.company_signatory_title') {
         if (!isSystemFieldVisible('system.company_signatory_title')) return '';
-        return localizePlainText(sellerInfo?.official_signatory_title || 'ظ…ط¯غŒط±ط¹ط§ظ…ظ„');
+        return localizePlainText(sellerInfo?.official_signatory_title || 'مدیرعامل');
       }
       if (path === 'system.footer_signatures') {
         const signatures = selectedStoredTemplate?.footerSignatures || getDefaultFooterSignatures(moduleId);
@@ -2134,7 +2134,7 @@ export const usePrintManager = ({
         return rawRemaining === null || rawRemaining === undefined || rawRemaining === '' ? formatPersianPrice(invoiceSummary.remaining) : formatPersianPrice(rawRemaining);
       }
       if (path === 'record.global_discount_type') {
-        return invoiceSummary.globalDiscountType === 'percent' ? 'ط¯ط±طµط¯' : 'ظ…ط¨ظ„ط؛';
+        return invoiceSummary.globalDiscountType === 'percent' ? 'درصد' : 'مبلغ';
       }
       if (path === 'record.global_discount_value') {
         return invoiceSummary.globalDiscountType === 'percent'
@@ -2190,7 +2190,7 @@ export const usePrintManager = ({
         return String(logo || '');
       }
       if (root === 'company' && nestedPath === 'currency_label') {
-        return localizePlainText(source?.currency_label || source?.currency_code || 'ط±غŒط§ظ„');
+        return localizePlainText(source?.currency_label || source?.currency_code || 'ریال');
       }
       if (root === 'company' && nestedPath === 'company_name_en') {
         return String(source?.company_name_en || source?.trade_name || source?.company_full_name || source?.company_name || '').trim();
@@ -2230,7 +2230,7 @@ export const usePrintManager = ({
       }
 
       if (root === 'customer' && nestedPath === 'person_type') {
-        return String(raw) === 'ط­ظ‚ظˆظ‚غŒ' || String(raw) === 'legal' ? 'ط­ظ‚ظˆظ‚غŒ' : 'ط­ظ‚غŒظ‚غŒ';
+        return String(raw) === 'حقوقی' || String(raw) === 'legal' ? 'حقوقی' : 'حقیقی';
       }
       if (root === 'supplier' && nestedPath === 'national_identifier') {
         return localizePlainText(
@@ -2238,7 +2238,7 @@ export const usePrintManager = ({
         );
       }
       if (root === 'customer' && nestedPath === 'national_identifier') {
-        const identifier = String(source?.person_type || '').includes('ط­ظ‚ظˆظ‚')
+        const identifier = String(source?.person_type || '').includes('حقوق')
           ? String(source?.national_id || source?.company_national_id || raw || '')
           : String(source?.national_code || raw || '');
         return localizePlainText(identifier);
@@ -2256,7 +2256,7 @@ export const usePrintManager = ({
         const pathKey = nestedPath.toLowerCase();
         if (
           PRICE_PATH_PATTERN.test(pathKey) &&
-          /^[غ°-غ¹ظ -ظ©\d\s,.-]+$/.test(raw)
+          /^[۰-۹٠-٩\d\s,.-]+$/.test(raw)
         ) {
           return formatPersianPrice(raw);
         }
@@ -2616,7 +2616,7 @@ export const usePrintManager = ({
           // Per-page effective body step: exactly the number of content pixels
           // this page should display. For all pages except the last this equals
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
-          // where the next page begins — no overlap, no partial lines.
+          // where the next page begins - no overlap, no partial lines.
           const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
           const effectiveBodyStepPx = nextPageStartOffset !== undefined
             ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
@@ -2758,7 +2758,7 @@ export const usePrintManager = ({
                       ? React.createElement(
                           'div',
                           { className: 'print-template-page-counter', style: { fontSize: 10, color: '#64748b', textAlign: 'left' } },
-                          `طµظپط­ظ‡ ${toPersianNumber(`${pageIndex + 1} ط§ط² ${effectivePageCount}`)}`
+                          `صفحه ${toPersianNumber(`${pageIndex + 1} از ${effectivePageCount}`)}`
                         )
                       : null
                   )
@@ -2914,6 +2914,7 @@ export const usePrintManager = ({
     renderPrintCard,
   };
 };
+
 
 
 

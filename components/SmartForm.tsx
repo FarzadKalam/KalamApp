@@ -2837,6 +2837,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   <SummaryCard 
                     type={summaryConfigObj?.calculationType || SummaryCalculationType.SUM_ALL_ROWS} 
                     data={currentSummaryData} 
+                    labels={summaryConfigObj?.labels}
                     onRefresh={() => setFormData((prev: Record<string, any>) => ({ ...(prev || {}) }))}
                   />
               )}
