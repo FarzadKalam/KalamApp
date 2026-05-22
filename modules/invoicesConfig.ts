@@ -480,16 +480,6 @@ export const invoicesConfig: ModuleDefinition = {
       hideInCreateForm: true,
     },
     {
-      key: 'liam_code',
-      labels: { fa: 'کد لیام', en: 'Liam Code' },
-      type: FieldType.TEXT,
-      location: FieldLocation.BLOCK,
-      blockId: 'legacyInfo',
-      order: 3.7,
-      nature: FieldNature.STANDARD,
-      hideInCreateForm: true,
-    },
-    {
       key: 'marketer_accounting_code',
       labels: { fa: 'کد حسابداری بازاریاب', en: 'Marketer Accounting Code' },
       type: FieldType.TEXT,

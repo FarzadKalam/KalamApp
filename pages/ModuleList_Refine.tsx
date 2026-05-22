@@ -183,6 +183,27 @@ const sanitizeModuleVisibleColumns = (
   return sanitized;
 };
 
+const normalizeVisibleColumnsForView = (
+  moduleId: string | null | undefined,
+  moduleConfig: ModuleDefinition | null | undefined,
+  currentView: SavedView | null | undefined,
+  columns?: string[] | null,
+) => {
+  const sanitized = sanitizeModuleVisibleColumns(moduleId, moduleConfig, columns);
+  const isDefaultView = !currentView || currentView.is_default || String(currentView.id || '').startsWith('default_');
+  if (!isDefaultView) return sanitized;
+
+  const allFieldKeys = (moduleConfig?.fields || [])
+    .map((field) => String(field?.key || '').trim())
+    .filter(Boolean)
+    .filter((key, index, list) => list.indexOf(key) === index);
+
+  if (sanitized.length > 0 && allFieldKeys.length > 0 && sanitized.length === allFieldKeys.length) {
+    return [];
+  }
+  return sanitized;
+};
+
 const MODULE_LIST_BASE_SELECT_KEYS = [
   "id",
   "org_id",
@@ -602,7 +623,12 @@ export const ModuleListRefine: React.FC<{
   const [viewFiltersState, setViewFiltersState] = useState<CrudFilters>(effectiveInitialViewFilters);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(persistedState?.columnFilters || {});
   const [visibleColumns, setVisibleColumns] = useState<string[]>(
-    () => sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, persistedState?.visibleColumns || [])
+    () => normalizeVisibleColumnsForView(
+      resolvedModuleId,
+      moduleConfig,
+      persistedState?.currentView || null,
+      persistedState?.visibleColumns || []
+    )
   );  // ✅ ستون‌های انتخاب‌شده
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>(
     () => cachedOptionSnapshot?.dynamicOptions || {}
@@ -1333,7 +1359,12 @@ export const ModuleListRefine: React.FC<{
     setSelectedRowKeys([]);
     setSelectedRowsMap({});
     setListVisibleRowKeys(null);
-    setVisibleColumns(sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, restoredState?.visibleColumns || []));
+    setVisibleColumns(normalizeVisibleColumnsForView(
+      resolvedModuleId,
+      moduleConfig,
+      restoredState?.currentView || null,
+      restoredState?.visibleColumns || []
+    ));
     setGridPageSize(getDefaultGridPageSize());
     setKanbanVisibleCounts({});
     setKanbanDraggingRecordId(null);
@@ -2863,7 +2894,7 @@ export const ModuleListRefine: React.FC<{
 
     // ✅ اعمال ستون‌های انتخاب‌شده
     if (config && config.columns && Array.isArray(config.columns) && config.columns.length > 0) {
-        setVisibleColumns(sanitizeModuleVisibleColumns(resolvedModuleId, moduleConfig, config.columns));
+        setVisibleColumns(normalizeVisibleColumnsForView(resolvedModuleId, moduleConfig, view, config.columns));
     } else {
         setVisibleColumns([]);
     }

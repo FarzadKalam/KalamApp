@@ -4,7 +4,7 @@ import { TeamOutlined } from '@ant-design/icons';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import ProfileAvatar from './common/ProfileAvatar';
+import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
@@ -523,7 +523,17 @@ const SmartForm: React.FC<SmartFormProps> = ({
       value: currentAssigneeComboValue,
       emoji: normalizedType === 'role'
         ? <TeamOutlined />
-        : <ProfileAvatar size={20} src={matchedUser?.avatar_url} name={label} />,
+        : (
+          <AssigneeAvatarDisplay
+            source={{ assignee_id, assignee_type: normalizedType }}
+            allUsers={assignees.users}
+            allRoles={assignees.roles}
+            explicitLabel={label}
+            avatarSize={20}
+            showLabel={false}
+            className="flex items-center"
+          />
+        ),
       type: normalizedType,
     };
   }, [assignees.roles, assignees.users, assigneesLoading, currentAssigneeComboValue, formData?.assignee_label, formData?.assignee_name, initialRecord?.assignee_label, initialRecord?.assignee_name, optionsBootstrapping]);
@@ -532,7 +542,17 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const userOptions = assignees.users.map((u) => ({
       label: u.display_name || u.full_name,
       value: `user_${u.id}`,
-      emoji: <ProfileAvatar size={20} src={u.avatar_url} name={u.display_name || u.full_name} />,
+      emoji: (
+        <AssigneeAvatarDisplay
+          source={{ assignee_id: u.id, assignee_type: 'user' }}
+          allUsers={assignees.users}
+          allRoles={assignees.roles}
+          explicitLabel={u.display_name || u.full_name}
+          avatarSize={20}
+          showLabel={false}
+          className="flex items-center"
+        />
+      ),
     }));
     const roleOptions = assignees.roles.map((r) => ({
       label: r.title,

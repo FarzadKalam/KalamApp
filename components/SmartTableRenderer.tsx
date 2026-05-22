@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
-import { AppstoreOutlined, SearchOutlined, UserOutlined, TeamOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
@@ -20,14 +20,13 @@ import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from '../utils/cashBankLegacyAccountKey
 import PhoneActionsPopover from './PhoneActionsPopover';
 import PersianDatePicker from './PersianDatePicker';
 import { useCurrencyConfig } from '../utils/currency';
-import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
 import { buildConditionalFieldStateMap, filterConditionallyVisibleFieldsForDataset } from '../utils/conditionalFieldRules';
 import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRuntime';
 import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import ResilientImage from './common/ResilientImage';
-import ProfileAvatar from './common/ProfileAvatar';
+import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -1300,41 +1299,17 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       if (deferredDataLoading) {
         return renderDeferredAssigneePlaceholder();
       }
-      const assigneeId = getResolvedAssigneeId(record);
-      const assigneeType = record.assignee_type;
-      
-      if (!assigneeId) {
-        return <span className="inline-flex min-h-[24px] items-center text-[10px] text-gray-300">-</span>;
-      }
-      
-      if (assigneeType === 'user') {
-        const user = allUsers.find(u => u.id === assigneeId);
-        if (user) {
-          return (
-            <div className="flex min-h-[24px] items-center gap-1">
-              <ProfileAvatar
-                src={user.avatar_url}
-                size="small"
-                icon={<UserOutlined />}
-                name={user.full_name || user.display_name}
-              />
-              <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]">{user.full_name}</span>
-            </div>
-          );
-        }
-      } else if (assigneeType === 'role') {
-        const role = allRoles.find(r => r.id === assigneeId);
-        if (role) {
-          return (
-            <div className="flex min-h-[24px] items-center gap-1">
-              <ProfileAvatar size="small" icon={<TeamOutlined />} className="bg-blue-100 text-blue-600" fallback={<TeamOutlined />} />
-              <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]">{role.title}</span>
-            </div>
-          );
-        }
-      }
-      
-      return <span className="text-[10px] text-gray-400">نامشخص</span>;
+      return (
+        <AssigneeAvatarDisplay
+          source={record}
+          allUsers={allUsers}
+          allRoles={allRoles}
+          avatarSize="small"
+          className="flex min-h-[24px] items-center gap-1 min-w-0"
+          labelClassName="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[80px]"
+          emptyPlaceholder={<span className="inline-flex min-h-[24px] items-center text-[10px] text-gray-300">-</span>}
+        />
+      );
     }
     });
   }

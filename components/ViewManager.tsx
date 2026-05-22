@@ -35,7 +35,7 @@ import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
-import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
+import { getModuleListVisibleFields, normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -64,21 +64,33 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
   const [viewName, setViewName] = useState('');
   const [editingViewId, setEditingViewId] = useState<string | null>(null);
+  const [editingDefaultView, setEditingDefaultView] = useState(false);
   const [config, setConfig] = useState<ViewConfig>({ columns: [], filters: [] });
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleConfig = MODULES[moduleId];
+  const defaultViewColumnKeys = useMemo(
+    () => getModuleListVisibleFields(moduleConfig).map((field) => String(field?.key || '').trim()).filter(Boolean),
+    [moduleConfig]
+  );
   const getViewColumnKeys = useCallback(
     (columns?: string[] | null) => {
-      const sourceColumns = Array.isArray(columns) && columns.length > 0
-        ? columns
-        : (moduleConfig?.fields || []).map((field) => field.key);
+      const sourceColumns = Array.isArray(columns) ? columns : [];
       if (moduleId === 'cash_bank_operations') {
         return normalizeCashBankVisibleColumnKeys(moduleConfig, sourceColumns);
       }
-      return sourceColumns;
+      const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || '').trim()).filter(Boolean));
+      const seen = new Set<string>();
+      return sourceColumns
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .filter((key) => {
+          if (!allowedFieldKeys.has(key) || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
     },
     [moduleConfig, moduleId]
   );
@@ -86,7 +98,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     () => (moduleConfig?.fields || []).filter((field) => getViewColumnKeys([field.key]).includes(field.key)),
     [getViewColumnKeys, moduleConfig?.fields]
   );
-  const selectedColumnKeys = useMemo(() => getViewColumnKeys(config.columns), [config.columns, getViewColumnKeys]);
+  const selectedColumnKeys = useMemo(() => {
+    const explicitColumns = getViewColumnKeys(config.columns);
+    return explicitColumns.length > 0 ? explicitColumns : defaultViewColumnKeys;
+  }, [config.columns, defaultViewColumnKeys, getViewColumnKeys]);
+  const isEditingView = editingViewId !== null || editingDefaultView;
   const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
   const supportedViewFilterOperators = useMemo(
     () =>
@@ -154,6 +170,15 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     }),
     [moduleConfig?.titles?.fa, moduleId]
   );
+  const normalizeViewsList = useCallback(
+    (items: SavedView[]) => {
+      const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+      const persistedDefaultView = normalizedItems.find((view) => view.is_default) || null;
+      const otherViews = normalizedItems.filter((view) => !view.is_default && view.id !== defaultView.id);
+      return [persistedDefaultView || defaultView, ...otherViews];
+    },
+    [defaultView]
+  );
 
   useEffect(() => {
     if (!moduleId) return;
@@ -177,7 +202,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
               .select('*')
               .eq('module_id', moduleId)
               .order('created_at', { ascending: false });
-            return [defaultView, ...(data || [])] as SavedView[];
+            return normalizeViewsList((data || []) as SavedView[]);
           })();
 
         if (!savedViewsPromiseCache.has(moduleId)) {
@@ -202,7 +227,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     return () => {
       active = false;
     };
-  }, [defaultView, moduleId]);
+  }, [defaultView, moduleId, normalizeViewsList]);
 
   useEffect(() => {
     if (!moduleConfig || !isModalOpen) return;
@@ -229,10 +254,10 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   }, [isModalOpen, moduleId, moduleConfig, viewConditionFields]);
 
   const handleOpenNewView = () => {
-    const allCols = getViewColumnKeys();
-    setConfig({ columns: allCols, filters: [] });
+    setConfig({ columns: defaultViewColumnKeys, filters: [] });
     setViewName('');
     setEditingViewId(null);
+    setEditingDefaultView(false);
     setIsModalOpen(true);
   };
 
@@ -248,19 +273,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
           ? getViewColumnKeys(rawConfig.columns)
-          : getViewColumnKeys(),
+          : defaultViewColumnKeys,
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
     };
     setConfig(safeConfig);
-
-    if (view.is_default || view.id.startsWith('default_')) {
-      setViewName(`${view.name} (کپی)`);
-      setEditingViewId(null);
-    } else {
-      setViewName(view.name);
-      setEditingViewId(view.id);
-    }
+    setViewName(view.name);
+    setEditingViewId(view.id.startsWith('default_') ? null : view.id);
+    setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
     setIsModalOpen(true);
   };
 
@@ -271,7 +291,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
           ? getViewColumnKeys(rawConfig.columns)
-          : getViewColumnKeys(),
+          : defaultViewColumnKeys,
       filters: normalizeViewFilters(rawConfig.filters).map((filter) => ({
         ...filter,
         id: createWorkflowId(),
@@ -281,6 +301,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setConfig(safeConfig);
     setViewName(`${view.name} (کپی)`);
     setEditingViewId(null);
+    setEditingDefaultView(false);
     setIsModalOpen(true);
   };
 
@@ -290,18 +311,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       columns:
         Array.isArray(rawConfig.columns) && rawConfig.columns.length > 0
           ? getViewColumnKeys(rawConfig.columns)
-          : getViewColumnKeys(),
+          : defaultViewColumnKeys,
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
     };
     setConfig(safeConfig);
-    if (view.is_default || view.id.startsWith('default_')) {
-      setViewName(`${view.name} (کپی)`);
-      setEditingViewId(null);
-    } else {
-      setViewName(view.name);
-      setEditingViewId(view.id);
-    }
+    setViewName(view.name);
+    setEditingViewId(view.id.startsWith('default_') ? null : view.id);
+    setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
     setIsMobileSheetOpen(false);
     setIsModalOpen(true);
   };
@@ -328,10 +345,23 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       module_id: moduleId,
       name: viewName,
       config: cleanConfig,
-      is_default: false,
+      is_default: editingDefaultView,
     };
 
     try {
+      if (editingDefaultView) {
+        let resetQuery = supabase
+          .from('saved_views')
+          .update({ is_default: false })
+          .eq('module_id', moduleId)
+          .eq('is_default', true);
+        if (editingViewId) {
+          resetQuery = resetQuery.neq('id', editingViewId);
+        }
+        const { error: resetError } = await resetQuery;
+        if (resetError) throw resetError;
+      }
+
       let savedData: SavedView | null;
       if (editingViewId) {
         const { data, error } = await supabase
@@ -344,7 +374,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         savedData = data;
         if (savedData) {
           setViews((prev) => {
-            const nextViews = prev.map((view) => (view.id === editingViewId ? savedData! : view));
+            const nextViews = normalizeViewsList(
+              prev.map((view) => (view.id === editingViewId ? savedData! : view))
+            );
             savedViewsCache.set(moduleId, nextViews);
             return nextViews;
           });
@@ -360,15 +392,17 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         savedData = data;
         if (savedData) {
           setViews((prev) => {
-            const nextViews = [...prev, savedData!];
+            const nextViews = normalizeViewsList([...prev, savedData!]);
             savedViewsCache.set(moduleId, nextViews);
             return nextViews;
           });
         }
-        message.success('ایجاد شد');
+        message.success(isEditingView ? 'ذخیره شد' : 'ایجاد شد');
       }
 
       setIsModalOpen(false);
+      setEditingViewId(null);
+      setEditingDefaultView(false);
       if (savedData) {
         onViewChange(savedData, savedData.config);
       }
@@ -412,7 +446,10 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const handleDeleteView = async (view: SavedView) => {
     await supabase.from('saved_views').delete().eq('id', view.id);
     setViews((prev) => {
-      const nextViews = prev.filter((item) => item.id !== view.id);
+      const remainingViews = prev.filter((item) => item.id !== view.id);
+      const nextViews = view.is_default
+        ? normalizeViewsList(remainingViews)
+        : remainingViews;
       savedViewsCache.set(moduleId, nextViews);
       return nextViews;
     });
@@ -636,8 +673,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       <Modal
         title={
           <div className="flex items-center gap-2">
-            {editingViewId ? <EditOutlined /> : <PlusOutlined />}
-            {editingViewId ? 'ویرایش نما' : 'ساخت نمای جدید'}
+            {isEditingView ? <EditOutlined /> : <PlusOutlined />}
+            {isEditingView ? 'ویرایش نما' : 'ساخت نمای جدید'}
           </div>
         }
         open={isModalOpen}
@@ -656,12 +693,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
             onClick={handleSaveView}
             className="bg-leather-600 hover:!bg-leather-500"
           >
-            {editingViewId ? 'ذخیره تغییرات' : 'ایجاد نما'}
+            {isEditingView ? 'ذخیره تغییرات' : 'ایجاد نما'}
           </Button>,
         ]}
       >
         <div className="flex flex-col gap-4 py-4">
-          {!editingViewId && viewName.includes('(کپی)') && (
+          {!isEditingView && viewName.includes('(کپی)') && (
             <Alert
               type="info"
               showIcon

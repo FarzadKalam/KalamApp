@@ -534,7 +534,6 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
   [normalizeKey("کد پستی")]: { scope: "header", key: "postal_code" },
   [normalizeKey("آدرس")]: { scope: "header", key: "address" },
   [normalizeKey("نوع فاکتور حسابداری")]: { scope: "header", key: "legacy_accounting_type" },
-  [normalizeKey("کد لیام")]: { scope: "header", key: "liam_code" },
   [normalizeKey("کد حسابداری بازاریاب")]: { scope: "header", key: "marketer_accounting_code" },
   [normalizeKey("درصد تخفیف")]: { scope: "header", key: "invoice_discount_percent" },
   [normalizeKey("میزان تخفیف")]: { scope: "header", key: "invoice_discount_amount" },
@@ -578,7 +577,6 @@ const INVOICE_LEGACY_IMPORT_FALLBACK_FIELDS: ImportFieldDescriptor[] = [
   { key: "postal_code", labels: { fa: "کد پستی", en: "Postal Code" }, type: FieldType.TEXT, scope: "header" },
   { key: "address", labels: { fa: "آدرس", en: "Address" }, type: FieldType.LONG_TEXT, scope: "header" },
   { key: "legacy_accounting_type", labels: { fa: "نوع فاکتور حسابداری سیستم قبلی", en: "Legacy Accounting Type" }, type: FieldType.TEXT, scope: "header" },
-  { key: "liam_code", labels: { fa: "کد لیام", en: "Liam Code" }, type: FieldType.TEXT, scope: "header" },
   { key: "marketer_accounting_code", labels: { fa: "کد حسابداری بازاریاب", en: "Marketer Accounting Code" }, type: FieldType.TEXT, scope: "header" },
   { key: "invoice_discount_percent", labels: { fa: "درصد تخفیف فاکتور", en: "Invoice Discount Percent" }, type: FieldType.PERCENTAGE, scope: "header" },
   { key: "invoice_discount_amount", labels: { fa: "میزان تخفیف فاکتور", en: "Invoice Discount Amount" }, type: FieldType.PRICE, scope: "header" },
@@ -967,7 +965,6 @@ const applyLegacyInvoiceSourceColumns = (
   setPayloadTextIfEmpty(next, "legacy_invoice_type", getImportedRowValue(row, ["نوع فاکتور"]));
   setPayloadTextIfEmpty(next, "legacy_accounting_type", getImportedRowValue(row, ["نوع فاکتور حسابداری"]));
   setPayloadTextIfEmpty(next, "legacy_accounting_status", getImportedRowValue(row, ["وضعیت فاکتور حسابداری"]));
-  setPayloadTextIfEmpty(next, "liam_code", getImportedRowValue(row, ["کد لیام"]));
   setPayloadTextIfEmpty(next, "marketer_accounting_code", getImportedRowValue(row, ["کد حسابداری بازاریاب"]));
   setPayloadTextIfEmpty(next, "province", getImportedRowValue(row, ["استان"]));
   setPayloadTextIfEmpty(next, "city", getImportedRowValue(row, ["شهر"]));

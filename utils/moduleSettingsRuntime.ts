@@ -114,20 +114,78 @@ const mergeRequiredTagsField = (
   return [...incomingFields, cloneDeep(baseTagsField)];
 };
 
-// فیلدهایی که در base code هستند ولی در schema ذخیره‌شده نیستند را inject می‌کند.
-// این اتفاق می‌افتد وقتی فیلد جدیدی به کانفیگ اضافه می‌شود اما تنظیمات ماژول از قبل ذخیره شده‌اند.
-const mergeNewBaseFields = (
+const mergeSchemaFieldsWithBase = (
   baseFields: ModuleField[],
   incomingFields: ModuleField[]
 ): ModuleField[] => {
+  const baseFieldMap = new Map(
+    (baseFields || [])
+      .map((field) => [String(field?.key || '').trim(), field] as const)
+      .filter(([key]) => Boolean(key))
+  );
+  const mergedIncomingFields = (incomingFields || []).map((field) => {
+    const fieldKey = String(field?.key || '').trim();
+    const baseField = fieldKey ? baseFieldMap.get(fieldKey) : null;
+    return baseField
+      ? { ...cloneDeep(baseField), ...field }
+      : field;
+  });
+
   const incomingKeys = new Set(
-    (incomingFields || []).map((f) => String(f?.key || '').trim()).filter(Boolean)
+    mergedIncomingFields.map((f) => String(f?.key || '').trim()).filter(Boolean)
   );
   const missingBaseFields = (baseFields || []).filter(
     (f) => f?.key && !incomingKeys.has(String(f.key).trim())
   );
-  if (missingBaseFields.length === 0) return incomingFields;
-  return [...incomingFields, ...cloneDeep(missingBaseFields)];
+  if (missingBaseFields.length === 0) return mergedIncomingFields;
+  return [...mergedIncomingFields, ...cloneDeep(missingBaseFields)];
+};
+
+const mergeSchemaBlocksWithBase = (
+  baseBlocks: BlockDefinition[],
+  incomingBlocks: BlockDefinition[]
+): BlockDefinition[] => {
+  const baseBlockMap = new Map(
+    (baseBlocks || [])
+      .map((block) => [String(block?.id || '').trim(), block] as const)
+      .filter(([id]) => Boolean(id))
+  );
+  const mergedIncomingBlocks = (incomingBlocks || []).map((block) => {
+    const blockId = String(block?.id || '').trim();
+    const baseBlock = blockId ? baseBlockMap.get(blockId) : null;
+    return baseBlock
+      ? { ...cloneDeep(baseBlock), ...block }
+      : block;
+  });
+
+  const incomingIds = new Set(
+    mergedIncomingBlocks.map((block) => String(block?.id || '').trim()).filter(Boolean)
+  );
+  const missingBaseBlocks = (baseBlocks || []).filter(
+    (block) => block?.id && !incomingIds.has(String(block.id).trim())
+  );
+  if (missingBaseBlocks.length === 0) return mergedIncomingBlocks;
+  return [...mergedIncomingBlocks, ...cloneDeep(missingBaseBlocks)];
+};
+
+export const mergeModuleSchemaWithBase = (
+  baseSchema: { fields?: ModuleField[]; blocks?: BlockDefinition[] } | null | undefined,
+  incomingSchema: { fields?: ModuleField[]; blocks?: BlockDefinition[] } | null | undefined
+) => {
+  const baseFields = cloneDeep((baseSchema?.fields || []) as ModuleField[]);
+  const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
+  const mergedFields = mergeRequiredTagsField(
+    baseFields,
+    mergeSchemaFieldsWithBase(baseFields, incomingFields)
+  );
+  const mergedBlocks = mergeSchemaBlocksWithBase(
+    cloneDeep((baseSchema?.blocks || []) as BlockDefinition[]),
+    cloneDeep((incomingSchema?.blocks || baseSchema?.blocks || []) as BlockDefinition[])
+  );
+  return {
+    fields: mergedFields,
+    blocks: mergedBlocks,
+  };
 };
 
 const getIncomingModuleSettings = (
@@ -146,15 +204,10 @@ export const applyModuleSettingsStoreToRegistry = (
     const base = baseModuleRegistrySnapshot[moduleId];
     const incoming = getIncomingModuleSettings(store, moduleId);
     const incomingSchema = incoming?.schema;
-    const baseFields = cloneDeep((base?.fields || []) as ModuleField[]);
-    const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
-    const withNewBase = mergeNewBaseFields(baseFields, incomingFields);
-    const resolvedFields = mergeRequiredTagsField(baseFields, withNewBase);
-
-    const resolvedBlocks = cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[]);
+    const mergedSchema = mergeModuleSchemaWithBase(base, incomingSchema);
     const normalizedSchema = moduleId === 'attendance_logs'
-      ? normalizeAttendanceLogsDetailSchema(resolvedFields)
-      : { fields: resolvedFields, blocks: resolvedBlocks };
+      ? normalizeAttendanceLogsDetailSchema(mergedSchema.fields)
+      : mergedSchema;
 
     moduleDef.fields = normalizeFields(normalizedSchema.fields);
     moduleDef.blocks = normalizeBlocks(normalizedSchema.blocks);

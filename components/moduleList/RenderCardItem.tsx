@@ -5,7 +5,6 @@ import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
-import { getResolvedAssigneeId } from "../../utils/assigneeValue";
 import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
 import { getRecordCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
@@ -16,7 +15,7 @@ import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
 import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules";
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
 import ResilientImage from "../common/ResilientImage";
-import ProfileAvatar from "../common/ProfileAvatar";
+import AssigneeAvatarDisplay from "../common/AssigneeAvatarDisplay";
 
 export interface RenderCardItemProps {
   item: any;
@@ -131,8 +130,6 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const category = categoryField ? cardItem[categoryField] : null;
   const categoryLabel = categoryFieldConfig?.options?.find((o: any) => o.value === category)?.label || category;
 
-  const assigneeId = getResolvedAssigneeId(cardItem);
-  const assigneeType = cardItem.assignee_type;
   const assigneeLabel = getAssigneeLabel(moduleId);
   const dueDate = cardItem.due_date;
   const assigneeAllowed = (canViewField ? canViewField('assignee_id') !== false : true) && isCardFieldVisible('assignee_id');
@@ -228,36 +225,16 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const summaryFields = getRecordCardSummaryFields(cardItem, moduleConfig, summaryExcludedKeys, minimal ? 2 : 3);
 
   const renderAssignee = () => {
-    if (!assigneeId) {
-      return <span className="text-[10px] text-gray-400">-</span>;
-    }
-    if (assigneeType === 'user') {
-      const user = allUsers.find((u: any) => u.id === assigneeId);
-      if (user) {
-        return (
-          <div className="flex items-center gap-1 min-w-0">
-            <ProfileAvatar size={18} src={user.avatar_url} name={user.full_name} />
-            <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]">
-              {user.full_name}
-            </span>
-          </div>
-        );
-      }
-    }
-    if (assigneeType === 'role') {
-      const role = allRoles.find((r: any) => r.id === assigneeId);
-      if (role) {
-        return (
-          <div className="flex items-center gap-1 min-w-0">
-            <ProfileAvatar size={18} className="bg-blue-100 text-blue-600" fallback="R" />
-            <span className="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]">
-              {role.title}
-            </span>
-          </div>
-        );
-      }
-    }
-    return <span className="text-[10px] text-gray-400">نامشخص</span>;
+    return (
+      <AssigneeAvatarDisplay
+        source={cardItem}
+        allUsers={allUsers}
+        allRoles={allRoles}
+        avatarSize={18}
+        className="flex items-center gap-1 min-w-0"
+        labelClassName="text-[10px] text-gray-600 dark:text-gray-300 truncate max-w-[90px]"
+      />
+    );
   };
 
   const renderDueDate = () => {

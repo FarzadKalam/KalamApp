@@ -103,6 +103,7 @@ Deno.serve(async (req: Request) => {
       const errMap: Record<string, string> = {
         not_found: 'فاکتور پیدا نشد.',
         invalid_status: 'وضعیت فاکتور اجازه تایید را نمی‌دهد.',
+        phone_not_allowed: 'این شماره برای تایید این فاکتور مجاز نیست.',
       };
       return json(400, { error: otpResult.error, message: errMap[otpResult.error] ?? 'خطا در ارسال کد.' });
     }

@@ -51,7 +51,11 @@ import {
   SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
-import { getBaseModuleFieldDefinition, MODULE_SETTINGS_UPDATED_EVENT } from '../../utils/moduleSettingsRuntime';
+import {
+  getBaseModuleFieldDefinition,
+  mergeModuleSchemaWithBase,
+  MODULE_SETTINGS_UPDATED_EVENT,
+} from '../../utils/moduleSettingsRuntime';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ConditionalFieldRulesEditor from '../../components/settings/ConditionalFieldRulesEditor';
 import SettingsCollapsiblePanel from '../../components/settings/SettingsCollapsiblePanel';
@@ -205,16 +209,18 @@ const mergeModuleSettings = (
     },
   };
 
-  const incomingSchema = incoming.schema || base.schema;
   return {
     general: mergedGeneral,
     specific: mergedSpecific,
-    schema: normalizeSchema({
-      blocks: cloneDeep(incomingSchema.blocks || base.schema.blocks),
-      fields: cloneDeep(incomingSchema.fields || base.schema.fields),
-    }),
+    schema: normalizeSchema(
+      mergeModuleSchemaWithBase(base.schema, incoming.schema || base.schema)
+    ),
     conditionalDisplay: {
       rules: cloneDeep(incoming.conditionalDisplay?.rules || base.conditionalDisplay?.rules || []),
+    },
+    onlineInvoice: {
+      ...DEFAULT_ONLINE_INVOICE_SETTINGS,
+      ...(incoming.onlineInvoice || {}),
     },
   };
 };

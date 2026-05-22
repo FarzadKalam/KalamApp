@@ -7,6 +7,7 @@ export const PROFILE_DIRECTORY_SAFE_COLUMNS = [
   'role',
   'role_id',
   'full_name',
+  'avatar_url',
   'email',
   'mobile_1',
   'is_active',

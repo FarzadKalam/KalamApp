@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, App, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
-import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, TeamOutlined, CopyOutlined } from '@ant-design/icons';
+import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, BlockType, FieldLocation, FieldNature } from '../types';
@@ -38,7 +38,7 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
-import ProfileAvatar from '../components/common/ProfileAvatar';
+import AssigneeAvatarDisplay from '../components/common/AssigneeAvatarDisplay';
 import { applyStockTransferInventory } from '../utils/stockTransferInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolicy';
@@ -58,6 +58,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
+import { resolveAssigneePresentation } from '../utils/assigneePresentation';
 import { getResolvedAssigneeId } from '../utils/assigneeValue';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
@@ -5030,26 +5031,29 @@ const ModuleShow: React.FC = () => {
 
   const currentAssigneeOption = useMemo(() => {
     if (!supportsAssignee) return null;
-    const resolvedAssigneeId = getResolvedAssigneeId(data);
-    if (!resolvedAssigneeId) return null;
-    const normalizedType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
-    const matchedUser = allUsers.find((user) => String(user?.id || '') === resolvedAssigneeId);
-    const matchedRole = allRoles.find((role) => String(role?.id || '') === resolvedAssigneeId);
-    const explicitLabel = String(
-      data?.assignee_name ||
-      data?.assignee_label ||
-      data?.assignee_role_name ||
-      ''
-    ).trim();
+    const explicitLabel = String(data?.assignee_name || data?.assignee_label || data?.assignee_role_name || '').trim();
+    const presentation = resolveAssigneePresentation({
+      source: data,
+      allUsers,
+      allRoles,
+      explicitLabel,
+    });
+    if (!presentation.assigneeId) return null;
     return {
-      label:
-        explicitLabel ||
-        (normalizedType === 'role'
-          ? String(matchedRole?.title || 'تیم انتخاب‌شده')
-          : String(matchedUser?.full_name || matchedUser?.email || matchedUser?.mobile_1 || 'مسئول انتخاب‌شده')),
-      value: `${normalizedType}_${resolvedAssigneeId}`,
-      emoji: normalizedType === 'role' ? <TeamOutlined /> : <UserOutlined />,
-      type: normalizedType,
+      label: presentation.label || (presentation.assigneeType === 'role' ? 'تیم انتخاب‌شده' : 'مسئول انتخاب‌شده'),
+      value: `${presentation.assigneeType}_${presentation.assigneeId}`,
+      emoji: (
+        <AssigneeAvatarDisplay
+          source={data}
+          allUsers={allUsers}
+          allRoles={allRoles}
+          explicitLabel={explicitLabel}
+          avatarSize={20}
+          showLabel={false}
+          className="flex items-center"
+        />
+      ),
+      type: presentation.assigneeType,
     };
   }, [allRoles, allUsers, data, data?.assignee_label, data?.assignee_name, data?.assignee_role_name, data?.assignee_type, supportsAssignee]);
 
@@ -5058,12 +5062,32 @@ const ModuleShow: React.FC = () => {
     const userOptions = allUsers.map((u) => ({
       label: u.full_name || u.email || u.mobile_1 || `کاربر ${String(u.id || '').slice(0, 8)}`,
       value: `user_${u.id}`,
-      emoji: <UserOutlined />,
+      emoji: (
+        <AssigneeAvatarDisplay
+          source={{ assignee_id: u.id, assignee_type: 'user' }}
+          allUsers={allUsers}
+          allRoles={allRoles}
+          explicitLabel={u.full_name || u.display_name || u.email || u.mobile_1}
+          avatarSize={20}
+          showLabel={false}
+          className="flex items-center"
+        />
+      ),
     }));
     const roleOptions = allRoles.map((r) => ({
       label: r.title,
       value: `role_${r.id}`,
-      emoji: <TeamOutlined />,
+      emoji: (
+        <AssigneeAvatarDisplay
+          source={{ assignee_role_id: r.id, assignee_type: 'role' }}
+          allUsers={allUsers}
+          allRoles={allRoles}
+          explicitLabel={r.title}
+          avatarSize={20}
+          showLabel={false}
+          className="flex items-center"
+        />
+      ),
     }));
     const hasCurrentUser = currentAssigneeOption?.type === 'user' && userOptions.some((item) => item.value === currentAssigneeOption.value);
     const hasCurrentRole = currentAssigneeOption?.type === 'role' && roleOptions.some((item) => item.value === currentAssigneeOption.value);
@@ -6059,17 +6083,17 @@ const ModuleShow: React.FC = () => {
     });
 
   const currentAssigneeId = getResolvedAssigneeId(data);
-  const currentAssigneeType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
-  let assigneeIcon = <UserOutlined />;
-  if (currentAssigneeId) {
-      if (currentAssigneeType === 'user') {
-          const u = allUsers.find(u => u.id === currentAssigneeId);
-          if (u) { assigneeIcon = <ProfileAvatar src={u.avatar_url} size="small" icon={<UserOutlined />} name={u.full_name || u.display_name} />; }
-      } else {
-          const r = allRoles.find(r => r.id === currentAssigneeId);
-          if (r) { assigneeIcon = <ProfileAvatar icon={<TeamOutlined />} size="small" className="bg-blue-100 text-blue-600" fallback={<TeamOutlined />} />; }
-      }
-  }
+  const assigneeIcon = currentAssigneeId ? (
+    <AssigneeAvatarDisplay
+      source={data}
+      allUsers={allUsers}
+      allRoles={allRoles}
+      explicitLabel={String(data?.assignee_name || data?.assignee_label || data?.assignee_role_name || '').trim()}
+      avatarSize="small"
+      showLabel={false}
+      className="flex items-center"
+    />
+  ) : <UserOutlined />;
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
   const recordTitleField = (moduleConfig?.fields || []).find((field: any) => {
     if (!field?.key || field.readonly || canViewField(field.key) === false) return false;
