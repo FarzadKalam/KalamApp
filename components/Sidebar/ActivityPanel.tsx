@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Empty, Form, List, Spin, Tag, Timeline } from 'antd';
+import { App, Button, Checkbox, Empty, Form, List, Spin, Tag, Timeline } from 'antd';
 import DateObject from 'react-date-object';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
@@ -29,7 +29,7 @@ import {
   RelationValueMap,
 } from '../../utils/recordDisplayFormatter';
 import { NOTES_UPDATED_EVENT } from '../../utils/aiAssistantEvents';
-import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../utils/noteDispatch';
+import { insertNotesWithFallback, sendNoteSmsNotifications, sendInvoiceReplySmsToCustomer } from '../../utils/noteDispatch';
 import {
   getActivityActionLabel,
   getActivityFieldLabel,
@@ -76,6 +76,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [editingValue, setEditingValue] = useState('');
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
+  const [sendPublicToCustomer, setSendPublicToCustomer] = useState(false);
   const [currentUser, setCurrentUser] = useState<{ id: string | null; full_name: string | null }>({ id: null, full_name: null });
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
@@ -570,6 +571,13 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       if (pendingLinkedAttachments.length > 0) {
         await ensureNoteAttachmentShortcuts(scope.module_id, scope.record_id, pendingLinkedAttachments);
       }
+      const replyTargetNote = replyToId ? items.find((note: any) => note.id === replyToId) : null;
+      const replyTargetIsOnlineInvoice = Boolean(
+        replyTargetNote &&
+        ['online_invoice', 'online_invoice_confirm'].includes(String(replyTargetNote?.metadata?.source || ''))
+      );
+      const isPublicReply = replyTargetIsOnlineInvoice && sendPublicToCustomer;
+
       const payload = {
         module_id: scope.module_id,
         record_id: scope.record_id,
@@ -580,18 +588,28 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         author_id: currentUser.id,
         author_name: currentUser.full_name,
         created_at: new Date().toISOString(),
+        ...(isPublicReply ? { is_public: true } : {}),
       } as any;
 
       await insertNotesWithFallback([payload]);
       if (smsNotificationEnabled) {
-        await sendNoteSmsNotifications({
-          authorName: String(currentUser.full_name || '').trim() || 'کاربر',
-          noteText: newItem,
-          mentionUserIds: mention_user_ids,
-          mentionRoleIds: mention_role_ids,
-          moduleId: scope.module_id,
-          recordId: scope.record_id,
-        });
+        if (isPublicReply) {
+          await sendInvoiceReplySmsToCustomer({
+            moduleId: scope.module_id,
+            recordId: scope.record_id,
+            recordName: recordName || '',
+            systemCode: String(replyTargetNote?.metadata?.system_code || ''),
+          });
+        } else {
+          await sendNoteSmsNotifications({
+            authorName: String(currentUser.full_name || '').trim() || 'کاربر',
+            noteText: newItem,
+            mentionUserIds: mention_user_ids,
+            mentionRoleIds: mention_role_ids,
+            moduleId: scope.module_id,
+            recordId: scope.record_id,
+          });
+        }
       }
 
       message.success('یادداشت ثبت شد');
@@ -602,6 +620,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setPendingLinkedAttachments([]);
       setReplyToId(null);
       setSmsNotificationEnabled(false);
+      setSendPublicToCustomer(false);
       await fetchData();
     } catch (err: any) {
       console.error(err);
@@ -755,9 +774,26 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
             filePickerModuleId={moduleId}
             filePickerRecordId={recordId}
             replyActive={Boolean(replyToId)}
-            onClearReply={() => setReplyToId(null)}
+            onClearReply={() => { setReplyToId(null); setSendPublicToCustomer(false); }}
             smsNotificationEnabled={smsNotificationEnabled}
             onSmsNotificationChange={setSmsNotificationEnabled}
+            extraActions={(() => {
+              if (!replyToId) return undefined;
+              const replyTarget = items.find((n: any) => n.id === replyToId);
+              const isOnlineInvoice = replyTarget && ['online_invoice', 'online_invoice_confirm'].includes(
+                String(replyTarget?.metadata?.source || '')
+              );
+              if (!isOnlineInvoice) return undefined;
+              return (
+                <Checkbox
+                  checked={sendPublicToCustomer}
+                  onChange={(e) => setSendPublicToCustomer(e.target.checked)}
+                  className="mr-2 whitespace-nowrap text-[11px]"
+                >
+                  ارسال در فاکتور برای مشتری
+                </Checkbox>
+              );
+            })()}
             submitDisabled={!newItem.trim() && pendingFiles.length === 0 && pendingLinkedAttachments.length === 0}
           />
         </div>
@@ -784,6 +820,12 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                   const isAi = isAiNote(item);
                   const isSystem = String(item?.source_type || '').trim() === 'system'
                     || String(item?.metadata?.source_type || '').trim() === 'system';
+                  const isOnlineInvoiceNote = ['online_invoice', 'online_invoice_confirm'].includes(
+                    String(item?.metadata?.source || '')
+                  );
+                  const sourceLabel = isOnlineInvoiceNote
+                    ? (moduleId === 'purchase_invoices' ? 'پیام تامین‌کننده' : 'پیام مشتری')
+                    : undefined;
                   const authorName = isAi ? 'دستیار هوشمند' : (item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم');
                   const replyTarget = items.find((note) => note.id === item.reply_to);
                   const replyAuthorName = replyTarget
@@ -815,6 +857,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                           setEditingValue('');
                         }}
                         isEdited={Boolean(item.is_edited)}
+                        sourceLabel={sourceLabel}
                         onReply={() => setReplyToId(item.id)}
                         onEdit={isAi ? undefined : () => handleEdit(item)}
                         onDelete={isAi ? undefined : () => handleDelete(item.id)}

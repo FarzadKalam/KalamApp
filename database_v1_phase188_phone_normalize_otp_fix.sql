@@ -1,6 +1,8 @@
--- Phase 188: fix phone normalization in invoice OTP functions
--- Problem: send/verify_invoice_confirm_otp did not normalize +98/98 prefix,
--- causing phone_not_allowed when customer phone is stored with +98 or 98 prefix.
+-- Phase 188: fix phone normalization + OTP hashing in invoice OTP functions
+-- Problems fixed:
+--   1. send/verify_invoice_confirm_otp did not normalize +98/98/9x prefix → phone_not_allowed
+--   2. encode(digest(...)) from pgcrypto fails with SET search_path = public → otp_generation_failed
+--      Fix: use built-in encode(sha256(... ::bytea), 'hex') (PostgreSQL 11+, no pgcrypto needed)
 
 -- ── helper: full phone normalization (mirrors frontend normalizePhone) ─────────
 
@@ -24,7 +26,7 @@ AS $$
   ) sub
 $$;
 
--- ── send_invoice_confirm_otp (with proper normalization) ─────────────────────
+-- ── send_invoice_confirm_otp ──────────────────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION public.send_invoice_confirm_otp(
   p_system_code TEXT,
@@ -55,8 +57,8 @@ BEGIN
       i.id,
       i.status,
       (
-        public._normalize_phone_for_match(c.mobile_1) = v_phone_normalized
-        OR public._normalize_phone_for_match(c.mobile_2) = v_phone_normalized
+        public._normalize_phone_for_match(c.mobile_1)       = v_phone_normalized
+        OR public._normalize_phone_for_match(c.mobile_2)    = v_phone_normalized
         OR public._normalize_phone_for_match(c.assistant_phone) = v_phone_normalized
       )
     INTO v_invoice_id, v_status, v_phone_allowed
@@ -90,15 +92,18 @@ BEGIN
   END IF;
 
   v_otp_code := LPAD(FLOOR(RANDOM() * 1000000)::TEXT, 6, '0');
-  v_otp_hash := encode(digest(v_otp_code || v_phone_normalized, 'sha256'), 'hex');
+  -- Use built-in sha256 (no pgcrypto required)
+  v_otp_hash := encode(sha256(CAST(v_otp_code || v_phone_normalized AS bytea)), 'hex');
 
   IF p_module = 'invoices' THEN
     UPDATE public.invoices
-    SET confirm_otp_hash = v_otp_hash, confirm_otp_expires_at = NOW() + INTERVAL '3 minutes'
+    SET confirm_otp_hash = v_otp_hash,
+        confirm_otp_expires_at = NOW() + INTERVAL '3 minutes'
     WHERE id = v_invoice_id AND org_id = v_org_id;
   ELSE
     UPDATE public.purchase_invoices
-    SET confirm_otp_hash = v_otp_hash, confirm_otp_expires_at = NOW() + INTERVAL '3 minutes'
+    SET confirm_otp_hash = v_otp_hash,
+        confirm_otp_expires_at = NOW() + INTERVAL '3 minutes'
     WHERE id = v_invoice_id AND org_id = v_org_id;
   END IF;
 
@@ -106,7 +111,7 @@ BEGIN
 END;
 $$;
 
--- ── verify_invoice_confirm_otp (with proper normalization) ───────────────────
+-- ── verify_invoice_confirm_otp ────────────────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION public.verify_invoice_confirm_otp(
   p_system_code TEXT,
@@ -161,7 +166,8 @@ BEGIN
     RETURN jsonb_build_object('error', 'otp_expired');
   END IF;
 
-  v_expected_hash := encode(digest(p_otp_code || v_phone_normalized, 'sha256'), 'hex');
+  -- Use same built-in sha256 as send function
+  v_expected_hash := encode(sha256(CAST(p_otp_code || v_phone_normalized AS bytea)), 'hex');
   IF v_stored_hash <> v_expected_hash THEN
     RETURN jsonb_build_object('error', 'otp_invalid');
   END IF;
@@ -192,9 +198,19 @@ BEGIN
     'فاکتور توسط ' || p_confirmer_name || ' تایید شد.',
     p_confirmer_name,
     TRUE,
-    jsonb_build_object('source', 'online_invoice_confirm', 'phone', v_phone_normalized, 'system_code', p_system_code)
+    jsonb_build_object(
+      'source', 'online_invoice_confirm',
+      'phone', v_phone_normalized,
+      'system_code', p_system_code
+    )
   );
 
   RETURN jsonb_build_object('success', TRUE, 'confirmed_at', NOW());
 END;
 $$;
+
+-- ── grants ────────────────────────────────────────────────────────────────────
+
+GRANT EXECUTE ON FUNCTION public._normalize_phone_for_match(TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.send_invoice_confirm_otp(TEXT, TEXT, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.verify_invoice_confirm_otp(TEXT, TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;

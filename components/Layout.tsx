@@ -736,7 +736,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     }, 15000);
     const timer = window.setInterval(() => {
       void tick();
-    }, 90000);
+    }, 600000); // fallback: server-side pg_cron handles primary triggering
 
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {

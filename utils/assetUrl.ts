@@ -21,6 +21,8 @@ export const normalizePublicAssetUrl = (value: unknown): string => {
     }
     return parsed.toString();
   } catch {
+    // اگر URL مطلق نیست ولی با / شروع می‌شود (مثل /storage/v1/...) قابل قبول است
+    if (!raw.startsWith('/')) return '';
     if (typeof window === 'undefined') return raw;
     try {
       const parsed = new URL(raw, window.location.origin);
@@ -29,7 +31,7 @@ export const normalizePublicAssetUrl = (value: unknown): string => {
       }
       return parsed.toString();
     } catch {
-      return raw;
+      return '';
     }
   }
 };

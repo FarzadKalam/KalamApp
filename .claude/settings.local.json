@@ -74,7 +74,9 @@
       "PowerShell(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Include \"types.ts\" -File | Where-Object { $_.FullName -notmatch \"node_modules\" })",
       "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $result = npx tsc --noEmit 2>&1 | Out-String; $result.Substring\\(0, [Math]::Min\\($result.Length, 4000\\)\\))",
       "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $env:NODE_OPTIONS=\"--max-old-space-size=512\"; npx tsc --noEmit --skipLibCheck 2>&1 | Select-Object -First 50 | Out-String)",
-      "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $env:NODE_OPTIONS=\"--max-old-space-size=4096\"; npx vite build 2>&1 | Select-String -Pattern \"error|Error|warning|Warning\" | Select-Object -First 40 | Out-String)"
+      "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $env:NODE_OPTIONS=\"--max-old-space-size=4096\"; npx vite build 2>&1 | Select-String -Pattern \"error|Error|warning|Warning\" | Select-Object -First 40 | Out-String)",
+      "WebSearch",
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Filter \"kong.yml\" -ErrorAction SilentlyContinue)"
     ]
   },
   "hooks": {

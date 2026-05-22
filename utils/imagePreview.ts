@@ -75,7 +75,6 @@ export const buildImagePreviewUrl = (rawUrl: string | null | undefined, preset: 
   const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return '';
   if (normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
-
   const parsed = resolveUrl(normalized);
   if (!parsed) return normalized;
 

@@ -34,7 +34,7 @@ import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
-import { DEFAULT_BRANDING, type BrandingConfig } from '../theme/brandTheme';
+import { DEFAULT_BRANDING, BRAND_PALETTE_PRESETS, type BrandingConfig, type BrandingPaletteKey } from '../theme/brandTheme';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { supabase } from '../supabaseClient';
 
@@ -171,12 +171,6 @@ const toFarsiDigits = (str: string): string =>
 const formatPhoneDisplay = (raw: string | null | undefined): string => {
   if (!raw) return '—';
   const normalized = normalizePhone(String(raw));
-  // display as ۰۹۱۲-۳۴۵-۶۷۸۹ style
-  if (/^09\d{9}$/.test(normalized)) {
-    return toFarsiDigits(
-      `${normalized.slice(0, 4)}-${normalized.slice(4, 7)}-${normalized.slice(7)}`
-    );
-  }
   return toFarsiDigits(normalized || String(raw));
 };
 
@@ -274,17 +268,36 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
         setNotes(invData.notes || []);
 
         const bs = invData.branding?.branding_settings as Record<string, any> | undefined;
-        if (bs) {
-          const merged: BrandingConfig = {
-            ...DEFAULT_BRANDING,
-            brandName: String(bs.brand_name || bs.brandName || DEFAULT_BRANDING.brandName),
-            shortName: String(bs.short_name || bs.shortName || DEFAULT_BRANDING.shortName),
-            logoUrl: String(bs.logo_url || bs.logoUrl || '').trim() || null,
-          };
-          setBranding(merged);
-          const color = bs.primary_color || bs.palette?.primary;
-          if (color) onBrandingLoad(String(color));
-        }
+        const cs = invData.branding?.company_settings as Record<string, any> | undefined;
+
+        // Logo: from company_settings (authoritative source for logo_url)
+        const logoFromCompany = String(cs?.logo_url || '').trim() || null;
+        // Brand name: branding_settings > company_settings fallback
+        const brandName = String(
+          bs?.brand_name || bs?.brandName ||
+          cs?.company_full_name || cs?.trade_name ||
+          DEFAULT_BRANDING.brandName
+        );
+        const shortName = String(
+          bs?.short_name || bs?.shortName ||
+          cs?.trade_name || cs?.company_full_name ||
+          DEFAULT_BRANDING.shortName
+        );
+
+        const merged: BrandingConfig = {
+          ...DEFAULT_BRANDING,
+          brandName,
+          shortName,
+          logoUrl: logoFromCompany,
+        };
+        setBranding(merged);
+
+        // Color: direct primary_color > palette_key lookup > company brand_palette_key
+        const directColor = String(bs?.primary_color || '').trim();
+        const paletteKey = (bs?.palette_key || cs?.brand_palette_key || '') as BrandingPaletteKey;
+        const paletteColor = paletteKey ? BRAND_PALETTE_PRESETS[paletteKey]?.palette?.primary : '';
+        const resolvedColor = directColor || paletteColor || '';
+        if (resolvedColor) onBrandingLoad(resolvedColor);
 
         const inv = invData.invoice;
         const phoneCandidates: { label: string; value: string; phone: string; displayPhone: string }[] = [];

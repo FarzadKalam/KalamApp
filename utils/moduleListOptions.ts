@@ -407,13 +407,13 @@ const mergeRelationOptions = (...lists: Array<any[] | undefined | null>) => {
 export const fetchModuleListRelationOptions = async (
   supabaseClient: any,
   fields: ModuleFieldLike[],
-  directory: { users: any[]; roles: any[] }
+  directory: { users: any[]; roles: any[] } | null
 ) => {
-  const profileOptions = (directory.users || []).map((user: any) => ({
+  const profileOptions = (directory?.users || []).map((user: any) => ({
     label: user.display_name || user.full_name || user.id,
     value: user.id,
   }));
-  const roleOptions = (directory.roles || []).map((role: any) => ({
+  const roleOptions = (directory?.roles || []).map((role: any) => ({
     label: role.title || role.id,
     value: role.id,
   }));

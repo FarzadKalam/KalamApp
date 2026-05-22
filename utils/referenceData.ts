@@ -69,7 +69,7 @@ const processTemplateRowsCache: {
 };
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
-const RECORD_TAGS_FETCH_CHUNK_SIZE = 25;
+const RECORD_TAGS_FETCH_CHUNK_SIZE = 150;
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
   expiresAt: number;

@@ -2630,7 +2630,7 @@ const claimIntervalWorkflowRun = async (
   } catch {
     let query = supabase
       .from('workflows')
-      .update({ last_run_at: claimedAtIso })
+      .update({ last_run_at: claimedAtIso, server_queued_at: null })
       .eq('id', workflowId)
       .eq('is_active', true)
       .eq('trigger_type', 'interval')
@@ -2728,7 +2728,8 @@ export const runWorkflowsIntervalTick = async ({
 
   for (const rawWorkflow of workflows) {
     const workflow = sanitizeIntervalWorkflow(rawWorkflow);
-    const due = isIntervalDue({
+    const serverQueued = !!workflow.server_queued_at;
+    const due = serverQueued || isIntervalDue({
       lastRunAt: workflow.last_run_at || null,
       intervalValue: clampIntervalValue(workflow.interval_value, 1),
       intervalUnit: normalizeIntervalUnit(workflow.interval_unit || 'day'),

@@ -97,6 +97,91 @@ export const buildNoteSmsPreviewText = (authorName: string, noteText: string) =>
   return `پیام جدید از طرف "${safeAuthor}"${body}\nبرای مشاهده به سامانه مراجعه کنید`;
 };
 
+export const buildInvoiceReplySmsText = ({
+  invoiceName,
+  publicLink,
+  companyName,
+}: {
+  invoiceName: string;
+  publicLink: string;
+  companyName?: string;
+}): string => {
+  const name = String(invoiceName || '').trim() || 'فاکتور';
+  const lines = [
+    `یک پاسخ جدید به پیام شما برای فاکتور «${name}» ثبت شد.`,
+    `مشاهده در لینک زیر:`,
+    String(publicLink || '').trim(),
+  ];
+  if (companyName) lines.push(String(companyName).trim());
+  return lines.join('\n');
+};
+
+export const sendInvoiceReplySmsToCustomer = async ({
+  moduleId,
+  recordId,
+  recordName,
+  systemCode,
+}: {
+  moduleId: string;
+  recordId: string;
+  recordName: string;
+  systemCode?: string;
+}) => {
+  const isSales = moduleId !== 'purchase_invoices';
+  const table = isSales ? 'invoices' : 'purchase_invoices';
+  const phoneField = isSales ? 'customer_mobile_1' : 'supplier_mobile_1';
+
+  // Fetch invoice phone + system_code + company name in parallel
+  const [invoiceRes, companyRes] = await Promise.all([
+    supabase
+      .from(table)
+      .select(`system_code, public_link, ${isSales ? 'customer:customers(mobile_1)' : 'supplier:suppliers(mobile_1)'}`)
+      .eq('id', recordId)
+      .maybeSingle(),
+    supabase
+      .from('company_settings')
+      .select('company_full_name, trade_name')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const invoice = invoiceRes?.data as Record<string, any> | null;
+  if (!invoice) return;
+
+  const rawPhone = isSales
+    ? invoice?.customer?.mobile_1
+    : invoice?.supplier?.mobile_1;
+  const phone = normalizePhone(String(rawPhone || ''));
+  if (!isValidIranMobile(phone)) return;
+
+  const sc = systemCode || String(invoice.system_code || '').trim();
+  const publicLink = invoice.public_link
+    ? String(invoice.public_link)
+    : sc
+      ? `${typeof window !== 'undefined' ? window.location.origin : ''}/i/${sc}${!isSales ? '?t=p' : ''}`
+      : '';
+  if (!publicLink) return;
+
+  const company = companyRes?.data as Record<string, any> | null;
+  const companyName = String(company?.company_full_name || company?.trade_name || '').trim();
+  const text = buildInvoiceReplySmsText({
+    invoiceName: recordName,
+    publicLink,
+    companyName: companyName || undefined,
+  });
+
+  await sendSmsViaGateway({
+    to: [phone],
+    text,
+    allowDirectFallback: true,
+    moduleId,
+    recordId,
+    title: 'پاسخ به پیام فاکتور',
+    metadata: { source_type: 'invoice_reply_notification', [phoneField]: phone },
+  });
+};
+
 export const sendNoteSmsNotifications = async ({
   authorName,
   noteText,

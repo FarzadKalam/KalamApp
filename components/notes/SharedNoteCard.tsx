@@ -58,6 +58,7 @@ interface SharedNoteCardProps {
   variant?: 'default' | 'ai';
   renderTemplateBold?: boolean;
   animateOnMount?: boolean;
+  sourceLabel?: string;
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
@@ -145,6 +146,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   variant = 'default',
   renderTemplateBold = false,
   animateOnMount = false,
+  sourceLabel,
 }) => {
   const [entered, setEntered] = useState<boolean>(!animateOnMount);
   const [previewAttachment, setPreviewAttachment] = useState<NoteAttachment | null>(null);
@@ -463,7 +465,17 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         style={cardStyle}
       >
           <div className="mb-1 flex items-center justify-between gap-2 text-[9px]" style={subtleTextStyle}>
-          <span className="truncate font-semibold" style={{ color: token.colorText }}>{authorName}</span>
+          <span className="inline-flex items-center gap-1.5 min-w-0">
+            <span className="truncate font-semibold" style={{ color: token.colorText }}>{authorName}</span>
+            {sourceLabel && (
+              <Tag
+                color="orange"
+                style={{ fontSize: 9, padding: '0 4px', lineHeight: '16px', margin: 0, flexShrink: 0 }}
+              >
+                {sourceLabel}
+              </Tag>
+            )}
+          </span>
           <span className="shrink-0 inline-flex items-center gap-1">
             {statusNode}
             <span>{createdAtLabel}</span>

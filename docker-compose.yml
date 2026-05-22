@@ -86,6 +86,9 @@ services:
       KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth,request-termination,ip-restriction
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+      # WebSocket connection timeout — بدون این Kong اتصال WebSocket را قطع می‌کند
+      KONG_NGINX_PROXY_PROXY_READ_TIMEOUT: 3600s
+      KONG_NGINX_PROXY_PROXY_SEND_TIMEOUT: 3600s
       SUPABASE_ANON_KEY: ${ANON_KEY}
       SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
       DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
@@ -291,6 +294,10 @@ services:
       REGION: ${REGION}
       ENABLE_IMAGE_TRANSFORMATION: "true"
       IMGPROXY_URL: http://imgproxy:5001
+      # رفع خطای 403 با ParsPack: AWS SDK v3 به‌صورت پیش‌فرض x-amz-checksum-mode اضافه می‌کند
+      # که ParsPack پشتیبانی نمی‌کند — این env var checksum را فقط وقتی ضروری است فعال می‌کند
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
       # S3 protocol endpoint configuration
       ##S3_PROTOCOL_ACCESS_KEY_ID: ${S3_PROTOCOL_ACCESS_KEY_ID}
       ##S3_PROTOCOL_ACCESS_KEY_SECRET: ${S3_PROTOCOL_ACCESS_KEY_SECRET}

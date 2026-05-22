@@ -113,6 +113,7 @@ export type WorkflowRecord = {
   actions?: WorkflowAction[] | null;
   is_active?: boolean;
   last_run_at?: string | null;
+  server_queued_at?: string | null;
   created_at?: string;
   updated_at?: string;
 };

@@ -724,8 +724,8 @@ export const ModuleListRefine: React.FC<{
     pagination: { pageSize: DEFAULT_LIST_PAGE_SIZE },
     queryOptions: {
       enabled: !!dataResource,
-      staleTime: 30_000,
-      refetchOnMount: true,
+      staleTime: 60_000,
+      refetchOnMount: false,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
@@ -1939,25 +1939,48 @@ export const ModuleListRefine: React.FC<{
       }
 
       try {
-        const directoryPromise = fetchAssigneeDirectory(supabase);
-        const immediateDynamicPromise =
+        // همه ۳ درخواست موازی شروع می‌شوند — relation options بدون directory (null-safe)
+        const [directory, immediateDynamicOptions, partialRelationOptions] = await Promise.all([
+          fetchAssigneeDirectory(supabase),
           optionPlan.immediateDynamicCategories.length > 0
             ? fetchDynamicOptionsMap(supabase, optionPlan.immediateDynamicCategories)
-            : Promise.resolve({} as Record<string, any[]>);
-        const [directory, immediateDynamicOptions] = await Promise.all([
-          directoryPromise,
-          immediateDynamicPromise,
+            : Promise.resolve({} as Record<string, any[]>),
+          fetchModuleListRelationOptions(supabase, optionPlan.immediateRelationFields, null),
         ]);
         if (!isActive) return;
 
         setAllUsers(directory.users);
         setAllRoles(directory.roles);
 
-        const immediateRelationOptions = await fetchModuleListRelationOptions(
-          supabase,
-          optionPlan.immediateRelationFields,
-          directory
-        );
+        // پس از دریافت directory، فیلدهای user/profile/role را بدون کوئری DB جدید override می‌کنیم
+        const profileOptions = (directory.users || []).map((u: any) => ({
+          label: u.display_name || u.full_name || u.id,
+          value: u.id,
+        }));
+        const roleOptions = (directory.roles || []).map((r: any) => ({
+          label: r.title || r.id,
+          value: r.id,
+        }));
+        const assigneeOptions = [
+          ...profileOptions,
+          ...roleOptions.filter((r) => !profileOptions.some((u) => String(u.value) === String(r.value))),
+        ];
+        const directoryOverrides: Record<string, any[]> = {
+          profiles: profileOptions,
+          assignee_id: assigneeOptions,
+          org_roles: roleOptions,
+          roles: roleOptions,
+        };
+        (optionPlan.immediateRelationFields || []).forEach((f) => {
+          const k = String(f.key || '').trim();
+          if (!k) return;
+          if (f.type === FieldType.USER || f.relationConfig?.targetModule === 'profiles') {
+            directoryOverrides[k] = profileOptions;
+          } else if (f.relationConfig?.targetModule === 'org_roles' || f.relationConfig?.targetModule === 'roles') {
+            directoryOverrides[k] = roleOptions;
+          }
+        });
+        const immediateRelationOptions = { ...partialRelationOptions, ...directoryOverrides };
 
         const snapshot = writeModuleOptionSnapshot(resolvedModuleId, {
           dynamicOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.dynamicOptions, immediateDynamicOptions),
