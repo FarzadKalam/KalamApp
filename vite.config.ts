@@ -1,6 +1,8 @@
 import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 
 const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 
@@ -44,6 +46,31 @@ const resolveManualChunk = (id: string) => {
     return undefined;
 };
 
+const generateVersionJson = () => ({
+  name: 'generate-version-json',
+  buildStart() {
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+
+    let changes = [];
+    const changesFile = path.resolve(process.cwd(), '.version-changes.json');
+    if (fs.existsSync(changesFile)) {
+      const changesData = JSON.parse(fs.readFileSync(changesFile, 'utf-8'));
+      changes = changesData.changes || [];
+    }
+
+    const versionFile = {
+      version: pkg.version,
+      releasedAt: new Date().toISOString().replace('Z', '+03:30'),
+      changes
+    };
+
+    const publicDir = path.resolve(process.cwd(), 'public');
+    fs.mkdirSync(publicDir, { recursive: true });
+    fs.writeFileSync(path.join(publicDir, 'version.json'), JSON.stringify(versionFile, null, 2));
+  }
+});
+
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
@@ -65,7 +92,7 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [react()],
+      plugins: [react(), generateVersionJson()],
       build: {
         rollupOptions: {
           output: {
