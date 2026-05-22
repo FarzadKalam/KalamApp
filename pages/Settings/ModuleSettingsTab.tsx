@@ -38,13 +38,16 @@ import {
   FieldType,
   ModuleDefinition,
   ModuleField,
+  ModuleNature,
 } from '../../types';
 import { fetchCurrentUserRolePermissions, isSaasAdminModuleId, type PermissionMap } from '../../utils/permissions';
 import {
   AddFieldFormValues,
+  DEFAULT_ONLINE_INVOICE_SETTINGS,
   EditableModuleSchema,
   ModuleSettingsConfig,
   ModuleSettingsStore,
+  OnlineInvoiceSettings,
   SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE,
 } from './moduleSettingsTypes';
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
@@ -1118,6 +1121,139 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                   />
                 ),
               },
+              ...(selectedModuleConfig?.nature === ModuleNature.INVOICE ? [{
+                key: 'online_invoice',
+                label: 'تنظیمات فاکتور آنلاین',
+                children: (() => {
+                  const oi: OnlineInvoiceSettings = {
+                    ...DEFAULT_ONLINE_INVOICE_SETTINGS,
+                    ...(currentConfig.onlineInvoice || {}),
+                  };
+                  const updateOI = (patch: Partial<OnlineInvoiceSettings>) =>
+                    updateCurrentConfig((prev) => ({
+                      ...prev,
+                      onlineInvoice: { ...DEFAULT_ONLINE_INVOICE_SETTINGS, ...(prev.onlineInvoice || {}), ...patch },
+                    }));
+
+                  const headerFields = (currentConfig.schema.fields || []).filter(
+                    (f) => f.location !== 'block' && !['image_url', 'system_code', 'status', 'created_at', 'updated_at', 'customer_confirmed_at', 'customer_confirmer_name', 'supplier_confirmed_at', 'supplier_confirmer_name'].includes(f.key)
+                  );
+
+                  return (
+                    <div className="space-y-4">
+                      <Card title="تنظیمات کلی" size="small" className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800">
+                        <Row gutter={[12, 12]}>
+                          <Col xs={24}>
+                            <div className="flex items-center gap-3">
+                              <Switch
+                                checked={oi.enabled}
+                                onChange={(v) => updateOI({ enabled: v })}
+                                disabled={!selectedModuleEditable}
+                              />
+                              <Typography.Text>لینک عمومی فاکتور فعال باشد</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24}>
+                            <div className="flex items-center gap-3">
+                              <Switch
+                                checked={oi.confirmationEnabled}
+                                onChange={(v) => updateOI({ confirmationEnabled: v })}
+                                disabled={!selectedModuleEditable}
+                              />
+                              <Typography.Text>قابلیت تایید فاکتور توسط مشتری/تامین‌کننده</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24}>
+                            <div className="flex items-center gap-3">
+                              <Switch
+                                checked={oi.messagingEnabled}
+                                onChange={(v) => updateOI({ messagingEnabled: v })}
+                                disabled={!selectedModuleEditable}
+                              />
+                              <Typography.Text>امکان ارسال پیام توسط مشتری/تامین‌کننده</Typography.Text>
+                            </div>
+                          </Col>
+                        </Row>
+                      </Card>
+
+                      <Card title="نمایش جدول اقلام" size="small" className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800">
+                        <Row gutter={[12, 12]}>
+                          <Col xs={24}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showItemsTable} onChange={(v) => updateOI({ showItemsTable: v })} disabled={!selectedModuleEditable} />
+                              <Typography.Text>نمایش جدول اقلام</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showItemNotes} onChange={(v) => updateOI({ showItemNotes: v })} disabled={!selectedModuleEditable || !oi.showItemsTable} />
+                              <Typography.Text className={!oi.showItemsTable ? 'text-gray-400' : ''}>نمایش یادداشت اقلام</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showItemDimensions} onChange={(v) => updateOI({ showItemDimensions: v })} disabled={!selectedModuleEditable || !oi.showItemsTable} />
+                              <Typography.Text className={!oi.showItemsTable ? 'text-gray-400' : ''}>نمایش ابعاد (طول × عرض)</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showItemDates} onChange={(v) => updateOI({ showItemDates: v })} disabled={!selectedModuleEditable || !oi.showItemsTable} />
+                              <Typography.Text className={!oi.showItemsTable ? 'text-gray-400' : ''}>نمایش تاریخ شروع/پایان اقلام</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showDiscount} onChange={(v) => updateOI({ showDiscount: v })} disabled={!selectedModuleEditable || !oi.showItemsTable} />
+                              <Typography.Text className={!oi.showItemsTable ? 'text-gray-400' : ''}>نمایش تخفیف</Typography.Text>
+                            </div>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <div className="flex items-center gap-3">
+                              <Switch checked={oi.showVat} onChange={(v) => updateOI({ showVat: v })} disabled={!selectedModuleEditable || !oi.showItemsTable} />
+                              <Typography.Text className={!oi.showItemsTable ? 'text-gray-400' : ''}>نمایش ارزش افزوده</Typography.Text>
+                            </div>
+                          </Col>
+                        </Row>
+                      </Card>
+
+                      <Card title="نمایش جدول دریافت/پرداخت" size="small" className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800">
+                        <div className="flex items-center gap-3">
+                          <Switch checked={oi.showPaymentsTable} onChange={(v) => updateOI({ showPaymentsTable: v })} disabled={!selectedModuleEditable} />
+                          <Typography.Text>نمایش جدول دریافت/پرداخت</Typography.Text>
+                        </div>
+                      </Card>
+
+                      <Card title="فیلدهای قابل نمایش به مشتری/تامین‌کننده" size="small" className="border-gray-200 dark:!bg-[#141414] dark:!border-gray-800">
+                        <Typography.Text className="text-xs text-gray-500 dark:text-gray-400 block mb-3">
+                          فیلدهایی که در صفحه عمومی فاکتور نمایش داده می‌شوند را انتخاب کنید.
+                        </Typography.Text>
+                        <Space direction="vertical" className="w-full">
+                          {headerFields.map((field) => {
+                            const currentVis = (oi.visibleFields || []).find((v) => v.key === field.key);
+                            const isVisible = currentVis ? currentVis.visible : true;
+                            return (
+                              <div key={field.key} className="flex items-center gap-3">
+                                <Switch
+                                  size="small"
+                                  checked={isVisible}
+                                  disabled={!selectedModuleEditable}
+                                  onChange={(v) => {
+                                    const next = (oi.visibleFields || []).filter((x) => x.key !== field.key);
+                                    next.push({ key: field.key, visible: v });
+                                    updateOI({ visibleFields: next });
+                                  }}
+                                />
+                                <Typography.Text>{field.labels?.fa || field.key}</Typography.Text>
+                              </div>
+                            );
+                          })}
+                        </Space>
+                      </Card>
+                    </div>
+                  );
+                })(),
+              }] : []),
               {
                 key: 'schema_editor',
                 label: 'ویرایش فیلدها و بلاک‌ها',

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Space } from 'antd';
+import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Space, Tooltip } from 'antd';
 import {
   UploadOutlined,
   LoadingOutlined,
@@ -8,6 +8,7 @@ import {
   EllipsisOutlined,
   CopyOutlined,
   DeleteOutlined,
+  LinkOutlined,
   EditOutlined,
   PushpinOutlined,
   SaveOutlined,
@@ -1096,9 +1097,15 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     setRelationSearchQuery('');
   };
 
+  const isValidRelationId = (v: any) => {
+    const s = String(v ?? '').trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+  };
+
   useEffect(() => {
     if (fieldType !== FieldType.RELATION) return;
     if (value === undefined || value === null || value === '') return;
+    if (!isValidRelationId(value)) return;
     if (String(relationSearchQuery || '').trim().length > 0) return;
     const exists = relationResolvedOptions.some((item: any) => String(item?.value) === String(value));
     if (exists) return;
@@ -1113,6 +1120,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       return;
     }
     if (value === undefined || value === null || value === '') {
+      setRelationExactOption(null);
+      return;
+    }
+    if (!isValidRelationId(value)) {
       setRelationExactOption(null);
       return;
     }
@@ -2064,6 +2075,45 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         if (fieldType === FieldType.TIME) {
           return <span className="font-mono persian-number">{formatPersian(value, 'TIME')}</span>;
         }
+        if (fieldType === FieldType.LINK) {
+          const rawLink = (() => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            // Relative paths from DB (e.g. /i/I100) — prepend origin
+            if (raw.startsWith('/')) return `${window.location.origin}${raw}`;
+            // Already absolute
+            if (raw.startsWith('http')) return raw;
+            return raw;
+          })();
+          if (!rawLink) return <span className="text-gray-400">—</span>;
+          return (
+            <span className="flex items-center gap-1 min-w-0">
+              <a
+                href={rawLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 underline text-xs truncate max-w-[200px]"
+              >
+                <LinkOutlined className="mr-1" />
+                {rawLink}
+              </a>
+              <Tooltip title="کپی لینک">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CopyOutlined />}
+                  className="shrink-0 text-gray-400 hover:text-leather-600"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard?.writeText(rawLink).then(() => {
+                      // silent success
+                    }).catch(() => {});
+                  }}
+                />
+              </Tooltip>
+            </span>
+          );
+        }
         if (fieldType === FieldType.PHONE) {
           return (
             <PhoneActionsPopover
@@ -2207,6 +2257,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             value={formatTextForInput(value)}
             onChange={e => onChange(normalizeDigitsToEnglish(e.target.value))}
             allowClear
+          />
+        );
+
+      case FieldType.LINK:
+        return (
+          <Input
+            {...commonProps}
+            value={String(value || '')}
+            onChange={(e) => onChange(e.target.value)}
+            allowClear
+            prefix={<LinkOutlined className="text-gray-400" />}
           />
         );
 

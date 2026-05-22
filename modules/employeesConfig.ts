@@ -278,6 +278,7 @@ export const employeesModule: ModuleDefinition = {
 
     { key: 'notes', labels: { fa: 'توضیحات', en: 'Notes' }, type: FieldType.LONG_TEXT, blockId: 'notes_info', order: 12 },
   
+    { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 1.75, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.8, nature: FieldNature.STANDARD, isTableColumn: true },
 ],
   blocks: [

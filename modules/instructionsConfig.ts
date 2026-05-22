@@ -123,6 +123,7 @@ export const instructionsModule: ModuleDefinition = {
       order: 2,
       nature: FieldNature.STANDARD,
     },
+    { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 3.5, nature: FieldNature.STANDARD, isTableColumn: true },
   ],
   blocks: [
     {

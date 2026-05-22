@@ -1,8 +1,7 @@
-export const isManualInvoiceAccountingIssueModule = (moduleId: string | null | undefined) =>
-  moduleId === 'invoices' || moduleId === 'purchase_invoices';
+export const isManualInvoiceAccountingIssueModule = (_moduleId: string | null | undefined) => true;
 
-export const shouldAutoSyncInvoiceAccounting = (moduleId: string | null | undefined) =>
-  !isManualInvoiceAccountingIssueModule(moduleId);
+// All accounting document issuance is manual — never auto-create on save.
+export const shouldAutoSyncInvoiceAccounting = (_moduleId: string | null | undefined) => false;
 
 export const hasIssuedInvoiceAccountingEntries = async (args: {
   supabase: any;

@@ -229,6 +229,14 @@ const BLOCKS = {
     order: 3.5,
     type: BlockType.FIELD_GROUP,
   },
+
+  onlineInvoice: {
+    id: 'onlineInvoice',
+    titles: { fa: 'فاکتور آنلاین', en: 'Online Invoice' },
+    icon: 'LinkOutlined',
+    order: 4.5,
+    type: BlockType.FIELD_GROUP,
+  },
 };
 
 export const invoicesConfig: ModuleDefinition = {
@@ -256,6 +264,7 @@ export const invoicesConfig: ModuleDefinition = {
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED, defaultValue: getTodayLocalDateValue },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: false },
+    { key: 'public_link', labels: { fa: 'لینک فاکتور آنلاین', en: 'Online Invoice Link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 1, readonly: true, nature: FieldNature.STANDARD, isTableColumn: false, hideInCreateForm: true },
     {
       key: 'status',
       labels: { fa: 'وضعیت', en: 'Status' },
@@ -534,6 +543,8 @@ export const invoicesConfig: ModuleDefinition = {
     { key: 'remaining_balance', labels: { fa: 'مانده حساب', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'legacyInfo', order: 6, readonly: true, nature: FieldNature.STANDARD },
     { key: 'updated_at', labels: { fa: 'زمان ویرایش', en: 'Updated At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'legacyInfo', order: 7, readonly: true, nature: FieldNature.STANDARD },
+    { key: 'customer_confirmed_at', labels: { fa: 'زمان تایید توسط مشتری', en: 'Customer Confirmed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 2, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'customer_confirmer_name', labels: { fa: 'تایید کننده (مشتری)', en: 'Confirmer Name' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 3, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
   ],
 
   blocks: [
@@ -543,6 +554,7 @@ export const invoicesConfig: ModuleDefinition = {
     BLOCKS.payments,
     BLOCKS.process,
     BLOCKS.summary,
+    BLOCKS.onlineInvoice,
   ],
   relatedTabs: [
     {

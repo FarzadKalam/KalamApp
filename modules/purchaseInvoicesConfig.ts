@@ -224,6 +224,14 @@ const BLOCKS = {
     order: 3.5,
     type: BlockType.FIELD_GROUP,
   },
+
+  onlineInvoice: {
+    id: 'onlineInvoice',
+    titles: { fa: 'فاکتور آنلاین', en: 'Online Invoice' },
+    icon: 'LinkOutlined',
+    order: 4.5,
+    type: BlockType.FIELD_GROUP,
+  },
 };
 
 export const purchaseInvoicesConfig: ModuleDefinition = {
@@ -238,6 +246,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED, defaultValue: getTodayLocalDateValue },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'public_link', labels: { fa: 'لینک فاکتور آنلاین', en: 'Online Invoice Link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 1, readonly: true, nature: FieldNature.STANDARD, isTableColumn: false, hideInCreateForm: true },
     {
       key: 'status',
       labels: { fa: 'وضعیت', en: 'Status' },
@@ -377,6 +386,8 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     { key: 'total_invoice_amount', labels: { fa: 'مبلغ کل فاکتور', en: 'Total Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'total_received_amount', labels: { fa: 'مبلغ پرداخت شده', en: 'Paid Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'remaining_balance', labels: { fa: 'مانده بدهی', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'supplier_confirmed_at', labels: { fa: 'زمان تایید توسط تامین‌کننده', en: 'Supplier Confirmed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 2, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'supplier_confirmer_name', labels: { fa: 'تایید کننده (تامین‌کننده)', en: 'Confirmer Name' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 3, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
   ],
   blocks: [
     BLOCKS.baseInfo,
@@ -385,6 +396,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     BLOCKS.payments,
     BLOCKS.process,
     BLOCKS.summary,
+    BLOCKS.onlineInvoice,
   ],
   relatedTabs: [
     {

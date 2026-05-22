@@ -27,11 +27,45 @@ export type EditableModuleSchema = {
   blocks: BlockDefinition[];
 };
 
+export type OnlineInvoiceFieldVisibility = {
+  key: string;
+  visible: boolean;
+};
+
+export type OnlineInvoiceSettings = {
+  enabled: boolean;
+  showItemsTable: boolean;
+  showItemNotes: boolean;
+  showItemDimensions: boolean;
+  showItemDates: boolean;
+  showDiscount: boolean;
+  showVat: boolean;
+  showPaymentsTable: boolean;
+  confirmationEnabled: boolean;
+  messagingEnabled: boolean;
+  visibleFields: OnlineInvoiceFieldVisibility[];
+};
+
+export const DEFAULT_ONLINE_INVOICE_SETTINGS: OnlineInvoiceSettings = {
+  enabled: true,
+  showItemsTable: true,
+  showItemNotes: true,
+  showItemDimensions: false,
+  showItemDates: false,
+  showDiscount: true,
+  showVat: true,
+  showPaymentsTable: true,
+  confirmationEnabled: true,
+  messagingEnabled: true,
+  visibleFields: [],
+};
+
 export type ModuleSettingsConfig = {
   general: ModuleGeneralSettings;
   specific: ModuleSpecificSettings;
   schema: EditableModuleSchema;
   conditionalDisplay?: ConditionalFieldSettings;
+  onlineInvoice?: OnlineInvoiceSettings;
 };
 
 export type ModuleSettingsStore = {

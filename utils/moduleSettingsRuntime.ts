@@ -114,6 +114,22 @@ const mergeRequiredTagsField = (
   return [...incomingFields, cloneDeep(baseTagsField)];
 };
 
+// فیلدهایی که در base code هستند ولی در schema ذخیره‌شده نیستند را inject می‌کند.
+// این اتفاق می‌افتد وقتی فیلد جدیدی به کانفیگ اضافه می‌شود اما تنظیمات ماژول از قبل ذخیره شده‌اند.
+const mergeNewBaseFields = (
+  baseFields: ModuleField[],
+  incomingFields: ModuleField[]
+): ModuleField[] => {
+  const incomingKeys = new Set(
+    (incomingFields || []).map((f) => String(f?.key || '').trim()).filter(Boolean)
+  );
+  const missingBaseFields = (baseFields || []).filter(
+    (f) => f?.key && !incomingKeys.has(String(f.key).trim())
+  );
+  if (missingBaseFields.length === 0) return incomingFields;
+  return [...incomingFields, ...cloneDeep(missingBaseFields)];
+};
+
 const getIncomingModuleSettings = (
   store: ModuleSettingsStore | null | undefined,
   moduleId: string
@@ -132,7 +148,8 @@ export const applyModuleSettingsStoreToRegistry = (
     const incomingSchema = incoming?.schema;
     const baseFields = cloneDeep((base?.fields || []) as ModuleField[]);
     const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
-    const resolvedFields = mergeRequiredTagsField(baseFields, incomingFields);
+    const withNewBase = mergeNewBaseFields(baseFields, incomingFields);
+    const resolvedFields = mergeRequiredTagsField(baseFields, withNewBase);
 
     const resolvedBlocks = cloneDeep((incomingSchema?.blocks || base?.blocks || []) as BlockDefinition[]);
     const normalizedSchema = moduleId === 'attendance_logs'

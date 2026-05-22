@@ -3,6 +3,7 @@ import type { NavigateFunction } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
 import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from '../pages/Settings/moduleSettingsTypes';
 import { fetchSessionBootstrap } from './sessionCache';
+import { generateNextJournalEntryNo } from './journalEntryNumbering';
 
 type SupportedInvoiceModule = 'invoices' | 'purchase_invoices';
 
@@ -809,10 +810,29 @@ const createJournalEntry = async ({
   }
 
   const sourceRecordTitle = getInvoiceLabel(invoice, recordId);
+  const entryDate = invoice.invoice_date || new Date().toISOString().slice(0, 10);
+
+  const { data: yearRows } = await supabase
+    .from('fiscal_years')
+    .select('id, start_date, end_date, is_active, is_closed')
+    .order('start_date', { ascending: false });
+
+  const fiscalYearId: string | null = (() => {
+    const years = (yearRows || []) as Array<{ id: string; start_date: string; end_date: string; is_active: boolean; is_closed: boolean }>;
+    const byDate = years.find((y) => !y.is_closed && entryDate >= y.start_date && entryDate <= y.end_date);
+    if (byDate) return byDate.id;
+    const active = years.find((y) => y.is_active && !y.is_closed);
+    return active?.id ?? null;
+  })();
+
+  const entryNo = await generateNextJournalEntryNo({ supabase, fiscalYearId });
+
   const { data: journalEntry, error: journalError } = await supabase
     .from('journal_entries')
     .insert({
-      entry_date: invoice.invoice_date || new Date().toISOString().slice(0, 10),
+      entry_no: entryNo,
+      entry_date: entryDate,
+      fiscal_year_id: fiscalYearId,
       description,
       status: 'draft',
       source_record_id: recordId,

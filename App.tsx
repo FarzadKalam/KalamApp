@@ -77,6 +77,7 @@ const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
 const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
+const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
@@ -114,6 +115,7 @@ const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
 const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
+const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
@@ -394,7 +396,7 @@ function App() {
   }, [moduleSettingsReady]);
 
   useEffect(() => {
-    const publicPaths = saasAppHost ? ["/", "/login", "/inquiry"] : ["/inquiry", "/login", "/tazesystem"];
+    const publicPaths = saasAppHost ? ["/", "/login", "/inquiry", "/i"] : ["/inquiry", "/i", "/login", "/tazesystem"];
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       const eventName = String(event);
@@ -640,6 +642,7 @@ function App() {
           ) : null}
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
+          <Route path="/i/:code" element={<LazyRouteBoundary><InvoicePublicPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 
           <Route

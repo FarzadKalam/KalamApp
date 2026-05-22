@@ -70,6 +70,7 @@ export const bartersConfig: ModuleDefinition = {
       nature: FieldNature.PREDEFINED,
     },
     
+    { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 5.05, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'initial_amount',

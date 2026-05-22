@@ -90,6 +90,7 @@ export const supplierModule: ModuleDefinition = {
     { key: 'supply_count', labels: { fa: 'تعداد فاکتور خرید', en: 'Supply Count' }, type: FieldType.NUMBER, blockId: 'financial_info', readonly: true },
     { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
   
+    { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.15, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.2, nature: FieldNature.STANDARD, isTableColumn: true },
 ],
   blocks: [
