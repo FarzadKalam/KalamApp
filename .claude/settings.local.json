@@ -76,7 +76,14 @@
       "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $env:NODE_OPTIONS=\"--max-old-space-size=512\"; npx tsc --noEmit --skipLibCheck 2>&1 | Select-Object -First 50 | Out-String)",
       "PowerShell(Set-Location \"d:\\\\Kalamapp\"; $env:NODE_OPTIONS=\"--max-old-space-size=4096\"; npx vite build 2>&1 | Select-String -Pattern \"error|Error|warning|Warning\" | Select-Object -First 40 | Out-String)",
       "WebSearch",
-      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Filter \"kong.yml\" -ErrorAction SilentlyContinue)"
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Filter \"kong.yml\" -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\" -Recurse -Directory -Name)",
+      "Bash(Get-Content \"d:\\\\Kalamapp\\\\components\\\\SmartForm.tsx\" -TotalCount 50)",
+      "Bash(Measure-Object -Line)",
+      "Bash(grep -r \"ProductionStagesField\" d:\\\\\\\\Kalamapp --include=\"*.tsx\")",
+      "Bash(grep -n \"Modal\" d:\\\\\\\\Kalamapp\\\\\\\\components\\\\\\\\ProductionStagesField.tsx)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'اضافه کردن فایل .version-changes.json برای مدیریت changelog *)"
     ]
   },
   "hooks": {

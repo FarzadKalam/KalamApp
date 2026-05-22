@@ -79,7 +79,7 @@ describe('formatListCellValue assignee display', () => {
     expect(fields.map((field) => field.key)).toEqual(expect.arrayContaining(['name', 'width', 'address']));
   });
 
-  it('uses transformed preview images for catalog list cards', () => {
+  it('uses raw storage images for catalog list cards by default', () => {
     const html = buildListCatalogHtml(
       [
         { key: 'image_url', label: 'تصویر', type: FieldType.IMAGE },
@@ -93,8 +93,6 @@ describe('formatListCellValue assignee display', () => {
       ],
     );
 
-    expect(html).toContain('/storage/v1/render/image/public/images/products/1/photo.jpg');
-    expect(html).toContain('width=520');
-    expect(html).toContain('quality=72');
+    expect(html).toContain('/storage/v1/object/public/images/products/1/photo.jpg');
   });
 });

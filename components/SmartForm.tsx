@@ -2352,10 +2352,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
     <div
       className={
         displayMode === 'modal'
-          ? 'fixed inset-0 bg-black/50 z-[1300] flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn'
+          ? 'fixed inset-0 bg-black/50 flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn'
           : 'w-full animate-fadeIn'
       }
-      style={{ fontFamily: 'Vazirmatn, sans-serif', ...(displayMode === 'modal' && typeof overlayZIndex === 'number' ? { zIndex: overlayZIndex } : {}) }}
+      style={{ fontFamily: 'Vazirmatn, sans-serif', ...(displayMode === 'modal' ? { zIndex: typeof overlayZIndex === 'number' ? overlayZIndex : 1300 } : {}) }}
     >
       <div
         className={

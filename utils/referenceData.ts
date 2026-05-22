@@ -5,6 +5,7 @@ import { normalizePublicAssetUrl } from './assetUrl';
 import { loadProfilesWithCompat } from './profileDirectory';
 import { getMergedTaskTypeOptions } from './taskMeta';
 import { doesProcessTemplateSupportModule } from './processTargets';
+import { collectAllKnownDynamicCategories } from './moduleListOptions';
 
 type DynamicOptionRow = { label: string; value: string };
 type ProcessTemplateOptionRow = {
@@ -33,7 +34,7 @@ export type AssigneeDirectory = {
   }>;
 };
 
-const REFERENCE_TTL_MS = 5 * 60_000;
+const REFERENCE_TTL_MS = 15 * 60_000;
 
 const assigneeDirectoryCache: {
   data: AssigneeDirectory | null;
@@ -69,7 +70,19 @@ const processTemplateRowsCache: {
 };
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
-const RECORD_TAGS_FETCH_CHUNK_SIZE = 150;
+const recordTagIdMapCache = new Map<string, { data: Record<string, string[]>; expiresAt: number }>();
+const recordTagIdMapPromiseCache = new Map<string, Promise<Record<string, string[]>>>();
+const RECORD_TAGS_FETCH_CHUNK_SIZE = 20;
+
+type RecordTagsBatchEntry = {
+  cacheKey: string;
+  recordIds: string[];
+  resolve: (v: Record<string, any[]>) => void;
+  reject: (e: unknown) => void;
+};
+const recordTagsBatchQueues = new Map<string, RecordTagsBatchEntry[]>();
+const recordTagsBatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const RECORD_TAG_ID_MAP_FALLBACK_PAGE_SIZE = 1000;
 const formulaOptionsCache: {
   data: DynamicOptionRow[] | null;
   expiresAt: number;
@@ -263,6 +276,8 @@ export const clearReferenceDataCache = () => {
   processTemplateRowsCache.promise = null;
   recordTagsCache.clear();
   recordTagsPromiseCache.clear();
+  recordTagIdMapCache.clear();
+  recordTagIdMapPromiseCache.clear();
 
   formulaOptionsCache.data = null;
   formulaOptionsCache.expiresAt = 0;
@@ -272,9 +287,105 @@ export const clearReferenceDataCache = () => {
 const buildRecordTagsCacheKey = (moduleId: string, recordIds: string[]) =>
   `${String(moduleId || '').trim()}::${recordIds.map((id) => String(id || '').trim()).filter(Boolean).sort().join(',')}`;
 
+const buildRecordTagIdMapCacheKey = (moduleId: string, tagIds?: string[] | null) => {
+  const normalizedTagIds = Array.from(new Set((tagIds || []).map((id) => String(id || '').trim()).filter(Boolean))).sort();
+  return `${String(moduleId || '').trim()}::${normalizedTagIds.length > 0 ? normalizedTagIds.join(',') : '__all__'}`;
+};
+
+const isMissingRecordTagsMapRpcError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return (
+    code === '42883'
+    || code === 'PGRST202'
+    || code === 'PGRST204'
+    || message.includes('get_record_tags_map')
+    || message.includes('could not find the function')
+    || message.includes('does not exist')
+  );
+};
+
+const isMissingRecordTagIdMapRpcError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return (
+    code === '42883'
+    || code === 'PGRST202'
+    || code === 'PGRST204'
+    || message.includes('get_record_tag_id_map')
+    || message.includes('could not find the function')
+    || message.includes('does not exist')
+  );
+};
+
 const isRoleTreeColumnMissingError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
   return text.includes('parent_id') || text.includes('sort_order');
+};
+
+const drainRecordTagsBatch = async (supabaseClient: any, moduleId: string) => {
+  const entries = recordTagsBatchQueues.get(moduleId) || [];
+  recordTagsBatchQueues.delete(moduleId);
+  recordTagsBatchTimers.delete(moduleId);
+  if (entries.length === 0) return;
+
+  const allIds = Array.from(new Set(entries.flatMap((e) => e.recordIds)));
+  const normalized: Record<string, any[]> = {};
+
+  const applyBatchRows = (rows: any[]) => {
+    (rows || []).forEach((item: any) => {
+      const recordId = String(item?.record_id || '').trim();
+      if (!recordId) return;
+      if (!normalized[recordId]) normalized[recordId] = [];
+      if (Array.isArray(item?.tags)) {
+        normalized[recordId].push(...item.tags.filter(Boolean));
+      } else if (item?.tags) {
+        normalized[recordId].push(item.tags);
+      }
+    });
+  };
+
+  try {
+    const { data, error } = await supabaseClient.rpc('get_record_tags_map', {
+      p_module_id: moduleId,
+      p_record_ids: allIds,
+    });
+    if (error) throw error;
+    applyBatchRows(Array.isArray(data) ? data : []);
+  } catch (error) {
+    if (!isMissingRecordTagsMapRpcError(error)) {
+      entries.forEach((e) => e.reject(error));
+      return;
+    }
+    for (let i = 0; i < allIds.length; i += RECORD_TAGS_FETCH_CHUNK_SIZE) {
+      const chunk = allIds.slice(i, i + RECORD_TAGS_FETCH_CHUNK_SIZE);
+      const { data, err } = await supabaseClient
+        .from('record_tags')
+        .select('record_id, tags(id, title, color)')
+        .eq('module_id', moduleId)
+        .in('record_id', chunk) as any;
+      if (err) { entries.forEach((e) => e.reject(err)); return; }
+      if (Array.isArray(data) && data.length > 0) applyBatchRows(data);
+    }
+  }
+
+  Object.keys(normalized).forEach((recordId) => {
+    const uniqueTags = new Map<string, any>();
+    normalized[recordId].forEach((tag: any) => {
+      const tagId = String(tag?.id || '').trim();
+      if (tagId && !uniqueTags.has(tagId)) uniqueTags.set(tagId, tag);
+    });
+    normalized[recordId] = Array.from(uniqueTags.values());
+  });
+
+  const expiresAt = Date.now() + REFERENCE_TTL_MS;
+  entries.forEach((entry) => {
+    const subset: Record<string, any[]> = {};
+    entry.recordIds.forEach((id) => { subset[id] = normalized[id] || []; });
+    recordTagsCache.set(entry.cacheKey, { data: subset, expiresAt });
+    recordTagsPromiseCache.delete(entry.cacheKey);
+    entry.resolve(subset);
+  });
 };
 
 export const fetchRecordTagsMap = async (
@@ -299,30 +410,79 @@ export const fetchRecordTagsMap = async (
     return recordTagsPromiseCache.get(cacheKey)!;
   }
 
-  const pending = (async () => {
-    const rows: any[] = [];
-    for (let i = 0; i < uniqueRecordIds.length; i += RECORD_TAGS_FETCH_CHUNK_SIZE) {
-      const chunk = uniqueRecordIds.slice(i, i + RECORD_TAGS_FETCH_CHUNK_SIZE);
-      const { data, error } = await supabaseClient
-        .from('record_tags')
-        .select('record_id, tags(id, title, color)')
-        .in('record_id', chunk);
-      if (error) throw error;
-      if (Array.isArray(data) && data.length > 0) {
-        rows.push(...data);
+  if (!options?.force) {
+    const batchPromise = new Promise<Record<string, any[]>>((resolve, reject) => {
+      const queue = recordTagsBatchQueues.get(moduleId) || [];
+      queue.push({ cacheKey, recordIds: uniqueRecordIds, resolve, reject });
+      recordTagsBatchQueues.set(moduleId, queue);
+      if (!recordTagsBatchTimers.has(moduleId)) {
+        recordTagsBatchTimers.set(
+          moduleId,
+          setTimeout(() => drainRecordTagsBatch(supabaseClient, moduleId), 0)
+        );
       }
+    });
+    recordTagsPromiseCache.set(cacheKey, batchPromise);
+    return batchPromise;
+  }
+
+  const pending = (async () => {
+    const normalized: Record<string, any[]> = {};
+
+    const applyRows = (rows: any[]) => {
+      (rows || []).forEach((item: any) => {
+        const recordId = String(item?.record_id || '').trim();
+        if (!recordId) return;
+        if (!normalized[recordId]) {
+          normalized[recordId] = [];
+        }
+        if (Array.isArray(item?.tags)) {
+          normalized[recordId].push(...item.tags.filter(Boolean));
+          return;
+        }
+        if (item?.tags) {
+          normalized[recordId].push(item.tags);
+        }
+      });
+    };
+
+    try {
+      const { data, error } = await supabaseClient.rpc('get_record_tags_map', {
+        p_module_id: moduleId,
+        p_record_ids: uniqueRecordIds,
+      });
+      if (error) throw error;
+      applyRows(Array.isArray(data) ? data : []);
+    } catch (error) {
+      if (!isMissingRecordTagsMapRpcError(error)) {
+        throw error;
+      }
+
+      const rows: any[] = [];
+      for (let i = 0; i < uniqueRecordIds.length; i += RECORD_TAGS_FETCH_CHUNK_SIZE) {
+        const chunk = uniqueRecordIds.slice(i, i + RECORD_TAGS_FETCH_CHUNK_SIZE);
+        const { data, error } = await supabaseClient
+          .from('record_tags')
+          .select('record_id, tags(id, title, color)')
+          .eq('module_id', moduleId)
+          .in('record_id', chunk);
+        if (error) throw error;
+        if (Array.isArray(data) && data.length > 0) {
+          rows.push(...data);
+        }
+      }
+      applyRows(rows);
     }
 
-    const normalized: Record<string, any[]> = {};
-    rows.forEach((item: any) => {
-      const recordId = String(item?.record_id || '').trim();
-      if (!recordId) return;
-      if (!normalized[recordId]) {
-        normalized[recordId] = [];
-      }
-      if (item?.tags) {
-        normalized[recordId].push(item.tags);
-      }
+    Object.keys(normalized).forEach((recordId) => {
+      const uniqueTags = new Map<string, any>();
+      normalized[recordId].forEach((tag: any) => {
+        const tagId = String(tag?.id || '').trim();
+        if (tagId && !uniqueTags.has(tagId)) {
+          uniqueTags.set(tagId, tag);
+        }
+      });
+      normalized[recordId] = Array.from(uniqueTags.values());
     });
 
     recordTagsCache.set(cacheKey, {
@@ -337,6 +497,107 @@ export const fetchRecordTagsMap = async (
   });
 
   recordTagsPromiseCache.set(cacheKey, pending);
+  return pending;
+};
+
+export const fetchRecordTagIdMap = async (
+  supabaseClient: any,
+  moduleId: string,
+  options?: { tagIds?: string[] | null; force?: boolean }
+): Promise<Record<string, string[]>> => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedTagIds = Array.from(new Set((options?.tagIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  if (!normalizedModuleId) {
+    return {};
+  }
+
+  const cacheKey = buildRecordTagIdMapCacheKey(normalizedModuleId, normalizedTagIds);
+  const now = Date.now();
+  const cached = recordTagIdMapCache.get(cacheKey);
+  if (!options?.force && cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  if (!options?.force && recordTagIdMapPromiseCache.has(cacheKey)) {
+    return recordTagIdMapPromiseCache.get(cacheKey)!;
+  }
+
+  const pending = (async () => {
+    const normalized: Record<string, string[]> = {};
+
+    const applyRows = (rows: any[]) => {
+      (rows || []).forEach((item: any) => {
+        const recordId = String(item?.record_id || '').trim();
+        if (!recordId) return;
+        const tagIds = Array.isArray(item?.tag_ids)
+          ? item.tag_ids.map((tagId: any) => String(tagId || '').trim()).filter(Boolean)
+          : [];
+        normalized[recordId] = Array.from(new Set(tagIds));
+      });
+    };
+
+    try {
+      const { data, error } = await supabaseClient.rpc('get_record_tag_id_map', {
+        p_module_id: normalizedModuleId,
+        p_tag_ids: normalizedTagIds.length > 0 ? normalizedTagIds : null,
+      });
+      if (error) throw error;
+      applyRows(Array.isArray(data) ? data : []);
+    } catch (error) {
+      if (!isMissingRecordTagIdMapRpcError(error)) {
+        throw error;
+      }
+
+      let page = 0;
+      while (true) {
+        let query = supabaseClient
+          .from('record_tags')
+          .select('record_id, tag_id')
+          .eq('module_id', normalizedModuleId)
+          .range(
+            page * RECORD_TAG_ID_MAP_FALLBACK_PAGE_SIZE,
+            ((page + 1) * RECORD_TAG_ID_MAP_FALLBACK_PAGE_SIZE) - 1
+          );
+
+        if (normalizedTagIds.length > 0) {
+          query = query.in('tag_id', normalizedTagIds);
+        }
+
+        const { data, error: fallbackError } = await query;
+        if (fallbackError) throw fallbackError;
+
+        const rows = Array.isArray(data) ? data : [];
+        rows.forEach((item: any) => {
+          const recordId = String(item?.record_id || '').trim();
+          const tagId = String(item?.tag_id || '').trim();
+          if (!recordId || !tagId) return;
+          if (!normalized[recordId]) {
+            normalized[recordId] = [];
+          }
+          if (!normalized[recordId].includes(tagId)) {
+            normalized[recordId].push(tagId);
+          }
+        });
+
+        if (rows.length < RECORD_TAG_ID_MAP_FALLBACK_PAGE_SIZE) {
+          break;
+        }
+        page += 1;
+      }
+    }
+
+    recordTagIdMapCache.set(cacheKey, {
+      data: normalized,
+      expiresAt: Date.now() + REFERENCE_TTL_MS,
+    });
+    recordTagIdMapPromiseCache.delete(cacheKey);
+    return normalized;
+  })().catch((error) => {
+    recordTagIdMapPromiseCache.delete(cacheKey);
+    throw error;
+  });
+
+  recordTagIdMapPromiseCache.set(cacheKey, pending);
   return pending;
 };
 
@@ -658,6 +919,45 @@ export const fetchFormulaOptions = async (
   return formulaOptionsCache.promise;
 };
 
+export const fetchAllDynamicOptionCategories = async (
+  supabaseClient: any,
+  categories: string[],
+  options?: { force?: boolean }
+): Promise<void> => {
+  const now = Date.now();
+  const missing = categories.filter((cat) => {
+    const c = String(cat || '').trim();
+    if (!c || c === 'task_type') return false;
+    if (options?.force) return true;
+    const cached = dynamicOptionsCache.get(c);
+    return !cached || cached.expiresAt <= now;
+  });
+  if (missing.length === 0) return;
+
+  const { data } = await supabaseClient
+    .from('dynamic_options')
+    .select('label, value, category')
+    .in('category', missing)
+    .eq('is_active', true);
+
+  const byCategory = new Map<string, any[]>();
+  (data || []).forEach((row: any) => {
+    const cat = String(row?.category || '').trim();
+    if (!cat) return;
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(row);
+  });
+
+  const expiresAt = Date.now() + REFERENCE_TTL_MS;
+  missing.forEach((cat) => {
+    const rows = byCategory.get(cat) || [];
+    dynamicOptionsCache.set(cat, {
+      data: normalizeDynamicOptions(rows),
+      expiresAt,
+    });
+  });
+};
+
 export const primeReferenceData = async (
   supabaseClient: any,
   options?: { force?: boolean }
@@ -665,5 +965,6 @@ export const primeReferenceData = async (
   await Promise.all([
     fetchAssigneeDirectory(supabaseClient, options),
     fetchFormulaOptions(supabaseClient, options),
+    fetchAllDynamicOptionCategories(supabaseClient, collectAllKnownDynamicCategories(), options),
   ]);
 };

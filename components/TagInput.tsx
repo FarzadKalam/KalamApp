@@ -46,7 +46,7 @@ const TagInput: React.FC<TagInputProps> = ({
   }, [disabled, inputVisible]);
 
   const fetchAllTags = async () => {
-    const { data } = await supabase.from('tags').select('*');
+    const { data } = await supabase.from('tags').select('id,title,color').order('title', { ascending: true });
     if (data) setAllTags(data);
   };
 

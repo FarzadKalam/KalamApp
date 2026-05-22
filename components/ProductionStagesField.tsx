@@ -3490,25 +3490,34 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return next;
     });
     void loadTaskCustomFieldOptions(stageCustomFields);
-    const defaultRoleId = draftStage?.default_assignee_role_id ? String(draftStage.default_assignee_role_id) : null;
-    const defaultUserId = draftStage?.default_assignee_id ? String(draftStage.default_assignee_id) : null;
-    const assigneeCombo = defaultRoleId
-      ? `role:${defaultRoleId}`
-      : (defaultUserId ? `user:${defaultUserId}` : undefined);
-    const initial = {
-      name: draftStage?.name || '',
-      sort_order: draftStage?.sort_order || ((tasks.length + 1) * 10),
-      wage: draftStage?.wage || 0,
-      weight: draftStage?.weight || 0,
-      description: draftStage?.description || '',
-      task_type: draftStage?.task_type || undefined,
-      duration_from: draftStage?.duration_from || 'project_start',
-      duration_value: Number(draftStage?.duration_value || 0),
-      duration_unit: draftStage?.duration_unit || 'day',
-      assignee_combo: assigneeCombo,
+    const ensureAssigneesLoaded = async () => {
+      if (!assignees.users.length && !assignees.roles.length) {
+        await fetchAssignees();
+      }
     };
-    taskForm.setFieldsValue(initial);
-    setIsTaskModalOpen(true);
+    const openModal = async () => {
+      await ensureAssigneesLoaded();
+      const defaultRoleId = draftStage?.default_assignee_role_id ? String(draftStage.default_assignee_role_id) : null;
+      const defaultUserId = draftStage?.default_assignee_id ? String(draftStage.default_assignee_id) : null;
+      const assigneeCombo = defaultRoleId
+        ? `role:${defaultRoleId}`
+        : (defaultUserId ? `user:${defaultUserId}` : undefined);
+      const initial = {
+        name: draftStage?.name || '',
+        sort_order: draftStage?.sort_order || ((tasks.length + 1) * 10),
+        wage: draftStage?.wage || 0,
+        weight: draftStage?.weight || 0,
+        description: draftStage?.description || '',
+        task_type: draftStage?.task_type || undefined,
+        duration_from: draftStage?.duration_from || 'project_start',
+        duration_value: Number(draftStage?.duration_value || 0),
+        duration_unit: draftStage?.duration_unit || 'day',
+        assignee_combo: assigneeCombo,
+      };
+      taskForm.setFieldsValue(initial);
+      setIsTaskModalOpen(true);
+    };
+    void openModal();
   };
 
   const handleAddTask = async (values: any) => {
@@ -9249,7 +9258,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <InstructionQuickCreateModal
             open={isInstructionQuickCreateOpen}
             onClose={() => setIsInstructionQuickCreateOpen(false)}
-            overlayZIndex={10120}
+            overlayZIndex={10100}
             onCreated={(record) => {
               const newInstruction = record as any;
               setInstructionsForEditor((prev) => {

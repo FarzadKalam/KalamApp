@@ -50,7 +50,7 @@ const InstructionQuickCreateModal: React.FC<InstructionQuickCreateModalProps> = 
         module={moduleConfig}
         visible={open}
         title="افزودن سریع دستورالعمل"
-        overlayZIndex={overlayZIndex}
+        overlayZIndex={overlayZIndex || 13100}
         initialValues={{
           status: 'draft',
           ...(initialValues || {}),

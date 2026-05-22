@@ -16,6 +16,7 @@ const PRESET_CONFIG: Record<ImagePreviewPreset, PreviewPresetConfig> = {
   gallery: { width: 760, quality: 74, resize: 'contain' },
 };
 
+const IMAGE_TRANSFORM_PREVIEW_ENABLED = false;
 const SKIP_TRANSFORM_EXTENSIONS = new Set(['svg', 'gif']);
 const IMAGE_FILE_EXTENSIONS = new Set([
   'jpg',
@@ -75,6 +76,7 @@ export const buildImagePreviewUrl = (rawUrl: string | null | undefined, preset: 
   const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return '';
   if (normalized.startsWith('data:') || normalized.startsWith('blob:')) return normalized;
+  if (!IMAGE_TRANSFORM_PREVIEW_ENABLED) return normalized;
   const parsed = resolveUrl(normalized);
   if (!parsed) return normalized;
 

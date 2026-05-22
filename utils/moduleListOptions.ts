@@ -33,7 +33,7 @@ export type ModuleListOptionPlan = {
 
 const RELATION_BATCH_SIZE = 500;
 const RELATION_MAX_PAGES = 40;
-const RELATION_OPTIONS_TTL_MS = 5 * 60_000;
+const RELATION_OPTIONS_TTL_MS = 15 * 60_000;
 const relationTargetOptionsCache = new Map<string, { data: any[]; expiresAt: number }>();
 const relationTargetPromiseCache = new Map<string, Promise<any[]>>();
 const normalizeFilter = (value: Record<string, any> | undefined) => {
@@ -526,4 +526,15 @@ export const fetchModuleListRelationOptions = async (
   });
 
   return relationOptions;
+};
+
+export const collectAllKnownDynamicCategories = (): string[] => {
+  const cats = new Set<string>();
+  Object.values(MODULES).forEach((mod) => {
+    collectFullDynamicOptionFields(mod).forEach((field) => {
+      const cat = String(field.dynamicOptionsCategory || '').trim();
+      if (cat) cats.add(cat);
+    });
+  });
+  return Array.from(cats);
 };

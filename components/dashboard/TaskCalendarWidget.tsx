@@ -5,9 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
 import ModuleCalendarView from '../moduleList/CalendarView';
 import { FieldType } from '../../types';
-import { fetchCurrentUserRecordAccessContext, canAccessAssignedRecord } from '../../utils/permissions';
+import { fetchCurrentUserRecordAccessContext } from '../../utils/permissions';
 import { supabase } from '../../supabaseClient';
-import { parseDateValue } from '../../utils/persianNumberFormatter';
 import PersianDatePicker from '../PersianDatePicker';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import { fetchDynamicOptionsByCategory } from '../../utils/referenceData';
@@ -34,6 +33,7 @@ type TaskViewKey = 'all' | 'mine';
 
 const TASK_SELECT_FIELDS =
   'id,name,status,priority,task_type,start_date,due_date,completed_at,assignee_id,assignee_role_id,assignee_type,org_id,updated_at,created_at';
+const TASK_QUERY_LIMIT = 240;
 
 const tasksModule = MODULES.tasks;
 
@@ -83,9 +83,23 @@ const createDefaultRange = () => {
   };
 };
 
-const TaskCalendarWidget: React.FC = () => {
+const mergeTaskRowsById = (rows: any[]) => {
+  const map = new Map<string, TaskCalendarRow>();
+  (rows || []).forEach((row) => {
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) return;
+    map.set(rowId, row as TaskCalendarRow);
+  });
+  return Array.from(map.values());
+};
+
+type TaskCalendarWidgetProps = {
+  prefetchedTasks?: any[];
+};
+
+const TaskCalendarWidget: React.FC<TaskCalendarWidgetProps> = ({ prefetchedTasks }) => {
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!prefetchedTasks || prefetchedTasks.length === 0);
   const [rows, setRows] = useState<TaskCalendarRow[]>([]);
   const [canViewWidget, setCanViewWidget] = useState(true);
   const [canViewAll, setCanViewAll] = useState(false);
@@ -97,6 +111,11 @@ const TaskCalendarWidget: React.FC = () => {
   const [dateTo, setDateTo] = useState<string>(formatIsoDate(createDefaultRange().to));
   const [recordAccess, setRecordAccess] = useState<Awaited<ReturnType<typeof fetchCurrentUserRecordAccessContext>> | null>(null);
   const [allTaskTypeOptions, setAllTaskTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const initialLoadDoneRef = React.useRef(false);
+  const selectedDateFieldMeta = useMemo(
+    () => taskDateFields.find((field) => String(field?.key || '') === selectedDateField) || null,
+    [selectedDateField]
+  );
 
   const loadTasks = useCallback(async () => {
     if (!tasksModule) {
@@ -106,11 +125,48 @@ const TaskCalendarWidget: React.FC = () => {
       return;
     }
 
+    const isInitialLoad = !initialLoadDoneRef.current;
+    initialLoadDoneRef.current = true;
+
+    if (isInitialLoad && prefetchedTasks && prefetchedTasks.length > 0) {
+      try {
+        const access = await fetchCurrentUserRecordAccessContext(supabase);
+        const modulePerm = access.permissions?.tasks || {};
+        if (modulePerm.view !== false) {
+          const normalizedDateField = String(selectedDateField || 'due_date').trim() || 'due_date';
+          const fromValue = String(dateFrom || '').trim();
+          const toValue = String(dateTo || '').trim();
+          const usesDateTimeRange = selectedDateFieldMeta?.type === FieldType.DATETIME || normalizedDateField === 'completed_at';
+          const filtered = (prefetchedTasks as TaskCalendarRow[]).filter((row) => {
+            const fieldVal = String((row as any)[normalizedDateField] || '').trim();
+            if (!fieldVal) return true;
+            const compareVal = usesDateTimeRange ? fieldVal.slice(0, 10) : fieldVal;
+            if (fromValue && compareVal < fromValue) return false;
+            if (toValue && compareVal > toValue) return false;
+            return true;
+          });
+          setRows(filtered);
+          setCanViewWidget(true);
+          setCanViewAll(String(modulePerm.record_scope || 'all') === 'all');
+          setRecordAccess(access);
+          setLoading(false);
+          return;
+        }
+      } catch {
+        // fall through to normal fetch
+      }
+    }
+
     setLoading(true);
     try {
       const access = await fetchCurrentUserRecordAccessContext(supabase);
       const modulePerm = access.permissions?.tasks || {};
       const moduleScope = String(modulePerm.record_scope || (modulePerm.view === false ? 'own' : 'all'));
+      const effectiveTaskView: TaskViewKey = moduleScope === 'all' ? taskView : 'mine';
+      const normalizedDateField = String(selectedDateField || 'due_date').trim() || 'due_date';
+      const fromValue = String(dateFrom || '').trim();
+      const toValue = String(dateTo || '').trim();
+      const usesDateTimeRange = selectedDateFieldMeta?.type === FieldType.DATETIME || normalizedDateField === 'completed_at';
 
       if (modulePerm.view === false) {
         setCanViewWidget(false);
@@ -119,32 +175,81 @@ const TaskCalendarWidget: React.FC = () => {
         return;
       }
 
-      const { data } = await supabase
-        .from('tasks')
-        .select(TASK_SELECT_FIELDS)
-        .order('updated_at', { ascending: false })
-        .limit(1200);
+      const applySharedFilters = (query: any) => {
+        let next = query
+          .neq('status', 'canceled')
+          .order(normalizedDateField, { ascending: false, nullsFirst: false })
+          .order('updated_at', { ascending: false })
+          .limit(TASK_QUERY_LIMIT);
+        if (fromValue) {
+          next = next.gte(normalizedDateField, usesDateTimeRange ? `${fromValue}T00:00:00.000` : fromValue);
+        }
+        if (toValue) {
+          next = next.lte(normalizedDateField, usesDateTimeRange ? `${toValue}T23:59:59.999` : toValue);
+        }
+        return next;
+      };
 
-      const scopedRows = (data || []).filter((row: any) =>
-        canAccessAssignedRecord(row, access.userId, access.roleId, moduleScope as any, {
-          currentOrgId: access.orgId,
-          allowedRoleIds: access.allowedRoleIds,
-          allowedUserIds: access.allowedUserIds,
-        })
-      ) as TaskCalendarRow[];
+      const buildTasksQuery = () =>
+        applySharedFilters(
+          supabase
+            .from('tasks')
+            .select(TASK_SELECT_FIELDS)
+        );
 
-      setRows(scopedRows);
+      let nextRows: TaskCalendarRow[] = [];
+      if (effectiveTaskView === 'all') {
+        const { data, error } = await buildTasksQuery();
+        if (error) throw error;
+        nextRows = (data || []) as TaskCalendarRow[];
+      } else {
+        const userId = String(access.userId || '').trim();
+        const roleId = String(access.roleId || '').trim();
+        const typedRoleQuery = roleId
+          ? buildTasksQuery().eq('assignee_type', 'role').eq('assignee_role_id', roleId)
+          : Promise.resolve({ data: [] as any[], error: null });
+        const [typedUserResult, typedRoleResult] = await Promise.all([
+          buildTasksQuery().eq('assignee_type', 'user').eq('assignee_id', userId),
+          typedRoleQuery,
+        ]);
+
+        const typedQueryFailed = [typedUserResult.error, typedRoleResult.error].some((error) => {
+          const text = String(error?.message || error?.details || '').toLowerCase();
+          return Boolean(error) && !text.includes('assignee_');
+        });
+
+        if (typedQueryFailed) {
+          if (typedUserResult.error) throw typedUserResult.error;
+          if (typedRoleResult.error) throw typedRoleResult.error;
+        }
+
+        if (!typedUserResult.error && !typedRoleResult.error) {
+          nextRows = mergeTaskRowsById([...(typedUserResult.data || []), ...(typedRoleResult.data || [])]);
+        } else {
+          const [legacyUserResult, legacyRoleResult] = await Promise.all([
+            buildTasksQuery().eq('assignee_id', userId),
+            roleId ? buildTasksQuery().eq('assignee_id', roleId) : Promise.resolve({ data: [] as any[], error: null }),
+          ]);
+          if (legacyUserResult.error) throw legacyUserResult.error;
+          if (legacyRoleResult.error) throw legacyRoleResult.error;
+          nextRows = mergeTaskRowsById([...(legacyUserResult.data || []), ...(legacyRoleResult.data || [])]);
+        }
+      }
+
+      setRows(nextRows);
       setCanViewWidget(true);
       setCanViewAll(moduleScope === 'all');
       setRecordAccess(access);
-      setTaskView(moduleScope === 'all' ? 'all' : 'mine');
+      if (moduleScope !== 'all' && taskView !== 'mine') {
+        setTaskView('mine');
+      }
     } catch {
       setCanViewWidget(false);
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dateFrom, dateTo, prefetchedTasks, selectedDateField, selectedDateFieldMeta?.type, taskView]);
 
   React.useEffect(() => {
     void loadTasks();
@@ -202,33 +307,14 @@ const TaskCalendarWidget: React.FC = () => {
 
   const filteredRows = useMemo(() => {
     if (!recordAccess) return [];
-    const fromValue = String(dateFrom || '').trim();
-    const toValue = String(dateTo || '').trim();
-    const fromMs = fromValue ? new Date(`${fromValue}T00:00:00`).getTime() : null;
-    const toMs = toValue ? new Date(`${toValue}T23:59:59`).getTime() : null;
 
     return rows.filter((row) => {
-      if (taskView === 'mine') {
-        const isMine = canAccessAssignedRecord(row as any, recordAccess.userId, recordAccess.roleId, 'own', {
-          currentOrgId: recordAccess.orgId,
-          allowedRoleIds: recordAccess.allowedRoleIds,
-          allowedUserIds: recordAccess.allowedUserIds,
-        });
-        if (!isMine) return false;
-      }
-
       if (taskTypeFilter !== 'all' && String(row?.task_type || '') !== taskTypeFilter) {
         return false;
       }
-
-      const parsed = parseDateValue((row as any)?.[selectedDateField]);
-      if (!parsed) return false;
-      const rowMs = parsed.toDate().getTime();
-      if (Number.isFinite(fromMs as number) && rowMs < (fromMs as number)) return false;
-      if (Number.isFinite(toMs as number) && rowMs > (toMs as number)) return false;
       return true;
     });
-  }, [dateFrom, dateTo, recordAccess, rows, selectedDateField, taskTypeFilter, taskView]);
+  }, [recordAccess, rows, taskTypeFilter]);
 
   const handleCalendarNavigate = useCallback(
     (path: string) => {

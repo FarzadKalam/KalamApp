@@ -49,6 +49,7 @@ interface ViewManagerProps {
 
 const savedViewsCache = new Map<string, SavedView[]>();
 const savedViewsPromiseCache = new Map<string, Promise<SavedView[]>>();
+const SAVED_VIEW_SELECT_FIELDS = 'id,name,module_id,config,is_default,created_at';
 
 const ViewManager: React.FC<ViewManagerProps> = ({
   moduleId,
@@ -199,7 +200,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
           (async () => {
             const { data } = await supabase
               .from('saved_views')
-              .select('*')
+              .select(SAVED_VIEW_SELECT_FIELDS)
               .eq('module_id', moduleId)
               .order('created_at', { ascending: false });
             return normalizeViewsList((data || []) as SavedView[]);

@@ -50,6 +50,9 @@ const TASK_MODAL_SELECT_COLUMNS = [
   'related_invoice',
   'purchase_invoice_id',
   'production_line_id',
+  'assignee_id',
+  'assignee_role_id',
+  'assignee_type',
 ] as const;
 
 const GlobalTaskProcessModalHost: React.FC = () => {

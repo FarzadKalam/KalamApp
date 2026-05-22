@@ -56,7 +56,8 @@ SET search_path = public
 AS $$
 DECLARE
   v_now  timestamptz := now();
-  v_hour int         := EXTRACT(HOUR FROM v_now)::int;
+  -- Extract hour in Tehran time — user enters from/to hours in local time
+  v_hour int         := EXTRACT(HOUR FROM (v_now AT TIME ZONE 'Asia/Tehran'))::int;
 BEGIN
   UPDATE public.workflows
   SET server_queued_at = v_now

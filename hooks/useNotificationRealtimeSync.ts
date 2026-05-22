@@ -39,8 +39,40 @@ export const useNotificationRealtimeSync = ({
   useEffect(() => {
     if (!enabled || !currentUserId) return;
 
-    const channel = supabase.channel(channelKey);
-    const broadcastChannels: any[] = [];
+    let disposed = false;
+    let reconnectTimer: number | null = null;
+    let channel: any = null;
+    let broadcastChannels: any[] = [];
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer !== null && typeof window !== 'undefined') {
+        window.clearTimeout(reconnectTimer);
+      }
+      reconnectTimer = null;
+    };
+
+    const cleanupChannels = () => {
+      if (channel) {
+        void supabase.removeChannel(channel);
+        channel = null;
+      }
+      broadcastChannels.forEach((broadcastChannel) => {
+        void supabase.removeChannel(broadcastChannel);
+      });
+      broadcastChannels = [];
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer !== null || typeof window === 'undefined') return;
+      cleanupChannels();
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        if (!disposed) {
+          connect();
+        }
+      }, 1500);
+    };
+
     const buildOrgScopedChange = (table: string, event: '*' | 'INSERT' | 'UPDATE') => ({
       event,
       schema: 'public',
@@ -48,85 +80,89 @@ export const useNotificationRealtimeSync = ({
       filter: currentOrgId ? `org_id=eq.${currentOrgId}` : undefined,
     });
 
-    if (currentOrgId) {
-      const broadcastTopics = [
-        `org:${currentOrgId}:notifications`,
-        `org:${currentOrgId}:user:${currentUserId}:notifications`,
-        currentRoleId ? `org:${currentOrgId}:role:${currentRoleId}:notifications` : null,
-      ].filter(Boolean) as string[];
+    const connect = () => {
+      channel = supabase.channel(channelKey);
 
-      broadcastTopics.forEach((topic) => {
-        const broadcastChannel = supabase.channel(topic, { config: { private: true } } as any)
-          .on('broadcast', { event: 'notification' }, (message: any) => {
-            const section = mapBroadcastSection(message?.payload?.section);
-            if (section) scheduleLiveRefresh(section);
+      if (currentOrgId) {
+        const broadcastTopics = [
+          `org:${currentOrgId}:notifications`,
+          `org:${currentOrgId}:user:${currentUserId}:notifications`,
+          currentRoleId ? `org:${currentOrgId}:role:${currentRoleId}:notifications` : null,
+        ].filter(Boolean) as string[];
+
+        broadcastTopics.forEach((topic) => {
+          const broadcastChannel = supabase.channel(topic, { config: { private: true } } as any)
+            .on('broadcast', { event: 'notification' }, (message: any) => {
+              const section = mapBroadcastSection(message?.payload?.section);
+              if (section) scheduleLiveRefresh(section);
+            });
+          broadcastChannel.subscribe((status: any) => {
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              scheduleReconnect();
+            }
           });
-        broadcastChannel.subscribe((status) => {
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-            void supabase.removeChannel(broadcastChannel);
-          }
+          broadcastChannels.push(broadcastChannel);
         });
-        broadcastChannels.push(broadcastChannel);
-      });
-    }
-
-    if (variant === 'chat') {
-      channel
-        .on('postgres_changes', buildOrgScopedChange('notes', 'INSERT'), (payload: any) => {
-          if (hasNoteMatch(payload?.new)) scheduleLiveRefresh('notes');
-        })
-        .on('postgres_changes', buildOrgScopedChange('notes', 'UPDATE'), (payload: any) => {
-          if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh('notes');
-        })
-        .on('postgres_changes', buildOrgScopedChange('counterparty_bot_groups', '*'), () => {
-          scheduleLiveRefresh('bot_messages');
-        })
-        .on('postgres_changes', buildOrgScopedChange('counterparty_bot_messages', '*'), () => {
-          scheduleLiveRefresh('bot_messages');
-        })
-        .on('postgres_changes', buildOrgScopedChange('outbound_messages', '*'), (payload: any) => {
-          const row = payload?.new || payload?.old || {};
-          if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefresh('sms_messages');
-        })
-        .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'INSERT'), (payload: any) => {
-          if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
-        })
-        .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'UPDATE'), (payload: any) => {
-          if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
-        });
-    } else {
-      channel
-        .on('postgres_changes', buildOrgScopedChange('tasks', 'INSERT'), (payload: any) => {
-          if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('tasks');
-        })
-        .on('postgres_changes', buildOrgScopedChange('tasks', 'UPDATE'), (payload: any) => {
-          if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('tasks');
-        });
-
-      responsibilityTables.forEach((table) => {
-        channel
-          .on('postgres_changes', buildOrgScopedChange(table, 'INSERT'), (payload: any) => {
-            if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('responsibilities');
-          })
-          .on('postgres_changes', buildOrgScopedChange(table, 'UPDATE'), (payload: any) => {
-            if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('responsibilities');
-          });
-      });
-    }
-
-    channel.subscribe((status) => {
-      if (status === 'CHANNEL_ERROR') {
-        console.warn('Notifications realtime channel failed.');
-        // Remove the dead subscription — the effect will re-subscribe when dependencies change
-        void supabase.removeChannel(channel);
       }
-    });
+
+      if (variant === 'chat') {
+        channel
+          .on('postgres_changes', buildOrgScopedChange('notes', 'INSERT'), (payload: any) => {
+            if (hasNoteMatch(payload?.new)) scheduleLiveRefresh('notes');
+          })
+          .on('postgres_changes', buildOrgScopedChange('notes', 'UPDATE'), (payload: any) => {
+            if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh('notes');
+          })
+          .on('postgres_changes', buildOrgScopedChange('counterparty_bot_groups', '*'), () => {
+            scheduleLiveRefresh('bot_messages');
+          })
+          .on('postgres_changes', buildOrgScopedChange('counterparty_bot_messages', '*'), () => {
+            scheduleLiveRefresh('bot_messages');
+          })
+          .on('postgres_changes', buildOrgScopedChange('outbound_messages', '*'), (payload: any) => {
+            const row = payload?.new || payload?.old || {};
+            if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefresh('sms_messages');
+          })
+          .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'INSERT'), (payload: any) => {
+            if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
+          })
+          .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'UPDATE'), (payload: any) => {
+            if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
+          });
+      } else {
+        channel
+          .on('postgres_changes', buildOrgScopedChange('tasks', 'INSERT'), (payload: any) => {
+            if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('tasks');
+          })
+          .on('postgres_changes', buildOrgScopedChange('tasks', 'UPDATE'), (payload: any) => {
+            if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('tasks');
+          });
+
+        responsibilityTables.forEach((table) => {
+          channel
+            .on('postgres_changes', buildOrgScopedChange(table, 'INSERT'), (payload: any) => {
+              if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('responsibilities');
+            })
+            .on('postgres_changes', buildOrgScopedChange(table, 'UPDATE'), (payload: any) => {
+              if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('responsibilities');
+            });
+        });
+      }
+
+      channel.subscribe((status: any) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('Notifications realtime channel reconnect scheduled.');
+          scheduleReconnect();
+        }
+      });
+    };
+
+    connect();
 
     return () => {
-      void supabase.removeChannel(channel);
-      broadcastChannels.forEach((broadcastChannel) => {
-        void supabase.removeChannel(broadcastChannel);
-      });
+      disposed = true;
+      clearReconnectTimer();
+      cleanupChannels();
     };
   }, [
     channelKey,

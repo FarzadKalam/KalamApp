@@ -35,6 +35,34 @@ const defaultAccess: GoalAccessState = {
   canEditGoals: true,
   canDeleteGoals: true,
 };
+const GOAL_MANAGER_SELECT_FIELDS = [
+  'id',
+  'org_id',
+  'module_id',
+  'name',
+  'description',
+  'goal_scope',
+  'period_unit',
+  'subperiod_unit',
+  'metric_type',
+  'metric_field_key',
+  'date_field_key',
+  'target_value',
+  'levels_enabled',
+  'bronze_value',
+  'silver_value',
+  'gold_value',
+  'assignee_user_ids',
+  'assignee_role_ids',
+  'conditions_all',
+  'conditions_any',
+  'config',
+  'is_active',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'updated_by',
+].join(',');
 
 const GoalsManager: React.FC<GoalsManagerProps> = ({
   inline = false,
@@ -82,7 +110,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
       const context = await fetchCurrentUserRoleContext(supabase);
       await ensureDefaultSalesInvoiceGoal({ userId: context.userId });
 
-      let query = supabase.from('goals').select('*').order('updated_at', { ascending: false });
+      let query = supabase.from('goals').select(GOAL_MANAGER_SELECT_FIELDS).order('updated_at', { ascending: false });
       if (moduleFilter !== 'all') {
         query = query.eq('module_id', moduleFilter);
       }

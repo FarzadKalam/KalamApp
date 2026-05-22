@@ -80,9 +80,13 @@ type DashboardBootstrapResult = {
   recentSections: DashboardRecentSection[];
 };
 
-const DASHBOARD_BOOTSTRAP_TTL_MS = 60_000;
+const DASHBOARD_BOOTSTRAP_TTL_MS = 5 * 60_000;
 const RECENT_RECORDS_LIMIT = 10;
+const DASHBOARD_MAX_MODULES = 6;
+const DASHBOARD_CARD_CONCURRENCY = 3;
+const DASHBOARD_RECENT_CONCURRENCY = 2;
 const NEW_RECORDS_DAYS = 30;
+
 
 const SIMPLE_RECENT_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
@@ -119,6 +123,30 @@ const dashboardRecentSectionCache = new Map<string, { data: DashboardRecentSecti
 const dashboardRecentSectionPromiseCache = new Map<string, Promise<DashboardRecentSection | null>>();
 const dashboardSelectableColumnsCache = new Map<string, string[]>();
 const dashboardOrderableColumnsCache = new Map<string, string[]>();
+
+const mapWithConcurrency = async <TItem, TResult>(
+  items: TItem[],
+  concurrency: number,
+  worker: (item: TItem, index: number) => Promise<TResult>
+): Promise<TResult[]> => {
+  const nextConcurrency = Math.max(1, Math.floor(concurrency || 1));
+  const results: TResult[] = new Array(items.length);
+  let cursor = 0;
+
+  const runWorker = async () => {
+    while (cursor < items.length) {
+      const currentIndex = cursor;
+      cursor += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(nextConcurrency, items.length || 1) }, () => runWorker())
+  );
+
+  return results;
+};
 
 const getTodayPersianDate = () => {
   try {
@@ -265,6 +293,16 @@ const countRows = async (table: string, apply?: (query: any) => any) => {
   return Number(count || 0);
 };
 
+const mergeDashboardRowsById = <TRow extends { id?: string | null }>(rows: TRow[]) => {
+  const map = new Map<string, TRow>();
+  (rows || []).forEach((row) => {
+    const rowId = String(row?.id || '').trim();
+    if (!rowId) return;
+    map.set(rowId, row);
+  });
+  return Array.from(map.values());
+};
+
 const getModuleRecordScope = (permissions: PermissionMap | null | undefined, moduleId: string) => {
   const modulePerm = permissions?.[moduleId] || {};
   return modulePerm.record_scope ?? (modulePerm.view === false ? 'own' : 'all');
@@ -284,6 +322,8 @@ const parseMissingColumnName = (error: any) => {
   }
   return null;
 };
+
+const isDashboardMissingColumnError = (error: any) => Boolean(parseMissingColumnName(error));
 
 const normalizeColumnList = (columns: string[]) =>
   Array.from(new Set((columns || []).map((column) => String(column || '').trim()).filter(Boolean)));
@@ -346,6 +386,68 @@ const safeSelectRows = async (
   return { data: [] as any[], error: null };
 };
 
+const runOrderedDashboardSelect = async (
+  table: string,
+  columns: string[],
+  options?: {
+    limit?: number;
+    orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
+  },
+  apply?: (query: any) => any,
+) => {
+  const normalizedTable = String(table || '').trim();
+  let activeColumns = normalizeColumnList(columns);
+  const cachedColumns = dashboardSelectableColumnsCache.get(normalizedTable);
+  if (cachedColumns?.length) {
+    const filtered = activeColumns.filter((column) => cachedColumns.includes(column));
+    if (filtered.length) activeColumns = filtered;
+  }
+
+  let activeOrderBy = (options?.orderBy || []).filter((entry) => entry?.field).map((entry) => ({
+    field: String(entry.field).trim(),
+    ascending: Boolean(entry.ascending),
+    nullsFirst: entry.nullsFirst,
+  }));
+  const cachedOrderFields = dashboardOrderableColumnsCache.get(normalizedTable);
+  if (cachedOrderFields?.length) {
+    const filtered = activeOrderBy.filter((entry) => cachedOrderFields.includes(entry.field));
+    if (filtered.length) activeOrderBy = filtered;
+  }
+
+  while (activeColumns.length > 0) {
+    let query = supabase.from(normalizedTable).select(activeColumns.join(','));
+    if (apply) {
+      query = apply(query);
+    }
+    activeOrderBy.forEach((entry) => {
+      query = query.order(entry.field, { ascending: entry.ascending, nullsFirst: entry.nullsFirst });
+    });
+    if (options?.limit) {
+      query = query.limit(options.limit);
+    }
+
+    const { data, error } = await query;
+    if (!error) {
+      dashboardSelectableColumnsCache.set(normalizedTable, [...activeColumns]);
+      dashboardOrderableColumnsCache.set(normalizedTable, activeOrderBy.map((entry) => entry.field));
+      return { data: data || [], error: null };
+    }
+
+    const missingColumn = parseMissingColumnName(error);
+    if (missingColumn && activeColumns.includes(missingColumn)) {
+      activeColumns = activeColumns.filter((column) => column !== missingColumn);
+      continue;
+    }
+    if (missingColumn && activeOrderBy.some((entry) => entry.field === missingColumn)) {
+      activeOrderBy = activeOrderBy.filter((entry) => entry.field !== missingColumn);
+      continue;
+    }
+    return { data: [] as any[], error };
+  }
+
+  return { data: [] as any[], error: null };
+};
+
 const moduleSupportsScopedRecords = (moduleId: string) => {
   const module = MODULES[moduleId];
   const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '')));
@@ -367,6 +469,110 @@ const filterRowsByRecordScope = (
       allowedUserIds: recordAccess.allowedUserIds,
     })
   );
+};
+
+const fetchScopedDashboardRows = async (
+  table: string,
+  moduleId: string,
+  columns: string[],
+  recordAccess: CurrentUserRecordAccessContext,
+  options?: {
+    limit?: number;
+    orderBy?: Array<{ field: string; ascending: boolean; nullsFirst?: boolean }>;
+  }
+) => {
+  const recordScope = getModuleRecordScope(recordAccess.permissions, moduleId);
+  if (recordScope === 'all' || !moduleSupportsScopedRecords(moduleId)) {
+    return safeSelectRows(table, columns, options);
+  }
+
+  const allowedUserIds = Array.from(
+    new Set([recordAccess.userId, ...(recordAccess.allowedUserIds || [])].map((id) => String(id || '').trim()).filter(Boolean))
+  );
+  const allowedRoleIds = Array.from(
+    new Set([recordAccess.roleId, ...(recordAccess.allowedRoleIds || [])].map((id) => String(id || '').trim()).filter(Boolean))
+  );
+
+  const typedUserRequest = allowedUserIds.length > 0
+    ? runOrderedDashboardSelect(table, columns, options, (query) =>
+        query.eq('assignee_type', 'user').in('assignee_id', allowedUserIds)
+      )
+    : Promise.resolve({ data: [] as any[], error: null });
+
+  const typedRoleRequest = allowedRoleIds.length > 0
+    ? runOrderedDashboardSelect(table, columns, options, (query) =>
+        query.eq('assignee_type', 'role').in('assignee_role_id', allowedRoleIds)
+      )
+    : Promise.resolve({ data: [] as any[], error: null });
+
+  const [typedUserResult, typedRoleResult] = await Promise.all([typedUserRequest, typedRoleRequest]);
+  const typedErrors = [typedUserResult.error, typedRoleResult.error].filter(Boolean);
+  if (typedErrors.length === 0) {
+    return { data: mergeDashboardRowsById([...(typedUserResult.data || []), ...(typedRoleResult.data || [])]), error: null };
+  }
+
+  const missingAssigneeSchemaOnly = typedErrors.every((error) => {
+    const text = String(error?.message || error?.details || '').toLowerCase();
+    return text.includes('assignee_') || isDashboardMissingColumnError(error);
+  });
+
+  if (!missingAssigneeSchemaOnly) {
+    return { data: [] as any[], error: typedErrors[0] };
+  }
+
+  const legacyIds = Array.from(new Set([...allowedUserIds, ...allowedRoleIds]));
+  if (legacyIds.length === 0) {
+    return { data: [], error: null };
+  }
+
+  return runOrderedDashboardSelect(table, columns, options, (query) =>
+    query.in('assignee_id', legacyIds)
+  );
+};
+
+const TASK_SHARED_COLUMNS = [
+  'id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type',
+  'status', 'name', 'priority', 'task_type', 'start_date', 'due_date',
+  'completed_at', 'updated_at', 'created_at',
+];
+
+let _dashboardTasksCache: {
+  data: any[] | null;
+  expiresAt: number;
+  userId: string | null;
+  promise: Promise<any[]> | null;
+} = { data: null, expiresAt: 0, userId: null, promise: null };
+
+const fetchDashboardTasksShared = async (
+  recordAccess: CurrentUserRecordAccessContext
+): Promise<any[]> => {
+  const now = Date.now();
+  if (
+    _dashboardTasksCache.data !== null &&
+    _dashboardTasksCache.expiresAt > now &&
+    _dashboardTasksCache.userId === String(recordAccess.userId || '')
+  ) {
+    return _dashboardTasksCache.data;
+  }
+  if (_dashboardTasksCache.promise) return _dashboardTasksCache.promise;
+
+  _dashboardTasksCache.promise = fetchScopedDashboardRows(
+    'tasks', 'tasks', TASK_SHARED_COLUMNS, recordAccess, { limit: 500 }
+  ).then(({ data }) => {
+    const rows = data || [];
+    _dashboardTasksCache = {
+      data: rows,
+      expiresAt: Date.now() + DASHBOARD_BOOTSTRAP_TTL_MS,
+      userId: String(recordAccess.userId || ''),
+      promise: null,
+    };
+    return rows;
+  }).catch((err) => {
+    _dashboardTasksCache.promise = null;
+    throw err;
+  });
+
+  return _dashboardTasksCache.promise;
 };
 
 const getDashboardCardCacheKey = (
@@ -445,8 +651,8 @@ const loadCardForModule = async (
 
   switch (preset) {
     case 'tasks_pending_mine': {
-      const { data } = await safeSelectRows('tasks', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status']);
-      const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
+      const data = await fetchDashboardTasksShared(recordAccess);
+      const scopedRows = filterRowsByRecordScope(data, moduleId, recordAccess);
       const pendingCount = scopedRows.filter((row: any) =>
         ['todo', 'in_progress', 'review'].includes(String(row?.status || ''))
       ).length;
@@ -461,7 +667,7 @@ const loadCardForModule = async (
     }
 
     case 'invoices_total_amount_mine': {
-      const { data } = await safeSelectRows('invoices', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'total_invoice_amount']);
+      const { data } = await fetchScopedDashboardRows('invoices', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'total_invoice_amount'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalAmount = scopedRows.reduce((sum: number, row: any) => sum + Number(row?.total_invoice_amount || 0), 0);
       const count = scopedRows.length;
@@ -475,7 +681,7 @@ const loadCardForModule = async (
     }
 
     case 'customers_new_mine': {
-      const { data } = await safeSelectRows('customers', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at']);
+      const { data } = await fetchScopedDashboardRows('customers', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
       return {
@@ -507,7 +713,7 @@ const loadCardForModule = async (
     }
 
     case 'billboards_opening': {
-      const { data } = await safeSelectRows('billboards', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status']);
+      const { data } = await fetchScopedDashboardRows('billboards', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const openingCount = scopedRows.filter((row: any) => String(row?.status || '') === 'opening').length;
       const freeCount = scopedRows.filter((row: any) => String(row?.status || '') === 'free').length;
@@ -521,7 +727,7 @@ const loadCardForModule = async (
     }
 
     case 'products_total': {
-      const { data } = await safeSelectRows('products', ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at']);
+      const { data } = await fetchScopedDashboardRows('products', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalCount = scopedRows.length;
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
@@ -538,7 +744,7 @@ const loadCardForModule = async (
       const selectFields = moduleSupportsScopedRecords(moduleId)
         ? 'id, org_id, assignee_id, assignee_role_id, assignee_type, created_at'
         : 'id, created_at';
-      const { data } = await safeSelectRows(module.table || moduleId, selectFields.split(','));
+      const { data } = await fetchScopedDashboardRows(module.table || moduleId, moduleId, selectFields.split(','), recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalCount = scopedRows.length;
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
@@ -594,12 +800,12 @@ const loadRecentSection = async (
     ? Array.from(new Set([...selectKeys, 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type']))
     : selectKeys;
 
-  const { data } = await safeSelectRows(module.table || moduleId, scopedSelectKeys, {
+  const { data } = await fetchScopedDashboardRows(module.table || moduleId, moduleId, scopedSelectKeys, recordAccess, {
     orderBy: [
       { field: 'updated_at', ascending: false, nullsFirst: false },
       { field: 'created_at', ascending: false, nullsFirst: false },
     ],
-    limit: RECENT_RECORDS_LIMIT * 5,
+    limit: RECENT_RECORDS_LIMIT + 2,
   });
 
   const recentFields = getRecentFieldKeys(module)
@@ -669,7 +875,7 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
   }
 
   const preferredModuleIds = resolvePreferredRoleModuleIds(permissions, MODULES, 8);
-  const dashboardModuleIds = resolveDashboardModuleIds(permissions, preferredModuleIds);
+  const dashboardModuleIds = resolveDashboardModuleIds(permissions, preferredModuleIds).slice(0, DASHBOARD_MAX_MODULES);
   const cacheKey = [
     userId,
     roleId || 'no-role',
@@ -693,16 +899,20 @@ const buildDashboardBootstrap = async (): Promise<DashboardBootstrapResult> => {
 
   dashboardBootstrapPromiseKey = cacheKey;
   dashboardBootstrapPromise = (async () => {
-    const quickActions = preferredModuleIds.map((moduleId) => ({
+    const quickActions = preferredModuleIds.slice(0, DASHBOARD_MAX_MODULES).map((moduleId) => ({
       moduleId,
       title: MODULES[moduleId]?.dashboard?.quickCreateLabel || `ایجاد ${getModuleTitle(moduleId)}`,
       description: getModuleTitle(moduleId),
     }));
 
-      const [cards, recentSections] = await Promise.all([
-      Promise.all(dashboardModuleIds.map((moduleId) => loadCardForModule(moduleId, recordAccess))),
-      Promise.all(dashboardModuleIds.map((moduleId) => loadRecentSection(moduleId, recordAccess))),
-      ]);
+    const [cards, recentSections] = await Promise.all([
+      mapWithConcurrency(dashboardModuleIds, DASHBOARD_CARD_CONCURRENCY, (moduleId) =>
+        loadCardForModule(moduleId, recordAccess)
+      ),
+      mapWithConcurrency(dashboardModuleIds, DASHBOARD_RECENT_CONCURRENCY, (moduleId) =>
+        loadRecentSection(moduleId, recordAccess)
+      ),
+    ]);
 
     const result: DashboardBootstrapResult = {
       widgetPermissions: (dashboardPermissions.fields || {}) as Record<string, boolean>,
@@ -756,6 +966,7 @@ const Dashboard: React.FC = () => {
   const [quickActions, setQuickActions] = useState<DashboardQuickAction[]>([]);
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
+  const [prefetchedTasks, setPrefetchedTasks] = useState<any[]>([]);
 
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -817,6 +1028,9 @@ const Dashboard: React.FC = () => {
         setQuickActions(result.quickActions || []);
         setCards(result.cards || []);
         setRecentSections(result.recentSections || []);
+        if (_dashboardTasksCache.data) {
+          setPrefetchedTasks(_dashboardTasksCache.data);
+        }
 
         if (userId) {
           setCurrentUserId(userId);
@@ -1067,7 +1281,7 @@ const Dashboard: React.FC = () => {
       {showActivityCalendarWidget && (
         <Row gutter={[16, 16]} className="mb-6">
           <Col xs={24}>
-            <TaskCalendarWidget />
+            <TaskCalendarWidget prefetchedTasks={prefetchedTasks.length > 0 ? prefetchedTasks : undefined} />
           </Col>
         </Row>
       )}

@@ -16,7 +16,7 @@ describe('profileAvatar', () => {
     expect(getAvatarFallbackText('')).toBe('?');
   });
 
-  it('preloads preview and original candidates once per session cache', () => {
+  it('preloads the raw avatar candidate once per session cache', () => {
     const assignedSources: string[] = [];
     const ImageMock = class {
       set src(value: string) {
@@ -34,8 +34,7 @@ describe('profileAvatar', () => {
       (globalThis as any).Image = originalImage;
     }
 
-    expect(assignedSources).toHaveLength(2);
-    expect(assignedSources[0]).toContain('/storage/v1/render/image/public/images/');
-    expect(assignedSources[1]).toContain('/storage/v1/object/public/images/');
+    expect(assignedSources).toHaveLength(1);
+    expect(assignedSources[0]).toContain('/storage/v1/object/public/images/');
   });
 });

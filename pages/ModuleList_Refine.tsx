@@ -42,7 +42,7 @@ import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagsMap } from "../utils/referenceData";
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagIdMap, fetchRecordTagsMap } from "../utils/referenceData";
 import { getFieldLabelFa } from "../utils/fieldLabel";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { getSingleOptionLabel } from "../utils/optionHelpers";
@@ -682,6 +682,10 @@ export const ModuleListRefine: React.FC<{
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const [taskRelationOptionsLoading, setTaskRelationOptionsLoading] = useState(false);
   const [loadedTaskRelationOptionsSignature, setLoadedTaskRelationOptionsSignature] = useState("");
+  const stableFiltersKey = useMemo(
+    () => JSON.stringify(effectiveInitialFilters),
+    [effectiveInitialFilters]
+  );
   const moduleListRowSelect = useMemo(
     () => buildModuleListRowSelect(moduleConfig, visibleColumns, {
       viewMode,
@@ -689,7 +693,8 @@ export const ModuleListRefine: React.FC<{
       calendarDateField,
       filters: effectiveInitialFilters,
     }),
-    [calendarDateField, effectiveInitialFilters, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [calendarDateField, stableFiltersKey, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
   );
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
@@ -1003,51 +1008,22 @@ export const ModuleListRefine: React.FC<{
     const unionTagIds = Array.from(
       new Set(normalizedActiveTagViewFilters.flatMap((item) => item.tagIds).filter(Boolean))
     );
-    const RECORD_TAGS_SCAN_SIZE = 1000;
     const TAG_FAST_FILTER_LIMIT = 800;
-    const selectedTagsByRecord = new Map<string, Set<string>>();
-    const allTagsByRecord = new Map<string, Set<string>>();
+    const [selectedTagIdMap, allTagIdMap] = await Promise.all([
+      unionTagIds.length > 0
+        ? fetchRecordTagIdMap(supabase, resolvedModuleId, { tagIds: unionTagIds })
+        : Promise.resolve({} as Record<string, string[]>),
+      needsAllTaggedUniverse
+        ? fetchRecordTagIdMap(supabase, resolvedModuleId)
+        : Promise.resolve({} as Record<string, string[]>),
+    ]);
 
-    const loadTagRows = async (tagIds?: string[] | null) => {
-      const target = tagIds && tagIds.length > 0 ? selectedTagsByRecord : allTagsByRecord;
-      let tagsPage = 0;
-
-      while (true) {
-        let tagQuery = supabase
-          .from("record_tags")
-          .select("record_id, tag_id")
-          .eq("module_id", resolvedModuleId)
-          .range(tagsPage * RECORD_TAGS_SCAN_SIZE, ((tagsPage + 1) * RECORD_TAGS_SCAN_SIZE) - 1);
-
-        if (tagIds && tagIds.length > 0) {
-          tagQuery = tagQuery.in("tag_id", tagIds);
-        }
-
-        const { data: tagRows, error: tagError } = await tagQuery;
-        if (tagError) throw tagError;
-
-        const normalizedRows = Array.isArray(tagRows) ? tagRows : [];
-        normalizedRows.forEach((row: any) => {
-          const recordId = String(row?.record_id || "").trim();
-          const tagId = String(row?.tag_id || "").trim();
-          if (!recordId || !tagId) return;
-          if (!target.has(recordId)) {
-            target.set(recordId, new Set<string>());
-          }
-          target.get(recordId)!.add(tagId);
-        });
-
-        if (normalizedRows.length < RECORD_TAGS_SCAN_SIZE) break;
-        tagsPage += 1;
-      }
-    };
-
-    if (unionTagIds.length > 0) {
-      await loadTagRows(unionTagIds);
-    }
-    if (needsAllTaggedUniverse) {
-      await loadTagRows();
-    }
+    const selectedTagsByRecord = new Map<string, Set<string>>(
+      Object.entries(selectedTagIdMap).map(([recordId, tagIds]) => [recordId, new Set(tagIds)])
+    );
+    const allTagsByRecord = new Map<string, Set<string>>(
+      Object.entries(allTagIdMap).map(([recordId, tagIds]) => [recordId, new Set(tagIds)])
+    );
 
     const taggedRecordIds = needsAllTaggedUniverse
       ? new Set(Array.from(allTagsByRecord.keys()))

@@ -1170,7 +1170,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   } = useNotificationConversationList({
     supabase,
     section: 'notes',
-    enabled: open && variant === 'chat' && Boolean(profile.id),
+    enabled: variant === 'chat' && Boolean(profile.id),
   });
 
   // Debounced conversation summary refreshes — prevents N RPC calls when N messages are marked as read
@@ -2937,6 +2937,37 @@ useEffect(() => {
     }
   };
 
+  const refreshClosedState = useCallback(async (options?: { force?: boolean }) => {
+    if (!profile.id) return;
+    if (variant === 'chat') {
+      const work: Array<Promise<any>> = [];
+      if (noteConversationSummaryAvailable) {
+        work.push(refreshNoteConversationSummaries());
+      } else {
+        work.push(refreshSection('notes', options));
+      }
+      if (botConversationSummaryAvailable) {
+        work.push(refreshBotConversationSummaries());
+      } else {
+        work.push(refreshSection('bot_messages', options));
+      }
+      await Promise.all(work);
+      return;
+    }
+    await Promise.all([
+      refreshSection('tasks', options),
+      refreshSection('responsibilities', options),
+    ]);
+  }, [
+    botConversationSummaryAvailable,
+    noteConversationSummaryAvailable,
+    profile.id,
+    refreshBotConversationSummaries,
+    refreshNoteConversationSummaries,
+    refreshSection,
+    variant,
+  ]);
+
   const fetchSmsMessages = async () => {
     const { data, error } = await supabase
       .from('sms_delivery_reports')
@@ -3404,8 +3435,12 @@ useEffect(() => {
   useEffect(() => {
     if (!profile.id) return;
     notificationsReadyRef.current = false;
-    void refreshAllRef.current?.(false, { force: true });
-  }, [profile.id, profile.role_id, variant]);
+    if (open) {
+      void refreshAllRef.current?.(false, { force: true });
+      return;
+    }
+    void refreshClosedState({ force: true });
+  }, [open, profile.id, profile.role_id, variant]);
 
   const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
   const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
@@ -3481,31 +3516,11 @@ useEffect(() => {
   }, [activeDrawerSection, open]);
 
   useEffect(() => {
-    if (!open) return;
-    if (activeDrawerSection !== 'bot_messages') return;
-    botShouldStickToBottomRef.current = true;
-    botForceScrollToBottomRef.current = true;
-    const refreshBotFallback = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void fetchBotGroups()
-        .then((groups) => fetchBotNotificationMessages(groups))
-        .catch((error) => console.warn('Could not refresh bot notification messages', error));
-      if (selectedBotGroupId && !botTimelineAvailable) {
-        void fetchBotMessages(selectedBotGroupId);
-      }
-    };
-    const timer = window.setInterval(() => {
-      refreshBotFallback();
-    }, 30000);
-    return () => window.clearInterval(timer);
-  }, [activeDrawerSection, botTimelineAvailable, open, selectedBotGroupId]);
-
-  useEffect(() => {
     if (!profile.id) return;
     const interval = setInterval(() => {
       if (open) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void refreshAll(true);
+      void refreshClosedState({ force: true });
     }, 90000);
     return () => clearInterval(interval);
   }, [open, profile.id, profile.role_id, variant]);
@@ -3529,7 +3544,15 @@ useEffect(() => {
       if (visibilityDebounceTimer !== null) window.clearTimeout(visibilityDebounceTimer);
       visibilityDebounceTimer = window.setTimeout(() => {
         visibilityDebounceTimer = null;
-        void refreshAll(false, { force: true });
+        if (open && activeDrawerSection) {
+          void refreshSection(activeDrawerSection, { force: true });
+          return;
+        }
+        if (open) {
+          void refreshAll(false, { force: true });
+          return;
+        }
+        void refreshClosedState({ force: true });
       }, 600);
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -3539,7 +3562,7 @@ useEffect(() => {
       if (resumeClassTimer !== null) window.clearTimeout(resumeClassTimer);
       document.body.classList.remove('page-resuming');
     };
-  }, [profile.id, profile.role_id, variant]);
+  }, [activeDrawerSection, open, profile.id, profile.role_id, variant]);
 
   const currentUserId = String(profile.id || '').trim();
   const currentRoleId = String(profile.role_id || '').trim();
