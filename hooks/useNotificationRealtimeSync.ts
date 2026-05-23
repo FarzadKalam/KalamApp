@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
@@ -36,6 +36,23 @@ export const useNotificationRealtimeSync = ({
   responsibilityTables,
   onVoipUpsert,
 }: UseNotificationRealtimeSyncOptions) => {
+  // Store callbacks in refs so the channel setup effect never re-runs due to function identity changes.
+  const mapBroadcastSectionRef = useRef(mapBroadcastSection);
+  const scheduleLiveRefreshRef = useRef(scheduleLiveRefresh);
+  const hasNoteMatchRef = useRef(hasNoteMatch);
+  const hasAssigneeMatchRef = useRef(hasAssigneeMatch);
+  const hasVoipCallMatchRef = useRef(hasVoipCallMatch);
+  const onVoipUpsertRef = useRef(onVoipUpsert);
+  const responsibilityTablesRef = useRef(responsibilityTables);
+
+  useEffect(() => { mapBroadcastSectionRef.current = mapBroadcastSection; }, [mapBroadcastSection]);
+  useEffect(() => { scheduleLiveRefreshRef.current = scheduleLiveRefresh; }, [scheduleLiveRefresh]);
+  useEffect(() => { hasNoteMatchRef.current = hasNoteMatch; }, [hasNoteMatch]);
+  useEffect(() => { hasAssigneeMatchRef.current = hasAssigneeMatch; }, [hasAssigneeMatch]);
+  useEffect(() => { hasVoipCallMatchRef.current = hasVoipCallMatch; }, [hasVoipCallMatch]);
+  useEffect(() => { onVoipUpsertRef.current = onVoipUpsert; }, [onVoipUpsert]);
+  useEffect(() => { responsibilityTablesRef.current = responsibilityTables; }, [responsibilityTables]);
+
   useEffect(() => {
     if (!enabled || !currentUserId) return;
 
@@ -93,8 +110,8 @@ export const useNotificationRealtimeSync = ({
         broadcastTopics.forEach((topic) => {
           const broadcastChannel = supabase.channel(topic, { config: { private: true } } as any)
             .on('broadcast', { event: 'notification' }, (message: any) => {
-              const section = mapBroadcastSection(message?.payload?.section);
-              if (section) scheduleLiveRefresh(section);
+              const section = mapBroadcastSectionRef.current(message?.payload?.section);
+              if (section) scheduleLiveRefreshRef.current(section);
             });
           broadcastChannel.subscribe((status: any) => {
             if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -108,43 +125,43 @@ export const useNotificationRealtimeSync = ({
       if (variant === 'chat') {
         channel
           .on('postgres_changes', buildOrgScopedChange('notes', 'INSERT'), (payload: any) => {
-            if (hasNoteMatch(payload?.new)) scheduleLiveRefresh('notes');
+            if (hasNoteMatchRef.current(payload?.new)) scheduleLiveRefreshRef.current('notes');
           })
           .on('postgres_changes', buildOrgScopedChange('notes', 'UPDATE'), (payload: any) => {
-            if (hasNoteMatch(payload?.new) || hasNoteMatch(payload?.old)) scheduleLiveRefresh('notes');
+            if (hasNoteMatchRef.current(payload?.new) || hasNoteMatchRef.current(payload?.old)) scheduleLiveRefreshRef.current('notes');
           })
           .on('postgres_changes', buildOrgScopedChange('counterparty_bot_groups', '*'), () => {
-            scheduleLiveRefresh('bot_messages');
+            scheduleLiveRefreshRef.current('bot_messages');
           })
           .on('postgres_changes', buildOrgScopedChange('counterparty_bot_messages', '*'), () => {
-            scheduleLiveRefresh('bot_messages');
+            scheduleLiveRefreshRef.current('bot_messages');
           })
           .on('postgres_changes', buildOrgScopedChange('outbound_messages', '*'), (payload: any) => {
             const row = payload?.new || payload?.old || {};
-            if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefresh('sms_messages');
+            if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefreshRef.current('sms_messages');
           })
           .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'INSERT'), (payload: any) => {
-            if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
+            if (hasVoipCallMatchRef.current(payload?.new)) onVoipUpsertRef.current(payload.new);
           })
           .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'UPDATE'), (payload: any) => {
-            if (hasVoipCallMatch(payload?.new)) onVoipUpsert(payload.new);
+            if (hasVoipCallMatchRef.current(payload?.new)) onVoipUpsertRef.current(payload.new);
           });
       } else {
         channel
           .on('postgres_changes', buildOrgScopedChange('tasks', 'INSERT'), (payload: any) => {
-            if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('tasks');
+            if (hasAssigneeMatchRef.current(payload?.new)) scheduleLiveRefreshRef.current('tasks');
           })
           .on('postgres_changes', buildOrgScopedChange('tasks', 'UPDATE'), (payload: any) => {
-            if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('tasks');
+            if (hasAssigneeMatchRef.current(payload?.new) || hasAssigneeMatchRef.current(payload?.old)) scheduleLiveRefreshRef.current('tasks');
           });
 
-        responsibilityTables.forEach((table) => {
+        responsibilityTablesRef.current.forEach((table) => {
           channel
             .on('postgres_changes', buildOrgScopedChange(table, 'INSERT'), (payload: any) => {
-              if (hasAssigneeMatch(payload?.new)) scheduleLiveRefresh('responsibilities');
+              if (hasAssigneeMatchRef.current(payload?.new)) scheduleLiveRefreshRef.current('responsibilities');
             })
             .on('postgres_changes', buildOrgScopedChange(table, 'UPDATE'), (payload: any) => {
-              if (hasAssigneeMatch(payload?.new) || hasAssigneeMatch(payload?.old)) scheduleLiveRefresh('responsibilities');
+              if (hasAssigneeMatchRef.current(payload?.new) || hasAssigneeMatchRef.current(payload?.old)) scheduleLiveRefreshRef.current('responsibilities');
             });
         });
       }
@@ -170,13 +187,6 @@ export const useNotificationRealtimeSync = ({
     currentRoleId,
     currentUserId,
     enabled,
-    hasAssigneeMatch,
-    hasNoteMatch,
-    hasVoipCallMatch,
-    mapBroadcastSection,
-    onVoipUpsert,
-    responsibilityTables,
-    scheduleLiveRefresh,
     supabase,
     variant,
   ]);

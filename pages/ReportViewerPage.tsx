@@ -1435,9 +1435,9 @@ const ReportViewerPage: React.FC = () => {
         {chartAvailable && (
           <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.5rem] border border-gray-200 p-4 dark:border-gray-700">
             <div className="flex flex-wrap items-center gap-2">
-              <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
-              <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
-              <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)] border-none' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
+              <Button icon={<TableOutlined />} type={renderMode === 'table' ? 'primary' : 'default'} className={renderMode === 'table' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('table')}>جدول</Button>
+              <Button icon={<BarChartOutlined />} type={renderMode === 'bar' ? 'primary' : 'default'} className={renderMode === 'bar' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('bar')}>نمودار ستونی</Button>
+              <Button icon={<PieChartOutlined />} type={renderMode === 'pie' ? 'primary' : 'default'} className={renderMode === 'pie' ? 'kalam-btn-brand' : ''} onClick={() => setRenderMode('pie')}>نمودار دایره‌ای</Button>
             </div>
             {metricOptions.length > 1 && (
               <Select

@@ -83,7 +83,9 @@
       "Bash(grep -r \"ProductionStagesField\" d:\\\\\\\\Kalamapp --include=\"*.tsx\")",
       "Bash(grep -n \"Modal\" d:\\\\\\\\Kalamapp\\\\\\\\components\\\\\\\\ProductionStagesField.tsx)",
       "Bash(git add *)",
-      "Bash(git commit -m 'اضافه کردن فایل .version-changes.json برای مدیریت changelog *)"
+      "Bash(git commit -m 'اضافه کردن فایل .version-changes.json برای مدیریت changelog *)",
+      "Bash(grep -rn \"cacheKey.*modal\\\\|cacheKey.*tasks\" d:/Kalamapp --include=\"*.ts\" --include=\"*.tsx\" ! -path \"*/node_modules/*\" ! -path \"*/dist/*\")",
+      "Bash(powershell -Command \"\\(Get-Content 'd:\\\\Kalamapp\\\\components\\\\NotificationsPopover.tsx' | Measure-Object -Line\\).Lines\")"
     ]
   },
   "hooks": {

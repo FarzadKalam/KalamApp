@@ -39,6 +39,30 @@
   }
 }
 
+/* =========================================
+   دکمه اصلی برند — پشتیبانی از dark mode
+   در حالت روشن: brand-600 / hover brand-500
+   در حالت تاریک: brand-500 / hover brand-400
+   ========================================= */
+.kalam-btn-brand {
+  background: rgba(var(--brand-600-rgb), 1) !important;
+  border: none !important;
+  color: #fff !important;
+}
+.kalam-btn-brand:hover,
+.kalam-btn-brand:focus {
+  background: rgba(var(--brand-500-rgb), 1) !important;
+  color: #fff !important;
+}
+html.dark .kalam-btn-brand {
+  background: rgba(var(--brand-500-rgb), 1) !important;
+}
+html.dark .kalam-btn-brand:hover,
+html.dark .kalam-btn-brand:focus {
+  background: rgba(var(--brand-400-rgb), 1) !important;
+  color: #fff !important;
+}
+
 html.kalam-app-shell-lock,
 body.kalam-app-shell-lock,
 html.kalam-app-shell-lock #root {

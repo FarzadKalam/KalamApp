@@ -2652,8 +2652,10 @@ useEffect(() => {
         && Boolean(selectedConversationKey)
       );
       if (shouldUseConversationScopedNotes) {
-        await safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
-        await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
+        await Promise.all([
+          safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any),
+          safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any),
+        ]);
         lastLoadedAtRef.current.notes = Date.now();
         return;
       }
@@ -2852,12 +2854,14 @@ useEffect(() => {
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
     if (shouldFetchGlobalNotes) setNotes(notesData);
-    if (shouldLoadNotes && selectedConversationKey) {
-      await safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
-    }
-    if (shouldLoadNotes && noteConversationSummaryAvailable) {
-      await safeFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
-    }
+    await Promise.all([
+      shouldLoadNotes && selectedConversationKey
+        ? safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any)
+        : Promise.resolve(null),
+      shouldLoadNotes && noteConversationSummaryAvailable
+        ? safeFetch(() => refreshNoteConversationSummaries(), 'notes', null as any)
+        : Promise.resolve(null),
+    ]);
     if (shouldLoadTasks) setTasks(tasksData);
     if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
     if (shouldLoadSmsMessages) setSmsMessages(smsData);
@@ -4107,10 +4111,10 @@ useEffect(() => {
       return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
     }, 0);
     const unreadCount = systemNotes.filter((note: any) => (
-      !isNotificationRead('notes', 'note', String(note?.id || ''), false)
+      !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
     )).length;
     return { noteCount: systemNotes.length, latestMessageAt, unreadCount };
-  }, [isNotificationRead, notes]);
+  }, [isNotificationRead, notes, seenNoteIds]);
   const myNoteStats = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     const myNotes = currentUserId

@@ -140,6 +140,7 @@ interface ProductionStagesFieldProps {
   automationContextModuleId?: string | null;
   automationContextModuleIds?: string[] | null;
   autoOpenTaskId?: string | null;
+  autoOpenTask?: any | null;
   readOnly?: boolean;
   compact?: boolean;
   cardCompact?: boolean;
@@ -458,7 +459,7 @@ const PROCESS_BAR_BREAKPOINTS = {
 const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
 const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false }) => {
   const screens = Grid.useBreakpoint();
   const isMobileProcessViewport = !screens.md;
   const [lines, setLines] = useState<any[]>([]);
@@ -571,14 +572,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handoverEditorHistoryRef = useRef<string | null>(null);
   const watchedDraftStageStatusOptions = Form.useWatch('stage_status_options_editor', { form: draftForm, preserve: true });
   const watchedDraftStageSortOrder = Form.useWatch('sort_order', { form: draftForm, preserve: true });
-  const activeTaskQuickModalTask = useMemo(
-    () => (
-      openTaskPopoverId
-        ? tasks.find((task: any) => String(task?.id || '') === String(openTaskPopoverId)) || null
-        : null
-    ),
-    [openTaskPopoverId, tasks]
-  );
+  const activeTaskQuickModalTask = useMemo(() => {
+    if (!openTaskPopoverId) return null;
+    const fromTasks = tasks.find((task: any) => String(task?.id || '') === String(openTaskPopoverId));
+    if (fromTasks) return fromTasks;
+    if (autoOpenTask && String(autoOpenTask?.id || '') === String(openTaskPopoverId)) {
+      return autoOpenTask;
+    }
+    return null;
+  }, [openTaskPopoverId, tasks, autoOpenTask]);
   const resetHandoverState = useCallback(() => {
     handoverFormsHistoryRef.current = null;
     handoverEditorHistoryRef.current = null;
@@ -2795,6 +2797,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return;
     }
     if (autoOpenedTaskIdRef.current === String(autoOpenTaskId)) return;
+    if (autoOpenTask && String(autoOpenTask?.id || '') === String(autoOpenTaskId)) {
+      autoOpenedTaskIdRef.current = String(autoOpenTaskId);
+      setOpenTaskPopoverId(String(autoOpenTaskId));
+      return;
+    }
     if (!tasks.length) return;
 
     const targetTask = tasks.find((task: any) => String(task?.id || '') === String(autoOpenTaskId));
@@ -2802,7 +2809,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     autoOpenedTaskIdRef.current = String(autoOpenTaskId);
     setOpenTaskPopoverId(String(targetTask.id));
-  }, [autoOpenTaskId, tasks]);
+  }, [autoOpenTaskId, autoOpenTask, tasks]);
 
   const setHandoverGroupCollapsed = useCallback((groupIndex: number, collapsed: boolean) => {
     setHandoverGroups((prev) => {
@@ -7322,7 +7329,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             setOpenDraftSegmentPopoverKey(null);
                             openTaskModal(line.id, segment);
                           }}
-                          className="border-none bg-[rgba(var(--brand-700-rgb),1)] text-white shadow-md ring-1 ring-[rgba(var(--brand-300-rgb),0.45)] hover:!bg-[rgba(var(--brand-600-rgb),1)] hover:shadow-lg focus:!bg-[rgba(var(--brand-700-rgb),1)] active:!bg-[rgba(var(--brand-800-rgb),1)]"
+                          className="kalam-btn-brand shadow-md ring-1 ring-[rgba(var(--brand-300-rgb),0.45)] hover:shadow-lg dark:ring-[rgba(var(--brand-400-rgb),0.45)]"
                         >
                           ایجاد فعالیت
                         </Button>
@@ -7813,7 +7820,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         <div className="space-y-3 pt-2">
           <Button
             type="primary"
-            className="w-full rounded-lg border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+            className="w-full rounded-lg kalam-btn-brand"
             onClick={() => {
               setDraftStageChooserOpen(false);
               openDraftStageModal(null, 'stage');
@@ -8016,7 +8023,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <Button onClick={() => {
               closeTaskModal();
             }} className="rounded-lg">انصراف</Button>
-            <Button type="primary" htmlType="submit" loading={isSubmittingTaskModal} className="rounded-lg border-none shadow-md bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]">
+            <Button type="primary" htmlType="submit" loading={isSubmittingTaskModal} className="rounded-lg shadow-md kalam-btn-brand">
               {isProcessModule ? 'ثبت فعالیت' : 'ثبت مرحله'}
             </Button>
           </div>
@@ -9086,7 +9093,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <Button
                 key="save-links"
                 type="primary"
-                className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                className="kalam-btn-brand"
                 loading={loading}
                 onClick={() => { void handleSaveProcessLinksToGroup(); }}
               >
@@ -9112,7 +9119,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <Button
                 key="add"
                 type="primary"
-                className="border-none bg-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-500-rgb),1)]"
+                className="kalam-btn-brand"
                 loading={loading}
                 onClick={() => { void handleAppendProcessTemplate(); }}
                 disabled={!appendProcessTemplateId}

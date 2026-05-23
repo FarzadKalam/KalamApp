@@ -63,6 +63,8 @@ export const useBotConversationTimeline = <TItem,>({
   // True when the current view was already populated from cache.
   // refresh() uses this to skip the loading skeleton for the background fetch.
   const cacheAppliedRef = useRef(false);
+  // Deduplicate concurrent refresh() calls — only one in-flight at a time.
+  const refreshInFlightRef = useRef(false);
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -144,6 +146,11 @@ export const useBotConversationTimeline = <TItem,>({
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
 
+    if (refreshInFlightRef.current) {
+      return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+    }
+    refreshInFlightRef.current = true;
+
     // Cache was already applied synchronously — skip skeleton, fetch silently
     if (!cacheAppliedRef.current) {
       setLoadingInitial(true);
@@ -183,6 +190,7 @@ export const useBotConversationTimeline = <TItem,>({
     } finally {
       setLoadingInitial(false);
       cacheAppliedRef.current = false;
+      refreshInFlightRef.current = false;
     }
   }, [applyPayload, available, botGroupId, enabled, loadFallbackInitial, pageSize, supabase]);
 

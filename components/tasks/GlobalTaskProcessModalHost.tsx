@@ -126,6 +126,7 @@ const GlobalTaskProcessModalHost: React.FC = () => {
                 recordId={target.recordId}
                 moduleId={target.moduleId}
                 autoOpenTaskId={String(task.id)}
+                autoOpenTask={task}
                 readOnly
                 compact
                 cardCompact
