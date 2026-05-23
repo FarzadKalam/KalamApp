@@ -406,6 +406,7 @@ type AttendanceComputedRow = {
   scheduledEnd: string | null;
   scheduleShifts: AttendanceScheduleShift[];
   shiftDeltas: AttendanceShiftDelta[];
+  attendanceSegments: AttendanceSegment[];
   lateMinutes: number;
   earlyArrivalMinutes: number;
   earlyLeaveMinutes: number;
@@ -926,6 +927,49 @@ const normalizeAttendanceDateTimes = (values: Array<string | null | undefined>) 
     ),
   ).sort((a, b) => (parseDate(a)?.valueOf() || 0) - (parseDate(b)?.valueOf() || 0));
 
+const buildAttendanceSegments = (
+  checkIns: string[],
+  checkOuts: string[],
+  keyPrefix: string,
+): AttendanceSegment[] => {
+  const sortedIns = normalizeAttendanceDateTimes(checkIns);
+  const sortedOuts = normalizeAttendanceDateTimes(checkOuts);
+  const usedOutIndexes = new Set<number>();
+  const segments: AttendanceSegment[] = [];
+
+  sortedIns.forEach((checkInAt, index) => {
+    const checkInValue = parseDate(checkInAt)?.valueOf() || 0;
+    const matchedOutIndex = sortedOuts.findIndex((checkOutAt, outIndex) => {
+      if (usedOutIndexes.has(outIndex)) return false;
+      const checkOutValue = parseDate(checkOutAt)?.valueOf() || 0;
+      return checkOutValue >= checkInValue;
+    });
+    const checkOutAt = matchedOutIndex >= 0 ? sortedOuts[matchedOutIndex] : null;
+    if (matchedOutIndex >= 0) usedOutIndexes.add(matchedOutIndex);
+    const checkIn = parseDate(checkInAt || null);
+    const checkOut = parseDate(checkOutAt || null);
+    const diff = checkIn && checkOut ? checkOut.diff(checkIn, 'minute') : 0;
+    segments.push({
+      key: `${keyPrefix}::segment::${index}`,
+      checkInAt,
+      checkOutAt,
+      presenceMinutes: diff > 0 && diff < 24 * 60 ? diff : 0,
+    });
+  });
+
+  sortedOuts.forEach((checkOutAt, outIndex) => {
+    if (usedOutIndexes.has(outIndex)) return;
+    segments.push({
+      key: `${keyPrefix}::segment::orphan_out::${outIndex}`,
+      checkInAt: null,
+      checkOutAt,
+      presenceMinutes: 0,
+    });
+  });
+
+  return segments.sort((a, b) => (parseDate(a.checkOutAt || a.checkInAt || null)?.valueOf() || 0) - (parseDate(b.checkOutAt || b.checkInAt || null)?.valueOf() || 0));
+};
+
 const pickClosestAttendanceTime = (
   values: string[],
   usedIndexes: Set<number>,
@@ -1031,19 +1075,25 @@ const combineAttendanceDateTime = (row: AttendanceLogRecord, timeValue: string |
 };
 
 const getAttendanceCheckInAt = (row: AttendanceLogRecord) => {
-  const logType = String(row.log_type || '');
   return combineAttendanceDateTime(row, row.check_in_time) ||
     row.manual_check_in_time ||
-    (logType === 'check_in' ? row.actual_check_in_time || row.occurred_at || null : null);
+    row.actual_check_in_time ||
+    null;
+};
+
+type AttendanceSegment = {
+  key: string;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  presenceMinutes: number;
 };
 
 const getAttendanceCheckOutAt = (row: AttendanceLogRecord) => {
-  const logType = String(row.log_type || '');
   const checkOutFromTime = combineAttendanceDateTime(row, row.check_out_time);
   if (checkOutFromTime) return checkOutFromTime;
-  if (logType === 'check_in') return null;
   return row.manual_check_out_time ||
-    (logType === 'check_out' ? row.actual_check_out_time || row.occurred_at || null : null);
+    row.actual_check_out_time ||
+    null;
 };
 
 const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
@@ -2448,6 +2498,68 @@ const HRPage: React.FC = () => {
     () => new Set((selectedEmployeeIds.length ? selectedEmployeeIds : profiles.map((profile) => profile.id)).map((value) => String(value))),
     [profiles, selectedEmployeeIds],
   );
+  const filteredAttendanceRows = useMemo(() => {
+    if (!selectedEmployeeIds.length) return attendanceRows;
+    return attendanceRows.filter((row) => {
+      const directEmployeeId = String(row.employee_id || '').trim();
+      if (directEmployeeId) return selectedEmployeeIdSet.has(directEmployeeId);
+      const assigneeEmployeeId = row.assignee_id
+        ? String(profileByRelatedId.get(String(row.assignee_id))?.id || '').trim()
+        : '';
+      if (assigneeEmployeeId) return selectedEmployeeIdSet.has(assigneeEmployeeId);
+      const relatedEmployeeId = row.related_profile_id
+        ? String(profileByRelatedId.get(String(row.related_profile_id))?.id || '').trim()
+        : '';
+      if (relatedEmployeeId) return selectedEmployeeIdSet.has(relatedEmployeeId);
+      return false;
+    });
+  }, [attendanceRows, profileByRelatedId, selectedEmployeeIdSet, selectedEmployeeIds.length]);
+
+  const attendanceTopStats = useMemo(() => ({
+    total: filteredAttendanceRows.length,
+    checkIns: filteredAttendanceRows.filter((row) => String(row.log_type || '').trim() === 'check_in').length,
+    checkOuts: filteredAttendanceRows.filter((row) => String(row.log_type || '').trim() === 'check_out').length,
+  }), [filteredAttendanceRows]);
+  const attendanceApprovedLeaveStats = useMemo(() => {
+    let hourlyMinutes = 0;
+    const dailyDayKeys = new Set<string>();
+    leaveRequests.forEach((request) => {
+      if (!isApprovedLeaveStatus(request.status) || !request.employeeId) return;
+      const employeeIdValue = String(request.employeeId || '').trim();
+      if (!employeeIdValue || !selectedEmployeeIdSet.has(employeeIdValue)) return;
+      const leaveType = String(request.leaveType || '').trim().toLowerCase();
+      const start = parseDate(request.startDate || null);
+      const end = parseDate(request.endDate || request.startDate || null);
+      if (leaveType === 'hourly') {
+        const fallbackMinutes = Math.max(0, toNumber(request.totalMinutes ?? 0));
+        if (!start || !end) {
+          hourlyMinutes += fallbackMinutes;
+          return;
+        }
+        const overlapStart = start.valueOf() < monthStart.valueOf() ? monthStart : start;
+        const overlapEnd = end.valueOf() > monthEnd.valueOf() ? monthEnd : end;
+        const overlap = overlapEnd.valueOf() > overlapStart.valueOf()
+          ? Math.floor((overlapEnd.valueOf() - overlapStart.valueOf()) / (1000 * 60))
+          : 0;
+        hourlyMinutes += overlap > 0 ? overlap : fallbackMinutes;
+        return;
+      }
+      if (!start || !end) return;
+      const rangeStart = start.valueOf() < monthStart.valueOf() ? monthStart : start;
+      const rangeEnd = end.valueOf() > monthEnd.valueOf() ? monthEnd : end;
+      let cursor = rangeStart.startOf('day');
+      const finalDay = rangeEnd.startOf('day');
+      while (cursor.valueOf() <= finalDay.valueOf()) {
+        const dayKey = toIsoDateKey(cursor);
+        if (dayKey) dailyDayKeys.add(`${employeeIdValue}::${dayKey}`);
+        cursor = cursor.add(1, 'day');
+      }
+    });
+    return {
+      hourlyMinutes,
+      dailyDays: dailyDayKeys.size,
+    };
+  }, [leaveRequests, monthEnd, monthStart, selectedEmployeeIdSet]);
 
   const approvedLeaveByEmployeeDate = useMemo(() => {
     const byEmployeeDate = new Map<string, Map<string, ApprovedLeaveRequest[]>>();
@@ -2615,6 +2727,7 @@ const HRPage: React.FC = () => {
         const locationText = [existing?.row.locationText, row.location_text].filter(Boolean).join(' | ') || null;
         const checkIns = normalizeAttendanceDateTimes([...(existing?.checkIns || []), checkInAt || null]);
         const checkOuts = normalizeAttendanceDateTimes([...(existing?.checkOuts || []), checkOutAt || null]);
+        const attendanceSegments = buildAttendanceSegments(checkIns, checkOuts, groupKey);
         const nextCheckInAt = checkIns[0] || null;
         const nextCheckOutAt = checkOuts[checkOuts.length - 1] || null;
         const rowTimeValue = parsedBaseAt?.valueOf() || 0;
@@ -2747,6 +2860,7 @@ const HRPage: React.FC = () => {
             scheduledEnd: schedule.end,
             scheduleShifts: schedule.shifts,
             shiftDeltas: adjustedShiftDeltas,
+            attendanceSegments,
             lateMinutes,
             earlyArrivalMinutes,
             earlyLeaveMinutes,
@@ -2851,6 +2965,7 @@ const HRPage: React.FC = () => {
             scheduledEnd: schedule.end,
             scheduleShifts: schedule.shifts,
             shiftDeltas: syntheticShiftDeltas,
+            attendanceSegments: [],
             lateMinutes: 0,
             earlyArrivalMinutes: 0,
             earlyLeaveMinutes: 0,
@@ -2876,7 +2991,10 @@ const HRPage: React.FC = () => {
         return b.lastAtValue - a.lastAtValue;
       })
       .map((item) => item.row)
-      .filter((row) => !row.employeeId || selectedEmployeeIdSet.has(String(row.employeeId)));
+      .filter((row) => {
+        if (!selectedEmployeeIds.length) return true;
+        return !!row.employeeId && selectedEmployeeIdSet.has(String(row.employeeId));
+      });
   }, [
     attendanceRows,
     approvedLeaveByEmployeeDate,
@@ -4844,6 +4962,18 @@ const HRPage: React.FC = () => {
       dataIndex: 'checkInAt',
       key: 'checkInAt',
       render: (val: string | null, row: AttendanceComputedRow) => {
+        const segmentEntries = row.attendanceSegments.filter((segment) => segment.checkInAt);
+        if (segmentEntries.length > 1) {
+          return (
+            <div className="flex flex-col gap-1">
+              {segmentEntries.map((segment, index) => (
+                <Tag key={`${segment.key}_in`} color="green" className="w-fit">
+                  {toPersianNumber(index + 1)}: {toPersianNumber(safeJalaliFormat(segment.checkInAt || '', 'HH:mm'))}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
         const shiftEntries = row.shiftDeltas.filter((shift) => shift.checkInAt);
         if (row.shiftDeltas.length > 1 && shiftEntries.length) {
           return (
@@ -4866,6 +4996,18 @@ const HRPage: React.FC = () => {
       dataIndex: 'checkOutAt',
       key: 'checkOutAt',
       render: (val: string | null, row: AttendanceComputedRow) => {
+        const segmentEntries = row.attendanceSegments.filter((segment) => segment.checkOutAt);
+        if (segmentEntries.length > 1) {
+          return (
+            <div className="flex flex-col gap-1">
+              {segmentEntries.map((segment, index) => (
+                <Tag key={`${segment.key}_out`} color="red" className="w-fit">
+                  {toPersianNumber(index + 1)}: {toPersianNumber(safeJalaliFormat(segment.checkOutAt || '', 'HH:mm'))}
+                </Tag>
+              ))}
+            </div>
+          );
+        }
         const shiftEntries = row.shiftDeltas.filter((shift) => shift.checkOutAt);
         if (row.shiftDeltas.length > 1 && shiftEntries.length) {
           return (
@@ -4913,6 +5055,20 @@ const HRPage: React.FC = () => {
       key: 'delta_details',
       render: (_: unknown, row: AttendanceComputedRow) => (
         <div className="text-xs leading-6">
+          {row.attendanceSegments.length > 1 && (
+            <div className="mb-2">
+              <div className="font-bold text-gray-700">بازه‌های حضور</div>
+              {row.attendanceSegments.map((segment, index) => (
+                <div key={segment.key}>
+                  {toPersianNumber(index + 1)}: {segment.checkInAt ? toPersianNumber(safeJalaliFormat(segment.checkInAt, 'HH:mm')) : '-'}
+                  {' تا '}
+                  {segment.checkOutAt ? toPersianNumber(safeJalaliFormat(segment.checkOutAt, 'HH:mm')) : '-'}
+                  {'، '}
+                  <span className="persian-number text-blue-700">{formatMinutesLabel(segment.presenceMinutes)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {row.shiftDeltas.length ? (
             row.shiftDeltas.map((shift) => (
               <div key={shift.key} className="mb-1">
@@ -5532,13 +5688,13 @@ const HRPage: React.FC = () => {
     <>
       <Row gutter={[12, 12]} className="mb-4">
         <Col xs={24} md={6}>
-          <Card><div className="text-xs text-gray-500 mb-1">کل رکوردهای تردد</div><div className="text-2xl font-black">{toPersianNumber(supportStats.attendance.total)}</div></Card>
+          <Card><div className="text-xs text-gray-500 mb-1">کل رکوردهای تردد</div><div className="text-2xl font-black">{toPersianNumber(attendanceTopStats.total)}</div></Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card><div className="text-xs text-gray-500 mb-1">ورودها</div><div className="text-2xl font-black text-green-700">{toPersianNumber(supportStats.attendance.checkIns)}</div></Card>
+          <Card><div className="text-xs text-gray-500 mb-1">ورودها</div><div className="text-2xl font-black text-green-700">{toPersianNumber(attendanceTopStats.checkIns)}</div></Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card><div className="text-xs text-gray-500 mb-1">خروج‌ها</div><div className="text-2xl font-black text-red-700">{toPersianNumber(supportStats.attendance.checkOuts)}</div></Card>
+          <Card><div className="text-xs text-gray-500 mb-1">خروج‌ها</div><div className="text-2xl font-black text-red-700">{toPersianNumber(attendanceTopStats.checkOuts)}</div></Card>
         </Col>
         <Col xs={24} md={6}>
           <Card><div className="text-xs text-gray-500 mb-1">جمع حضور</div><div className="text-lg font-black text-blue-700">{formatMinutesLabel(attendanceInsights.presenceMinutes)}</div></Card>
@@ -5550,7 +5706,15 @@ const HRPage: React.FC = () => {
           <Card><div className="text-xs text-gray-500 mb-1">تعجیل / اضافه‌ماندن</div><div className="text-sm font-black"><div className="text-green-700">{formatMinutesLabel(attendanceInsights.earlyArrivalMinutes + attendanceInsights.earlyLeaveMinutes)}</div><div className="text-blue-700">{formatMinutesLabel(attendanceInsights.overtimeStayMinutes)}</div></div></Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card><div className="text-xs text-gray-500 mb-1">مرخصی تاییدشده</div><div className="text-lg font-black text-cyan-700">{formatMinutesLabel(attendanceInsights.approvedLeaveMinutes)}</div><div className="text-xs text-gray-500 mt-1">روزها: {toPersianNumber(attendanceInsights.approvedLeaveDays)}</div></Card>
+          <Card>
+            <div className="text-xs text-gray-500 mb-2">مرخصی تاییدشده</div>
+            <div className="text-sm font-black text-cyan-700">
+              مرخصی ساعتی: {formatMinutesLabel(attendanceApprovedLeaveStats.hourlyMinutes)}
+            </div>
+            <div className="text-sm font-black text-blue-700 mt-1">
+              مرخصی روزانه: {toPersianNumber(attendanceApprovedLeaveStats.dailyDays)} روز
+            </div>
+          </Card>
         </Col>
       </Row>
       <Card className="mb-4">
