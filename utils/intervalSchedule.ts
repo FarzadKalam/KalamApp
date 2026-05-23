@@ -103,10 +103,20 @@ export const getNextIntervalDueAt = ({
   let next = addIntervalToDate(last, normalizedValue, normalizedUnit);
   const parsedTime = parseIntervalAtTime(intervalAt || null);
   if (parsedTime) {
-    next = applyTimeOfDay(next, intervalAt || null);
-    while (next.getTime() <= last.getTime()) {
-      next = addIntervalToDate(next, normalizedValue, normalizedUnit);
+    if (normalizedUnit === 'hour') {
+      // For hourly: only set the minute within the computed hour (not the full H:M)
+      // applyTimeOfDay would collapse e.g. 01:40 → 00:10 causing an infinite loop
+      next.setMinutes(parsedTime.minute, 0, 0);
+      while (next.getTime() <= last.getTime()) {
+        next = addIntervalToDate(next, normalizedValue, normalizedUnit);
+        next.setMinutes(parsedTime.minute, 0, 0);
+      }
+    } else {
       next = applyTimeOfDay(next, intervalAt || null);
+      while (next.getTime() <= last.getTime()) {
+        next = addIntervalToDate(next, normalizedValue, normalizedUnit);
+        next = applyTimeOfDay(next, intervalAt || null);
+      }
     }
   }
   return next;

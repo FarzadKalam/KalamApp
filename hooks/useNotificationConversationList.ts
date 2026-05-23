@@ -43,6 +43,8 @@ export const useNotificationConversationList = ({
   );
   const [loading, setLoading] = useState(false);
   const [available, setAvailable] = useState(true);
+  // Deduplicate concurrent refresh() calls — only one in-flight at a time.
+  const refreshInFlightRef = useRef(false);
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -84,6 +86,8 @@ export const useNotificationConversationList = ({
 
   const refresh = useCallback(async () => {
     if (!enabled || !available) return null;
+    if (refreshInFlightRef.current) return null;
+    refreshInFlightRef.current = true;
     // Show spinner only on a true cold load (no cached data in state yet)
     if (itemsRef.current === null) setLoading(true);
     try {
@@ -106,6 +110,7 @@ export const useNotificationConversationList = ({
       return nextItems;
     } finally {
       setLoading(false);
+      refreshInFlightRef.current = false;
     }
   }, [available, enabled, section, supabase]);
 

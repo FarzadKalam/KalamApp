@@ -85,7 +85,9 @@
       "Bash(git add *)",
       "Bash(git commit -m 'اضافه کردن فایل .version-changes.json برای مدیریت changelog *)",
       "Bash(grep -rn \"cacheKey.*modal\\\\|cacheKey.*tasks\" d:/Kalamapp --include=\"*.ts\" --include=\"*.tsx\" ! -path \"*/node_modules/*\" ! -path \"*/dist/*\")",
-      "Bash(powershell -Command \"\\(Get-Content 'd:\\\\Kalamapp\\\\components\\\\NotificationsPopover.tsx' | Measure-Object -Line\\).Lines\")"
+      "Bash(powershell -Command \"\\(Get-Content 'd:\\\\Kalamapp\\\\components\\\\NotificationsPopover.tsx' | Measure-Object -Line\\).Lines\")",
+      "Bash(Get-ChildItem -Path \"D:\\\\Kalamapp\" -Force)",
+      "Bash(Select-Object Name, PSIsContainer)"
     ]
   },
   "hooks": {

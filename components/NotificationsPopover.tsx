@@ -237,6 +237,9 @@ SmsDrawerComposer.displayName = 'SmsDrawerComposer';
 
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 90_000;
+// Minimum time between two realtime-triggered live refreshes for the same section.
+// Prevents rapid postgres_changes events from hammering the DB on every row insert.
+const LIVE_REFRESH_COOLDOWN_MS = 5_000;
 const ASSIGNED_NOTE_PAIRS_TTL_MS = 3 * 60 * 1000;
 const BOT_MEDIA_HYDRATION_MAX_FAILURES = 1;
 const BOT_MEDIA_HYDRATION_BACKOFF_MS = 30 * 60 * 1000;
@@ -1103,6 +1106,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   });
   const liveRefreshTimerRef = useRef<number | null>(null);
   const liveSectionRefreshTimersRef = useRef<Partial<Record<NotificationSectionKey, number>>>({});
+  // Tracks when the last live (realtime-triggered) refresh fired per section.
+  // Prevents rapid realtime events from hammering the DB on every event.
+  const lastLiveRefreshAtRef = useRef<Partial<Record<NotificationSectionKey, number>>>({});
   const realtimeDisabledRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshSectionRef = useRef<((section: NotificationSectionKey, options?: { force?: boolean }) => Promise<void>) | null>(null);
@@ -3633,10 +3639,16 @@ useEffect(() => {
       if (typeof currentSectionTimer === 'number') {
         window.clearTimeout(currentSectionTimer);
       }
+      const lastAt = lastLiveRefreshAtRef.current[section] || 0;
+      const elapsed = Date.now() - lastAt;
+      // If within cooldown: wait out the remaining cooldown before refreshing.
+      // This coalesces bursts of realtime events (e.g. workflow spam) into one refresh.
+      const delay = elapsed < LIVE_REFRESH_COOLDOWN_MS ? LIVE_REFRESH_COOLDOWN_MS - elapsed : 250;
       liveSectionRefreshTimersRef.current[section] = window.setTimeout(() => {
         delete liveSectionRefreshTimersRef.current[section];
+        lastLiveRefreshAtRef.current[section] = Date.now();
         void refreshSectionRef.current?.(section, { force: true });
-      }, 250);
+      }, delay);
       return;
     }
     liveRefreshTimerRef.current = window.setTimeout(() => {
