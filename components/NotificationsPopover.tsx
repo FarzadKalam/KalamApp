@@ -3690,13 +3690,14 @@ useEffect(() => {
 
   const notesCount = useMemo(() => notes.filter((n: any) => {
     const authorId = String(n?.author_id || '').trim();
+    const id = String(n?.id || '');
     return (
       (!authorId || authorId !== String(profile.id || ''))
-      && !isNotificationRead('notes', 'note', String(n?.id || ''), false)
+      && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
     );
   }).length + noteLikeNotifications.filter((item) => (
     !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
-  )).length, [notes, noteLikeNotifications, profile.id, isNotificationRead]);
+  )).length, [notes, noteLikeNotifications, profile.id, isNotificationRead, seenNoteIds]);
   const tasksCount = useMemo(() => tasks.filter((t: any) => (
     !isNotificationRead('tasks', 'task', String(t?.id || ''), seenTaskIds.has(String(t?.id || '')))
   )).length, [tasks, seenTaskIds, isNotificationRead]);
@@ -3714,10 +3715,11 @@ useEffect(() => {
       return String(row?.direction || '').trim() === 'inbound'
         && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
     }).length, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead, visibleBotGroupIds]);
-  const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => (
-    String(row?.direction || '').trim() === 'inbound'
-    && !isNotificationRead('sms_messages', 'inbound_sms', String(row?.id || '').trim(), false)
-  )).length, [smsMessages, isNotificationRead]);
+  const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => {
+    const id = String(row?.id || '').trim();
+    return String(row?.direction || '').trim() === 'inbound'
+      && !isNotificationRead('sms_messages', 'inbound_sms', id, seenSmsMessageIds.has(id));
+  }).length, [smsMessages, isNotificationRead, seenSmsMessageIds]);
   const voipCallsCount = useMemo(() => voipCalls.filter((row: any) => (
     String(row?.direction || '').trim() === 'incoming'
     && !isNotificationRead('voip_calls', 'voip_call', String(row?.id || '').trim(), seenVoipCallIds.has(String(row?.id || '').trim()))
@@ -4026,8 +4028,8 @@ useEffect(() => {
     const authorId = String(note?.author_id || '').trim();
     const currentUserId = String(profile.id || '').trim();
     if (authorId && currentUserId && authorId === currentUserId) return false;
-    return !isNotificationRead('notes', 'note', noteId, false);
-  }, [isNotificationRead, profile.id]);
+    return !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId));
+  }, [isNotificationRead, profile.id, seenNoteIds]);
   const isUnreadBotRow = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
     const rowId = String(row?.id || '').trim();
     if (!rowId) return false;
@@ -5296,14 +5298,17 @@ useEffect(() => {
       setNoteViewportReady(true);
       return;
     }
-    // Preserve scroll position after loading older messages
+    // Preserve scroll position after loading older messages.
+    // Only consume the saved height when the container actually grew — if a
+    // realtime update fires first (diff≤0), keep the ref so the real loadOlder
+    // update can still restore correctly.
     if (pendingNoteScrollRestoreRef.current !== null) {
       const savedScrollHeight = pendingNoteScrollRestoreRef.current;
-      pendingNoteScrollRestoreRef.current = null;
       const container = notesScrollContainerRef.current;
       if (container) {
         const diff = container.scrollHeight - savedScrollHeight;
         if (diff > 0) {
+          pendingNoteScrollRestoreRef.current = null;
           container.scrollTop += diff;
           return;
         }
@@ -6003,7 +6008,7 @@ useEffect(() => {
           return (
             noteId
             && !prevNotesRef.current.has(noteId)
-            && !isNotificationRead('notes', 'note', noteId, false)
+            && !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId))
             && String(note?.author_id || '').trim() !== String(profile.id || '')
             && !dismissedUiNotificationIds.has(`note:${noteId}`)
             && !isNotificationDismissed('notes', 'note', noteId)
@@ -6106,7 +6111,7 @@ useEffect(() => {
           if (!id) return false;
           if (String(row?.direction || '') !== 'inbound') return false;
           return !prevSmsMessageIdsRef.current.has(id)
-            && !isNotificationRead('sms_messages', 'inbound_sms', id, false)
+            && !isNotificationRead('sms_messages', 'inbound_sms', id, seenSmsMessageIds.has(id))
             && !dismissedUiNotificationIds.has(`sms:${id}`)
             && !isNotificationDismissed('sms_messages', 'inbound_sms', id);
         })
@@ -6209,14 +6214,14 @@ useEffect(() => {
       const entityId = separatorIndex >= 0 ? rawId.slice(separatorIndex + 1) : '';
       if (!kind || !entityId) return false;
       if (dismissedUiNotificationIds.has(rawId)) return false;
-      if (kind === 'note' || kind === 'assistant') return !isNotificationRead('notes', 'note', entityId, false);
+      if (kind === 'note' || kind === 'assistant') return !isNotificationRead('notes', 'note', entityId, seenNoteIds.has(entityId));
       if (kind === 'task') return !isNotificationRead('tasks', 'task', entityId, seenTaskIds.has(entityId));
       if (kind === 'responsibility') {
         const sourceType = item.responsibility ? getResponsibilitySourceType(item.responsibility) : 'responsibility';
         return !isNotificationRead('responsibilities', sourceType, entityId, seenResponsibilityIds.has(entityId));
       }
       if (kind === 'bot') return !isNotificationRead('bot_messages', 'counterparty_bot_message', entityId, seenBotMessageIds.has(entityId));
-      if (kind === 'sms') return !isNotificationRead('sms_messages', 'inbound_sms', entityId, false);
+      if (kind === 'sms') return !isNotificationRead('sms_messages', 'inbound_sms', entityId, seenSmsMessageIds.has(entityId));
       if (kind === 'voip_call') return !isNotificationRead('voip_calls', 'voip_call', entityId, seenVoipCallIds.has(entityId));
       return false;
     }));

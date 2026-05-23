@@ -107,6 +107,8 @@ export const useInternalConversationTimeline = <TItem,>({
     }
     if (loadingInitialKeyRef.current === conversationKey) return;
     loadingInitialKeyRef.current = conversationKey;
+    // Conversation changed — any in-flight request was for the old key, release the guard.
+    refreshInFlightRef.current = false;
 
     // Cache hit → render instantly, background refresh will run without skeleton
     const cached = readCache<TItem>(conversationKey);
@@ -151,8 +153,10 @@ export const useInternalConversationTimeline = <TItem,>({
     }
     refreshInFlightRef.current = true;
 
-    // Cache was already applied synchronously — skip skeleton, fetch silently
-    if (!cacheAppliedRef.current) {
+    // Show skeleton only on a true cold start (no data in view yet).
+    // Subsequent background refreshes (realtime updates, force-refresh) must
+    // run silently so the user isn't interrupted while reading or scrolling.
+    if (!cacheAppliedRef.current && itemsRef.current.length === 0) {
       setLoadingInitial(true);
     }
 

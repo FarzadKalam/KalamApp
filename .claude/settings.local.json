@@ -87,7 +87,9 @@
       "Bash(grep -rn \"cacheKey.*modal\\\\|cacheKey.*tasks\" d:/Kalamapp --include=\"*.ts\" --include=\"*.tsx\" ! -path \"*/node_modules/*\" ! -path \"*/dist/*\")",
       "Bash(powershell -Command \"\\(Get-Content 'd:\\\\Kalamapp\\\\components\\\\NotificationsPopover.tsx' | Measure-Object -Line\\).Lines\")",
       "Bash(Get-ChildItem -Path \"D:\\\\Kalamapp\" -Force)",
-      "Bash(Select-Object Name, PSIsContainer)"
+      "Bash(Select-Object Name, PSIsContainer)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\\\\components\" -Filter \"NotificationsPopover.tsx\")",
+      "Bash(Select-Object -Property FullName, Length)"
     ]
   },
   "hooks": {

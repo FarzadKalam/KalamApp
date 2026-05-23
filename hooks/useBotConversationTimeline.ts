@@ -107,6 +107,8 @@ export const useBotConversationTimeline = <TItem,>({
     }
     if (loadingInitialKeyRef.current === botGroupId) return;
     loadingInitialKeyRef.current = botGroupId;
+    // Bot group changed — release in-flight guard for the old group.
+    refreshInFlightRef.current = false;
 
     // Cache hit → render instantly, background refresh will run without skeleton
     const cached = readCache<TItem>(botGroupId);
@@ -151,8 +153,9 @@ export const useBotConversationTimeline = <TItem,>({
     }
     refreshInFlightRef.current = true;
 
-    // Cache was already applied synchronously — skip skeleton, fetch silently
-    if (!cacheAppliedRef.current) {
+    // Show skeleton only on cold start (no items in view). Background refreshes
+    // run silently to avoid interrupting the user mid-conversation.
+    if (!cacheAppliedRef.current && itemsRef.current.length === 0) {
       setLoadingInitial(true);
     }
 
