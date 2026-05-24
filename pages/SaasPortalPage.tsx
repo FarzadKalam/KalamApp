@@ -172,12 +172,11 @@ const SaasPortalPage: React.FC = () => {
 
     const savedStep = String(window.sessionStorage.getItem(SAAS_WIZARD_STEP_STORAGE_KEY) || 'phone').trim() as WizardStep;
     const savedPhone = window.sessionStorage.getItem(SAAS_WIZARD_PHONE_STORAGE_KEY) || '';
-    const savedOtp = window.sessionStorage.getItem(SAAS_WIZARD_OTP_STORAGE_KEY) || '';
     const savedCooldownUntil = Number(window.sessionStorage.getItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY) || '0');
     const savedFormRaw = window.sessionStorage.getItem(SAAS_WIZARD_FORM_STORAGE_KEY) || '';
 
     if (savedPhone) setPhone(savedPhone);
-    if (savedOtp) setOtpCode(savedOtp);
+    // OTP کد را هرگز از sessionStorage بازیابی نکن — کد منقضی‌شده موجب خطای 403 می‌شود.
     if (savedCooldownUntil > Date.now()) {
       setOtpCooldown(Math.ceil((savedCooldownUntil - Date.now()) / 1000));
     }
@@ -227,15 +226,6 @@ const SaasPortalPage: React.FC = () => {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (otpCode) {
-      window.sessionStorage.setItem(SAAS_WIZARD_OTP_STORAGE_KEY, otpCode);
-    } else {
-      window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY);
-    }
-  }, [otpCode]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
     if (otpCooldown > 0) {
       window.sessionStorage.setItem(
         SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY,
@@ -267,7 +257,7 @@ const SaasPortalPage: React.FC = () => {
     if (typeof window === 'undefined') return;
     window.sessionStorage.removeItem(SAAS_WIZARD_STEP_STORAGE_KEY);
     window.sessionStorage.removeItem(SAAS_WIZARD_PHONE_STORAGE_KEY);
-    window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY);
+    window.sessionStorage.removeItem(SAAS_WIZARD_OTP_STORAGE_KEY); // پاک‌کردن کلید قدیمی در صورت وجود
     window.sessionStorage.removeItem(SAAS_WIZARD_COOLDOWN_UNTIL_STORAGE_KEY);
     window.sessionStorage.removeItem(SAAS_WIZARD_FORM_STORAGE_KEY);
   };
@@ -342,7 +332,19 @@ const SaasPortalPage: React.FC = () => {
         lookupPhoneLoginCandidate(normalizedPhone),
         lookupPhoneSignupInvite(normalizedPhone),
       ]);
-      assertDemoOtpRequestAllowed(candidate, invite);
+      try {
+        assertDemoOtpRequestAllowed(candidate, invite);
+      } catch (assertErr: any) {
+        const assertCode = String(assertErr?.code || assertErr?.message || '');
+        // کاربری که قبلاً دمو ساخته، اجازه دارد با همین شماره دوباره لاگین کند.
+        // بعد از تأیید OTP، handleVerifyOtp او را به سازمان موجودش هدایت می‌کند.
+        if (
+          !assertCode.includes('__demo_phone_belongs_to_existing_org__') &&
+          !assertCode.includes('__demo_phone_existing_auth_user__')
+        ) {
+          throw assertErr;
+        }
+      }
       await requestSmsOtp(supabase.auth, normalizedPhone);
       setStep('otp');
       setOtpCooldown(OTP_RESEND_SECONDS);

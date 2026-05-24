@@ -6594,6 +6594,7 @@ const ModuleShow: React.FC = () => {
         onStartBindWatch={() => void handleStartBotBindWatch()}
         onCopyActivationCode={() => void handleCopyBotActivationCode()}
         onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
+        onChangeGroupTitle={setBotStatusGroupTitle}
         onChangeAllowedUserIds={setBotStatusAllowedUserIds}
         onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
         onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}

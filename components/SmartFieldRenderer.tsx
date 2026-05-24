@@ -3661,7 +3661,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
       confirmLoading={loading}
       destroyOnHidden
       zIndex={overlayZIndexBase}
-      getContainer={typeof document === 'undefined' ? undefined : () => document.body}
+      getContainer={typeof document === 'undefined' ? undefined : () => resolveSelectPopupContainer()}
       width={typeof window !== 'undefined' && window.innerWidth < 768 ? 'calc(100vw - 0.75rem)' : 560}
       style={{ top: typeof window !== 'undefined' && window.innerWidth < 768 ? 8 : undefined }}
       styles={{

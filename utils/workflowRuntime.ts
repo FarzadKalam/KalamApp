@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { loadScopedIntegrationSettings } from './integrationSettings';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
+import { buildClientFallbackSystemCode, supportsSystemCode } from './systemCode';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
 import { formatTemplateValueByField, resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
@@ -2315,6 +2316,10 @@ export const executeWorkflowAction = async (
       payload[targetField] = mapping?.value ?? null;
     }
 
+    if (supportsSystemCode(targetModuleId) && !payload.system_code) {
+      payload.system_code = await buildClientFallbackSystemCode(supabase, targetModuleId, getModuleTable(targetModuleId), { orgId: orgId ?? undefined });
+    }
+
     const { data: insertedRecord, error } = await supabase
       .from(getModuleTable(targetModuleId))
       .insert(payload)
@@ -2371,6 +2376,10 @@ export const executeWorkflowAction = async (
         continue;
       }
       payload[targetField] = mapping?.value ?? null;
+    }
+
+    if (supportsSystemCode(targetModuleId) && !payload.system_code) {
+      payload.system_code = await buildClientFallbackSystemCode(supabase, targetModuleId, getModuleTable(targetModuleId), { orgId: orgId ?? undefined });
     }
 
     const { error } = await supabase.from(getModuleTable(targetModuleId)).insert(payload);
@@ -2485,6 +2494,7 @@ const executeWorkflowForRecord = async ({
   previousRecord = null,
   event,
   runType,
+  executedRecordIds,
 }: {
   workflow: WorkflowRecord;
   moduleId: string;
@@ -2492,6 +2502,7 @@ const executeWorkflowForRecord = async ({
   previousRecord?: Record<string, any> | null | undefined;
   event: WorkflowEvent;
   runType: WorkflowRunType;
+  executedRecordIds?: Set<string> | null;
 }) => {
   const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
   if (!matched) {
@@ -2501,7 +2512,9 @@ const executeWorkflowForRecord = async ({
   const executionMode = String(workflow.execution_mode || 'first_match');
   const recordId = String(currentRecord?.id || '').trim();
   if (executionMode === 'first_match' && recordId) {
-    const alreadyExecuted = await hasWorkflowLogForRecord(workflow.id, moduleId, recordId, runType);
+    const alreadyExecuted = executedRecordIds
+      ? executedRecordIds.has(recordId)
+      : await hasWorkflowLogForRecord(workflow.id, moduleId, recordId, runType);
     if (alreadyExecuted) {
       return { matched: true, success: false, skippedByExecutionMode: true };
     }
@@ -2773,6 +2786,27 @@ export const runWorkflowsIntervalTick = async ({
     }
 
     const rows = Array.isArray(records) ? records : [];
+
+    // Batch-fetch workflow_logs for all records to avoid N+1 queries (first_match mode)
+    const executionMode = String(workflow.execution_mode || 'first_match');
+    let executedRecordIds: Set<string> | null = null;
+    if (executionMode === 'first_match' && rows.length > 0) {
+      const recordIds = rows.map((r: any) => String(r?.id || '').trim()).filter(Boolean);
+      if (recordIds.length > 0) {
+        const { data: logData } = await supabase
+          .from('workflow_logs')
+          .select('record_id')
+          .eq('workflow_id', workflow.id)
+          .eq('run_type', 'scheduled')
+          .eq('module_id', targetModuleId)
+          .eq('status', 'success')
+          .in('record_id', recordIds);
+        executedRecordIds = new Set(
+          (logData || []).map((row: any) => String(row?.record_id || '').trim()).filter(Boolean)
+        );
+      }
+    }
+
     for (const row of rows) {
       stats.processedRecords += 1;
       try {
@@ -2783,6 +2817,7 @@ export const runWorkflowsIntervalTick = async ({
           previousRecord: null,
           event: 'interval',
           runType: 'scheduled',
+          executedRecordIds,
         });
         if (result.success) {
           stats.executedWorkflows += 1;

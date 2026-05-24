@@ -112,7 +112,7 @@ const Login = () => {
 
     if (savedPhone && !phone) setPhone(savedPhone);
     if (savedRequestedFor) setOtpRequestedFor(savedRequestedFor);
-    if (savedOtpCode) setOtpCode(savedOtpCode);
+    // OTP کد را هرگز از sessionStorage بازیابی نکن — کد منقضی شده موجب خطای 403 می‌شود.
     if (savedCooldownUntil > Date.now()) {
       setOtpCooldown(Math.ceil((savedCooldownUntil - Date.now()) / 1000));
     }
@@ -139,14 +139,7 @@ const Login = () => {
     }
   }, [loginMode, otpRequestedFor]);
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || loginMode !== 'otp') return;
-    if (otpCode) {
-      window.sessionStorage.setItem(OTP_CODE_STORAGE_KEY, otpCode);
-    } else {
-      window.sessionStorage.removeItem(OTP_CODE_STORAGE_KEY);
-    }
-  }, [loginMode, otpCode]);
+  // OTP کد ذخیره نمی‌شود چون بازیابی کد منقضی شده موجب خطای 403 می‌شود.
 
   useEffect(() => {
     if (otpCooldown <= 0) return undefined;

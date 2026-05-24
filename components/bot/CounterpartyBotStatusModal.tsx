@@ -55,6 +55,7 @@ export type CounterpartyBotStatusModalProps = {
   countdown: number;
   channel: BotChannel;
   groupTitle: string;
+  onChangeGroupTitle: (value: string) => void;
   currentStatus: string;
   activationCode: string;
   lastInboundAt: string;
@@ -99,6 +100,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onStartBindWatch,
   onCopyActivationCode,
   onChangeChannel,
+  onChangeGroupTitle,
   onChangeAllowedUserIds,
   onChangeAllowedRoleIds,
   onChangeAiAutoReplyEnabled,
@@ -141,7 +143,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
           <div className="text-xs text-gray-500 dark:text-gray-400">
             برای اتصال اولیه، روی «انتظار برای پیام در گروه» بزنید و کد فعال‌سازی را در همان گروه ارسال کنید
             (مثل: <span className="font-mono">/KALAM-...</span>). سیستم بعد از دریافت همان پیام، گروه را به همین
-            طرف‌حساب متصل می‌کند و نام گروه به‌صورت خودکار ثبت می‌شود.
+            طرف‌حساب متصل می‌کند.
           </div>
           <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-700/40 dark:bg-blue-900/20 dark:text-blue-300">
             وضعیت فعلی: {COUNTERPARTY_BOT_STATUS_LABELS[currentStatus] || currentStatus || 'نامشخص'}
@@ -176,11 +178,11 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
             />
           </div>
           <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه شناسایی‌شده</div>
+            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه</div>
             <Input
               value={groupTitle}
-              placeholder="بعد از اولین پیام گروه به‌صورت خودکار ثبت می‌شود"
-              readOnly
+              placeholder="نام گروه را وارد کنید"
+              onChange={(e) => onChangeGroupTitle(e.target.value)}
             />
           </div>
           <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-700/40 dark:bg-violet-900/20">
