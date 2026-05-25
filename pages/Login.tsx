@@ -107,7 +107,6 @@ const Login = () => {
 
     const savedPhone = window.sessionStorage.getItem(OTP_PHONE_STORAGE_KEY) || '';
     const savedRequestedFor = window.sessionStorage.getItem(OTP_REQUESTED_FOR_STORAGE_KEY) || '';
-    const savedOtpCode = window.sessionStorage.getItem(OTP_CODE_STORAGE_KEY) || '';
     const savedCooldownUntil = Number(window.sessionStorage.getItem(OTP_COOLDOWN_UNTIL_STORAGE_KEY) || '0');
 
     if (savedPhone && !phone) setPhone(savedPhone);

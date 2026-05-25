@@ -109,11 +109,14 @@ const SaasAdminRequests: React.FC = () => {
   const handleManualProvision = async (row: RequestRow) => {
     if (!row.id) return;
     try {
-      const { error: fnErr } = await supabase.functions.invoke('provision-saas-demo', {
-        body: { request_id: row.id, force: true },
+      const { data, error: rpcErr } = await supabase.rpc('admin_convert_demo_request_to_org', {
+        p_request_id: row.id,
       });
-      if (fnErr) throw fnErr;
-      messageApi.success('درخواست پروویژن ارسال شد');
+      if (rpcErr) throw rpcErr;
+      if (data?.success === false) {
+        throw new Error(String(data?.message || 'پروویژن ناموفق بود.'));
+      }
+      messageApi.success(String(data?.message || 'سازمان دمو ایجاد شد'));
       void load();
     } catch (err: any) {
       messageApi.error(err?.message || 'خطا در ارسال درخواست');

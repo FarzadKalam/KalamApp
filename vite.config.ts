@@ -2,7 +2,6 @@ import path from 'path';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
 
 const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 

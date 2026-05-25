@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
 import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -76,6 +76,8 @@ interface NotificationsPopoverProps {
   isMobile: boolean;
   variant?: 'chat' | 'alerts';
   requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
+  /** When true, renders as a full-page component (no drawer/popover wrapper, always open) */
+  standalone?: boolean;
 }
 
 type AiSuggestionPopoverActionProps = {
@@ -963,11 +965,11 @@ const shouldPauseNotesPolling = (error: any) => {
   return false;
 };
 
-const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, variant = 'alerts', requestedTab }) => {
+const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, variant = 'alerts', requestedTab, standalone = false }) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const initialTab = normalizeTabForVariant(variant, requestedTab);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(standalone);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -1770,7 +1772,7 @@ useEffect(() => {
         .eq('user_id', profile.id)
         .in('section', relevantNotificationStateSections)
         .order('updated_at', { ascending: false })
-        .limit(1000);
+        .limit(10000);
       if (error) {
         if (!isMissingTableLikeError(error)) {
           console.warn('Could not load notification read states', error);
@@ -4374,14 +4376,6 @@ useEffect(() => {
       return haystack.includes(normalizedNoteMessageSearch);
     });
   }, [authorNameMap, directoryUserMap, myNotesDisplayLimit, normalizedNoteMessageSearch, orderedFilteredNotes, selectedNoteUserId]);
-  const firstUnreadNoteDomId = useMemo(() => {
-    const noteId = String(
-      selectedConversationInitialAnchorId
-      || displayedChatNotes.find((note: any) => isUnreadNoteRow(note))?.id
-      || ''
-    ).trim();
-    return noteId ? `note-message-${noteId}` : null;
-  }, [displayedChatNotes, isUnreadNoteRow, selectedConversationInitialAnchorId]);
   const firstUnreadBotMessageDomId = useMemo(() => {
     const rowId = String(
       botTimelineInitialAnchorId
@@ -5015,16 +5009,21 @@ useEffect(() => {
     if (readableRows.length === 0) return;
 
     const readableIds = new Set(readableRows.map((note: any) => String(note.id)));
-    setSeenNoteIds((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      readableIds.forEach((id) => {
-        if (!next.has(id)) {
-          next.add(id);
-          changed = true;
-        }
+
+    // Low-priority: seenNoteIds change triggers a full re-render of the panel.
+    // Wrapping in startTransition lets scroll/input events take priority first.
+    startTransition(() => {
+      setSeenNoteIds((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        readableIds.forEach((id) => {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
       });
-      return changed ? next : prev;
     });
 
     const applyReceipt = (note: any) => (
@@ -5095,16 +5094,18 @@ useEffect(() => {
         .filter(Boolean)
     );
     if (unreadInboundIds.length > 0) {
-      setSeenBotMessageIds((prev) => {
-        let changed = false;
-        const next = new Set(prev);
-        unreadInboundIds.forEach((id) => {
-          if (!next.has(id)) {
-            next.add(id);
-            changed = true;
-          }
+      startTransition(() => {
+        setSeenBotMessageIds((prev) => {
+          let changed = false;
+          const next = new Set(prev);
+          unreadInboundIds.forEach((id) => {
+            if (!next.has(id)) {
+              next.add(id);
+              changed = true;
+            }
+          });
+          return changed ? next : prev;
         });
-        return changed ? next : prev;
       });
       markNotificationEntriesRead(
         unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
@@ -5133,7 +5134,7 @@ useEffect(() => {
       .map((row) => String(row?.id || '').trim())
       .filter((id) => id && !isNotificationRead('tasks', 'task', id, seenTaskIds.has(id)));
     if (taskIds.length === 0) return;
-    setSeenTaskIds((prev) => new Set([...prev, ...taskIds]));
+    startTransition(() => { setSeenTaskIds((prev) => new Set([...prev, ...taskIds])); });
     markNotificationEntriesRead(taskIds.map((sourceId) => ({ section: 'tasks' as const, sourceType: 'task', sourceId })));
   }, [isNotificationRead, markNotificationEntriesRead, seenTaskIds]);
 
@@ -5148,7 +5149,7 @@ useEffect(() => {
       })
       .filter(Boolean) as NotificationStateEntryInput[];
     if (entries.length === 0) return;
-    setSeenResponsibilityIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)]));
+    startTransition(() => { setSeenResponsibilityIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)])); });
     markNotificationEntriesRead(entries);
   }, [isNotificationRead, markNotificationEntriesRead, seenResponsibilityIds]);
 
@@ -5158,7 +5159,7 @@ useEffect(() => {
       .map((row) => String(row?.id || '').trim())
       .filter((id) => id && !isNotificationRead('sms_messages', 'inbound_sms', id, false));
     if (messageIds.length === 0) return;
-    setSeenSmsMessageIds((prev) => new Set([...prev, ...messageIds]));
+    startTransition(() => { setSeenSmsMessageIds((prev) => new Set([...prev, ...messageIds])); });
     markNotificationEntriesRead(messageIds.map((sourceId) => ({ section: 'sms_messages' as const, sourceType: 'inbound_sms', sourceId })));
   }, [isNotificationRead, markNotificationEntriesRead, seenSmsMessageIds]);
 
@@ -5168,7 +5169,7 @@ useEffect(() => {
       .map((row) => String(row?.id || '').trim())
       .filter((id) => id && !isNotificationRead('voip_calls', 'voip_call', id, seenVoipCallIds.has(id)));
     if (callIds.length === 0) return;
-    setSeenVoipCallIds((prev) => new Set([...prev, ...callIds]));
+    startTransition(() => { setSeenVoipCallIds((prev) => new Set([...prev, ...callIds])); });
     markNotificationEntriesRead(callIds.map((sourceId) => ({ section: 'voip_calls' as const, sourceType: 'voip_call', sourceId })));
   }, [isNotificationRead, markNotificationEntriesRead, seenVoipCallIds]);
   const handleNotesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
@@ -5255,7 +5256,9 @@ useEffect(() => {
   }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen]);
 
   useEffect(() => {
-    setSelectedConversationNotes([]);
+    // Note: do NOT clear selectedConversationNotes here — the hook manages its own state
+    // and may have already loaded cached data for the new conversation. Clearing here causes
+    // a flash to empty even when cache is available.
     setNoteViewportReady(false);
     setMyNotesDisplayLimit(15);
     setNoteMessageSearch('');
@@ -5286,18 +5289,9 @@ useEffect(() => {
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
     if (!isSelectedConversationLoaded) return;
-    if (!noteViewportReady) {
-      const scrolledToUnread = scrollConversationToAnchor(
-        notesScrollContainerRef.current,
-        firstUnreadNoteDomId,
-        'bottom',
-      );
-      noteInitialAnchorDoneRef.current = true;
-      noteShouldStickToBottomRef.current = !scrolledToUnread || !firstUnreadNoteDomId;
-      noteForceScrollToBottomRef.current = false;
-      setNoteViewportReady(true);
-      return;
-    }
+    // Initial anchor scroll is handled inside NotesPanel via msgVirtualizer.scrollToIndex.
+    // NotesPanel calls setNoteViewportReady(true) when done.
+    if (!noteViewportReady) return;
     // Preserve scroll position after loading older messages.
     // Only consume the saved height when the container actually grew — if a
     // realtime update fires first (diff≤0), keep the ref so the real loadOlder
@@ -5321,7 +5315,7 @@ useEffect(() => {
     noteInitialAnchorDoneRef.current = true;
     scrollNotesToBottom(noteBehavior);
     noteForceScrollToBottomRef.current = false;
-  }, [activeDrawerSection, displayedChatNotes, firstUnreadNoteDomId, isSelectedConversationLoaded, noteViewportReady, open, scrollConversationToAnchor]);
+  }, [activeDrawerSection, displayedChatNotes, isSelectedConversationLoaded, noteViewportReady, open]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
@@ -5331,9 +5325,19 @@ useEffect(() => {
       .map((item) => ({ section: 'notes' as const, sourceType: 'note_like', sourceId: String(item.source_id || '') }))
       .filter((item) => item.sourceId);
     markNotificationEntriesRead(unreadLikeEntries);
+    // Auto-mark system/workflow notes as read — these are informational and don't require user action
+    const currentUserId = String(profile.id || '').trim();
+    const systemNotes = notes.filter((note: any) => (
+      isSystemNote(note)
+      && String(note?.author_id || '').trim() !== currentUserId
+      && !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
+    ));
+    if (systemNotes.length > 0) {
+      markNotesAsSeen(systemNotes);
+    }
     if (!selectedNoteUserId) return;
     markNotesAsSeen(displayedChatNotes);
-  }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, noteViewportReady, open, selectedNoteUserId]);
+  }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, noteViewportReady, notes, open, profile.id, seenNoteIds, selectedNoteUserId]);
 
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
@@ -6449,6 +6453,9 @@ useEffect(() => {
         mobileNoteSearchOpen,
         noteReplyTo,
         scrollMessageIntoView,
+        selectedConversationInitialAnchorId,
+        setNoteViewportReady,
+        noteInitialAnchorDoneRef,
       }}
     />
   );
@@ -6886,32 +6893,33 @@ useEffect(() => {
     </div>
   );
 
+  const desktopPaneH = 'h-full min-h-0';
   const desktopModernItems = variant === 'chat'
     ? [
       {
         key: 'notes',
         label: <Badge count={formatBadgeCount(notesCount)} color={badgeColor}><span className="px-1">پیام‌های داخلی</span></Badge>,
-        children: renderLazyDrawerPane('notes', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderNotesPanel('desktop')),
+        children: renderLazyDrawerPane('notes', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderNotesPanel('desktop')),
       },
       {
         key: 'bot_messages',
         label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
-        children: renderLazyDrawerPane('bot_messages', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderBotMessagesPanel('desktop')),
+        children: renderLazyDrawerPane('bot_messages', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderBotMessagesPanel('desktop')),
       },
       {
         key: 'sms_messages',
         label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
-        children: renderLazyDrawerPane('sms_messages', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderSmsMessagesPanel('desktop')),
+        children: renderLazyDrawerPane('sms_messages', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderSmsMessagesPanel('desktop')),
       },
       {
         key: 'voip_calls',
         label: <Badge count={formatBadgeCount(voipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
-        children: renderLazyDrawerPane('voip_calls', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => renderVoipCallsPanel('desktop')),
+        children: renderLazyDrawerPane('voip_calls', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderVoipCallsPanel('desktop')),
       },
       {
         key: 'assistant',
         label: <span className="px-1">هوش مصنوعی</span>,
-        children: renderLazyDrawerPane('assistant', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden', () => (
+        children: renderLazyDrawerPane('assistant', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => (
           <AssistantPanel active={open && desktopActiveKey === 'assistant'} />
         )),
       },
@@ -6920,29 +6928,33 @@ useEffect(() => {
       {
         key: 'tasks',
         label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
-        children: renderLazyDrawerPane('tasks', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3', () => renderTasksPanel('grid')),
+        children: renderLazyDrawerPane('tasks', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderTasksPanel('grid')),
       },
       {
         key: 'responsibilities',
         label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
-        children: renderLazyDrawerPane('responsibilities', desktopActiveKey, 'h-[calc(90vh-120px)] flex flex-col overflow-hidden px-3 pb-3', () => renderResponsibilitiesPanel('grid')),
+        children: renderLazyDrawerPane('responsibilities', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderResponsibilitiesPanel('grid')),
       },
     ];
 
+  const contentDesktopInner = (
+    <div className={`h-full overflow-hidden ${standalone ? '' : 'rounded-xl shadow-[0_18px_44px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_44px_rgba(0,0,0,0.24)]'} ${
+      variant === 'chat'
+        ? 'border border-white/10 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]'
+        : 'border border-[rgba(var(--brand-300-rgb),0.16)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)]'
+    }`}>
+      <Tabs
+        activeKey={desktopActiveKey}
+        onChange={(key) => setDesktopActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
+        className="h-full [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-3 [&_.ant-tabs-tab]:!py-3 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
+        items={desktopModernItems}
+      />
+    </div>
+  );
+
   const contentDesktopModern = (
     <div className="w-[780px] max-w-[88vw] h-[90vh] p-3">
-      <div className={`h-full rounded-xl overflow-hidden shadow-[0_18px_44px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_44px_rgba(0,0,0,0.24)] ${
-        variant === 'chat'
-          ? 'border border-white/10 bg-white dark:bg-[rgb(var(--app-dark-surface-rgb))]'
-          : 'border border-[rgba(var(--brand-300-rgb),0.16)] dark:border-[rgba(var(--brand-300-rgb),0.12)] bg-white dark:bg-[rgba(var(--app-dark-surface-rgb),0.95)]'
-      }`}>
-        <Tabs
-          activeKey={desktopActiveKey}
-          onChange={(key) => setDesktopActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
-          className="h-full [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-3 [&_.ant-tabs-tab]:!py-3 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
-          items={desktopModernItems}
-        />
-      </div>
+      {contentDesktopInner}
     </div>
   );
 
@@ -7008,6 +7020,12 @@ useEffect(() => {
 
   return (
     <>
+      {standalone ? (
+        <div className="h-full w-full overflow-hidden">
+          {isMobile ? contentMobileModern : contentDesktopInner}
+        </div>
+      ) : (
+        <>
       <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
         <Button
           type="text"
@@ -7081,6 +7099,8 @@ useEffect(() => {
           {contentDesktopModern}
         </Drawer>
       )}
+        </>
+      )}
       {previewRecord ? (
         <RelatedRecordPopover
           moduleId={previewRecord.moduleId}
@@ -7143,6 +7163,7 @@ useEffect(() => {
         onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
         onChangeAllowedUserIds={setBotStatusAllowedUserIds}
         onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
+        onChangeGroupTitle={setBotStatusGroupTitle}
         onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}
         onChangeAiCounterpartyGuide={setBotStatusAiCounterpartyGuide}
       />

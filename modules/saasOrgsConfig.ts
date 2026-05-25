@@ -28,11 +28,6 @@ const sourceKindOptions = [
   { value: 'request', label: 'درخواست دمو' },
 ];
 
-const dnsOptions = [
-  { value: 'pending', label: 'در انتظار' },
-  { value: 'active', label: 'فعال' },
-  { value: 'failed', label: 'ناموفق' },
-];
 
 export const saasOrgsConfig: ModuleDefinition = {
   id: 'saas_orgs',
@@ -198,44 +193,12 @@ export const saasOrgsConfig: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
-      key: 'dns_status',
-      labels: { fa: 'وضعیت DNS', en: 'DNS Status' },
-      type: FieldType.SELECT,
-      location: FieldLocation.BLOCK,
-      blockId: 'dns',
-      order: 1,
-      isTableColumn: true,
-      options: dnsOptions,
-      readonly: true,
-      nature: FieldNature.SYSTEM,
-    },
-    {
       key: 'resolved_host',
-      labels: { fa: 'هاست نهایی', en: 'Resolved Host' },
+      labels: { fa: 'آدرس ساب‌دامین', en: 'Subdomain Host' },
       type: FieldType.TEXT,
       location: FieldLocation.BLOCK,
-      blockId: 'dns',
-      order: 2,
-      readonly: true,
-      nature: FieldNature.SYSTEM,
-    },
-    {
-      key: 'dns_attempt_count',
-      labels: { fa: 'تعداد تلاش DNS', en: 'DNS Attempt Count' },
-      type: FieldType.NUMBER,
-      location: FieldLocation.BLOCK,
-      blockId: 'dns',
-      order: 3,
-      readonly: true,
-      nature: FieldNature.SYSTEM,
-    },
-    {
-      key: 'dns_last_error',
-      labels: { fa: 'آخرین خطای DNS', en: 'DNS Error' },
-      type: FieldType.LONG_TEXT,
-      location: FieldLocation.BLOCK,
-      blockId: 'dns',
-      order: 4,
+      blockId: 'system',
+      order: 0,
       readonly: true,
       nature: FieldNature.SYSTEM,
     },
@@ -295,13 +258,6 @@ export const saasOrgsConfig: ModuleDefinition = {
       type: BlockType.FIELD_GROUP,
       order: 2,
       icon: 'UserOutlined',
-    },
-    {
-      id: 'dns',
-      titles: { fa: 'DNS و دسترسی', en: 'DNS' },
-      type: BlockType.FIELD_GROUP,
-      order: 3,
-      icon: 'WifiOutlined',
     },
     {
       id: 'system',

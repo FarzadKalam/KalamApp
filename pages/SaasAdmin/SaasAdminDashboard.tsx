@@ -1,13 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Table, Tag, Typography, Spin, Alert, Badge } from 'antd';
+import { Card, Col, Row, Statistic, Table, Tag, Typography, Spin, Alert } from 'antd';
 import {
   CloudServerOutlined,
   TeamOutlined,
   ClockCircleOutlined,
   CheckCircleOutlined,
-  ExclamationCircleOutlined,
   RocketOutlined,
-  WifiOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 
@@ -18,8 +16,6 @@ type Stats = {
   active_orgs: number;
   demo_orgs: number;
   trial_orgs: number;
-  pending_dns: number;
-  failed_dns: number;
   total_requests: number;
   pending_requests: number;
   provisioned_today: number;
@@ -32,7 +28,6 @@ type RecentOrg = {
   slug: string;
   status: string;
   is_demo: boolean;
-  dns_status: string;
   provisioned_at: string;
   owner_name: string | null;
 };
@@ -60,7 +55,7 @@ const SaasAdminDashboard: React.FC = () => {
           supabase.rpc('get_saas_admin_stats'),
           supabase
             .from('saas_admin_orgs_view')
-            .select('org_id,org_name,slug,status,is_demo,dns_status,provisioned_at,owner_name')
+            .select('org_id,org_name,slug,status,is_demo,provisioned_at,owner_name')
             .order('provisioned_at', { ascending: false })
             .limit(8),
         ]);
@@ -114,16 +109,6 @@ const SaasAdminDashboard: React.FC = () => {
           <Tag color={statusColor[status] || 'default'}>{status}</Tag>
           {row.is_demo && <Tag color="purple" className="text-[10px]">دمو</Tag>}
         </div>
-      ),
-    },
-    {
-      title: 'DNS',
-      dataIndex: 'dns_status',
-      render: (dns: string) => (
-        <Badge
-          status={dns === 'active' ? 'success' : dns === 'failed' ? 'error' : 'processing'}
-          text={<Text className="text-xs">{dns}</Text>}
-        />
       ),
     },
     {
@@ -190,26 +175,6 @@ const SaasAdminDashboard: React.FC = () => {
               value={stats?.trial_orgs ?? 0}
               prefix={<ClockCircleOutlined className="text-blue-500" />}
               valueStyle={{ color: '#2563eb', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={6}>
-          <Card className="rounded-2xl border-0 shadow-sm text-center">
-            <Statistic
-              title="DNS در انتظار"
-              value={stats?.pending_dns ?? 0}
-              prefix={<WifiOutlined className="text-amber-500" />}
-              valueStyle={{ color: '#d97706', fontWeight: 800 }}
-            />
-          </Card>
-        </Col>
-        <Col xs={12} sm={8} lg={6}>
-          <Card className="rounded-2xl border-0 shadow-sm text-center">
-            <Statistic
-              title="DNS ناموفق"
-              value={stats?.failed_dns ?? 0}
-              prefix={<ExclamationCircleOutlined className="text-red-500" />}
-              valueStyle={{ color: '#dc2626', fontWeight: 800 }}
             />
           </Card>
         </Col>

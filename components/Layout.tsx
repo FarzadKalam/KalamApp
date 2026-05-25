@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { startTransition, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
@@ -28,6 +28,7 @@ import {
   ReloadOutlined,
   ArrowLeftOutlined,
   CloudServerOutlined,
+  MessageOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -119,8 +120,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const handleSidebarNavigate = (href: string) => {
     if (!href) return;
-    navigate(href);
     if (isMobile) setCollapsed(true);
+    startTransition(() => navigate(href));
   };
 
   const handleSidebarLinkClick = (
@@ -505,6 +506,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const rawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
+      { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی' },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,

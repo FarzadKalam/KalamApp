@@ -81,6 +81,7 @@ const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
+const loadMessagesPage = () => import("./pages/MessagesPage");
 
 const ProfilePage = lazy(loadProfilePage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -119,6 +120,7 @@ const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
+const MessagesPage = lazy(loadMessagesPage);
 
 const routePreloaders = [
   loadProfilePage,
@@ -672,6 +674,7 @@ function App() {
             <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
             <Route path="/hr" element={<HRPage />} />
             <Route path="/hr/:employeeId" element={<HRPage />} />
+            <Route path="/messages" element={<MessagesPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />

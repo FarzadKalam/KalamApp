@@ -136,29 +136,23 @@ export const executeSaasModuleAction = async (
     };
   }
 
-  if (moduleId === 'saas_orgs' && actionId === 'retry_dns') {
-    const orgId = normalizeText(record.org_id || record.id);
-    const slug = normalizeText(record.slug);
-    if (!orgId || !slug) {
-      throw new Error('اطلاعات لازم برای retry DNS کامل نیست.');
-    }
-    const { error } = await supabase.functions.invoke('provision-saas-dns', {
-      body: { org_id: orgId, slug },
-    });
-    if (error) throw error;
-    return { message: 'درخواست retry DNS ارسال شد.' };
-  }
-
   if (moduleId === 'saas_demo_requests' && actionId === 'manual_provision') {
     const requestId = normalizeText(record.id || record.request_id);
     if (!requestId) {
       throw new Error('شناسه درخواست دمو پیدا نشد.');
     }
-    const { error } = await supabase.functions.invoke('provision-saas-demo', {
-      body: { request_id: requestId, force: true },
+    const { data, error } = await supabase.rpc('admin_convert_demo_request_to_org', {
+      p_request_id: requestId,
     });
     if (error) throw error;
-    return { message: 'درخواست پروویژن ارسال شد.' };
+    if (data?.success === false) {
+      throw new Error(String(data?.message || 'پروویژن ناموفق بود.'));
+    }
+    const orgId = normalizeText(data?.org_id || data?.source_id);
+    return {
+      message: String(data?.message || 'سازمان دمو ایجاد شد.'),
+      nextRecordId: orgId,
+    };
   }
 
   throw new Error('این عملیات برای ماژول انتخاب‌شده پشتیبانی نمی‌شود.');
@@ -173,15 +167,6 @@ export const saasOrgRecordActions: ModuleRecordAction[] = [
     confirmTitle: 'ایجاد سازمان از روی درخواست دمو',
     confirmDescription: 'این درخواست به یک سازمان SaaS واقعی تبدیل می‌شود.',
     visible: (record) => String(record?.source_kind || '').trim() === 'request',
-  },
-  {
-    id: 'retry_dns',
-    label: 'retry DNS',
-    placement: 'header',
-    variant: 'default',
-    visible: (record) =>
-      String(record?.source_kind || '').trim() === 'org'
-      && String(record?.dns_status || '').trim() === 'failed',
   },
 ];
 

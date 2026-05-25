@@ -1616,3 +1616,34 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
 .dark .notifications-drawer .ant-drawer-body {
   background: rgb(var(--app-dark-surface-rgb)) !important;
 }
+
+/* Messages page — full-page chat layout optimizations */
+.messages-page-root {
+  contain: layout style;
+}
+
+/* GPU-accelerated scroll containers inside the chat panel */
+.messages-page-root [class*="overflow-y-auto"],
+.messages-page-root [class*="overflow-y-scroll"],
+.notifications-drawer [class*="overflow-y-auto"],
+.notifications-drawer [class*="overflow-y-scroll"] {
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent layout thrashing during image load — images keep their space */
+.messages-page-root img,
+.notifications-drawer img {
+  contain: layout;
+}
+
+/* Smooth fade-in for images so reloads aren't jarring */
+.messages-page-root img:not([src=""]),
+.notifications-drawer img:not([src=""]) {
+  animation: img-fade-in 0.15s ease-in;
+}
+
+@keyframes img-fade-in {
+  from { opacity: 0.6; }
+  to   { opacity: 1; }
+}

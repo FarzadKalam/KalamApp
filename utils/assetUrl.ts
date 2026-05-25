@@ -8,6 +8,9 @@ const isLocalHostName = (hostname: string) => {
     || normalized.endsWith('.internal');
 };
 
+const LEGACY_API_HOST = 'api.kalamapp.ir';
+const CURRENT_API_HOST = 'api.tazesystem.ir';
+
 export const normalizePublicAssetUrl = (value: unknown): string => {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -15,6 +18,9 @@ export const normalizePublicAssetUrl = (value: unknown): string => {
 
   try {
     const parsed = new URL(raw);
+    if (parsed.hostname === LEGACY_API_HOST) {
+      parsed.hostname = CURRENT_API_HOST;
+    }
     if (parsed.protocol === 'http:' && !isLocalHostName(parsed.hostname)) {
       parsed.protocol = 'https:';
       return parsed.toString();

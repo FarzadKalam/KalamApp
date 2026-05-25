@@ -12,7 +12,11 @@ export const isMarketingHost = (hostname = getCurrentHostname()) => {
 
 export const isInternalRootHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
-  return normalized === "kalamapp.ir" || normalized === "www.kalamapp.ir";
+  return (
+    normalized === "kalamapp.ir" ||
+    normalized === "www.kalamapp.ir" ||
+    normalized === "kalam.tazesystem.ir"
+  );
 };
 
 export const isSaasAppHost = (hostname = getCurrentHostname()) => {
@@ -27,7 +31,7 @@ export const isLocalHost = (hostname = getCurrentHostname()) => {
 export const isTenantHost = (hostname = getCurrentHostname()) => {
   const normalized = normalizeHostname(hostname);
   if (!normalized.endsWith(".tazesystem.ir")) return false;
-  return !["tazesystem.ir", "www.tazesystem.ir", "app.tazesystem.ir"].includes(normalized);
+  return !["tazesystem.ir", "www.tazesystem.ir", "app.tazesystem.ir", "kalam.tazesystem.ir"].includes(normalized);
 };
 
 export const isTazeSystemFamilyHost = (hostname = getCurrentHostname()) =>
@@ -41,7 +45,7 @@ export const getMarketingSiteBasePath = (hostname = getCurrentHostname()) =>
 
 export const getMarketingPanelUrl = () => "https://app.tazesystem.ir";
 
-export const getInternalAppUrl = () => "https://kalamapp.ir";
+export const getInternalAppUrl = () => "https://kalam.tazesystem.ir";
 
 export const getInternalLoginUrl = () => `${getInternalAppUrl()}/login`;
 

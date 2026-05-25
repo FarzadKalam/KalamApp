@@ -107,6 +107,24 @@ const shouldCacheResponse = (response) => {
   return response.ok || response.type === 'opaque';
 };
 
+const buildUnavailableJsonResponse = (message, status = 503) =>
+  new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      Pragma: 'no-cache',
+    },
+  });
+
+const buildStaticAssetFallbackResponse = (status = 504) =>
+  new Response('', {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+  });
+
 const limitCacheEntries = async (cacheName, maxEntries) => {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
@@ -169,7 +187,7 @@ const handleStaticAssetRequest = async (request) => {
 
   const networkResponse = await networkPromise;
   if (networkResponse) return networkResponse;
-  throw new Error('Static asset unavailable and not cached.');
+  return buildStaticAssetFallbackResponse();
 };
 
 const handleDataRequest = async (request) => {
@@ -185,15 +203,30 @@ const handleDataRequest = async (request) => {
 };
 
 const handleVersionManifestRequest = async (request) => {
-  const response = await fetch(request, { cache: 'no-store' });
-  const headers = new Headers(response.headers);
-  headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
-  headers.set('Pragma', 'no-cache');
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  const cacheKey = new Request(new URL(VERSION_MANIFEST_PATH, self.location.origin).toString());
+
+  try {
+    const response = await fetch(request, { cache: 'no-store' });
+    const headers = new Headers(response.headers);
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    headers.set('Pragma', 'no-cache');
+
+    const normalizedResponse = new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+
+    if (response.ok) {
+      void putInCache(DATA_CACHE, cacheKey, normalizedResponse.clone(), MAX_DATA_ENTRIES);
+    }
+
+    return normalizedResponse;
+  } catch {
+    const cached = await caches.match(cacheKey, { ignoreSearch: true });
+    if (cached) return cached;
+    return buildUnavailableJsonResponse('version_manifest_unavailable');
+  }
 };
 
 self.addEventListener('install', (event) => {

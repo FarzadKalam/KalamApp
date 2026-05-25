@@ -158,16 +158,6 @@ const updateServiceWorkers = async () => {
   );
 };
 
-const clearAppCaches = async () => {
-  if (typeof window === 'undefined' || !('caches' in window)) return;
-  const cacheNames = await window.caches.keys().catch(() => []);
-  await Promise.all(
-    cacheNames
-      .filter((cacheName) => cacheName.startsWith('tazesystem-'))
-      .map((cacheName) => window.caches.delete(cacheName).catch(() => false))
-  );
-};
-
 export const prepareAppRefresh = async (targetVersion: string, options?: { force?: boolean }) => {
   const version = normalizeVersion(targetVersion);
   if (!version) throw new Error('نسخه مقصد معتبر نیست.');
@@ -180,5 +170,4 @@ export const prepareAppRefresh = async (targetVersion: string, options?: { force
 
   recordRefreshIntent(version);
   await updateServiceWorkers();
-  await clearAppCaches();
 };

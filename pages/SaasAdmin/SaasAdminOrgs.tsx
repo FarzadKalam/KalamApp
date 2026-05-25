@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
-  Badge,
   Button,
   Card,
   Drawer,
@@ -13,7 +12,6 @@ import {
   Spin,
   Table,
   Tag,
-  Tooltip,
   Typography,
   App,
   Descriptions,
@@ -23,7 +21,6 @@ import {
   ReloadOutlined,
   SearchOutlined,
   EyeOutlined,
-  WifiOutlined,
   ClockCircleOutlined,
   StopOutlined,
   CheckCircleOutlined,
@@ -41,11 +38,6 @@ type OrgRow = {
   is_demo: boolean;
   is_readonly: boolean;
   trial_ends_at: string | null;
-  resolved_host: string | null;
-  dns_status: string;
-  dns_last_error: string | null;
-  arvan_record_id: string | null;
-  dns_attempt_count: number;
   primary_contact_mobile: string | null;
   provisioning_source: string;
   provisioned_at: string;
@@ -61,13 +53,6 @@ const STATUS_OPTIONS = [
   { value: 'draft', label: 'draft' },
 ];
 
-const DNS_OPTIONS = [
-  { value: '', label: 'همه DNS' },
-  { value: 'active', label: 'فعال' },
-  { value: 'pending', label: 'در انتظار' },
-  { value: 'failed', label: 'ناموفق' },
-];
-
 const statusColor: Record<string, string> = {
   active: 'green',
   trial: 'blue',
@@ -76,7 +61,7 @@ const statusColor: Record<string, string> = {
 };
 
 const SAAS_ADMIN_ORGS_SELECT =
-  'org_id, org_name, slug, status, plan_code, is_demo, is_readonly, trial_ends_at, resolved_host, dns_status, dns_last_error, arvan_record_id, dns_attempt_count, primary_contact_mobile, provisioning_source, provisioned_at, owner_name, owner_email';
+  'org_id, org_name, slug, status, plan_code, is_demo, is_readonly, trial_ends_at, primary_contact_mobile, provisioning_source, provisioned_at, owner_name, owner_email';
 
 const SaasAdminOrgs: React.FC = () => {
   const { message: messageApi } = App.useApp();
@@ -85,10 +70,8 @@ const SaasAdminOrgs: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
-  const [dnsFilter, setDnsFilter] = useState('');
   const [selectedOrg, setSelectedOrg] = useState<OrgRow | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [retrying, setRetrying] = useState<string | null>(null);
   const [extendDays, setExtendDays] = useState<number>(30);
   const [extending, setExtending] = useState(false);
   const [settingStatus, setSettingStatus] = useState(false);
@@ -103,7 +86,6 @@ const SaasAdminOrgs: React.FC = () => {
         .order('provisioned_at', { ascending: false });
 
       if (statusFilter) query = query.eq('status', statusFilter);
-      if (dnsFilter) query = query.eq('dns_status', dnsFilter);
 
       const { data, error: qErr } = await query;
       if (qErr) throw qErr;
@@ -113,7 +95,7 @@ const SaasAdminOrgs: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, dnsFilter]);
+  }, [statusFilter]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -127,22 +109,6 @@ const SaasAdminOrgs: React.FC = () => {
       o.primary_contact_mobile?.includes(q)
     );
   });
-
-  const handleRetryDns = async (org: OrgRow) => {
-    setRetrying(org.org_id);
-    try {
-      const { error: fnErr } = await supabase.functions.invoke('provision-saas-dns', {
-        body: { org_id: org.org_id, slug: org.slug },
-      });
-      if (fnErr) throw fnErr;
-      messageApi.success('درخواست retry DNS ارسال شد');
-      void load();
-    } catch (err: any) {
-      messageApi.error(err?.message || 'خطا در retry DNS');
-    } finally {
-      setRetrying(null);
-    }
-  };
 
   const handleExtendTrial = async () => {
     if (!selectedOrg) return;
@@ -212,29 +178,6 @@ const SaasAdminOrgs: React.FC = () => {
       render: (v: string | null) => v ? <Tag>{v}</Tag> : <Text type="secondary">—</Text>,
     },
     {
-      title: 'DNS',
-      key: 'dns',
-      render: (_: any, row: OrgRow) => (
-        <div className="flex items-center gap-2">
-          <Badge
-            status={row.dns_status === 'active' ? 'success' : row.dns_status === 'failed' ? 'error' : 'processing'}
-            text={<Text className="text-xs">{row.dns_status}</Text>}
-          />
-          {row.dns_status === 'failed' && (
-            <Tooltip title="retry DNS">
-              <Button
-                size="small"
-                icon={<WifiOutlined />}
-                loading={retrying === row.org_id}
-                onClick={() => handleRetryDns(row)}
-                className="!h-6 !text-xs"
-              />
-            </Tooltip>
-          )}
-        </div>
-      ),
-    },
-    {
       title: 'تماس',
       dataIndex: 'primary_contact_mobile',
       render: (v: string | null) => v || <Text type="secondary">—</Text>,
@@ -286,12 +229,6 @@ const SaasAdminOrgs: React.FC = () => {
             options={STATUS_OPTIONS}
             className="w-36"
           />
-          <Select
-            value={dnsFilter}
-            onChange={setDnsFilter}
-            options={DNS_OPTIONS}
-            className="w-32"
-          />
         </div>
 
         {loading ? (
@@ -304,13 +241,12 @@ const SaasAdminOrgs: React.FC = () => {
             columns={columns}
             rowKey="org_id"
             size="small"
-            scroll={{ x: 700 }}
+            scroll={{ x: 600 }}
             pagination={{ pageSize: 20, showSizeChanger: false }}
           />
         )}
       </Card>
 
-      {/* Drawer جزئیات سازمان */}
       <Drawer
         title={selectedOrg?.org_name || 'جزئیات سازمان'}
         open={drawerOpen}
@@ -322,7 +258,7 @@ const SaasAdminOrgs: React.FC = () => {
           <div className="space-y-4">
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="نام سازمان">{selectedOrg.org_name}</Descriptions.Item>
-              <Descriptions.Item label="Slug">
+              <Descriptions.Item label="آدرس">
                 <Text className="ltr-text">{selectedOrg.slug}.tazesystem.ir</Text>
               </Descriptions.Item>
               <Descriptions.Item label="وضعیت">
@@ -338,28 +274,6 @@ const SaasAdminOrgs: React.FC = () => {
               </Descriptions.Item>
             </Descriptions>
 
-            <Divider orientation="right" plain>DNS</Divider>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="وضعیت DNS">
-                <Badge
-                  status={selectedOrg.dns_status === 'active' ? 'success' : selectedOrg.dns_status === 'failed' ? 'error' : 'processing'}
-                  text={selectedOrg.dns_status}
-                />
-              </Descriptions.Item>
-              <Descriptions.Item label="Resolved Host">
-                <Text className="ltr-text text-xs">{selectedOrg.resolved_host || '—'}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Arvan Record ID">
-                <Text className="ltr-text text-xs">{selectedOrg.arvan_record_id || '—'}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="تعداد تلاش">{selectedOrg.dns_attempt_count}</Descriptions.Item>
-              {selectedOrg.dns_last_error && (
-                <Descriptions.Item label="آخرین خطا">
-                  <Text type="danger" className="text-xs">{selectedOrg.dns_last_error}</Text>
-                </Descriptions.Item>
-              )}
-            </Descriptions>
-
             <Divider orientation="right" plain>مالک</Divider>
             <Descriptions column={1} size="small" bordered>
               <Descriptions.Item label="نام">{selectedOrg.owner_name || '—'}</Descriptions.Item>
@@ -371,20 +285,8 @@ const SaasAdminOrgs: React.FC = () => {
               </Descriptions.Item>
             </Descriptions>
 
-            {selectedOrg.dns_status === 'failed' && (
-              <Button
-                block
-                icon={<WifiOutlined />}
-                loading={retrying === selectedOrg.org_id}
-                onClick={() => handleRetryDns(selectedOrg)}
-              >
-                retry DNS
-              </Button>
-            )}
-
             <Divider orientation="right" plain>عملیات ادمین</Divider>
 
-            {/* تمدید Trial */}
             <div className="flex items-center gap-2">
               <InputNumber
                 min={1}
@@ -405,7 +307,6 @@ const SaasAdminOrgs: React.FC = () => {
               </Button>
             </div>
 
-            {/* تعلیق / فعال‌سازی */}
             <div className="flex gap-2 mt-2">
               {selectedOrg.status !== 'suspended' ? (
                 <Popconfirm
