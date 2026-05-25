@@ -37,6 +37,7 @@ export const MOBILE_FOOTER_PERMISSION_KEY = '__mobile_footer';
 export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
+export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
 export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
@@ -123,6 +124,18 @@ export const REPORTS_PERMISSION_FIELDS = [
 export const VOIP_PERMISSION_FIELDS = [
   { key: 'all_call_notifications', label: 'مشاهده اعلان همه تماس‌ها' },
 ];
+
+export const COMMUNICATIONS_PERMISSION_FIELDS = [
+  { key: 'panel_access', label: 'پنل سریع ارتباطات' },
+  { key: 'workspace_access', label: 'فضای کامل پیام‌رسانی' },
+  { key: 'send_internal', label: 'ارسال پیام داخلی' },
+  { key: 'manage_groups', label: 'مدیریت گروه‌های گفتگو' },
+  { key: 'use_bot_channels', label: 'کانال‌های بات' },
+  { key: 'use_sms', label: 'پیامک' },
+  { key: 'use_voip', label: 'تماس VoIP' },
+  { key: 'view_system_feed', label: 'فید سیستم و اتوماسیون' },
+  { key: 'audit_all_conversations', label: 'ممیزی همه گفتگوها' },
+] as const;
 
 export const STORIES_PERMISSION_FIELDS = [
   { key: 'publish', label: 'انتشار استوری' },
@@ -337,6 +350,17 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: true,
     record_scope: 'all',
     fields: createFieldsMap(VOIP_PERMISSION_FIELDS),
+  };
+
+  defaults[COMMUNICATIONS_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: false,
+    record_scope: 'all',
+    fields: {
+      ...createFieldsMap([...COMMUNICATIONS_PERMISSION_FIELDS]),
+      audit_all_conversations: false,
+    },
   };
 
   defaults[MOBILE_FOOTER_PERMISSION_KEY] = {
@@ -704,6 +728,24 @@ export const resolveVoipAccessPermissions = (permissions: PermissionMap | null |
 
   return {
     canViewAllCallNotifications: canViewRoot && fields.all_call_notifications !== false,
+  };
+};
+
+export const resolveCommunicationsPermissions = (permissions: PermissionMap | null | undefined) => {
+  const perm = permissions?.[COMMUNICATIONS_PERMISSION_KEY] || {};
+  const fields = perm.fields || {};
+  const canViewRoot = perm.view !== false;
+
+  return {
+    canUsePanel: canViewRoot && fields.panel_access !== false,
+    canUseWorkspace: canViewRoot && fields.workspace_access !== false,
+    canSendInternal: canViewRoot && perm.edit !== false && fields.send_internal !== false,
+    canManageGroups: canViewRoot && perm.edit !== false && fields.manage_groups !== false,
+    canUseBotChannels: canViewRoot && fields.use_bot_channels !== false,
+    canUseSms: canViewRoot && fields.use_sms !== false,
+    canUseVoip: canViewRoot && fields.use_voip !== false,
+    canViewSystemFeed: canViewRoot && fields.view_system_feed !== false,
+    canAuditAllConversations: canViewRoot && fields.audit_all_conversations === true,
   };
 };
 

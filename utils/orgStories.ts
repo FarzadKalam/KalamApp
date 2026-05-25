@@ -1,11 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OrgStory, OrgStoryReaction, OrgStoryView, OrgStoryWithMeta } from '../components/stories/storyTypes';
+import { normalizePublicAssetUrl } from './assetUrl';
 
 export const ORG_STORY_SELECT =
   'id, org_id, creator_id, creator_name, creator_avatar, slides, is_org_wide, is_saas_wide, is_saas_admins_only, viewer_user_ids, viewer_role_ids, mention_user_ids, mention_role_ids, published_at, expires_at, is_pinned, is_active, view_count, created_at, updated_at';
 
 export const ORG_STORY_VIEW_SELECT = 'id, org_id, story_id, user_id, viewed_at';
 export const ORG_STORY_REACTION_SELECT = 'id, org_id, story_id, user_id, user_name, emoji, created_at';
+
+export const normalizeOrgStoryAssets = (story: OrgStory): OrgStory => ({
+  ...story,
+  creator_avatar: normalizePublicAssetUrl(story.creator_avatar) || null,
+  slides: (story.slides || []).map((slide) => ({
+    ...slide,
+    ...(slide.image_url
+      ? { image_url: normalizePublicAssetUrl(slide.image_url) || undefined }
+      : {}),
+  })),
+});
 
 export const buildOrgStoriesWithMeta = (
   rawStories: OrgStory[],
@@ -38,11 +50,12 @@ export const buildOrgStoriesWithMeta = (
 
   return (rawStories || [])
     .map((story) => {
+      const normalizedStory = normalizeOrgStoryAssets(story);
       const storyReactions = reactionsByStoryId.get(String(story.id)) || [];
       const myReaction = storyReactions.find((row) => row.user_id === currentUserId) ?? null;
 
       return {
-        ...story,
+        ...normalizedStory,
         isViewedByMe: viewedIds.has(String(story.id)),
         myReaction,
         reactions: storyReactions,

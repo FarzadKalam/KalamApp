@@ -120,7 +120,7 @@ services:
       analytics:
         condition: service_healthy
     extra_hosts:
-      - "api.kalamapp.ir:host-gateway"
+      - "api.tazesystem.ir:host-gateway"
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
@@ -174,7 +174,7 @@ services:
       # GOTRUE_HOOK_PASSWORD_VERIFICATION_ATTEMPT_URI: "pg-functions://postgres/public/password_verification_attempt"
 
       GOTRUE_HOOK_SEND_SMS_ENABLED: "true"
-      GOTRUE_HOOK_SEND_SMS_URI: "https://api.kalamapp.ir/functions/v1/send-sms?hook_secret=${KALAM_AUTH_SMS_HOOK_SECRET}"
+      GOTRUE_HOOK_SEND_SMS_URI: "https://api.tazesystem.ir/functions/v1/send-sms?hook_secret=${KALAM_AUTH_SMS_HOOK_SECRET}"
 
       # GOTRUE_HOOK_SEND_EMAIL_ENABLED: "false"
       # GOTRUE_HOOK_SEND_EMAIL_URI: "http://host.docker.internal:54321/functions/v1/email_sender"

@@ -10,6 +10,8 @@ import { FieldType, type ModuleField } from "../types";
 import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from "../theme/brandTheme";
 import { readRuntimeBranding } from "../utils/brandingRuntime";
+import { normalizeCompanyAssetFields } from "../utils/companySettings";
+import { normalizePublicAssetUrl } from "../utils/assetUrl";
 import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
 import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
@@ -544,13 +546,13 @@ const InquiryForm = () => {
     let cancelled = false;
 
     const loadCompanySettings = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .rpc("get_public_branding", {
           p_hostname: typeof window !== "undefined" ? window.location.hostname : null,
-        })
-        .maybeSingle();
-      const response = (data || null) as PublicBrandingRpcRow | null;
-      return toRecord(response?.company_settings);
+        });
+      if (error) throw error;
+      const response = (Array.isArray(data) ? data[0] : data || null) as PublicBrandingRpcRow | null;
+      return toRecord(normalizeCompanyAssetFields(response?.company_settings));
     };
 
     const loadDynamicForm = async () => {
@@ -561,12 +563,11 @@ const InquiryForm = () => {
           .rpc("get_public_web_form", {
             p_slug: requestedSlug,
             p_hostname: typeof window !== "undefined" ? window.location.hostname : null,
-          })
-          .maybeSingle();
+          });
 
         if (error) throw error;
 
-        const response = (data || null) as PublicWebFormRpcRow | null;
+        const response = (Array.isArray(data) ? data[0] : data || null) as PublicWebFormRpcRow | null;
 
         if (response?.form_id) {
           const webForm = toRecord(response.web_form);
@@ -585,7 +586,7 @@ const InquiryForm = () => {
               targetModuleId,
               config,
               fields,
-              companySettings: toRecord(response.company_settings),
+              companySettings: toRecord(normalizeCompanyAssetFields(response.company_settings)),
               conditionalDisplay: normalizeConditionalFieldSettings(toRecord(response.conditional_display)),
             });
           }
@@ -718,7 +719,7 @@ const InquiryForm = () => {
       });
       const { data: { publicUrl } } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
       return {
-        url: publicUrl,
+        url: normalizePublicAssetUrl(publicUrl) || publicUrl,
         name: file.name || "file",
         mimeType: file.type || null,
         fileType: field.field_type === "image" ? "image" : "file",

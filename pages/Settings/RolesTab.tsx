@@ -24,6 +24,8 @@ import {
   REPORTS_PERMISSION_FIELDS,
   VOIP_PERMISSION_KEY,
   VOIP_PERMISSION_FIELDS,
+  COMMUNICATIONS_PERMISSION_KEY,
+  COMMUNICATIONS_PERMISSION_FIELDS,
   STORIES_PERMISSION_KEY,
   STORIES_PERMISSION_FIELDS,
   SAAS_ADMIN_PERMISSION_KEY,
@@ -1300,6 +1302,48 @@ const RolesTab: React.FC = () => {
                       REPORTS_PERMISSION_KEY,
                       REPORTS_PERMISSION_FIELDS,
                       getModulePerms(REPORTS_PERMISSION_KEY).view === false
+                    )}
+                  </div>
+                </Panel>
+
+                <Panel
+                  key={COMMUNICATIONS_PERMISSION_KEY}
+                  className="dark:border-gray-800"
+                  header={
+                    <div className="flex items-center justify-between w-full dark:text-gray-200">
+                      <span className="font-bold">ارتباطات و پیام‌رسانی</span>
+                      <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(COMMUNICATIONS_PERMISSION_KEY).view !== false}
+                          onChange={(e) =>
+                            handlePermissionChange(COMMUNICATIONS_PERMISSION_KEY, 'view', undefined, e.target.checked)
+                          }
+                        >
+                          مشاهده
+                        </Checkbox>
+                        <Checkbox
+                          className="dark:text-gray-400"
+                          checked={getModulePerms(COMMUNICATIONS_PERMISSION_KEY).edit !== false}
+                          disabled={getModulePerms(COMMUNICATIONS_PERMISSION_KEY).view === false}
+                          onChange={(e) =>
+                            handlePermissionChange(COMMUNICATIONS_PERMISSION_KEY, 'edit', undefined, e.target.checked)
+                          }
+                        >
+                          ارسال/مدیریت
+                        </Checkbox>
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
+                      دسترسی کانال‌ها و ممیزی
+                    </Divider>
+                    {renderFieldSwitches(
+                      COMMUNICATIONS_PERMISSION_KEY,
+                      [...COMMUNICATIONS_PERMISSION_FIELDS],
+                      getModulePerms(COMMUNICATIONS_PERMISSION_KEY).view === false
                     )}
                   </div>
                 </Panel>

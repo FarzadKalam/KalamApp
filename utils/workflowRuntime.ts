@@ -2066,6 +2066,8 @@ export const executeWorkflowAction = async (
     });
     const baseMetadata = {
       source_type: 'system',
+      notification_surface: 'system_feed',
+      requires_action: false,
       workflow_action_type: action.type,
       workflow_action_id: (action as any)?.id || null,
     };

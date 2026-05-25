@@ -167,22 +167,30 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     overscan: 6,
   });
 
-  // ─── Initial anchor scroll (DOM-based — all items stay in DOM) ──────────────
+  const messageVirtualizer = useVirtualizer({
+    count: data.length,
+    getScrollElement: () => notesScrollContainerRef.current,
+    estimateSize: () => 118,
+    overscan: 8,
+    getItemKey: (index) => String(data[index]?.id || index),
+  });
+
+  // ─── Initial anchor scroll ──────────────────────────────────────────────────
   useLayoutEffect(() => {
     if (noteViewportReady) return;
     if (!isSelectedConversationLoaded || data.length === 0) return;
-    const container = notesScrollContainerRef.current;
-    if (!container) return;
 
     const anchorId = selectedConversationInitialAnchorId
       || (data.find((n: any) => isUnreadNoteRow(n)) as any)?.id;
+    const anchorIndex = anchorId
+      ? data.findIndex((note: any) => String(note?.id || '') === String(anchorId))
+      : -1;
 
-    if (anchorId) {
-      const el = container.querySelector(`[data-note-id="${anchorId}"]`) as HTMLElement | null;
-      if (el) el.scrollIntoView({ behavior: 'instant' as ScrollBehavior, block: 'start' });
+    if (anchorIndex >= 0) {
+      messageVirtualizer.scrollToIndex(anchorIndex, { align: 'start' });
       noteShouldStickToBottomRef.current = false;
     } else {
-      container.scrollTop = container.scrollHeight;
+      messageVirtualizer.scrollToIndex(data.length - 1, { align: 'end' });
       noteShouldStickToBottomRef.current = true;
     }
 
@@ -190,7 +198,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     if (noteInitialAnchorDoneRef) noteInitialAnchorDoneRef.current = true;
     setNoteViewportReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSelectedConversationLoaded, noteViewportReady, data.length]);
+  }, [isSelectedConversationLoaded, noteViewportReady, data.length, messageVirtualizer]);
 
   // Stick-to-bottom when new messages arrive
   useLayoutEffect(() => {
@@ -425,8 +433,11 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                 </div>
               ) : null}
 
-              {/* Message list — items stay in DOM; browser skips off-screen rendering via content-visibility */}
-              {data.map((note: any) => {
+              {/* Message list: keep only viewport and overscan items in DOM. */}
+              <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+                {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+                  const note: any = data[virtualRow.index];
+                  if (!note) return null;
                   const recordKey = `${note.module_id}:${note.record_id}`;
                   const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id, module_id: note.module_id }, note.module_id);
                   const isSystem = isSystemNote(note);
@@ -452,9 +463,14 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                     <div
                       key={note.id}
                       data-note-id={note.id}
+                      data-index={virtualRow.index}
+                      ref={messageVirtualizer.measureElement}
                       style={{
-                        contentVisibility: 'auto',
-                        containIntrinsicSize: '0 110px',
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start}px)`,
                         paddingBottom: 10,
                       }}
                     >
@@ -514,6 +530,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                     </div>
                   );
                 })}
+              </div>
             </>
           )}
         </div>

@@ -40,6 +40,7 @@ import {
   REPORTS_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_KEY,
+  resolveCommunicationsPermissions,
   resolveFilesAccessPermissions,
   resolvePreferredRoleModuleIds,
   type PermissionMap,
@@ -59,6 +60,7 @@ import {
 } from '../utils/orgSaasStatus';
 import ProfileAvatar from './common/ProfileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
+import CommunicationLauncher from './communications/CommunicationLauncher';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -380,6 +382,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
+  const communicationsAccess = resolveCommunicationsPermissions(rolePermissions);
   const canRunIntervalAutomation = Boolean(rolePermissionsReady
     && currentUser?.id
     && (
@@ -506,7 +509,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const rawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
-      { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی' },
+      { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,
@@ -639,7 +642,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, canViewSaasAdmin, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -656,6 +659,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return canViewAccountingSettings;
         case '/reports':
           return canViewReportsHub;
+        case '/messages':
+          return communicationsAccess.canUseWorkspace;
         case '/gallery':
           return filesAccess.canViewGallery;
         case RECYCLE_BIN_ROUTE:
@@ -704,6 +709,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewSaasAdmin,
     filesAccess.canViewGallery,
     filesAccess.canViewRecycleBin,
+    communicationsAccess.canUseWorkspace,
     rolePermissions,
   ]);
 
@@ -1273,7 +1279,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             )}
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
             <React.Suspense fallback={null}>
-              <NotificationsPopover isMobile={isMobile} variant="chat" requestedTab="notes" />
+              {communicationsAccess.canUsePanel && location.pathname !== '/messages' ? (
+                <CommunicationLauncher
+                  isMobile={isMobile}
+                  currentUserId={currentUserProfile?.id || currentUser?.id || null}
+                  currentRoleId={currentUserProfile?.role_id || null}
+                  currentOrgId={resolvedOrgId || currentUserProfile?.org_id || null}
+                />
+              ) : null}
               <NotificationsPopover isMobile={isMobile} variant="alerts" />
             </React.Suspense>
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>

@@ -720,6 +720,8 @@ const insertAutomationNote = async (
     source_type: 'system',
     metadata: {
       source_type: 'system',
+      notification_surface: 'system_feed',
+      requires_action: false,
       process_automation_rule_id: String(rule?.id || '').trim() || null,
       workflow_action_type: String((ruleNoteAction as any)?.type || 'send_note').trim() || 'send_note',
     },

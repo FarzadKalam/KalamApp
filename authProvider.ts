@@ -1,6 +1,7 @@
 import { AuthBindings } from "@refinedev/core";
 import { supabase } from "./supabaseClient";
 import { signOutLocalSession } from "./utils/authSession";
+import { normalizePublicAssetUrl } from "./utils/assetUrl";
 
 type CachedUserState = {
   user: any | null;
@@ -121,7 +122,7 @@ export const authProvider: AuthBindings = {
       return {
         ...user,
         name: user.user_metadata?.full_name || user.email,
-        avatar: user.user_metadata?.avatar_url,
+        avatar: normalizePublicAssetUrl(user.user_metadata?.avatar_url) || undefined,
       };
     }
     return null;

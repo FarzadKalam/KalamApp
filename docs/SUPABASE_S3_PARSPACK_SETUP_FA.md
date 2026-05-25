@@ -71,7 +71,7 @@ REGION=local
 در اکثر حالت‌ها فرانت نیاز به تغییر ندارد و همین کافی است:
 
 ```env
-VITE_SUPABASE_URL=https://api.kalamapp.ir
+VITE_SUPABASE_URL=https://api.tazesystem.ir
 VITE_SUPABASE_ANON_KEY=...
 ```
 
@@ -159,7 +159,7 @@ docker compose logs --tail=200 storage
 
 HAR را نگاه کردم. آخرین آپلود در `2026-04-01T20:55:16Z` انجام شده و این request fail شده:
 
-`POST https://api.kalamapp.ir/storage/v1/object/images/record_files/products/.../1775076916370_x2ruoz_hamid.png`
+`POST https://api.tazesystem.ir/storage/v1/object/images/record_files/products/.../1775076916370_x2ruoz_hamid.png`
 
 پاسخ دقیق سرور این بوده:
 

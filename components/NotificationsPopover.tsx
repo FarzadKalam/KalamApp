@@ -52,7 +52,7 @@ import { useNotificationConversationList } from '../hooks/useNotificationConvers
 import { useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
 import { useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
-import type { NotificationConversationSummary } from '../utils/notificationConversationRpc';
+import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
 import ProfileAvatar from './common/ProfileAvatar';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
@@ -78,6 +78,12 @@ interface NotificationsPopoverProps {
   requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
   /** When true, renders as a full-page component (no drawer/popover wrapper, always open) */
   standalone?: boolean;
+  /** Open on first mount when a lightweight launcher mounts the heavy panel. */
+  initialOpen?: boolean;
+  /** Render only drawer content; the lightweight launcher owns the header button. */
+  triggerless?: boolean;
+  /** Called after the close animation so the launcher can release this component. */
+  onClosed?: () => void;
 }
 
 type AiSuggestionPopoverActionProps = {
@@ -571,7 +577,6 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const isUuidValue = (value: unknown) => UUID_REGEX.test(String(value || '').trim());
 const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0);
 const ENTRY_ANIMATION_WINDOW_MS = 12_000;
-const READ_RECEIPTS_KEY = 'read_receipts';
 const LIKES_KEY = 'likes';
 const EMPTY_READ_FALLBACK_SET = new Set<string>();
 
@@ -672,12 +677,6 @@ const readReceiptMapFromBox = (box: any): Record<string, any> => {
     });
   }
   return map;
-};
-
-const hasReadReceiptForUser = (box: any, userId?: string | null) => {
-  const normalizedUserId = String(userId || '').trim();
-  if (!normalizedUserId) return false;
-  return Boolean(readReceiptMapFromBox(box)[normalizedUserId]);
 };
 
 const getLikesSource = (box: any) => {
@@ -965,11 +964,19 @@ const shouldPauseNotesPolling = (error: any) => {
   return false;
 };
 
-const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, variant = 'alerts', requestedTab, standalone = false }) => {
+const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
+  isMobile,
+  variant = 'alerts',
+  requestedTab,
+  standalone = false,
+  initialOpen = false,
+  triggerless = false,
+  onClosed,
+}) => {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const initialTab = normalizeTabForVariant(variant, requestedTab);
-  const [open, setOpen] = useState(standalone);
+  const [open, setOpen] = useState(standalone || initialOpen);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -1039,7 +1046,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({ isMobile, v
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
   const [noteLinkedAttachments, setNoteLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [noteSmsNotificationEnabled, setNoteSmsNotificationEnabled] = useState(false);
-  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(SYSTEM_MESSAGES_USER_ID);
+  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(null);
   const [noteUserSearch, setNoteUserSearch] = useState('');
   const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
@@ -1772,7 +1779,7 @@ useEffect(() => {
         .eq('user_id', profile.id)
         .in('section', relevantNotificationStateSections)
         .order('updated_at', { ascending: false })
-        .limit(10000);
+        .limit(1000);
       if (error) {
         if (!isMissingTableLikeError(error)) {
           console.warn('Could not load notification read states', error);
@@ -1998,11 +2005,16 @@ useEffect(() => {
   const fetchNotificationInboxSection = async (
     section: NotificationStateSectionKey,
     limit = 200,
+    options?: { excludeSystem?: boolean },
   ): Promise<NotificationInboxItemRow[] | null> => {
-    const { data, error } = await supabase
+    let query = supabase
       .from('notification_inbox_items')
       .select('id,source_type,source_id,section,category,title,body,module_id,record_id,payload,last_event_at,created_at')
-      .eq('section', section)
+      .eq('section', section);
+    if (options?.excludeSystem) {
+      query = query.not('category', 'in', '("system","assistant")');
+    }
+    const { data, error } = await query
       .order('last_event_at', { ascending: false })
       .limit(limit);
     if (error) {
@@ -2375,7 +2387,7 @@ useEffect(() => {
     if (!profile.id) return [];
     if (notesPollingPausedRef.current) return [];
 
-    const inboxItems = await fetchNotificationInboxSection('notes', 260);
+    const inboxItems = await fetchNotificationInboxSection('notes', 260, { excludeSystem: true });
     if (inboxItems === null) {
       setNoteLikeNotifications([]);
       return fetchNotesLegacy();
@@ -3240,6 +3252,7 @@ useEffect(() => {
     hasMore: botTimelineHasMoreBefore,
     initialAnchorId: botTimelineInitialAnchorId,
     unreadCount: botTimelineUnreadCount,
+    readModel: botReadModel,
     available: botTimelineAvailable,
     refresh: refreshBotTimeline,
     loadOlder: loadOlderBotMessages,
@@ -3695,6 +3708,7 @@ useEffect(() => {
     const id = String(n?.id || '');
     return (
       (!authorId || authorId !== String(profile.id || ''))
+      && !isSystemNote(n)
       && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
     );
   }).length + noteLikeNotifications.filter((item) => (
@@ -4000,6 +4014,7 @@ useEffect(() => {
     hasMore: selectedConversationHasMoreBefore,
     initialAnchorId: selectedConversationInitialAnchorId,
     unreadCount: selectedConversationUnreadCount,
+    readModel: selectedConversationReadModel,
     refresh: refreshSelectedConversationTimeline,
     loadOlder: loadOlderSelectedConversationNotes,
   } = useInternalConversationTimeline<any>({
@@ -4195,7 +4210,7 @@ useEffect(() => {
           id: userId,
           kind: 'direct' as const,
           conversationKey: String(item.conversation_key || '').trim() || null,
-          displayName: String(directoryUser?.display_name || item.title || userId || 'کاربر'),
+          displayName: String(directoryUser?.display_name || item.title || 'کاربر'),
           avatarUrl: directoryUser?.avatar_url || item.avatar_url || null,
           noteCount: Number(item.note_count || 0),
           unreadCount: Number(item.unread_count || 0),
@@ -4503,20 +4518,6 @@ useEffect(() => {
       .filter(Boolean)
       .sort((left, right) => new Date(right!.likedAt || 0).getTime() - new Date(left!.likedAt || 0).getTime()) as LikeReceiptEntry[];
   }, [currentUserDisplayName, directoryUserMap, profile.id]);
-
-  const buildReadReceiptBox = useCallback((box: any, readAt: string) => {
-    const currentUserId = String(profile.id || '').trim();
-    const base = isPlainRecord(box) ? { ...box } : {};
-    if (!currentUserId) return base;
-    const receiptMap = readReceiptMapFromBox(base);
-    receiptMap[currentUserId] = {
-      user_id: currentUserId,
-      user_name: currentUserDisplayName,
-      read_at: readAt,
-    };
-    base[READ_RECEIPTS_KEY] = receiptMap;
-    return base;
-  }, [currentUserDisplayName, profile.id]);
 
   const toggleNoteLike = useCallback(async (note: any) => {
     const currentUserId = String(profile.id || '').trim();
@@ -4960,50 +4961,46 @@ useEffect(() => {
       target.classList.remove('ring-2', 'ring-red-400', 'rounded-2xl');
     }, 1400);
   }, []);
-  const persistNoteReadReceipts = useCallback(async (rows: any[], readAt: string) => {
-    const currentUserId = String(profile.id || '').trim();
-    if (!currentUserId) return;
-    const targets = rows
-      .filter((note: any) => {
-        const id = String(note?.id || '').trim();
-        const authorId = String(note?.author_id || '').trim();
-        return id && authorId !== currentUserId && !hasReadReceiptForUser(note?.metadata, currentUserId);
-      })
-      .slice(0, 30);
-    if (targets.length === 0) return;
-
-    await Promise.all(targets.map(async (note: any) => {
-      const noteId = String(note?.id || '').trim();
-      try {
-        const { data, error: selectError } = await supabase
-          .from('notes')
-          .select('metadata')
-          .eq('id', noteId)
-          .maybeSingle();
-        if (selectError) throw selectError;
-        const metadata = buildReadReceiptBox((data as any)?.metadata || note?.metadata || {}, readAt);
-        const { error: updateError } = await supabase
-          .from('notes')
-          .update({ metadata })
-          .eq('id', noteId);
-        if (updateError) throw updateError;
-      } catch (error) {
-        console.warn('Could not persist note read receipt', error);
+  const markCommunicationReadCursor = useCallback(async (
+    channel: 'internal' | 'bot',
+    conversationKey: string,
+    rows: Array<{ id?: unknown; created_at?: unknown }>,
+  ) => {
+    const latest = rows.reduce<{ id: string; createdAt: string; createdAtMs: number } | null>((result, row) => {
+      const id = String(row?.id || '').trim();
+      const createdAt = String(row?.created_at || '').trim();
+      const createdAtMs = new Date(createdAt).getTime();
+      if (!id || !createdAt || !Number.isFinite(createdAtMs)) return result;
+      if (!result || createdAtMs > result.createdAtMs || (createdAtMs === result.createdAtMs && id > result.id)) {
+        return { id, createdAt, createdAtMs };
       }
-    }));
-  }, [buildReadReceiptBox, profile.id]);
-
+      return result;
+    }, null);
+    if (!latest) return false;
+    const { data, error } = await supabase.rpc('mark_communication_read', {
+      p_channel: channel,
+      p_conversation_key: conversationKey,
+      p_read_through_at: latest.createdAt,
+      p_read_through_id: latest.id,
+    });
+    if (error) {
+      if (!isMissingRpcError(error)) {
+        console.warn('Could not persist communication read cursor', error);
+      }
+      return false;
+    }
+    return data !== false;
+  }, []);
   const markNotesAsSeen = useCallback((rows: any[]) => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId || !Array.isArray(rows) || rows.length === 0) return;
-    const readAt = new Date().toISOString();
     const readableRows = rows.filter((note: any) => {
         const id = String(note?.id || '').trim();
         const authorId = String(note?.author_id || '').trim();
         return (
           id
           && authorId !== currentUserId
-          && (!isNotificationRead('notes', 'note', id, false) || !hasReadReceiptForUser(note?.metadata, currentUserId))
+          && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
         );
       });
     if (readableRows.length === 0) return;
@@ -5026,73 +5023,43 @@ useEffect(() => {
       });
     });
 
-    const applyReceipt = (note: any) => (
-      readableIds.has(String(note?.id || ''))
-        ? { ...note, metadata: buildReadReceiptBox(note?.metadata || {}, readAt) }
-        : note
+    const readEntries = Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }));
+    const shouldUseCursor = (
+      selectedConversationReadModel === 'cursor'
+      && Boolean(selectedConversationKey)
+      && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
+      && readableRows.every((note: any) => !isSystemNote(note))
     );
-    setNotes((prev) => prev.map(applyReceipt));
-    setSelectedConversationNotes((prev) => (prev ? prev.map(applyReceipt) : prev));
-
-    markNotificationEntriesRead(
-      Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }))
-    );
+    if (shouldUseCursor && selectedConversationKey) {
+      void markCommunicationReadCursor('internal', selectedConversationKey, readableRows).then((persisted) => {
+        if (!persisted) {
+          markNotificationEntriesRead(readEntries);
+        }
+        if (noteConversationSummaryAvailable) {
+          debouncedRefreshNoteConversationSummaries();
+        }
+      });
+    } else {
+      markNotificationEntriesRead(readEntries);
+      if (noteConversationSummaryAvailable) {
+        debouncedRefreshNoteConversationSummaries();
+      }
+    }
     if (selectedNoteUserId) {
       patchLocalNoteConversationSummary(selectedNoteUserId, { unreadCount: 0 });
     }
-    if (noteConversationSummaryAvailable) {
-      debouncedRefreshNoteConversationSummaries();
-    }
-    void persistNoteReadReceipts(readableRows, readAt);
-  }, [buildReadReceiptBox, debouncedRefreshNoteConversationSummaries, isNotificationRead, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, persistNoteReadReceipts, profile.id, selectedNoteUserId]);
-
-  const persistBotReadReceipts = useCallback(async (rows: CounterpartyBotMessageRow[], readAt: string) => {
-    const currentUserId = String(profile.id || '').trim();
-    if (!currentUserId) return;
-    const targets = rows
-      .filter((row) => {
-        const id = String(row?.id || '').trim();
-        return isUuidValue(id) && !hasReadReceiptForUser(row?.payload, currentUserId);
-      })
-      .slice(0, 30);
-    if (targets.length === 0) return;
-
-    await Promise.all(targets.map(async (row) => {
-      const rowId = String(row?.id || '').trim();
-      try {
-        const { data, error: selectError } = await supabase
-          .from('counterparty_bot_messages')
-          .select('payload')
-          .eq('id', rowId)
-          .maybeSingle();
-        if (selectError) throw selectError;
-        const payload = buildReadReceiptBox((data as any)?.payload || row?.payload || {}, readAt);
-        const { error: updateError } = await supabase
-          .from('counterparty_bot_messages')
-          .update({ payload })
-          .eq('id', rowId);
-        if (updateError) throw updateError;
-      } catch (error) {
-        console.warn('Could not persist bot read receipt', error);
-      }
-    }));
-  }, [buildReadReceiptBox, profile.id]);
+  }, [debouncedRefreshNoteConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, profile.id, seenNoteIds, selectedConversationKey, selectedConversationReadModel, selectedNoteUserId]);
 
   const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
-    const readAt = new Date().toISOString();
-    const unreadInboundIds = rows
-      .filter((row) => String(row?.direction || '').trim() === 'inbound')
-      .map((row) => String(row?.id || '').trim())
-      .filter((id) => isUuidValue(id) && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, false));
-    const receiptRows = rows.filter((row) => {
+    const unreadInboundRows = rows.filter((row) => {
       const id = String(row?.id || '').trim();
-      return isUuidValue(id) && !hasReadReceiptForUser(row?.payload, String(profile.id || '').trim());
+      return (
+        String(row?.direction || '').trim() === 'inbound'
+        && isUuidValue(id)
+        && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))
+      );
     });
-    const messageIds = new Set(
-      receiptRows
-        .map((row) => String(row?.id || '').trim())
-        .filter(Boolean)
-    );
+    const unreadInboundIds = unreadInboundRows.map((row) => String(row.id).trim());
     if (unreadInboundIds.length > 0) {
       startTransition(() => {
         setSeenBotMessageIds((prev) => {
@@ -5107,27 +5074,27 @@ useEffect(() => {
           return changed ? next : prev;
         });
       });
-      markNotificationEntriesRead(
-        unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }))
-      );
+      const readEntries = unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }));
+      if (botReadModel === 'cursor' && selectedBotGroupId) {
+        void markCommunicationReadCursor('bot', `bot:${selectedBotGroupId}`, unreadInboundRows).then((persisted) => {
+          if (!persisted) {
+            markNotificationEntriesRead(readEntries);
+          }
+          if (botConversationSummaryAvailable) {
+            debouncedRefreshBotConversationSummaries();
+          }
+        });
+      } else {
+        markNotificationEntriesRead(readEntries);
+        if (botConversationSummaryAvailable) {
+          debouncedRefreshBotConversationSummaries();
+        }
+      }
       if (selectedBotGroupId) {
         patchLocalBotConversationSummary(selectedBotGroupId, { unreadCount: 0 });
       }
-      if (botConversationSummaryAvailable) {
-        debouncedRefreshBotConversationSummaries();
-      }
     }
-    if (messageIds.size === 0) return;
-
-    const applyReceipt = (row: CounterpartyBotMessageRow) => (
-      messageIds.has(String(row?.id || '').trim())
-        ? { ...row, payload: buildReadReceiptBox(row?.payload || {}, readAt) }
-        : row
-    );
-    setBotMessages((prev) => prev.map(applyReceipt));
-    setBotNotificationMessages((prev) => prev.map(applyReceipt));
-    void persistBotReadReceipts(receiptRows, readAt);
-  }, [botConversationSummaryAvailable, buildReadReceiptBox, debouncedRefreshBotConversationSummaries, isNotificationRead, markNotificationEntriesRead, patchLocalBotConversationSummary, persistBotReadReceipts, profile.id, selectedBotGroupId]);
+  }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, seenBotMessageIds, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const taskIds = (rows || [])
@@ -5214,7 +5181,10 @@ useEffect(() => {
   const finalizeDrawerClose = useCallback(() => {
     const snapshot = drawerCloseSnapshotRef.current;
     drawerCloseSnapshotRef.current = null;
-    if (!snapshot) return;
+    if (!snapshot) {
+      onClosed?.();
+      return;
+    }
 
     // Reset lightweight UI state immediately
     setMobileNoteSearchOpen(false);
@@ -5252,8 +5222,9 @@ useEffect(() => {
           markVoipCallsAsSeen(snapshot.displayedVoipCalls);
         }
       }
+      onClosed?.();
     }, 80);
-  }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen]);
+  }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, onClosed]);
 
   useEffect(() => {
     // Note: do NOT clear selectedConversationNotes here — the hook manages its own state
@@ -6011,6 +5982,7 @@ useEffect(() => {
           const noteId = String(note?.id || '');
           return (
             noteId
+            && !isSystemNote(note)
             && !prevNotesRef.current.has(noteId)
             && !isNotificationRead('notes', 'note', noteId, seenNoteIds.has(noteId))
             && String(note?.author_id || '').trim() !== String(profile.id || '')
@@ -7026,17 +6998,19 @@ useEffect(() => {
         </div>
       ) : (
         <>
-      <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
-        <Button
-          type="text"
-          shape="circle"
-          icon={triggerIcon}
-          onClick={() => {
-            setUiNotificationOverlaySuppressed(true, overlaySource);
-            setOpen(true);
-          }}
-        />
-      </Badge>
+      {!triggerless ? (
+        <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
+          <Button
+            type="text"
+            shape="circle"
+            icon={triggerIcon}
+            onClick={() => {
+              setUiNotificationOverlaySuppressed(true, overlaySource);
+              setOpen(true);
+            }}
+          />
+        </Badge>
+      ) : null}
 
       {isMobile ? (
         <Drawer

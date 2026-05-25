@@ -13,6 +13,7 @@ describe('notificationConversationRpc', () => {
       first_unread_id: 11,
       has_more_before: 1,
       next_before_cursor: 22,
+      read_model: 'cursor',
     });
 
     expect(payload).toEqual({
@@ -21,6 +22,7 @@ describe('notificationConversationRpc', () => {
       first_unread_id: '11',
       has_more_before: true,
       next_before_cursor: '22',
+      read_model: 'cursor',
     });
   });
 

@@ -28,6 +28,7 @@ import PersianDatePicker from '../PersianDatePicker';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { STORY_GRADIENT_PRESET_LIST, getGradientPreset } from '../../utils/storyGradients';
 import { createWorkflowId as createId } from '../../utils/workflowTypes';
+import { normalizePublicAssetUrl } from '../../utils/assetUrl';
 import type {
   OrgStory,
   StorySlide,
@@ -181,7 +182,7 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
       const slide: StorySlide = {
         id: createId(),
         type: 'image',
-        image_url: urlData.publicUrl,
+        image_url: normalizePublicAssetUrl(urlData.publicUrl) || urlData.publicUrl,
         text_layers: [],
         duration_ms: DEFAULT_SLIDE_DURATION_MS,
       };
@@ -266,7 +267,7 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
         // INSERT از طریق SECURITY DEFINER RPC — creator_id و org_id سرور ست می‌کنه
         const { data, error } = await supabase.rpc('create_org_story', {
           p_creator_name: currentUserName,
-          p_creator_avatar: currentUserAvatar || null,
+          p_creator_avatar: normalizePublicAssetUrl(currentUserAvatar) || null,
           p_slides: slides,
           p_is_org_wide: isOrgWide,
           p_is_saas_wide: isSaasWide,

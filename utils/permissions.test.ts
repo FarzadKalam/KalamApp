@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDefaultPermissions,
+  COMMUNICATIONS_PERMISSION_KEY,
   mergePermissionsWithDefaults,
+  resolveCommunicationsPermissions,
   resolvePreferredRoleModuleIds,
   SAAS_ADMIN_PERMISSION_KEY,
 } from './permissions';
@@ -49,5 +51,27 @@ describe('permissions', () => {
     const merged = mergePermissionsWithDefaults({}, defaults);
 
     expect(resolvePreferredRoleModuleIds(merged, modules, 10)).toEqual(['products']);
+  });
+
+  it('preserves communication access but keeps conversation audit opt-in', () => {
+    const defaults = buildDefaultPermissions(modules);
+    const resolved = resolveCommunicationsPermissions(defaults);
+
+    expect(defaults[COMMUNICATIONS_PERMISSION_KEY]?.fields?.audit_all_conversations).toBe(false);
+    expect(resolved.canUsePanel).toBe(true);
+    expect(resolved.canUseWorkspace).toBe(true);
+    expect(resolved.canAuditAllConversations).toBe(false);
+  });
+
+  it('requires an explicit communication audit grant', () => {
+    const resolved = resolveCommunicationsPermissions({
+      [COMMUNICATIONS_PERMISSION_KEY]: {
+        view: true,
+        edit: true,
+        fields: { audit_all_conversations: true },
+      },
+    });
+
+    expect(resolved.canAuditAllConversations).toBe(true);
   });
 });

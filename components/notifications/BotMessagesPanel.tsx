@@ -2,6 +2,7 @@ import React from 'react';
 import { App, Avatar, Badge, Button, Empty, Input, Popover, Skeleton } from 'antd';
 import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -277,6 +278,13 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   const inactiveConversationClass = 'border border-transparent text-gray-700 hover:bg-white/80 dark:text-gray-200 dark:hover:bg-white/[0.055]';
   const activeRailClass = 'bg-[rgba(var(--brand-500-rgb),0.14)] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.22)] dark:bg-[rgba(var(--brand-300-rgb),0.15)] dark:shadow-[inset_0_0_0_1px_rgba(var(--brand-300-rgb),0.24)]';
   const inactiveRailClass = 'hover:bg-white/75 dark:hover:bg-white/5';
+  const messageVirtualizer = useVirtualizer({
+    count: filteredBotMessages.length,
+    getScrollElement: () => botMessagesScrollContainerRef.current,
+    estimateSize: () => 118,
+    overscan: 8,
+    getItemKey: (index) => String(filteredBotMessages[index]?.id || index),
+  });
 
   return (
     <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
@@ -416,7 +424,10 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   </Button>
                 </div>
               ) : null}
-              {filteredBotMessages.map((row) => {
+              <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
+              {messageVirtualizer.getVirtualItems().map((virtualRow) => {
+                const row = filteredBotMessages[virtualRow.index];
+                if (!row) return null;
                 const outgoing = String(row.direction || '') === 'outbound';
                 const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
                 const parsedAttachments = getBotMessageAttachments(row);
@@ -450,7 +461,19 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                 const isPersistedBotMessage = isUuidValue(botMessageId);
                 const isUnreadBotMessage = isUnreadBotRow(row);
                 return (
-                  <div key={row.id}>
+                  <div
+                    key={row.id}
+                    data-index={virtualRow.index}
+                    ref={messageVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                      paddingBottom: 10,
+                    }}
+                  >
                     <SharedNoteCard
                       authorName={author.name}
                       createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
@@ -557,6 +580,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   </div>
                 );
               })}
+              </div>
             </>
           )}
         </div>

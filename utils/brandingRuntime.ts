@@ -201,12 +201,11 @@ const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
       : "";
 
   const { data, error } = await supabase
-    .rpc("get_public_branding", { p_hostname: hostname || null })
-    .maybeSingle();
+    .rpc("get_public_branding", { p_hostname: hostname || null });
 
   if (error) throw error;
 
-  const row = toObjectRecord(data);
+  const row = toObjectRecord(Array.isArray(data) ? data[0] : data);
   return buildRuntimeBranding(row.company_settings, row.branding_settings);
 };
 

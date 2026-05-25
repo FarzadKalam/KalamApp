@@ -1,4 +1,5 @@
 import { runSelectWithCompatibleColumns } from './selectCompat';
+import { normalizePublicAssetUrl } from './assetUrl';
 
 type SessionBootstrapSnapshot = {
   user: any | null;
@@ -168,7 +169,12 @@ export const fetchSessionBootstrap = async (
             .eq('id', user.id)
             .maybeSingle(),
       });
-      const profile = profileResult.data || null;
+      const profile = profileResult.data
+        ? {
+            ...profileResult.data,
+            avatar_url: normalizePublicAssetUrl(profileResult.data.avatar_url) || null,
+          }
+        : null;
 
       let permissions: Record<string, any> | null = null;
       let resolvedOrgId: string | null = profile?.org_id ? String(profile.org_id) : null;

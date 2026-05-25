@@ -4,7 +4,7 @@ import { fetchSessionBootstrap } from './sessionCache';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
-const normalizeCompanyAssetFields = (row: any) => {
+export const normalizeCompanyAssetFields = (row: any) => {
   if (!row || typeof row !== 'object') return row;
   return {
     ...row,

@@ -83,4 +83,43 @@ describe('fetchSessionBootstrap', () => {
     expect(snapshot.orgId).toBe('org-1');
     expect(snapshot.permissions).toEqual({ tasks: { view: true } });
   });
+
+  it('normalizes legacy avatar storage hosts in the session profile', async () => {
+    const supabaseClient = {
+      auth: {
+        getSession: async () => ({
+          data: {
+            session: {
+              user: { id: 'user-avatar' },
+              expires_at: Math.floor(Date.now() / 1000) + 300,
+            },
+          },
+        }),
+        getUser: async () => ({ data: { user: { id: 'user-avatar' } } }),
+      },
+      from: (table: string) => {
+        if (table !== 'profiles') throw new Error(`Unexpected table ${table}`);
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: {
+                  id: 'user-avatar',
+                  full_name: 'کاربر تصویر',
+                  avatar_url: 'https://api.kalamapp.ir/storage/v1/object/public/images/avatar.jpg',
+                  org_id: 'org-1',
+                  role_id: null,
+                },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      },
+    };
+
+    const snapshot = await fetchSessionBootstrap(supabaseClient, { force: true });
+
+    expect(snapshot.profile?.avatar_url).toBe('https://api.tazesystem.ir/storage/v1/object/public/images/avatar.jpg');
+  });
 });

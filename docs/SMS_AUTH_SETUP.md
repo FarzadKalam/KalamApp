@@ -37,14 +37,14 @@
 بنابراین در این پروژه باید از آدرس عمومی HTTPS استفاده شود:
 
 ```text
-https://api.kalamapp.ir/functions/v1/send-sms?hook_secret=YOUR_SECRET
+https://api.tazesystem.ir/functions/v1/send-sms?hook_secret=YOUR_SECRET
 ```
 
 در `docker-compose.yml`:
 
 ```yml
 GOTRUE_HOOK_SEND_SMS_ENABLED: "true"
-GOTRUE_HOOK_SEND_SMS_URI: "https://api.kalamapp.ir/functions/v1/send-sms?hook_secret=${KALAM_AUTH_SMS_HOOK_SECRET}"
+GOTRUE_HOOK_SEND_SMS_URI: "https://api.tazesystem.ir/functions/v1/send-sms?hook_secret=${KALAM_AUTH_SMS_HOOK_SECRET}"
 ```
 
 نکته:
@@ -89,13 +89,13 @@ MELIPAYAMAK_OTP_TEXT_TEMPLATE=کد تایید شما: {code}
 
 - sender برای بعضی متدهای ملی‌پیامک معتبر نیست
 - بعضی endpointها maintenance/instability دارند
-- برگشت از دامنه عمومی به خود `api.kalamapp.ir` برای hook، latency غیرضروری می‌سازد
+- برگشت از دامنه عمومی به خود `api.tazesystem.ir` برای hook، latency غیرضروری می‌سازد
 
 ## نتیجه عملی
 
 اگر با این تنظیم نهایی:
 
-- `GOTRUE_HOOK_SEND_SMS_URI=https://api.kalamapp.ir/functions/v1/send-sms?...`
+- `GOTRUE_HOOK_SEND_SMS_URI=https://api.tazesystem.ir/functions/v1/send-sms?...`
 - `MELIPAYAMAK_OTP_MODE=soap`
 - `MELIPAYAMAK_OTP_SOAP_URL=http://46.245.77.196/post/Send.asmx/SendOtp`
 

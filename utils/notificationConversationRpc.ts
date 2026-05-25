@@ -21,12 +21,15 @@ export type NotificationConversationSummary = {
   bot_chat_id: string | null;
 };
 
+export type NotificationReadModel = 'item' | 'cursor';
+
 export type NotificationTimelinePayload<TItem> = {
   items: TItem[];
   unread_count: number;
   first_unread_id: string | null;
   has_more_before: boolean;
   next_before_cursor: string | null;
+  read_model: NotificationReadModel;
 };
 
 export const EMPTY_TIMELINE_PAYLOAD: NotificationTimelinePayload<any> = {
@@ -35,6 +38,7 @@ export const EMPTY_TIMELINE_PAYLOAD: NotificationTimelinePayload<any> = {
   first_unread_id: null,
   has_more_before: false,
   next_before_cursor: null,
+  read_model: 'item',
 };
 
 export const isMissingRpcError = (error: any) => {
@@ -68,6 +72,7 @@ export const normalizeTimelinePayload = <TItem,>(value: any): NotificationTimeli
     first_unread_id: raw.first_unread_id ? String(raw.first_unread_id) : null,
     has_more_before: Boolean(raw.has_more_before),
     next_before_cursor: raw.next_before_cursor ? String(raw.next_before_cursor) : null,
+    read_model: raw.read_model === 'cursor' ? 'cursor' : 'item',
   };
 };
 

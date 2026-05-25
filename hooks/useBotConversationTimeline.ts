@@ -5,6 +5,7 @@ import {
   EMPTY_TIMELINE_PAYLOAD,
   isMissingRpcError,
   normalizeTimelinePayload,
+  type NotificationReadModel,
   type NotificationTimelinePayload,
 } from '../utils/notificationConversationRpc';
 
@@ -58,6 +59,8 @@ export const useBotConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
+  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(true);
+  const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
 
   // True when the current view was already populated from cache.
@@ -68,7 +71,10 @@ export const useBotConversationTimeline = <TItem,>({
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
-    if (enabled) setAvailable(true);
+    if (enabled) {
+      setAvailable(true);
+      setCommunicationApiAvailable(true);
+    }
   }, [enabled]);
 
   const applyPayload = useCallback((
@@ -94,6 +100,7 @@ export const useBotConversationTimeline = <TItem,>({
     setCursor(payload.next_before_cursor || null);
     setInitialAnchorId(payload.first_unread_id || null);
     setUnreadCount(Number(payload.unread_count || 0));
+    setReadModel(payload.read_model);
     return true;
   }, []);
 
@@ -142,6 +149,40 @@ export const useBotConversationTimeline = <TItem,>({
     return payload;
   }, [applyPayload, fallbackLoadInitial]);
 
+  const fetchTimelinePage = useCallback(async (beforeCursor: string | null) => {
+    if (communicationApiAvailable) {
+      const { data, error } = await supabase.rpc('get_communication_timeline', {
+        p_channel: 'bot',
+        p_conversation_key: `bot:${botGroupId}`,
+        p_before_cursor: beforeCursor,
+        p_limit: pageSize,
+      });
+      if (!error) {
+        return normalizeTimelinePayload<TItem>(data);
+      }
+      if (!isMissingRpcError(error)) {
+        throw error;
+      }
+      setCommunicationApiAvailable(false);
+    }
+
+    const { data, error } = await supabase.rpc('get_bot_conversation_timeline', {
+      p_bot_group_id: botGroupId,
+      p_limit: pageSize,
+      p_before_cursor: beforeCursor,
+      // Avoid the legacy unread-window path, which can return the entire backlog.
+      p_include_unread_window: false,
+    });
+    if (error) {
+      if (isMissingRpcError(error)) {
+        setAvailable(false);
+        return null;
+      }
+      throw error;
+    }
+    return normalizeTimelinePayload<TItem>(data);
+  }, [botGroupId, communicationApiAvailable, pageSize, supabase]);
+
   const refresh = useCallback(async () => {
     if (!enabled || !botGroupId) {
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
@@ -164,20 +205,10 @@ export const useBotConversationTimeline = <TItem,>({
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
 
-      const { data, error } = await supabase.rpc('get_bot_conversation_timeline', {
-        p_bot_group_id: botGroupId,
-        p_limit: pageSize,
-        p_before_cursor: null,
-        p_include_unread_window: true,
-      });
-      if (error) {
-        if (isMissingRpcError(error)) {
-          setAvailable(false);
-          return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-        }
-        throw error;
+      const payload = await fetchTimelinePage(null);
+      if (!payload) {
+        return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
-      const payload = normalizeTimelinePayload<TItem>(data);
       if ((payload.items || []).length === 0 && fallbackLoadInitial) {
         const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
         if ((fallbackPayload.items || []).length > 0) {
@@ -195,27 +226,17 @@ export const useBotConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightRef.current = false;
     }
-  }, [applyPayload, available, botGroupId, enabled, loadFallbackInitial, pageSize, supabase]);
+  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !botGroupId || !cursor || !available || loadingOlder) return;
     setLoadingOlder(true);
     try {
-      const { data, error } = await supabase.rpc('get_bot_conversation_timeline', {
-        p_bot_group_id: botGroupId,
-        p_limit: pageSize,
-        p_before_cursor: cursor,
-        p_include_unread_window: false,
-      });
-      if (error) {
-        if (isMissingRpcError(error)) {
-          setAvailable(false);
-          setHasMore(false);
-          return;
-        }
-        throw error;
+      const payload = await fetchTimelinePage(cursor);
+      if (!payload) {
+        setHasMore(false);
+        return;
       }
-      const payload = normalizeTimelinePayload<TItem>(data);
       setItemsState((prev) => {
         const merged = [...(payload.items || []), ...prev];
         const unique = new Map<string, TItem>();
@@ -245,7 +266,7 @@ export const useBotConversationTimeline = <TItem,>({
     } finally {
       setLoadingOlder(false);
     }
-  }, [available, botGroupId, cursor, enabled, loadingOlder, pageSize, supabase]);
+  }, [available, botGroupId, cursor, enabled, fetchTimelinePage, loadingOlder]);
 
   useEffect(() => {
     if (!enabled || !botGroupId) {
@@ -290,6 +311,7 @@ export const useBotConversationTimeline = <TItem,>({
     cursor,
     initialAnchorId,
     unreadCount,
+    readModel,
     available,
     refresh,
     loadOlder,

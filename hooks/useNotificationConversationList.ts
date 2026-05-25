@@ -43,12 +43,16 @@ export const useNotificationConversationList = ({
   );
   const [loading, setLoading] = useState(false);
   const [available, setAvailable] = useState(true);
+  const [v2Available, setV2Available] = useState(true);
   // Deduplicate concurrent refresh() calls — only one in-flight at a time.
   const refreshInFlightRef = useRef(false);
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
-    if (enabled) setAvailable(true);
+    if (enabled) {
+      setAvailable(true);
+      setV2Available(true);
+    }
   }, [enabled]);
 
   // Ref so refresh() can check current items without needing them in its dep array
@@ -91,9 +95,38 @@ export const useNotificationConversationList = ({
     // Show spinner only on a true cold load (no cached data in state yet)
     if (itemsRef.current === null) setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('get_notification_conversations', {
-        p_section: section,
-      });
+      let data: any = null;
+      let error: any = null;
+      if (v2Available) {
+        ({ data, error } = await supabase.rpc('get_communication_conversations_v2', {
+          p_channel: section === 'notes' ? 'internal' : 'bot',
+          p_before_cursor: null,
+          p_limit: 80,
+        }));
+        if (error && isMissingRpcError(error)) {
+          setV2Available(false);
+          data = null;
+          error = null;
+        } else if (error) {
+          throw error;
+        }
+      }
+      if (!v2Available || data === null) {
+        ({ data, error } = section === 'notes'
+          ? await supabase.rpc('get_communication_conversations', {
+            p_channel: 'internal',
+            p_before_cursor: null,
+            p_limit: 80,
+          })
+          : await supabase.rpc('get_notification_conversations', {
+            p_section: section,
+          }));
+      }
+      if (section === 'notes' && error && isMissingRpcError(error)) {
+        ({ data, error } = await supabase.rpc('get_notification_conversations', {
+          p_section: section,
+        }));
+      }
       if (error) {
         if (isMissingRpcError(error)) {
           setAvailable(false);
@@ -112,7 +145,7 @@ export const useNotificationConversationList = ({
       setLoading(false);
       refreshInFlightRef.current = false;
     }
-  }, [available, enabled, section, supabase]);
+  }, [available, enabled, section, supabase, v2Available]);
 
   useEffect(() => {
     if (!enabled || !available) return;
