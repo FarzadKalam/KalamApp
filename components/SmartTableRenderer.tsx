@@ -824,7 +824,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const cols: ColumnsType<any> = tableFields.map(field => {
     const isKeyLikeField = isNameOrTitleField(field);
     const isPrimaryTitleColumn = isKeyLikeField && primaryTitleField?.key === field.key;
-    const isSearchable = field.type === FieldType.TEXT || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
+    const isSearchable = field.type === FieldType.TEXT || field.type === FieldType.PHONE || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
     const hasChoiceFilter =
       !isTagField &&

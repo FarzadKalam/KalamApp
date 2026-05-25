@@ -2547,8 +2547,8 @@ export const ModuleListRefine: React.FC<{
     return filters;
   }
 
-  function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState): CrudFilters {
-    const mergedFilters = [...permissionFilters, ...nextViewFilters].filter((item: any) => {
+  function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, nextPermFilters: CrudFilters = []): CrudFilters {
+    const mergedFilters = [...nextPermFilters, ...nextViewFilters].filter((item: any) => {
       return !getTagViewFilterMeta(item, moduleConfig);
     });
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
@@ -2867,7 +2867,7 @@ export const ModuleListRefine: React.FC<{
   }
 
   function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
-    const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters);
+    const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters, permissionFilters);
     const nextSignature = JSON.stringify(mergedFilters);
     if (lastAppliedFiltersSignatureRef.current !== nextSignature) {
       lastAppliedFiltersSignatureRef.current = nextSignature;
