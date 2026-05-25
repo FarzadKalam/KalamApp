@@ -177,16 +177,6 @@ export const saasDemoRequestsConfig: ModuleDefinition = {
       nature: FieldNature.SYSTEM,
     },
     {
-      key: 'org_id',
-      labels: { fa: 'شناسه سازمان', en: 'Org Id' },
-      type: FieldType.TEXT,
-      location: FieldLocation.BLOCK,
-      blockId: 'status_info',
-      order: 5,
-      readonly: true,
-      nature: FieldNature.SYSTEM,
-    },
-    {
       key: 'created_at',
       labels: { fa: 'زمان ثبت', en: 'Created At' },
       type: FieldType.DATETIME,

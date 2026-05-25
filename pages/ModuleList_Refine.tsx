@@ -20,7 +20,6 @@ import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import MergeRecordsModal from "../components/moduleList/MergeRecordsModal";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import GridView from "../components/moduleList/GridView";
-import MapView from "../components/moduleList/MapView";
 import ModuleCalendarView from "../components/moduleList/CalendarView";
 import RenderCardItem from "../components/moduleList/RenderCardItem";
 import {
@@ -43,6 +42,8 @@ import PrintSection from "../components/moduleShow/PrintSection";
 import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
 import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
+
+const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagIdMap, fetchRecordTagsMap } from "../utils/referenceData";
 import { getFieldLabelFa } from "../utils/fieldLabel";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
@@ -77,6 +78,8 @@ import { enrichAttendancePresenceRows } from "../utils/attendancePresence";
 import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill";
 import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
+import SaasUserAdminDrawer from "../components/saas/SaasUserAdminDrawer";
+import type { SaasAdminUserRow } from "../utils/saasUserAdmin";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -681,6 +684,7 @@ export const ModuleListRefine: React.FC<{
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
+  const [saasUserDrawerRecord, setSaasUserDrawerRecord] = useState<SaasAdminUserRow | null>(null);
   const [taskRelationOptionsByField, setTaskRelationOptionsByField] = useState<Record<string, any[]>>({});
   const [taskRelationOptionsLoading, setTaskRelationOptionsLoading] = useState(false);
   const [loadedTaskRelationOptionsSignature, setLoadedTaskRelationOptionsSignature] = useState("");
@@ -1373,6 +1377,7 @@ export const ModuleListRefine: React.FC<{
     setListPrintRows([]);
     setBulkBuildTarget(null);
     setPreviewRecordId(null);
+    setSaasUserDrawerRecord(null);
     setTaskRelationOptionsByField({});
     setTaskRelationOptionsLoading(false);
     setLoadedTaskRelationOptionsSignature("");
@@ -1419,9 +1424,13 @@ export const ModuleListRefine: React.FC<{
       if (isSaasAdminModuleId(resolvedModuleId)) {
         const saasPerms = permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
         const saasFields = saasPerms.fields || {};
-        const editFieldKey = resolvedModuleId === "saas_orgs" ? "edit_orgs" : "edit_requests";
-        const canViewSaas = saasPerms.view === true || saasPerms.edit === true || saasFields[editFieldKey] === true;
-        const canEditSaas = canViewSaas && (saasPerms.edit === true || saasFields[editFieldKey] === true);
+        const editFieldKey = resolvedModuleId === "saas_orgs"
+          ? "edit_orgs"
+          : resolvedModuleId === "saas_demo_requests"
+            ? "edit_requests"
+            : null;
+        const canViewSaas = saasPerms.view === true || saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false);
+        const canEditSaas = canViewSaas && (saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false) || resolvedModuleId === "saas_users");
         setModulePermissions({
           view: canViewSaas,
           edit: canEditSaas,
@@ -1557,6 +1566,7 @@ export const ModuleListRefine: React.FC<{
   const isSystemManagedModule = moduleConfig?.systemManaged === true;
   const createDisabled = moduleConfig?.disableCreate === true;
   const detailDisabled = moduleConfig?.disableDetailView === true;
+  const useSaasUserDrawer = moduleConfig?.listDetailSurface === "saas_user_drawer";
   const useQuickPreviewModal = moduleConfig?.listPreviewMode === "modal" || detailDisabled;
   const canCreateModule = canEditModule && !createDisabled;
 
@@ -2353,12 +2363,16 @@ export const ModuleListRefine: React.FC<{
         return;
       }
     }
+    if (useSaasUserDrawer) {
+      setSaasUserDrawerRecord(record as SaasAdminUserRow);
+      return;
+    }
     if (useQuickPreviewModal) {
       setPreviewRecordId(recordId);
       return;
     }
     navigate(`/${resolvedModuleId}/${recordId}`);
-  }, [navigate, resolvedModuleId, useQuickPreviewModal]);
+  }, [navigate, resolvedModuleId, useQuickPreviewModal, useSaasUserDrawer]);
 
   const handleTableRowProps = useCallback((record: any) => ({
     onClick: (event: React.MouseEvent<HTMLElement>) => {
@@ -2394,6 +2408,17 @@ export const ModuleListRefine: React.FC<{
         }
       }
     }
+    if (useSaasUserDrawer && resolvedModuleId) {
+      const moduleRecordPrefix = `/${resolvedModuleId}/`;
+      if (normalizedPath.startsWith(moduleRecordPrefix)) {
+        const recordId = normalizedPath.slice(moduleRecordPrefix.length).split("/")[0];
+        const record = enrichedData.find((item: any) => String(item?.id || "") === recordId);
+        if (record) {
+          setSaasUserDrawerRecord(record as SaasAdminUserRow);
+          return;
+        }
+      }
+    }
     if (useQuickPreviewModal && resolvedModuleId) {
       const moduleRecordPrefix = `/${resolvedModuleId}/`;
       if (normalizedPath.startsWith(moduleRecordPrefix)) {
@@ -2405,7 +2430,7 @@ export const ModuleListRefine: React.FC<{
       }
     }
     navigate(normalizedPath);
-  }, [enrichedData, navigate, resolvedModuleId, useQuickPreviewModal]);
+  }, [enrichedData, navigate, resolvedModuleId, useQuickPreviewModal, useSaasUserDrawer]);
 
   function buildColumnCrudFilters(nextColumnFilters: ColumnFiltersState): CrudFilters {
     if (!moduleConfig) return [];
@@ -4180,12 +4205,14 @@ export const ModuleListRefine: React.FC<{
                 )}
                 {viewMode === ViewMode.MAP && moduleConfig && resolvedModuleId && (
                 <div className="h-full">
-                  <MapView
-                    data={enrichedData}
-                    moduleId={resolvedModuleId}
-                    moduleConfig={moduleConfig}
-                    navigate={moduleListNavigate}
-                  />
+                  <React.Suspense fallback={<Skeleton active paragraph={{ rows: 4 }} />}>
+                    <MapView
+                      data={enrichedData}
+                      moduleId={resolvedModuleId}
+                      moduleConfig={moduleConfig}
+                      navigate={moduleListNavigate}
+                    />
+                  </React.Suspense>
                 </div>
                 )}
                 {viewMode === ViewMode.CALENDAR && moduleConfig && resolvedModuleId && (
@@ -4412,7 +4439,18 @@ export const ModuleListRefine: React.FC<{
           }}
         />
       ) : null}
-      {previewRecordId && useQuickPreviewModal ? (
+      {saasUserDrawerRecord && useSaasUserDrawer ? (
+        <SaasUserAdminDrawer
+          open
+          record={saasUserDrawerRecord}
+          onClose={() => setSaasUserDrawerRecord(null)}
+          onChanged={() => {
+            setSaasUserDrawerRecord(null);
+            void tableQueryResult.refetch();
+          }}
+        />
+      ) : null}
+      {previewRecordId && useQuickPreviewModal && !useSaasUserDrawer ? (
         <RelatedRecordPopover
           mode="modal"
           moduleId={resolvedModuleId}

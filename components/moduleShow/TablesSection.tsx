@@ -3,7 +3,6 @@ import { Button, Tooltip } from 'antd';
 import EditableTable from '../EditableTable.tsx';
 import GridTable from '../GridTable';
 import SummaryCard from '../SummaryCard';
-import ProductionStagesField from '../../components/ProductionStagesField';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import { calculateSummary } from '../../utils/calculations';
 import { SummaryCalculationType, FieldType } from '../../types';
@@ -15,6 +14,8 @@ import { normalizeInstructionIdList } from '../../utils/instructionSupport';
 import { syncProcessTemplateStageInstructionLinks } from '../../utils/processTemplateStageInstructions';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { buildProcessGuideContext } from '../../utils/processGuideContext';
+
+const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -414,23 +415,25 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 </Tooltip>
               ) : null}
             </div>
-            <ProductionStagesField
-              recordId={data.id}
-              moduleId={module.id}
-              forceProcessRecordMode={isProcessStagesField && !isTemplatePreviewField && !isRunPreviewField}
-              automationContextModuleId={null}
-              automationContextModuleIds={
-                module.id === 'process_templates' || module.id === 'process_runs'
-                  ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
-                  : null
-              }
-              readOnly={!canEditModule || productionLocked || isRunPreviewField}
-              compact={true}
-              onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}
-              draftStages={stageDraftValue}
-              onDraftStagesChange={handleDraftStagesChange}
-              showWageSummary={module.id === 'production_orders'}
-            />
+            <React.Suspense fallback={null}>
+              <ProductionStagesField
+                recordId={data.id}
+                moduleId={module.id}
+                forceProcessRecordMode={isProcessStagesField && !isTemplatePreviewField && !isRunPreviewField}
+                automationContextModuleId={null}
+                automationContextModuleIds={
+                  module.id === 'process_templates' || module.id === 'process_runs'
+                    ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
+                    : null
+                }
+                readOnly={!canEditModule || productionLocked || isRunPreviewField}
+                compact={true}
+                onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}
+                draftStages={stageDraftValue}
+                onDraftStagesChange={handleDraftStagesChange}
+                showWageSummary={module.id === 'production_orders'}
+              />
+            </React.Suspense>
             </div>
           );
         })()

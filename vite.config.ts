@@ -20,13 +20,6 @@ const resolveManualChunk = (id: string) => {
     }
 
     if (
-      normalizedId.includes('/node_modules/@tiptap/') ||
-      normalizedId.includes('/node_modules/prosemirror/')
-    ) {
-      return 'editor-vendor';
-    }
-
-    if (
       normalizedId.includes('/node_modules/xlsx/') ||
       normalizedId.includes('/node_modules/codepage/') ||
       normalizedId.includes('/node_modules/cfb/') ||
@@ -96,6 +89,7 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           output: {
             manualChunks: resolveManualChunk,
+            onlyExplicitManualChunks: true,
           },
         },
       },

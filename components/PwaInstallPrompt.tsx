@@ -1,5 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
-import { App } from 'antd';
+import App from 'antd/es/app';
 import { setUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 
 type BeforeInstallPromptEvent = Event & {

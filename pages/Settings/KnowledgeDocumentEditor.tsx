@@ -6,18 +6,19 @@ import {
   RobotOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { App, Button, Select, Switch, Tooltip, Typography } from 'antd';
+import { App, Button, Select, Spin, Switch, Tooltip, Typography } from 'antd';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
 import { printInIframe } from '../../utils/printTemplates/printInIframe';
-import PrintTemplateEditor from '../../components/moduleShow/PrintTemplateEditor';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
 import RecordFilesManager from '../../components/RecordFilesManager';
 import {
   AI_INSTRUCTIONS_DOCUMENT_TYPE,
   AI_INSTRUCTIONS_TITLE,
 } from '../../utils/aiKnowledge';
+
+const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 
 const plainTextToHtml = (text: string) => {
   if (!text.trim()) return '';
@@ -246,14 +247,16 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
 
       {/* Editor body */}
       <div className="flex-1 overflow-hidden">
-        <PrintTemplateEditor
-          value={bodyHtml}
-          onChange={setBodyHtml}
-          fillHeight
-          contentPadding="32px 48px"
-          placeholder="متن سند را اینجا بنویسید..."
-          onEditorReady={handleEditorReady}
-        />
+        <React.Suspense fallback={<Spin />}>
+          <PrintTemplateEditor
+            value={bodyHtml}
+            onChange={setBodyHtml}
+            fillHeight
+            contentPadding="32px 48px"
+            placeholder="متن سند را اینجا بنویسید..."
+            onEditorReady={handleEditorReady}
+          />
+        </React.Suspense>
       </div>
 
       {/* File Manager */}

@@ -12,7 +12,6 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import type { InputRef } from 'antd';
 import type { ColumnType, ColumnsType } from 'antd/es/table';
 import type { FilterConfirmProps, FilterValue } from 'antd/es/table/interface';
-import ProductionStagesField from './ProductionStagesField';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
 import { getFieldLabelFa } from '../utils/fieldLabel';
@@ -27,6 +26,8 @@ import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRunt
 import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import ResilientImage from './common/ResilientImage';
 import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
+
+const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -1101,17 +1102,19 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
           return (
             <div style={{ minWidth: 160, minHeight: 20 }}>
-              <ProductionStagesField
-                recordId={record.id}
-                moduleId={moduleConfig?.id}
-                readOnly={true}
-                compact={true}
-                cardCompact
-                allowReportEditInReadOnly={true}
-                lazyLoad={true}
-                draftStages={draftStages}
-                showWageSummary={false}
-              />
+              <React.Suspense fallback={null}>
+                <ProductionStagesField
+                  recordId={record.id}
+                  moduleId={moduleConfig?.id}
+                  readOnly={true}
+                  compact={true}
+                  cardCompact
+                  allowReportEditInReadOnly={true}
+                  lazyLoad={true}
+                  draftStages={draftStages}
+                  showWageSummary={false}
+                />
+              </React.Suspense>
             </div>
           );
         }

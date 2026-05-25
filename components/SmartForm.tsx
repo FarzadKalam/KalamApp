@@ -15,7 +15,6 @@ import { calculateSummary } from '../utils/calculations';
 import { ModuleDefinition, FieldLocation, BlockType, FieldType, SummaryCalculationType } from '../types';
 import { convertArea } from '../utils/unitConversions';
 import { PRODUCTION_MESSAGES } from '../utils/productionMessages';
-import ProductionStagesField from './ProductionStagesField';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
@@ -56,6 +55,8 @@ import {
 import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
 import { evaluateLegacyVisibilityRule, isConditionalFieldValueEmpty } from '../utils/conditionalFieldRules';
 import { buildModuleOnChangePatch, normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
+
+const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -2580,21 +2581,23 @@ const SmartForm: React.FC<SmartFormProps> = ({
                     <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>
                     مراحل تولید
                   </h3>
-                  <ProductionStagesField
-                    recordId={recordId}
-                    moduleId={module.id}
-                    automationContextModuleId={null}
-                    readOnly={!canEditModule}
-                    compact={true}
-                    orderStatus={module.id === 'production_orders' ? (currentValues as any)?.status : null}
-                    draftStages={(currentValues as any)?.production_stages_draft || []}
-                    onDraftStagesChange={(stages) => {
-                      const next = { ...form.getFieldsValue(), production_stages_draft: stages };
-                      form.setFieldValue('production_stages_draft', stages);
-                      setFormData(next);
-                    }}
-                    showWageSummary={module.id === 'production_orders'}
-                  />
+                  <React.Suspense fallback={<Spin size="small" />}>
+                    <ProductionStagesField
+                      recordId={recordId}
+                      moduleId={module.id}
+                      automationContextModuleId={null}
+                      readOnly={!canEditModule}
+                      compact={true}
+                      orderStatus={module.id === 'production_orders' ? (currentValues as any)?.status : null}
+                      draftStages={(currentValues as any)?.production_stages_draft || []}
+                      onDraftStagesChange={(stages) => {
+                        const next = { ...form.getFieldsValue(), production_stages_draft: stages };
+                        form.setFieldValue('production_stages_draft', stages);
+                        setFormData(next);
+                      }}
+                      showWageSummary={module.id === 'production_orders'}
+                    />
+                  </React.Suspense>
                 </div>
               )}
 

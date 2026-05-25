@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Popover, Input, Button } from 'antd';
 import type { ButtonProps } from 'antd';
 import { QrcodeOutlined } from '@ant-design/icons';
-import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '../supabaseClient';
 import { BRANDING_UPDATED_EVENT } from '../theme/brandTheme';
 import { loadScopedCompanySettings } from '../utils/companySettings';
@@ -19,6 +18,8 @@ interface QrScanPopoverProps {
   buttonClassName?: string;
   buttonProps?: ButtonProps;
 }
+
+type Html5QrcodeInstance = import('html5-qrcode').Html5Qrcode;
 
 let cachedQrScanEnabled: boolean | null = null;
 let qrScanEnabledPromise: Promise<boolean> | null = null;
@@ -64,7 +65,7 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
   const [enabled, setEnabled] = useState<boolean | null>(cachedQrScanEnabled);
   const mergedClassName = [buttonProps?.className, buttonClassName].filter(Boolean).join(' ');
   const scannerId = useMemo(() => `qr-reader-${Math.random().toString(36).slice(2)}`, []);
-  const qrRef = useRef<Html5Qrcode | null>(null);
+  const qrRef = useRef<Html5QrcodeInstance | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   const handleSubmit = () => {
@@ -127,6 +128,8 @@ const QrScanPopover: React.FC<QrScanPopoverProps> = ({ onScan, label = 'اسکن
       try {
         const element = document.getElementById(scannerId);
         if (!element) return;
+        const { Html5Qrcode } = await import('html5-qrcode');
+        if (cancelled) return;
         const scanner = new Html5Qrcode(scannerId);
         qrRef.current = scanner;
         await scanner.start(

@@ -155,6 +155,30 @@ export const executeSaasModuleAction = async (
     };
   }
 
+  if (moduleId === 'saas_orgs' && actionId === 'delete_demo_org') {
+    if (record.is_demo !== true) {
+      throw new Error('حذف دائمی فقط برای نسخه دمو مجاز است.');
+    }
+    const { data, error } = await supabase.functions.invoke('user-admin', {
+      body: {
+        action: 'saas_delete_demo_org',
+        orgId: record.org_id || record.source_id || record.id,
+      },
+    });
+    if (error) throw error;
+    if (data?.success === false) throw new Error(String(data?.message || 'حذف نسخه دمو ناموفق بود.'));
+    return { message: String(data?.message || 'نسخه دمو حذف شد.') };
+  }
+
+  if (moduleId === 'saas_demo_requests' && actionId === 'delete_request') {
+    const { data, error } = await supabase.rpc('admin_saas_delete_request', {
+      p_request_id: record.id,
+    });
+    if (error) throw error;
+    if (data?.success === false) throw new Error(String(data?.message || 'حذف درخواست ناموفق بود.'));
+    return { message: String(data?.message || 'درخواست دمو حذف شد.') };
+  }
+
   throw new Error('این عملیات برای ماژول انتخاب‌شده پشتیبانی نمی‌شود.');
 };
 
@@ -168,6 +192,15 @@ export const saasOrgRecordActions: ModuleRecordAction[] = [
     confirmDescription: 'این درخواست به یک سازمان SaaS واقعی تبدیل می‌شود.',
     visible: (record) => String(record?.source_kind || '').trim() === 'request',
   },
+  {
+    id: 'delete_demo_org',
+    label: 'حذف کامل نسخه دمو',
+    placement: 'header',
+    danger: true,
+    confirmTitle: 'حذف کامل نسخه دمو',
+    confirmDescription: 'تمام اطلاعات وابسته به این نسخه دمو حذف خواهد شد. این عملیات قابل بازگشت نیست.',
+    visible: (record) => record?.is_demo === true && String(record?.source_kind || 'org') === 'org',
+  },
 ];
 
 export const saasDemoRequestRecordActions: ModuleRecordAction[] = [
@@ -180,5 +213,15 @@ export const saasDemoRequestRecordActions: ModuleRecordAction[] = [
     confirmDescription: 'این درخواست برای ساخت دمو به زیرساخت SaaS ارسال می‌شود.',
     visible: (record) =>
       ['draft', 'failed', 'needs_admin_review'].includes(String(record?.status || '').trim()),
+  },
+  {
+    id: 'delete_request',
+    label: 'حذف درخواست',
+    placement: 'header',
+    danger: true,
+    confirmTitle: 'حذف درخواست دمو',
+    confirmDescription: 'این درخواست حذف خواهد شد. ادامه می‌دهید؟',
+    visible: (record) =>
+      !record?.org_id && ['draft', 'failed', 'cancelled', 'needs_admin_review'].includes(String(record?.status || '').trim()),
   },
 ];

@@ -29,7 +29,6 @@ import {
   UpOutlined,
 } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
-import PrintTemplateEditor from '../../components/moduleShow/PrintTemplateEditor';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
@@ -53,6 +52,8 @@ import {
 } from '../../utils/printTemplates/store';
 import { buildListPrintableFields } from '../../utils/listPrintExport';
 import { supabase } from '../../supabaseClient';
+
+const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 import { fetchCurrentUserRolePermissions, isSaasAdminModuleId } from '../../utils/permissions';
 import {
   filterPrintTemplateVariableOptions,
@@ -956,17 +957,19 @@ const PrintTemplatesTab: React.FC = () => {
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       سربرگ
                     </div>
-                    <PrintTemplateEditor
-                      key={`${editingTemplate.id}-header`}
-                      value={editingTemplate.headerHtml || ''}
-                      onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, headerHtml: html } : prev))}
-                      placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
-                      minHeight={HEADER_HEIGHT_MIN}
-                      fixedHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
-                      contentPadding="2px 10px"
-                      onEditorReady={setHeaderEditor}
-                      onFocusSection={() => setActiveSection('header')}
-                    />
+                    <React.Suspense fallback={<Spin />}>
+                      <PrintTemplateEditor
+                        key={`${editingTemplate.id}-header`}
+                        value={editingTemplate.headerHtml || ''}
+                        onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, headerHtml: html } : prev))}
+                        placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
+                        minHeight={HEADER_HEIGHT_MIN}
+                        fixedHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
+                        contentPadding="2px 10px"
+                        onEditorReady={setHeaderEditor}
+                        onFocusSection={() => setActiveSection('header')}
+                      />
+                    </React.Suspense>
                     <button
                       type="button"
                       className="absolute bottom-[-9px] left-1/2 -translate-x-1/2 z-10 h-4 w-20 rounded-full border border-slate-300 bg-white shadow-sm cursor-ns-resize touch-none"
@@ -986,17 +989,19 @@ const PrintTemplatesTab: React.FC = () => {
                   <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                     بدنه
                   </div>
-                  <PrintTemplateEditor
-                    key={`${editingTemplate.id}-body`}
-                    value={editingTemplate.contentHtml}
-                    onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, contentHtml: html } : prev))}
-                    placeholder="متن و جدول‌های اصلی سند را اینجا طراحی کنید..."
-                    minHeight={editingTemplate.showHeader !== false || editingTemplate.showFooter !== false ? 460 : 640}
-                    fillHeight
-                    contentPadding="2px 10px"
-                    onEditorReady={setBodyEditor}
-                    onFocusSection={() => setActiveSection('body')}
-                  />
+                  <React.Suspense fallback={<Spin />}>
+                    <PrintTemplateEditor
+                      key={`${editingTemplate.id}-body`}
+                      value={editingTemplate.contentHtml}
+                      onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, contentHtml: html } : prev))}
+                      placeholder="متن و جدول‌های اصلی سند را اینجا طراحی کنید..."
+                      minHeight={editingTemplate.showHeader !== false || editingTemplate.showFooter !== false ? 460 : 640}
+                      fillHeight
+                      contentPadding="2px 10px"
+                      onEditorReady={setBodyEditor}
+                      onFocusSection={() => setActiveSection('body')}
+                    />
+                  </React.Suspense>
                 </section>
 
                 {editingTemplate.showFooter !== false ? (
@@ -1017,17 +1022,19 @@ const PrintTemplatesTab: React.FC = () => {
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       پاورقی
                     </div>
-                    <PrintTemplateEditor
-                      key={`${editingTemplate.id}-footer`}
-                      value={editingTemplate.footerHtml || ''}
-                      onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, footerHtml: html } : prev))}
-                      placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
-                      minHeight={FOOTER_HEIGHT_MIN}
-                      fixedHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
-                      contentPadding="2px 10px"
-                      onEditorReady={setFooterEditor}
-                      onFocusSection={() => setActiveSection('footer')}
-                    />
+                    <React.Suspense fallback={<Spin />}>
+                      <PrintTemplateEditor
+                        key={`${editingTemplate.id}-footer`}
+                        value={editingTemplate.footerHtml || ''}
+                        onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, footerHtml: html } : prev))}
+                        placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
+                        minHeight={FOOTER_HEIGHT_MIN}
+                        fixedHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
+                        contentPadding="2px 10px"
+                        onEditorReady={setFooterEditor}
+                        onFocusSection={() => setActiveSection('footer')}
+                      />
+                    </React.Suspense>
                   </section>
                 ) : null}
               </div>

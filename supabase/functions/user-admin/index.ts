@@ -8,7 +8,15 @@ type UserAdminAction =
   | 'send_phone_otp'
   | 'verify_phone_otp'
   | 'repair_legacy_phone_login'
-  | 'setup_owner_credentials';
+  | 'setup_owner_credentials'
+  | 'saas_upsert_user'
+  | 'saas_find_profile_matches'
+  | 'saas_link_orphan_to_profile'
+  | 'saas_send_phone_otp'
+  | 'saas_verify_phone_otp'
+  | 'saas_delete_user_preflight'
+  | 'saas_delete_user'
+  | 'saas_delete_demo_org';
 
 type UserAdminBody = {
   action?: UserAdminAction | string;
@@ -117,6 +125,25 @@ const readJsonSafe = async (response: Response) => {
   }
 };
 
+const invokeRpcAsUser = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  userToken: string,
+  functionName: string,
+  payload: Record<string, any>,
+) => {
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/${functionName}`, {
+    method: 'POST',
+    headers: getServiceHeaders(serviceRoleKey, userToken),
+    body: JSON.stringify(payload),
+  });
+  const parsed = await readJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(String(parsed?.message || parsed || 'اجرای عملیات مدیریتی ناموفق بود.'));
+  }
+  return parsed;
+};
+
 const createReasonedError = (message: string, reasonCode?: string, status = 400) => {
   const error: any = new Error(String(message || 'Auth operation failed'));
   if (reasonCode) error.reasonCode = reasonCode;
@@ -178,7 +205,7 @@ const fetchRole = async (supabaseUrl: string, serviceRoleKey: string, roleId?: s
 
   const url = restUrl(supabaseUrl, 'org_roles');
   url.searchParams.set('id', `eq.${normalizedRoleId}`);
-  url.searchParams.set('select', 'id,title,org_id');
+  url.searchParams.set('select', 'id,title,org_id,permissions');
   url.searchParams.set('limit', '1');
 
   const response = await fetch(url.toString(), {
@@ -463,6 +490,39 @@ const deleteAuthUser = async (
     throw new Error(String(parsed?.msg || parsed?.message || parsed || 'آزادسازی شماره موبایل کاربر قدیمی ناموفق بود'));
   }
   return parsed?.user || parsed || null;
+};
+
+const deleteProfile = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  userId: string,
+) => {
+  const url = restUrl(supabaseUrl, 'profiles');
+  url.searchParams.set('id', `eq.${userId}`);
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    throw new Error(raw || 'حذف پروفایل ناموفق بود.');
+  }
+};
+
+const hasSaasAdminAccess = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  callerProfile: any,
+) => {
+  const role = await fetchRole(supabaseUrl, serviceRoleKey, callerProfile?.role_id);
+  const permission = role?.permissions?.__saas_admin;
+  if (!permission || typeof permission !== 'object') return false;
+  const fields = permission.fields || {};
+  return permission.view === true
+    || permission.edit === true
+    || fields.edit_orgs === true
+    || fields.edit_requests === true
+    || fields.demo_override === true;
 };
 
 const repairPhoneOwnerConflict = async (
@@ -848,6 +908,188 @@ Deno.serve(async (request) => {
     }
     if (!callerProfile?.id) {
       return json(403, { success: false, message: 'پروفایل کاربر فعلی پیدا نشد.' });
+    }
+
+    if (action.startsWith('saas_')) {
+      if (!(await hasSaasAdminAccess(supabaseUrl, serviceRoleKey, callerProfile))) {
+        return json(403, { success: false, message: 'دسترسی تازه سیستم برای این عملیات کافی نیست.' });
+      }
+
+      if (action === 'saas_delete_user_preflight') {
+        const targetUserId = String(body?.userId || '').trim();
+        if (!targetUserId) return json(400, { success: false, message: 'کاربر انتخاب نشده است.' });
+        const result = await invokeRpcAsUser(supabaseUrl, serviceRoleKey, userToken, 'admin_saas_user_delete_preflight', {
+          p_user_id: targetUserId,
+        });
+        if (result?.allowed !== true) {
+          return json(409, { success: false, message: String(result?.message || 'حذف این کاربر مجاز نیست.') });
+        }
+        return json(200, { success: true, ...result });
+      }
+
+      if (action === 'saas_upsert_user') {
+        const targetUserId = String(body?.userId || '').trim();
+        const fullName = String(body?.fullName || '').trim();
+        const email = normalizeEmail(body?.email) || null;
+        const normalizedPhone = normalizeIranMobileE164(body?.phone);
+        const roleId = String(body?.roleId || '').trim() || null;
+        const requestedOrgId = String(body?.orgId || '').trim() || null;
+        const softwareRole = String(body?.role || '').trim() || 'viewer';
+        if (!targetUserId || !fullName || !requestedOrgId || !roleId) {
+          return json(400, { success: false, message: 'نام، سازمان و نقش سازمانی الزامی است.' });
+        }
+        const resolvedRole = await resolveRoleForOrg(supabaseUrl, serviceRoleKey, roleId, requestedOrgId);
+        if (!resolvedRole.role?.id || String(resolvedRole.orgId || '') !== requestedOrgId) {
+          return json(400, { success: false, message: 'نقش انتخاب‌شده با سازمان هم‌خوان نیست.' });
+        }
+        const existingProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+        const duplicateProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
+          phone: normalizedPhone,
+          email,
+          excludeUserId: targetUserId,
+        });
+        if (duplicateProfile?.id) {
+          return json(409, { success: false, message: 'موبایل یا ایمیل برای کاربر دیگری ثبت شده است.' });
+        }
+        const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
+        if (authUser?.id) {
+          const authPayload: Record<string, any> = { user_metadata: { full_name: fullName } };
+          if (email) {
+            authPayload.email = email;
+            authPayload.email_confirm = true;
+          }
+          if (normalizedPhone) authPayload.phone = normalizedPhone;
+          await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, authPayload);
+        }
+        const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
+          id: targetUserId,
+          org_id: requestedOrgId,
+          role_id: roleId,
+          role: softwareRole,
+          full_name: fullName,
+          email,
+          mobile_1: normalizedPhone ? toLocalIranMobile(normalizedPhone) : null,
+          is_active: body?.isActive !== false,
+        });
+        return json(200, { success: true, createdProfile: !existingProfile?.id, profile });
+      }
+
+      if (action === 'saas_find_profile_matches') {
+        const orphanUserId = String(body?.userId || '').trim();
+        if (!orphanUserId) return json(400, { success: false, message: 'کاربر انتخاب نشده است.' });
+        const orphanProfile = await fetchProfile(supabaseUrl, serviceRoleKey, orphanUserId);
+        if (orphanProfile?.id) return json(200, { success: true, matches: [] });
+        const orphanAuth = await fetchAuthUserById(supabaseUrl, serviceRoleKey, orphanUserId);
+        const match = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
+          phone: orphanAuth?.phone || null,
+          email: orphanAuth?.email || null,
+          excludeUserId: orphanUserId,
+        });
+        return json(200, {
+          success: true,
+          matches: match?.id ? [{
+            userId: match.id,
+            fullName: match.full_name || null,
+            email: match.email || null,
+            mobile: match.mobile_1 || null,
+            orgId: match.org_id || null,
+            isActive: match.is_active !== false,
+          }] : [],
+        });
+      }
+
+      if (action === 'saas_link_orphan_to_profile') {
+        const orphanUserId = String(body?.userId || '').trim();
+        const targetUserId = String((body as any)?.targetUserId || '').trim();
+        if (!orphanUserId || !targetUserId || orphanUserId === targetUserId) {
+          return json(400, { success: false, message: 'رکوردهای تطبیق معتبر نیستند.' });
+        }
+        const orphanProfile = await fetchProfile(supabaseUrl, serviceRoleKey, orphanUserId);
+        const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+        if (orphanProfile?.id || !targetProfile?.id) {
+          return json(409, { success: false, message: 'اتصال فقط برای حساب یتیم و پروفایل معتبر قابل انجام است.' });
+        }
+        const orphanAuth = await fetchAuthUserById(supabaseUrl, serviceRoleKey, orphanUserId);
+        const targetAuth = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
+        if (!targetAuth?.id) {
+          return json(409, { success: false, message: 'حساب ورود پروفایل مقصد پیدا نشد.' });
+        }
+        const orphanPhone = normalizeIranMobileE164(orphanAuth?.phone || '');
+        const orphanEmail = normalizeEmail(orphanAuth?.email) || null;
+        await deleteAuthUser(supabaseUrl, serviceRoleKey, orphanUserId);
+        const patch: Record<string, any> = {};
+        if (orphanPhone) {
+          patch.phone = orphanPhone;
+          patch.phone_confirm = false;
+        }
+        if (!targetAuth?.email && orphanEmail) patch.email = orphanEmail;
+        if (Object.keys(patch).length > 0) await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, patch);
+        if (orphanPhone) {
+          await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(orphanPhone) });
+        }
+        return json(200, { success: true, message: 'حساب یتیم به پروفایل موجود متصل شد. در صورت نیاز ورود پیامکی را تایید کنید.' });
+      }
+
+      if (action === 'saas_delete_user') {
+        const targetUserId = String(body?.userId || '').trim();
+        if (!targetUserId) return json(400, { success: false, message: 'کاربر انتخاب نشده است.' });
+        const result = await invokeRpcAsUser(supabaseUrl, serviceRoleKey, userToken, 'admin_saas_user_delete_preflight', {
+          p_user_id: targetUserId,
+        });
+        if (result?.allowed !== true) {
+          return json(409, { success: false, message: String(result?.message || 'حذف این کاربر مجاز نیست.') });
+        }
+        const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
+        if (authUser?.id) await deleteAuthUser(supabaseUrl, serviceRoleKey, targetUserId);
+        else await deleteProfile(supabaseUrl, serviceRoleKey, targetUserId);
+        return json(200, { success: true });
+      }
+
+      if (action === 'saas_delete_demo_org') {
+        const orgId = String(body?.orgId || '').trim();
+        if (!orgId) return json(400, { success: false, message: 'نسخه دمو انتخاب نشده است.' });
+        const preflight = await invokeRpcAsUser(supabaseUrl, serviceRoleKey, userToken, 'admin_saas_demo_delete_preflight', {
+          p_org_id: orgId,
+        });
+        if (preflight?.allowed !== true) {
+          return json(409, { success: false, message: String(preflight?.message || 'حذف این سازمان مجاز نیست.') });
+        }
+        const userIds = Array.isArray(preflight?.user_ids)
+          ? preflight.user_ids.map((id: any) => String(id || '')).filter(Boolean)
+          : [];
+        const deleted = await invokeRpcAsUser(supabaseUrl, serviceRoleKey, userToken, 'admin_saas_delete_demo_org', {
+          p_org_id: orgId,
+        });
+        if (deleted?.success !== true) {
+          return json(409, { success: false, message: String(deleted?.message || 'حذف نسخه دمو ناموفق بود.') });
+        }
+        for (const userId of userIds) {
+          if (userId !== String(callerProfile.id)) {
+            await deleteAuthUser(supabaseUrl, serviceRoleKey, userId).catch(() => null);
+          }
+        }
+        return json(200, { success: true, message: 'نسخه دمو و اطلاعات وابسته حذف شد.' });
+      }
+
+      if (action === 'saas_send_phone_otp' || action === 'saas_verify_phone_otp') {
+        const targetUserId = String(body?.userId || '').trim();
+        const normalizedPhone = normalizeIranMobileE164(body?.phone);
+        if (!targetUserId || !normalizedPhone) {
+          return json(400, { success: false, message: 'کاربر و شماره موبایل معتبر الزامی است.' });
+        }
+        const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
+        if (!targetProfile?.id) return json(404, { success: false, message: 'ابتدا پروفایل کاربر را تکمیل کنید.' });
+        if (action === 'saas_send_phone_otp') {
+          await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, { phone: normalizedPhone, phone_confirm: false });
+          await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
+          await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'phone_change');
+          return json(200, { success: true });
+        }
+        const token = normalizeDigitsToEnglish(body?.token).replace(/\D+/g, '');
+        if (!token) return json(400, { success: false, message: 'کد تایید الزامی است.' });
+        await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'phone_change');
+        return json(200, { success: true });
+      }
     }
 
     const callerRole = String(callerProfile?.role || '').trim().toLowerCase();

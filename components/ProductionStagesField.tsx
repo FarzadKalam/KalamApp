@@ -11,10 +11,10 @@ import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
 import TaskActionButtons from './tasks/TaskActionButtons';
 import ProfileAvatar from './common/ProfileAvatar';
-import TaskHandoverModal, { type StageHandoverConfirm, type StageHandoverGroup, type StageHandoverDeliveryRow } from './production/TaskHandoverModal';
-import TaskHandoverFormsModal, {
-  type StageHandoverFormListRow,
-  type StageHandoverSummaryRow,
+import type { StageHandoverConfirm, StageHandoverGroup, StageHandoverDeliveryRow } from './production/TaskHandoverModal';
+import type {
+  StageHandoverFormListRow,
+  StageHandoverSummaryRow,
 } from './production/TaskHandoverFormsModal';
 import DateObject from 'react-date-object';
 import persian from 'react-date-object/calendars/persian';
@@ -66,8 +66,6 @@ import {
   type WorkflowExecutionMode,
   workflowExecutionModeOptions,
 } from '../utils/workflowTypes';
-import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
-import WorkflowActionsBuilder from './workflows/WorkflowActionsBuilder';
 import HelpHint from './HelpHint';
 import {
   buildProcessLinkMapFromRecord,
@@ -133,6 +131,10 @@ import {
 } from '../utils/instructionSupport';
 
 const InstructionQuickCreateModal = React.lazy(() => import('./instructions/InstructionQuickCreateModal'));
+const TaskHandoverModal = React.lazy(() => import('./production/TaskHandoverModal'));
+const TaskHandoverFormsModal = React.lazy(() => import('./production/TaskHandoverFormsModal'));
+const WorkflowConditionsGroup = React.lazy(() => import('./workflows/WorkflowConditionsGroup'));
+const WorkflowActionsBuilder = React.lazy(() => import('./workflows/WorkflowActionsBuilder'));
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -504,6 +506,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [activeHandoverFormId, setActiveHandoverFormId] = useState<string | null>(null);
   const [handoverFormsModalOpen, setHandoverFormsModalOpen] = useState(false);
   const [handoverEditorOpen, setHandoverEditorOpen] = useState(false);
+  const [handoverFormsContentMounted, setHandoverFormsContentMounted] = useState(false);
+  const [handoverEditorContentMounted, setHandoverEditorContentMounted] = useState(false);
   const [handoverLoading, setHandoverLoading] = useState(false);
   const [productionShelfOptions, setProductionShelfOptions] = useState<{ label: string; value: string }[]>([]);
   const [openTaskPopoverId, setOpenTaskPopoverId] = useState<string | null>(null);
@@ -636,6 +640,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       window.removeEventListener('popstate', handlePopState);
     };
   }, [closeTaskQuickModal, openTaskPopoverId]);
+  useEffect(() => {
+    if (handoverFormsModalOpen) {
+      setHandoverFormsContentMounted(true);
+    }
+  }, [handoverFormsModalOpen]);
+  useEffect(() => {
+    if (handoverEditorOpen) {
+      setHandoverEditorContentMounted(true);
+    }
+  }, [handoverEditorOpen]);
   useEffect(() => {
     if (!handoverFormsModalOpen || typeof window === 'undefined') return;
 
@@ -8693,49 +8707,53 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     <span className="font-semibold">{draftStageTaskTypeLabel}</span>
                                   </div>
                                 ) : null}
-                                <WorkflowConditionsGroup
-                                  value={editableAllConditions}
-                                  onChange={(next) => updateDraftAutomationRule(rule.id, {
-                                    conditions_all: (next as WorkflowCondition[]).filter(
-                                      (condition) => String(condition?.id || '') !== '__locked_stage_task_type__'
-                                    ),
-                                  })}
-                                  fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
-                                  dynamicOptions={automationDynamicOptions}
-                                  relationOptions={automationRelationOptions}
-                                  dynamicFieldProps={{
-                                    task_type: {
-                                      onOptionsUpdate: fetchTaskTypeOptions,
-                                      protectedValues: getTaskTypeProtectedValues(),
-                                    },
-                                  }}
-                                  onBeforeAddCondition={guardDraftAutomationConditionAdd}
-                                  overlayZIndexBase={16040}
-                                  popupContainer={resolveOverlayPopupContainer}
-                                />
+                                <React.Suspense fallback={<Spin size="small" />}>
+                                  <WorkflowConditionsGroup
+                                    value={editableAllConditions}
+                                    onChange={(next) => updateDraftAutomationRule(rule.id, {
+                                      conditions_all: (next as WorkflowCondition[]).filter(
+                                        (condition) => String(condition?.id || '') !== '__locked_stage_task_type__'
+                                      ),
+                                    })}
+                                    fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
+                                    dynamicOptions={automationDynamicOptions}
+                                    relationOptions={automationRelationOptions}
+                                    dynamicFieldProps={{
+                                      task_type: {
+                                        onOptionsUpdate: fetchTaskTypeOptions,
+                                        protectedValues: getTaskTypeProtectedValues(),
+                                      },
+                                    }}
+                                    onBeforeAddCondition={guardDraftAutomationConditionAdd}
+                                    overlayZIndexBase={16040}
+                                    popupContainer={resolveOverlayPopupContainer}
+                                  />
+                                </React.Suspense>
                               </div>
                               <div>
                                 <div className="mb-2 text-xs text-gray-500">یا یکی از شرط‌ها</div>
-                                <WorkflowConditionsGroup
-                                  value={editableAnyConditions}
-                                  onChange={(next) => updateDraftAutomationRule(rule.id, {
-                                    conditions_any: (next as WorkflowCondition[]).filter(
-                                      (condition) => String(condition?.field || '').trim() !== '__task__task_type'
-                                    ),
-                                  })}
-                                  fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
-                                  dynamicOptions={automationDynamicOptions}
-                                  relationOptions={automationRelationOptions}
-                                  dynamicFieldProps={{
-                                    task_type: {
-                                      onOptionsUpdate: fetchTaskTypeOptions,
-                                      protectedValues: getTaskTypeProtectedValues(),
-                                    },
-                                  }}
-                                  onBeforeAddCondition={guardDraftAutomationConditionAdd}
-                                  overlayZIndexBase={16040}
-                                  popupContainer={resolveOverlayPopupContainer}
-                                />
+                                <React.Suspense fallback={<Spin size="small" />}>
+                                  <WorkflowConditionsGroup
+                                    value={editableAnyConditions}
+                                    onChange={(next) => updateDraftAutomationRule(rule.id, {
+                                      conditions_any: (next as WorkflowCondition[]).filter(
+                                        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
+                                      ),
+                                    })}
+                                    fields={draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields}
+                                    dynamicOptions={automationDynamicOptions}
+                                    relationOptions={automationRelationOptions}
+                                    dynamicFieldProps={{
+                                      task_type: {
+                                        onOptionsUpdate: fetchTaskTypeOptions,
+                                        protectedValues: getTaskTypeProtectedValues(),
+                                      },
+                                    }}
+                                    onBeforeAddCondition={guardDraftAutomationConditionAdd}
+                                    overlayZIndexBase={16040}
+                                    popupContainer={resolveOverlayPopupContainer}
+                                  />
+                                </React.Suspense>
                               </div>
                             </div>
                           </div>
@@ -8744,38 +8762,40 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               <div className="mb-3 text-sm font-semibold text-gray-800 dark:text-gray-100">اقدام‌ها</div>
                               <div className="grid grid-cols-12 gap-3">
                                 <div className="col-span-12">
-                                  <WorkflowActionsBuilder
-                                  value={ruleActions}
-                                  onChange={(next) => updateDraftAutomationRule(rule.id, {
-                                    actions: next,
-                                    note_text: String(
-                                      next?.find((action) => {
-                                        const actionType = String(action?.type || '').trim();
-                                        return actionType === 'send_note' || actionType === 'send_note_sms';
-                                      })?.config?.note_text
-                                      || ''
-                                    ) || null,
-                                  })}
-                                  currentModuleId={automationScopeModuleId || 'tasks'}
-                                  currentModuleFields={automationActionModuleFields}
-                                  variableFields={automationActionVariableFields}
-                                  nextStageFields={nextStageTransferFields}
-                                  enableNextStageActions
-                                  moduleOptions={workflowModuleOptions}
-                                  relationSourceModuleOptions={automationScopeModuleIds.map((scopeModuleId) => ({
-                                    value: scopeModuleId,
-                                    label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
-                                  }))}
-                                  additionalRecipientFieldOptions={[
-                                    { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
-                                    { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
-                                    { label: 'مسئول مرحله بعد', value: '__comm_recipient__next_stage_assignee' },
-                                  ]}
-                                  dynamicOptions={automationDynamicOptions}
-                                  relationOptions={automationRelationOptions}
-                                  overlayZIndexBase={16040}
-                                  popupContainer={resolveOverlayPopupContainer}
-                                  />
+                                  <React.Suspense fallback={<Spin size="small" />}>
+                                    <WorkflowActionsBuilder
+                                      value={ruleActions}
+                                      onChange={(next) => updateDraftAutomationRule(rule.id, {
+                                        actions: next,
+                                        note_text: String(
+                                          next?.find((action) => {
+                                            const actionType = String(action?.type || '').trim();
+                                            return actionType === 'send_note' || actionType === 'send_note_sms';
+                                          })?.config?.note_text
+                                          || ''
+                                        ) || null,
+                                      })}
+                                      currentModuleId={automationScopeModuleId || 'tasks'}
+                                      currentModuleFields={automationActionModuleFields}
+                                      variableFields={automationActionVariableFields}
+                                      nextStageFields={nextStageTransferFields}
+                                      enableNextStageActions
+                                      moduleOptions={workflowModuleOptions}
+                                      relationSourceModuleOptions={automationScopeModuleIds.map((scopeModuleId) => ({
+                                        value: scopeModuleId,
+                                        label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
+                                      }))}
+                                      additionalRecipientFieldOptions={[
+                                        { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
+                                        { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
+                                        { label: 'مسئول مرحله بعد', value: '__comm_recipient__next_stage_assignee' },
+                                      ]}
+                                      dynamicOptions={automationDynamicOptions}
+                                      relationOptions={automationRelationOptions}
+                                      overlayZIndexBase={16040}
+                                      popupContainer={resolveOverlayPopupContainer}
+                                    />
+                                  </React.Suspense>
                               </div>
                             </div>
                           </div>
@@ -9210,54 +9230,62 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         </div>
       </Modal>
 
-      {supportsHandover && (
+      {supportsHandover && (handoverFormsContentMounted || handoverEditorContentMounted) && (
         <>
-          <TaskHandoverFormsModal
-            open={handoverFormsModalOpen && !!handoverTask && !!handoverContext}
-            loading={handoverLoading}
-            taskName={String(handoverTask?.name || handoverTask?.title || 'مرحله')}
-            sourceStageName={String(handoverContext?.sourceStageName || 'شروع تولید')}
-            summaries={handoverSummaryRows}
-            forms={handoverFormRows}
-            selectedFormId={activeHandoverFormId}
-            onSelectForm={(formId) => setActiveHandoverFormId(formId)}
-            onCreateForm={handleCreateHandoverForm}
-            onOpenSelectedForm={() => openHandoverEditorForForm(activeHandoverFormId)}
-            onClose={closeHandoverModal}
-          />
+          {handoverFormsContentMounted ? (
+            <React.Suspense fallback={null}>
+              <TaskHandoverFormsModal
+                open={handoverFormsModalOpen && !!handoverTask && !!handoverContext}
+                loading={handoverLoading}
+                taskName={String(handoverTask?.name || handoverTask?.title || 'مرحله')}
+                sourceStageName={String(handoverContext?.sourceStageName || 'شروع تولید')}
+                summaries={handoverSummaryRows}
+                forms={handoverFormRows}
+                selectedFormId={activeHandoverFormId}
+                onSelectForm={(formId) => setActiveHandoverFormId(formId)}
+                onCreateForm={handleCreateHandoverForm}
+                onOpenSelectedForm={() => openHandoverEditorForForm(activeHandoverFormId)}
+                onClose={closeHandoverModal}
+              />
+            </React.Suspense>
+          ) : null}
 
-          <TaskHandoverModal
-            open={handoverEditorOpen && !!handoverTask && !!handoverContext}
-            loading={handoverLoading}
-            locked={!!(handoverContext?.giverConfirmation?.confirmed || handoverContext?.receiverConfirmation?.confirmed)}
-            task={handoverTask}
-            currentUser={{
-              id: currentUser.id,
-              fullName: currentUser.fullName,
-            }}
-            taskName={String(handoverTask?.name || handoverTask?.title || 'مرحله')}
-            sourceStageName={String(handoverContext?.sourceStageName || 'شروع تولید')}
-            giverName={String(handoverContext?.giver?.label || 'تعیین نشده')}
-            receiverName={String(handoverContext?.receiver?.label || 'تعیین نشده')}
-            groups={handoverGroups}
-            shelfOptions={productionShelfOptions}
-            targetShelfId={handoverContext?.targetShelfId || null}
-            giverConfirmation={handoverContext?.giverConfirmation || { confirmed: false }}
-            receiverConfirmation={handoverContext?.receiverConfirmation || { confirmed: false }}
-            onCancel={closeHandoverEditor}
-            onSave={() => { void saveHandover(); }}
-            onToggleGroup={setHandoverGroupCollapsed}
-            onConfirmGroup={confirmHandoverGroup}
-            onDeliveryRowAdd={addHandoverDeliveryRow}
-            onDeliveryRowsDelete={deleteHandoverDeliveryRows}
-            onDeliveryRowsTransfer={transferHandoverDeliveryRows}
-            onDeliveryRowFieldChange={updateHandoverDeliveryRowField}
-            onTargetShelfChange={setHandoverTargetShelf}
-            onTargetShelfScan={handleHandoverShelfScan}
-            onConfirmGiver={() => { void handleConfirmGiver(); }}
-            onConfirmReceiver={() => { void handleConfirmReceiver(); }}
-            onTaskUpdated={handleHandoverTaskUpdated}
-          />
+          {handoverEditorContentMounted ? (
+            <React.Suspense fallback={null}>
+              <TaskHandoverModal
+                open={handoverEditorOpen && !!handoverTask && !!handoverContext}
+                loading={handoverLoading}
+                locked={!!(handoverContext?.giverConfirmation?.confirmed || handoverContext?.receiverConfirmation?.confirmed)}
+                task={handoverTask}
+                currentUser={{
+                  id: currentUser.id,
+                  fullName: currentUser.fullName,
+                }}
+                taskName={String(handoverTask?.name || handoverTask?.title || 'مرحله')}
+                sourceStageName={String(handoverContext?.sourceStageName || 'شروع تولید')}
+                giverName={String(handoverContext?.giver?.label || 'تعیین نشده')}
+                receiverName={String(handoverContext?.receiver?.label || 'تعیین نشده')}
+                groups={handoverGroups}
+                shelfOptions={productionShelfOptions}
+                targetShelfId={handoverContext?.targetShelfId || null}
+                giverConfirmation={handoverContext?.giverConfirmation || { confirmed: false }}
+                receiverConfirmation={handoverContext?.receiverConfirmation || { confirmed: false }}
+                onCancel={closeHandoverEditor}
+                onSave={() => { void saveHandover(); }}
+                onToggleGroup={setHandoverGroupCollapsed}
+                onConfirmGroup={confirmHandoverGroup}
+                onDeliveryRowAdd={addHandoverDeliveryRow}
+                onDeliveryRowsDelete={deleteHandoverDeliveryRows}
+                onDeliveryRowsTransfer={transferHandoverDeliveryRows}
+                onDeliveryRowFieldChange={updateHandoverDeliveryRowField}
+                onTargetShelfChange={setHandoverTargetShelf}
+                onTargetShelfScan={handleHandoverShelfScan}
+                onConfirmGiver={() => { void handleConfirmGiver(); }}
+                onConfirmReceiver={() => { void handleConfirmReceiver(); }}
+                onTaskUpdated={handleHandoverTaskUpdated}
+              />
+            </React.Suspense>
+          ) : null}
         </>
       )}
       {isInstructionQuickCreateOpen ? (

@@ -8,7 +8,6 @@ import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
 import { getRecordCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
-import ProductionStagesField from "../ProductionStagesField";
 import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
 import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
@@ -16,6 +15,8 @@ import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
 import ResilientImage from "../common/ResilientImage";
 import AssigneeAvatarDisplay from "../common/AssigneeAvatarDisplay";
+
+const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
 
 export interface RenderCardItemProps {
   item: any;
@@ -740,15 +741,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           className={`${minimal ? 'mt-2' : 'mt-3'}`}
           onClick={(e) => e.stopPropagation()}
         >
-          <ProductionStagesField
-            recordId={String(cardItem.related_production_order)}
-            moduleId="production_orders"
-            readOnly
-            compact
-            cardCompact
-            allowReportEditInReadOnly
-            onlyLineId={String(cardItem.production_line_id)}
-          />
+          <React.Suspense fallback={null}>
+            <ProductionStagesField
+              recordId={String(cardItem.related_production_order)}
+              moduleId="production_orders"
+              readOnly
+              compact
+              cardCompact
+              allowReportEditInReadOnly
+              onlyLineId={String(cardItem.production_line_id)}
+            />
+          </React.Suspense>
         </div>
       )}
       {isExecutionProcessTask && (
@@ -756,14 +759,16 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           className={`${minimal ? 'mt-2' : 'mt-3'}`}
           onClick={(e) => e.stopPropagation()}
         >
-          <ProductionStagesField
-            recordId={String(relatedProcessRecordId)}
-            moduleId={relatedProcessModuleId}
-            readOnly
-            compact
-            cardCompact
-            allowReportEditInReadOnly
-          />
+          <React.Suspense fallback={null}>
+            <ProductionStagesField
+              recordId={String(relatedProcessRecordId)}
+              moduleId={relatedProcessModuleId}
+              readOnly
+              compact
+              cardCompact
+              allowReportEditInReadOnly
+            />
+          </React.Suspense>
         </div>
       )}
     </div>

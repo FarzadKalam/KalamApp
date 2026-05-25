@@ -1,6 +1,10 @@
 import React from 'react';
-import { Button, Result, theme, Typography } from 'antd';
-import { DisconnectOutlined, ReloadOutlined } from '@ant-design/icons';
+import Button from 'antd/es/button';
+import Result from 'antd/es/result';
+import theme from 'antd/es/theme';
+import Typography from 'antd/es/typography';
+import DisconnectOutlined from '@ant-design/icons/DisconnectOutlined';
+import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 
 const { Text } = Typography;

@@ -1,4 +1,3 @@
-import { supabase } from "../supabaseClient";
 import tazeSystemLogo from "../src/tazesystem_logo.png";
 import {
   BRANDING_INTEGRATION_CONNECTION_TYPE,
@@ -11,9 +10,6 @@ import {
 } from "../theme/brandTheme";
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
 import { normalizePublicAssetUrl } from "./assetUrl";
-import { getCachedAuthUser } from "./sessionCache";
-import { loadScopedCompanySettings } from "./companySettings";
-import { loadScopedIntegrationSettings } from "./integrationSettings";
 import { isLocalHost, isSharedAppHost, isTenantHost, isTazeSystemFamilyHost } from "./hostRouting";
 
 export const BRANDING_CACHE_KEY = "erp:branding-cache";
@@ -195,6 +191,7 @@ export const applyBrandingRuntime = (branding: BrandingConfig) => {
 };
 
 const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
+  const { supabase } = await import("../supabaseClient");
   const hostname =
     typeof window !== "undefined"
       ? String(window.location.hostname || "").trim().toLowerCase()
@@ -210,6 +207,11 @@ const loadPublicBranding = async (): Promise<RuntimeBrandingResult> => {
 };
 
 const loadAuthenticatedBranding = async (): Promise<RuntimeBrandingResult> => {
+  const [{ supabase }, { loadScopedCompanySettings }, { loadScopedIntegrationSettings }] = await Promise.all([
+    import("../supabaseClient"),
+    import("./companySettings"),
+    import("./integrationSettings"),
+  ]);
   const [companyResult, themeResult] = await Promise.all([
     loadScopedCompanySettings(supabase as any),
     loadScopedIntegrationSettings(supabase as any, {
@@ -243,8 +245,11 @@ export const loadRuntimeBranding = async (
   }
 
   const pending = (async () => {
+    const { supabase } = await import("../supabaseClient");
     const hostname = getCurrentHostname();
-    const authUser = await getCachedAuthUser(supabase).catch(() => null);
+    const authUser = await supabase.auth.getSession()
+      .then(({ data }) => data?.session?.user || null)
+      .catch(() => null);
     const sharedHost = isSharedAppHost(hostname);
     const allowPublicBranding =
       !isLocalHost(hostname) && (sharedHost || isTenantHost(hostname) || !isTazeSystemFamilyHost(hostname));

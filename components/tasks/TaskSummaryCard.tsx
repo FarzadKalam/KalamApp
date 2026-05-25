@@ -2,7 +2,6 @@ import React from 'react';
 import { InputNumber, Select } from 'antd';
 import { AppstoreOutlined, FileOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
-import ProductionStagesField from '../ProductionStagesField';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
@@ -10,6 +9,8 @@ import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import TaskActionButtons from './TaskActionButtons';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import ResilientImage from '../common/ResilientImage';
+
+const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
 interface TaskSummaryCardProps {
   task: any;
@@ -202,30 +203,34 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
 
         {isProductionTask ? (
           <div className="mt-3">
-            <ProductionStagesField
-              recordId={String(task.related_production_order)}
-              moduleId="production_orders"
-              readOnly
-              compact
-              cardCompact
-              allowReportEditInReadOnly
-              lazyLoad
-              onlyLineId={String(task.production_line_id)}
-            />
+            <React.Suspense fallback={null}>
+              <ProductionStagesField
+                recordId={String(task.related_production_order)}
+                moduleId="production_orders"
+                readOnly
+                compact
+                cardCompact
+                allowReportEditInReadOnly
+                lazyLoad
+                onlyLineId={String(task.production_line_id)}
+              />
+            </React.Suspense>
           </div>
         ) : null}
 
         {isExecutionProcessTask ? (
           <div className="mt-3">
-            <ProductionStagesField
-              recordId={String(relatedProcessRecordId)}
-              moduleId={relatedModuleId}
-              readOnly
-              compact
-              cardCompact
-              allowReportEditInReadOnly
-              lazyLoad
-            />
+            <React.Suspense fallback={null}>
+              <ProductionStagesField
+                recordId={String(relatedProcessRecordId)}
+                moduleId={relatedModuleId}
+                readOnly
+                compact
+                cardCompact
+                allowReportEditInReadOnly
+                lazyLoad
+              />
+            </React.Suspense>
           </div>
         ) : null}
       </div>

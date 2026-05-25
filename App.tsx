@@ -1,16 +1,19 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
 import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
 import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams } from "react-router-dom";
-import { ConfigProvider, App as AntdApp, theme as antdTheme } from "antd";
+import ConfigProvider from "antd/es/config-provider";
+import AntdApp from "antd/es/app";
+import antdTheme from "antd/es/theme";
 import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
-import Layout from "./components/Layout";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
 import PwaInstallPrompt from "./components/PwaInstallPrompt";
 import OfflineOverlay from "./components/OfflineOverlay";
@@ -43,6 +46,11 @@ import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 import { signOutLocalSession } from "./utils/authSession";
 
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
+
+focusManager.setEventListener(() => {
+  return () => undefined;
+});
+focusManager.setFocused(true);
 
 const loadProfilePage = () => import("./pages/ProfilePage");
 const loadSettingsPage = () => import("./pages/Settings/SettingsPage");
@@ -82,6 +90,7 @@ const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 const loadMessagesPage = () => import("./pages/MessagesPage");
+const loadLayout = () => import("./components/Layout");
 
 const ProfilePage = lazy(loadProfilePage);
 const SettingsPage = lazy(loadSettingsPage);
@@ -121,6 +130,61 @@ const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const MessagesPage = lazy(loadMessagesPage);
+const Layout = lazy(loadLayout);
+
+const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
+  const pathname = String(targetPath || "").split(/[?#]/)[0] || "/";
+  const segments = pathname.split("/").filter(Boolean);
+  const section = segments[0] || "";
+  const detail = segments[1] || "";
+
+  let preloader: (() => Promise<unknown>) | null = null;
+
+  if (!section || section === "dashboard") preloader = loadDashboard;
+  else if (section === "profile") preloader = loadProfilePage;
+  else if (section === "settings") preloader = loadSettingsPage;
+  else if (section === "messages") preloader = loadMessagesPage;
+  else if (section === "gallery") preloader = loadFilesGalleryPage;
+  else if (section === "recycle-bin") preloader = loadRecycleBinPage;
+  else if (section === "search") preloader = loadGlobalSearchPage;
+  else if (section === "hr") preloader = loadHRPage;
+  else if (section === "production_group_orders") {
+    preloader = detail ? loadProductionGroupOrderWizard : loadProductionGroupOrdersList;
+  } else if (section === "web_forms") {
+    preloader = detail ? loadWebFormBuilderPage : loadWebFormsHubPage;
+  } else if (section === "reports") {
+    preloader = detail === "create" ? loadReportBuilderPage : detail ? loadReportViewerPage : loadReportsHubPage;
+  } else if (section === "accounting") {
+    if (detail === "reports") {
+      preloader = segments[2] ? loadAccountingReportViewerPage : loadAccountingReportsPage;
+    } else if (detail === "account-review") {
+      preloader = loadAccountingAccountReviewPage;
+    } else if (detail === "settings") {
+      preloader = loadAccountingSettingsPage;
+    } else {
+      preloader = loadAccountingPage;
+    }
+  } else if (section === "cash_bank_operations") {
+    preloader = detail ? loadAccountingRecordPage : loadCashBankPage;
+  } else if (section === "chart_of_accounts") {
+    preloader = detail ? loadAccountingRecordPage : loadChartOfAccountsTreePage;
+  } else if (section === "journal_entries") {
+    preloader = detail === "create" ? loadJournalEntryCreatePage : detail ? loadJournalEntryShowPage : loadModuleListRefine;
+  } else if (section === "work_schedules") {
+    preloader = loadWorkSchedulesPage;
+  } else if (section === "taze-system") {
+    preloader = detail === "plans" ? loadSaasAdminPlans : loadSaasAdminDashboard;
+  } else {
+    preloader = detail === "create" ? loadModuleCreate : detail ? loadModuleShow : loadModuleListRefine;
+  }
+
+  void preloader().catch(() => undefined);
+};
+
+const preloadAuthenticatedShell = (pathname?: string) => {
+  void loadLayout().catch(() => undefined);
+  preloadAuthenticatedRouteChunk(pathname);
+};
 
 const routePreloaders = [
   loadProfilePage,
@@ -322,6 +386,7 @@ function App() {
             }
             return;
           }
+          preloadAuthenticatedShell(window.location.pathname);
           await loadModuleSettings();
         } else {
           applyModuleSettingsStoreToRegistry(null);
@@ -424,6 +489,7 @@ function App() {
         void primeSessionBootstrap(supabase);
         void loadBranding();
         if (!isPublicSaasOnboarding) {
+          preloadAuthenticatedShell(pathname);
           void primeReferenceData(supabase);
           void loadModuleSettings();
         } else {
@@ -441,6 +507,7 @@ function App() {
         void primeSessionBootstrap(supabase);
         void loadBranding(true);
         if (!isPublicSaasOnboarding) {
+          preloadAuthenticatedShell(pathname);
           void primeReferenceData(supabase, { force: true });
           void loadModuleSettings();
         } else {
@@ -653,15 +720,18 @@ function App() {
                 key="authenticated-inner"
                 fallback={<CatchAllNavigate to="/login" />}
               >
-                <Layout
-                  isDarkMode={isDarkMode}
-                  toggleTheme={handleToggleTheme}
-                  brandShortName={branding.shortName}
-                >
-                  <LazyRouteBoundary>
-                    <Outlet />
-                  </LazyRouteBoundary>
-                </Layout>
+                <LazyRouteBoundary>
+                  <Layout
+                    isDarkMode={isDarkMode}
+                    toggleTheme={handleToggleTheme}
+                    brandShortName={branding.shortName}
+                    preloadRoute={preloadAuthenticatedRouteChunk}
+                  >
+                    <LazyRouteBoundary>
+                      <Outlet />
+                    </LazyRouteBoundary>
+                  </Layout>
+                </LazyRouteBoundary>
               </Authenticated>
             }
           >
@@ -733,7 +803,7 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true }}>
       <ConfigProvider
         direction="rtl"
         locale={faIR}
@@ -761,5 +831,9 @@ function App() {
     </BrowserRouter>
   );
 }
+
+export const mountApp = (container: HTMLElement) => {
+  createRoot(container).render(<App />);
+};
 
 export default App;

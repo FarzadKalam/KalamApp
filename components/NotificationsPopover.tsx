@@ -14,29 +14,19 @@ import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/n
 import { normalizeNoteScope } from '../utils/noteScope';
 import { resolveTaskSourceLink } from '../utils/taskMeta';
 import SharedNoteComposer from './notes/SharedNoteComposer';
-import VoipCallsPanel from './notifications/VoipCallsPanel';
-import ResponsibilitiesPanel from './notifications/ResponsibilitiesPanel';
-import TasksPanel from './notifications/TasksPanel';
-import SmsMessagesPanel from './notifications/SmsMessagesPanel';
-import BotMessagesPanel from './notifications/BotMessagesPanel';
-import NotesPanel from './notifications/NotesPanel';
-import RelatedRecordPopover from './RelatedRecordPopover';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { getActiveChannelSettings } from '../utils/channelSettings';
-import AssistantPanel from './ai/AssistantPanel';
 import { renderRecordTemplate } from '../utils/recordMessaging';
 import { resolveTemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
-import MessageComposerModal from './MessageComposerModal';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns, selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import AiSparkleIcon from './ai/AiSparkleIcon';
-import CounterpartyBotStatusModal from './bot/CounterpartyBotStatusModal';
 import {
   buildNoteConversations,
   buildSmsThreads,
@@ -58,6 +48,16 @@ import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
+const VoipCallsPanel = React.lazy(() => import('./notifications/VoipCallsPanel'));
+const ResponsibilitiesPanel = React.lazy(() => import('./notifications/ResponsibilitiesPanel'));
+const TasksPanel = React.lazy(() => import('./notifications/TasksPanel'));
+const SmsMessagesPanel = React.lazy(() => import('./notifications/SmsMessagesPanel'));
+const BotMessagesPanel = React.lazy(() => import('./notifications/BotMessagesPanel'));
+const NotesPanel = React.lazy(() => import('./notifications/NotesPanel'));
+const RelatedRecordPopover = React.lazy(() => import('./RelatedRecordPopover'));
+const AssistantPanel = React.lazy(() => import('./ai/AssistantPanel'));
+const MessageComposerModal = React.lazy(() => import('./MessageComposerModal'));
+const CounterpartyBotStatusModal = React.lazy(() => import('./bot/CounterpartyBotStatusModal'));
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
 const renderNotificationTemplate = async (
@@ -977,6 +977,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const navigate = useNavigate();
   const initialTab = normalizeTabForVariant(variant, requestedTab);
   const [open, setOpen] = useState(standalone || initialOpen);
+  const [drawerContentMounted, setDrawerContentMounted] = useState(standalone || initialOpen);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
@@ -3703,17 +3704,24 @@ useEffect(() => {
     },
   });
 
-  const notesCount = useMemo(() => notes.filter((n: any) => {
-    const authorId = String(n?.author_id || '').trim();
-    const id = String(n?.id || '');
-    return (
-      (!authorId || authorId !== String(profile.id || ''))
-      && !isSystemNote(n)
-      && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
-    );
-  }).length + noteLikeNotifications.filter((item) => (
-    !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
-  )).length, [notes, noteLikeNotifications, profile.id, isNotificationRead, seenNoteIds]);
+  const notesCount = useMemo(() => {
+    if (noteConversationSummaryAvailable && rpcNoteConversationSummaries) {
+      return (rpcNoteConversationSummaries || [])
+        .filter((item) => String(item?.section || '').trim() === 'notes' && String(item?.kind || '').trim() !== 'system')
+        .reduce((sum, item) => sum + Number(item?.unread_count || 0), 0);
+    }
+    return notes.filter((n: any) => {
+      const authorId = String(n?.author_id || '').trim();
+      const id = String(n?.id || '');
+      return (
+        (!authorId || authorId !== String(profile.id || ''))
+        && !isSystemNote(n)
+        && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
+      );
+    }).length + noteLikeNotifications.filter((item) => (
+      !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
+    )).length;
+  }, [notes, noteLikeNotifications, profile.id, isNotificationRead, seenNoteIds, noteConversationSummaryAvailable, rpcNoteConversationSummaries]);
   const tasksCount = useMemo(() => tasks.filter((t: any) => (
     !isNotificationRead('tasks', 'task', String(t?.id || ''), seenTaskIds.has(String(t?.id || '')))
   )).length, [tasks, seenTaskIds, isNotificationRead]);
@@ -6349,6 +6357,12 @@ useEffect(() => {
     };
   }, [open, overlaySource]);
 
+  useEffect(() => {
+    if (standalone || open) {
+      setDrawerContentMounted(true);
+    }
+  }, [open, standalone]);
+
   const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
     <NotesPanel
       layout={layout}
@@ -6885,7 +6899,11 @@ useEffect(() => {
     renderPane: () => React.ReactNode,
   ) => (
     <div className={className}>
-      {activeKey === tabKey ? renderPane() : null}
+      {activeKey === tabKey ? (
+        <React.Suspense fallback={null}>
+          {renderPane()}
+        </React.Suspense>
+      ) : null}
     </div>
   );
 
@@ -7030,6 +7048,7 @@ useEffect(() => {
             icon={triggerIcon}
             onClick={() => {
               setUiNotificationOverlaySuppressed(true, overlaySource);
+              setDrawerContentMounted(true);
               setOpen(true);
             }}
           />
@@ -7064,7 +7083,7 @@ useEffect(() => {
           styles={{ body: mobileDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
           closeIcon={<CloseOutlined className="text-white" />}
         >
-          {contentMobileModern}
+          {drawerContentMounted ? contentMobileModern : null}
         </Drawer>
       ) : (
         <Drawer
@@ -7094,23 +7113,25 @@ useEffect(() => {
           styles={{ body: desktopDrawerBodyStyle, header: drawerHeaderStyle, content: drawerContentStyle }}
           closeIcon={<CloseOutlined className="text-white" />}
         >
-          {contentDesktopModern}
+          {drawerContentMounted ? contentDesktopModern : null}
         </Drawer>
       )}
         </>
       )}
       {previewRecord ? (
-        <RelatedRecordPopover
-          moduleId={previewRecord.moduleId}
-          recordId={previewRecord.recordId}
-          label={previewRecord.label}
-          mode="modal"
-          open={!!previewRecord}
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) setPreviewRecord(null);
-          }}
-          overlayZIndex={NOTIFICATIONS_MODAL_Z_INDEX}
-        />
+        <React.Suspense fallback={null}>
+          <RelatedRecordPopover
+            moduleId={previewRecord.moduleId}
+            recordId={previewRecord.recordId}
+            label={previewRecord.label}
+            mode="modal"
+            open={!!previewRecord}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) setPreviewRecord(null);
+            }}
+            overlayZIndex={NOTIFICATIONS_MODAL_Z_INDEX}
+          />
+        </React.Suspense>
       ) : null}
       {taskProcessTarget ? (
         <div className="hidden" aria-hidden="true">
@@ -7130,41 +7151,45 @@ useEffect(() => {
           </React.Suspense>
         </div>
       ) : null}
-      <CounterpartyBotStatusModal
-        open={botStatusModalOpen}
-        loading={botStatusModalLoading}
-        saving={botStatusModalSaving}
-        watching={botStatusWatching}
-        countdown={botStatusCountdown}
-        channel={botStatusChannel}
-        groupTitle={botStatusGroupTitle}
-        currentStatus={botStatusCurrentStatus}
-        activationCode={botStatusActivationCode}
-        lastInboundAt={botStatusLastInboundAt}
-        lastInboundText={botStatusLastInboundText}
-        allowedUserIds={botStatusAllowedUserIds}
-        allowedRoleIds={botStatusAllowedRoleIds}
-        aiAutoReplyEnabled={botStatusAiAutoReplyEnabled}
-        aiCounterpartyGuide={botStatusAiCounterpartyGuide}
-        userOptions={directoryUsers.map((user: any) => ({
-          label: String(user?.display_name || user?.id || '-').trim(),
-          value: String(user?.id || '').trim(),
-        })).filter((item) => item.value)}
-        roleOptions={directoryRoles.map((role: any) => ({
-          label: String(role?.title || role?.id || '-').trim(),
-          value: String(role?.id || '').trim(),
-        })).filter((item) => item.value)}
-        onClose={handleCloseBotStatusModal}
-        onSave={() => void handleSaveBotStatusModal()}
-        onStartBindWatch={() => void handleStartBotBindWatch()}
-        onCopyActivationCode={() => void handleCopyBotActivationCode()}
-        onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
-        onChangeAllowedUserIds={setBotStatusAllowedUserIds}
-        onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
-        onChangeGroupTitle={setBotStatusGroupTitle}
-        onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}
-        onChangeAiCounterpartyGuide={setBotStatusAiCounterpartyGuide}
-      />
+      {botStatusModalOpen ? (
+        <React.Suspense fallback={null}>
+          <CounterpartyBotStatusModal
+            open={botStatusModalOpen}
+            loading={botStatusModalLoading}
+            saving={botStatusModalSaving}
+            watching={botStatusWatching}
+            countdown={botStatusCountdown}
+            channel={botStatusChannel}
+            groupTitle={botStatusGroupTitle}
+            currentStatus={botStatusCurrentStatus}
+            activationCode={botStatusActivationCode}
+            lastInboundAt={botStatusLastInboundAt}
+            lastInboundText={botStatusLastInboundText}
+            allowedUserIds={botStatusAllowedUserIds}
+            allowedRoleIds={botStatusAllowedRoleIds}
+            aiAutoReplyEnabled={botStatusAiAutoReplyEnabled}
+            aiCounterpartyGuide={botStatusAiCounterpartyGuide}
+            userOptions={directoryUsers.map((user: any) => ({
+              label: String(user?.display_name || user?.id || '-').trim(),
+              value: String(user?.id || '').trim(),
+            })).filter((item) => item.value)}
+            roleOptions={directoryRoles.map((role: any) => ({
+              label: String(role?.title || role?.id || '-').trim(),
+              value: String(role?.id || '').trim(),
+            })).filter((item) => item.value)}
+            onClose={handleCloseBotStatusModal}
+            onSave={() => void handleSaveBotStatusModal()}
+            onStartBindWatch={() => void handleStartBotBindWatch()}
+            onCopyActivationCode={() => void handleCopyBotActivationCode()}
+            onChangeChannel={(value) => void handleChangeBotStatusChannel(value)}
+            onChangeAllowedUserIds={setBotStatusAllowedUserIds}
+            onChangeAllowedRoleIds={setBotStatusAllowedRoleIds}
+            onChangeGroupTitle={setBotStatusGroupTitle}
+            onChangeAiAutoReplyEnabled={setBotStatusAiAutoReplyEnabled}
+            onChangeAiCounterpartyGuide={setBotStatusAiCounterpartyGuide}
+          />
+        </React.Suspense>
+      ) : null}
       <Modal
         title={editingGroup ? 'ویرایش گروه' : 'ایجاد گروه جدید'}
         open={groupModalOpen}
@@ -7206,20 +7231,22 @@ useEffect(() => {
         </div>
       </Modal>
       {templateComposerContext ? (
-        <MessageComposerModal
-          open
-          mode="template"
-          moduleId={activeTemplateModuleId}
-          record={activeTemplateRecord || null}
-          templateOnlyTitle={
-            templateComposerContext === 'bot'
-              ? 'پیام‌های آماده چت بات'
-              : (templateComposerContext === 'forward' ? 'پیام‌های آماده فوروارد' : 'پیام‌های آماده یادداشت')
-          }
-          onApplyTemplate={applyReadyText}
-          onInsertVariable={insertTemplateToken}
-          onCancel={() => setTemplateComposerContext(null)}
-        />
+        <React.Suspense fallback={null}>
+          <MessageComposerModal
+            open
+            mode="template"
+            moduleId={activeTemplateModuleId}
+            record={activeTemplateRecord || null}
+            templateOnlyTitle={
+              templateComposerContext === 'bot'
+                ? 'پیام‌های آماده چت بات'
+                : (templateComposerContext === 'forward' ? 'پیام‌های آماده فوروارد' : 'پیام‌های آماده یادداشت')
+            }
+            onApplyTemplate={applyReadyText}
+            onInsertVariable={insertTemplateToken}
+            onCancel={() => setTemplateComposerContext(null)}
+          />
+        </React.Suspense>
       ) : null}
       <Modal
         title="فوروارد پیام"

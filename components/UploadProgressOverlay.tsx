@@ -1,21 +1,22 @@
 ﻿import React, { useMemo, useState } from 'react';
-import { Badge, Button, Progress, theme } from 'antd';
-import {
-  BellOutlined,
-  CheckCircleFilled,
-  CheckOutlined,
-  CloseCircleFilled,
-  CloseOutlined,
-  LoadingOutlined,
-  MessageOutlined,
-  MinusOutlined,
-  PhoneOutlined,
-  ReloadOutlined,
-  RobotOutlined,
-  OpenAIOutlined,
-  StopFilled,
-  TeamOutlined,
-} from '@ant-design/icons';
+import Badge from 'antd/es/badge';
+import Button from 'antd/es/button';
+import Progress from 'antd/es/progress';
+import theme from 'antd/es/theme';
+import BellOutlined from '@ant-design/icons/BellOutlined';
+import CheckCircleFilled from '@ant-design/icons/CheckCircleFilled';
+import CheckOutlined from '@ant-design/icons/CheckOutlined';
+import CloseCircleFilled from '@ant-design/icons/CloseCircleFilled';
+import CloseOutlined from '@ant-design/icons/CloseOutlined';
+import LoadingOutlined from '@ant-design/icons/LoadingOutlined';
+import MessageOutlined from '@ant-design/icons/MessageOutlined';
+import MinusOutlined from '@ant-design/icons/MinusOutlined';
+import PhoneOutlined from '@ant-design/icons/PhoneOutlined';
+import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
+import RobotOutlined from '@ant-design/icons/RobotOutlined';
+import OpenAIOutlined from '@ant-design/icons/OpenAIOutlined';
+import StopFilled from '@ant-design/icons/StopFilled';
+import TeamOutlined from '@ant-design/icons/TeamOutlined';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import { dismissUiNotificationOverlayItem, useUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';

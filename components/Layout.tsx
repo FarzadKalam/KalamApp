@@ -73,9 +73,10 @@ interface LayoutProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
   brandShortName: string;
+  preloadRoute?: (href: string) => void;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName }) => {
+const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
   const { message: messageApi, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -120,11 +121,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     };
   }, []);
 
-  const handleSidebarNavigate = (href: string) => {
+  const handleSidebarNavigate = useCallback((href: string) => {
     if (!href) return;
+    preloadRoute?.(href);
     if (isMobile) setCollapsed(true);
     startTransition(() => navigate(href));
-  };
+  }, [isMobile, navigate, preloadRoute]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -163,6 +165,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         href={disabled ? undefined : href}
         aria-disabled={disabled || undefined}
         className={`sidebar-menu-link ${disabled ? 'is-disabled' : ''}`}
+        onPointerEnter={() => !disabled && preloadRoute?.(href)}
+        onFocus={() => !disabled && preloadRoute?.(href)}
+        onTouchStart={() => !disabled && preloadRoute?.(href)}
         onClick={(event) => handleSidebarLinkClick(event, href, disabled)}
         onAuxClick={(event) => event.stopPropagation()}
         onContextMenu={(event) => event.stopPropagation()}
@@ -635,6 +640,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         label: 'تازه سیستم',
         children: [
           { key: '/taze-system', label: 'داشبورد SaaS' },
+          { key: '/saas_users', label: 'همه کاربران' },
           { key: '/saas_orgs', label: 'سازمان‌ها' },
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
@@ -668,6 +674,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/settings':
           return canViewSettingsRoot;
         case '/taze-system':
+        case '/saas_users':
         case '/saas_orgs':
         case '/saas_demo_requests':
         case '/taze-system/plans':
@@ -842,7 +849,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         key: 'profile',
         label: 'پروفایل کاربری',
         icon: <UserOutlined />,
-        onClick: () => navigate('/profile'),
+        onClick: () => handleSidebarNavigate('/profile'),
       },
       { type: 'divider' as const },
       { 
@@ -957,20 +964,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const openGlobalSearchPage = useCallback(() => {
     const term = globalSearch.trim();
     if (!term) return;
-    navigate(`/search?q=${encodeURIComponent(term)}`);
+    handleSidebarNavigate(`/search?q=${encodeURIComponent(term)}`);
     setSearchResults([]);
     setSearchTouched(false);
     setSearchLoading(false);
-  }, [globalSearch, navigate]);
+  }, [globalSearch, handleSidebarNavigate]);
 
   const openSearchResult = useCallback((moduleId: string, recordId: string) => {
     if (!moduleId || !recordId) return;
-    navigate(`/${moduleId}/${recordId}`);
+    handleSidebarNavigate(`/${moduleId}/${recordId}`);
     setGlobalSearch('');
     setSearchResults([]);
     setSearchTouched(false);
     setSearchLoading(false);
-  }, [navigate]);
+  }, [handleSidebarNavigate]);
 
   const getSearchModuleIcon = (moduleId: string) => {
     if (moduleId === 'customers' || moduleId === 'suppliers' || moduleId === 'employees') return <TeamOutlined />;
@@ -1328,12 +1335,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         {breadcrumb && breadcrumb.moduleTitle && (
           <div className="sticky top-16 z-[900] bg-white/90 dark:bg-dark-surface/90 backdrop-blur border-b border-gray-200 dark:border-dark-border px-2 md:px-4 py-2 mb-3">
             <div className="flex items-center gap-1 text-xs md:text-sm text-gray-500 whitespace-nowrap overflow-x-auto no-scrollbar">
-              <button onClick={() => navigate('/')} className="flex items-center gap-1 hover:text-leather-600">
+              <button onPointerEnter={() => preloadRoute?.('/')} onClick={() => handleSidebarNavigate('/')} className="flex items-center gap-1 hover:text-leather-600">
                 <HomeOutlined /> خانه
               </button>
               <span className="px-1 text-gray-300">/</span>
               {breadcrumb.moduleId ? (
-                <button onClick={() => navigate(`/${breadcrumb.moduleId}`)} className="hover:text-leather-600">
+                <button onPointerEnter={() => preloadRoute?.(`/${breadcrumb.moduleId}`)} onClick={() => handleSidebarNavigate(`/${breadcrumb.moduleId}`)} className="hover:text-leather-600">
                   {breadcrumb.moduleTitle}
                 </button>
               ) : (
@@ -1393,7 +1400,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                const isActive = location.pathname === item.key;
                if (item.isCenter) {
                  return (
-                   <div key={item.key} onClick={() => navigate(item.key)} className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all">
+                   <div key={item.key} onTouchStart={() => preloadRoute?.(item.key)} onClick={() => handleSidebarNavigate(item.key)} className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all">
                       <HomeOutlined className="text-white text-2xl" />
                    </div>
                  );
@@ -1401,7 +1408,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                return (
                  <div 
                    key={item.key} 
-                   onClick={() => item.isMenu ? toggleSidebar() : navigate(item.key)} 
+                   onTouchStart={() => !item.isMenu && preloadRoute?.(item.key)}
+                   onClick={() => item.isMenu ? toggleSidebar() : handleSidebarNavigate(item.key)}
                    className={`flex flex-col items-center gap-1 w-12 cursor-pointer ${isActive ? 'text-leather-500' : 'text-gray-400 dark:text-gray-500'}`}
                  >
                     <div className="text-xl">{item.icon}</div>

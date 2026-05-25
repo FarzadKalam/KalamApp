@@ -4,7 +4,6 @@ import { NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
-import ProductionStagesField from '../ProductionStagesField';
 import {
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
@@ -14,6 +13,8 @@ import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { parseProcessLinkMap } from '../../utils/processTargets';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+
+const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
 type ProcessWidgetItem = {
   key: string;
@@ -533,17 +534,19 @@ const OurProcessesWidget: React.FC = () => {
                     </Tag>
                   ) : null}
                 </div>
-                <ProductionStagesField
-                  recordId={item.recordId}
-                  moduleId={item.moduleId}
-                  readOnly
-                  compact
-                  cardCompact
-                  lazyLoad
-                  onlyLineId={item.lineId}
-                  onlyProcessGroupId={item.groupId}
-                  forceProcessRecordMode
-                />
+                <React.Suspense fallback={<Spin size="small" />}>
+                  <ProductionStagesField
+                    recordId={item.recordId}
+                    moduleId={item.moduleId}
+                    readOnly
+                    compact
+                    cardCompact
+                    lazyLoad
+                    onlyLineId={item.lineId}
+                    onlyProcessGroupId={item.groupId}
+                    forceProcessRecordMode
+                  />
+                </React.Suspense>
               </div>
             ))}
           </div>

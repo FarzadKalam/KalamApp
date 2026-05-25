@@ -17,7 +17,6 @@ import {
   DownOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import maplibregl from 'maplibre-gl';
 import { ModuleField, FieldType, FieldNature, BlockType } from '../types';
 import { toPersianNumber, formatPersianPrice } from '../utils/persianNumberFormatter';
 import { supabase } from '../supabaseClient';
@@ -25,7 +24,6 @@ import { MODULES } from '../moduleRegistry';
 import DynamicSelectField from './DynamicSelectField';
 import AdaptiveSelectField from './AdaptiveSelectField';
 import TagInput from './TagInput';
-import ProductionStagesField from './ProductionStagesField';
 import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
 import QrScanPopover from './QrScanPopover';
@@ -37,11 +35,9 @@ import persian from 'react-date-object/calendars/persian';
 import persian_fa from 'react-date-object/locales/persian_fa';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
-import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, LocationLatLng, parseLocationValue } from '../utils/location';
-import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../utils/mapConfig';
+import { formatLocationValue, LocationLatLng, parseLocationValue } from '../utils/location';
+import { MAP_STYLE_URL } from '../utils/mapConfig';
 import ResilientImage from './common/ResilientImage';
-import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../utils/maplibreRuntime';
-import { createThemeMapPinElement } from '../utils/mapPin';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
@@ -74,6 +70,8 @@ import {
 } from '../utils/popupContainer';
 
 const SmartFormLazy = React.lazy(() => import('./SmartForm'));
+const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
+const LocationPickerMap = React.lazy(() => import('./location/LocationPickerMap'));
 const GLOBAL_MODAL_OVERLAY_Z_INDEX = 30000;
 
 const normalizeDigitsToEnglish = (raw: any): string => {
@@ -299,116 +297,6 @@ const preventNonNumericPaste = (event: React.ClipboardEvent<HTMLInputElement>) =
 const formatTextForInput = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
   return toPersianNumber(normalizeDigitsToEnglish(raw));
-};
-
-const LocationPickerMap: React.FC<{
-  value: LocationLatLng | null;
-  onChange: (value: LocationLatLng) => void;
-}> = ({ value, onChange }) => {
-  const mapContainerRef = React.useRef<HTMLDivElement | null>(null);
-  const mapRef = React.useRef<maplibregl.Map | null>(null);
-  const markerRef = React.useRef<maplibregl.Marker | null>(null);
-  const mapMaxZoom = Math.max(MAP_MAX_ZOOM, 18);
-
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-
-    const [[minLat, minLng], [maxLat, maxLng]] = IRAN_BOUNDS;
-    const center: [number, number] = value ? [value.lng, value.lat] : [IRAN_CENTER[1], IRAN_CENTER[0]];
-    const useRemoteStyle = Boolean(MAP_STYLE_URL);
-    const rasterFallbackStyle = buildRasterStyle();
-    let fallbackApplied = false;
-
-    ensureMapLibreRTLTextPlugin();
-
-    const map = new maplibregl.Map({
-      container: mapContainerRef.current,
-      style: (useRemoteStyle ? rasterFallbackStyle : buildMapStyle()) as any,
-      transformRequest: buildMapTransformRequest() as any,
-      center,
-      zoom: value ? 12 : 5,
-      minZoom: 4,
-      maxZoom: mapMaxZoom,
-      maxBounds: [
-        [minLng, minLat],
-        [maxLng, maxLat],
-      ],
-      attributionControl: {},
-    });
-
-    mapRef.current = map;
-    map.on('load', () => {
-      map.resize();
-      window.requestAnimationFrame(() => map.resize());
-      window.setTimeout(() => map.resize(), 220);
-    });
-    attachMissingMapImageFallback(map);
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
-    map.addControl(
-      new maplibregl.GeolocateControl({
-        positionOptions: { enableHighAccuracy: true },
-        trackUserLocation: false,
-      }),
-      'top-left'
-    );
-    map.on('error', (event: any) => {
-      if (!useRemoteStyle || fallbackApplied) return;
-      const message = String(event?.error?.message || event?.error || '').toLowerCase();
-      if (!message) return;
-
-      const shouldFallback =
-        message.includes('failed to fetch') ||
-        message.includes('ajaxerror') ||
-        message.includes('connection') ||
-        message.includes('timeout') ||
-        message.includes('err_connection') ||
-        message.includes('style');
-
-      if (!shouldFallback) return;
-
-      fallbackApplied = true;
-      map.setStyle(rasterFallbackStyle as any, { diff: false } as any);
-    });
-    if (useRemoteStyle) {
-      map.setStyle(MAP_STYLE_URL, { diff: false, transformStyle: sanitizeMapStyle } as any);
-    }
-    map.on('click', (event) => {
-      onChange({ lat: event.lngLat.lat, lng: event.lngLat.lng });
-    });
-
-    return () => {
-      markerRef.current?.remove();
-      markerRef.current = null;
-      map.remove();
-      mapRef.current = null;
-    };
-  }, [mapMaxZoom, onChange]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (!value) {
-      markerRef.current?.remove();
-      markerRef.current = null;
-      return;
-    }
-
-    const lngLat: [number, number] = [value.lng, value.lat];
-    map.easeTo({ center: lngLat, zoom: Math.max(map.getZoom(), 11), duration: 400 });
-
-    if (!markerRef.current) {
-      const markerElement = createThemeMapPinElement({ interactive: false, size: 'md' });
-      markerRef.current = new maplibregl.Marker({ element: markerElement, anchor: 'bottom' })
-        .setLngLat(lngLat)
-        .addTo(map);
-      return;
-    }
-
-    markerRef.current.setLngLat(lngLat);
-  }, [value]);
-
-  return <div ref={mapContainerRef} style={{ width: '100%', height: 360, borderRadius: 12 }} />;
 };
 
 interface SmartFieldRendererProps {
@@ -2006,15 +1894,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       const isBom = moduleId === 'production_boms';
       const canEditStages = isOrder && String(status || '').toLowerCase() !== 'completed';
       return (
-        <ProductionStagesField
-          recordId={recordId}
-          moduleId={moduleId}
-          readOnly={isBom ? false : !canEditStages}
-          compact={compactMode}
-          orderStatus={isOrder ? (allValues as any)?.status : null}
-          draftStages={(allValues as any)?.production_stages_draft || []}
-          showWageSummary={isOrder}
-        />
+        <React.Suspense fallback={null}>
+          <ProductionStagesField
+            recordId={recordId}
+            moduleId={moduleId}
+            readOnly={isBom ? false : !canEditStages}
+            compact={compactMode}
+            orderStatus={isOrder ? (allValues as any)?.status : null}
+            draftStages={(allValues as any)?.production_stages_draft || []}
+            showWageSummary={isOrder}
+          />
+        </React.Suspense>
       );
     }
 
@@ -2025,28 +1915,30 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         : (Array.isArray((allValues as any)?.[fieldKey]) ? (allValues as any)[fieldKey] : []);
       const allowTemplateStageEdit = moduleId === 'process_templates' && fieldKey === 'template_stages_preview';
       return (
-        <ProductionStagesField
-          recordId={recordId}
-          moduleId={moduleId}
-          automationContextModuleId={
-            moduleId === 'process_templates' || moduleId === 'process_runs'
-              ? null
-              : null
-          }
-          automationContextModuleIds={
-            moduleId === 'process_templates' || moduleId === 'process_runs'
-              ? normalizeProcessTargetModuleIds(
-                  (allValues as any)?.module_ids,
-                  (allValues as any)?.module_id
-                )
-              : null
-          }
-          readOnly={!forceEditMode || (isReadonly && !allowTemplateStageEdit)}
-          compact={compactMode}
-          draftStages={nextDraftStages}
-          onDraftStagesChange={(stages) => onChange(stages)}
-          forceProcessRecordMode={moduleId !== 'process_templates' && moduleId !== 'process_runs'}
-        />
+        <React.Suspense fallback={null}>
+          <ProductionStagesField
+            recordId={recordId}
+            moduleId={moduleId}
+            automationContextModuleId={
+              moduleId === 'process_templates' || moduleId === 'process_runs'
+                ? null
+                : null
+            }
+            automationContextModuleIds={
+              moduleId === 'process_templates' || moduleId === 'process_runs'
+                ? normalizeProcessTargetModuleIds(
+                    (allValues as any)?.module_ids,
+                    (allValues as any)?.module_id
+                  )
+                : null
+            }
+            readOnly={!forceEditMode || (isReadonly && !allowTemplateStageEdit)}
+            compact={compactMode}
+            draftStages={nextDraftStages}
+            onDraftStagesChange={(stages) => onChange(stages)}
+            forceProcessRecordMode={moduleId !== 'process_templates' && moduleId !== 'process_runs'}
+          />
+        </React.Suspense>
       );
     }
 
@@ -3146,7 +3038,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       <div className="mb-2 text-xs text-gray-500">
         با کلیک روی نقشه موقعیت ثبت می‌شود.
       </div>
-      <LocationPickerMap value={locationDraft} onChange={setLocationDraft} />
+      {isLocationPickerOpen ? (
+        <React.Suspense fallback={<div style={{ height: 360 }} />}>
+          <LocationPickerMap value={locationDraft} onChange={setLocationDraft} />
+        </React.Suspense>
+      ) : null}
       <div className="mt-2 text-xs text-gray-500">
         موقعیت انتخاب‌شده:
         <span className="font-semibold mr-1">
@@ -3783,4 +3679,3 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     </Modal>
   );
 };
-

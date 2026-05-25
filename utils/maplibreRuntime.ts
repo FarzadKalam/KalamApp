@@ -1,3 +1,4 @@
+import 'maplibre-gl/dist/maplibre-gl.css';
 import maplibregl from 'maplibre-gl';
 
 const RTL_TEXT_PLUGIN_URL = '/vendor/mapbox-gl-rtl-text.js';
