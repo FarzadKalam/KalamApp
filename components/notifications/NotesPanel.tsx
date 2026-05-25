@@ -384,20 +384,22 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               </div>
             </div>
             <div className="flex items-center gap-1">
-              {selectedChatGroup && selectedChatGroup.created_by === String(profile.id || '') ? (
+              {selectedChatGroup ? (
                 <>
                   <Button size="small" icon={<EditOutlined />} onClick={() => { setEditingGroup(selectedChatGroup); setGroupNameDraft(selectedChatGroup.name); setGroupMemberDrafts([...(selectedChatGroup.user_ids || []).map((id: any) => `user:${id}`), ...(selectedChatGroup.role_ids || []).map((id: any) => `role:${id}`)]); setGroupModalOpen(true); }} />
-                  <Button size="small" danger icon={<DeleteOutlined />} onClick={() => {
-                    Modal.confirm({
-                      title: 'حذف گروه', content: 'این گفتگو حذف شود؟', okText: 'حذف', cancelText: 'انصراف', okButtonProps: { danger: true },
-                      onOk: async () => {
-                        const { error } = await supabase.from('chat_groups').delete().eq('id', selectedChatGroup.id);
-                        if (error) throw error;
-                        setChatGroups((prev: any[]) => prev.filter((g: any) => g.id !== selectedChatGroup.id));
-                        setSelectedNoteUserId(null);
-                      },
-                    });
-                  }} />
+                  {selectedChatGroup.created_by === String(profile.id || '') ? (
+                    <Button size="small" danger icon={<DeleteOutlined />} onClick={() => {
+                      Modal.confirm({
+                        title: 'حذف گروه', content: 'این گفتگو حذف شود؟', okText: 'حذف', cancelText: 'انصراف', okButtonProps: { danger: true },
+                        onOk: async () => {
+                          const { error } = await supabase.from('chat_groups').delete().eq('id', selectedChatGroup.id);
+                          if (error) throw error;
+                          setChatGroups((prev: any[]) => prev.filter((g: any) => g.id !== selectedChatGroup.id));
+                          setSelectedNoteUserId(null);
+                        },
+                      });
+                    }} />
+                  ) : null}
                 </>
               ) : null}
               <Button size="small" type={noteMessageSearchOpen || normalizedNoteMessageSearch ? 'primary' : 'default'} icon={<SearchOutlined />} onClick={() => { setNoteMessageSearchOpen((prev: any) => { if (prev) setNoteMessageSearch(''); return !prev; }); }} />

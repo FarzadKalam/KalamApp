@@ -4172,7 +4172,8 @@ useEffect(() => {
   );
   const noteConversationsFromRpc = useMemo<ConversationListItem[]>(() => {
     const summaries = rpcNoteConversationSummaries || [];
-    return summaries
+    const rpcGroupIds = new Set<string>();
+    const rpcItems = summaries
       .filter((item) => String(item?.section || '').trim() === 'notes')
       .map((item: NotificationConversationSummary) => {
         const kind = String(item.kind || '').trim();
@@ -4191,6 +4192,7 @@ useEffect(() => {
         }
         if (kind === 'group') {
           const groupId = String(item.group_id || '').trim();
+          if (groupId) rpcGroupIds.add(groupId);
           const chatGroup = groupId ? chatGroupMap[groupId] || null : null;
           return {
             id: `${CHAT_GROUP_PREFIX}${groupId}`,
@@ -4220,14 +4222,36 @@ useEffect(() => {
           isGroup: false,
         };
       })
-      .filter((item) => Boolean(item.id))
+      .filter((item) => Boolean(item.id));
+
+    // Merge groups the user is a member of that RPC didn't return (e.g. no recent
+    // notification_inbox_items with this user in target_user_ids). These groups are
+    // still accessible — clicking them loads messages via the legacy notes fallback.
+    const localOnlyGroups: ConversationListItem[] = chatGroups
+      .filter((group) => {
+        const gid = String(group.id || '').trim();
+        return gid && !rpcGroupIds.has(gid);
+      })
+      .map((group) => ({
+        id: `${CHAT_GROUP_PREFIX}${group.id}`,
+        kind: 'group' as const,
+        conversationKey: `group:${group.id}`,
+        displayName: group.name,
+        noteCount: 0,
+        unreadCount: 0,
+        latestMessageAt: 0,
+        groupId: group.id,
+        isGroup: true,
+      }));
+
+    return [...rpcItems, ...localOnlyGroups]
       .sort((a, b) => {
         if (b.latestMessageAt !== a.latestMessageAt) return b.latestMessageAt - a.latestMessageAt;
         if (b.unreadCount !== a.unreadCount) return b.unreadCount - a.unreadCount;
         return String(a.displayName || '').localeCompare(String(b.displayName || ''), 'fa');
       })
       .filter((item, index, arr) => arr.findIndex((other) => other.id === item.id) === index);
-  }, [chatGroupMap, directoryUserMap, roleLookup, rpcNoteConversationSummaries]);
+  }, [chatGroupMap, chatGroups, directoryUserMap, roleLookup, rpcNoteConversationSummaries]);
   const effectiveNoteConversations = noteConversationSummaryAvailable && rpcNoteConversationSummaries
     ? noteConversationsFromRpc.filter((item) => item.kind !== 'system')
     : noteConversations;
