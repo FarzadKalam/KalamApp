@@ -27,6 +27,7 @@ import {
 } from './processTaskCustomFields';
 import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './intervalSchedule';
 import { sendSmsViaGateway } from './smsGateway';
+import { sendEmailViaGateway } from './emailGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory, fetchRecordTagsMap } from './referenceData';
@@ -2234,7 +2235,18 @@ export const executeWorkflowAction = async (
   }
 
   if (action.type === 'send_email') {
-    throw new Error('ارسال ایمیل هنوز پیاده‌سازی نشده است.');
+    const subject = (await renderWorkflowTemplate(String(config.subject || ''), currentRecord, moduleId)).trim();
+    const body = (await renderWorkflowTemplate(String(config.body || ''), currentRecord, moduleId)).trim();
+    if (!subject && !body) return;
+    const manuals = asArray(config.manual_emails).map((v) => String(v || '').trim()).filter(Boolean);
+    const fromFields = asArray(config.recipient_fields).flatMap((fieldKey) => {
+      const val = currentRecord?.[String(fieldKey || '').trim()];
+      return Array.isArray(val) ? val.map(String) : [String(val || '')];
+    }).filter(Boolean);
+    const to = Array.from(new Set([...manuals, ...fromFields])).filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
+    if (to.length === 0) return;
+    await sendEmailViaGateway({ to, subject, body, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
+    return;
   }
 
   if (action.type === 'send_to_next_stages') {

@@ -738,11 +738,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
       intervalRunnerBusyRef.current = true;
       try {
-        const [{ runWorkflowsIntervalTick }, { runProcessAutomationsIntervalTick }] = await Promise.all([
-          import('../utils/workflowRuntime'),
-          import('../utils/processAutomationRuntime'),
-        ]);
-        await runWorkflowsIntervalTick();
+        // Interval workflows run server-side via workflow-interval-runner Edge Function.
+        // Only process automations still run client-side here.
+        const { runProcessAutomationsIntervalTick } = await import('../utils/processAutomationRuntime');
         await runProcessAutomationsIntervalTick();
       } catch (error) {
         console.warn('Interval automation tick failed', error);
