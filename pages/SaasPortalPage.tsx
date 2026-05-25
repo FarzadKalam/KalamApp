@@ -26,7 +26,7 @@ import {
 } from '../utils/saasOnboarding';
 
 // ─── Types ───────────────────────────────────────────
-type WizardStep = 'phone' | 'otp' | 'info' | 'provisioning' | 'done' | 'error';
+type WizardStep = 'phone' | 'info' | 'otp' | 'provisioning' | 'done' | 'error';
 
 type SlugState = 'idle' | 'checking' | 'available' | 'taken' | 'invalid';
 
@@ -109,9 +109,9 @@ const Logo = () => (
 );
 
 const StepIndicator = ({ step }: { step: WizardStep }) => {
-  const steps: WizardStep[] = ['phone', 'otp', 'info', 'provisioning'];
+  const steps: WizardStep[] = ['phone', 'info', 'otp', 'provisioning'];
   const current = steps.indexOf(step);
-  const labels = ['تایید شماره', 'کد تایید', 'اطلاعات', 'راه‌اندازی'];
+  const labels = ['شماره موبایل', 'اطلاعات', 'کد تایید', 'راه‌اندازی'];
   return (
     <div className="flex items-center gap-2 mb-8">
       {steps.map((s, i) => (
@@ -141,6 +141,7 @@ const SaasPortalPage: React.FC = () => {
   const [otpCooldown, setOtpCooldown] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isExistingPhoneUser, setIsExistingPhoneUser] = useState(false);
 
   // Org info
   const [fullName, setFullName] = useState('');
@@ -199,6 +200,11 @@ const SaasPortalPage: React.FC = () => {
 
     const restoreStep = async () => {
       if (!savedStep || savedStep === 'phone') return;
+      // info مرحله قبل از OTP است — نیازی به session ندارد
+      if (savedStep === 'info') {
+        setStep('info');
+        return;
+      }
       if (savedStep === 'otp') {
         setStep('otp');
         return;
@@ -320,7 +326,7 @@ const SaasPortalPage: React.FC = () => {
   }, [step]);
 
   // ── Handlers ──
-  const handleSendOtp = async () => {
+  const handleValidatePhone = async () => {
     if (!normalizedPhone) {
       setError('شماره موبایل معتبر وارد کنید. مثال: ۰۹۱۲...');
       return;
@@ -332,19 +338,52 @@ const SaasPortalPage: React.FC = () => {
         lookupPhoneLoginCandidate(normalizedPhone),
         lookupPhoneSignupInvite(normalizedPhone),
       ]);
+      let isExisting = false;
       try {
         assertDemoOtpRequestAllowed(candidate, invite);
       } catch (assertErr: any) {
         const assertCode = String(assertErr?.code || assertErr?.message || '');
-        // کاربری که قبلاً دمو ساخته، اجازه دارد با همین شماره دوباره لاگین کند.
-        // بعد از تأیید OTP، handleVerifyOtp او را به سازمان موجودش هدایت می‌کند.
         if (
-          !assertCode.includes('__demo_phone_belongs_to_existing_org__') &&
-          !assertCode.includes('__demo_phone_existing_auth_user__')
+          assertCode.includes('__demo_phone_belongs_to_existing_org__') ||
+          assertCode.includes('__demo_phone_existing_auth_user__')
         ) {
+          // کاربر قبلاً دمو ساخته — مستقیم OTP می‌فرستیم و هدایت می‌کنیم
+          isExisting = true;
+        } else {
           throw assertErr;
         }
       }
+      setIsExistingPhoneUser(isExisting);
+      if (isExisting) {
+        // کاربر موجود: همین‌جا OTP می‌فرستیم
+        await requestSmsOtp(supabase.auth, normalizedPhone);
+        setStep('otp');
+        setOtpCooldown(OTP_RESEND_SECONDS);
+      } else {
+        // کاربر جدید: ابتدا اطلاعات را پر می‌کند، بعد OTP
+        setStep('info');
+      }
+    } catch (err: any) {
+      setError(getOtpErrorMessage(err, 'خطا در تایید شماره موبایل'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendOtpFromInfo = async () => {
+    if (!fullName.trim()) { setError('نام و نام خانوادگی الزامی است.'); return; }
+    if (!isValidOwnerEmail(ownerEmail)) { setError('ایمیل مدیر اصلی معتبر نیست.'); return; }
+    if (!isValidOwnerPassword(ownerPassword)) { setError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
+    if (ownerPassword !== ownerPasswordConfirm) { setError('تکرار رمز عبور با رمز عبور یکسان نیست.'); return; }
+    if (!orgName.trim()) { setError('نام سازمان الزامی است.'); return; }
+    const normalizedSlug = normalizeSaasSlug(slug);
+    if (!normalizedSlug || normalizedSlug.length < 3) { setError('آدرس اختصاصی باید حداقل ۳ حرف باشد.'); return; }
+    if (slugState === 'taken') { setError('این آدرس قبلاً انتخاب شده است.'); return; }
+    if (slugState === 'checking') { setError('صبر کنید تا بررسی آدرس تکمیل شود.'); return; }
+    if (!normalizedPhone) { setError('شماره موبایل معتبر نیست.'); return; }
+    setError('');
+    setLoading(true);
+    try {
       await requestSmsOtp(supabase.auth, normalizedPhone);
       setStep('otp');
       setOtpCooldown(OTP_RESEND_SECONDS);
@@ -387,32 +426,32 @@ const SaasPortalPage: React.FC = () => {
     if (token.length < 4) { setError('کد تایید را وارد کنید.'); return; }
     setError('');
     setLoading(true);
+    let otpVerified = false;
     try {
       await verifySmsOtp(supabase.auth, normalizedPhone as string, token);
+      otpVerified = true;
       const { profile, saasContext } = await resolveAuthenticatedDemoSessionState();
 
+      // کاربر موجود با سازمان — هدایت به پنل
       if (saasContext?.org_id && saasContext?.slug) {
         clearWizardState();
         window.location.href = `https://${saasContext.slug}${TAZE_SUFFIX}`;
         return;
       }
-
       if (profile?.org_id) {
         clearWizardState();
         window.location.href = getInternalAppUrl();
         return;
       }
 
-      setStep('info');
+      // کاربر جدید — اطلاعات قبلاً پر شده، مستقیم provisioning
+      await runProvision();
     } catch (err: any) {
       const mappedError = getOtpErrorMessage(err, 'خطا در تایید کد');
-      const raw = String(err?.message || '');
-      if (
-        raw.includes('__otp_user_inactive__')
-        || raw.includes('__demo_phone_belongs_to_existing_org__')
-        || raw.includes('__demo_phone_existing_auth_user__')
-      ) {
-        await signOutLocalSession();
+      if (otpVerified) {
+        await signOutLocalSession().catch(() => null);
+        setOtpCode('');
+        setOtpCooldown(0);
       }
       setError(mappedError);
     } finally {
@@ -420,19 +459,8 @@ const SaasPortalPage: React.FC = () => {
     }
   };
 
-  const handleProvision = useCallback(async () => {
-    if (!fullName.trim()) { setError('نام و نام خانوادگی الزامی است.'); return; }
-    if (!isValidOwnerEmail(ownerEmail)) { setError('ایمیل مدیر اصلی معتبر نیست.'); return; }
-    if (!isValidOwnerPassword(ownerPassword)) { setError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
-    if (ownerPassword !== ownerPasswordConfirm) { setError('تکرار رمز عبور با رمز عبور یکسان نیست.'); return; }
-    if (!orgName.trim()) { setError('نام سازمان الزامی است.'); return; }
+  const runProvision = useCallback(async () => {
     const normalizedSlug = normalizeSaasSlug(slug);
-    if (!normalizedSlug || normalizedSlug.length < 3) { setError('آدرس اختصاصی باید حداقل ۳ حرف باشد.'); return; }
-    if (slugState === 'taken') { setError('این آدرس قبلاً انتخاب شده است.'); return; }
-    if (slugState === 'checking') { setError('صبر کنید تا بررسی آدرس تکمیل شود.'); return; }
-
-    setError('');
-    setLoading(true);
     setProvisionWarning('');
 
     try {
@@ -514,11 +542,15 @@ const SaasPortalPage: React.FC = () => {
       ) {
         userMsg = getOwnerSetupErrorMessage(err);
         setStep('info');
+        setOtpCode('');
+        setOtpCooldown(0);
         inlineInfoError = true;
       } else {
         userMsg = getDemoProvisionErrorMessage(err, userMsg);
         if (msg.includes('slug') || msg.includes('available')) {
           setStep('info');
+          setOtpCode('');
+          setOtpCooldown(0);
           inlineInfoError = true;
         } else if (
           msg.includes('needs_admin_review')
@@ -538,8 +570,6 @@ const SaasPortalPage: React.FC = () => {
         setError(userMsg);
       }
       setProvisionError(userMsg);
-    } finally {
-      setLoading(false);
     }
   }, [brandPaletteKey, discoverySource, fullName, industry, normalizedPhone, orgName, ownerEmail, ownerPassword, ownerPasswordConfirm, slug, slugState, userCount]);
 
@@ -591,7 +621,7 @@ const SaasPortalPage: React.FC = () => {
             <StepIndicator step="phone" />
             <h1 className="text-2xl font-black text-slate-900 mb-2">شروع رایگان</h1>
             <p className="text-slate-500 text-sm mb-8 leading-7">
-              شماره موبایل خود را وارد کنید. کد تایید برای شما ارسال می‌شود.
+              شماره موبایل خود را وارد کنید تا فضای اختصاصی سازمان شما راه‌اندازی شود.
             </p>
             {error && <Alert type="error" message={error} className="mb-4 rounded-xl" showIcon />}
             <div className="space-y-4">
@@ -602,7 +632,7 @@ const SaasPortalPage: React.FC = () => {
                   placeholder="۰۹۱۲..."
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  onPressEnter={handleSendOtp}
+                  onPressEnter={handleValidatePhone}
                   size="large"
                   className={inputClassName}
                   dir="ltr"
@@ -614,10 +644,10 @@ const SaasPortalPage: React.FC = () => {
                 block
                 size="large"
                 loading={loading}
-                onClick={handleSendOtp}
+                onClick={handleValidatePhone}
                 className="!rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               >
-                دریافت کد تایید
+                ادامه
               </Button>
             </div>
             <p className="mt-6 text-center text-xs text-slate-400">
@@ -666,7 +696,12 @@ const SaasPortalPage: React.FC = () => {
                 ) : (
                   <button
                     className="text-xs font-bold text-slate-600 hover:text-slate-900 underline"
-                    onClick={() => { setOtpCode(''); setStep('phone'); }}
+                    onClick={() => {
+                      setOtpCode('');
+                      setOtpCooldown(0);
+                      setError('');
+                      setStep(isExistingPhoneUser ? 'phone' : 'info');
+                    }}
                   >
                     ارسال مجدد کد
                   </button>
@@ -843,7 +878,7 @@ const SaasPortalPage: React.FC = () => {
                 type="primary"
                 block
                 size="large"
-                onClick={handleProvision}
+                onClick={handleSendOtpFromInfo}
                 loading={loading}
                 disabled={
                   !fullName.trim()
@@ -857,7 +892,7 @@ const SaasPortalPage: React.FC = () => {
                 }
                 className="!mt-2 !rounded-xl !h-12 !font-black !bg-slate-900 !border-none hover:!bg-slate-700"
               >
-                راه‌اندازی فضای من <ArrowLeftOutlined />
+                ارسال کد تایید <ArrowLeftOutlined />
               </Button>
             </div>
           </div>
@@ -940,9 +975,17 @@ const SaasPortalPage: React.FC = () => {
             <Button
               size="large"
               className="!rounded-xl !h-12 !font-black"
-              onClick={() => { setStep('info'); setProvisionError(''); }}
+              onClick={() => {
+                clearWizardState();
+                setStep('phone');
+                setOtpCode('');
+                setOtpCooldown(0);
+                setError('');
+                setProvisionError('');
+                setIsExistingPhoneUser(false);
+              }}
             >
-              بازگشت و تلاش مجدد
+              شروع مجدد
             </Button>
           </div>
         )}

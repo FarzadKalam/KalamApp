@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { FieldType, type ModuleDefinition } from '../types';
+import { getFieldLabelFa } from './fieldLabel';
 import { getRecordTitle } from './recordTitle';
 import { normalizePhoneDigits, normalizePhoneForStorage } from './phoneNumber';
-import { isSaasAdminModuleId, type PermissionMap } from './permissions';
+import { isSaasAdminModuleId, type PermissionMap, type RecordScope } from './permissions';
 
 export type GlobalSearchMatchField = {
   key: string;
@@ -31,6 +32,7 @@ export type GlobalSearchGroup = {
 export type GlobalSearchModule = {
   id: string;
   title: string;
+  recordScope: RecordScope;
   keys: string[];
   displayKeys: string[];
   fieldLabels: Record<string, string>;
@@ -42,8 +44,20 @@ const PERSIAN_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
 const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const FALLBACK_SEARCH_LIMIT = 8;
 const SEARCH_CACHE_TTL_MS = 30000;
+const FALLBACK_CONCURRENCY = 6;
+
+export const GLOBAL_SEARCH_MIN_QUERY_LENGTH = 2;
 
 const searchCache = new Map<string, { expiresAt: number; groups: GlobalSearchGroup[] }>();
+const ILIKE_SEARCHABLE_FIELD_TYPES = new Set<FieldType>([
+  FieldType.TEXT,
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.PHONE,
+  FieldType.LINK,
+  FieldType.SELECT,
+  FieldType.STATUS,
+]);
 
 export const digitsToEnglish = (value: unknown): string =>
   String(value ?? '')
@@ -63,6 +77,8 @@ export const normalizePersianSearchText = (value: unknown): string =>
     .replace(/\s+/g, ' ');
 
 export const normalizeGlobalSearchQuery = (value: unknown): string => normalizePersianSearchText(value);
+export const isGlobalSearchQueryReady = (value: unknown): boolean =>
+  normalizeGlobalSearchQuery(value).length >= GLOBAL_SEARCH_MIN_QUERY_LENGTH;
 
 export const buildPhoneSearchVariants = (value: unknown): string[] => {
   const rawDigits = normalizePhoneDigits(digitsToEnglish(value));
@@ -99,15 +115,24 @@ export const buildPhoneSearchVariants = (value: unknown): string[] => {
   return Array.from(variants);
 };
 
-const fieldLabel = (field: any): string => String(field?.labels?.fa || field?.labels?.en || field?.key || '').trim();
-
 const isSearchableField = (field: any): boolean => {
   const key = String(field?.key || '').trim();
   if (!key || key.includes('.')) return false;
-  if (field?.type === FieldType.IMAGE || field?.type === FieldType.JSON || field?.type === FieldType.TAGS) return false;
-  if (field?.type === FieldType.TEXT || field?.type === FieldType.LONG_TEXT || field?.type === FieldType.SUPER_LONG_TEXT) return true;
-  if (field?.type === FieldType.PHONE || field?.type === FieldType.LINK) return true;
+  if (field?.type) return ILIKE_SEARCHABLE_FIELD_TYPES.has(field.type);
   return /name|title|code|number|phone|mobile|email|subject|description|notes|status|city|address/i.test(key);
+};
+
+const isAbortFailure = (error: any, signal?: AbortSignal): boolean => {
+  if (signal?.aborted) return true;
+  const name = String(error?.name || '').toLowerCase();
+  const message = String(error?.message || error?.details || '').toLowerCase();
+  return name === 'aborterror' || message.includes('aborterror') || message.includes('signal is aborted');
+};
+
+const isMissingRpcFailure = (error: any): boolean => {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = String(error?.message || '').toLowerCase();
+  return code === 'PGRST202' || code === '42883' || message.includes('could not find the function');
 };
 
 const getModuleSearchKeys = (module: ModuleDefinition): string[] => {
@@ -145,10 +170,10 @@ const getModuleSearchKeys = (module: ModuleDefinition): string[] => {
     .filter((key) => key && fieldKeys.has(key));
 };
 
-const getDisplayKeys = (module: ModuleDefinition, keys: string[]): string[] => {
+const getDisplayKeys = (module: ModuleDefinition, keys: string[], fieldPermissions: Record<string, any>): string[] => {
   const dashboardKeys = module.dashboard?.recentListFields || [];
   return Array.from(new Set(['id', 'created_at', 'updated_at', 'system_code', 'manual_code', ...keys, ...dashboardKeys]))
-    .filter((key) => key && !key.includes('.'));
+    .filter((key) => key && !key.includes('.') && (key === 'id' || key === 'created_at' || key === 'updated_at' || fieldPermissions[key] !== false));
 };
 
 export const buildGlobalSearchModules = (
@@ -158,10 +183,12 @@ export const buildGlobalSearchModules = (
   Object.entries(modules)
     .filter(([moduleId, module]) => module && !isSaasAdminModuleId(moduleId) && permissions?.[moduleId]?.view !== false)
     .map(([moduleId, module]) => {
-      const keys = getModuleSearchKeys(module);
+      const recordScope = permissions?.[moduleId]?.record_scope ?? (permissions?.[moduleId]?.view === false ? 'own' : 'all');
+      const fieldPermissions = permissions?.[moduleId]?.fields || {};
+      const keys = getModuleSearchKeys(module).filter((key) => fieldPermissions[key] !== false);
       const fieldLabels = (module.fields || []).reduce<Record<string, string>>((acc, field: any) => {
         const key = String(field?.key || '').trim();
-        if (key) acc[key] = fieldLabel(field) || key;
+        if (key) acc[key] = getFieldLabelFa(field, { moduleId, fallback: key });
         return acc;
       }, {});
       const phoneKeys = (module.fields || [])
@@ -172,8 +199,9 @@ export const buildGlobalSearchModules = (
       return {
         id: moduleId,
         title: module.titles?.fa || module.titles?.faSingular || moduleId,
+        recordScope,
         keys,
-        displayKeys: getDisplayKeys(module, keys),
+        displayKeys: getDisplayKeys(module, keys, fieldPermissions),
         fieldLabels,
         phoneKeys,
       };
@@ -205,7 +233,7 @@ const buildResultFromPayload = (
     .filter((key) => itemMatchesField(payload?.[key], query, phoneVariants))
     .slice(0, 4)
     .map((key) => ({ key, label: module.fieldLabels[key] || key }));
-  const title = getRecordTitle(payload, moduleConfig, { fallback: String(payload?.id || '-') });
+  const title = getRecordTitle(payload, moduleConfig, { fallback: '[بدون عنوان]' });
   const subtitleKey = ['system_code', 'manual_code', 'legacy_contact_code', 'accounting_code', 'mobile_1', 'phone']
     .find((key) => payload?.[key]);
 
@@ -231,20 +259,29 @@ const normalizeRpcRow = (
   const recordId = String(row?.record_id || row?.id || '').trim();
   const module = modulesById.get(moduleId);
   if (!module || !recordId) return null;
-  const payload = (row?.payload && typeof row.payload === 'object') ? row.payload : {};
-  const matchedKeys = Array.isArray(row?.matched_fields) ? row.matched_fields : [];
+  const rawPayload = (row?.payload && typeof row.payload === 'object') ? row.payload : {};
+  const visiblePayloadKeys = new Set(['id', 'created_at', ...module.displayKeys]);
+  const payload = Object.fromEntries(
+    Object.entries(rawPayload).filter(([key]) => visiblePayloadKeys.has(key))
+  );
+  const allowedMatchKeys = new Set(module.keys);
+  const matchedKeys = Array.isArray(row?.matched_fields)
+    ? row.matched_fields.filter((key: unknown) => allowedMatchKeys.has(String(key || '').trim()))
+    : [];
   const matchedFields = matchedKeys.map((key: unknown) => {
     const normalizedKey = String(key || '').trim();
     return { key: normalizedKey, label: module.fieldLabels[normalizedKey] || normalizedKey };
   }).filter((item: GlobalSearchMatchField) => item.key);
-  const title = String(row?.title || '').trim() || getRecordTitle(payload, moduleConfigs[moduleId], { fallback: recordId });
+  const title = getRecordTitle(payload, moduleConfigs[moduleId], { fallback: '[بدون عنوان]' });
+  const subtitleKey = ['system_code', 'manual_code', 'legacy_contact_code', 'legacy_system_code', 'legacy_invoice_number', 'accounting_code', 'mobile_1', 'phone']
+    .find((key) => payload?.[key]);
 
   return {
     moduleId,
     moduleTitle: module.title,
     recordId,
     title,
-    subtitle: String(row?.subtitle || payload?.system_code || payload?.manual_code || '').trim(),
+    subtitle: subtitleKey ? String(payload[subtitleKey] || '').trim() : '',
     matchedFields,
     payload: { id: recordId, ...payload },
     score: Number(row?.score || 0),
@@ -284,56 +321,38 @@ const fallbackSearch = async (
   modules: GlobalSearchModule[],
   query: string,
   limitPerModule: number,
-  offset: number
+  offset: number,
+  signal?: AbortSignal
 ): Promise<GlobalSearchGroup[]> => {
   const safeTerm = escapePostgrestSearchTerm(query);
   if (!safeTerm) return [];
   const phoneVariants = buildPhoneSearchVariants(query);
 
-  const settled = await Promise.allSettled(modules.map(async (module) => {
-    const rowsById = new Map<string, Record<string, any>>();
-    const successfulKeys = new Set<string>();
-    const candidateQueries: Array<{ key: string; term: string }> = [];
-    module.keys.forEach((key) => candidateQueries.push({ key, term: safeTerm }));
+  const searchModule = async (module: GlobalSearchModule): Promise<GlobalSearchGroup | null> => {
+    if (module.recordScope !== 'all') return null;
+    if (signal?.aborted) throw new DOMException('Global search aborted', 'AbortError');
+    const filters = new Set<string>();
+    module.keys.forEach((key) => filters.add(`${key}.ilike.%${safeTerm}%`));
     module.phoneKeys.forEach((key) => {
       phoneVariants.forEach((variant) => {
         const safeVariant = escapePostgrestSearchTerm(variant);
-        if (safeVariant) candidateQueries.push({ key, term: safeVariant });
+        if (safeVariant) filters.add(`${key}.ilike.%${safeVariant}%`);
       });
     });
+    if (!filters.size) return null;
 
-    for (const candidate of candidateQueries) {
-      const { data, error } = await supabase
-        .from(module.id)
-        .select(`id, ${candidate.key}`)
-        .ilike(candidate.key, `%${candidate.term}%`)
-        .range(0, offset + limitPerModule - 1);
-
-      if (error) continue;
-      successfulKeys.add(candidate.key);
-      (data || []).forEach((row: any) => {
-        const rowId = String(row?.id || '').trim();
-        if (!rowId) return;
-        rowsById.set(rowId, { ...(rowsById.get(rowId) || {}), ...row });
-      });
-      if (rowsById.size >= offset + limitPerModule) break;
-    }
-
-    const foundIds = Array.from(rowsById.keys()).slice(offset, offset + limitPerModule);
-    if (!foundIds.length) return null;
-
-    let rows = foundIds.map((id) => rowsById.get(id)).filter(Boolean) as Record<string, any>[];
-    const { data: detailRows } = await supabase
+    let request = supabase
       .from(module.id)
-      .select('*')
-      .in('id', foundIds);
-    if (Array.isArray(detailRows) && detailRows.length > 0) {
-      const detailById = new Map(detailRows.map((row: any) => [String(row?.id || ''), row]));
-      rows = foundIds.map((id) => detailById.get(id) || rowsById.get(id)).filter(Boolean) as Record<string, any>[];
-    }
+      .select(module.displayKeys.join(','))
+      .or(Array.from(filters).join(','))
+      .range(offset, offset + limitPerModule);
+    if (signal) request = request.abortSignal(signal);
+    const { data, error } = await request;
+    if (error || !Array.isArray(data) || !data.length) return null;
 
     const moduleConfig = moduleConfigs[module.id];
-    const items = rows
+    const items = data
+      .slice(0, limitPerModule)
       .map((row: any) => buildResultFromPayload(module, moduleConfig, row, query, phoneVariants))
       .filter((item) => item.recordId);
 
@@ -341,13 +360,19 @@ const fallbackSearch = async (
       moduleId: module.id,
       moduleTitle: module.title,
       items,
-      hasMore: rowsById.size > offset + limitPerModule || (items.length >= limitPerModule && successfulKeys.size > 0),
+      hasMore: data.length > limitPerModule,
     } as GlobalSearchGroup;
-  }));
+  };
 
-  return settled
-    .map((item) => item.status === 'fulfilled' ? item.value : null)
-    .filter((group): group is GlobalSearchGroup => Boolean(group && group.items.length));
+  const results: GlobalSearchGroup[] = [];
+  for (let index = 0; index < modules.length; index += FALLBACK_CONCURRENCY) {
+    if (signal?.aborted) throw new DOMException('Global search aborted', 'AbortError');
+    const settled = await Promise.allSettled(modules.slice(index, index + FALLBACK_CONCURRENCY).map(searchModule));
+    settled.forEach((item) => {
+      if (item.status === 'fulfilled' && item.value?.items.length) results.push(item.value);
+    });
+  }
+  return results;
 };
 
 export const searchGlobalRecords = async (
@@ -359,32 +384,38 @@ export const searchGlobalRecords = async (
     limitPerModule?: number;
     offset?: number;
     forceRefresh?: boolean;
+    cacheNamespace?: string;
+    signal?: AbortSignal;
   }
 ): Promise<GlobalSearchGroup[]> => {
   const query = normalizeGlobalSearchQuery(options.query);
   const limitPerModule = Math.max(1, Math.min(30, options.limitPerModule || FALLBACK_SEARCH_LIMIT));
   const offset = Math.max(0, options.offset || 0);
   const activeModules = modules.filter((module) => module.keys.length > 0);
-  if (!query || !activeModules.length) return [];
+  if (!isGlobalSearchQueryReady(query) || !activeModules.length) return [];
 
   const cacheKey = JSON.stringify({
+    access: options.cacheNamespace || '',
     query,
     limitPerModule,
     offset,
-    modules: activeModules.map((module) => module.id),
+    modules: activeModules.map((module) => [module.id, module.keys]),
   });
-  const cached = searchCache.get(cacheKey);
+  const canUseCache = Boolean(options.cacheNamespace);
+  const cached = canUseCache ? searchCache.get(cacheKey) : undefined;
   if (!options.forceRefresh && cached && cached.expiresAt > Date.now()) return cached.groups;
 
   const modulesById = new Map(activeModules.map((module) => [module.id, module]));
   let groups: GlobalSearchGroup[];
 
-  const { data, error } = await supabase.rpc('global_search_records', {
+  let rpcRequest = supabase.rpc('global_search_records', {
     p_query: query,
     p_modules: activeModules.map((module) => module.id),
     p_limit_per_module: limitPerModule,
     p_offset: offset,
   });
+  if (options.signal) rpcRequest = rpcRequest.abortSignal(options.signal);
+  const { data, error } = await rpcRequest;
 
   if (!error && Array.isArray(data)) {
     const results = data
@@ -392,10 +423,18 @@ export const searchGlobalRecords = async (
       .filter((item): item is GlobalSearchResult => Boolean(item));
     groups = groupResults(activeModules, results, limitPerModule);
   } else {
+    if (error && isAbortFailure(error, options.signal)) {
+      throw new DOMException('Global search aborted', 'AbortError');
+    }
+    if (error && !isMissingRpcFailure(error)) {
+      throw error;
+    }
     if (error) console.warn('Global search RPC unavailable, using client fallback', error);
-    groups = await fallbackSearch(supabase, moduleConfigs, activeModules, query, limitPerModule, offset);
+    groups = await fallbackSearch(supabase, moduleConfigs, activeModules, query, limitPerModule, offset, options.signal);
   }
 
-  searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_CACHE_TTL_MS, groups });
+  if (canUseCache) {
+    searchCache.set(cacheKey, { expiresAt: Date.now() + SEARCH_CACHE_TTL_MS, groups });
+  }
   return groups;
 };

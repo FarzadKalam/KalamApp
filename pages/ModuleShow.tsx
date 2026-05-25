@@ -3969,11 +3969,11 @@ const ModuleShow: React.FC = () => {
             text: botMessageText,
             skipLog: false,
             fallbackText,
-            attachments: isRubikaTarget ? externalAttachment.map((item) => ({
+            attachments: isRubikaTarget ? attachment.map((item) => ({
               url: item.url,
               name: item.name,
-              mimeType: item.mimeType || null,
-              fileType: item.fileType || null,
+              mimeType: 'application/pdf',
+              fileType: 'file',
             })) : undefined,
           },
         });

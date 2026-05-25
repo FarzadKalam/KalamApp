@@ -3,7 +3,7 @@
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 type BotAdminBody = {
-  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'edit_message' | 'delete_message' | 'diagnose_rubika_runtime';
+  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'import_bale_file' | 'edit_message' | 'delete_message' | 'diagnose_rubika_runtime';
   channel?: BotChannel | string;
   connectionId?: string;
   cursor?: string | number | null;
@@ -45,7 +45,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_ADMIN_BUILD = 'bot-admin-2026-05-19-01';
+const BOT_ADMIN_BUILD = 'bot-admin-2026-05-26-01';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -782,10 +782,12 @@ const ensureRubikaSuccess = (payload: any) => {
   const rootStatus = String(payload?.status || '').trim();
   const nestedStatus = String(payload?.data?.status || '').trim();
   if (rootStatus && rootStatus.toUpperCase() !== 'OK') {
-    throw new Error(rootStatus);
+    const detail = (() => { try { return JSON.stringify(payload).slice(0, 400); } catch { return rootStatus; } })();
+    throw new Error(`RUBIKA_${rootStatus} | response: ${detail}`);
   }
   if (nestedStatus && nestedStatus.toUpperCase() !== 'OK') {
-    throw new Error(nestedStatus);
+    const detail = (() => { try { return JSON.stringify(payload).slice(0, 400); } catch { return nestedStatus; } })();
+    throw new Error(`RUBIKA_${nestedStatus} | response: ${detail}`);
   }
 };
 
@@ -1200,6 +1202,12 @@ const sendProviderMessage = async (
     }
 
     if (channel === 'rubika') {
+      const rubikaStatus = String(payload?.status || '').trim().toUpperCase();
+      if (rubikaStatus === 'SERVER_ERROR' && attempt < 3) {
+        lastError = new Error(`RUBIKA_SERVER_ERROR | attempt ${attempt} | response: ${(() => { try { return JSON.stringify(payload).slice(0, 300); } catch { return rubikaStatus; } })()}`);
+        await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+        continue;
+      }
       ensureRubikaSuccess(payload);
     } else {
       ensureTelegramLikeSuccess(payload);
@@ -1364,6 +1372,150 @@ const sendRubikaAttachmentMessage = async ({
   };
 };
 
+// Send attachment (photo/video/document/audio/voice) via Telegram-like API (Bale, Telegram).
+// Downloads the file from `attachment.url` and uploads it via multipart/form-data.
+const sendTelegramLikeAttachmentMessage = async ({
+  channel,
+  settings,
+  chatId,
+  text,
+  attachment,
+  extraPayload,
+}: {
+  channel: 'telegram' | 'bale';
+  settings: Record<string, any>;
+  chatId: string;
+  text?: string;
+  attachment: Record<string, any>;
+  extraPayload?: Record<string, any>;
+}) => {
+  const attachmentUrl = String(attachment?.url || '').trim();
+  if (!attachmentUrl) throw new Error('آدرس فایل برای ارسال خالی است.');
+
+  const downloaded = await downloadBinaryFromUrl(attachmentUrl);
+  if (!downloaded?.bytes?.length) {
+    throw new Error(`دانلود فایل ناموفق بود: ${String(attachment?.name || attachmentUrl)}`);
+  }
+
+  const kind = normalizeAttachmentKind(attachment);
+  const kindToMethod: Record<string, { method: string; field: string }> = {
+    image: { method: 'sendPhoto', field: 'photo' },
+    video: { method: 'sendVideo', field: 'video' },
+    voice: { method: 'sendVoice', field: 'voice' },
+    audio: { method: 'sendAudio', field: 'audio' },
+    file: { method: 'sendDocument', field: 'document' },
+  };
+  const { method: methodName, field: fieldName } = kindToMethod[kind] || kindToMethod.file;
+
+  const fileName = safeFileName(String(attachment?.name || 'file').trim() || 'file');
+  const contentType = String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream');
+
+  const token = pick(settings?.bot_token);
+  if (!token) throw new Error('توکن بات تنظیم نشده است.');
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
+  const url = `${baseUrl}/bot${encodeURIComponent(token)}/${methodName}`;
+
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  form.append(fieldName, new File([downloaded.bytes], fileName, { type: contentType }));
+
+  const normalizedCaption = String(text || '').trim();
+  if (normalizedCaption) form.append('caption', normalizedCaption);
+
+  const replyToId = String(extraPayload?.reply_to_message_id || '').trim();
+  if (replyToId) form.append('reply_to_message_id', replyToId);
+
+  const response = await fetch(url, { method: 'POST', body: form });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      typeof payload === 'string'
+        ? payload
+        : String(payload?.description || payload?.message || `HTTP ${response.status}`)
+    );
+  }
+  ensureTelegramLikeSuccess(payload);
+
+  const result = payload?.result || payload;
+  return {
+    kind,
+    file_name: fileName,
+    mime_type: contentType,
+    send_result: payload,
+    provider_message_id: pick(result?.message_id, payload?.message_id),
+  };
+};
+
+// Configure Bale bot webhook (setWebhook).
+// Returns webhook URL and provider response on success.
+const configureBaleWebhook = async (
+  supabaseUrl: string,
+  requestUrl: string,
+  requestHeaders: Headers,
+  settings: Record<string, any>
+) => {
+  const token = pick(settings?.bot_token);
+  if (!token) throw new Error('توکن بات تنظیم نشده است.');
+  const secret = pick(settings?.webhook_secret);
+  if (!secret) throw new Error('Webhook Secret برای بات بله تنظیم نشده است.');
+
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'bale');
+  const webhookBase = pickWebhookPublicBase(requestUrl, supabaseUrl, requestHeaders, settings);
+  if (!webhookBase) throw new Error('آدرس عمومی Webhook قابل شناسایی نیست.');
+
+  const normalizedSecret = encodeURIComponent(secret);
+  const webhookUrl = `${webhookBase}/functions/v1/bot-webhook/bale/${normalizedSecret}`;
+  const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/setWebhook`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: webhookUrl }),
+  });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      typeof payload === 'string'
+        ? payload
+        : String(payload?.description || payload?.message || `HTTP ${response.status}`)
+    );
+  }
+  ensureTelegramLikeSuccess(payload);
+  return {
+    webhook_url: webhookUrl,
+    http_status: response.status,
+    configured_at: new Date().toISOString(),
+    provider_result: payload,
+  };
+};
+
+// Resolve a Bale/Telegram file_id to a download URL via getFile.
+const resolveTelegramLikeFileUrl = async (
+  channel: 'telegram' | 'bale',
+  settings: Record<string, any>,
+  fileId: string
+) => {
+  const token = pick(settings?.bot_token);
+  if (!token || !fileId) return null;
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
+  const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/getFile`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fileId }),
+    });
+    if (!response.ok) return null;
+    const payload = await parseResponse(response);
+    const filePath = pick(payload?.result?.file_path, payload?.file_path);
+    if (!filePath) return null;
+    const downloadUrl = `${baseUrl}/file/bot${encodeURIComponent(token)}/${filePath}`;
+    return { file_url: downloadUrl, provider_result: payload };
+  } catch {
+    return null;
+  }
+};
+
 const buildProviderMethodUrl = (
   channel: BotChannel,
   settings: Record<string, any>,
@@ -1472,29 +1624,16 @@ const sendTestMessage = async (
     const providerMessages: Array<Record<string, any>> = [];
 
     if (channel === 'rubika' && normalizedAttachments.length > 0) {
-      if (normalizedText) {
-        payload = await sendProviderMessage(
-          channel,
-          integration?.settings || {},
-          chatId,
-          normalizedText,
-          undefined
-        );
-        providerMessages.push({
-          message_type: 'text',
-          content_text: normalizedText,
-          provider_result: payload,
-        });
-      }
-      for (const attachment of normalizedAttachments) {
+      for (const [index, attachment] of normalizedAttachments.entries()) {
         const sentAttachment = await sendRubikaAttachmentMessage({
           settings: integration?.settings || {},
           chatId,
+          text: index === 0 ? normalizedText : undefined,
           attachment,
         });
         providerMessages.push({
           message_type: String(sentAttachment.kind || 'file').trim() || 'file',
-          content_text: '',
+          content_text: index === 0 ? normalizedText : '',
           file_url: String(attachment?.url || '').trim() || null,
           file_name: sentAttachment.file_name,
           mime_type: sentAttachment.mime_type,
@@ -1510,6 +1649,33 @@ const sendTestMessage = async (
             request_send_file_result: sentAttachment.request_send_file_result,
             upload_result: sentAttachment.upload_result,
           },
+        });
+        payload = sentAttachment.send_result;
+      }
+    } else if ((channel === 'bale' || channel === 'telegram') && normalizedAttachments.length > 0) {
+      for (const [index, attachment] of normalizedAttachments.entries()) {
+        const sentAttachment = await sendTelegramLikeAttachmentMessage({
+          channel: channel as 'bale' | 'telegram',
+          settings: integration?.settings || {},
+          chatId,
+          text: index === 0 ? normalizedText : undefined,
+          attachment,
+          extraPayload: options?.extraPayload,
+        });
+        providerMessages.push({
+          message_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          content_text: index === 0 ? normalizedText : '',
+          file_url: String(attachment?.url || '').trim() || null,
+          file_name: sentAttachment.file_name,
+          mime_type: sentAttachment.mime_type,
+          attachment: {
+            url: String(attachment?.url || '').trim() || null,
+            name: sentAttachment.file_name,
+            mime_type: sentAttachment.mime_type,
+            file_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          },
+          provider_result: sentAttachment.send_result,
+          provider_message_id: sentAttachment.provider_message_id,
         });
         payload = sentAttachment.send_result;
       }
@@ -2269,7 +2435,7 @@ Deno.serve(async (req) => {
     if (!connectionId) {
       return json(400, { success: false, message: 'connectionId الزامی است.' });
     }
-    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'edit_message', 'delete_message', 'diagnose_rubika_runtime'].includes(action)) {
+    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'import_bale_file', 'edit_message', 'delete_message', 'diagnose_rubika_runtime'].includes(action)) {
       return json(400, { success: false, message: 'action معتبر نیست.' });
     }
 
@@ -2298,8 +2464,23 @@ Deno.serve(async (req) => {
 
     if (action === 'start_capture') {
       let providerResult: any = null;
-      if (channel === 'telegram' || channel === 'bale') {
+      let webhookConfigured = false;
+      if (channel === 'telegram') {
         providerResult = await disableTelegramLikeWebhook(channel, integration.settings || {});
+      } else if (channel === 'bale') {
+        try {
+          providerResult = await configureBaleWebhook(supabaseUrl, req.url, req.headers, integration.settings || {});
+          webhookConfigured = true;
+        } catch (webhookError: any) {
+          try {
+            providerResult = await disableTelegramLikeWebhook('bale', integration.settings || {});
+          } catch {
+            providerResult = {
+              webhook_configured: false,
+              warning: String(webhookError?.message || webhookError || 'Bale webhook configure failed'),
+            };
+          }
+        }
       } else if (channel === 'rubika') {
         try {
           providerResult = await configureRubikaReceiveEndpoint(supabaseUrl, req.url, req.headers, integration.settings || {});
@@ -2311,21 +2492,22 @@ Deno.serve(async (req) => {
         }
       }
       const baseline = await primeChannelCursor(integration, channel, cursor);
-      const captureDiagnostic = channel === 'rubika'
+      const captureDiagnostic = (channel === 'rubika' || channel === 'bale')
         ? {
           webhook_url: providerResult?.webhook_url || null,
           provider_http_status: providerResult?.http_status || providerResult?.provider_http_status || null,
           warning: providerResult?.warning || null,
           configured_at: providerResult?.configured_at || null,
-          official_api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
+          ...(channel === 'rubika' ? { official_api_base_url: RUBIKA_OFFICIAL_API_BASE_URL } : {}),
         }
         : null;
       return json(200, {
         success: true,
         channel,
-        mode: 'get_updates',
+        mode: webhookConfigured ? 'webhook' : 'get_updates',
         capture_started: true,
-        webhook_disabled: channel === 'telegram' || channel === 'bale',
+        webhook_configured: webhookConfigured,
+        webhook_disabled: channel === 'telegram' || (channel === 'bale' && !webhookConfigured),
         provider_result: providerResult,
         capture_diagnostic: captureDiagnostic,
         cursor: baseline.cursor,
@@ -2387,20 +2569,30 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'resolve_file') {
-      if (channel !== 'rubika') {
-        return json(400, { success: false, message: 'resolve_file فقط برای روبیکا پشتیبانی می‌شود.' });
-      }
       if (!fileId) {
         return json(400, { success: false, message: 'fileId الزامی است.' });
       }
-      const resolved = await resolveRubikaFileUrl(integration?.settings || {}, fileId);
-      return json(200, {
-        success: true,
-        channel,
-        file_id: fileId,
-        file_url: String(resolved?.file_url || '').trim() || null,
-        provider_result: resolved?.provider_result || null,
-      });
+      if (channel === 'rubika') {
+        const resolved = await resolveRubikaFileUrl(integration?.settings || {}, fileId);
+        return json(200, {
+          success: true,
+          channel,
+          file_id: fileId,
+          file_url: String(resolved?.file_url || '').trim() || null,
+          provider_result: resolved?.provider_result || null,
+        });
+      }
+      if (channel === 'bale' || channel === 'telegram') {
+        const resolved = await resolveTelegramLikeFileUrl(channel, integration?.settings || {}, fileId);
+        return json(200, {
+          success: Boolean(resolved?.file_url),
+          channel,
+          file_id: fileId,
+          file_url: String(resolved?.file_url || '').trim() || null,
+          provider_result: resolved?.provider_result || null,
+        });
+      }
+      return json(400, { success: false, message: 'resolve_file برای این کانال پشتیبانی نمی‌شود.' });
     }
 
     if (action === 'import_rubika_file') {
@@ -2440,6 +2632,32 @@ Deno.serve(async (req) => {
           message: String(error?.message || 'بازیابی فایل روبیکا ناموفق بود.'),
         });
       }
+    }
+
+    if (action === 'import_bale_file') {
+      if (channel !== 'bale') {
+        return json(400, { success: false, message: 'import_bale_file فقط برای بله پشتیبانی می‌شود.' });
+      }
+      if (!fileId) {
+        return json(400, { success: false, message: 'fileId الزامی است.' });
+      }
+      const resolved = await resolveTelegramLikeFileUrl('bale', integration?.settings || {}, fileId);
+      if (!resolved?.file_url) {
+        return json(200, {
+          success: false,
+          channel,
+          file_id: fileId,
+          message: 'بازیابی آدرس فایل بله ناموفق بود.',
+          provider_result: resolved?.provider_result || null,
+        });
+      }
+      return json(200, {
+        success: true,
+        channel,
+        file_id: fileId,
+        file_url: resolved.file_url,
+        provider_result: resolved.provider_result || null,
+      });
     }
 
     const result = await pollChannelUpdates(supabaseUrl, serviceRoleKey, integration, channel, cursor);

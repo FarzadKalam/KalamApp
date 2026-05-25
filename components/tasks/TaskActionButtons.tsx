@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Modal } from 'antd';
+import { App, Badge, Button, Modal } from 'antd';
 import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined, ReadOutlined } from '@ant-design/icons';
 import OverlayEventBoundary from '../OverlayEventBoundary';
 import PersianDatePicker from '../PersianDatePicker';
@@ -86,17 +86,31 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     if (loadedInstructions.length > 0) return;
     setLoadingInstructions(true);
     try {
-      const { data, error } = await supabase
-        .from('instructions')
-        .select('id, name, system_code, status, department, goal, body, image_url')
-        .in('id', taskInstructionIds);
+      const [{ data, error }, { data: filesData }] = await Promise.all([
+        supabase
+          .from('instructions')
+          .select('id, name, system_code, status, department, goal, body, image_url')
+          .in('id', taskInstructionIds),
+        supabase
+          .from('record_files')
+          .select('id, record_id, file_url, file_name, mime_type, file_type')
+          .eq('module_id', 'instructions')
+          .in('record_id', taskInstructionIds),
+      ]);
       if (error) throw error;
+      const filesByRecordId: Record<string, any[]> = {};
+      for (const f of filesData || []) {
+        const rid = String(f.record_id || '');
+        if (!filesByRecordId[rid]) filesByRecordId[rid] = [];
+        filesByRecordId[rid].push({ id: String(f.id), url: String(f.file_url || ''), name: String(f.file_name || f.id), mimeType: f.mime_type || null, fileType: f.file_type || null });
+      }
       const withStatus = (data || []).map((item) => {
         const statusOption = instructionStatusOptions.find((o) => o.value === item?.status);
         return {
           ...item,
           status_label: statusOption?.label || item?.status || null,
           status_color: statusOption?.color || 'default',
+          attachments: filesByRecordId[String(item?.id || '')] || [],
         };
       });
       const ordered = taskInstructionIds
@@ -235,17 +249,19 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     <>
       <div ref={overlayAnchorRef} className="flex items-center justify-center gap-1.5">
         {taskInstructionIds.length > 0 ? (
-          <Button
-            type="text"
-            size={size}
-            icon={<ReadOutlined />}
-            className={`task-action-button ${buttonClassName}`}
-            style={getActionButtonStyle(undefined)}
-            title="مشاهده دستورالعمل‌ها"
-            aria-label="مشاهده دستورالعمل‌ها"
-            loading={loadingInstructions}
-            onClick={handleOpenInstructionsModal}
-          />
+          <Badge count={taskInstructionIds.length} size="small" style={{ fontSize: 10 }}>
+            <Button
+              type="text"
+              size={size}
+              icon={<ReadOutlined />}
+              className={`task-action-button ${buttonClassName}`}
+              style={getActionButtonStyle(undefined)}
+              title="مشاهده دستورالعمل‌ها"
+              aria-label="مشاهده دستورالعمل‌ها"
+              loading={loadingInstructions}
+              onClick={handleOpenInstructionsModal}
+            />
+          </Badge>
         ) : null}
         <Button
           type="text"

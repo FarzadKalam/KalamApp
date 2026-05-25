@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Empty, Input, Select, Spin } from 'antd';
 import {
   AppstoreOutlined,
@@ -13,11 +13,12 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import {
   buildGlobalSearchModules,
+  isGlobalSearchQueryReady,
   searchGlobalRecords,
   type GlobalSearchGroup,
   type GlobalSearchModule,
 } from '../utils/globalSearch';
-import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
+import { fetchCurrentUserRoleContext, type PermissionMap } from '../utils/permissions';
 
 const PAGE_LIMIT_PER_MODULE = 10;
 
@@ -38,9 +39,12 @@ const GlobalSearchPage: React.FC = () => {
   const [inputValue, setInputValue] = useState(query);
   const [permissions, setPermissions] = useState<PermissionMap>({});
   const [permissionsReady, setPermissionsReady] = useState(false);
+  const [searchCacheNamespace, setSearchCacheNamespace] = useState('');
   const [groups, setGroups] = useState<GlobalSearchGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMoreModuleId, setLoadingMoreModuleId] = useState<string | null>(null);
+  const searchRequestRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setInputValue(query);
@@ -58,9 +62,11 @@ const GlobalSearchPage: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     const loadPermissions = async () => {
-      const rolePermissions = await fetchCurrentUserRolePermissions(supabase);
+      const context = await fetchCurrentUserRoleContext(supabase);
       if (cancelled) return;
-      setPermissions((rolePermissions || {}) as PermissionMap);
+      const rolePermissions = (context.permissions || {}) as PermissionMap;
+      setPermissions(rolePermissions);
+      setSearchCacheNamespace(`${String(context.userId || '')}:${JSON.stringify(rolePermissions)}`);
       setPermissionsReady(true);
     };
     void loadPermissions();
@@ -86,31 +92,48 @@ const GlobalSearchPage: React.FC = () => {
 
   const runSearch = async (nextQuery = query, modules: GlobalSearchModule[] = activeModules) => {
     const term = String(nextQuery || '').trim();
-    if (!term || !permissionsReady) {
+    if (!term || !permissionsReady || !isGlobalSearchQueryReady(term)) {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
       setGroups([]);
+      setLoading(false);
       return;
     }
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
+    const controller = new AbortController();
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = controller;
     setLoading(true);
     try {
       const results = await searchGlobalRecords(supabase, MODULES, modules, {
         query: term,
         limitPerModule: PAGE_LIMIT_PER_MODULE,
-        forceRefresh: true,
+        cacheNamespace: searchCacheNamespace,
+        signal: controller.signal,
       });
+      if (searchRequestRef.current !== requestId) return;
       setGroups(results);
     } catch (error) {
+      if (String((error as any)?.name || '') === 'AbortError') return;
       console.warn('Global search page failed', error);
-      setGroups([]);
-      message.error('جستجو با خطا روبرو شد.');
+      if (searchRequestRef.current === requestId) {
+        setGroups([]);
+        message.error('جستجو با خطا روبرو شد.');
+      }
     } finally {
-      setLoading(false);
+      if (searchRequestRef.current === requestId) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!permissionsReady) return;
     void runSearch(query, activeModules);
-  }, [query, permissionsReady, selectedModuleId, searchableModules.length]);
+  }, [query, permissionsReady, searchCacheNamespace, selectedModuleId, searchableModules.length]);
+
+  useEffect(() => () => {
+    searchAbortRef.current?.abort();
+  }, []);
 
   const updateSearchParams = (nextQuery: string, nextModuleId = selectedModuleId) => {
     const params = new URLSearchParams();
@@ -130,6 +153,7 @@ const GlobalSearchPage: React.FC = () => {
         limitPerModule: PAGE_LIMIT_PER_MODULE,
         offset: group.items.length,
         forceRefresh: true,
+        cacheNamespace: searchCacheNamespace,
       });
       const nextGroup = nextGroups[0];
       if (!nextGroup) {
@@ -201,6 +225,10 @@ const GlobalSearchPage: React.FC = () => {
       {!query ? (
         <div className="rounded-2xl border border-dashed border-gray-200 bg-white p-10 dark:border-dark-border dark:bg-dark-surface">
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="برای شروع، یک عبارت جستجو وارد کنید." />
+        </div>
+      ) : !isGlobalSearchQueryReady(query) ? (
+        <div className="rounded-2xl border border-dashed border-gray-200 bg-white p-10 dark:border-dark-border dark:bg-dark-surface">
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="برای جستجو حداقل دو نویسه وارد کنید." />
         </div>
       ) : loading ? (
         <div className="rounded-2xl border border-gray-200 bg-white p-10 text-center dark:border-dark-border dark:bg-dark-surface">

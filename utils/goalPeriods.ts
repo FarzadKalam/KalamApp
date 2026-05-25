@@ -186,6 +186,13 @@ export const buildGoalRangeSnapshot = (start: dayjs.Dayjs, end: dayjs.Dayjs): Go
   endLabel: safeJalaliFormat(end.toISOString(), 'YYYY/MM/DD'),
 });
 
+export const buildGoalRangeSnapshotFromIso = (startIso: string, endIso: string): GoalDateRange => ({
+  startIso,
+  endIso,
+  startLabel: safeJalaliFormat(startIso, 'YYYY/MM/DD'),
+  endLabel: safeJalaliFormat(endIso, 'YYYY/MM/DD'),
+});
+
 export const getGoalUnitOrder = (unit: GoalPeriodUnit) =>
   ['day', 'week', 'month', 'quarter', 'half_year', 'year'].indexOf(unit);
 

@@ -503,8 +503,10 @@ const Login = () => {
     }
 
     setOtpLoading(true);
+    let otpVerified = false;
     try {
       await verifySmsOtp(supabase.auth, otpRequestedFor, normalizedOtpToken);
+      otpVerified = true;
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
       await trackSuccessfulLogin('otp');
@@ -522,6 +524,15 @@ const Login = () => {
       }
     } catch (error: any) {
       const raw = String(error?.message || '');
+      // اگر OTP موفق بود اما مرحله بعدی خطا داد، sign out کن
+      // تا OTP مصرف‌شده دیگر block نکند و کاربر بتواند کد جدید بگیرد
+      if (otpVerified && !raw.includes('__otp_phone_repaired_retry__')) {
+        await signOutLocalSession().catch(() => null);
+        clearOtpSessionState();
+        setOtpRequestedFor(null);
+        setOtpCode('');
+        setOtpCooldown(0);
+      }
       if (raw.includes('__otp_phone_repaired_retry__')) {
         message.success(getOtpErrorMessage(error));
       } else {

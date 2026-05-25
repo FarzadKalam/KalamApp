@@ -1,5 +1,5 @@
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
-import { getTaskStatusOption } from './processTaskStatusOptions';
+import { getTaskStatusOption, getTaskStatusLabel, getTaskStatusColor } from './processTaskStatusOptions';
 import { buildConditionalFieldStateMap } from './conditionalFieldRules';
 import { getResolvedModuleConditionalDisplay } from './moduleSettingsRuntime';
 
@@ -157,14 +157,21 @@ export const resolveCardStatusMeta = (
   const rawValue = statusField ? item?.[statusField.key] : undefined;
   if (!statusField || rawValue === undefined || rawValue === null || rawValue === '') return null;
 
-  const option = moduleConfig?.id === 'tasks' && String(statusField?.key || '') === 'status'
+  const isTaskStatus = moduleConfig?.id === 'tasks' && String(statusField?.key || '') === 'status';
+  const option = isTaskStatus
     ? getTaskStatusOption(rawValue, item, statusField.options || [])
     : (statusField.options || []).find((entry: any) => String(entry?.value || '') === String(rawValue));
+  const label = isTaskStatus
+    ? getTaskStatusLabel(rawValue, item, statusField.options || [])
+    : String(option?.label || rawValue);
+  const color = isTaskStatus
+    ? (String(option?.color || '').trim() || getTaskStatusColor(rawValue, item, statusField.options || []))
+    : String(option?.color || 'default');
   return {
     field: statusField,
     value: rawValue,
-    label: String(option?.label || rawValue),
-    color: String(option?.color || 'default'),
+    label,
+    color,
   };
 };
 

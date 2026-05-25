@@ -24,6 +24,7 @@ const LEGACY_TASK_STATUS_FALLBACKS: Record<string, SelectOption> = {
   in_progress: { value: 'in_progress', label: 'در حال انجام', color: 'blue' },
   review: { value: 'review', label: 'بازبینی', color: 'gold' },
   todo: { value: 'todo', label: 'انجام نشده', color: 'red' },
+  planned: { value: 'planned', label: 'برنامه‌ریزی شده', color: 'purple' },
   canceled: { value: 'canceled', label: 'لغو شده', color: 'default' },
 };
 
@@ -209,6 +210,7 @@ export const getTaskStatusColor = (status: unknown, task?: any, baseOptions?: an
   if (normalizedStatus === 'in_progress') return 'blue';
   if (normalizedStatus === 'review') return 'gold';
   if (normalizedStatus === 'todo') return 'red';
+  if (normalizedStatus === 'planned') return 'purple';
   if (normalizedStatus === 'canceled') return 'default';
   return 'default';
 };

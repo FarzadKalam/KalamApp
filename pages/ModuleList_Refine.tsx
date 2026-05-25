@@ -80,6 +80,11 @@ import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows"
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
 import SaasUserAdminDrawer from "../components/saas/SaasUserAdminDrawer";
 import type { SaasAdminUserRow } from "../utils/saasUserAdmin";
+import {
+  buildModuleListSearchFieldKeys,
+  buildModuleListSearchFilter,
+  isModuleListSearchFilter,
+} from "../utils/moduleListSearch";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -245,6 +250,7 @@ const collectCrudFilterFields = (filters?: CrudFilters | null): string[] => {
   const keys = new Set<string>();
   const visit = (item: any) => {
     if (!item || typeof item !== "object") return;
+    if (isModuleListSearchFilter(item)) return;
     const field = String(item.field || "").trim();
     if (field) keys.add(field);
     if (Array.isArray(item.value)) item.value.forEach(visit);
@@ -568,6 +574,15 @@ export const ModuleListRefine: React.FC<{
     if (textField) return textField.key;
     return null;
   }, [moduleConfig]);
+  const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
+  const [fieldPermissionsModuleId, setFieldPermissionsModuleId] = useState<string | null>(null);
+  const fieldPermissionsReady = fieldPermissionsModuleId === String(resolvedModuleId || "");
+  const moduleListSearchFieldKeys = useMemo(
+    () => fieldPermissionsReady
+      ? buildModuleListSearchFieldKeys(moduleConfig, fieldPermissions)
+      : (searchTargetField ? [searchTargetField] : []),
+    [fieldPermissions, fieldPermissionsReady, moduleConfig, searchTargetField]
+  );
   const persistedState = useMemo(
     () => readPersistedModuleListState(resolvedModuleId, storageKeySuffix),
     [resolvedModuleId, storageKeySuffix]
@@ -603,7 +618,7 @@ export const ModuleListRefine: React.FC<{
       persistedState?.searchTerm || "",
       persistedState?.columnFilters || {}
     ),
-    [effectiveInitialViewFilters, moduleConfig, persistedState?.columnFilters, persistedState?.searchTerm, searchTargetField]
+    [effectiveInitialViewFilters, moduleConfig, moduleListSearchFieldKeys, persistedState?.columnFilters, persistedState?.searchTerm]
   );
 
   // ✅ Use default view mode from module config, fallback to LIST
@@ -659,7 +674,6 @@ export const ModuleListRefine: React.FC<{
   const [kanbanDragOverColumn, setKanbanDragOverColumn] = useState<string | null>(null);
   const [allUsers, setAllUsers] = useState<any[]>(() => cachedOptionSnapshot?.allUsers || []);
   const [allRoles, setAllRoles] = useState<any[]>(() => cachedOptionSnapshot?.allRoles || []);
-  const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
   const [permissionFilters, setPermissionFilters] = useState<CrudFilters>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -1439,12 +1453,14 @@ export const ModuleListRefine: React.FC<{
           record_scope: "all",
         });
         setFieldPermissions({});
+        setFieldPermissionsModuleId(String(resolvedModuleId || ""));
         setCanOpenWorkflows(false);
         setCanOpenGoals(false);
         setCanShowGoalCards(false);
         return;
       }
       const modulePerms = permissions?.[resolvedModuleId] || {};
+      const nextFieldPermissions = modulePerms.fields || {};
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
       const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};
       const moduleGoalAccess = resolveModuleGoalAccessPermissions(permissions, resolvedModuleId);
@@ -1454,16 +1470,42 @@ export const ModuleListRefine: React.FC<{
         delete: modulePerms.delete,
         record_scope: modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all'),
       });
-      setFieldPermissions(modulePerms.fields || {});
+      setFieldPermissions(nextFieldPermissions);
+      setFieldPermissionsModuleId(String(resolvedModuleId || ""));
       // build permission-level filters from view_conditions
       const viewCondGroup = modulePerms.view_conditions;
       if (viewCondGroup && Array.isArray(viewCondGroup.conditions) && viewCondGroup.conditions.length > 0) {
         buildViewCrudFilters(viewCondGroup.conditions, viewCondGroup.logic).then((pFilters) => {
           setPermissionFilters(pFilters);
-          applyCombinedFilters(effectiveInitialViewFilters as CrudFilters, persistedState?.searchTerm || '', persistedState?.columnFilters || {}, false);
-        }).catch(() => setPermissionFilters([]));
+          applyCombinedFilters(
+            effectiveInitialViewFilters as CrudFilters,
+            persistedState?.searchTerm || '',
+            persistedState?.columnFilters || {},
+            false,
+            pFilters,
+            nextFieldPermissions
+          );
+        }).catch(() => {
+          setPermissionFilters([]);
+          applyCombinedFilters(
+            effectiveInitialViewFilters as CrudFilters,
+            persistedState?.searchTerm || '',
+            persistedState?.columnFilters || {},
+            false,
+            [],
+            nextFieldPermissions
+          );
+        });
       } else {
         setPermissionFilters([]);
+        applyCombinedFilters(
+          effectiveInitialViewFilters as CrudFilters,
+          persistedState?.searchTerm || '',
+          persistedState?.columnFilters || {},
+          false,
+          [],
+          nextFieldPermissions
+        );
       }
       setCanOpenWorkflows(
         workflowPerms.view !== false && (workflowPerms?.fields?.module_list_button !== false)
@@ -2547,17 +2589,23 @@ export const ModuleListRefine: React.FC<{
     return filters;
   }
 
-  function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, nextPermFilters: CrudFilters = []): CrudFilters {
+  function buildMergedFilters(
+    nextViewFilters: CrudFilters,
+    nextSearchTerm: string,
+    nextColumnFilters: ColumnFiltersState,
+    nextPermFilters: CrudFilters = [],
+    nextSearchFieldPermissions?: Record<string, any>
+  ): CrudFilters {
     const mergedFilters = [...nextPermFilters, ...nextViewFilters].filter((item: any) => {
       return !getTagViewFilterMeta(item, moduleConfig);
     });
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
-    if (searchTargetField && nextSearchTerm.trim()) {
-      mergedFilters.push({
-        field: searchTargetField,
-        operator: "contains",
-        value: nextSearchTerm.trim(),
-      });
+    const searchFieldKeys = nextSearchFieldPermissions
+      ? buildModuleListSearchFieldKeys(moduleConfig, nextSearchFieldPermissions)
+      : moduleListSearchFieldKeys;
+    const searchFilter = buildModuleListSearchFilter(nextSearchTerm, searchFieldKeys);
+    if (searchFilter) {
+      mergedFilters.push(searchFilter);
     }
     return mergedFilters;
   }
@@ -2866,8 +2914,21 @@ export const ModuleListRefine: React.FC<{
     return filters;
   }
 
-  function applyCombinedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState, resetPage = true) {
-    const mergedFilters = buildMergedFilters(nextViewFilters, nextSearchTerm, nextColumnFilters, permissionFilters);
+  function applyCombinedFilters(
+    nextViewFilters: CrudFilters,
+    nextSearchTerm: string,
+    nextColumnFilters: ColumnFiltersState,
+    resetPage = true,
+    nextPermissionFilters: CrudFilters = permissionFilters,
+    nextFieldPermissions?: Record<string, any>
+  ) {
+    const mergedFilters = buildMergedFilters(
+      nextViewFilters,
+      nextSearchTerm,
+      nextColumnFilters,
+      nextPermissionFilters,
+      nextFieldPermissions ?? (fieldPermissionsReady ? fieldPermissions : undefined)
+    );
     const nextSignature = JSON.stringify(mergedFilters);
     if (lastAppliedFiltersSignatureRef.current !== nextSignature) {
       lastAppliedFiltersSignatureRef.current = nextSignature;

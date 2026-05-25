@@ -16,7 +16,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-04-15-03';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-05-26-01';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -943,6 +943,39 @@ const downloadBinaryFromUrl = async (
   return null;
 };
 
+// Resolve a Bale/Telegram file_id → download URL via getFile.
+const tryTelegramLikeGetFile = async ({
+  channel,
+  settings,
+  fileId,
+}: {
+  channel: 'telegram' | 'bale';
+  settings: IntegrationSettings;
+  fileId: string;
+}) => {
+  const token = String(settings?.bot_token || '').trim();
+  if (!token || !fileId) return null;
+  const baseUrl = normalizeBaseUrl(String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim());
+  if (!baseUrl) return null;
+  const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/getFile`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fileId }),
+    });
+    if (!response.ok) return null;
+    const parsed = await response.json().catch(() => null);
+    if (!parsed || !parsed.ok) return null;
+    const filePath = String(parsed?.result?.file_path || '').trim();
+    if (!filePath) return null;
+    const downloadUrl = `${baseUrl}/file/bot${encodeURIComponent(token)}/${filePath}`;
+    return { fileUrl: downloadUrl };
+  } catch {
+    return null;
+  }
+};
+
 const tryRubikaGetFile = async ({
   settings,
   fileId,
@@ -1022,14 +1055,23 @@ const resolveAndStoreInboundMedia = async ({
   let resolvedMime = String(mediaInfo.mimeType || '').trim() || null;
   let bytes: Uint8Array | null = null;
 
-  const shouldPreferRubikaFileApi =
-    channel === 'rubika'
-    && String(mediaInfo.fileId || '').trim().length > 0;
+  const normalizedFileId = String(mediaInfo.fileId || '').trim();
+  const shouldPreferRubikaFileApi = channel === 'rubika' && normalizedFileId.length > 0;
+  const shouldUseTelegramLikeFileApi = (channel === 'bale' || channel === 'telegram') && normalizedFileId.length > 0;
+
+  if (shouldUseTelegramLikeFileApi) {
+    const byFileId = await tryTelegramLikeGetFile({
+      channel: channel as 'bale' | 'telegram',
+      settings: integrationSettings,
+      fileId: normalizedFileId,
+    });
+    if (byFileId?.fileUrl) resolvedUrl = byFileId.fileUrl;
+  }
 
   if (shouldPreferRubikaFileApi) {
     const byFileId = await tryRubikaGetFile({
       settings: integrationSettings,
-      fileId: String(mediaInfo.fileId || '').trim(),
+      fileId: normalizedFileId,
     });
     if (byFileId) {
       if (byFileId.fileUrl) resolvedUrl = String(byFileId.fileUrl || '').trim() || resolvedUrl;
@@ -1054,7 +1096,7 @@ const resolveAndStoreInboundMedia = async ({
     for (let retry = 0; retry < 2; retry += 1) {
       const refreshed = await tryRubikaGetFile({
         settings: integrationSettings,
-        fileId: String(mediaInfo.fileId || '').trim(),
+        fileId: normalizedFileId,
       });
       const refreshedUrl = String(refreshed?.fileUrl || '').trim();
       if (!refreshedUrl) continue;

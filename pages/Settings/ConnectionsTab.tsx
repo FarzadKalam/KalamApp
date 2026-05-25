@@ -76,8 +76,6 @@ type FormValues = {
     sender_number?: string;
     body_id?: string;
     webhook_secret?: string;
-    otp_login_enabled?: boolean;
-    otp_delivery_mode?: 'sms_only' | 'sms_and_bale';
     is_active?: boolean;
   };
   email: {
@@ -207,8 +205,6 @@ const DEFAULT_VALUES: FormValues = {
     sender_number: '',
     body_id: '',
     webhook_secret: '',
-    otp_login_enabled: false,
-    otp_delivery_mode: 'sms_only',
     is_active: true,
   },
   email: {
@@ -490,8 +486,6 @@ const ConnectionsTab: React.FC = () => {
     body_id: String(smsValues?.body_id || '').trim(),
     webhook_secret: String(smsValues?.webhook_secret || '').trim(),
     inbound_webhook_secret: String(smsValues?.webhook_secret || '').trim(),
-    otp_login_enabled: smsValues?.otp_login_enabled === true,
-    otp_delivery_mode: smsValues?.otp_delivery_mode || 'sms_only',
     is_flash: false,
   });
 

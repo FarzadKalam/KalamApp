@@ -13,6 +13,7 @@ import {
   buildGoalExplicitRange,
   buildGoalCurrentRange,
   buildGoalRangeSnapshot,
+  buildGoalRangeSnapshotFromIso,
   calculateRangeRatio,
   clampGoalSubperiodUnit,
   clampGoalRangeToBounds,
@@ -548,6 +549,7 @@ const prepareGoalProgressRows = async (
     fiscalYear?: FiscalYearSnapshot | null;
     selectedSubperiodUnit?: GoalPeriodUnit | null;
     cache?: Map<string, any[]>;
+    overridePeriodRange?: { startIso: string; endIso: string };
   }
 ) => {
   const subperiodUnit = clampGoalSubperiodUnit(
@@ -555,13 +557,21 @@ const prepareGoalProgressRows = async (
     options.selectedSubperiodUnit || goal.subperiod_unit
   );
 
-  const { mainBounds, subBounds } = resolveGoalPeriodBounds(
-    goal,
-    subperiodUnit,
-    options.fiscalYear
-  );
-  const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
-  const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+  let mainRange: ReturnType<typeof buildGoalRangeSnapshot>;
+  let subRange: ReturnType<typeof buildGoalRangeSnapshot>;
+
+  if (options.overridePeriodRange) {
+    mainRange = buildGoalRangeSnapshotFromIso(options.overridePeriodRange.startIso, options.overridePeriodRange.endIso);
+    subRange = mainRange;
+  } else {
+    const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+      goal,
+      subperiodUnit,
+      options.fiscalYear
+    );
+    mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
+    subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+  }
 
   const cache = options.cache || new Map<string, any[]>();
   const [mainRows, subRows] = await Promise.all([
@@ -1013,6 +1023,7 @@ export const executeGoalProgress = async (
     subjectRoleId?: string | null;
     subjectLabel?: string | null;
     fallbackSubjects?: GoalAssignedMember[];
+    overridePeriodRange?: { startIso: string; endIso: string };
   }
 ): Promise<GoalProgressSnapshot | null> => {
   const goal = normalizeGoalRecord(goalInput);

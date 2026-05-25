@@ -33,6 +33,7 @@ type GoalProgressSliderProps = {
   autoPlay?: boolean;
   showPlaybackControls?: boolean;
   onActiveCardChange?: (card: GoalProgressSnapshot | null) => void;
+  periodOverride?: { startIso: string; endIso: string };
 };
 
 const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
@@ -169,6 +170,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   autoPlay = true,
   showPlaybackControls = true,
   onActiveCardChange,
+  periodOverride,
 }) => {
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
@@ -254,6 +256,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         moduleId: moduleId || null,
         userId: roleContext.userId || null,
         roleId: roleContext.roleId || null,
+        periodOverride: periodOverride ? `${periodOverride.startIso}__${periodOverride.endIso}` : null,
         selections: Object.keys(resolvedSelections)
           .sort()
           .reduce<Record<string, GoalPeriodUnit>>((acc, key) => {
@@ -372,6 +375,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 selectedSubperiodUnit,
                 cache: rowCacheRef.current,
                 fallbackSubjects: resolveGoalAssignedMembers(goal, directory),
+                overridePeriodRange: periodOverride,
               });
             } catch {
               return buildGoalFallbackProgressSnapshot(goal, {
@@ -410,7 +414,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [loadFiscalYear, moduleId, placementField, subperiodSelections]);
+  }, [loadFiscalYear, moduleId, periodOverride, placementField, subperiodSelections]);
 
   useEffect(() => {
     cardsRef.current = cards;

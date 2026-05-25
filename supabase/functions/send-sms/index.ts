@@ -1311,6 +1311,24 @@ Deno.serve(async (req) => {
       `[send-sms] build=${FUNCTION_BUILD} action=${String(body?.action || 'send')} hook=${isAuthHookRequest ? 'yes' : 'no'} hasSecret=${hasHookSecret ? 'yes' : 'no'} hasOtp=${hookOtp ? 'yes' : 'no'} hasPhone=${hookPhone ? 'yes' : 'no'} shape=${JSON.stringify(payloadShape)}`
     );
 
+    // OTP همیشه از یک ساختار واحد استفاده می‌کند: env vars (MELIPAYAMAK_*)
+    // هیچ‌گاه از تنظیمات پیام‌کوتاه سازمان‌ها استفاده نمی‌شود
+    if (hookOtp) {
+      try {
+        if (!hookPhone) {
+          console.warn('[send-sms] otp payload missing phone', JSON.stringify(payloadShape));
+          return authHookError(400, 'OTP payload did not include phone number');
+        }
+        const otpSettings = getHookSmsSettings(null);
+        await sendOtpWithProvider(hookPhone, hookOtp, otpSettings, { disableAutoFallback: true });
+        return authHookSuccess();
+      } catch (otpError: any) {
+        const message = String(otpError?.message || otpError || 'OTP delivery failed');
+        console.error('[send-sms] otp delivery error', message);
+        return authHookError(400, message);
+      }
+    }
+
     if (isAuthHookRequest) {
       try {
         if (!hookPhone) {
@@ -1318,20 +1336,15 @@ Deno.serve(async (req) => {
           return authHookError(400, 'SMS hook payload did not include phone number');
         }
 
-        const settings = getHookSmsSettings(body?.overrideSettings);
-        if (hookOtp) {
-          await sendOtpWithProvider(hookPhone, hookOtp, settings, { disableAutoFallback: true });
-          return authHookSuccess();
-        }
-
+        const settings = getHookSmsSettings(null);
         const hookText = extractHookMessageText(body as any);
         if (hookText) {
           await sendSmsWithProviderFallback([hookPhone], hookText, settings);
           return authHookSuccess();
         }
 
-        console.warn('[send-sms] hook payload missing otp', JSON.stringify(payloadShape));
-        return authHookError(400, 'SMS hook payload did not include OTP code');
+        console.warn('[send-sms] hook payload missing content', JSON.stringify(payloadShape));
+        return authHookError(400, 'SMS hook payload did not include message content');
       } catch (hookError: any) {
         const message = String(hookError?.message || hookError || 'SMS hook failed');
         console.error('[send-sms] auth hook error', message);

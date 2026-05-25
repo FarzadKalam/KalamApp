@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  buildGlobalSearchModules,
   buildPhoneSearchVariants,
   digitsToEnglish,
+  isGlobalSearchQueryReady,
   normalizeGlobalSearchQuery,
   normalizePersianSearchText,
+  searchGlobalRecords,
 } from './globalSearch';
+import { FieldType } from '../types';
 
 describe('globalSearch normalization', () => {
   it('normalizes Persian and Arabic character variants', () => {
@@ -26,5 +30,84 @@ describe('globalSearch normalization', () => {
       expect.arrayContaining(['989123456789', '+989123456789', '09123456789', '9123456789'])
     );
   });
-});
 
+  it('does not execute broad one-character global searches', () => {
+    expect(isGlobalSearchQueryReady('ا')).toBe(false);
+    expect(isGlobalSearchQueryReady('اب')).toBe(true);
+    expect(isGlobalSearchQueryReady('۱۲')).toBe(true);
+  });
+
+  it('excludes fields hidden by role permissions from searchable data', () => {
+    const modules = {
+      customers: {
+        id: 'customers',
+        titles: { fa: 'مشتریان' },
+        fields: [
+          { key: 'full_name', labels: { fa: 'نام' }, type: FieldType.TEXT },
+          { key: 'mobile_1', labels: { fa: 'موبایل' }, type: FieldType.PHONE },
+        ],
+      },
+    } as any;
+
+    const result = buildGlobalSearchModules(modules, {
+      customers: { view: true, fields: { full_name: true, mobile_1: false } },
+    });
+
+    expect(result[0].keys).toContain('full_name');
+    expect(result[0].keys).not.toContain('mobile_1');
+    expect(result[0].displayKeys).not.toContain('mobile_1');
+  });
+
+  it('does not build ilike search filters for non-text values', () => {
+    const modules = {
+      products: {
+        id: 'products',
+        titles: { fa: 'محصولات' },
+        fields: [
+          { key: 'name', labels: { fa: 'نام' }, type: FieldType.TEXT },
+          { key: 'auto_name_enabled', labels: { fa: 'نام‌گذاری خودکار' }, type: FieldType.CHECKBOX },
+        ],
+      },
+    } as any;
+
+    const result = buildGlobalSearchModules(modules);
+
+    expect(result[0].keys).toContain('name');
+    expect(result[0].keys).not.toContain('auto_name_enabled');
+  });
+
+  it('keeps modules with disabled view out of global search requests', () => {
+    const modules = {
+      tasks: {
+        id: 'tasks',
+        titles: { fa: 'کارها' },
+        fields: [{ key: 'title', labels: { fa: 'عنوان' }, type: FieldType.TEXT }],
+      },
+    } as any;
+
+    expect(buildGlobalSearchModules(modules, { tasks: { view: false, record_scope: 'own' } })).toEqual([]);
+  });
+
+  it('does not fan out client fallback requests for a broken RPC function', async () => {
+    const moduleConfigs = {
+      products: {
+        id: 'products',
+        titles: { fa: 'محصولات' },
+        fields: [{ key: 'name', labels: { fa: 'نام' }, type: FieldType.TEXT }],
+      },
+    } as any;
+    const modules = buildGlobalSearchModules(moduleConfigs);
+    const from = vi.fn();
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({
+        data: null,
+        error: { code: '42601', message: 'syntax error at or near "from"' },
+      }),
+      from,
+    } as any;
+
+    await expect(searchGlobalRecords(supabase, moduleConfigs, modules, { query: 'جعفری' }))
+      .rejects.toMatchObject({ code: '42601' });
+    expect(from).not.toHaveBeenCalled();
+  });
+});

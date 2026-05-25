@@ -11,8 +11,6 @@ export type SmsSettings = {
   sender_number?: string;
   body_id?: string;
   credit_url?: string;
-  otp_login_enabled?: boolean;
-  otp_delivery_mode?: 'sms_only' | 'sms_and_bale' | string;
   mode?: SmsMode | string;
   base_url?: string;
   is_flash?: boolean;

@@ -47,7 +47,12 @@ import {
 } from '../utils/permissions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
-import type { GlobalSearchGroup } from '../utils/globalSearch';
+import {
+  buildGlobalSearchModules,
+  isGlobalSearchQueryReady,
+  searchGlobalRecords,
+  type GlobalSearchGroup,
+} from '../utils/globalSearch';
 import {
   clearCurrentOrgDemoData,
   getCurrentOrgDemoSeedStatus,
@@ -106,6 +111,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
+  const searchAbortRef = useRef<AbortController | null>(null);
   const intervalRunnerBusyRef = useRef(false);
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   const wasMobileViewportRef = useRef(initialIsMobile);
@@ -773,6 +779,15 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return mapSidebarMenuItems(visibleRawMenuItems);
   }, [visibleRawMenuItems]);
 
+  const searchableGlobalSearchModules = useMemo(
+    () => buildGlobalSearchModules(MODULES, rolePermissions),
+    [rolePermissions]
+  );
+  const globalSearchCacheNamespace = useMemo(
+    () => `${String(currentUser?.id || '')}:${JSON.stringify(rolePermissions)}`,
+    [currentUser?.id, rolePermissions]
+  );
+
   useEffect(() => {
     const matchedPath = findMenuPath(rawMenuItems, location.pathname);
     const parentKeys = matchedPath.slice(0, -1);
@@ -786,7 +801,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   useEffect(() => {
     const term = globalSearch.trim();
-    if (!term) {
+    if (!term || !rolePermissionsReady || !isGlobalSearchQueryReady(term)) {
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
+      searchRequestRef.current += 1;
       setSearchResults([]);
       setSearchLoading(false);
       setSearchTouched(false);
@@ -795,19 +813,23 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
     const requestId = searchRequestRef.current + 1;
     searchRequestRef.current = requestId;
+    const controller = new AbortController();
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = controller;
     const handle = setTimeout(async () => {
       try {
         setSearchLoading(true);
-        const { buildGlobalSearchModules, searchGlobalRecords } = await import('../utils/globalSearch');
-        const searchableModules = buildGlobalSearchModules(MODULES, rolePermissions);
-        const results = await searchGlobalRecords(supabase, MODULES, searchableModules, {
+        const results = await searchGlobalRecords(supabase, MODULES, searchableGlobalSearchModules, {
           query: term,
           limitPerModule: 5,
+          cacheNamespace: globalSearchCacheNamespace,
+          signal: controller.signal,
         });
         if (searchRequestRef.current !== requestId) return;
         setSearchResults(results);
         setSearchTouched(true);
       } catch (err) {
+        if (String((err as any)?.name || '') === 'AbortError') return;
         console.warn('Global search failed', err);
         if (searchRequestRef.current === requestId) {
           setSearchResults([]);
@@ -816,15 +838,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       } finally {
         if (searchRequestRef.current === requestId) setSearchLoading(false);
       }
-    }, 250);
+    }, 140);
 
-    return () => clearTimeout(handle);
-  }, [globalSearch, rolePermissions]);
+    return () => {
+      clearTimeout(handle);
+      controller.abort();
+    };
+  }, [globalSearch, globalSearchCacheNamespace, rolePermissionsReady, searchableGlobalSearchModules]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!searchBoxRef.current) return;
       if (searchBoxRef.current.contains(event.target as Node)) return;
+      searchAbortRef.current?.abort();
+      searchAbortRef.current = null;
       searchRequestRef.current += 1;
       setSearchResults([]);
       setSearchTouched(false);
@@ -965,6 +992,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const term = globalSearch.trim();
     if (!term) return;
     handleSidebarNavigate(`/search?q=${encodeURIComponent(term)}`);
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
     setSearchResults([]);
     setSearchTouched(false);
     setSearchLoading(false);
@@ -973,6 +1002,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const openSearchResult = useCallback((moduleId: string, recordId: string) => {
     if (!moduleId || !recordId) return;
     handleSidebarNavigate(`/${moduleId}/${recordId}`);
+    searchAbortRef.current?.abort();
+    searchAbortRef.current = null;
     setGlobalSearch('');
     setSearchResults([]);
     setSearchTouched(false);

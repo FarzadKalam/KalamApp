@@ -618,6 +618,9 @@ const toNativeGregorianDateString = (value: Dayjs | null | undefined): string | 
   return `${year}-${month}-${day}`;
 };
 
+const HR_SESSION_KEY_RANGE = 'hr_filter_range';
+const HR_SESSION_KEY_EMPLOYEES = 'hr_filter_employee_ids';
+
 const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
   const query = new URLSearchParams(window.location.search);
   const from = parseDateParam(query.get('from'));
@@ -625,6 +628,17 @@ const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
   if (from && to && from.valueOf() <= to.valueOf()) {
     return [from.startOf('day'), to.endOf('day')];
   }
+  try {
+    const saved = sessionStorage.getItem(HR_SESSION_KEY_RANGE);
+    if (saved) {
+      const parsed = JSON.parse(saved) as { from: string; to: string };
+      const savedFrom = parseDateParam(parsed.from);
+      const savedTo = parseDateParam(parsed.to);
+      if (savedFrom?.isValid() && savedTo?.isValid() && savedFrom.valueOf() <= savedTo.valueOf()) {
+        return [savedFrom.startOf('day'), savedTo.endOf('day')];
+      }
+    }
+  } catch {}
   return [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')];
 };
 
@@ -1403,6 +1417,12 @@ const HRPage: React.FC = () => {
       if (nextStart.valueOf() > nextEnd.valueOf()) {
         [nextStart, nextEnd] = [current[0].startOf('day'), current[1].endOf('day')];
       }
+      try {
+        sessionStorage.setItem(HR_SESSION_KEY_RANGE, JSON.stringify({
+          from: toNativeGregorianDateString(nextStart),
+          to: toNativeGregorianDateString(nextEnd),
+        }));
+      } catch {}
       return [nextStart, nextEnd];
     });
   }, []);
@@ -1978,9 +1998,23 @@ const HRPage: React.FC = () => {
       setOrderQuantityById(orderMap);
 
       if (!employeeFilterInitialized) {
-        const defaultSelectedIds = normalizedProfiles
-          .filter((profile) => isCurrentlyCollaboratingProfile(profile))
-          .map((profile) => profile.id);
+        let defaultSelectedIds: string[];
+        try {
+          const saved = sessionStorage.getItem(HR_SESSION_KEY_EMPLOYEES);
+          if (saved) {
+            const parsed = JSON.parse(saved) as string[];
+            const validIds = new Set(normalizedProfiles.map((p) => p.id));
+            defaultSelectedIds = parsed.filter((id) => validIds.has(id));
+          } else {
+            defaultSelectedIds = normalizedProfiles
+              .filter((profile) => isCurrentlyCollaboratingProfile(profile))
+              .map((profile) => profile.id);
+          }
+        } catch {
+          defaultSelectedIds = normalizedProfiles
+            .filter((profile) => isCurrentlyCollaboratingProfile(profile))
+            .map((profile) => profile.id);
+        }
         setSelectedEmployeeIds(defaultSelectedIds);
         setEmployeeFilterInitialized(true);
       }
@@ -2194,6 +2228,7 @@ const HRPage: React.FC = () => {
                 subjectUserId: member.userId,
                 subjectRoleId: member.roleId,
                 subjectLabel: member.label,
+                overridePeriodRange: { startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() },
               });
               if (!snapshot) continue;
               const rewardEntries = evaluateGoalRewardRules({
@@ -2257,7 +2292,7 @@ const HRPage: React.FC = () => {
     };
 
     void run();
-  }, [activeTab, payrollLedgerRows, payrollSlipById, visibleSummaries]);
+  }, [activeTab, monthEnd, monthStart, payrollLedgerRows, payrollSlipById, visibleSummaries]);
 
   const fetchCalculatedCommissionRows = useCallback(async () => {
     const periodStart = toNativeGregorianDateString(monthStart);
@@ -5896,6 +5931,7 @@ const HRPage: React.FC = () => {
           autoPlay={false}
           showPlaybackControls={false}
           onActiveCardChange={(card) => setHrActiveGoalId(card?.goal.id || null)}
+          periodOverride={{ startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() }}
         />
       </Card>
       <Card>
@@ -6343,7 +6379,11 @@ const HRPage: React.FC = () => {
                   allowClear
                   placeholder="فیلتر نیرو"
                   value={selectedEmployeeIds}
-                  onChange={(values) => setSelectedEmployeeIds(values as string[])}
+                  onChange={(values) => {
+                    const ids = values as string[];
+                    setSelectedEmployeeIds(ids);
+                    try { sessionStorage.setItem(HR_SESSION_KEY_EMPLOYEES, JSON.stringify(ids)); } catch {}
+                  }}
                   options={employeeOptions}
                   className="w-full min-w-0"
                   getPopupContainer={resolveSelectPopupContainer}
@@ -6352,7 +6392,10 @@ const HRPage: React.FC = () => {
                 />
                 <Button
                   icon={<CloseOutlined />}
-                  onClick={() => setSelectedEmployeeIds([])}
+                  onClick={() => {
+                    setSelectedEmployeeIds([]);
+                    try { sessionStorage.removeItem(HR_SESSION_KEY_EMPLOYEES); } catch {}
+                  }}
                   disabled={!selectedEmployeeIds.length}
                   className="w-full rounded-xl"
                 >
