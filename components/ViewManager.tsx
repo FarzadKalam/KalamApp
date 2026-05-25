@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   App,
@@ -9,8 +9,11 @@ import {
   List,
   Modal,
   Popconfirm,
+  Radio,
+  Select,
   Skeleton,
   Tabs,
+  Tag,
   Tooltip,
 } from 'antd';
 import {
@@ -21,21 +24,33 @@ import {
   DeleteOutlined,
   EditOutlined,
   FilterOutlined,
+  LockOutlined,
   PlusOutlined,
   SaveOutlined,
+  SortAscendingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import { ModuleField, SavedView, ViewConfig } from '../types';
+import { FieldType, ModuleField, SavedView, ViewConfig } from '../types';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
 import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperatorNeedsValue } from '../utils/filterUtils';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
-import { createWorkflowId } from '../utils/workflowTypes';
+import { createWorkflowId, WORKFLOW_ASSIGNEE_FIELD_KEY } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { getModuleListVisibleFields, normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
+import { getCachedAuthUser } from '../utils/sessionCache';
+import { fetchAssigneeDirectory } from '../utils/referenceData';
+
+const CURRENT_USER_OPTION_VALUE = '__current_user__';
+const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
+const SPECIAL_ASSIGNEE_OPTIONS = [
+  { label: 'کاربر در حال مشاهده', value: CURRENT_USER_OPTION_VALUE },
+  { label: 'نقش در حال مشاهده', value: CURRENT_ROLE_OPTION_VALUE },
+];
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -69,6 +84,10 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const [config, setConfig] = useState<ViewConfig>({ columns: [], filters: [] });
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [accessDirectory, setAccessDirectory] = useState<{ users: Array<{ id: string; display_name?: string; full_name?: string; role_id?: string | null }>; roles: Array<{ id: string; title?: string }> } | null>(null);
+  const [loadingAccessDirectory, setLoadingAccessDirectory] = useState(false);
+  const [activeModalTab, setActiveModalTab] = useState('columns');
+  const accessDirectoryLoadedRef = useRef(false);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleConfig = MODULES[moduleId];
@@ -105,6 +124,16 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   }, [config.columns, defaultViewColumnKeys, getViewColumnKeys]);
   const isEditingView = editingViewId !== null || editingDefaultView;
   const viewConditionFields = useMemo(() => getWorkflowConditionFields(moduleId), [moduleId]);
+
+  const sortableFields = useMemo(() => {
+    const fields = moduleConfig?.fields || [];
+    const timeSystemKeys = ['created_at', 'updated_at'];
+    const dateTypes = new Set<FieldType>([FieldType.DATE, FieldType.DATETIME]);
+    const timeSystemFields = fields.filter((f) => timeSystemKeys.includes(f.key));
+    const otherDateFields = fields.filter((f) => !timeSystemKeys.includes(f.key) && dateTypes.has(f.type as FieldType));
+    const otherFields = fields.filter((f) => !timeSystemKeys.includes(f.key) && !dateTypes.has(f.type as FieldType));
+    return [...timeSystemFields, ...otherDateFields, ...otherFields];
+  }, [moduleConfig]);
   const supportedViewFilterOperators = useMemo(
     () =>
       new Set([
@@ -181,6 +210,29 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     [defaultView]
   );
 
+  const filterViewsByAccess = useCallback(async (allViews: SavedView[]): Promise<SavedView[]> => {
+    try {
+      const authUser = await getCachedAuthUser(supabase);
+      const currentUserId = authUser?.id || null;
+      if (!currentUserId) return allViews;
+      const directory = await fetchAssigneeDirectory(supabase);
+      const me = (directory.users || []).find((u) => String(u?.id || '') === currentUserId);
+      const myRoleId = me?.role_id ? String(me.role_id) : null;
+      return allViews.filter((view) => {
+        if (view.is_default || view.id.startsWith('default_')) return true;
+        const access = (view.config as any)?.access;
+        if (!access || access.type !== 'specific') return true;
+        const userIds: string[] = Array.isArray(access.userIds) ? access.userIds : [];
+        const roleIds: string[] = Array.isArray(access.roleIds) ? access.roleIds : [];
+        if (userIds.includes(currentUserId)) return true;
+        if (myRoleId && roleIds.includes(myRoleId)) return true;
+        return false;
+      });
+    } catch {
+      return allViews;
+    }
+  }, []);
+
   useEffect(() => {
     if (!moduleId) return;
     let active = true;
@@ -203,7 +255,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
               .select(SAVED_VIEW_SELECT_FIELDS)
               .eq('module_id', moduleId)
               .order('created_at', { ascending: false });
-            return normalizeViewsList((data || []) as SavedView[]);
+            const normalized = normalizeViewsList((data || []) as SavedView[]);
+            return filterViewsByAccess(normalized);
           })();
 
         if (!savedViewsPromiseCache.has(moduleId)) {
@@ -228,7 +281,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     return () => {
       active = false;
     };
-  }, [defaultView, moduleId, normalizeViewsList]);
+  }, [defaultView, filterViewsByAccess, moduleId, normalizeViewsList]);
 
   useEffect(() => {
     if (!moduleConfig || !isModalOpen) return;
@@ -238,7 +291,17 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       try {
         const optionState = await loadWorkflowConditionEditorOptions(moduleId, viewConditionFields);
         if (!active) return;
-        setDynamicOptions(optionState.dynamicOptions || {});
+        const nextDynamic = { ...(optionState.dynamicOptions || {}) };
+        // inject special current-user/role options at the top of assignee fields
+        const assigneeKeys = viewConditionFields
+          .filter((f) => f.key === WORKFLOW_ASSIGNEE_FIELD_KEY || String(f.key).includes(WORKFLOW_ASSIGNEE_FIELD_KEY))
+          .map((f) => f.key);
+        for (const key of Object.keys(nextDynamic)) {
+          if (key === WORKFLOW_ASSIGNEE_FIELD_KEY || assigneeKeys.includes(key)) {
+            nextDynamic[key] = [...SPECIAL_ASSIGNEE_OPTIONS, ...(nextDynamic[key] || [])];
+          }
+        }
+        setDynamicOptions(nextDynamic);
         setRelationOptions(optionState.relationOptions || {});
       } catch (error) {
         if (!active) return;
@@ -254,11 +317,28 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     };
   }, [isModalOpen, moduleId, moduleConfig, viewConditionFields]);
 
+  useEffect(() => {
+    if (!isModalOpen || activeModalTab !== 'access' || accessDirectoryLoadedRef.current) return;
+    accessDirectoryLoadedRef.current = true;
+    let active = true;
+    setLoadingAccessDirectory(true);
+    fetchAssigneeDirectory(supabase)
+      .then((dir) => {
+        if (!active) return;
+        setAccessDirectory(dir as any);
+      })
+      .catch(() => { if (active) setAccessDirectory(null); })
+      .finally(() => { if (active) setLoadingAccessDirectory(false); });
+    return () => { active = false; };
+  }, [isModalOpen, activeModalTab]);
+
   const handleOpenNewView = () => {
     setConfig({ columns: defaultViewColumnKeys, filters: [] });
     setViewName('');
     setEditingViewId(null);
     setEditingDefaultView(false);
+    setActiveModalTab('columns');
+    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -277,11 +357,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({
           : defaultViewColumnKeys,
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
+      access: rawConfig.access,
     };
     setConfig(safeConfig);
     setViewName(view.name);
     setEditingViewId(view.id.startsWith('default_') ? null : view.id);
     setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
+    setActiveModalTab('columns');
+    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -298,11 +381,14 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         id: createWorkflowId(),
       })),
       sort: rawConfig.sort,
+      access: rawConfig.access,
     };
     setConfig(safeConfig);
     setViewName(`${view.name} (کپی)`);
     setEditingViewId(null);
     setEditingDefaultView(false);
+    setActiveModalTab('columns');
+    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -315,12 +401,15 @@ const ViewManager: React.FC<ViewManagerProps> = ({
           : defaultViewColumnKeys,
       filters: normalizeViewFilters(rawConfig.filters),
       sort: rawConfig.sort,
+      access: rawConfig.access,
     };
     setConfig(safeConfig);
     setViewName(view.name);
     setEditingViewId(view.id.startsWith('default_') ? null : view.id);
     setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
     setIsMobileSheetOpen(false);
+    setActiveModalTab('columns');
+    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -719,6 +808,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
           <Tabs
             className="view-manager-modal-tabs"
             type="card"
+            activeKey={activeModalTab}
+            onChange={setActiveModalTab}
             items={[
               {
                 key: 'columns',
@@ -814,6 +905,215 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                       overlayZIndexBase={1400}
                       popupContainer={popupContainer}
                     />
+                  </div>
+                ),
+              },
+              {
+                key: 'sort',
+                label: (
+                  <span className="inline-flex items-center gap-2">
+                    <SortAscendingOutlined />
+                    ترتیب نمایش
+                    {config.sort && config.sort.length > 0 && (
+                      <Badge count={config.sort.length} size="small" color="rgb(var(--brand-500-rgb))" />
+                    )}
+                  </span>
+                ),
+                children: (
+                  <div className="min-h-[350px] rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                    <div className="mb-4 text-sm font-medium text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
+                      معیار ترتیب نمایش پیش‌فرض
+                    </div>
+                    <div className="flex flex-col gap-4">
+                      <div className="flex items-center gap-3">
+                        <span className="w-20 shrink-0 text-sm text-gray-600 dark:text-gray-400">فیلد</span>
+                        <Select
+                          className="flex-1"
+                          allowClear
+                          placeholder="انتخاب فیلد..."
+                          value={config.sort?.[0]?.field || null}
+                          onChange={(val) =>
+                            setConfig((prev) => ({
+                              ...prev,
+                              sort: val ? [{ field: val, order: prev.sort?.[0]?.order || 'desc' }] : [],
+                            }))
+                          }
+                          getPopupContainer={popupContainer}
+                          options={sortableFields.map((f, idx) => {
+                            const isTimeSystem = f.key === 'created_at' || f.key === 'updated_at';
+                            const isDateType = f.type === FieldType.DATE || f.type === FieldType.DATETIME;
+                            const prevField = sortableFields[idx - 1];
+                            const isFirstDateGroup =
+                              !isTimeSystem &&
+                              isDateType &&
+                              (prevField?.key === 'created_at' || prevField?.key === 'updated_at' || (prevField?.type !== FieldType.DATE && prevField?.type !== FieldType.DATETIME));
+                            const isFirstOtherGroup =
+                              !isTimeSystem &&
+                              !isDateType &&
+                              prevField &&
+                              (prevField.type === FieldType.DATE || prevField.type === FieldType.DATETIME);
+                            return {
+                              label: (
+                                <span className="flex items-center gap-1.5">
+                                  {isTimeSystem && <span className="text-[10px] text-amber-500">⏱</span>}
+                                  {!isTimeSystem && isDateType && <span className="text-[10px] text-blue-400">📅</span>}
+                                  {f.labels.fa}
+                                  {isFirstDateGroup && <span className="mr-1 text-[10px] text-gray-400">— فیلدهای تاریخ</span>}
+                                  {isFirstOtherGroup && <span className="mr-1 text-[10px] text-gray-400">— سایر فیلدها</span>}
+                                </span>
+                              ),
+                              value: f.key,
+                            };
+                          })}
+                        />
+                      </div>
+                      {config.sort?.[0]?.field && (
+                        <div className="flex items-center gap-3">
+                          <span className="w-20 shrink-0 text-sm text-gray-600 dark:text-gray-400">جهت</span>
+                          <Radio.Group
+                            value={config.sort[0].order}
+                            onChange={(e) =>
+                              setConfig((prev) => ({
+                                ...prev,
+                                sort: prev.sort?.map((s, i) => (i === 0 ? { ...s, order: e.target.value } : s)),
+                              }))
+                            }
+                          >
+                            <Radio.Button value="desc">جدیدترین اول ↓</Radio.Button>
+                            <Radio.Button value="asc">قدیمی‌ترین اول ↑</Radio.Button>
+                          </Radio.Group>
+                        </div>
+                      )}
+                      {(!config.sort || config.sort.length === 0) && (
+                        <div className="mt-2 rounded-xl border border-dashed border-[rgba(var(--brand-300-rgb),0.5)] p-4 text-center text-sm text-gray-400 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:text-gray-500">
+                          هیچ معیار ترتیبی انتخاب نشده — از ترتیب پیش‌فرض سیستم استفاده می‌شود
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                key: 'access',
+                label: (
+                  <span className="inline-flex items-center gap-2">
+                    <LockOutlined />
+                    دسترسی مشاهده
+                    {config.access?.type === 'specific' && (
+                      <Badge
+                        count={(config.access.userIds?.length || 0) + (config.access.roleIds?.length || 0)}
+                        size="small"
+                        color="rgb(var(--brand-500-rgb))"
+                      />
+                    )}
+                  </span>
+                ),
+                children: (
+                  <div className="min-h-[350px] rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.38)] p-4 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                    <div className="mb-4 text-sm font-medium text-[rgba(var(--brand-700-rgb),1)] dark:text-[rgba(var(--brand-200-rgb),1)]">
+                      چه کسانی می‌توانند این نما را ببینند؟
+                    </div>
+                    <div className="flex flex-col gap-4">
+                      <Radio.Group
+                        value={config.access?.type || 'all'}
+                        onChange={(e) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            access: e.target.value === 'all'
+                              ? { type: 'all' }
+                              : { type: 'specific', userIds: prev.access?.userIds || [], roleIds: prev.access?.roleIds || [] },
+                          }))
+                        }
+                      >
+                        <div className="flex flex-col gap-3">
+                          <Radio value="all">
+                            <span className="mr-1 font-medium">همه کاربران</span>
+                            <span className="mr-2 text-xs text-gray-400">(پیش‌فرض)</span>
+                          </Radio>
+                          <Radio value="specific">
+                            <span className="mr-1 font-medium">کاربران / نقش‌های انتخابی</span>
+                          </Radio>
+                        </div>
+                      </Radio.Group>
+
+                      {config.access?.type === 'specific' && (
+                        <div className="flex flex-col gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/60 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                          <div>
+                            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
+                              <TeamOutlined /> کاربران
+                            </div>
+                            {loadingAccessDirectory ? (
+                              <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
+                            ) : (
+                              <Select
+                                mode="multiple"
+                                className="w-full"
+                                placeholder="انتخاب کاربران..."
+                                value={config.access?.userIds || []}
+                                onChange={(val) =>
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    access: { ...prev.access, type: 'specific', userIds: val, roleIds: prev.access?.roleIds || [] },
+                                  }))
+                                }
+                                getPopupContainer={popupContainer}
+                                tagRender={({ label, value, closable, onClose }) => (
+                                  <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
+                                    {label}
+                                  </Tag>
+                                )}
+                                options={(accessDirectory?.users || []).map((u) => ({
+                                  label: String(u?.display_name || u?.full_name || u?.id || ''),
+                                  value: String(u?.id || ''),
+                                }))}
+                                filterOption={(input, opt) =>
+                                  String(opt?.label || '').includes(input)
+                                }
+                              />
+                            )}
+                          </div>
+                          <div>
+                            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
+                              <LockOutlined /> نقش‌ها
+                            </div>
+                            {loadingAccessDirectory ? (
+                              <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
+                            ) : (
+                              <Select
+                                mode="multiple"
+                                className="w-full"
+                                placeholder="انتخاب نقش‌ها..."
+                                value={config.access?.roleIds || []}
+                                onChange={(val) =>
+                                  setConfig((prev) => ({
+                                    ...prev,
+                                    access: { ...prev.access, type: 'specific', userIds: prev.access?.userIds || [], roleIds: val },
+                                  }))
+                                }
+                                getPopupContainer={popupContainer}
+                                tagRender={({ label, value, closable, onClose }) => (
+                                  <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
+                                    {label}
+                                  </Tag>
+                                )}
+                                options={(accessDirectory?.roles || []).map((r) => ({
+                                  label: String(r?.title || r?.id || ''),
+                                  value: String(r?.id || ''),
+                                }))}
+                                filterOption={(input, opt) =>
+                                  String(opt?.label || '').includes(input)
+                                }
+                              />
+                            )}
+                          </div>
+                          {(config.access.userIds?.length || 0) + (config.access.roleIds?.length || 0) === 0 && (
+                            <div className="text-xs text-amber-500">
+                              ⚠️ هیچ کاربر یا نقشی انتخاب نشده — این نما برای کسی نمایش داده نمی‌شود
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ),
               },

@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { App, Tree, Checkbox, Button, Input, Empty, Divider, Switch, Collapse, Radio, Select, Tooltip } from 'antd';
-import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, DeleteOutlined, SaveOutlined, LockOutlined, TeamOutlined } from '@ant-design/icons';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { App, Tree, Checkbox, Button, Input, Empty, Divider, Switch, Collapse, Radio, Select, Tooltip, Badge } from 'antd';
+import { ArrowDownOutlined, ArrowUpOutlined, PlusOutlined, DeleteOutlined, SaveOutlined, LockOutlined, TeamOutlined, FilterOutlined, CaretDownOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import {
@@ -36,6 +36,7 @@ import {
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
   type PermissionMap,
   type RecordScope,
+  type ViewConditionGroup,
 } from '../../utils/permissions';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -47,6 +48,25 @@ import {
   mergeClassNames,
   resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
+import WorkflowConditionsGroup from '../../components/workflows/WorkflowConditionsGroup';
+import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
+import { getWorkflowConditionFields } from '../../utils/workflowHelpers';
+import { getDefaultWorkflowOperator, getWorkflowOperatorOptions } from '../../utils/filterUtils';
+import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
+
+const CURRENT_USER_OPTION_VALUE = '__current_user__';
+const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
+const SPECIAL_ASSIGNEE_OPTIONS = [
+  { label: 'کاربر در حال مشاهده', value: CURRENT_USER_OPTION_VALUE },
+  { label: 'نقش در حال مشاهده', value: CURRENT_ROLE_OPTION_VALUE },
+];
+
+type ModuleConditionOptions = {
+  dynamicOptions: Record<string, Array<{ label: string; value: string }>>;
+  relationOptions: Record<string, Array<{ label: string; value: string }>>;
+  loading: boolean;
+  loaded: boolean;
+};
 
 const { Panel } = Collapse;
 
@@ -83,6 +103,9 @@ const RolesTab: React.FC = () => {
   const [supportsRoleTreeSchema, setSupportsRoleTreeSchema] = useState<boolean | null>(null);
   const [permissionSchemaVersion, setPermissionSchemaVersion] = useState(0);
   const [fieldSearchByModule, setFieldSearchByModule] = useState<Record<string, string>>({});
+  const [conditionEditorOpen, setConditionEditorOpen] = useState<Record<string, boolean>>({});
+  const [moduleConditionOptions, setModuleConditionOptions] = useState<Record<string, ModuleConditionOptions>>({});
+  const conditionOptionsLoadingRef = useRef<Set<string>>(new Set());
 
   const defaultPermissions = useMemo(() => buildDefaultPermissions(MODULES), [permissionSchemaVersion]);
   const mobileFooterModuleOptions = useMemo(
@@ -359,6 +382,58 @@ const RolesTab: React.FC = () => {
       return next;
     });
   };
+
+  const handleViewConditionsChange = useCallback((moduleId: string, group: ViewConditionGroup) => {
+    setPermissions((prev) => {
+      const merged = mergePermissionsWithDefaults(prev, defaultPermissions);
+      return {
+        ...merged,
+        [moduleId]: {
+          ...(merged[moduleId] || {}),
+          view_conditions: group.conditions.length > 0 ? group : undefined,
+        },
+      };
+    });
+  }, [defaultPermissions]);
+
+  const loadConditionOptions = useCallback(async (moduleId: string) => {
+    if (conditionOptionsLoadingRef.current.has(moduleId)) return;
+    if (moduleConditionOptions[moduleId]?.loaded) return;
+    conditionOptionsLoadingRef.current.add(moduleId);
+    setModuleConditionOptions((prev) => ({
+      ...prev,
+      [moduleId]: { dynamicOptions: {}, relationOptions: {}, loading: true, loaded: false },
+    }));
+    try {
+      const fields = getWorkflowConditionFields(moduleId);
+      const result = await loadWorkflowConditionEditorOptions(moduleId, fields);
+      const nextDynamic = { ...(result.dynamicOptions || {}) };
+      for (const key of Object.keys(nextDynamic)) {
+        if (key === WORKFLOW_ASSIGNEE_FIELD_KEY || key.includes(WORKFLOW_ASSIGNEE_FIELD_KEY)) {
+          nextDynamic[key] = [...SPECIAL_ASSIGNEE_OPTIONS, ...(nextDynamic[key] || [])];
+        }
+      }
+      setModuleConditionOptions((prev) => ({
+        ...prev,
+        [moduleId]: { dynamicOptions: nextDynamic, relationOptions: result.relationOptions || {}, loading: false, loaded: true },
+      }));
+    } catch {
+      setModuleConditionOptions((prev) => ({
+        ...prev,
+        [moduleId]: { dynamicOptions: {}, relationOptions: {}, loading: false, loaded: true },
+      }));
+    } finally {
+      conditionOptionsLoadingRef.current.delete(moduleId);
+    }
+  }, [moduleConditionOptions]);
+
+  const toggleConditionEditor = useCallback((moduleId: string) => {
+    setConditionEditorOpen((prev) => {
+      const next = !prev[moduleId];
+      if (next) void loadConditionOptions(moduleId);
+      return { ...prev, [moduleId]: next };
+    });
+  }, [loadConditionOptions]);
 
   const savePermissions = async () => {
     if (!selectedRoleId) return;
@@ -897,13 +972,90 @@ const RolesTab: React.FC = () => {
                         <Radio.Group
                           value={modPerms.record_scope || 'all'}
                           onChange={(e) => handlePermissionChange(module.id, 'scope', undefined, e.target.value)}
-                          className="mb-5 flex flex-col gap-2"
+                          className="mb-4 flex flex-col gap-2"
                         >
                           <Radio value="all">مشاهده همه رکوردها</Radio>
                           <Radio value="own">فقط مشاهده رکوردهای به نام شخص</Radio>
                           <Radio value="team">فقط مشاهده رکوردهای به نام تیم (جایگاه)</Radio>
                           <Radio value="subtree">مشاهده رکوردهای افراد زیرمجموعه</Radio>
                         </Radio.Group>
+
+                        {/* شرط‌های نمایش پیشرفته */}
+                        {(() => {
+                          const condOpen = conditionEditorOpen[module.id] || false;
+                          const condOpts = moduleConditionOptions[module.id];
+                          const existingConditions = modPerms.view_conditions;
+                          const condCount = existingConditions?.conditions?.length || 0;
+                          const condFields = getWorkflowConditionFields(module.id);
+                          return (
+                            <div className="mb-5">
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 rounded-xl border border-dashed border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-50-rgb),0.4)] px-3 py-2 text-sm text-[rgba(var(--brand-700-rgb),1)] transition hover:border-[rgba(var(--brand-500-rgb),0.7)] hover:bg-[rgba(var(--brand-50-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)] dark:hover:bg-white/10"
+                                onClick={() => toggleConditionEditor(module.id)}
+                                disabled={disabled}
+                              >
+                                <FilterOutlined className="text-xs" />
+                                <span className="flex-1 text-right text-xs font-medium">شرط‌های نمایش پیشرفته</span>
+                                {condCount > 0 && !condOpen && (
+                                  <Badge count={condCount} size="small" color="rgb(var(--brand-500-rgb))" />
+                                )}
+                                <CaretDownOutlined
+                                  className={`text-xs transition-transform ${condOpen ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+
+                              {condOpen && (
+                                <div className="mt-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/60 p-3 dark:border-[rgba(var(--brand-300-rgb),0.15)] dark:bg-white/5">
+                                  <div className="mb-3 flex items-center justify-between">
+                                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                                      رکوردهایی که این شرط‌ها را دارند قابل مشاهده می‌شوند
+                                    </span>
+                                    <Radio.Group
+                                      size="small"
+                                      value={existingConditions?.logic || 'and'}
+                                      onChange={(e) =>
+                                        handleViewConditionsChange(module.id, {
+                                          logic: e.target.value,
+                                          conditions: existingConditions?.conditions || [],
+                                        })
+                                      }
+                                    >
+                                      <Radio.Button value="and">همه شرط‌ها</Radio.Button>
+                                      <Radio.Button value="or">یکی از شرط‌ها</Radio.Button>
+                                    </Radio.Group>
+                                  </div>
+                                  <WorkflowConditionsGroup
+                                    value={(existingConditions?.conditions || []) as any}
+                                    onChange={(next) =>
+                                      handleViewConditionsChange(module.id, {
+                                        logic: existingConditions?.logic || 'and',
+                                        conditions: next as any,
+                                      })
+                                    }
+                                    fields={condFields}
+                                    dynamicOptions={condOpts?.dynamicOptions || {}}
+                                    relationOptions={condOpts?.relationOptions || {}}
+                                    getOperatorOptions={(field) =>
+                                      getWorkflowOperatorOptions(field).filter((opt) =>
+                                        ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || ''))
+                                      )
+                                    }
+                                    getDefaultOperator={getDefaultWorkflowOperator}
+                                    overlayZIndexBase={2000}
+                                    disabled={disabled}
+                                  />
+                                  {condCount === 0 && (
+                                    <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                                      بدون شرط — همه رکوردها (با توجه به محدوده بالا) نمایش داده می‌شوند
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">
                           دسترسی به فیلدها و جداول
                         </Divider>

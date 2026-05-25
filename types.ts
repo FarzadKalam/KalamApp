@@ -427,6 +427,11 @@ export interface ViewConfig {
   columns: string[];
   filters: FilterItem[];
   sort?: { field: string; order: 'asc' | 'desc' }[];
+  access?: {
+    type: 'all' | 'specific';
+    userIds?: string[];
+    roleIds?: string[];
+  };
 }
 
 export interface SavedView {

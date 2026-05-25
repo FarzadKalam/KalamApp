@@ -38,6 +38,11 @@ export const saasUsersConfig: ModuleDefinition = {
     { key: 'is_active', labels: { fa: 'فعال', en: 'Active' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'access', order: 1, isTableColumn: true, nature: FieldNature.SYSTEM },
     { key: 'is_demo', labels: { fa: 'سازمان دمو', en: 'Demo Organization' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'access', order: 2, isTableColumn: true, nature: FieldNature.SYSTEM },
     { key: 'phone_confirmed', labels: { fa: 'ورود پیامکی تایید شده', en: 'Phone Confirmed' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'login', order: 1, nature: FieldNature.SYSTEM },
+    { key: 'role_id', labels: { fa: 'شناسه نقش', en: 'Role ID' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'access', order: 10, nature: FieldNature.SYSTEM },
+    { key: 'software_role', labels: { fa: 'نقش نرم‌افزاری', en: 'Software Role' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'access', order: 11, nature: FieldNature.SYSTEM },
+    { key: 'profile_exists', labels: { fa: 'پروفایل موجود', en: 'Profile Exists' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'audit', order: 10, nature: FieldNature.SYSTEM },
+    { key: 'auth_exists', labels: { fa: 'حساب ورود موجود', en: 'Auth Exists' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'audit', order: 11, nature: FieldNature.SYSTEM },
+    { key: 'org_slug', labels: { fa: 'Slug سازمان', en: 'Org Slug' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'audit', order: 12, nature: FieldNature.SYSTEM },
   ],
   blocks: [
     { id: 'audit', titles: { fa: 'نتیجه بررسی', en: 'Audit' }, type: BlockType.FIELD_GROUP, order: 1 },

@@ -5,11 +5,24 @@ import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCach
 
 export type RecordScope = 'all' | 'own' | 'team' | 'subtree';
 
+export type ViewConditionItem = {
+  id: string;
+  field: string;
+  operator: string;
+  value?: any;
+};
+
+export type ViewConditionGroup = {
+  logic: 'and' | 'or';
+  conditions: ViewConditionItem[];
+};
+
 export type ModulePermissionConfig = {
   view?: boolean;
   edit?: boolean;
   delete?: boolean;
   record_scope?: RecordScope;
+  view_conditions?: ViewConditionGroup;
   fields?: Record<string, any>;
 };
 

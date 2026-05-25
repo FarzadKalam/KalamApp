@@ -661,6 +661,7 @@ export const ModuleListRefine: React.FC<{
   const [allRoles, setAllRoles] = useState<any[]>(() => cachedOptionSnapshot?.allRoles || []);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
+  const [permissionFilters, setPermissionFilters] = useState<CrudFilters>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
@@ -1454,6 +1455,16 @@ export const ModuleListRefine: React.FC<{
         record_scope: modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all'),
       });
       setFieldPermissions(modulePerms.fields || {});
+      // build permission-level filters from view_conditions
+      const viewCondGroup = modulePerms.view_conditions;
+      if (viewCondGroup && Array.isArray(viewCondGroup.conditions) && viewCondGroup.conditions.length > 0) {
+        buildViewCrudFilters(viewCondGroup.conditions, viewCondGroup.logic).then((pFilters) => {
+          setPermissionFilters(pFilters);
+          applyCombinedFilters(effectiveInitialViewFilters as CrudFilters, persistedState?.searchTerm || '', persistedState?.columnFilters || {}, false);
+        }).catch(() => setPermissionFilters([]));
+      } else {
+        setPermissionFilters([]);
+      }
       setCanOpenWorkflows(
         workflowPerms.view !== false && (workflowPerms?.fields?.module_list_button !== false)
       );
@@ -2537,7 +2548,7 @@ export const ModuleListRefine: React.FC<{
   }
 
   function buildMergedFilters(nextViewFilters: CrudFilters, nextSearchTerm: string, nextColumnFilters: ColumnFiltersState): CrudFilters {
-    const mergedFilters = [...nextViewFilters].filter((item: any) => {
+    const mergedFilters = [...permissionFilters, ...nextViewFilters].filter((item: any) => {
       return !getTagViewFilterMeta(item, moduleConfig);
     });
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
@@ -2551,7 +2562,7 @@ export const ModuleListRefine: React.FC<{
     return mergedFilters;
   }
 
-  async function buildViewCrudFilters(nextViewFiltersConfig: any[]): Promise<CrudFilters> {
+  async function buildViewCrudFilters(nextViewFiltersConfig: any[], logic?: 'and' | 'or'): Promise<CrudFilters> {
     if (!moduleConfig || !Array.isArray(nextViewFiltersConfig)) return [];
 
     const buildDateBoundaryValue = (
@@ -2592,7 +2603,38 @@ export const ModuleListRefine: React.FC<{
       const assigneeIds = new Set<string>();
       const assigneeRoleIds = new Set<string>();
 
+      // resolve special current-viewer tokens once
+      let currentViewerUserId: string | null = null;
+      let currentViewerRoleId: string | null = null;
+      const needsCurrentUser = normalizedValues.includes("__current_user__") || normalizedValues.includes("__current_role__");
+      if (needsCurrentUser) {
+        const authUser = await getCachedAuthUser(supabase);
+        currentViewerUserId = authUser?.id ? String(authUser.id) : null;
+        if (currentViewerUserId) {
+          const meInDir = users.find((u) => String(u?.id || "") === currentViewerUserId);
+          currentViewerRoleId = meInDir?.role_id ? String(meInDir.role_id) : null;
+        }
+      }
+
       normalizedValues.forEach((entry) => {
+        if (entry === "__current_user__") {
+          if (currentViewerUserId) assigneeIds.add(currentViewerUserId);
+          return;
+        }
+
+        if (entry === "__current_role__") {
+          if (currentViewerRoleId) {
+            assigneeRoleIds.add(currentViewerRoleId);
+            assigneeIds.add(currentViewerRoleId);
+            users.forEach((user) => {
+              if (String(user?.role_id || "").trim() === currentViewerRoleId) {
+                assigneeIds.add(String(user?.id || "").trim());
+              }
+            });
+          }
+          return;
+        }
+
         if (entry.startsWith("user_")) {
           const userId = String(entry.slice(5) || "").trim();
           if (userId) assigneeIds.add(userId);
@@ -2817,6 +2859,10 @@ export const ModuleListRefine: React.FC<{
       }
     }
 
+    if (logic === 'or' && filters.length > 1) {
+      return [{ operator: 'or', value: filters } as any];
+    }
+
     return filters;
   }
 
@@ -2918,13 +2964,23 @@ export const ModuleListRefine: React.FC<{
     };
     void applyViewFilters();
 
-    // ✅ اعمال ستون‌های انتخاب‌شده
+    // اعمال ستون‌های انتخاب‌شده
     if (config && config.columns && Array.isArray(config.columns) && config.columns.length > 0) {
         setVisibleColumns(normalizeVisibleColumnsForView(resolvedModuleId, moduleConfig, view, config.columns));
     } else {
         setVisibleColumns([]);
     }
-  }, [columnFilters, currentView, moduleConfig, resolvedModuleId, searchTerm]);
+
+    // اعمال ترتیب نمایش
+    if (config && Array.isArray(config.sort) && config.sort.length > 0) {
+      const viewSorters = config.sort
+        .filter((s: any) => String(s?.field || '').trim() && (s?.order === 'asc' || s?.order === 'desc'))
+        .map((s: any) => ({ field: String(s.field), order: s.order as 'asc' | 'desc' }));
+      if (viewSorters.length > 0) {
+        setSorters(ensureStableCrudSorters(viewSorters));
+      }
+    }
+  }, [columnFilters, currentView, moduleConfig, resolvedModuleId, searchTerm, setSorters]);
 
   const handleViewModeChange = useCallback((nextMode: ViewMode) => {
     if (nextMode === viewMode) return;
