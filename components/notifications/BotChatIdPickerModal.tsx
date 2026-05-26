@@ -50,7 +50,7 @@ const useModuleSearch = (moduleId: string, table: string, nameField: string, que
     }
     setLoading(true);
     const timer = setTimeout(() => {
-      supabase
+      void supabase
         .from(table)
         .select(`id,${nameField}`)
         .ilike(nameField, `%${q}%`)
@@ -64,8 +64,7 @@ const useModuleSearch = (moduleId: string, table: string, nameField: string, que
               moduleId,
             })),
           );
-        })
-        .catch(() => setLoading(false));
+        }, () => setLoading(false));
     }, 300);
     return () => clearTimeout(timer);
   }, [query, moduleId, table, nameField]);

@@ -1357,7 +1357,7 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
     >
       {tableTools}
       {imageTools}
-      <EditorContent editor={editor} />
+      <EditorContent editor={editor} className="print-template-editor-shell" />
 
       <style>{`
         .print-template-editor-root {
@@ -1371,6 +1371,10 @@ const PrintTemplateEditor: React.FC<PrintTemplateEditorProps> = ({
           z-index: 80;
         }
         .print-template-editor-root[data-fill-height='true'] {
+          height: 100%;
+          min-height: 0;
+        }
+        .print-template-editor-root[data-fill-height='true'] .print-template-editor-shell {
           height: 100%;
           min-height: 0;
         }

@@ -58,6 +58,7 @@ export const automationExecutionReportsConfig: ModuleDefinition = {
       options: [
         { label: 'موفق', value: 'success', color: 'green' },
         { label: 'ناموفق', value: 'failed', color: 'red' },
+        { label: 'رد شده / بدون اقدام', value: 'skipped', color: 'default' },
       ],
       nature: FieldNature.SYSTEM,
     },

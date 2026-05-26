@@ -39,8 +39,8 @@ import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { extractBotMessageAttachments } from '../utils/messageAttachments';
 import { useNotificationConversationList } from '../hooks/useNotificationConversationList';
-import { useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
-import { useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
+import { prefetchInternalConversationTimeline, useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
+import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
 import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
 import ProfileAvatar from './common/ProfileAvatar';
@@ -1147,6 +1147,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const realtimeDisabledRef = useRef(false);
   const refreshAllRef = useRef<((notify?: boolean, options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshSectionRef = useRef<((section: NotificationSectionKey, options?: { force?: boolean }) => Promise<void>) | null>(null);
+  const refreshClosedStateRef = useRef<((options?: { force?: boolean }) => Promise<void>) | null>(null);
   const refreshAllInFlightRef = useRef(false);
   const refreshAllPendingRef = useRef<{ notify?: boolean; options?: { force?: boolean } } | null>(null);
   const refreshSectionInFlightRef = useRef<Partial<Record<NotificationSectionKey, boolean>>>({});
@@ -1178,6 +1179,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const botHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedBotHydrationFailuresRef = useRef<Set<string>>(new Set());
   const botStatusWatchTimerRef = useRef<number | null>(null);
+  const botGroupsEnrichSeqRef = useRef(0);
+  const backgroundSectionRefreshTimerRef = useRef<number | null>(null);
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -1272,6 +1275,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     () => new Set(effectiveBotGroups.map((row) => String(row.id || '').trim()).filter(Boolean)),
     [effectiveBotGroups]
   );
+
   const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
       window.clearInterval(botStatusWatchTimerRef.current);
@@ -2730,7 +2734,9 @@ useEffect(() => {
       if (showSkeleton) setLoadingBotMessages(true);
       const groups = await safeSectionFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]);
       const resolvedGroupId = String(selectedBotGroupId || groups[0]?.id || '').trim();
-      await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+      if (!botConversationSummaryAvailable) {
+        await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+      }
       if (resolvedGroupId) {
         // Skip refreshBotTimeline() here — the hook's useEffect will fire
         // automatically when selectedBotGroupId propagates via React state.
@@ -2903,7 +2909,9 @@ useEffect(() => {
     });
     if (shouldLoadBotMessages) {
       const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
-      await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+      if (!botConversationSummaryAvailable) {
+        await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
+      }
       if (resolvedGroupId) {
         // Skip refreshBotTimeline() here — the hook's useEffect will fire
         // automatically when selectedBotGroupId propagates via React state.
@@ -3044,6 +3052,97 @@ useEffect(() => {
     return data || [];
   };
 
+  const sortBotGroupsByActivity = (rows: CounterpartyBotGroupRow[]) => rows.slice().sort((a, b) => {
+    const left = Math.max(
+      new Date(a.last_inbound_at || '').getTime() || 0,
+      new Date(a.last_outbound_at || '').getTime() || 0,
+      new Date(a.updated_at || '').getTime() || 0,
+    );
+    const right = Math.max(
+      new Date(b.last_inbound_at || '').getTime() || 0,
+      new Date(b.last_outbound_at || '').getTime() || 0,
+      new Date(b.updated_at || '').getTime() || 0,
+    );
+    return right - left;
+  });
+
+  const applyBotGroups = (rows: CounterpartyBotGroupRow[]) => {
+    const sortedRows = sortBotGroupsByActivity(rows);
+    setBotGroups(sortedRows);
+    setSelectedBotGroupId((prev) => {
+      if (prev && sortedRows.some((row) => String(row.id) === String(prev))) return prev;
+      const withChat = sortedRows.find((row) => String(row.bot_chat_id || '').trim());
+      return withChat ? String(withChat.id) : (sortedRows[0]?.id ? String(sortedRows[0].id) : null);
+    });
+    return sortedRows;
+  };
+
+  const enrichBotGroups = async (rows: CounterpartyBotGroupRow[], requestSeq: number) => {
+    const customerIds = Array.from(new Set(rows.map((row) => String(row.customer_id || '').trim()).filter(Boolean)));
+    const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
+    if (customerIds.length === 0 && supplierIds.length === 0) return;
+
+    const counterpartyLabelMap: Record<string, string> = {};
+    const counterpartyImageMap: Record<string, string> = {};
+    if (customerIds.length > 0) {
+      const customerResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:customers',
+        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name', 'image_url'],
+        ids: customerIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from('customers')
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
+      (customerResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        const personName = `${String(item?.first_name || '').trim()} ${String(item?.last_name || '').trim()}`.trim();
+        counterpartyLabelMap[`customers:${id}`] = String(
+          item?.full_name || item?.business_name || item?.legal_name || personName || item?.system_code || ''
+        ).trim();
+        const imgUrl = String(item?.image_url || '').trim();
+        if (imgUrl) counterpartyImageMap[`customers:${id}`] = imgUrl;
+      });
+    }
+    if (supplierIds.length > 0) {
+      const supplierResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:suppliers',
+        columns: ['id', 'business_name', 'full_name', 'system_code', 'image_url'],
+        ids: supplierIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from('suppliers')
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
+      (supplierResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        counterpartyLabelMap[`suppliers:${id}`] = String(
+          item?.business_name || item?.full_name || item?.system_code || ''
+        ).trim();
+        const imgUrl = String(item?.image_url || '').trim();
+        if (imgUrl) counterpartyImageMap[`suppliers:${id}`] = imgUrl;
+      });
+    }
+    if (requestSeq !== botGroupsEnrichSeqRef.current) return;
+    setBotGroups((prev) => prev.map((row) => {
+      const customerId = String(row.customer_id || '').trim();
+      const supplierId = String(row.supplier_id || '').trim();
+      const key = customerId ? `customers:${customerId}` : supplierId ? `suppliers:${supplierId}` : '';
+      if (!key) return row;
+      return {
+        ...row,
+        counterparty_label: counterpartyLabelMap[key] || row.counterparty_label || null,
+        counterparty_image_url: counterpartyImageMap[key] || row.counterparty_image_url || null,
+      };
+    }));
+  };
+
   const fetchBotGroups = async () => {
     const { data, error } = await supabase
       .from('counterparty_bot_groups')
@@ -3068,88 +3167,12 @@ useEffect(() => {
       return false;
     });
 
-    const customerIds = Array.from(new Set(rows.map((row) => String(row.customer_id || '').trim()).filter(Boolean)));
-    const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
-
-    const counterpartyLabelMap: Record<string, string> = {};
-    const counterpartyImageMap: Record<string, string> = {};
-    if (customerIds.length > 0) {
-      const customerResult = await selectByIdsWithCompatibleColumns<any>({
-        cacheKey: 'notifications:customers',
-        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name', 'image_url'],
-        ids: customerIds,
-        batchSize: 25,
-        execute: (selectExpr, idBatch) =>
-          supabase
-            .from('customers')
-            .select(selectExpr)
-            .in('id', idBatch),
-      });
-      const customers = customerResult.data || [];
-      (customers || []).forEach((item: any) => {
-        const id = String(item?.id || '').trim();
-        if (!id) return;
-        const personName = `${String(item?.first_name || '').trim()} ${String(item?.last_name || '').trim()}`.trim();
-        counterpartyLabelMap[`customers:${id}`] = String(
-          item?.full_name || item?.business_name || item?.legal_name || personName || item?.system_code || id
-        ).trim();
-        const imgUrl = String(item?.image_url || '').trim();
-        if (imgUrl) counterpartyImageMap[`customers:${id}`] = imgUrl;
-      });
-    }
-    if (supplierIds.length > 0) {
-      const supplierResult = await selectByIdsWithCompatibleColumns<any>({
-        cacheKey: 'notifications:suppliers',
-        columns: ['id', 'business_name', 'full_name', 'system_code', 'image_url'],
-        ids: supplierIds,
-        batchSize: 25,
-        execute: (selectExpr, idBatch) =>
-          supabase
-            .from('suppliers')
-            .select(selectExpr)
-            .in('id', idBatch),
-      });
-      const suppliers = supplierResult.data || [];
-      (suppliers || []).forEach((item: any) => {
-        const id = String(item?.id || '').trim();
-        if (!id) return;
-        counterpartyLabelMap[`suppliers:${id}`] = String(
-          item?.business_name || item?.full_name || item?.system_code || id
-        ).trim();
-        const imgUrl = String(item?.image_url || '').trim();
-        if (imgUrl) counterpartyImageMap[`suppliers:${id}`] = imgUrl;
-      });
-    }
-
-    const enrichedRows = rows.map((row) => {
-      const customerId = String(row.customer_id || '').trim();
-      const supplierId = String(row.supplier_id || '').trim();
-      const key = customerId ? `customers:${customerId}` : supplierId ? `suppliers:${supplierId}` : '';
-      return {
-        ...row,
-        counterparty_label: key ? (counterpartyLabelMap[key] || null) : null,
-        counterparty_image_url: key ? (counterpartyImageMap[key] || null) : null,
-      };
-    }).sort((a, b) => {
-      const left = Math.max(
-        new Date(a.last_inbound_at || '').getTime() || 0,
-        new Date(a.last_outbound_at || '').getTime() || 0,
-        new Date(a.updated_at || '').getTime() || 0,
-      );
-      const right = Math.max(
-        new Date(b.last_inbound_at || '').getTime() || 0,
-        new Date(b.last_outbound_at || '').getTime() || 0,
-        new Date(b.updated_at || '').getTime() || 0,
-      );
-      return right - left;
+    const sortedRows = applyBotGroups(rows);
+    const requestSeq = ++botGroupsEnrichSeqRef.current;
+    void enrichBotGroups(sortedRows, requestSeq).catch((enrichError) => {
+      console.warn('Failed to enrich bot groups.', enrichError);
     });
-    setBotGroups(enrichedRows);
-    setSelectedBotGroupId((prev) => {
-      if (prev && enrichedRows.some((row) => String(row.id) === String(prev))) return prev;
-      const withChat = enrichedRows.find((row) => String(row.bot_chat_id || '').trim());
-      return withChat ? String(withChat.id) : (enrichedRows[0]?.id ? String(enrichedRows[0].id) : null);
-    });
-    return enrichedRows;
+    return sortedRows;
   };
 
   const fetchBotMessages = async (
@@ -3257,10 +3280,6 @@ useEffect(() => {
     setBotNotificationMessages(rows);
     return rows;
   };
-  const loadLegacyBotTimeline = useCallback(async () => {
-    if (!selectedBotGroupId) return [] as CounterpartyBotMessageRow[];
-    return await fetchBotMessages(selectedBotGroupId, { showLoading: false, forceFull: true });
-  }, [selectedBotGroupId]);
   const {
     items: botMessages,
     setItems: setBotMessages,
@@ -3278,7 +3297,6 @@ useEffect(() => {
     enabled: open && Boolean(selectedBotGroupId),
     botGroupId: selectedBotGroupId,
     pageSize: 10,
-    fallbackLoadInitial: loadLegacyBotTimeline,
   });
   useEffect(() => {
     setLoadingBotMessages(loadingBotTimelineInitial);
@@ -3448,6 +3466,18 @@ useEffect(() => {
     }
   }, []);
 
+  const scheduleBackgroundSectionRefresh = useCallback((activeSection: NotificationSectionKey | null, options?: { force?: boolean }) => {
+    if (typeof window === 'undefined') return;
+    if (backgroundSectionRefreshTimerRef.current !== null) {
+      window.clearTimeout(backgroundSectionRefreshTimerRef.current);
+    }
+    backgroundSectionRefreshTimerRef.current = window.setTimeout(() => {
+      backgroundSectionRefreshTimerRef.current = null;
+      const sections = getSectionsForVariant(variant).filter((section) => section !== activeSection);
+      void Promise.all(sections.map((section) => refreshSectionRef.current?.(section, options)));
+    }, 900);
+  }, [variant]);
+
   const handleManualRefresh = async () => {
     setRefreshing(true);
     try {
@@ -3457,7 +3487,7 @@ useEffect(() => {
       const activeSection = isSectionTabKey(currentTab) ? currentTab : null;
       if (activeSection) {
         await refreshSection(activeSection, { force: true });
-        void refreshAll(false, { force: true });
+        scheduleBackgroundSectionRefresh(activeSection, { force: true });
       } else {
         await refreshAll(false, { force: true });
       }
@@ -3475,17 +3505,32 @@ useEffect(() => {
   }, [refreshSection]);
 
   useEffect(() => {
-    if (!profile.id) return;
-    notificationsReadyRef.current = false;
-    if (open) {
-      void refreshAllRef.current?.(false, { force: true });
-      return;
+    refreshClosedStateRef.current = refreshClosedState;
+  }, [refreshClosedState]);
+
+  useEffect(() => () => {
+    if (backgroundSectionRefreshTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearTimeout(backgroundSectionRefreshTimerRef.current);
     }
-    void refreshClosedState({ force: true });
-  }, [open, profile.id, profile.role_id, variant]);
+  }, []);
 
   const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
   const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
+
+  useEffect(() => {
+    if (!profile.id) return;
+    notificationsReadyRef.current = false;
+    if (open) {
+      if (activeDrawerSection) {
+        void refreshSectionRef.current?.(activeDrawerSection, { force: true });
+        scheduleBackgroundSectionRefresh(activeDrawerSection, { force: true });
+      } else {
+        void refreshAllRef.current?.(false, { force: true });
+      }
+      return;
+    }
+    void refreshClosedStateRef.current?.({ force: true });
+  }, [activeDrawerSection, open, profile.id, profile.role_id, scheduleBackgroundSectionRefresh, variant]);
 
   useEffect(() => {
     setDesktopActiveKey((prev) => normalizeTabForVariant(variant, prev));
@@ -3515,12 +3560,6 @@ useEffect(() => {
     window.addEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
     return () => window.removeEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
   }, [variant]);
-
-  useEffect(() => {
-    if (open && activeDrawerSection) {
-      void refreshSection(activeDrawerSection);
-    }
-  }, [activeDrawerSection, open, profile.id]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes' || selectedNoteUserId) return;
@@ -3972,64 +4011,43 @@ useEffect(() => {
     if (selectedChatGroupId) return `group:${selectedChatGroupId}`;
     return buildDirectConversationKey(String(profile.id || ''), String(selectedNoteUserId || ''));
   }, [profile.id, selectedChatGroupId, selectedNoteUserId, selectedRpcConversationKey]);
-  const loadLegacySelectedConversationNotes = useCallback(async () => {
-    if (!profile.id || !selectedNoteUserId) return [] as any[];
-
-    if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
-      const inboxItems = await fetchNotificationInboxSection('notes', 160);
-      const systemNoteIds = (inboxItems || [])
-        .filter((item) => (
-          String(item?.source_type || '').trim() === 'note'
-          && (
-            String(item?.category || '').trim() === 'system'
-            || String(item?.category || '').trim() === 'assistant'
-            || String((item?.payload as any)?.conversation_key || '').trim() === 'system'
-            || String((item?.payload as any)?.note_source || '').trim() === 'ai'
-          )
-        ))
-        .map((item) => String(item?.source_id || '').trim())
-        .filter(Boolean)
-        .slice(0, 120);
-      return await fetchNotesByIds(systemNoteIds);
-    }
-
-    if (selectedChatGroupId) {
-      const { data, error } = await supabase
-        .from('notes')
-        .select(NOTE_SELECT_FIELDS)
-        .contains('metadata', { chat_group_id: selectedChatGroupId })
-        .order('created_at', { ascending: false })
-        .limit(120);
-      if (error) throw error;
-      return data || [];
-    }
-
-    const currentUserId = String(profile.id || '');
-    const targetUserId = String(selectedNoteUserId || '');
-    const [sentResult, receivedResult] = await Promise.all([
-      supabase
-        .from('notes')
-        .select(NOTE_SELECT_FIELDS)
-        .eq('author_id', currentUserId)
-        .contains('mention_user_ids', [targetUserId])
-        .order('created_at', { ascending: false })
-        .limit(80),
-      supabase
-        .from('notes')
-        .select(NOTE_SELECT_FIELDS)
-        .eq('author_id', targetUserId)
-        .contains('mention_user_ids', [currentUserId])
-        .order('created_at', { ascending: false })
-        .limit(80),
-    ]);
-    if (sentResult.error) throw sentResult.error;
-    if (receivedResult.error) throw receivedResult.error;
-    const unique = new Map<string, any>();
-    [...(sentResult.data || []), ...(receivedResult.data || [])].forEach((note: any) => {
-      unique.set(String(note.id), note);
-    });
-    return Array.from(unique.values());
-  }, [profile.id, selectedChatGroupId, selectedNoteUserId]);
+  useEffect(() => {
+    if (variant !== 'chat' || !profile.id || typeof window === 'undefined') return undefined;
+    const timer = window.setTimeout(() => {
+      (rpcNoteConversationSummaries || [])
+        .filter((item) => {
+          const key = String(item?.conversation_key || '').trim();
+          return key && key !== 'system' && key !== String(selectedConversationKey || '').trim();
+        })
+        .slice(0, 2)
+        .forEach((item) => {
+          void prefetchInternalConversationTimeline<any>({
+            supabase,
+            conversationKey: String(item.conversation_key || '').trim(),
+            pageSize: 10,
+          });
+        });
+      (rpcBotConversationSummaries || [])
+        .map((item) => String(item?.bot_group_id || '').trim())
+        .filter((botGroupId) => botGroupId && botGroupId !== String(selectedBotGroupId || '').trim())
+        .slice(0, 2)
+        .forEach((botGroupId) => {
+          void prefetchBotConversationTimeline<CounterpartyBotMessageRow>({
+            supabase,
+            botGroupId,
+            pageSize: 10,
+          });
+        });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [
+    profile.id,
+    rpcBotConversationSummaries,
+    rpcNoteConversationSummaries,
+    selectedBotGroupId,
+    selectedConversationKey,
+    variant,
+  ]);
   const {
     items: selectedConversationNotes,
     setItems: setSelectedConversationNotes,
@@ -4046,7 +4064,6 @@ useEffect(() => {
     enabled: open && activeDrawerSection === 'notes' && Boolean(profile.id) && Boolean(selectedConversationKey),
     conversationKey: selectedConversationKey,
     pageSize: 10,
-    fallbackLoadInitial: loadLegacySelectedConversationNotes,
   });
   const loadOlderNotesWithPreserve = useCallback(async () => {
     const container = notesScrollContainerRef.current;
@@ -5669,7 +5686,6 @@ useEffect(() => {
     if (noteSending) return;
 
     setNoteSending(true);
-    let optimisticNoteId: string | null = null;
     try {
       const scope = normalizeNoteScope(noteModuleId, noteRecordId);
       const renderedNoteText = noteModuleId && noteTemplateRecord
@@ -5700,20 +5716,6 @@ useEffect(() => {
         metadata: groupPayload.metadata,
       };
 
-      optimisticNoteId = `optimistic-note-${Date.now()}`;
-      const optimisticNote = {
-        id: optimisticNoteId,
-        ...payload,
-        source_type: null,
-        is_edited: false,
-        edited_at: null,
-        created_at: new Date().toISOString(),
-      };
-      setNotes((prev) => [optimisticNote, ...prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId)]);
-      setSelectedConversationNotes((prev) => (
-        prev ? [...prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId), optimisticNote] : prev
-      ));
-
       await insertNotesWithFallback([payload]);
       if (noteSmsNotificationEnabled) {
         await sendNoteSmsNotifications({
@@ -5726,22 +5728,11 @@ useEffect(() => {
         });
       }
 
-      if (optimisticNoteId) {
-        setSelectedConversationNotes((prev) => (
-          prev ? prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId) : prev
-        ));
-      }
       noteShouldStickToBottomRef.current = true;
       noteForceScrollToBottomRef.current = true;
       resetNoteComposer();
       await refreshSection('notes', { force: true });
     } catch (error: any) {
-      if (optimisticNoteId) {
-        setNotes((prev) => prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId));
-        setSelectedConversationNotes((prev) => (
-          prev ? prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId) : prev
-        ));
-      }
       message.error(toFaErrorMessage(error, 'ثبت یادداشت ناموفق بود.'));
     } finally {
       setNoteSending(false);
@@ -6625,7 +6616,6 @@ useEffect(() => {
         return;
       }
       setBotSending(true);
-      let optimisticBotMessageId: string | null = null;
       try {
         const recordModuleId = selectedBotModuleId || (selectedGroup.target_type === 'customers' ? 'customers' : 'suppliers');
         const recordId = selectedGroup.target_type === 'customers'
@@ -6667,30 +6657,6 @@ useEffect(() => {
           message.warning('پیام خالی است.');
           return;
         }
-        const senderPayload = buildCurrentBotSenderPayload();
-        optimisticBotMessageId = `optimistic-bot-${Date.now()}`;
-        const primaryAttachment = attachments[0] || null;
-        const optimisticBotMessage: CounterpartyBotMessageRow = {
-          id: optimisticBotMessageId,
-          bot_group_id: selectedGroup.id,
-          direction: 'outbound',
-          message_type: String(primaryAttachment?.fileType || (attachments.length > 0 ? 'file' : 'text')).trim() || 'text',
-          chat_id: chatId,
-          provider_message_id: null,
-          content_text: String(renderedText || '').trim() || null,
-          file_url: String(primaryAttachment?.url || '').trim() || null,
-          file_name: String(primaryAttachment?.name || '').trim() || null,
-          mime_type: String(primaryAttachment?.mimeType || '').trim() || null,
-          payload: {
-            attachments,
-            reply_to_message_id: botReplyToId || null,
-            ...senderPayload,
-            optimistic: true,
-          },
-          created_by: String(senderPayload.sender_user_id || '').trim() || null,
-          created_at: new Date().toISOString(),
-        };
-        setBotMessages((prev) => [...prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId), optimisticBotMessage]);
         botShouldStickToBottomRef.current = true;
         botForceScrollToBottomRef.current = true;
         await sendTextToBotGroup(selectedGroup, finalText, {
@@ -6709,24 +6675,13 @@ useEffect(() => {
         setBotAttachments([]);
         setBotLinkedAttachments([]);
         setBotMentionPickerOpen(false);
-        const groups = await fetchBotGroups();
-        await fetchBotNotificationMessages(groups);
-        if (botConversationSummaryAvailable) {
-          await refreshBotConversationSummaries();
-        }
-        if (optimisticBotMessageId) {
-          setBotMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId));
-        }
-        if (botTimelineAvailable) {
-          await refreshBotTimeline();
-        } else {
-          await fetchBotMessages(selectedGroup.id, { forceFull: true });
-        }
+        await Promise.all([
+          fetchBotGroups(),
+          botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
+          botTimelineAvailable ? refreshBotTimeline() : fetchBotMessages(selectedGroup.id, { forceFull: true }),
+        ]);
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
-        if (optimisticBotMessageId) {
-          setBotMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId));
-        }
         console.warn('Could not send bot group message', error);
         message.error(toFaErrorMessage(error, 'ارسال پیام بات ناموفق بود.'));
       } finally {

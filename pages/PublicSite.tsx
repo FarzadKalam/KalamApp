@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   CloudServerOutlined,
   DatabaseOutlined,
+  DownOutlined,
   FolderOpenOutlined,
   MailOutlined,
   MessageOutlined,
@@ -16,6 +17,7 @@ import {
   SafetyCertificateOutlined,
   TeamOutlined,
   ThunderboltOutlined,
+  UpOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -274,6 +276,19 @@ const formatPriceFA = (n: number) =>
 
 const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
   const { plans, loaded } = usePricingPlans();
+  const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
+
+  const togglePlanFeatures = (planId: string) => {
+    setExpandedPlanIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(planId)) {
+        next.delete(planId);
+      } else {
+        next.add(planId);
+      }
+      return next;
+    });
+  };
 
   return (
     <section className="bg-white px-5 py-20">
@@ -295,9 +310,10 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
             {plans.map((plan) => {
               const highlighted = !!plan.highlight_tag;
               const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
-              const features = detailed
-                ? normalizedFeatures
-                : normalizedFeatures.filter((item) => item.featured);
+              const primaryFeatures = normalizedFeatures.filter((item) => item.featured);
+              const extraFeatures = normalizedFeatures.filter((item) => !item.featured);
+              const expanded = expandedPlanIds.has(plan.id);
+              const features = expanded ? [...primaryFeatures, ...extraFeatures] : primaryFeatures;
               return (
                 <div
                   key={plan.id}
@@ -355,6 +371,22 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
                         </li>
                       ))}
                     </ul>
+                  )}
+
+                  {extraFeatures.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => togglePlanFeatures(plan.id)}
+                      className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-black transition ${
+                        highlighted
+                          ? 'border-white/20 text-white hover:bg-white/10'
+                          : 'border-zinc-200 text-zinc-800 hover:border-zinc-950 hover:bg-zinc-50'
+                      }`}
+                      aria-expanded={expanded}
+                    >
+                      {expanded ? 'مشاهده کمتر' : `مشاهده ${extraFeatures.length.toLocaleString('fa-IR')} ویژگی دیگر`}
+                      {expanded ? <UpOutlined /> : <DownOutlined />}
+                    </button>
                   )}
 
                   <a

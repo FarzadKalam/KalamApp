@@ -43,6 +43,43 @@ const readCache = <TItem>(key: string): NotificationTimelinePayload<TItem> | nul
 const sortByDate = <T>(items: T[]): T[] =>
   items.slice().sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
 
+const _internalTimelinePrefetchInFlight = new Set<string>();
+
+export const prefetchInternalConversationTimeline = async <TItem,>({
+  supabase,
+  conversationKey,
+  pageSize = 10,
+}: {
+  supabase: SupabaseClient<any, 'public', any>;
+  conversationKey: string | null;
+  pageSize?: number;
+}) => {
+  const normalizedConversationKey = String(conversationKey || '').trim();
+  if (
+    !normalizedConversationKey
+    || normalizedConversationKey === 'system'
+    || readCache<TItem>(normalizedConversationKey)
+    || _internalTimelinePrefetchInFlight.has(normalizedConversationKey)
+  ) return;
+  _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
+  try {
+    const { data, error } = await supabase.rpc('get_communication_timeline', {
+      p_channel: 'internal',
+      p_conversation_key: normalizedConversationKey,
+      p_before_cursor: null,
+      p_limit: pageSize,
+    });
+    if (error) return;
+    const payload = normalizeTimelinePayload<TItem>(data);
+    _internalTimelineCache.set(normalizedConversationKey, {
+      payload: { ...payload, items: sortByDate(payload.items || []) },
+      fetchedAt: Date.now(),
+    });
+  } finally {
+    _internalTimelinePrefetchInFlight.delete(normalizedConversationKey);
+  }
+};
+
 // ---------------------------------------------------------------------------
 
 export const useInternalConversationTimeline = <TItem,>({

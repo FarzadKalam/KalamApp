@@ -1,10 +1,14 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Empty, Input, InputNumber, Space, Switch } from 'antd';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import DateObject from 'react-date-object';
+import persian from 'react-date-object/calendars/persian';
+import persian_fa from 'react-date-object/locales/persian_fa';
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import { getHolidayOccasionOptions, type HolidayOccasionOption } from '../../utils/holidayCalendar';
 import { AdaptivePickerMode, resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../../utils/popupContainer';
 import {
   getDefaultWorkflowOperator,
@@ -68,6 +72,23 @@ const getFieldOptions = (
   return [];
 };
 
+const OCCASION_OPERATORS = new Set([
+  'occasion_eq',
+  'occasion_neq',
+  'occasion_contains',
+  'occasion_not_contains',
+  'days_before_occasion',
+]);
+
+const MULTI_OCCASION_OPERATORS = new Set(['occasion_contains', 'occasion_not_contains']);
+
+const isOccasionOperator = (operator?: string) => OCCASION_OPERATORS.has(String(operator || ''));
+
+const getCurrentJalaliYear = () => {
+  const current = new DateObject({ date: new Date(), calendar: persian, locale: persian_fa });
+  return Number(String(current.year || '').replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit))));
+};
+
 const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   value,
   onChange,
@@ -86,12 +107,24 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
   adaptiveMode = 'auto',
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const [occasionOptions, setOccasionOptions] = useState<HolidayOccasionOption[]>([]);
   const resolvedPopupContainer = (trigger?: HTMLElement | null) => {
     const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
     return modalBodyHost || popupContainer(trigger) || resolveOverlayPopupContainer(trigger);
   };
   const lockedConditionIdSet = useMemo(() => new Set(lockedConditionIds), [lockedConditionIds]);
   const requiredConditionIdSet = useMemo(() => new Set(requiredConditionIds), [requiredConditionIds]);
+
+  useEffect(() => {
+    let alive = true;
+    const currentYear = getCurrentJalaliYear();
+    void getHolidayOccasionOptions([currentYear, currentYear + 1]).then((options) => {
+      if (alive) setOccasionOptions(options);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const lockedFieldKeySet = useMemo(
     () => new Set(
       safeValue
@@ -192,6 +225,69 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
           placeholder="عدد"
           min={0}
+        />
+      );
+    }
+
+    if (isOccasionOperator(condition.operator)) {
+      const options = occasionOptions.map((option) => ({
+        label: option.isHoliday ? `${option.label} - تعطیل` : option.label,
+        value: option.value,
+      }));
+
+      if (condition.operator === 'days_before_occasion') {
+        const objectValue = condition.value && typeof condition.value === 'object' && !Array.isArray(condition.value)
+          ? condition.value
+          : {};
+        return (
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+            <InputNumber
+              className="w-full persian-number md:col-span-2"
+              disabled={disabled || isLocked}
+              value={objectValue.days as any}
+              onChange={(nextVal) => updateCondition(condition.id, {
+                value: {
+                  ...objectValue,
+                  days: nextVal,
+                },
+              })}
+              placeholder="تعداد روز"
+              min={0}
+            />
+            <AdaptiveSelectField
+              {...commonSelectProps}
+              className="w-full md:col-span-3"
+              options={options}
+              value={objectValue.occasion || undefined}
+              disabled={disabled || isLocked}
+              onChange={(nextVal) => updateCondition(condition.id, {
+                value: {
+                  ...objectValue,
+                  occasion: nextVal,
+                },
+              })}
+              placeholder="مناسبت"
+              pickerTitle="مناسبت"
+            />
+          </div>
+        );
+      }
+
+      const expectsListValue = MULTI_OCCASION_OPERATORS.has(String(condition.operator || ''));
+      return (
+        <AdaptiveSelectField
+          {...commonSelectProps}
+          mode={expectsListValue ? 'multiple' : undefined}
+          options={options}
+          value={
+            expectsListValue
+              ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : []))
+              : condition.value
+          }
+          disabled={disabled || isLocked}
+          onChange={(nextVal) => updateCondition(condition.id, { value: nextVal })}
+          placeholder="مناسبت"
+          pickerTitle="مناسبت"
         />
       );
     }

@@ -27,6 +27,11 @@ export const WORKFLOW_OPERATORS = {
   is_tomorrow: 'فردا باشد',
   is_friday: 'جمعه باشد',
   is_official_holiday: 'تعطیل رسمی باشد',
+  occasion_eq: 'برابر با کدام مناسبت باشد',
+  occasion_neq: 'نابرابر با کدام مناسبت باشد',
+  occasion_contains: 'شامل کدام مناسبت(ها) باشد',
+  occasion_not_contains: 'شامل کدام مناسبت(ها) نباشد',
+  days_before_occasion: 'چند روز قبل از کدام مناسبت باشد',
   is_this_week: 'همین هفته باشد',
   is_last_week: 'هفته گذشته باشد',
   is_this_month: 'همین ماه باشد',
@@ -57,7 +62,12 @@ Object.assign(WORKFLOW_OPERATORS as Record<string, string>, {
 export type WorkflowOperator =
   | keyof typeof WORKFLOW_OPERATORS
   | 'days_passed_eq'
-  | 'days_remaining_eq';
+  | 'days_remaining_eq'
+  | 'occasion_eq'
+  | 'occasion_neq'
+  | 'occasion_contains'
+  | 'occasion_not_contains'
+  | 'days_before_occasion';
 
 const baseTextOperators: WorkflowOperator[] = [
   'contains',
@@ -120,6 +130,11 @@ const baseDateOperators: WorkflowOperator[] = [
   'is_last_month',
   'is_friday',
   'is_official_holiday',
+  'occasion_eq',
+  'occasion_neq',
+  'occasion_contains',
+  'occasion_not_contains',
+  'days_before_occasion',
   'day_of_month_eq',
   'day_of_month_neq',
   'day_of_week_eq',
@@ -171,6 +186,11 @@ const baseDateTimeOperators: WorkflowOperator[] = [
   'is_last_month',
   'is_friday',
   'is_official_holiday',
+  'occasion_eq',
+  'occasion_neq',
+  'occasion_contains',
+  'occasion_not_contains',
+  'days_before_occasion',
   'day_of_month_eq',
   'day_of_month_neq',
   'day_of_week_eq',

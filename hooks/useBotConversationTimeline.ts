@@ -42,6 +42,38 @@ const readCache = <TItem>(key: string): NotificationTimelinePayload<TItem> | nul
 const sortByDate = <T>(items: T[]): T[] =>
   items.slice().sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
 
+const _botTimelinePrefetchInFlight = new Set<string>();
+
+export const prefetchBotConversationTimeline = async <TItem,>({
+  supabase,
+  botGroupId,
+  pageSize = 10,
+}: {
+  supabase: SupabaseClient<any, 'public', any>;
+  botGroupId: string | null;
+  pageSize?: number;
+}) => {
+  const normalizedBotGroupId = String(botGroupId || '').trim();
+  if (!normalizedBotGroupId || readCache<TItem>(normalizedBotGroupId) || _botTimelinePrefetchInFlight.has(normalizedBotGroupId)) return;
+  _botTimelinePrefetchInFlight.add(normalizedBotGroupId);
+  try {
+    const { data, error } = await supabase.rpc('get_communication_timeline', {
+      p_channel: 'bot',
+      p_conversation_key: `bot:${normalizedBotGroupId}`,
+      p_before_cursor: null,
+      p_limit: pageSize,
+    });
+    if (error) return;
+    const payload = normalizeTimelinePayload<TItem>(data);
+    _botTimelineCache.set(normalizedBotGroupId, {
+      payload: { ...payload, items: sortByDate(payload.items || []) },
+      fetchedAt: Date.now(),
+    });
+  } finally {
+    _botTimelinePrefetchInFlight.delete(normalizedBotGroupId);
+  }
+};
+
 // ---------------------------------------------------------------------------
 
 export const useBotConversationTimeline = <TItem,>({

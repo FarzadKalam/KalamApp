@@ -25,7 +25,6 @@ import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
 } from './processTaskCustomFields';
-import { isIntervalDue, normalizeIntervalUnit, clampIntervalValue } from './intervalSchedule';
 import { sendSmsViaGateway } from './smsGateway';
 import { sendEmailViaGateway } from './emailGateway';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
@@ -36,7 +35,7 @@ import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
 
-type WorkflowEvent = 'create' | 'upsert' | 'interval';
+type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
 type CounterpartyBotGroupRow = {
   id?: string | null;
@@ -245,46 +244,52 @@ const isSameDate = (a: Date, b: Date) =>
   a.getMonth() === b.getMonth() &&
   a.getDate() === b.getDate();
 
-export const formatWorkflowTemplateValue = (value: unknown): string => {
-  return formatTemplateValueByField({ value });
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 };
 
-const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
-  'is_true',
-  'is_false',
-  'is_null',
-  'not_null',
-  'changed',
-  'is_today',
-  'is_yesterday',
-  'is_tomorrow',
-  'is_friday',
-  'is_official_holiday',
-  'is_this_week',
-  'is_last_week',
-  'is_this_month',
-  'is_last_month',
-]);
+const normalizeOccasionText = (value: any) => normalizeSearchText(value);
 
-const INTERVAL_UNSUPPORTED_OPERATORS = new Set([
-  'changed',
-  'changed_from',
-  'changed_to',
-]);
+const normalizeOccasionValues = (value: any) =>
+  normalizeListValues(value)
+    .map((item) => normalizeOccasionText(item))
+    .filter(Boolean);
 
-const isBlankConditionValue = (value: unknown) =>
-  value === undefined
-  || value === null
-  || String(value).trim() === ''
-  || (Array.isArray(value) && value.length === 0);
+const occasionMatches = (title: string, expected: string) => {
+  const normalizedTitle = normalizeOccasionText(title);
+  const normalizedExpected = normalizeOccasionText(expected);
+  return !!normalizedExpected && (
+    normalizedTitle === normalizedExpected
+    || normalizedTitle.includes(normalizedExpected)
+    || normalizedExpected.includes(normalizedTitle)
+  );
+};
 
-const isRunnableIntervalCondition = (condition: WorkflowCondition) => {
-  const field = String(condition?.field || '').trim();
-  if (!field) return false;
-  const operator = String(condition?.operator || 'eq').trim();
-  if (INTERVAL_UNSUPPORTED_OPERATORS.has(operator)) return false;
-  if (WORKFLOW_OPERATORS_WITHOUT_VALUE.has(operator)) return true;
-  return !isBlankConditionValue(condition?.value);
+const dateHasAnyOccasion = async (value: any, expectedValue: any) => {
+  const expected = normalizeOccasionValues(expectedValue);
+  if (expected.length === 0) return false;
+  const summary = await getHolidaySummaryForDate(value);
+  const titles = (summary?.occasions || []).map((item) => item.title).filter(Boolean);
+  return titles.some((title) => expected.some((item) => occasionMatches(title, item)));
+};
+
+const dateIsDaysBeforeOccasion = async (value: any, expectedValue: any) => {
+  const date = parseDate(value);
+  if (!date) return false;
+  const config = expectedValue && typeof expectedValue === 'object' && !Array.isArray(expectedValue)
+    ? expectedValue
+    : {};
+  const days = Number(config?.days ?? config?.count ?? 0);
+  if (!Number.isFinite(days) || days < 0) return false;
+  const occasion = config?.occasion ?? config?.event ?? config?.value;
+  if (isEmptyValue(occasion)) return false;
+  return dateHasAnyOccasion(addDays(date, days), occasion);
+};
+
+export const formatWorkflowTemplateValue = (value: unknown): string => {
+  return formatTemplateValueByField({ value });
 };
 
 const getValueByPath = (record: Record<string, any> | null | undefined, path: string) => {
@@ -819,6 +824,14 @@ const evaluateResolvedCondition = async (
       const summary = await getHolidaySummaryForDate(currentValue);
       return !!summary?.isOfficialHoliday;
     }
+    case 'occasion_eq':
+    case 'occasion_contains':
+      return dateHasAnyOccasion(currentValue, expectedValue);
+    case 'occasion_neq':
+    case 'occasion_not_contains':
+      return !(await dateHasAnyOccasion(currentValue, expectedValue));
+    case 'days_before_occasion':
+      return dateIsDaysBeforeOccasion(currentValue, expectedValue);
     case 'is_this_week': {
       const d = parseDate(currentValue);
       if (!d) return false;
@@ -946,7 +959,7 @@ export const evaluateWorkflowCondition = async ({
   );
 };
 
-const NEGATIVE_ANY_GROUP_OPERATORS = new Set(['neq', 'not_in', 'not_contains']);
+const NEGATIVE_ANY_GROUP_OPERATORS = new Set(['neq', 'not_in', 'not_contains', 'occasion_neq', 'occasion_not_contains']);
 
 const buildAnyConditionGroups = (conditions: WorkflowCondition[]) => {
   const conditionsByField = new Map<string, WorkflowCondition[]>();
@@ -2717,219 +2730,4 @@ export const runWorkflowsForEvent = async ({
       }
     }
   }
-};
-
-const sanitizeIntervalWorkflow = (workflow: WorkflowRecord): WorkflowRecord => ({
-  ...workflow,
-  conditions_all: (Array.isArray(workflow?.conditions_all) ? workflow.conditions_all : [])
-    .filter((condition) => isRunnableIntervalCondition(condition as WorkflowCondition)),
-  conditions_any: (Array.isArray(workflow?.conditions_any) ? workflow.conditions_any : [])
-    .filter((condition) => isRunnableIntervalCondition(condition as WorkflowCondition)),
-});
-
-const claimIntervalWorkflowRun = async (
-  workflowId: string,
-  expectedLastRunAt: string | null,
-  claimedAtIso: string
-) => {
-  try {
-    const { data, error } = await supabase.rpc('claim_workflow_interval_run', {
-      p_workflow_id: workflowId,
-      p_expected_last_run_at: expectedLastRunAt,
-      p_claimed_at: claimedAtIso,
-    });
-    if (error) throw error;
-    return data === true;
-  } catch {
-    let query = supabase
-      .from('workflows')
-      .update({ last_run_at: claimedAtIso, server_queued_at: null })
-      .eq('id', workflowId)
-      .eq('is_active', true)
-      .eq('trigger_type', 'interval')
-      .select('id')
-      .limit(1);
-
-    if (expectedLastRunAt) {
-      query = query.eq('last_run_at', expectedLastRunAt);
-    } else {
-      query = query.is('last_run_at', null);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-    return Array.isArray(data) && data.length > 0;
-  }
-};
-
-const checkIntervalDayCondition = async (
-  condition: string | null | undefined,
-  now: Date
-): Promise<boolean> => {
-  const cond = String(condition || 'any').trim();
-  if (!cond || cond === 'any') return true;
-
-  const dayOfWeek = now.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
-  const dayMap: Record<string, number> = {
-    saturday: 6, sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5,
-  };
-
-  if (cond === 'is_friday') return dayOfWeek === 5;
-  if (cond === 'not_friday') return dayOfWeek !== 5;
-  if (cond === 'is_saturday') return dayOfWeek === dayMap.saturday;
-  if (cond === 'not_saturday') return dayOfWeek !== dayMap.saturday;
-  if (cond === 'is_sunday') return dayOfWeek === dayMap.sunday;
-  if (cond === 'not_sunday') return dayOfWeek !== dayMap.sunday;
-  if (cond === 'is_monday') return dayOfWeek === dayMap.monday;
-  if (cond === 'not_monday') return dayOfWeek !== dayMap.monday;
-  if (cond === 'is_tuesday') return dayOfWeek === dayMap.tuesday;
-  if (cond === 'not_tuesday') return dayOfWeek !== dayMap.tuesday;
-  if (cond === 'is_wednesday') return dayOfWeek === dayMap.wednesday;
-  if (cond === 'not_wednesday') return dayOfWeek !== dayMap.wednesday;
-  if (cond === 'is_thursday') return dayOfWeek === dayMap.thursday;
-  if (cond === 'not_thursday') return dayOfWeek !== dayMap.thursday;
-
-  if (cond === 'is_friday_or_holiday' || cond === 'not_friday_or_holiday') {
-    const summary = await getHolidaySummaryForDate(now).catch(() => null);
-    const isHoliday = !!summary?.isOfficialHoliday;
-    if (cond === 'is_friday_or_holiday') return isHoliday;
-    return !isHoliday;
-  }
-
-  return true;
-};
-
-export const runWorkflowsIntervalTick = async ({
-  moduleId,
-  workflowId,
-  maxWorkflows = 20,
-  defaultBatchSize = 200,
-}: {
-  moduleId?: string | null;
-  workflowId?: string | null;
-  maxWorkflows?: number;
-  defaultBatchSize?: number;
-} = {}) => {
-  const now = new Date();
-  const normalizedWorkflowLimit = Math.max(1, Math.min(100, Number(maxWorkflows || 20)));
-  const normalizedDefaultBatch = Math.max(10, Math.min(1000, Number(defaultBatchSize || 200)));
-
-  let query = supabase
-    .from('workflows')
-    .select('*')
-    .eq('is_active', true)
-    .eq('trigger_type', 'interval')
-    .order('updated_at', { ascending: true })
-    .limit(normalizedWorkflowLimit);
-
-  const normalizedModuleId = String(moduleId || '').trim();
-  if (normalizedModuleId) query = query.eq('module_id', normalizedModuleId);
-  const normalizedWorkflowId = String(workflowId || '').trim();
-  if (normalizedWorkflowId) query = query.eq('id', normalizedWorkflowId);
-
-  const { data, error } = await query;
-  if (error) throw error;
-
-  const workflows = (data || []) as WorkflowRecord[];
-  const stats = {
-    checkedWorkflows: workflows.length,
-    claimedWorkflows: 0,
-    processedRecords: 0,
-    executedWorkflows: 0,
-    failedRuns: 0,
-  };
-
-  for (const rawWorkflow of workflows) {
-    const workflow = sanitizeIntervalWorkflow(rawWorkflow);
-    const serverQueued = !!workflow.server_queued_at;
-    const due = serverQueued || isIntervalDue({
-      lastRunAt: workflow.last_run_at || null,
-      intervalValue: clampIntervalValue(workflow.interval_value, 1),
-      intervalUnit: normalizeIntervalUnit(workflow.interval_unit || 'day'),
-      intervalAt: workflow.interval_at || null,
-      intervalFirstRunAt: workflow.interval_first_run_at || null,
-      intervalMinute: typeof workflow.interval_minute === 'number' ? workflow.interval_minute : null,
-      intervalAllowedFromHour: typeof workflow.interval_allowed_from_hour === 'number' ? workflow.interval_allowed_from_hour : null,
-      intervalAllowedToHour: typeof workflow.interval_allowed_to_hour === 'number' ? workflow.interval_allowed_to_hour : null,
-      intervalDayOfMonth: typeof workflow.interval_day_of_month === 'number' ? workflow.interval_day_of_month : null,
-      now,
-    });
-    if (!due) continue;
-
-    const dayConditionPassed = await checkIntervalDayCondition(workflow.interval_day_condition || null, now);
-    if (!dayConditionPassed) continue;
-
-    const claimedAtIso = now.toISOString();
-    const claimed = await claimIntervalWorkflowRun(
-      String(workflow.id || '').trim(),
-      String(workflow.last_run_at || '').trim() || null,
-      claimedAtIso
-    );
-    if (!claimed) continue;
-    stats.claimedWorkflows += 1;
-
-    const targetModuleId = String(workflow.module_id || '').trim();
-    if (!targetModuleId) continue;
-    const moduleTable = getModuleTable(targetModuleId);
-    const perWorkflowBatchSize = Math.max(
-      1,
-      Math.min(5000, Number(workflow.batch_size || normalizedDefaultBatch))
-    );
-
-    const { data: records, error: recordsError } = await supabase
-      .from(moduleTable)
-      .select('*')
-      .limit(perWorkflowBatchSize);
-    if (recordsError) {
-      console.error('Workflow interval record fetch failed:', recordsError);
-      continue;
-    }
-
-    const rows = Array.isArray(records) ? records : [];
-
-    // Batch-fetch workflow_logs for all records to avoid N+1 queries (first_match mode)
-    const executionMode = String(workflow.execution_mode || 'first_match');
-    let executedRecordIds: Set<string> | null = null;
-    if (executionMode === 'first_match' && rows.length > 0) {
-      const recordIds = rows.map((r: any) => String(r?.id || '').trim()).filter(Boolean);
-      if (recordIds.length > 0) {
-        const { data: logData } = await supabase
-          .from('workflow_logs')
-          .select('record_id')
-          .eq('workflow_id', workflow.id)
-          .eq('run_type', 'scheduled')
-          .eq('module_id', targetModuleId)
-          .eq('status', 'success')
-          .in('record_id', recordIds);
-        executedRecordIds = new Set(
-          (logData || []).map((row: any) => String(row?.record_id || '').trim()).filter(Boolean)
-        );
-      }
-    }
-
-    for (const row of rows) {
-      stats.processedRecords += 1;
-      try {
-        const result = await executeWorkflowForRecord({
-          workflow,
-          moduleId: targetModuleId,
-          currentRecord: row || {},
-          previousRecord: null,
-          event: 'interval',
-          runType: 'scheduled',
-          executedRecordIds,
-        });
-        if (result.success) {
-          stats.executedWorkflows += 1;
-        } else if (result.errorMessage) {
-          stats.failedRuns += 1;
-        }
-      } catch (runErr) {
-        stats.failedRuns += 1;
-        console.error(`Scheduled workflow execution failed (${workflow?.name || workflow?.id}):`, runErr);
-      }
-    }
-  }
-
-  return stats;
 };

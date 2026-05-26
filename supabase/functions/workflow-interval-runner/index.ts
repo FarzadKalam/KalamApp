@@ -6,6 +6,18 @@
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-05-26-01';
 const MAX_WORKFLOWS = 30;
 const DEFAULT_BATCH_SIZE = 300;
+const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
+const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
+const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
+const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
+const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
+const CALENDAR_PUBLIC_BASE_URL = String(
+  Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
+  || Deno.env.get('PUBLIC_APP_URL')
+  || Deno.env.get('PUBLIC_SITE_URL')
+  || Deno.env.get('SITE_URL')
+  || ''
+).trim().replace(/\/+$/, '');
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -16,10 +28,50 @@ type WorkflowCondition = {
   value?: any;
 };
 
+type HolidayApiEvent = {
+  isHoliday?: boolean;
+  event?: string;
+  calendarType?: 'jalali' | 'hijri' | 'gregorian';
+};
+
+type HolidayApiDay = {
+  day?: {
+    jalali?: string;
+    gregorian?: string;
+    hijri?: string;
+  };
+  events?: {
+    isHoliday?: boolean;
+    list?: HolidayApiEvent[];
+  };
+};
+
+type HolidayApiMonth = {
+  days?: HolidayApiDay[];
+};
+
+const holidayYearCache = new Map<number, Promise<HolidayApiMonth[] | null>>();
+
+const CALENDAR_EVENT_MOVES = [
+  { from: '1405/03/05', to: '1405/03/06', eventIncludes: 'عید سعید قربان', event: { isHoliday: true, event: 'عید سعید قربان', calendarType: 'hijri' as const } },
+  { from: '1405/03/05', to: '1405/03/06', eventIncludes: 'آغاز دههٔ امامت و ولایت', event: { isHoliday: false, event: 'آغاز دههٔ امامت و ولایت', calendarType: 'hijri' as const } },
+  { from: '1405/03/13', to: '1405/03/14', eventIncludes: 'عید سعید غدیر خم', event: { isHoliday: true, event: 'عید سعید غدیر خم(۱۰ ه‍‍.ق)', calendarType: 'hijri' as const } },
+];
+
 type WorkflowAction = {
   id?: string;
   type: string;
   config: Record<string, any>;
+};
+
+type ActionExecutionResult = {
+  action_type: string;
+  action_id: string | null;
+  status: 'success' | 'skipped' | 'failed';
+  recipient_count?: number;
+  affected_count?: number;
+  message?: string;
+  details?: Record<string, any>;
 };
 
 type WorkflowRow = {
@@ -74,12 +126,123 @@ function formatJalaliDate(isoDate: string): string {
   return `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`;
 }
 
+function toEnglishDigits(value: string): string {
+  return String(value || '')
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+}
+
+function normalizeDateKey(value: string): string {
+  return toEnglishDigits(value)
+    .replace(/-/g, '/')
+    .split('/')
+    .map((part, index) => (index === 0 ? part.padStart(4, '0') : part.padStart(2, '0')))
+    .join('/');
+}
+
+async function loadHolidayYear(jalaliYear: number): Promise<HolidayApiMonth[] | null> {
+  if (!CALENDAR_PUBLIC_BASE_URL || !Number.isFinite(jalaliYear)) return null;
+  if (!holidayYearCache.has(jalaliYear)) {
+    holidayYearCache.set(jalaliYear, (async () => {
+      const response = await fetch(`${CALENDAR_PUBLIC_BASE_URL}/calendar/${jalaliYear}.json`, { cache: 'force-cache' });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return Array.isArray(data) ? data : null;
+    })().catch((error) => {
+      console.warn(`[workflow-runner] Calendar fetch failed for ${jalaliYear}:`, error?.message || error);
+      return null;
+    }));
+  }
+  return holidayYearCache.get(jalaliYear) || null;
+}
+
+function applyCalendarEventMoves(dateKey: string, events: HolidayApiEvent[]): HolidayApiEvent[] {
+  const normalizedDateKey = normalizeDateKey(dateKey);
+  let nextEvents = [...events];
+  for (const move of CALENDAR_EVENT_MOVES) {
+    const from = normalizeDateKey(move.from);
+    const to = normalizeDateKey(move.to);
+    if (normalizedDateKey === from) {
+      nextEvents = nextEvents.filter((item) => !String(item?.event || '').includes(move.eventIncludes));
+    }
+    if (
+      normalizedDateKey === to &&
+      !nextEvents.some((item) => String(item?.event || '').includes(move.eventIncludes))
+    ) {
+      nextEvents.push(move.event);
+    }
+  }
+  return nextEvents;
+}
+
+function normalizeOccasionText(value: unknown): string {
+  return toEnglishDigits(String(value ?? '')).trim().toLocaleLowerCase('fa-IR');
+}
+
+function normalizeOccasionValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeOccasionValues(item));
+  if (value && typeof value === 'object') {
+    const nested = (value as any)?.values || (value as any)?.items || (value as any)?.selected;
+    if (Array.isArray(nested)) return normalizeOccasionValues(nested);
+    return [(value as any)?.value, (value as any)?.label, (value as any)?.title, (value as any)?.event]
+      .filter((item) => item !== undefined && item !== null && item !== '')
+      .map((item) => normalizeOccasionText(item));
+  }
+  const text = normalizeOccasionText(value);
+  return text ? [text] : [];
+}
+
+function occasionMatches(title: string, expected: string): boolean {
+  const normalizedTitle = normalizeOccasionText(title);
+  const normalizedExpected = normalizeOccasionText(expected);
+  return !!normalizedExpected && (
+    normalizedTitle === normalizedExpected ||
+    normalizedTitle.includes(normalizedExpected) ||
+    normalizedExpected.includes(normalizedTitle)
+  );
+}
+
+async function getHolidayEventsForDate(value: unknown): Promise<HolidayApiEvent[]> {
+  const date = value ? new Date(String(value)) : null;
+  if (!date || isNaN(date.getTime())) return [];
+  const dateKey = formatJalaliDate(date.toISOString());
+  const [yearText, monthText, dayText] = normalizeDateKey(dateKey).split('/');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const yearData = await loadHolidayYear(year);
+  const monthData = Array.isArray(yearData) ? yearData[month - 1] : null;
+  const dayData = monthData?.days?.find((item) => Number(toEnglishDigits(item?.day?.jalali || '0')) === day);
+  return applyCalendarEventMoves(dateKey, (dayData?.events?.list || []) as HolidayApiEvent[]);
+}
+
+async function dateHasAnyOccasion(value: unknown, expectedValue: unknown): Promise<boolean> {
+  const expected = normalizeOccasionValues(expectedValue);
+  if (expected.length === 0) return false;
+  const titles = (await getHolidayEventsForDate(value)).map((item) => String(item?.event || '').trim()).filter(Boolean);
+  return titles.some((title) => expected.some((item) => occasionMatches(title, item)));
+}
+
+async function dateIsDaysBeforeOccasion(value: unknown, expectedValue: unknown): Promise<boolean> {
+  const date = value ? new Date(String(value)) : null;
+  if (!date || isNaN(date.getTime())) return false;
+  const config = expectedValue && typeof expectedValue === 'object' && !Array.isArray(expectedValue)
+    ? expectedValue as Record<string, any>
+    : {};
+  const days = Number(config.days ?? config.count ?? 0);
+  if (!Number.isFinite(days) || days < 0) return false;
+  const occasion = config.occasion ?? config.event ?? config.value;
+  if (normalizeOccasionValues(occasion).length === 0) return false;
+  const target = new Date(date);
+  target.setDate(target.getDate() + days);
+  return dateHasAnyOccasion(target.toISOString(), occasion);
+}
+
 function formatJalaliDateTime(isoDate: string): string {
   const d = new Date(isoDate);
   if (isNaN(d.getTime())) return isoDate;
   const tehranDate = new Date(isoDate);
-  const tehranOffset = 3.5 * 60 * 60 * 1000;
-  const local = new Date(tehranDate.getTime() + tehranOffset);
+  const local = new Date(tehranDate.getTime() + TEHRAN_OFFSET_MS);
   const [jy, jm, jd] = gregorianToJalali(local.getUTCFullYear(), local.getUTCMonth() + 1, local.getUTCDate());
   const h = String(local.getUTCHours()).padStart(2, '0');
   const min = String(local.getUTCMinutes()).padStart(2, '0');
@@ -90,12 +253,132 @@ function formatJalaliDateTime(isoDate: string): string {
 
 const DATE_LIKE_REGEX = /^\d{4}-\d{2}-\d{2}/;
 
+const asArray = (value: any): any[] => {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined || value === '') return [];
+  return [value];
+};
+
+const toTehranDate = (date: Date) => new Date(date.getTime() + TEHRAN_OFFSET_MS);
+const fromTehranDate = (date: Date) => new Date(date.getTime() - TEHRAN_OFFSET_MS);
+
 function getFieldValue(record: Record<string, any>, fieldKey: string): any {
   if (Object.prototype.hasOwnProperty.call(record, fieldKey)) return record[fieldKey];
   const parts = fieldKey.split('.');
   let cur: any = record;
   for (const p of parts) { cur = cur?.[p]; if (cur === undefined) break; }
   return cur;
+}
+
+function buildResolvedAssigneeCombo(record: Record<string, any>): string | null {
+  const assigneeType = String(record?.assignee_type || '').trim().toLowerCase();
+  const roleId = String(record?.assignee_role_id || '').trim();
+  const userId = String(record?.assignee_id || '').trim();
+  if (assigneeType === 'role' || (!assigneeType && roleId)) {
+    const id = roleId || userId;
+    return id ? `role_${id}` : null;
+  }
+  return userId ? `user_${userId}` : null;
+}
+
+function parseWorkflowRelatedFieldKey(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith(WORKFLOW_RELATED_FIELD_PREFIX)) return null;
+  const parts = raw.slice(WORKFLOW_RELATED_FIELD_PREFIX.length).split('::');
+  if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) return null;
+  return { relationFieldKey: parts[0], targetModuleId: parts[1], targetFieldKey: parts[2] };
+}
+
+function parseWorkflowMultiRelationFieldKey(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith(WORKFLOW_MULTI_RELATION_PREFIX)) return null;
+  const parts = raw.slice(WORKFLOW_MULTI_RELATION_PREFIX.length).split('::');
+  if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) return null;
+  return { fieldKey: parts[0], targetModuleId: parts[1], targetFieldKey: parts[2] };
+}
+
+function parseProcessNextStageFieldKey(value: string) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith(PROCESS_NEXT_STAGE_FIELD_PREFIX)) return null;
+  const match = raw.slice(PROCESS_NEXT_STAGE_FIELD_PREFIX.length).match(/^([12])__(.+)$/);
+  if (!match?.[1] || !match?.[2]) return null;
+  return { offset: Number(match[1]), fieldKey: String(match[2]).trim() };
+}
+
+function normalizeMultiRelationIds(value: any): string[] {
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeMultiRelationIds(item));
+  if (value && typeof value === 'object') {
+    return [value.id, value.value, value.record_id].map((item) => String(item || '').trim()).filter(Boolean);
+  }
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('{') && raw.endsWith('}')) {
+    try { return normalizeMultiRelationIds(JSON.parse(raw)); } catch { return [raw]; }
+  }
+  return [raw];
+}
+
+async function fetchRelatedRecord(url: string, key: string, moduleId: string, recordId: string): Promise<Record<string, any> | null> {
+  const table = getModuleTable(moduleId);
+  const rows = await dbGet(url, key, `${table}?id=eq.${encodeURIComponent(recordId)}&select=*&limit=1`).catch(() => []);
+  return rows[0] || null;
+}
+
+function normalizeMultiRelationCommunicationValues(targetModuleId: string, targetFieldKey: string, values: any[]): any[] {
+  const normalizedTargetModuleId = String(targetModuleId || '').trim();
+  const normalizedTargetFieldKey = String(targetFieldKey || '').trim();
+  if (
+    normalizedTargetFieldKey === 'related_profile_id'
+    || (normalizedTargetModuleId === 'profiles' && normalizedTargetFieldKey === 'id')
+  ) {
+    return values
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .map((value) => `user_${value}`);
+  }
+  return values;
+}
+
+async function resolveWorkflowFieldValue(
+  url: string,
+  key: string,
+  fieldKey: string,
+  record: Record<string, any>,
+): Promise<any> {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  if (!normalizedFieldKey) return null;
+  if (normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return buildResolvedAssigneeCombo(record);
+
+  const relatedMeta = parseWorkflowRelatedFieldKey(normalizedFieldKey);
+  if (relatedMeta) {
+    const relationId = String(getFieldValue(record, relatedMeta.relationFieldKey) || '').trim();
+    if (!relationId) return null;
+    const relatedRecord = await fetchRelatedRecord(url, key, relatedMeta.targetModuleId, relationId);
+    if (!relatedRecord) return null;
+    if (relatedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return buildResolvedAssigneeCombo(relatedRecord);
+    return getFieldValue(relatedRecord, relatedMeta.targetFieldKey);
+  }
+
+  const multiRelationMeta = parseWorkflowMultiRelationFieldKey(normalizedFieldKey);
+  if (multiRelationMeta) {
+    const ids = Array.from(new Set(normalizeMultiRelationIds(getFieldValue(record, multiRelationMeta.fieldKey))));
+    const values: any[] = [];
+    for (const id of ids) {
+      const relatedRecord = await fetchRelatedRecord(url, key, multiRelationMeta.targetModuleId, id);
+      if (!relatedRecord) continue;
+      if (multiRelationMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+        const assignee = buildResolvedAssigneeCombo(relatedRecord);
+        if (assignee) values.push(assignee);
+      } else {
+        const value = getFieldValue(relatedRecord, multiRelationMeta.targetFieldKey);
+        if (Array.isArray(value)) values.push(...value);
+        else if (value !== null && value !== undefined && value !== '') values.push(value);
+      }
+    }
+    return normalizeMultiRelationCommunicationValues(multiRelationMeta.targetModuleId, multiRelationMeta.targetFieldKey, values);
+  }
+
+  return getFieldValue(record, normalizedFieldKey);
 }
 
 function formatFieldValue(value: any, fieldKey: string): string {
@@ -113,15 +396,27 @@ function formatFieldValue(value: any, fieldKey: string): string {
   return str;
 }
 
-function renderTemplate(template: string, record: Record<string, any>, bold = false): string {
-  return String(template || '').replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, key) => {
-    const fieldKey = String(key).trim();
-    if (!fieldKey) return '';
-    const value = getFieldValue(record, fieldKey);
+async function renderTemplateAsync(
+  template: string,
+  record: Record<string, any>,
+  url: string,
+  key: string,
+  bold = false,
+): Promise<string> {
+  const raw = String(template || '');
+  const matches = Array.from(raw.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
+  if (matches.length === 0) return raw;
+
+  let rendered = raw;
+  for (const match of matches) {
+    const token = match[0];
+    const fieldKey = String(match[1] || '').trim();
+    if (!fieldKey) continue;
+    const value = await resolveWorkflowFieldValue(url, key, fieldKey, record);
     const text = formatFieldValue(value, fieldKey);
-    if (!text) return '';
-    return bold ? `**${text}**` : text;
-  });
+    rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
+  }
+  return rendered;
 }
 
 // ── Condition evaluation ───────────────────────────────────────────────────────
@@ -163,7 +458,7 @@ function normalizeConditionValue(value: any): string {
     .replace(/[٠-٩]/g, (d) => String(ARABIC.indexOf(d)));
 }
 
-function evaluateCondition(condition: WorkflowCondition, record: Record<string, any>): boolean {
+async function evaluateCondition(condition: WorkflowCondition, record: Record<string, any>): Promise<boolean> {
   const field = String(condition?.field || '').trim();
   if (!field) return true;
   const operator = String(condition?.operator || 'eq').trim();
@@ -300,8 +595,19 @@ function evaluateCondition(condition: WorkflowCondition, record: Record<string, 
       return !!d && !isNaN(d.getTime()) && d.getDay() === 5;
     }
     case 'is_official_holiday': {
-      // Cannot call holiday service from server; treat as false (skip this condition)
-      return false;
+      const events = await getHolidayEventsForDate(current);
+      return events.some((event) => event?.isHoliday === true);
+    }
+    case 'occasion_eq':
+    case 'occasion_contains': {
+      return dateHasAnyOccasion(current, expected);
+    }
+    case 'occasion_neq':
+    case 'occasion_not_contains': {
+      return !(await dateHasAnyOccasion(current, expected));
+    }
+    case 'days_before_occasion': {
+      return dateIsDaysBeforeOccasion(current, expected);
     }
     default:
       console.warn(`[workflow-runner] Unknown operator: ${operator}`);
@@ -309,24 +615,24 @@ function evaluateCondition(condition: WorkflowCondition, record: Record<string, 
   }
 }
 
-function evaluateConditions(
+async function evaluateConditions(
   conditionsAll: WorkflowCondition[],
   conditionsAny: WorkflowCondition[],
   record: Record<string, any>
-): boolean {
+): Promise<boolean> {
   const allConditions = Array.isArray(conditionsAll) ? conditionsAll : [];
   const anyConditions = Array.isArray(conditionsAny) ? conditionsAny : [];
 
   if (allConditions.length > 0) {
     for (const c of allConditions) {
-      if (!evaluateCondition(c, record)) return false;
+      if (!await evaluateCondition(c, record)) return false;
     }
   }
 
   if (anyConditions.length > 0) {
     let anyPassed = false;
     for (const c of anyConditions) {
-      if (evaluateCondition(c, record)) { anyPassed = true; break; }
+      if (await evaluateCondition(c, record)) { anyPassed = true; break; }
     }
     if (!anyPassed) return false;
   }
@@ -350,6 +656,7 @@ function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
   const unit = String(workflow.interval_unit || 'day').toLowerCase();
   const value = Math.max(1, parseInt(String(workflow.interval_value || 1), 10) || 1);
   const lastRunAt = workflow.last_run_at ? new Date(workflow.last_run_at) : null;
+  const tehranNow = toTehranDate(now);
 
   // Respect interval_first_run_at for first run
   if (!lastRunAt && workflow.interval_first_run_at) {
@@ -361,14 +668,14 @@ function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
   if (unit === 'hour') {
     const from = workflow.interval_allowed_from_hour;
     const to = workflow.interval_allowed_to_hour;
-    const h = now.getHours();
+    const h = tehranNow.getUTCHours();
     if (from !== null && to !== null && (h < from || h > to)) return false;
   }
 
   // Month: day-of-month check
   if (unit === 'month' && workflow.interval_day_of_month) {
     const target = Math.min(31, Math.max(1, workflow.interval_day_of_month));
-    if (now.getDate() !== target) return false;
+    if (tehranNow.getUTCDate() !== target) return false;
   }
 
   if (!lastRunAt) return true;
@@ -377,27 +684,28 @@ function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
     ? (typeof workflow.interval_minute === 'number' ? `00:${String(workflow.interval_minute).padStart(2, '0')}` : null)
     : workflow.interval_at;
 
-  let next = new Date(lastRunAt);
-  if (unit === 'hour') next.setHours(next.getHours() + value);
-  else if (unit === 'day') next.setDate(next.getDate() + value);
-  else next.setMonth(next.getMonth() + value);
+  let nextLocal = toTehranDate(lastRunAt);
+  if (unit === 'hour') nextLocal.setUTCHours(nextLocal.getUTCHours() + value);
+  else if (unit === 'day') nextLocal.setUTCDate(nextLocal.getUTCDate() + value);
+  else nextLocal.setUTCMonth(nextLocal.getUTCMonth() + value);
 
   const parsedTime = parseIntervalAt(effectiveIntervalAt);
   if (parsedTime) {
     if (unit === 'hour') {
-      next.setMinutes(parsedTime.minute, 0, 0);
+      nextLocal.setUTCMinutes(parsedTime.minute, 0, 0);
     } else {
-      next.setHours(parsedTime.hour, parsedTime.minute, 0, 0);
+      nextLocal.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
     }
   }
 
+  const next = fromTehranDate(nextLocal);
   return now >= next;
 }
 
 function checkIntervalDayCondition(condition: string | null | undefined, now: Date): boolean {
   const cond = String(condition || 'any').trim();
   if (!cond || cond === 'any') return true;
-  const day = now.getDay();
+  const day = toTehranDate(now).getUTCDay();
   if (cond === 'is_friday') return day === 5;
   if (cond === 'not_friday') return day !== 5;
   if (cond === 'is_saturday') return day === 6;
@@ -493,13 +801,6 @@ async function fetchModuleRecords(url: string, key: string, table: string, orgId
   return await dbGet(url, key, `${table}?org_id=eq.${orgId}&limit=${batchSize}`);
 }
 
-async function hasWorkflowLog(url: string, key: string, workflowId: string, moduleId: string, recordId: string): Promise<boolean> {
-  const rows = await dbGet(url, key,
-    `workflow_logs?workflow_id=eq.${workflowId}&module_id=eq.${moduleId}&record_id=eq.${recordId}&run_type=eq.scheduled&status=eq.success&limit=1`
-  );
-  return rows.length > 0;
-}
-
 async function insertWorkflowLog(url: string, key: string, log: {
   workflow_id: string; org_id: string; module_id: string; record_id: string;
   run_type: string; status: string; message?: string; details?: any;
@@ -538,28 +839,56 @@ function normalizePhone(p: string): string {
 
 function isValidIranMobile(p: string): boolean { return /^09\d{9}$/.test(p); }
 
+async function loadChatGroups(url: string, key: string, groupIds: string[]): Promise<Array<{ id: string; user_ids: any[]; role_ids: any[] }>> {
+  const ids = Array.from(new Set(groupIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (ids.length === 0) return [];
+  return await dbGet(url, key, `chat_groups?id=in.(${ids.join(',')})&select=id,user_ids,role_ids`).catch(() => []);
+}
+
+async function expandChatGroupsIntoSets(
+  url: string,
+  key: string,
+  groupIds: Set<string>,
+  userIds: Set<string>,
+  roleIds: Set<string>
+): Promise<Array<{ groupId: string; userIds: string[]; roleIds: string[] }>> {
+  const groups = await loadChatGroups(url, key, Array.from(groupIds));
+  return groups.map((group: any) => {
+    const groupId = String(group?.id || '').trim();
+    const groupUserIds = asArray(group?.user_ids).map((id) => String(id || '').trim()).filter(Boolean);
+    const groupRoleIds = asArray(group?.role_ids).map((id) => String(id || '').trim()).filter(Boolean);
+    groupUserIds.forEach((id) => userIds.add(id));
+    groupRoleIds.forEach((id) => roleIds.add(id));
+    return { groupId, userIds: groupUserIds, roleIds: groupRoleIds };
+  }).filter((group) => Boolean(group.groupId));
+}
+
 async function resolveAssigneesToSmsRecipients(
   url: string, key: string, orgId: string,
   recipientAssignees: any[], recipientFields: any[], record: Record<string, any>
 ): Promise<string[]> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
   const directPhones: string[] = [];
 
   const processEntry = (entry: any) => {
     const token = parseRecipientToken(String(entry ?? ''));
     if (token?.kind === 'user') { userIds.add(token.id); return; }
     if (token?.kind === 'role') { roleIds.add(token.id); return; }
+    if (token?.kind === 'chat_group') { groupIds.add(token.id); return; }
     const phone = normalizePhone(String(entry ?? ''));
     if (phone) directPhones.push(phone);
   };
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
-  (Array.isArray(recipientFields) ? recipientFields : []).forEach((fieldKey) => {
-    const val = getFieldValue(record, String(fieldKey ?? ''));
+  for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
+    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record);
     if (Array.isArray(val)) val.forEach(processEntry);
     else processEntry(val);
-  });
+  }
+
+  await expandChatGroupsIntoSets(url, key, groupIds, userIds, roleIds);
 
   const phones: string[] = [...directPhones];
 
@@ -582,33 +911,44 @@ async function resolveAssigneesToSmsRecipients(
   return Array.from(new Set(phones.filter(isValidIranMobile)));
 }
 
-async function resolveAssigneesToUserIds(
+async function resolveAssigneesToMentionTargets(
   url: string, key: string, orgId: string,
   recipientAssignees: any[], recipientFields: any[], record: Record<string, any>
-): Promise<string[]> {
+): Promise<{ mentionUserIds: string[]; mentionRoleIds: string[]; groupTargets: Array<{ groupId: string; userIds: string[]; roleIds: string[] }> }> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
 
   const processEntry = (entry: any) => {
     const token = parseRecipientToken(String(entry ?? ''));
     if (token?.kind === 'user') { userIds.add(token.id); return; }
     if (token?.kind === 'role') { roleIds.add(token.id); return; }
+    if (token?.kind === 'chat_group') { groupIds.add(token.id); return; }
   };
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
-  (Array.isArray(recipientFields) ? recipientFields : []).forEach((fieldKey) => {
-    const val = getFieldValue(record, String(fieldKey ?? ''));
+  for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
+    const val = await resolveWorkflowFieldValue(url, key, String(fieldKey ?? ''), record);
     if (Array.isArray(val)) val.forEach(processEntry);
     else processEntry(val);
-  });
-
-  if (roleIds.size > 0) {
-    const ids = Array.from(roleIds).join(',');
-    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=id`).catch(() => []);
-    profiles.forEach((p: any) => { if (p.id) userIds.add(String(p.id)); });
   }
 
-  return Array.from(userIds);
+  const groupRows = await loadChatGroups(url, key, Array.from(groupIds));
+  const groupTargets = groupRows.map((group: any) => {
+    const groupId = String(group?.id || '').trim();
+    if (!groupId) return null;
+    return {
+      groupId,
+      userIds: asArray(group?.user_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      roleIds: asArray(group?.role_ids).map((id) => String(id || '').trim()).filter(Boolean),
+    };
+  }).filter(Boolean) as Array<{ groupId: string; userIds: string[]; roleIds: string[] }>;
+
+  return {
+    mentionUserIds: Array.from(userIds),
+    mentionRoleIds: Array.from(roleIds),
+    groupTargets,
+  };
 }
 
 // ── Bot recipient resolution ───────────────────────────────────────────────────
@@ -620,22 +960,26 @@ async function resolveAssigneesToBotChatIds(
 ): Promise<string[]> {
   const userIds = new Set<string>();
   const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
   const directChatIds: string[] = [];
 
   const processEntry = (entry: any) => {
     const token = parseRecipientToken(String(entry ?? ''));
     if (token?.kind === 'user') { userIds.add(token.id); return; }
     if (token?.kind === 'role') { roleIds.add(token.id); return; }
+    if (token?.kind === 'chat_group') { groupIds.add(token.id); return; }
     const v = String(entry ?? '').trim();
     if (v) directChatIds.push(v);
   };
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
-  (Array.isArray(recipientFields) ? recipientFields : []).forEach((fk) => {
-    const val = getFieldValue(record, String(fk ?? ''));
+  for (const fk of (Array.isArray(recipientFields) ? recipientFields : [])) {
+    const val = await resolveWorkflowFieldValue(url, key, String(fk ?? ''), record);
     if (Array.isArray(val)) val.forEach(processEntry);
     else processEntry(val);
-  });
+  }
+
+  await expandChatGroupsIntoSets(url, key, groupIds, userIds, roleIds);
 
   const chatIdField = channel === 'telegram' ? 'telegram_chat_id' : channel === 'rubika' ? 'rubika_chat_id' : 'bale_chat_id';
   const chatIds: string[] = [...directChatIds];
@@ -673,7 +1017,63 @@ async function getOrgSmsSettings(url: string, key: string, orgId: string): Promi
   };
 }
 
-async function sendSmsViaProvider(settings: any, to: string[], text: string): Promise<void> {
+async function insertSmsAudit(url: string, key: string, payload: {
+  orgId: string;
+  moduleId?: string | null;
+  recordId?: string | null;
+  recipient: string;
+  text: string;
+  status: 'provider_accepted' | 'failed' | 'skipped';
+  errorMessage?: string | null;
+  metadata?: Record<string, any>;
+}): Promise<void> {
+  await dbInsert(url, key, 'outbound_messages', {
+    org_id: payload.orgId,
+    channel_type: 'sms',
+    direction: 'outbound',
+    provider: 'meli_payamak',
+    module_id: payload.moduleId || null,
+    record_id: payload.recordId || null,
+    customer_id: payload.moduleId === 'customers' ? payload.recordId || null : null,
+    recipient: payload.recipient || null,
+    title: 'ارسال پیامک خودکار',
+    message_text: payload.text,
+    status: payload.status,
+    error_message: payload.errorMessage || null,
+    metadata: {
+      source_type: 'workflow',
+      runner_build: FUNCTION_BUILD,
+      ...(payload.metadata || {}),
+    },
+    sent_at: payload.status === 'provider_accepted' ? new Date().toISOString() : null,
+  }).catch((e) => console.warn('[workflow-runner] Failed to insert SMS audit:', e.message));
+}
+
+async function auditSmsBatch(url: string, key: string, payload: {
+  orgId: string;
+  moduleId: string;
+  recordId: string | null;
+  recipients: string[];
+  text: string;
+  status: 'provider_accepted' | 'failed' | 'skipped';
+  errorMessage?: string | null;
+  metadata?: Record<string, any>;
+}): Promise<void> {
+  for (const recipient of payload.recipients) {
+    await insertSmsAudit(url, key, {
+      orgId: payload.orgId,
+      moduleId: payload.moduleId,
+      recordId: payload.recordId,
+      recipient,
+      text: payload.text,
+      status: payload.status,
+      errorMessage: payload.errorMessage,
+      metadata: payload.metadata,
+    });
+  }
+}
+
+async function sendSmsViaProvider(settings: any, to: string[], text: string): Promise<string[]> {
   const username = String(settings.username || '').trim();
   const password = String(settings.password || settings.api_key || '').trim();
   const apiKey = String(settings.api_key || '').trim();
@@ -681,6 +1081,7 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string): Pr
   if (!senderNumber || (!username && !apiKey)) throw new Error('تنظیمات پیامک ناقص است');
   if (!text.trim()) throw new Error('متن پیامک خالی است');
 
+  const sentRecipients: string[] = [];
   for (const recipient of to) {
     const phone = normalizePhone(recipient);
     if (!isValidIranMobile(phone)) { console.warn('[workflow-runner] Invalid phone:', phone); continue; }
@@ -695,7 +1096,9 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string): Pr
       signal: AbortSignal.timeout(10000),
     });
     if (!r.ok) throw new Error(`پاسخ پیامک خطا: ${r.status}`);
+    sentRecipients.push(phone);
   }
+  return sentRecipients;
 }
 
 // ── Bot sending ────────────────────────────────────────────────────────────────
@@ -711,7 +1114,10 @@ async function sendBotMessage(chatId: string, text: string, settings: any, chann
   const token = String(settings.bot_token || settings.token || '').trim();
   if (!token || !chatId) return;
   const isTelegram = channel === 'telegram';
-  const baseUrl = isTelegram
+  const isRubika = channel === 'rubika';
+  const baseUrl = isRubika
+    ? `https://rubika.ir/rubika/bots/${token}/sendMessage`
+    : isTelegram
     ? `https://api.telegram.org/bot${token}/sendMessage`
     : `https://tapi.bale.ai/bot${token}/sendMessage`;
   const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
@@ -720,7 +1126,12 @@ async function sendBotMessage(chatId: string, text: string, settings: any, chann
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(8000),
-  }).catch((e) => console.warn(`[workflow-runner] Bot send failed (${channel}):`, e.message));
+  }).then(async (response) => {
+    if (!response.ok) {
+      const raw = await response.text().catch(() => String(response.status));
+      throw new Error(`ارسال پیام ${channel} ناموفق بود: ${raw || response.status}`);
+    }
+  });
 }
 
 // ── Note insertion ─────────────────────────────────────────────────────────────
@@ -773,78 +1184,151 @@ async function createRecord(url: string, key: string, moduleId: string, orgId: s
 
 // ── Action execution ───────────────────────────────────────────────────────────
 
+function actionResult(
+  action: WorkflowAction,
+  status: ActionExecutionResult['status'],
+  message?: string,
+  patch: Partial<ActionExecutionResult> = {}
+): ActionExecutionResult {
+  return {
+    action_type: String(action?.type || ''),
+    action_id: action?.id || null,
+    status,
+    ...(message ? { message } : {}),
+    ...patch,
+  };
+}
+
+async function resolveConfiguredActionValue(
+  config: Record<string, any>,
+  record: Record<string, any>,
+  url: string,
+  key: string
+): Promise<any> {
+  const valueMode = String(config.value_mode || 'static');
+  if (valueMode === 'from_source') {
+    const sourceField = String(config.source_field || '').trim();
+    return sourceField ? await resolveWorkflowFieldValue(url, key, sourceField, record) : null;
+  }
+  return config.value ?? null;
+}
+
 async function executeAction(
   action: WorkflowAction, record: Record<string, any>,
   moduleId: string, orgId: string, url: string, key: string
-): Promise<void> {
+): Promise<ActionExecutionResult> {
   const config = action.config || {};
+  const recordId = String(record?.id || '').trim();
 
   // ── send_sms ──────────────────────────────────────────────────────────
   if (action.type === 'send_sms') {
-    const text = renderTemplate(String(config.message || ''), record).trim();
-    if (!text) return;
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    if (!text) return actionResult(action, 'skipped', 'متن پیامک خالی است.');
     const recipients = await resolveAssigneesToSmsRecipients(
       url, key, orgId,
       config.recipient_assignees || [], config.recipient_fields || [], record
     );
     const manuals = (config.manual_numbers || []).map(normalizePhone).filter(isValidIranMobile);
     const allRecipients = Array.from(new Set([...recipients, ...manuals]));
-    if (allRecipients.length === 0) return;
+    if (allRecipients.length === 0) return actionResult(action, 'skipped', 'گیرنده معتبر برای پیامک پیدا نشد.', { recipient_count: 0 });
     const smsSettings = await getOrgSmsSettings(url, key, orgId);
-    if (!smsSettings) { console.warn(`[workflow-runner] No SMS settings for org: ${orgId}`); return; }
-    await sendSmsViaProvider(smsSettings, allRecipients, text);
-    return;
+    if (!smsSettings) {
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, status: 'skipped', errorMessage: 'تنظیمات پیامک فعال نیست.', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      return actionResult(action, 'skipped', 'تنظیمات پیامک فعال نیست.', { recipient_count: allRecipients.length });
+    }
+    try {
+      const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text);
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      return actionResult(action, sentRecipients.length > 0 ? 'success' : 'skipped', sentRecipients.length > 0 ? undefined : 'هیچ شماره معتبری ارسال نشد.', { recipient_count: sentRecipients.length });
+    } catch (e: any) {
+      await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: allRecipients, text, status: 'failed', errorMessage: String(e?.message || e), metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+      throw e;
+    }
   }
 
   // ── send_note / send_note_sms ─────────────────────────────────────────
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
-    const noteText = renderTemplate(String(config.note_text || ''), record, true).trim();
-    if (!noteText) return;
-    const recordId = String(record?.id || '');
-    if (!moduleId || !recordId) return;
-    const mentionUserIds = await resolveAssigneesToUserIds(
+    const noteText = (await renderTemplateAsync(String(config.note_text || ''), record, url, key, true)).trim();
+    if (!noteText) return actionResult(action, 'skipped', 'متن یادداشت خالی است.');
+    if (!moduleId || !recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای یادداشت مشخص نیست.');
+    const mentionTargets = await resolveAssigneesToMentionTargets(
       url, key, orgId,
       config.recipient_assignees || [], config.recipient_fields || [], record
     );
-    if (mentionUserIds.length === 0) { console.info('[workflow-runner] No note recipients'); return; }
-    await insertNote(url, key, {
-      org_id: orgId, module_id: moduleId, record_id: recordId,
-      content: noteText, mention_user_ids: mentionUserIds, mention_role_ids: [],
-      source_type: 'system',
-      metadata: { source_type: 'system', notification_surface: 'system_feed', requires_action: false, workflow_action_type: action.type, workflow_action_id: action.id || null },
+    const noteRows: Record<string, any>[] = [];
+    const baseMetadata = { source_type: 'system', notification_surface: 'system_feed', requires_action: false, workflow_action_type: action.type, workflow_action_id: action.id || null };
+    const hasDirectMentions = mentionTargets.mentionUserIds.length > 0 || mentionTargets.mentionRoleIds.length > 0;
+    if (hasDirectMentions || mentionTargets.groupTargets.length === 0) {
+      noteRows.push({
+        org_id: orgId, module_id: moduleId, record_id: recordId,
+        content: noteText, mention_user_ids: mentionTargets.mentionUserIds, mention_role_ids: mentionTargets.mentionRoleIds,
+        source_type: 'system', metadata: baseMetadata,
+      });
+    }
+    mentionTargets.groupTargets.forEach((group) => {
+      noteRows.push({
+        org_id: orgId, module_id: moduleId, record_id: recordId,
+        content: noteText, mention_user_ids: group.userIds, mention_role_ids: group.roleIds,
+        source_type: 'system', metadata: { ...baseMetadata, chat_group_id: group.groupId },
+      });
     });
+    if (noteRows.length === 0 || !hasDirectMentions && mentionTargets.groupTargets.length === 0) {
+      return actionResult(action, 'skipped', 'گیرنده یادداشت پیدا نشد.', { recipient_count: 0 });
+    }
+    for (const noteRow of noteRows) await insertNote(url, key, noteRow as any);
+    let smsRecipientCount = 0;
     if (action.type === 'send_note_sms') {
       const smsText = `پیام جدید از طرف "سیستم"\n"${noteText.replace(/\*\*/g, '').substring(0, 80)}"\nبرای مشاهده به سامانه مراجعه کنید`;
       const recipients = await resolveAssigneesToSmsRecipients(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record);
       if (recipients.length > 0) {
         const smsSettings = await getOrgSmsSettings(url, key, orgId);
-        if (smsSettings) await sendSmsViaProvider(smsSettings, recipients, smsText).catch((e) => console.warn('[workflow-runner] note_sms failed:', e.message));
+        if (smsSettings) {
+          try {
+            const sentRecipients = await sendSmsViaProvider(smsSettings, recipients, smsText);
+            smsRecipientCount = sentRecipients.length;
+            await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text: smsText, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+          } catch (e: any) {
+            await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients, text: smsText, status: 'failed', errorMessage: String(e?.message || e), metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
+            throw e;
+          }
+        }
       }
     }
-    return;
+    return actionResult(action, 'success', undefined, {
+      recipient_count: mentionTargets.mentionUserIds.length + mentionTargets.mentionRoleIds.length + mentionTargets.groupTargets.length + smsRecipientCount,
+      affected_count: noteRows.length,
+      details: { note_count: noteRows.length, sms_recipient_count: smsRecipientCount },
+    });
   }
 
   // ── send_bale_bot ─────────────────────────────────────────────────────
-  if (action.type === 'send_bale_bot' || action.type === 'send_telegram_bot') {
-    const channel = action.type === 'send_telegram_bot' ? 'telegram' : 'bale';
-    const text = renderTemplate(String(config.message || ''), record).trim();
-    if (!text) return;
+  if (action.type === 'send_bale_bot' || action.type === 'send_telegram_bot' || action.type === 'send_bot_message') {
+    const configuredChannel = String(config.channel || config.platform || '').trim().toLowerCase();
+    const channel = action.type === 'send_telegram_bot'
+      ? 'telegram'
+      : configuredChannel === 'telegram' || configuredChannel === 'bale' || configuredChannel === 'rubika'
+        ? configuredChannel
+        : 'bale';
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    if (!text) return actionResult(action, 'skipped', 'متن پیام بات خالی است.');
     const botSettings = await getOrgBotSettings(url, key, orgId, channel);
-    if (!botSettings) return;
+    if (!botSettings) return actionResult(action, 'skipped', `تنظیمات ${channel} فعال نیست.`);
     const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, channel);
+    if (chatIds.length === 0) return actionResult(action, 'skipped', 'گیرنده بات پیدا نشد.', { recipient_count: 0 });
     for (const chatId of chatIds) {
       await sendBotMessage(chatId, text, botSettings, channel);
     }
-    return;
+    return actionResult(action, 'success', undefined, { recipient_count: chatIds.length });
   }
 
   // ── send_rubika_bot ───────────────────────────────────────────────────
   if (action.type === 'send_rubika_bot') {
-    const text = renderTemplate(String(config.message || ''), record).trim();
-    if (!text) return;
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    if (!text) return actionResult(action, 'skipped', 'متن پیام روبیکا خالی است.');
     const botSettings = await getOrgBotSettings(url, key, orgId, 'rubika');
-    if (!botSettings) return;
+    if (!botSettings) return actionResult(action, 'skipped', 'تنظیمات روبیکا فعال نیست.');
     const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, 'rubika');
+    if (chatIds.length === 0) return actionResult(action, 'skipped', 'گیرنده روبیکا پیدا نشد.', { recipient_count: 0 });
     for (const chatId of chatIds) {
       const token = String(botSettings.bot_token || '').trim();
       if (!token || !chatId) continue;
@@ -853,29 +1337,29 @@ async function executeAction(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text }),
         signal: AbortSignal.timeout(8000),
-      }).catch((e) => console.warn('[workflow-runner] Rubika send failed:', e.message));
+      }).then(async (response) => {
+        if (!response.ok) {
+          const raw = await response.text().catch(() => String(response.status));
+          throw new Error(`ارسال پیام روبیکا ناموفق بود: ${raw || response.status}`);
+        }
+      });
     }
-    return;
+    return actionResult(action, 'success', undefined, { recipient_count: chatIds.length });
   }
 
   // ── update_record ─────────────────────────────────────────────────────
   if (action.type === 'update_record') {
     const fieldKey = String(config.field || '').trim();
-    if (!fieldKey || !record?.id) return;
-    const valueMode = String(config.value_mode || 'static');
-    let nextValue: any = config.value ?? null;
-    if (valueMode === 'from_source') {
-      const sf = String(config.source_field || '').trim();
-      if (sf) nextValue = getFieldValue(record, sf);
-    }
+    if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد یا رکورد مقصد برای بروزرسانی مشخص نیست.');
+    const nextValue = await resolveConfiguredActionValue(config, record, url, key);
     await updateRecord(url, key, moduleId, String(record.id), { [fieldKey]: nextValue });
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey } });
   }
 
   // ── create_standalone_record ──────────────────────────────────────────
   if (action.type === 'create_standalone_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
-    if (!targetModuleId) return;
+    if (!targetModuleId) return actionResult(action, 'skipped', 'ماژول مقصد برای ایجاد رکورد مشخص نیست.');
     const payload: Record<string, any> = {};
     const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
     for (const mapping of mappings) {
@@ -883,13 +1367,13 @@ async function executeAction(
       if (!tf) continue;
       if (mapping?.mode === 'from_source') {
         const sf = String(mapping?.source_field || '').trim();
-        payload[tf] = sf ? getFieldValue(record, sf) : null;
+        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record) : null;
       } else {
         payload[tf] = mapping?.value ?? null;
       }
     }
     await createRecord(url, key, targetModuleId, orgId, payload);
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
   }
 
   // ── create_related_record ─────────────────────────────────────────────
@@ -897,7 +1381,7 @@ async function executeAction(
     const targetModuleId = String(config.target_module_id || '').trim();
     const relationFieldKey = String(config.relation_field_key || '').trim();
     const sourceRecordId = String(record?.id || '').trim();
-    if (!targetModuleId || !relationFieldKey || !sourceRecordId) return;
+    if (!targetModuleId || !relationFieldKey || !sourceRecordId) return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
     const payload: Record<string, any> = { [relationFieldKey]: sourceRecordId };
     const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
     for (const mapping of mappings) {
@@ -905,19 +1389,19 @@ async function executeAction(
       if (!tf) continue;
       if (mapping?.mode === 'from_source') {
         const sf = String(mapping?.source_field || '').trim();
-        payload[tf] = sf ? getFieldValue(record, sf) : null;
+        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record) : null;
       } else {
         payload[tf] = mapping?.value ?? null;
       }
     }
     await createRecord(url, key, targetModuleId, orgId, payload);
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
   }
 
   // ── execute_process ───────────────────────────────────────────────────
   if (action.type === 'execute_process') {
     const templateId = String(config.template_id || '').trim();
-    if (!templateId || !record?.id) return;
+    if (!templateId || !record?.id) return actionResult(action, 'skipped', 'قالب فرآیند یا رکورد مقصد مشخص نیست.');
     await callRpc(url, key, 'create_process_run_from_template', {
       p_org_id: orgId,
       p_template_id: templateId,
@@ -926,13 +1410,13 @@ async function executeAction(
       p_process_name: null,
       p_copied_mode: 'auto',
     });
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
   }
 
   // ── copy_process_template ─────────────────────────────────────────────
   if (action.type === 'copy_process_template') {
     const templateId = String(config.template_id || '').trim();
-    if (!templateId || !record?.id) return;
+    if (!templateId || !record?.id) return actionResult(action, 'skipped', 'قالب فرآیند یا رکورد مقصد مشخص نیست.');
     // Load template stages and apply to record as draft
     const stages = await dbGet(url, key, `process_template_stages?template_id=eq.${templateId}&order=sort_order.asc`).catch(() => []);
     const templateRows = await dbGet(url, key, `process_templates?id=eq.${templateId}&select=name&limit=1`).catch(() => []);
@@ -947,59 +1431,92 @@ async function executeAction(
       process_template_id: templateId,
       [draftFieldKey]: JSON.stringify(draft),
     });
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
   }
 
   // ── publish_story ─────────────────────────────────────────────────────
   if (action.type === 'publish_story') {
-    const content = renderTemplate(String(config.content || ''), record).trim();
-    if (!content) return;
+    const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key)).trim();
+    if (!content) return actionResult(action, 'skipped', 'متن استوری خالی است.');
+    const profileRows = await dbGet(url, key, `profiles?org_id=eq.${orgId}&select=id,full_name,avatar_url&limit=1`).catch(() => []);
+    const creator = profileRows[0] || {};
+    const creatorId = String(creator?.id || '').trim();
+    if (!creatorId) return actionResult(action, 'skipped', 'کاربر سیستمی برای انتشار استوری پیدا نشد.');
+    const expiresHours = Number(config.expires_hours || 24);
+    const expiresAt = Number.isFinite(expiresHours) && expiresHours > 0
+      ? new Date(Date.now() + expiresHours * 60 * 60 * 1000).toISOString()
+      : null;
+    const slideType = String(config.slide_type || 'gradient') === 'image' ? 'image' : 'gradient';
+    const slide = {
+      id: crypto.randomUUID(),
+      type: slideType,
+      image_url: slideType === 'image' ? String(config.image_url || config.media_url || '').trim() || null : null,
+      gradient_key: slideType === 'gradient' ? String(config.gradient_key || 'brand_indigo') : null,
+      text_layers: [{
+        id: crypto.randomUUID(),
+        content,
+        x: 50,
+        y: 50,
+        font_size: 18,
+        color: '#FFFFFF',
+        align: 'center',
+        bold: false,
+      }],
+      duration_ms: 5000,
+    };
     await dbInsert(url, key, 'org_stories', {
-      org_id: orgId, content, story_type: config.story_type || 'text',
-      media_url: config.media_url || null, created_by: null,
-    }).catch((e) => console.warn('[workflow-runner] publish_story failed:', e.message));
-    return;
+      org_id: orgId,
+      creator_id: creatorId,
+      creator_name: String(creator?.full_name || 'سیستم').trim() || 'سیستم',
+      creator_avatar: creator?.avatar_url || null,
+      slides: [slide],
+      is_org_wide: config.is_org_wide !== false,
+      viewer_user_ids: asArray(config.viewer_user_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      viewer_role_ids: asArray(config.viewer_role_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      mention_user_ids: [],
+      mention_role_ids: [],
+      expires_at: expiresAt,
+      is_active: true,
+    });
+    return actionResult(action, 'success', undefined, { affected_count: 1 });
   }
 
   // ── send_to_next_stages ───────────────────────────────────────────────
   if (action.type === 'send_to_next_stages') {
-    const fieldKey = String(config.field || '').trim();
-    if (!fieldKey || !record?.id) return;
+    const fieldMeta = parseProcessNextStageFieldKey(String(config.field || '').trim());
+    const fieldKey = fieldMeta?.fieldKey || String(config.field || '').trim();
+    if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد مرحله بعد مشخص نیست.');
     const processRunId = String(record.process_run_id || '').trim();
-    if (!processRunId) return;
-    const valueMode = String(config.value_mode || 'static');
-    let nextValue: any = config.value ?? null;
-    if (valueMode === 'from_source') {
-      const sf = String(config.source_field || '').trim();
-      if (sf) nextValue = getFieldValue(record, sf);
-    }
+    if (!processRunId) return actionResult(action, 'skipped', 'فرآیند مرتبط با رکورد پیدا نشد.');
+    const nextValue = await resolveConfiguredActionValue(config, record, url, key);
     const tasks = await dbGet(url, key,
       `tasks?process_run_id=eq.${processRunId}&order=sort_order.asc&select=id,sort_order,status`
     ).catch(() => []);
     const currentTaskId = String(record.task_id || record.id || '').trim();
     const currentIdx = tasks.findIndex((t: any) => String(t.id) === currentTaskId);
-    const offset = parseInt(String(config.stage_offset || 1), 10) || 1;
+    const offset = fieldMeta?.offset || parseInt(String(config.stage_offset || 1), 10) || 1;
     const targetTask = tasks[currentIdx + offset];
-    if (!targetTask?.id) return;
+    if (!targetTask?.id) return actionResult(action, 'skipped', 'مرحله مقصد پیدا نشد.');
     await updateRecord(url, key, 'tasks', String(targetTask.id), { [fieldKey]: nextValue });
-    return;
+    return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey, stage_offset: offset } });
   }
 
   // ── send_email ────────────────────────────────────────────────────────
   if (action.type === 'send_email') {
-    const subject = renderTemplate(String(config.subject || ''), record).trim();
-    const body = renderTemplate(String(config.body || ''), record).trim();
-    if (!subject && !body) return;
+    const subject = (await renderTemplateAsync(String(config.subject || ''), record, url, key)).trim();
+    const body = (await renderTemplateAsync(String(config.body || ''), record, url, key)).trim();
+    if (!subject && !body) return actionResult(action, 'skipped', 'موضوع و متن ایمیل خالی است.');
     const manuals: string[] = (Array.isArray(config.manual_emails) ? config.manual_emails : [])
       .map((v: any) => String(v || '').trim()).filter(Boolean);
-    const fromFields: string[] = (Array.isArray(config.recipient_fields) ? config.recipient_fields : [])
-      .flatMap((fieldKey: any) => {
-        const val = record?.[String(fieldKey || '').trim()];
-        return Array.isArray(val) ? val.map(String) : [String(val || '')];
-      }).filter(Boolean);
+    const fromFields: string[] = [];
+    for (const fieldKey of (Array.isArray(config.recipient_fields) ? config.recipient_fields : [])) {
+      const val = await resolveWorkflowFieldValue(url, key, String(fieldKey || '').trim(), record);
+      if (Array.isArray(val)) fromFields.push(...val.map(String));
+      else if (val !== null && val !== undefined) fromFields.push(String(val));
+    }
     const to = Array.from(new Set([...manuals, ...fromFields]))
       .filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
-    if (to.length === 0) { console.warn('[workflow-runner] send_email: no valid recipients'); return; }
+    if (to.length === 0) return actionResult(action, 'skipped', 'گیرنده معتبر برای ایمیل پیدا نشد.', { recipient_count: 0 });
     const emailFnUrl = `${url.replace(/\/$/, '')}/functions/v1/send-email`;
     const resp = await fetch(emailFnUrl, {
       method: 'POST',
@@ -1007,15 +1524,16 @@ async function executeAction(
       body: JSON.stringify({ to, subject, body, org_id: orgId }),
       signal: AbortSignal.timeout(30000),
     }).catch((e) => { console.warn('[workflow-runner] send_email fetch error:', e.message); return null; });
-    if (!resp) return;
+    if (!resp) return actionResult(action, 'failed', 'درخواست ارسال ایمیل به تابع ارسال نرسید.', { recipient_count: to.length });
     if (!resp.ok) {
       const msg = await resp.text().catch(() => String(resp.status));
-      console.warn('[workflow-runner] send_email failed:', msg);
+      throw new Error(`ارسال ایمیل ناموفق بود: ${msg}`);
     }
-    return;
+    return actionResult(action, 'success', undefined, { recipient_count: to.length });
   }
 
   console.warn(`[workflow-runner] Unknown action type: ${action.type}`);
+  return actionResult(action, 'skipped', `نوع اقدام پشتیبانی نمی‌شود: ${action.type}`);
 }
 
 // ── Main execution loop ─────────────────────────────────────���──────────────────
@@ -1069,7 +1587,7 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
 
     for (const record of records) {
       stats.processedRecords++;
-      const matched = evaluateConditions(conditionsAll, conditionsAny, record);
+      const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
       if (!matched) continue;
 
       const recordId = String(record?.id || '').trim();
@@ -1079,28 +1597,53 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
 
       const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
       const errors: string[] = [];
+      const actionResults: ActionExecutionResult[] = [];
 
       for (const action of actions) {
         try {
-          await executeAction(action as WorkflowAction, record, workflow.module_id, workflow.org_id, url, key);
-          stats.executedActions++;
+          const result = await executeAction(action as WorkflowAction, record, workflow.module_id, workflow.org_id, url, key);
+          actionResults.push(result);
+          if (result.status === 'success') stats.executedActions++;
+          if (result.status === 'failed') {
+            errors.push(result.message || String(action.type || 'action failed'));
+            stats.failedRuns++;
+          }
         } catch (e: any) {
-          errors.push(String(e?.message || action.type || 'action failed'));
+          const errorMessage = String(e?.message || action.type || 'action failed');
+          errors.push(errorMessage);
+          actionResults.push({
+            action_type: String((action as any)?.type || ''),
+            action_id: (action as any)?.id || null,
+            status: 'failed',
+            message: errorMessage,
+          });
           console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
           stats.failedRuns++;
         }
       }
 
       if (recordId) {
+        const hasFailedAction = actionResults.some((result) => result.status === 'failed');
+        const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
+        const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
+        const skippedMessage = !hasSuccessfulAction && errors.length === 0
+          ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
+          : undefined;
         await insertWorkflowLog(url, key, {
           workflow_id: workflow.id, org_id: workflow.org_id,
           module_id: workflow.module_id, record_id: recordId,
           run_type: 'scheduled',
-          status: errors.length > 0 ? 'failed' : 'success',
-          message: errors.length > 0 ? errors.join(' | ') : undefined,
-          details: { workflow_name: workflow.name, action_count: actions.length },
+          status: runStatus,
+          message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
+          details: {
+            workflow_name: workflow.name,
+            action_count: actions.length,
+            action_results: actionResults,
+            timezone: 'Asia/Tehran',
+            runner_build: FUNCTION_BUILD,
+          },
         });
-        if (executedRecordIds && errors.length === 0) executedRecordIds.add(recordId);
+        if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
       }
     }
   }

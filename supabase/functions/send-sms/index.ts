@@ -1290,15 +1290,16 @@ Deno.serve(async (req) => {
     const hookPhone = extractHookPhone(body as any);
     const hasHookSecret = !!hookSecret && requestHookSecret === hookSecret;
     const hasBearerToken = authHeader.startsWith('Bearer ');
-    const isLikelyHookPayload =
-      !!hookOtp ||
+    const action = String(body?.action || 'send').trim();
+    const isSupabaseAuthHookPayload = !hasBearerToken && !!body?.user && (!!body?.sms || !!hookOtp);
+    const isHookSmsPayload =
       !!body?.user ||
       !!body?.sms ||
       !!body?.message ||
       !!body?.text ||
       !!body?.template_data ||
-      !hasBearerToken;
-    const isAuthHookRequest = (hasHookSecret || !hasBearerToken) && isLikelyHookPayload;
+      !!hookOtp;
+    const isAuthHookRequest = (hasHookSecret && isHookSmsPayload) || isSupabaseAuthHookPayload;
     const payloadShape = {
       topKeys: Object.keys(body || {}).slice(0, 12),
       hasUser: !!body?.user,
@@ -1308,12 +1309,12 @@ Deno.serve(async (req) => {
       hasTemplateData: !!body?.template_data,
     };
     console.log(
-      `[send-sms] build=${FUNCTION_BUILD} action=${String(body?.action || 'send')} hook=${isAuthHookRequest ? 'yes' : 'no'} hasSecret=${hasHookSecret ? 'yes' : 'no'} hasOtp=${hookOtp ? 'yes' : 'no'} hasPhone=${hookPhone ? 'yes' : 'no'} shape=${JSON.stringify(payloadShape)}`
+      `[send-sms] build=${FUNCTION_BUILD} action=${action} hook=${isAuthHookRequest ? 'yes' : 'no'} hasSecret=${hasHookSecret ? 'yes' : 'no'} hasOtp=${hookOtp ? 'yes' : 'no'} hasPhone=${hookPhone ? 'yes' : 'no'} shape=${JSON.stringify(payloadShape)}`
     );
 
     // OTP همیشه از یک ساختار واحد استفاده می‌کند: env vars (MELIPAYAMAK_*)
     // هیچ‌گاه از تنظیمات پیام‌کوتاه سازمان‌ها استفاده نمی‌شود
-    if (hookOtp) {
+    if (isAuthHookRequest && hookOtp) {
       try {
         if (!hookPhone) {
           console.warn('[send-sms] otp payload missing phone', JSON.stringify(payloadShape));
@@ -1363,7 +1364,6 @@ Deno.serve(async (req) => {
     }
 
     const settings = await getSmsSettings(supabaseUrl, serviceRoleKey, body?.overrideSettings);
-    const action = String(body?.action || 'send').trim();
 
     if (action === 'get_balance') {
       const result = await getSmsCreditWithProvider(settings);

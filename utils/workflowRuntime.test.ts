@@ -544,6 +544,39 @@ describe('formula-based workflow actions', () => {
 });
 
 describe('evaluateWorkflowConditions', () => {
+  const mockHolidayCalendarFetch = () => {
+    const months = Array.from({ length: 12 }, () => ({ days: [] as any[] }));
+    months[2] = {
+      days: [
+        {
+          day: { jalali: '۵', gregorian: '26', hijri: '١٠' },
+          events: {
+            isHoliday: true,
+            list: [{ isHoliday: true, event: 'عید سعید قربان', calendarType: 'hijri' }],
+          },
+        },
+        {
+          day: { jalali: '۶', gregorian: '27', hijri: '١١' },
+          events: { isHoliday: false, list: [] },
+        },
+        {
+          day: { jalali: '۱۴', gregorian: '4', hijri: '١٩' },
+          events: {
+            isHoliday: true,
+            list: [
+              { isHoliday: true, event: 'رحلت حضرت امام خمینی', calendarType: 'jalali' },
+              { isHoliday: true, event: 'عید سعید غدیر خم(۱۰ ه‍‍.ق)', calendarType: 'hijri' },
+            ],
+          },
+        },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => months,
+    }));
+  };
+
   it('matches contains against any selected value in arrays', async () => {
     await expect(evaluateWorkflowConditions({
       conditionsAll: [
@@ -596,6 +629,46 @@ describe('evaluateWorkflowConditions', () => {
         { id: 'any-2', field: 'priority', operator: 'eq', value: 'high' } as any,
       ],
       currentRecord: { status: 'closed', priority: 'high' },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+  });
+
+  it('matches date fields against calendar occasions', async () => {
+    mockHolidayCalendarFetch();
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [
+        { id: 'occasion-1', field: 'due_date', operator: 'occasion_eq', value: 'عید سعید قربان' } as any,
+      ],
+      conditionsAny: [],
+      currentRecord: { due_date: '2026-05-27' },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [
+        { id: 'occasion-2', field: 'due_date', operator: 'occasion_not_contains', value: ['عید سعید قربان'] } as any,
+      ],
+      conditionsAny: [],
+      currentRecord: { due_date: '2026-05-26' },
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+  });
+
+  it('matches date fields that are N days before a selected occasion', async () => {
+    mockHolidayCalendarFetch();
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [
+        {
+          id: 'occasion-before-1',
+          field: 'due_date',
+          operator: 'days_before_occasion',
+          value: { days: 3, occasion: 'عید سعید غدیر خم' },
+        } as any,
+      ],
+      conditionsAny: [],
+      currentRecord: { due_date: '2026-06-01' },
       moduleId: 'tasks',
     })).resolves.toBe(true);
   });

@@ -246,7 +246,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
       </div>
 
       {/* Editor body */}
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <React.Suspense fallback={<Spin />}>
           <PrintTemplateEditor
             value={bodyHtml}
