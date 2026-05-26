@@ -337,6 +337,7 @@ type CounterpartyBotGroupRow = {
   last_outbound_at: string | null;
   metadata?: Record<string, any> | null;
   counterparty_label?: string | null;
+  counterparty_image_url?: string | null;
 };
 
 type CounterpartyBotMessageRow = {
@@ -3062,10 +3063,11 @@ useEffect(() => {
     const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
 
     const counterpartyLabelMap: Record<string, string> = {};
+    const counterpartyImageMap: Record<string, string> = {};
     if (customerIds.length > 0) {
       const customerResult = await selectByIdsWithCompatibleColumns<any>({
         cacheKey: 'notifications:customers',
-        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name'],
+        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name', 'image_url'],
         ids: customerIds,
         batchSize: 25,
         execute: (selectExpr, idBatch) =>
@@ -3082,12 +3084,14 @@ useEffect(() => {
         counterpartyLabelMap[`customers:${id}`] = String(
           item?.full_name || item?.business_name || item?.legal_name || personName || item?.system_code || id
         ).trim();
+        const imgUrl = String(item?.image_url || '').trim();
+        if (imgUrl) counterpartyImageMap[`customers:${id}`] = imgUrl;
       });
     }
     if (supplierIds.length > 0) {
       const supplierResult = await selectByIdsWithCompatibleColumns<any>({
         cacheKey: 'notifications:suppliers',
-        columns: ['id', 'business_name', 'full_name', 'system_code'],
+        columns: ['id', 'business_name', 'full_name', 'system_code', 'image_url'],
         ids: supplierIds,
         batchSize: 25,
         execute: (selectExpr, idBatch) =>
@@ -3103,6 +3107,8 @@ useEffect(() => {
         counterpartyLabelMap[`suppliers:${id}`] = String(
           item?.business_name || item?.full_name || item?.system_code || id
         ).trim();
+        const imgUrl = String(item?.image_url || '').trim();
+        if (imgUrl) counterpartyImageMap[`suppliers:${id}`] = imgUrl;
       });
     }
 
@@ -3113,6 +3119,7 @@ useEffect(() => {
       return {
         ...row,
         counterparty_label: key ? (counterpartyLabelMap[key] || null) : null,
+        counterparty_image_url: key ? (counterpartyImageMap[key] || null) : null,
       };
     }).sort((a, b) => {
       const left = Math.max(
@@ -5710,6 +5717,11 @@ useEffect(() => {
         });
       }
 
+      if (optimisticNoteId) {
+        setSelectedConversationNotes((prev) => (
+          prev ? prev.filter((note: any) => String(note?.id || '') !== optimisticNoteId) : prev
+        ));
+      }
       noteShouldStickToBottomRef.current = true;
       noteForceScrollToBottomRef.current = true;
       resetNoteComposer();
@@ -6692,6 +6704,9 @@ useEffect(() => {
         await fetchBotNotificationMessages(groups);
         if (botConversationSummaryAvailable) {
           await refreshBotConversationSummaries();
+        }
+        if (optimisticBotMessageId) {
+          setBotMessages((prev) => prev.filter((row) => String(row?.id || '') !== optimisticBotMessageId));
         }
         if (botTimelineAvailable) {
           await refreshBotTimeline();

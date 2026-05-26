@@ -49,9 +49,10 @@ const formatWithIntl = (dateObj: Date, format: string) => {
         hour: '2-digit',
         minute: '2-digit',
         second: withSeconds ? '2-digit' : undefined,
-        hour12: false
+        hour12: false,
+        timeZone: 'Asia/Tehran',
       }
-    : { year: 'numeric', month: '2-digit', day: '2-digit' };
+    : { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Tehran' };
   return new Intl.DateTimeFormat('fa-IR-u-ca-persian', options).format(dateObj);
 };
 
@@ -61,7 +62,10 @@ const stripTimezone = (val: string) =>
 const normalizeDateString = (val: string) => {
   let trimmed = val.trim();
   trimmed = trimmed.includes(' ') ? trimmed.replace(' ', 'T') : trimmed;
+  // +0330 → +03:30
   trimmed = trimmed.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  // +03 (without minutes) → +03:00
+  trimmed = trimmed.replace(/([+-]\d{2})$/, '$1:00');
   trimmed = trimmed.replace(/\.(\d{3})\d+/, '.$1');
   const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed);
   return { normalized: trimmed, hasTz };

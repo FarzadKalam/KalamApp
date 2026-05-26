@@ -146,6 +146,7 @@ type SmsMessagesPanelProps = {
   getModuleFieldOptionLabel: (moduleId: string, fieldKey: string, value: any) => string;
   requestReplySuggestion: (payload: any) => Promise<string>;
   refreshSection: (section: 'sms_messages', options?: { force?: boolean }) => Promise<void>;
+  onOpenPhoneMatchPicker?: (phoneNumberId: string, phone: string) => void;
 };
 
 const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
@@ -166,6 +167,7 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
   getModuleFieldOptionLabel,
   requestReplySuggestion,
   refreshSection,
+  onOpenPhoneMatchPicker,
 }) => {
   const { message } = App.useApp();
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement>(null);
@@ -307,7 +309,19 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
                       <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                       <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</div>
                       {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                        <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                        <div className="mt-1 truncate text-[11px]">
+                          {thread.phoneMatchStatus === 'ambiguous' && thread.phoneNumberId && onOpenPhoneMatchPicker ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); onOpenPhoneMatchPicker(thread.phoneNumberId!, thread.phone); }}
+                              className="text-amber-600 underline decoration-dashed underline-offset-2 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-200"
+                            >
+                              {getPhoneMatchLabel(thread.phoneMatchStatus)}
+                            </button>
+                          ) : (
+                            <span className="text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</span>
+                          )}
+                        </div>
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -324,7 +338,7 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
               ))}
             </div>
           ) : (
-            <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
+            <div className="max-h-[210px] overflow-y-auto p-1.5 space-y-1">
               {smsThreads.map((thread) => (
                 <button
                   key={thread.id}
@@ -333,23 +347,25 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
                     setSelectedSmsThreadKey(thread.id);
                     if (thread.phone) setSmsRecipient(thread.phone);
                   }}
-                  className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
+                  className={`w-full rounded-xl border px-2.5 py-2 text-right ${
                     activeThread?.id === thread.id
                       ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
                       : 'border-transparent bg-white/60 dark:bg-transparent'
                   }`}
                 >
-                  <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
+                      <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</div>
+                    </div>
                     {thread.unreadCount > 0 ? (
-                      <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
+                      <span className="shrink-0 rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
                         {toPersianNumber(String(thread.unreadCount))}
                       </span>
                     ) : null}
                   </div>
                   {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                    <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                    <div className="mt-0.5 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
                   ) : null}
                 </button>
               ))}

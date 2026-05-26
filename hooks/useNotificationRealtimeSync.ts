@@ -60,6 +60,8 @@ export const useNotificationRealtimeSync = ({
     let reconnectTimer: number | null = null;
     let channel: any = null;
     let broadcastChannels: any[] = [];
+    let backoffMs = 1500;
+    const MAX_BACKOFF_MS = 60_000;
 
     const clearReconnectTimer = () => {
       if (reconnectTimer !== null && typeof window !== 'undefined') {
@@ -82,12 +84,14 @@ export const useNotificationRealtimeSync = ({
     const scheduleReconnect = () => {
       if (disposed || reconnectTimer !== null || typeof window === 'undefined') return;
       cleanupChannels();
+      const delay = backoffMs;
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
       reconnectTimer = window.setTimeout(() => {
         reconnectTimer = null;
         if (!disposed) {
           connect();
         }
-      }, 1500);
+      }, delay);
     };
 
     const buildOrgScopedChange = (table: string, event: '*' | 'INSERT' | 'UPDATE') => ({
@@ -167,8 +171,9 @@ export const useNotificationRealtimeSync = ({
       }
 
       channel.subscribe((status: any) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('Notifications realtime channel reconnect scheduled.');
+        if (status === 'SUBSCRIBED') {
+          backoffMs = 1500;
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           scheduleReconnect();
         }
       });

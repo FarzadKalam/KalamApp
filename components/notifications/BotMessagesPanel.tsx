@@ -2,6 +2,7 @@ import React from 'react';
 import { App, Avatar, Badge, Button, Empty, Input, Popover, Skeleton } from 'antd';
 import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
+import { normalizePublicAssetUrl } from '../../utils/assetUrl';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -21,6 +22,7 @@ type BotGroupRow = {
   group_join_link?: string | null;
   bot_chat_id?: string | null;
   counterparty_label?: string | null;
+  counterparty_image_url?: string | null;
   updated_at?: string | null;
   last_inbound_at?: string | null;
   last_outbound_at?: string | null;
@@ -59,6 +61,32 @@ const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
   rubika: 'روبیکا',
   telegram: 'تلگرام',
   bale: 'بله',
+};
+
+const CHANNEL_AVATAR_CONFIG: Record<string, { className: string; label: string }> = {
+  telegram: { className: '!bg-sky-100 !text-sky-600 dark:!bg-sky-500/15 dark:!text-sky-300', label: 'T' },
+  bale: { className: '!bg-green-100 !text-green-700 dark:!bg-green-500/15 dark:!text-green-300', label: 'ب' },
+  rubika: { className: '!bg-purple-100 !text-purple-700 dark:!bg-purple-500/15 dark:!text-purple-300', label: 'R' },
+};
+
+const BotGroupAvatar: React.FC<{ row: Pick<BotGroupRow, 'channel_type' | 'counterparty_image_url'>; size: number; extraClassName?: string }> = ({ row, size, extraClassName = '' }) => {
+  const imgSrc = normalizePublicAssetUrl(row.counterparty_image_url || '');
+  if (imgSrc) {
+    return <Avatar size={size} src={imgSrc} className={extraClassName} />;
+  }
+  const channelCfg = CHANNEL_AVATAR_CONFIG[String(row.channel_type || '')];
+  if (channelCfg) {
+    return (
+      <Avatar size={size} className={`${channelCfg.className} ${extraClassName}`}>
+        {channelCfg.label}
+      </Avatar>
+    );
+  }
+  return (
+    <Avatar size={size} className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${extraClassName}`}>
+      <RobotOutlined />
+    </Avatar>
+  );
 };
 
 const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
@@ -326,9 +354,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   }}
                 >
                   <div className="flex items-center gap-3">
-                    <Avatar size={36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
-                      <RobotOutlined />
-                    </Avatar>
+                    <BotGroupAvatar row={row} size={36} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{rowTitle}</div>
                       <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
@@ -350,9 +376,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
         <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0 flex items-center gap-3">
-              <Avatar size={withMobileUserRail ? 32 : 36} className="!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300">
-                <RobotOutlined />
-              </Avatar>
+              <BotGroupAvatar row={selectedGroup ?? {}} size={withMobileUserRail ? 32 : 36} />
               <div className="min-w-0">
                 <div className="truncate px-0.5 text-[13px] font-bold text-gray-800 dark:text-gray-100">{groupTitle}</div>
                 <div className="truncate text-[11px] text-gray-500 dark:text-gray-400">وضعیت: {statusLabel} | پلتفرم: {channelLabel}</div>
@@ -714,14 +738,11 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   title={rowTitle}
                 >
                   <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]}>
-                    <Avatar
+                    <BotGroupAvatar
+                      row={row}
                       size={38}
-                      className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${
-                        active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''
-                      }`}
-                    >
-                      <RobotOutlined />
-                    </Avatar>
+                      extraClassName={active ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''}
+                    />
                   </Badge>
                   <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
                     {rowTitle}

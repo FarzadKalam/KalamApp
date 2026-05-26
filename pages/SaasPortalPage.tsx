@@ -445,7 +445,12 @@ const SaasPortalPage: React.FC = () => {
       }
 
       // کاربر جدید — اطلاعات قبلاً پر شده، مستقیم provisioning
-      await runProvision();
+      // اگر از مسیر existing user آمده، اطلاعات پر نشده — باید info را پر کند
+      if (isExistingPhoneUser) {
+        setStep('info');
+      } else {
+        await runProvision();
+      }
     } catch (err: any) {
       const mappedError = getOtpErrorMessage(err, 'خطا در تایید کد');
       if (otpVerified) {
@@ -474,7 +479,21 @@ const SaasPortalPage: React.FC = () => {
           skipProfileUpsert: true,
         },
       });
-      if (ownerSetupError) throw ownerSetupError;
+      if (ownerSetupError) {
+        // body پیام واقعی (مثل email_conflict) داخل response body است، نه error.message
+        let ownerErrMsg = String(ownerSetupError?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.').trim();
+        const ctx = (ownerSetupError as any)?.context;
+        if (ctx && typeof ctx.clone === 'function') {
+          try {
+            const body = await ctx.clone().json();
+            const bodyMsg = String(body?.message || '').trim();
+            const bodyCode = String(body?.reason_code || '').trim();
+            if (bodyMsg) ownerErrMsg = bodyMsg;
+            if (bodyCode) ownerErrMsg = `${bodyCode}: ${ownerErrMsg}`;
+          } catch { /* keep original */ }
+        }
+        throw new Error(ownerErrMsg);
+      }
       if (ownerSetupData?.success === false) {
         const ownerSetupReason = String(ownerSetupData?.reason_code || '').trim();
         const ownerSetupMessage = String(ownerSetupData?.message || 'تنظیم حساب مدیر اصلی ناموفق بود.').trim();
@@ -539,8 +558,9 @@ const SaasPortalPage: React.FC = () => {
         || msg.includes('email_conflict')
         || msg.includes('invalid email')
         || (msg.includes('password') && msg.includes('least'))
+        || msg.includes('برای این ایمیل قبلاً کاربر ثبت شده است')
       ) {
-        userMsg = getOwnerSetupErrorMessage(err);
+        userMsg = msg.includes('برای این ایمیل') ? 'این ایمیل قبلاً در سیستم ثبت شده است. لطفاً ایمیل دیگری وارد کنید.' : getOwnerSetupErrorMessage(err);
         setStep('info');
         setOtpCode('');
         setOtpCooldown(0);

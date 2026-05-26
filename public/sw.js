@@ -198,7 +198,7 @@ const handleDataRequest = async (request) => {
   } catch {
     const cached = await caches.match(request, { ignoreSearch: false });
     if (cached) return cached;
-    throw new Error('Network unavailable and no cache entry found.');
+    return buildUnavailableJsonResponse('network_unavailable');
   }
 };
 

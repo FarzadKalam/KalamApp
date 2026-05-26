@@ -21,9 +21,10 @@ describe('moduleListSearch', () => {
   } as any;
 
   it('uses searchable string fields while excluding hidden and non-text query fields', () => {
+    // PHONE fields are prioritized over plain TEXT, then by key fragment relevance
     expect(buildModuleListSearchFieldKeys(moduleConfig, { notes: false })).toEqual([
-      'full_name',
       'mobile_1',
+      'full_name',
       'status',
     ]);
   });
