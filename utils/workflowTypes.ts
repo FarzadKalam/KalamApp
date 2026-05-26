@@ -48,6 +48,7 @@ export type WorkflowActionType =
   | 'send_note_sms'
   | 'send_sms'
   | 'send_email'
+  | 'send_bot_message'
   | 'send_telegram_bot'
   | 'send_bale_bot'
   | 'send_rubika_bot'
@@ -153,9 +154,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال یادداشت', value: 'send_note' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال ایمیل', value: 'send_email' },
-  { label: 'ارسال در تلگرام', value: 'send_telegram_bot' },
-  { label: 'ارسال در بله', value: 'send_bale_bot' },
-  { label: 'ارسال در روبیکا', value: 'send_rubika_bot' },
+  { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },
   { label: 'ایجاد رکورد مستقل', value: 'create_standalone_record' },
@@ -164,6 +163,10 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
   { label: 'انتشار استوری', value: 'publish_story' },
 ];
+
+// انواع قدیمی بات — برای backward compatibility گردش‌کارهای موجود نگه داشته شده‌اند
+// در UI جدید فقط send_bot_message نمایش داده می‌شود
+export const legacyBotActionTypes: WorkflowActionType[] = ['send_telegram_bot', 'send_bale_bot', 'send_rubika_bot'];
 
 export const createProcessNextStageFieldKey = (
   offset: 1 | 2,

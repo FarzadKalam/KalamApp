@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Checkbox, Input, Modal, Select, Skeleton } from 'antd';
+import { Button, Checkbox, Input, Modal, Select, Skeleton, Tabs } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import {
@@ -9,7 +9,31 @@ import {
   resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
 
-type BotChannel = 'rubika' | 'telegram' | 'bale';
+export type BotChannel = 'rubika' | 'telegram' | 'bale';
+
+export type BotPlatformState = {
+  groupTitle: string;
+  currentStatus: string;
+  activationCode: string;
+  lastInboundAt: string;
+  lastInboundText: string;
+  allowedUserIds: string[];
+  allowedRoleIds: string[];
+  aiAutoReplyEnabled: boolean;
+  aiCounterpartyGuide: string;
+};
+
+export const DEFAULT_PLATFORM_STATE: BotPlatformState = {
+  groupTitle: '',
+  currentStatus: 'pending_join',
+  activationCode: '',
+  lastInboundAt: '',
+  lastInboundText: '',
+  allowedUserIds: [],
+  allowedRoleIds: [],
+  aiAutoReplyEnabled: false,
+  aiCounterpartyGuide: '',
+};
 
 const COUNTERPARTY_BOT_STATUS_LABELS: Record<string, string> = {
   pending_join_link: 'در انتظار پیام در گروه',
@@ -24,6 +48,12 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: BotChannel }> = [
   { label: 'تلگرام', value: 'telegram' },
   { label: 'بله', value: 'bale' },
 ];
+
+const STATUS_COLOR: Record<string, string> = {
+  active: 'text-emerald-600 dark:text-emerald-400',
+  error: 'text-red-500',
+  disabled: 'text-gray-400',
+};
 
 const ensureSelectedOptions = (
   options: Array<{ label: string; value: string }>,
@@ -51,77 +81,207 @@ export type CounterpartyBotStatusModalProps = {
   open: boolean;
   loading: boolean;
   saving: boolean;
-  watching: boolean;
+  watchingChannel: BotChannel | null;
   countdown: number;
-  channel: BotChannel;
-  groupTitle: string;
-  onChangeGroupTitle: (value: string) => void;
-  currentStatus: string;
-  activationCode: string;
-  lastInboundAt: string;
-  lastInboundText: string;
-  allowedUserIds: string[];
-  allowedRoleIds: string[];
-  aiAutoReplyEnabled: boolean;
-  aiCounterpartyGuide: string;
+  activeTab: BotChannel;
+  defaultChannel: BotChannel;
+  fallbackToActive: boolean;
+  counterpartyType: 'customer' | 'supplier';
+  platforms: Record<BotChannel, BotPlatformState>;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
   onClose: () => void;
   onSave: () => void;
+  onChangeTab: (channel: BotChannel) => void;
+  onChangeDefaultChannel: (channel: BotChannel) => void;
+  onChangeFallbackToActive: (value: boolean) => void;
+  onStartBindWatch: (channel: BotChannel) => void;
+  onCopyActivationCode: (channel: BotChannel) => void;
+  onChangePlatform: (channel: BotChannel, key: keyof BotPlatformState, value: any) => void;
+};
+
+const PlatformTabContent: React.FC<{
+  channel: BotChannel;
+  state: BotPlatformState;
+  watching: boolean;
+  countdown: number;
+  saving: boolean;
+  userOptions: Array<{ label: string; value: string }>;
+  roleOptions: Array<{ label: string; value: string }>;
+  onChangePlatform: (key: keyof BotPlatformState, value: any) => void;
   onStartBindWatch: () => void;
   onCopyActivationCode: () => void;
-  onChangeChannel: (channel: BotChannel) => void;
-  onChangeAllowedUserIds: (value: string[]) => void;
-  onChangeAllowedRoleIds: (value: string[]) => void;
-  onChangeAiAutoReplyEnabled: (value: boolean) => void;
-  onChangeAiCounterpartyGuide: (value: string) => void;
+}> = ({
+  state,
+  watching,
+  countdown,
+  saving,
+  userOptions,
+  roleOptions,
+  onChangePlatform,
+  onStartBindWatch,
+  onCopyActivationCode,
+}) => {
+  const normalizedUserOptions = React.useMemo(
+    () => ensureSelectedOptions(userOptions, state.allowedUserIds, 'کاربر'),
+    [state.allowedUserIds, userOptions]
+  );
+  const normalizedRoleOptions = React.useMemo(
+    () => ensureSelectedOptions(roleOptions, state.allowedRoleIds, 'نقش'),
+    [state.allowedRoleIds, roleOptions]
+  );
+  const statusColor = STATUS_COLOR[state.currentStatus] || 'text-gray-700 dark:text-gray-300';
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-gray-500 dark:text-gray-400">
+        برای اتصال اولیه، روی «انتظار برای پیام در گروه» بزنید و کد فعال‌سازی را در همان گروه ارسال کنید.
+        سیستم بعد از دریافت همان پیام، گروه را به این طرف‌حساب متصل می‌کند.
+      </div>
+      <div className={`rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs dark:border-blue-700/40 dark:bg-blue-900/20 ${statusColor}`}>
+        وضعیت فعلی: <span className="font-medium">{COUNTERPARTY_BOT_STATUS_LABELS[state.currentStatus] || state.currentStatus || 'نامشخص'}</span>
+      </div>
+      <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono">{state.activationCode || '-'}</span>
+          <Button size="small" icon={<CopyOutlined />} onClick={onCopyActivationCode}>
+            کپی
+          </Button>
+        </div>
+      </div>
+      {watching ? (
+        <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300">
+          در حال انتظار پیام... زمان باقی‌مانده: {toPersianNumber(String(countdown))}
+        </div>
+      ) : null}
+      <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
+        آخرین پیام دریافتی: {state.lastInboundText || '-'}
+        <div className="mt-1 text-[11px]">آخرین زمان: {state.lastInboundAt || '-'}</div>
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه</div>
+        <Input
+          value={state.groupTitle}
+          placeholder="نام گروه را وارد کنید"
+          onChange={(e) => onChangePlatform('groupTitle', e.target.value)}
+        />
+      </div>
+      <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-700/40 dark:bg-violet-900/20">
+        <Checkbox
+          checked={state.aiAutoReplyEnabled}
+          onChange={(event) => onChangePlatform('aiAutoReplyEnabled', Boolean(event.target.checked))}
+        >
+          پاسخگویی خودکار توسط هوش مصنوعی
+        </Checkbox>
+        {state.aiAutoReplyEnabled ? (
+          <div className="mt-2">
+            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">
+              توضیحات به هوش مصنوعی راجع به این مشتری/تامین‌کننده
+            </div>
+            <Input.TextArea
+              value={state.aiCounterpartyGuide}
+              onChange={(event) => onChangePlatform('aiCounterpartyGuide', event.target.value)}
+              autoSize={{ minRows: 3, maxRows: 7 }}
+              placeholder="نکات اختصاصی این مشتری/تامین‌کننده برای پاسخگویی دقیق‌تر بات..."
+            />
+          </div>
+        ) : null}
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای این گروه بات</div>
+        <Select
+          mode="multiple"
+          allowClear
+          showSearch
+          value={state.allowedUserIds}
+          options={normalizedUserOptions}
+          onChange={(value) => onChangePlatform('allowedUserIds', (value || []).map((id: any) => String(id)))}
+          className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
+          optionFilterProp="label"
+          optionLabelProp="label"
+          placeholder="اگر خالی باشد، همه کاربران مجازند"
+          getPopupContainer={resolveSelectPopupContainer}
+          popupMatchSelectWidth={false}
+          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
+        />
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز برای این گروه بات</div>
+        <Select
+          mode="multiple"
+          allowClear
+          showSearch
+          value={state.allowedRoleIds}
+          options={normalizedRoleOptions}
+          onChange={(value) => onChangePlatform('allowedRoleIds', (value || []).map((id: any) => String(id)))}
+          className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
+          optionFilterProp="label"
+          optionLabelProp="label"
+          placeholder="اگر خالی باشد، همه نقش‌ها مجازند"
+          getPopupContainer={resolveSelectPopupContainer}
+          popupMatchSelectWidth={false}
+          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
+        />
+      </div>
+      <div className="flex justify-end pt-1">
+        <Button type="primary" loading={saving} disabled={watching} onClick={onStartBindWatch}>
+          {watching ? 'در حال انتظار...' : 'انتظار برای پیام در گروه'}
+        </Button>
+      </div>
+    </div>
+  );
 };
 
 const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   open,
   loading,
   saving,
-  watching,
+  watchingChannel,
   countdown,
-  channel,
-  groupTitle,
-  currentStatus,
-  activationCode,
-  lastInboundAt,
-  lastInboundText,
-  allowedUserIds,
-  allowedRoleIds,
-  aiAutoReplyEnabled,
-  aiCounterpartyGuide,
+  activeTab,
+  defaultChannel,
+  fallbackToActive,
+  counterpartyType,
+  platforms,
   userOptions,
   roleOptions,
   onClose,
   onSave,
+  onChangeTab,
+  onChangeDefaultChannel,
+  onChangeFallbackToActive,
   onStartBindWatch,
   onCopyActivationCode,
-  onChangeChannel,
-  onChangeGroupTitle,
-  onChangeAllowedUserIds,
-  onChangeAllowedRoleIds,
-  onChangeAiAutoReplyEnabled,
-  onChangeAiCounterpartyGuide,
+  onChangePlatform,
 }) => {
-  const normalizedUserOptions = React.useMemo(
-    () => ensureSelectedOptions(userOptions, allowedUserIds, 'کاربر'),
-    [allowedUserIds, userOptions]
-  );
-  const normalizedRoleOptions = React.useMemo(
-    () => ensureSelectedOptions(roleOptions, allowedRoleIds, 'نقش'),
-    [allowedRoleIds, roleOptions]
-  );
+  const counterpartyLabel = counterpartyType === 'supplier' ? 'تامین‌کننده' : 'مشتری';
+
+  const tabItems = CHANNEL_OPTIONS.map(({ label, value: channel }) => ({
+    key: channel,
+    label,
+    children: (
+      <PlatformTabContent
+        channel={channel}
+        state={platforms[channel] || { ...DEFAULT_PLATFORM_STATE }}
+        watching={watchingChannel === channel}
+        countdown={watchingChannel === channel ? countdown : 0}
+        saving={saving}
+        userOptions={userOptions}
+        roleOptions={roleOptions}
+        onChangePlatform={(key, val) => onChangePlatform(channel, key, val)}
+        onStartBindWatch={() => onStartBindWatch(channel)}
+        onCopyActivationCode={() => onCopyActivationCode(channel)}
+      />
+    ),
+  }));
 
   return (
     <Modal
-      title="وضعیت گروه بات طرف‌حساب"
+      title={`تنظیمات بات ${counterpartyLabel}`}
       open={open}
       onCancel={onClose}
       destroyOnHidden
-      width={680}
+      width={720}
       footer={[
         <Button key="cancel" onClick={onClose}>
           بستن
@@ -129,119 +289,50 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
         <Button key="save" loading={saving} onClick={onSave}>
           ذخیره تنظیمات
         </Button>,
-        <Button key="bind" type="primary" loading={saving} disabled={watching} onClick={onStartBindWatch}>
-          {watching ? 'در حال انتظار...' : 'انتظار برای پیام در گروه'}
-        </Button>,
       ]}
     >
       {loading ? (
         <div className="py-6">
-          <Skeleton active paragraph={{ rows: 5 }} />
+          <Skeleton active paragraph={{ rows: 6 }} />
         </div>
       ) : (
-        <div className="space-y-3 text-gray-700 dark:text-gray-200">
-          <div className="text-xs text-gray-500 dark:text-gray-400">
-            برای اتصال اولیه، روی «انتظار برای پیام در گروه» بزنید و کد فعال‌سازی را در همان گروه ارسال کنید
-            (مثل: <span className="font-mono">/KALAM-...</span>). سیستم بعد از دریافت همان پیام، گروه را به همین
-            طرف‌حساب متصل می‌کند.
-          </div>
-          <div className="rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-700/40 dark:bg-blue-900/20 dark:text-blue-300">
-            وضعیت فعلی: {COUNTERPARTY_BOT_STATUS_LABELS[currentStatus] || currentStatus || 'نامشخص'}
-          </div>
-          <div className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-900/20 dark:text-emerald-300">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono">{activationCode || '-'}</span>
-              <Button size="small" icon={<CopyOutlined />} onClick={onCopyActivationCode}>
-                کپی
-              </Button>
+        <div className="space-y-4 text-gray-700 dark:text-gray-200">
+          {/* بخش پلتفرم پیش‌فرض */}
+          <div className="rounded-lg border border-brand-200/60 bg-brand-50/40 px-4 py-3 space-y-3 dark:border-brand-300/20 dark:bg-white/5">
+            <div className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              تنظیمات پیش‌فرض {counterpartyLabel}
             </div>
-          </div>
-          {watching ? (
-            <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/20 dark:text-amber-300">
-              در حال انتظار پیام... زمان باقی‌مانده: {toPersianNumber(String(countdown))}
-            </div>
-          ) : null}
-          <div className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
-            آخرین پیام دریافتی: {lastInboundText || '-'}
-            <div className="mt-1 text-[11px]">آخرین زمان: {lastInboundAt || '-'}</div>
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">پلتفرم بات</div>
-            <Select
-              value={channel}
-              options={CHANNEL_OPTIONS}
-              onChange={(value) => onChangeChannel(value as BotChannel)}
-              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
-              optionLabelProp="label"
-              getPopupContainer={resolveSelectPopupContainer}
-              styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نام گروه</div>
-            <Input
-              value={groupTitle}
-              placeholder="نام گروه را وارد کنید"
-              onChange={(e) => onChangeGroupTitle(e.target.value)}
-            />
-          </div>
-          <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-700/40 dark:bg-violet-900/20">
-            <Checkbox
-              checked={aiAutoReplyEnabled}
-              onChange={(event) => onChangeAiAutoReplyEnabled(Boolean(event.target.checked))}
-            >
-              پاسخگویی خودکار توسط هوش مصنوعی
-            </Checkbox>
-            {aiAutoReplyEnabled ? (
-              <div className="mt-2">
-                <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">
-                  توضیحات به هوش مصنوعی راجع به این مشتری/تامین‌کننده
-                </div>
-                <Input.TextArea
-                  value={aiCounterpartyGuide}
-                  onChange={(event) => onChangeAiCounterpartyGuide(event.target.value)}
-                  autoSize={{ minRows: 3, maxRows: 7 }}
-                  placeholder="نکات اختصاصی این مشتری/تامین‌کننده برای پاسخگویی دقیق‌تر بات..."
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">پلتفرم پیش‌فرض {counterpartyLabel}</div>
+                <Select
+                  value={defaultChannel}
+                  options={CHANNEL_OPTIONS}
+                  onChange={(value) => onChangeDefaultChannel(value as BotChannel)}
+                  className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
+                  optionLabelProp="label"
+                  getPopupContainer={resolveSelectPopupContainer}
+                  styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
                 />
               </div>
-            ) : null}
+              <div className="flex items-center pt-5">
+                <Checkbox
+                  checked={fallbackToActive}
+                  onChange={(e) => onChangeFallbackToActive(Boolean(e.target.checked))}
+                >
+                  <span className="text-xs">در صورت قطع پلتفرم اصلی، از اولین پلتفرم فعال استفاده شود</span>
+                </Checkbox>
+              </div>
+            </div>
           </div>
-          <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای این گروه بات</div>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              value={allowedUserIds}
-              options={normalizedUserOptions}
-              onChange={(value) => onChangeAllowedUserIds((value || []).map((id) => String(id)))}
-              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
-              optionFilterProp="label"
-              optionLabelProp="label"
-              placeholder="اگر خالی باشد، همه کاربران مجازند"
-              getPopupContainer={resolveSelectPopupContainer}
-              popupMatchSelectWidth={false}
-              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
-            />
-          </div>
-          <div>
-            <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز برای این گروه بات</div>
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              value={allowedRoleIds}
-              options={normalizedRoleOptions}
-              onChange={(value) => onChangeAllowedRoleIds((value || []).map((id) => String(id)))}
-              className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
-              optionFilterProp="label"
-              optionLabelProp="label"
-              placeholder="اگر خالی باشد، همه نقش‌ها مجازند"
-              getPopupContainer={resolveSelectPopupContainer}
-              popupMatchSelectWidth={false}
-              styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
-            />
-          </div>
+
+          {/* تب‌های پلتفرم */}
+          <Tabs
+            activeKey={activeTab}
+            onChange={(key) => onChangeTab(key as BotChannel)}
+            items={tabItems}
+            size="small"
+          />
         </div>
       )}
     </Modal>

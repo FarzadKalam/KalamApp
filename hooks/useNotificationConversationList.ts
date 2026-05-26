@@ -5,6 +5,7 @@ import {
   type NotificationConversationSummary,
   isMissingRpcError,
 } from '../utils/notificationConversationRpc';
+import { preloadAvatarUrls } from '../utils/profileAvatar';
 
 // ---------------------------------------------------------------------------
 // Module-level cache — persists across mount/unmount cycles.
@@ -151,6 +152,15 @@ export const useNotificationConversationList = ({
     if (!enabled || !available) return;
     void refresh();
   }, [available, enabled, refresh]);
+
+  // Preload conversation sidebar avatars into browser cache as soon as they arrive
+  useEffect(() => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const urls = items
+      .map((item) => item.avatar_url)
+      .filter((url): url is string => Boolean(url));
+    preloadAvatarUrls(urls, 'avatar');
+  }, [items]);
 
   return {
     items,

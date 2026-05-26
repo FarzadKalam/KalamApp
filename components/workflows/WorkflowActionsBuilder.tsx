@@ -117,6 +117,7 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_field: '',
         variable_target: 'body',
       };
+    case 'send_bot_message':
     case 'send_telegram_bot':
     case 'send_bale_bot':
     case 'send_rubika_bot':
@@ -1211,6 +1212,112 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           {renderVariableTools(action, [
             { key: 'subject', label: 'موضوع ایمیل' },
             { key: 'body', label: 'متن ایمیل' },
+          ])}
+        </div>
+      );
+    }
+
+    if (actionType === 'send_bot_message') {
+      const botRecipientFieldOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const selectedRecipientFields = Array.isArray(config.recipient_fields)
+        ? config.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
+        : [];
+      const selectedCheckboxKeys = new Set(
+        RUBIKA_RELATED_RECIPIENT_CHECKBOXES
+          .filter((item) => item.fieldKeys.some((fieldKey) => selectedRecipientFields.includes(fieldKey)))
+          .map((item) => item.key)
+      );
+      if ((Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []).length > 0) {
+        selectedCheckboxKeys.add('employee_related');
+      }
+
+      return (
+        <div className="space-y-2">
+          <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
+            پلتفرم ارسال بر اساس تنظیمات پیش‌فرض بات هر مشتری/تامین‌کننده تعیین می‌شود.
+            اگر مقصدی انتخاب نکنید، گیرنده از اتصال بات مشتری/تامین‌کننده رکورد جاری تشخیص داده می‌شود.
+          </div>
+          <div className="rounded-lg border border-gray-200 dark:border-white/10 px-3 py-2">
+            <div className="mb-2 text-xs text-gray-500">گیرنده‌های مرتبط</div>
+            <Space size={[12, 8]} wrap>
+              {RUBIKA_RELATED_RECIPIENT_CHECKBOXES.map((item) => {
+                const checked = selectedCheckboxKeys.has(item.key);
+                return (
+                  <Checkbox
+                    key={item.key}
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={(e) => {
+                      const nextChecked = !!e.target.checked;
+                      const nextSelectedKeys = new Set(selectedCheckboxKeys);
+                      if (nextChecked) nextSelectedKeys.add(item.key);
+                      else nextSelectedKeys.delete(item.key);
+                      const nextRecipientFields = Array.from(
+                        new Set(
+                          RUBIKA_RELATED_RECIPIENT_CHECKBOXES
+                            .filter((entry) => nextSelectedKeys.has(entry.key))
+                            .flatMap((entry) => entry.fieldKeys)
+                        )
+                      );
+                      updateActionConfig(action.id, {
+                        recipient_fields: nextRecipientFields,
+                        recipient_assignees: [],
+                      });
+                    }}
+                  >
+                    {item.label}
+                  </Checkbox>
+                );
+              })}
+            </Space>
+          </div>
+          <Select
+            {...commonSelectProps}
+            mode="multiple"
+            value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+            disabled={disabled}
+            options={botRecipientFieldOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
+            placeholder="فیلدهای اختصاصی گیرنده (اختیاری)"
+            maxTagCount="responsive"
+          />
+          <Input
+            value={config.title}
+            disabled={disabled}
+            onChange={(e) => updateActionConfig(action.id, { title: e.target.value })}
+            placeholder="عنوان پیام (اختیاری)"
+          />
+          <div className="flex justify-end">
+            {renderMessageTemplateButton(action.id, 'message', 'پیام‌های آماده')}
+          </div>
+          <Input.TextArea
+            rows={4}
+            value={config.message}
+            disabled={disabled}
+            onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
+            placeholder="متن پیام"
+          />
+          <div className="text-xs text-gray-500">فیلدهای تصویر/فایل برای ارسال پیوست</div>
+          <Select
+            {...commonSelectProps}
+            mode="multiple"
+            value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
+            disabled={disabled || noteAttachmentFieldOptions.length === 0}
+            options={noteAttachmentFieldOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
+            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
+            className="w-full"
+            maxTagCount="responsive"
+          />
+          {renderVariableTools(action, [
+            { key: 'title', label: 'عنوان پیام' },
+            { key: 'message', label: 'متن پیام' },
           ])}
         </div>
       );

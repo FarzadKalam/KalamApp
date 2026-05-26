@@ -8,6 +8,7 @@ import {
   type NotificationReadModel,
   type NotificationTimelinePayload,
 } from '../utils/notificationConversationRpc';
+import { preloadAvatarUrls } from '../utils/profileAvatar';
 
 type LegacyLoader<TItem> = () => Promise<TItem[]>;
 
@@ -101,6 +102,11 @@ export const useInternalConversationTimeline = <TItem,>({
     setInitialAnchorId(payload.first_unread_id || null);
     setUnreadCount(Number(payload.unread_count || 0));
     setReadModel(payload.read_model);
+    // Preload sender avatars so they render from browser cache on re-open
+    const senderUrls = nextItems
+      .map((item: any) => item?.sender_avatar_url || item?.avatar_url)
+      .filter((url): url is string => typeof url === 'string' && Boolean(url));
+    preloadAvatarUrls(senderUrls, 'avatar');
     return true;
   }, []);
 

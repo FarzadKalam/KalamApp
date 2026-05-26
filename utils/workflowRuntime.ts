@@ -2122,6 +2122,92 @@ export const executeWorkflowAction = async (
     return;
   }
 
+  if (action.type === 'send_bot_message') {
+    // پیام یکپارچه بات: پلتفرم از تنظیمات پیش‌فرض counterparty_bot_config خوانده می‌شود
+    const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
+    const attachments = await resolveNoteAttachmentsFromFields({
+      currentRecord,
+      moduleId,
+      attachmentFields: asArray(config.attachment_fields),
+    });
+    if (!rawMessageText && attachments.length === 0) return;
+    const externalAttachments = attachments.length > 0
+      ? await shortenAttachmentsForExternalShare(attachments, {
+          moduleId,
+          recordId: currentRecord?.id ? String(currentRecord.id) : null,
+          metadata: { source_type: 'workflow', workflow_action_type: 'send_bot_message', workflow_action_id: (action as any)?.id || null },
+        })
+      : [];
+    const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
+    const configuredRecipientFields = asArray(config.recipient_fields).map((item) => String(item || '').trim()).filter(Boolean);
+    const configuredRecipientAssignees = asArray(config.recipient_assignees).map((item) => String(item || '').trim()).filter(Boolean);
+
+    // تعیین پلتفرم برای هر counterparty از counterparty_bot_config
+    const resolveChannelForCounterparty = async (counterpartyId: string, counterpartyType: 'customers' | 'suppliers'): Promise<'rubika' | 'telegram' | 'bale'> => {
+      const configQuery = supabase
+        .from('counterparty_bot_config')
+        .select('default_channel, fallback_to_active')
+        .eq(counterpartyType === 'customers' ? 'customer_id' : 'supplier_id', counterpartyId)
+        .maybeSingle();
+      const { data: prefRow } = await configQuery;
+      const defaultChannel = (String(prefRow?.default_channel || 'rubika') as 'rubika' | 'telegram' | 'bale');
+      if (!prefRow?.fallback_to_active) return defaultChannel;
+      // اگر fallback فعال است، بررسی کن پلتفرم اصلی فعال است یا نه
+      const groupQuery = supabase
+        .from('counterparty_bot_groups')
+        .select('channel_type, status, bot_chat_id')
+        .eq(counterpartyType === 'customers' ? 'customer_id' : 'supplier_id', counterpartyId);
+      const { data: groupRows } = await groupQuery;
+      if (!groupRows?.length) return defaultChannel;
+      const activeForDefault = groupRows.find((r: any) => r.channel_type === defaultChannel && String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
+      if (activeForDefault) return defaultChannel;
+      const firstActive = groupRows.find((r: any) => String(r.status || '') === 'active' && String(r.bot_chat_id || '').trim());
+      return firstActive ? (String(firstActive.channel_type || defaultChannel) as 'rubika' | 'telegram' | 'bale') : defaultChannel;
+    };
+
+    // resolve recipients همانند bot actions قدیمی ولی بدون channel مشخص
+    // ابتدا از طریق رکورد جاری counterparty را پیدا می‌کنیم
+    const customerId = String(currentRecord?.customer_id || (moduleId === 'customers' ? currentRecord?.id : '') || '').trim();
+    const supplierId = String(currentRecord?.supplier_id || (moduleId === 'suppliers' ? currentRecord?.id : '') || '').trim();
+
+    if (customerId || supplierId) {
+      const counterpartyId = customerId || supplierId;
+      const counterpartyType = customerId ? 'customers' : 'suppliers';
+      const channel = await resolveChannelForCounterparty(counterpartyId, counterpartyType);
+      const fallbackText = channel === 'rubika' && externalAttachments.length > 0
+        ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
+        : undefined;
+      const messageText = channel === 'rubika' && externalAttachments.length > 0
+        ? (rawMessageText || 'پیوست ارسال شد')
+        : rawMessageText;
+      const recipientsFromFields = await resolveCommunicationValuesFromFields({
+        currentRecord,
+        moduleId,
+        recipientFields: configuredRecipientFields,
+        recipientAssignees: configuredRecipientAssignees,
+        channel,
+      });
+      const counterpartyChatIds = await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord);
+      const recipients = Array.from(new Set([...recipientsFromFields, ...counterpartyChatIds])).filter(Boolean);
+      if (recipients.length > 0) {
+        const handledChatIds = new Set<string>();
+        if (channel === 'rubika') {
+          const groupRows = await resolveCounterpartyBotGroupsByChatIds('rubika', recipients);
+          for (const group of groupRows) {
+            const groupChatId = String(group?.bot_chat_id || '').trim();
+            if (!groupChatId || handledChatIds.has(groupChatId)) continue;
+            handledChatIds.add(groupChatId);
+            await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: { attachments, workflow_action_type: 'send_bot_message', workflow_action_id: (action as any)?.id || null }, messageType: attachments.length > 0 ? 'file' : 'text' });
+          }
+        }
+        for (const chatId of recipients.filter((r) => !handledChatIds.has(String(r || '').trim()))) {
+          await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments: channel === 'rubika' ? attachments : undefined, fallbackText: channel === 'rubika' ? fallbackText : undefined, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
+        }
+      }
+    }
+    return;
+  }
+
   if (
     action.type === 'send_telegram_bot'
     || action.type === 'send_bale_bot'
