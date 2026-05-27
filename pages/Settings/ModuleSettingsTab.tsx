@@ -53,9 +53,11 @@ import {
 import { clearSystemCodeSettingsCache } from '../../utils/systemCode';
 import {
   getBaseModuleFieldDefinition,
+  getBaseModuleSchemaSnapshot,
   mergeModuleSchemaWithBase,
   MODULE_SETTINGS_UPDATED_EVENT,
 } from '../../utils/moduleSettingsRuntime';
+import { ensureModuleSettingsCustomColumns } from '../../utils/moduleSettingsSchema';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ConditionalFieldRulesEditor from '../../components/settings/ConditionalFieldRulesEditor';
 import SettingsCollapsiblePanel from '../../components/settings/SettingsCollapsiblePanel';
@@ -119,6 +121,7 @@ const formatSystemCodePreview = (prefix: string, startNumber: number, numberWidt
 };
 
 const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettingsConfig => {
+  const baseSchema = getBaseModuleSchemaSnapshot(moduleDef.id);
   return {
     general: {
       systemCodeNaming: buildDefaultSystemCodeNaming(moduleDef),
@@ -134,8 +137,8 @@ const buildDefaultModuleSettings = (moduleDef: ModuleDefinition): ModuleSettings
           }
         : {},
     schema: normalizeSchema({
-      fields: cloneDeep(moduleDef.fields || []),
-      blocks: cloneDeep(moduleDef.blocks || []),
+      fields: cloneDeep(baseSchema?.fields || moduleDef.fields || []),
+      blocks: cloneDeep(baseSchema?.blocks || moduleDef.blocks || []),
     }),
     conditionalDisplay: {
       rules: [],
@@ -236,6 +239,31 @@ const dynamicOptionCapableTypes = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.MULTI_SELECT,
   FieldType.STATUS,
+]);
+
+const addableCustomFieldTypes = new Set<FieldType>([
+  FieldType.TEXT,
+  FieldType.LONG_TEXT,
+  FieldType.SUPER_LONG_TEXT,
+  FieldType.NUMBER,
+  FieldType.PRICE,
+  FieldType.PERCENTAGE,
+  FieldType.CHECKBOX,
+  FieldType.IMAGE,
+  FieldType.SELECT,
+  FieldType.MULTI_SELECT,
+  FieldType.CHECKLIST,
+  FieldType.DATE,
+  FieldType.TIME,
+  FieldType.DATETIME,
+  FieldType.LINK,
+  FieldType.LOCATION,
+  FieldType.RELATION,
+  FieldType.USER,
+  FieldType.STATUS,
+  FieldType.PHONE,
+  FieldType.JSON,
+  FieldType.PERCENTAGE_OR_AMOUNT,
 ]);
 
 const HEADER_DESTINATION = '__header__';
@@ -454,9 +482,19 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     [selectedModuleConfig]
   );
 
+  const baseBlockIds = useMemo(() => {
+    const baseSchema = getBaseModuleSchemaSnapshot(selectedModuleId);
+    return new Set((baseSchema?.blocks || []).map((block) => String(block?.id || '').trim()).filter(Boolean));
+  }, [selectedModuleId]);
+
   const isProtectedField = useCallback(
     (field: ModuleField) => protectedFieldKeys.has(String(field.key || '')),
     [protectedFieldKeys]
+  );
+
+  const isBaseBlock = useCallback(
+    (blockId: string) => baseBlockIds.has(String(blockId || '').trim()),
+    [baseBlockIds]
   );
 
   const loadPermissions = useCallback(async () => {
@@ -658,6 +696,11 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
     []
   );
 
+  const addFieldTypeOptions = useMemo(
+    () => fieldTypeOptions.filter((option) => addableCustomFieldTypes.has(option.value)),
+    [fieldTypeOptions]
+  );
+
   const blockTypeOptions = useMemo(
     () =>
       Object.values(BlockType).map((type) => ({
@@ -681,6 +724,10 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
 
     setSaving(true);
     try {
+      if (selectedModuleConfig) {
+        await ensureModuleSettingsCustomColumns(supabase, selectedModuleConfig, currentConfig);
+      }
+
       const nextModules: Record<string, ModuleSettingsConfig> = {
         ...settingsByModule,
         [selectedModuleId]: currentConfig,
@@ -723,6 +770,8 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       const messageText = String(err?.message || err || '');
       if (messageText.toLowerCase().includes('integration_settings')) {
         message.error('جدول integration_settings در دیتابیس موجود نیست.');
+      } else if (messageText.toLowerCase().includes('ensure_module_settings_columns')) {
+        message.error('تابع آماده‌سازی ستون‌های سفارشی در دیتابیس نصب نشده است. ابتدا migration جدید را اجرا کنید.');
       } else {
         message.error('ذخیره تنظیمات ماژول ناموفق بود.');
       }
@@ -756,6 +805,16 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       message.warning('این فیلد سیستمی/ضروری است و قابل حذف نیست.');
       return;
     }
+    const isBaseField = !!getBaseModuleFieldDefinition(selectedModuleId, fieldKey);
+    if (isBaseField) {
+      updateSchema((prev) => ({
+        ...prev,
+        fields: prev.fields.map((field) => (
+          field.key === fieldKey ? { ...field, isActive: false, isTableColumn: false } : field
+        )),
+      }));
+      return;
+    }
     updateSchema((prev) => ({
       ...prev,
       fields: prev.fields.filter((field) => field.key !== fieldKey),
@@ -767,10 +826,13 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       const values = await addBlockForm.validateFields();
       const normalizedId = String(values.id || '')
         .trim()
-        .replace(/\s+/g, '_');
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/_+/g, '_');
 
-      if (!normalizedId) {
-        message.error('شناسه بلاک معتبر نیست.');
+      if (!/^[a-z][a-z0-9_]*$/.test(normalizedId)) {
+        message.error('شناسه بلاک باید با حروف انگلیسی شروع شود و فقط شامل حروف کوچک انگلیسی، عدد و زیرخط باشد.');
         return;
       }
 
@@ -788,6 +850,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
             id: normalizedId,
             type: values.type,
             order: prev.blocks.length + 1,
+            isActive: true,
             titles: { fa: values.title || normalizedId },
           } as BlockDefinition,
         ],
@@ -800,6 +863,17 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
   };
 
   const deleteBlock = (blockId: string) => {
+    if (isBaseBlock(blockId)) {
+      updateSchema((prev) => ({
+        blocks: prev.blocks.map((block) => (
+          block.id === blockId ? { ...block, isActive: false, printable: false } : block
+        )),
+        fields: prev.fields.map((field) => (
+          field.blockId === blockId ? { ...field, isActive: false, isTableColumn: false } : field
+        )),
+      }));
+      return;
+    }
     updateSchema((prev) => ({
       blocks: prev.blocks.filter((block) => block.id !== blockId),
       fields: prev.fields.map((field) => {
@@ -814,9 +888,12 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
       const values = await addFieldForm.validateFields();
       const key = String(values.key || '')
         .trim()
-        .replace(/\s+/g, '_');
-      if (!key) {
-        message.error('کلید فیلد معتبر نیست.');
+        .toLowerCase()
+        .replace(/\s+/g, '_')
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/_+/g, '_');
+      if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+        message.error('کلید فیلد باید با حروف انگلیسی شروع شود و فقط شامل حروف کوچک انگلیسی، عدد و زیرخط باشد.');
         return;
       }
       if (sortedFields.some((field) => field.key === key)) {
@@ -840,6 +917,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
             labels: { fa: values.labelFa || key, en: key },
             blockId,
             location: blockId ? 'block' : 'header',
+            isActive: true,
             isTableColumn: true,
             order: prev.fields.length + 1,
             validation: { required: false },
@@ -1309,6 +1387,23 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                 }
                               />
                               <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-500 dark:text-gray-400">فعال</span>
+                                <Switch
+                                  size="small"
+                                  checked={block.isActive !== false}
+                                  onChange={(checked) =>
+                                    updateSchema((prev) => ({
+                                      ...prev,
+                                      blocks: prev.blocks.map((item) =>
+                                        item.id === block.id
+                                          ? { ...item, isActive: checked }
+                                          : item
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="flex items-center gap-2">
                                 <span className="text-xs text-gray-500 dark:text-gray-400">قابل چاپ</span>
                                 <Switch
                                   size="small"
@@ -1327,9 +1422,10 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                               </div>
                               <Tag>{block.id}</Tag>
                               <Tag color="blue">{blockTypeLabels[block.type] || block.type}</Tag>
+                              {block.isActive === false && <Tag color="orange">غیرفعال</Tag>}
                               <Popconfirm
                                 title="حذف بلاک"
-                                description="فیلدهای این بلاک به سربرگ منتقل می‌شوند."
+                                description={isBaseBlock(block.id) ? 'این بلاک سیستمی غیرفعال می‌شود.' : 'فیلدهای این بلاک به سربرگ منتقل می‌شوند.'}
                                 onConfirm={() => deleteBlock(block.id)}
                                 okText="حذف"
                                 cancelText="انصراف"
@@ -1421,6 +1517,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                     </div>
                                             <Tag color="default">{fieldTypeLabels[field.type] || field.type}</Tag>
                                             {field.isTableColumn === true && <Tag color="blue">ستون لیست</Tag>}
+                                            {field.isActive === false && <Tag color="orange">غیرفعال</Tag>}
                                             <Typography.Text className="text-sm">
                                               {field.labels?.fa || 'بدون عنوان'}
                                             </Typography.Text>
@@ -1539,6 +1636,24 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
                                         }))
                                       }
                                     />
+                                  </Col>
+                                  <Col xs={12} md={2}>
+                                    <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
+                                      فعال
+                                    </Typography.Text>
+                                    <div>
+                                      <Switch
+                                        checked={field.isActive !== false}
+                                        disabled={protectedField}
+                                        onChange={(checked) =>
+                                          updateField(field.key, (prev) => ({
+                                            ...prev,
+                                            isActive: checked,
+                                            isTableColumn: checked ? prev.isTableColumn : false,
+                                          }))
+                                        }
+                                      />
+                                    </div>
                                   </Col>
                                   <Col xs={12} md={2}>
                                     <Typography.Text className="text-xs text-gray-500 dark:text-gray-400">
@@ -1810,7 +1925,7 @@ const ModuleSettingsTab: React.FC<ModuleSettingsTabProps> = ({ initialModuleId }
             <Input placeholder="مثال: کد سفارشی" />
           </Form.Item>
           <Form.Item label="نوع فیلد" name="type">
-            <Select options={fieldTypeOptions} />
+            <Select options={addFieldTypeOptions} />
           </Form.Item>
           <Form.Item label="بلاک مقصد" name="blockId">
             <Select options={blockDestinationOptions} />

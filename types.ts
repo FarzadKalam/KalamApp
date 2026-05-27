@@ -160,6 +160,7 @@ export interface ModuleField {
   key: string;
   type: FieldType;
   labels: { fa: string; en?: string };
+  isActive?: boolean;
   isTableColumn?: boolean;
   hideInCreateForm?: boolean;
   options?: SelectOption[];
@@ -232,6 +233,7 @@ export interface BlockDefinition {
   type: BlockType;
   titles: { fa: string; en?: string };
   order: number;
+  isActive?: boolean;
   printable?: boolean;
   icon?: string;
   visibleIf?: any;

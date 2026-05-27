@@ -251,7 +251,7 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
 
   // Permission flag for opening module-level settings page.
   if (!fieldMap.has('__module_settings')) {
-    ensureField(fieldMap, '__module_settings', 'تنظیمات ماژول');
+    ensureField(fieldMap, '__module_settings', 'ویرایش فیلدها و بلاک‌های ماژول');
   }
 
   MODULE_GOAL_PERMISSION_FIELDS.forEach((item) => {

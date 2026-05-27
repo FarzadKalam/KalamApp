@@ -103,6 +103,27 @@ const normalizeBlocks = (blocks: BlockDefinition[]) =>
     .sort((a, b) => (a.order || 0) - (b.order || 0))
     .map((block, index) => ({ ...block, order: index + 1 }));
 
+const isSchemaItemActive = (item: any) => item?.isActive !== false && item?.disabled !== true;
+
+const filterActiveSchema = (
+  schema: { fields?: ModuleField[]; blocks?: BlockDefinition[] }
+) => {
+  const activeBlocks = (schema.blocks || []).filter(isSchemaItemActive);
+  const activeBlockIds = new Set(
+    activeBlocks.map((block) => String(block?.id || '').trim()).filter(Boolean)
+  );
+  const activeFields = (schema.fields || []).filter((field) => {
+    if (!isSchemaItemActive(field)) return false;
+    const blockId = String((field as any)?.blockId || '').trim();
+    if (!blockId) return true;
+    return activeBlockIds.has(blockId);
+  });
+  return {
+    fields: activeFields,
+    blocks: activeBlocks,
+  };
+};
+
 const mergeRequiredTagsField = (
   baseFields: ModuleField[],
   incomingFields: ModuleField[]
@@ -205,9 +226,10 @@ export const applyModuleSettingsStoreToRegistry = (
     const incoming = getIncomingModuleSettings(store, moduleId);
     const incomingSchema = incoming?.schema;
     const mergedSchema = mergeModuleSchemaWithBase(base, incomingSchema);
+    const activeSchema = filterActiveSchema(mergedSchema);
     const normalizedSchema = moduleId === 'attendance_logs'
-      ? normalizeAttendanceLogsDetailSchema(mergedSchema.fields)
-      : mergedSchema;
+      ? normalizeAttendanceLogsDetailSchema(activeSchema.fields)
+      : activeSchema;
 
     moduleDef.fields = normalizeFields(normalizedSchema.fields);
     moduleDef.blocks = normalizeBlocks(normalizedSchema.blocks);

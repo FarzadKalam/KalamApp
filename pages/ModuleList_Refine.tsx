@@ -85,6 +85,7 @@ import {
   buildModuleListSearchFilter,
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
+import { getBaseModuleFieldDefinition } from "../utils/moduleSettingsRuntime";
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -271,6 +272,12 @@ const buildModuleListRowSelect = (
   }
 ) => {
   if (!moduleConfig) return "*";
+
+  const hasCustomFields = (moduleConfig.fields || []).some((field) => {
+    const key = String(field?.key || "").trim();
+    return key && !getBaseModuleFieldDefinition(moduleConfig.id, key);
+  });
+  if (hasCustomFields) return "*";
 
   const selectedKeys = new Set<string>();
   const moduleFieldKeys = new Set(
