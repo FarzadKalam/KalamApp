@@ -98,6 +98,7 @@ declare
   sql_type text;
   table_relkind "char";
   changed boolean := false;
+  expected_table text;
 begin
   if auth.uid() is null or public.current_org_id() is null then
     raise exception 'دسترسی سازمان جاری قابل تشخیص نیست.';
@@ -110,6 +111,15 @@ begin
   if normalized_module !~ '^[a-z][a-z0-9_]*$'
      or normalized_table !~ '^[a-z][a-z0-9_]*$' then
     raise exception 'شناسه ماژول یا جدول معتبر نیست.';
+  end if;
+
+  expected_table := case normalized_module
+    when 'voip_call_reports' then 'voip_call_logs'
+    else normalized_module
+  end;
+
+  if normalized_table <> expected_table then
+    raise exception 'جدول مقصد با ماژول انتخاب‌شده همخوانی ندارد.';
   end if;
 
   if normalized_table in (

@@ -28,6 +28,11 @@ const readCache = (cacheKey: string): NotificationConversationSummary[] | null =
   return null;
 };
 
+const isCacheFresh = (cacheKey: string) => {
+  const entry = _convListCache.get(cacheKey);
+  return Boolean(entry && Date.now() - entry.fetchedAt < CONV_LIST_CACHE_TTL_MS);
+};
+
 // ---------------------------------------------------------------------------
 
 type UseNotificationConversationListOptions = {
@@ -35,6 +40,10 @@ type UseNotificationConversationListOptions = {
   section: NotificationConversationSection;
   enabled: boolean;
   cacheScopeKey?: string | null;
+};
+
+type RefreshOptions = {
+  force?: boolean;
 };
 
 export const useNotificationConversationList = ({
@@ -100,8 +109,15 @@ export const useNotificationConversationList = ({
     [cacheKey],
   );
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: RefreshOptions) => {
     if (!enabled || !available) return null;
+    if (!options?.force && isCacheFresh(cacheKey)) {
+      const cached = readCache(cacheKey);
+      if (cached) {
+        if (itemsRef.current === null) setItemsState(cached);
+        return cached;
+      }
+    }
     if (refreshInFlightRef.current) return null;
     refreshInFlightRef.current = true;
     // Show spinner only on a true cold load (no cached data in state yet)

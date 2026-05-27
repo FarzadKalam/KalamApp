@@ -43,6 +43,11 @@ const readCache = <TItem>(cacheKey: string): NotificationTimelinePayload<TItem> 
   return null;
 };
 
+const isCacheFresh = (cacheKey: string) => {
+  const entry = _botTimelineCache.get(cacheKey);
+  return Boolean(entry && Date.now() - entry.fetchedAt < TIMELINE_CACHE_TTL_MS);
+};
+
 const sortByDate = <T>(items: T[]): T[] =>
   items.slice().sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
 
@@ -225,10 +230,18 @@ export const useBotConversationTimeline = <TItem,>({
     return normalizeTimelinePayload<TItem>(data);
   }, [botGroupId, communicationApiAvailable, pageSize, supabase]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { force?: boolean }) => {
     if (!enabled || !botGroupId) {
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+    }
+
+    if (!options?.force && timelineCacheKey && isCacheFresh(timelineCacheKey)) {
+      const cached = readCache<TItem>(timelineCacheKey);
+      if (cached) {
+        applyPayload(cached);
+        return cached;
+      }
     }
 
     if (refreshInFlightRef.current) {

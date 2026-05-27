@@ -1,6 +1,6 @@
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
-import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
+import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -14,7 +14,6 @@ import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/n
 import { normalizeNoteScope } from '../utils/noteScope';
 import { buildTaskSourceInitialValues, normalizeTaskSourceValues, resolveTaskSourceLink } from '../utils/taskMeta';
 import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
-import SharedNoteComposer from './notes/SharedNoteComposer';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
@@ -27,7 +26,6 @@ import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns, selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
-import AiSparkleIcon from './ai/AiSparkleIcon';
 import {
   buildNoteConversations,
   buildSmsThreads,
@@ -50,6 +48,12 @@ import { prefetchInternalConversationTimeline, useInternalConversationTimeline }
 import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
 import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
+import {
+  CHAT_GROUP_PREFIX,
+  MY_NOTES_CONVERSATION_KEY,
+  SYSTEM_MESSAGES_USER_ID,
+  getChatGroupSelectionId,
+} from '../utils/notificationConversationKeys';
 import ProfileAvatar from './common/ProfileAvatar';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
@@ -63,6 +67,7 @@ const TasksPanel = React.lazy(() => import('./notifications/TasksPanel'));
 const SmsMessagesPanel = React.lazy(() => import('./notifications/SmsMessagesPanel'));
 const BotMessagesPanel = React.lazy(() => import('./notifications/BotMessagesPanel'));
 const NotesPanel = React.lazy(() => import('./notifications/NotesPanel'));
+const ForwardMessageModalRuntime = React.lazy(() => import('./notifications/ForwardMessageModalRuntime'));
 const RelatedRecordPopover = React.lazy(() => import('./RelatedRecordPopover'));
 const AssistantPanel = React.lazy(() => import('./ai/AssistantPanel'));
 const MessageComposerModal = React.lazy(() => import('./MessageComposerModal'));
@@ -96,14 +101,6 @@ interface NotificationsPopoverProps {
   onClosed?: () => void;
 }
 
-type AiSuggestionPopoverActionProps = {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  loading: boolean;
-  disabled: boolean;
-  onSubmit: (instruction: string) => void | Promise<void>;
-};
-
 type MessageActivityDraft = {
   initialValues: Record<string, any>;
   attachments: NoteAttachment[];
@@ -111,155 +108,6 @@ type MessageActivityDraft = {
   relatedRecordId: string | null;
   sourceLabel: string;
 };
-
-const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
-  open,
-  onOpenChange,
-  loading,
-  disabled,
-  onSubmit,
-}) => {
-  const [draft, setDraft] = useState('');
-
-  useEffect(() => {
-    if (!open) {
-      setDraft('');
-    }
-  }, [open]);
-
-  return (
-    <Popover
-      trigger="click"
-      placement="topRight"
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (disabled && nextOpen) return;
-        onOpenChange(nextOpen);
-      }}
-      content={(
-        <div className="w-[280px] max-w-[80vw]">
-          <div className="text-[12px] font-semibold text-gray-700 dark:text-gray-100">
-            توضیحات بیشتر برای هوش مصنوعی
-          </div>
-          <div className="mt-1 text-[11px] leading-5 text-gray-500 dark:text-gray-400">
-            کاربر بتونه راجع به این موضوع و پیام های رد و بدل شده و چیزی که میخواد، توضیحی اضافه کنه
-          </div>
-          <Input.TextArea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            autoSize={{ minRows: 3, maxRows: 6 }}
-            className="mt-2"
-            placeholder="مثلا لحن پاسخ، نکته مهم، یا چیزی که باید در نظر گرفته شود..."
-          />
-          <div className="mt-2 flex items-center justify-end gap-2">
-            <Button size="small" onClick={() => onOpenChange(false)}>
-              بستن
-            </Button>
-            <Button
-              type="primary"
-              size="small"
-              loading={loading}
-              onClick={() => void onSubmit(draft)}
-            >
-              دریافت پیشنهاد
-            </Button>
-          </div>
-        </div>
-      )}
-    >
-      <button
-        type="button"
-        disabled={disabled}
-        className={`inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] transition-colors ${
-          disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-black/5 dark:hover:bg-white/10'
-        }`}
-      >
-        <span
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md ${
-            loading
-              ? 'bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.16)] dark:text-[rgb(var(--brand-300-rgb))]'
-              : 'text-gray-600 dark:text-gray-300'
-          }`}
-        >
-          <AiSparkleIcon className="h-4 w-4" />
-        </span>
-        {loading ? (
-          <span className="whitespace-nowrap text-[11px] text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]">
-            در حال فکر کردن...
-          </span>
-        ) : null}
-      </button>
-    </Popover>
-  );
-};
-
-type SmsDrawerComposerProps = {
-  recipient: string;
-  activeThreadId?: string | null;
-  sending: boolean;
-  onSubmit: (text: string) => Promise<boolean> | boolean;
-  onSuggestReply: (instruction: string) => Promise<string | null>;
-};
-
-const SmsDrawerComposer = React.memo<SmsDrawerComposerProps>(({
-  recipient,
-  activeThreadId,
-  sending,
-  onSubmit,
-  onSuggestReply,
-}) => {
-  const [draft, setDraft] = useState('');
-  const [suggesting, setSuggesting] = useState(false);
-  const [aiPopoverOpen, setAiPopoverOpen] = useState(false);
-  const canSuggest = Boolean(activeThreadId || String(recipient || '').trim());
-
-  const submitDraft = useCallback(async () => {
-    const text = String(draft || '').trim();
-    const sent = await onSubmit(text);
-    if (sent) {
-      setDraft('');
-    }
-  }, [draft, onSubmit]);
-
-  const requestSuggestion = useCallback(async (instruction: string) => {
-    if (suggesting) return;
-    setSuggesting(true);
-    setAiPopoverOpen(false);
-    try {
-      const suggested = await onSuggestReply(instruction);
-      if (suggested) {
-        setDraft(suggested);
-      }
-    } finally {
-      setSuggesting(false);
-    }
-  }, [onSuggestReply, suggesting]);
-
-  return (
-    <SharedNoteComposer
-      value={draft}
-      onChange={setDraft}
-      onSubmit={submitDraft}
-      placeholder="متن پیامک..."
-      submitText="ارسال پیامک"
-      allowMentions={false}
-      allowAttachments={false}
-      submitLoading={sending}
-      submitDisabled={sending || suggesting || !String(recipient || '').trim() || !String(draft || '').trim()}
-      extraActions={(
-        <AiSuggestionPopoverAction
-          open={aiPopoverOpen}
-          onOpenChange={setAiPopoverOpen}
-          loading={suggesting}
-          disabled={sending || suggesting || !canSuggest}
-          onSubmit={requestSuggestion}
-        />
-      )}
-    />
-  );
-});
-
-SmsDrawerComposer.displayName = 'SmsDrawerComposer';
 
 const MAX_ITEMS = 10;
 const NOTIFICATIONS_CACHE_TTL_MS = 90_000;
@@ -349,10 +197,8 @@ const isSectionTabKey = (value: DrawerTabKey): value is NotificationSectionKey =
   value === 'notes' || value === 'tasks' || value === 'responsibilities' || value === 'bot_messages' || value === 'sms_messages' || value === 'voip_calls';
 const getSectionsForVariant = (variant: 'chat' | 'alerts'): NotificationSectionKey[] =>
   variant === 'chat' ? CHAT_SECTION_KEYS : ALERT_SECTION_KEYS;
-const SYSTEM_MESSAGES_USER_ID = '__system_messages__';
-const CHAT_GROUP_PREFIX = 'group:';
-const BOT_GROUP_FORWARD_PREFIX = 'botgroup:';
 const NOTE_SELECT_FIELDS = 'id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to, source_type, metadata, is_edited, edited_at';
+const NOTES_INBOX_FETCH_LIMIT = 80;
 type ChatGroupRow = {
   id: string;
   org_id: string | null;
@@ -785,12 +631,6 @@ const formatRecordLabel = (row: any, moduleId?: string | null) => {
   return `${label}${code}`.trim();
 };
 
-const isChatGroupSelection = (value: string | null | undefined) =>
-  String(value || '').startsWith(CHAT_GROUP_PREFIX);
-
-const getChatGroupSelectionId = (value: string | null | undefined) =>
-  isChatGroupSelection(value) ? String(value).slice(CHAT_GROUP_PREFIX.length) : null;
-
 const buildDirectConversationKey = (currentUserId: string, otherUserId: string) => {
   const left = String(currentUserId || '').trim();
   const right = String(otherUserId || '').trim();
@@ -1200,6 +1040,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const botStatusWatchTimerRef = useRef<number | null>(null);
   const botGroupsEnrichSeqRef = useRef(0);
   const backgroundSectionRefreshTimerRef = useRef<number | null>(null);
+  const communicationReadCursorInFlightRef = useRef<Map<string, Promise<boolean>>>(new Map());
+  const communicationReadCursorRecentRef = useRef<Map<string, number>>(new Map());
 
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
@@ -2424,7 +2266,7 @@ useEffect(() => {
     if (!profile.id) return [];
     if (notesPollingPausedRef.current) return [];
 
-    const inboxItems = await fetchNotificationInboxSection('notes', 260, { excludeSystem: true });
+    const inboxItems = await fetchNotificationInboxSection('notes', NOTES_INBOX_FETCH_LIMIT, { excludeSystem: true });
     if (inboxItems === null) {
       setNoteLikeNotifications([]);
       return fetchNotesLegacy();
@@ -3637,6 +3479,7 @@ useEffect(() => {
 
   const scheduleBackgroundSectionRefresh = useCallback((activeSection: NotificationSectionKey | null, options?: { force?: boolean }) => {
     if (typeof window === 'undefined') return;
+    if (variant === 'chat') return;
     if (backgroundSectionRefreshTimerRef.current !== null) {
       window.clearTimeout(backgroundSectionRefreshTimerRef.current);
     }
@@ -3729,7 +3572,7 @@ useEffect(() => {
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes' || selectedNoteUserId) return;
-    void refreshSection('notes', { force: true });
+    void refreshSection('notes');
   }, [activeDrawerSection, open, profile.id, selectedNoteUserId]);
 
   useEffect(() => {
@@ -4169,7 +4012,7 @@ useEffect(() => {
     return String(matched?.conversation_key || '').trim() || null;
   }, [noteConversationSummaryAvailable, rpcNoteConversationSummaries, selectedChatGroupId, selectedNoteUserId]);
   const selectedConversationKey = useMemo(() => {
-    if (!selectedNoteUserId) return null;
+    if (!selectedNoteUserId) return MY_NOTES_CONVERSATION_KEY;
     if (selectedRpcConversationKey) {
       return selectedRpcConversationKey;
     }
@@ -4244,7 +4087,10 @@ useEffect(() => {
     const container = notesScrollContainerRef.current;
     if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
     setMyNotesDisplayLimit((prev) => prev + 15);
-  }, []);
+    if (selectedConversationKey === MY_NOTES_CONVERSATION_KEY) {
+      void loadOlderSelectedConversationNotes();
+    }
+  }, [loadOlderSelectedConversationNotes, selectedConversationKey]);
   const loadOlderBotWithPreserve = useCallback(async () => {
     const container = botMessagesScrollContainerRef.current;
     if (container) pendingBotScrollRestoreRef.current = container.scrollHeight;
@@ -4253,6 +4099,7 @@ useEffect(() => {
   const isUnreadNoteRow = useCallback((note: any) => {
     const noteId = String(note?.id || '').trim();
     if (!noteId) return false;
+    if (typeof note?.is_read === 'boolean') return !note.is_read;
     const authorId = String(note?.author_id || '').trim();
     const currentUserId = String(profile.id || '').trim();
     if (authorId && currentUserId && authorId === currentUserId) return false;
@@ -4261,6 +4108,7 @@ useEffect(() => {
   const isUnreadBotRow = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
     const rowId = String(row?.id || '').trim();
     if (!rowId) return false;
+    if (typeof (row as any)?.is_read === 'boolean') return !(row as any).is_read;
     if (String(row?.direction || '').trim() === 'outbound') return false;
     return !isNotificationRead('bot_messages', 'counterparty_bot_message', rowId, seenBotMessageIds.has(rowId));
   }, [isNotificationRead, seenBotMessageIds]);
@@ -4269,6 +4117,9 @@ useEffect(() => {
     const sourceNotes = selectedConversationKey
       ? (selectedConversationNotes || [])
       : notes;
+    if (selectedConversationKey) {
+      return sourceNotes;
+    }
     if (!selectedNoteUserId) {
       const currentUserId = String(profile.id || '').trim();
       return sourceNotes.filter((note: any) => (
@@ -4359,15 +4210,22 @@ useEffect(() => {
   }, [isNotificationRead, notes, seenNoteIds]);
   const myNoteStats = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
+    const sourceRows = selectedConversationKey === MY_NOTES_CONVERSATION_KEY
+      ? (selectedConversationNotes || [])
+      : notes;
     const myNotes = currentUserId
       ? notes.filter((note: any) => String(note?.author_id || '').trim() === currentUserId && !isSystemNote(note))
       : [];
-    const latestMessageAt = myNotes.reduce<number>((latest, note: any) => {
+    const scopedMyNotes = currentUserId
+      ? sourceRows.filter((note: any) => String(note?.author_id || '').trim() === currentUserId && !isSystemNote(note))
+      : [];
+    const effectiveMyNotes = scopedMyNotes.length > 0 ? scopedMyNotes : myNotes;
+    const latestMessageAt = effectiveMyNotes.reduce<number>((latest, note: any) => {
       const createdAt = new Date(note?.created_at || '').getTime();
       return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
     }, 0);
-    return { noteCount: myNotes.length, latestMessageAt };
-  }, [notes, profile.id]);
+    return { noteCount: effectiveMyNotes.length, latestMessageAt };
+  }, [notes, profile.id, selectedConversationKey, selectedConversationNotes]);
   const noteConversations = useMemo<ConversationListItem[]>(
     () => buildNoteConversations({
       availableDirectUsers,
@@ -4607,7 +4465,11 @@ useEffect(() => {
     () => String(noteMessageSearch || '').trim().toLowerCase(),
     [noteMessageSearch]
   );
-  const myNotesHasMoreBefore = !selectedNoteUserId && orderedFilteredNotes.length > myNotesDisplayLimit;
+  const myNotesHasMoreBefore = !selectedNoteUserId && (
+    selectedConversationKey === MY_NOTES_CONVERSATION_KEY
+      ? selectedConversationHasMoreBefore
+      : orderedFilteredNotes.length > myNotesDisplayLimit
+  );
   const displayedChatNotes = useMemo(() => {
     if (!normalizedNoteMessageSearch) {
       if (!selectedNoteUserId) return orderedFilteredNotes.slice(-myNotesDisplayLimit);
@@ -4834,38 +4696,6 @@ useEffect(() => {
       </span>
     );
   }, []);
-  const forwardTargetOptions = useMemo(
-    () => [
-      ...botGroups.map((group) => ({
-        label: `گروه بات: ${String(group.group_title || '').trim() || String(group.group_join_link || '').trim() || group.id}`,
-        value: `${BOT_GROUP_FORWARD_PREFIX}${group.id}`,
-        searchText: `گروه بات ${String(group.group_title || '').trim() || ''} ${String(group.group_join_link || '').trim() || ''}`.toLowerCase(),
-      })),
-      ...chatGroups.map((group) => ({
-        label: `گروه: ${group.name}`,
-        value: `${CHAT_GROUP_PREFIX}${group.id}`,
-        searchText: `گروه ${group.name}`.toLowerCase(),
-      })),
-      ...availableDirectUsers
-        .filter((user) => String(user.id) !== String(profile.id || ''))
-        .map((user) => {
-          const roleLabel = user.role_id ? roleLookup[String(user.role_id)] : '';
-          return {
-            label: roleLabel ? `${user.display_name} - ${roleLabel}` : user.display_name,
-            value: String(user.id),
-            searchText: `${user.display_name} ${roleLabel || ''}`.toLowerCase(),
-          };
-        }),
-    ],
-    [availableDirectUsers, botGroups, chatGroups, profile.id, roleLookup]
-  );
-
-  const isBotGroupForwardSelection = (value: string) => String(value || '').startsWith(BOT_GROUP_FORWARD_PREFIX);
-  const getBotGroupForwardSelectionId = (value: string) => {
-    if (!isBotGroupForwardSelection(value)) return null;
-    return String(value).slice(BOT_GROUP_FORWARD_PREFIX.length) || null;
-  };
-
   const getBotMessageAttachments = useCallback((row: CounterpartyBotMessageRow) => extractBotMessageAttachments(row), []);
   const mergeHydratedBotMessageAttachment = useCallback((
     row: CounterpartyBotMessageRow,
@@ -5212,19 +5042,46 @@ useEffect(() => {
       return result;
     }, null);
     if (!latest) return false;
-    const { data, error } = await supabase.rpc('mark_communication_read', {
-      p_channel: channel,
-      p_conversation_key: conversationKey,
-      p_read_through_at: latest.createdAt,
-      p_read_through_id: latest.id,
-    });
-    if (error) {
-      if (!isMissingRpcError(error)) {
-        console.warn('Could not persist communication read cursor', error);
+
+    const dedupeKey = `${channel}:${conversationKey}:${latest.createdAt}:${latest.id}`;
+    const recentAt = communicationReadCursorRecentRef.current.get(dedupeKey) || 0;
+    if (Date.now() - recentAt < 60_000) return true;
+
+    const existingRequest = communicationReadCursorInFlightRef.current.get(dedupeKey);
+    if (existingRequest) return existingRequest;
+
+    const request = (async () => {
+      const { data, error } = await supabase.rpc('mark_communication_read', {
+        p_channel: channel,
+        p_conversation_key: conversationKey,
+        p_read_through_at: latest.createdAt,
+        p_read_through_id: latest.id,
+      });
+      if (error) {
+        if (!isMissingRpcError(error)) {
+          console.warn('Could not persist communication read cursor', error);
+        }
+        return false;
       }
-      return false;
+      const persisted = data !== false;
+      if (persisted) {
+        const now = Date.now();
+        communicationReadCursorRecentRef.current.set(dedupeKey, now);
+        if (communicationReadCursorRecentRef.current.size > 80) {
+          communicationReadCursorRecentRef.current.forEach((value, key) => {
+            if (now - value > 60_000) communicationReadCursorRecentRef.current.delete(key);
+          });
+        }
+      }
+      return persisted;
+    })();
+
+    communicationReadCursorInFlightRef.current.set(dedupeKey, request);
+    try {
+      return await request;
+    } finally {
+      communicationReadCursorInFlightRef.current.delete(dedupeKey);
     }
-    return data !== false;
   }, []);
   const markNotesAsSeen = useCallback((rows: any[]) => {
     const currentUserId = String(profile.id || '').trim();
@@ -5257,6 +5114,15 @@ useEffect(() => {
         return changed ? next : prev;
       });
     });
+    setNotes((prev) => prev.map((note: any) => (
+      readableIds.has(String(note?.id || '').trim()) ? { ...note, is_read: true } : note
+    )));
+    setSelectedConversationNotes((prev) => prev
+      ? prev.map((note: any) => (
+        readableIds.has(String(note?.id || '').trim()) ? { ...note, is_read: true } : note
+      ))
+      : prev
+    );
 
     const readEntries = Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }));
     const shouldUseCursor = (
@@ -5309,6 +5175,12 @@ useEffect(() => {
           return changed ? next : prev;
         });
       });
+      setBotMessages((prev) => prev
+        ? prev.map((row: any) => (
+          unreadInboundIds.includes(String(row?.id || '').trim()) ? { ...row, is_read: true } : row
+        ))
+        : prev
+      );
       const readEntries = unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }));
       if (botReadModel === 'cursor' && selectedBotGroupId) {
         void markCommunicationReadCursor('bot', `bot:${selectedBotGroupId}`, unreadInboundRows).then((persisted) => {
@@ -5812,6 +5684,24 @@ useEffect(() => {
     };
   }, [profile.id, resolveGroupMemberUserIds]);
 
+  const openForwardModal = useCallback((note: any, sourceType: 'note' | 'bot' = 'note') => {
+    setForwardingNote({
+      ...note,
+      __forward_source_type: sourceType,
+    });
+    setForwardTargetUserIds(
+      selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
+        ? [String(selectedNoteUserId)]
+        : []
+    );
+    setForwardMessageText('');
+  }, [selectedNoteUserId]);
+
+  const handleForwarded = useCallback(() => {
+    noteShouldStickToBottomRef.current = true;
+    noteForceScrollToBottomRef.current = true;
+  }, []);
+
   const parseMentionSelections = (values: string[]) => {
     const mentionUserIds = new Set<string>();
     const mentionRoleIds = new Set<string>();
@@ -5863,6 +5753,7 @@ useEffect(() => {
         : noteText;
       const { mentionUserIds, mentionRoleIds } = parseMentionSelections(mentionValues);
       const groupPayload = getChatGroupPayload(selectedChatGroup);
+      const isSavingToMyNotes = selectedConversationKey === MY_NOTES_CONVERSATION_KEY;
       const attachments = noteAttachments.length > 0
         ? await uploadNoteAttachments(scope.hasLinkedRecord ? scope.module_id : null, scope.hasLinkedRecord ? scope.record_id : null, noteAttachments)
         : [];
@@ -5879,11 +5770,11 @@ useEffect(() => {
         record_id: scope.record_id,
         content: serializeNoteContent(renderedNoteText, mergedAttachments),
         reply_to: noteReplyTo || null,
-        mention_user_ids: Array.from(new Set([...mentionUserIds, ...groupPayload.mentionUserIds])),
-        mention_role_ids: Array.from(new Set([...mentionRoleIds, ...groupPayload.mentionRoleIds])),
+        mention_user_ids: isSavingToMyNotes ? [] : Array.from(new Set([...mentionUserIds, ...groupPayload.mentionUserIds])),
+        mention_role_ids: isSavingToMyNotes ? [] : Array.from(new Set([...mentionRoleIds, ...groupPayload.mentionRoleIds])),
         author_id: profile.id,
         author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
-        metadata: groupPayload.metadata,
+        metadata: isSavingToMyNotes ? { saved_message: true } : groupPayload.metadata,
       };
 
       await insertNotesWithFallback([payload]);
@@ -5906,140 +5797,6 @@ useEffect(() => {
       message.error(toFaErrorMessage(error, 'ثبت یادداشت ناموفق بود.'));
     } finally {
       setNoteSending(false);
-    }
-  };
-
-  const openForwardModal = (note: any, sourceType: 'note' | 'bot' = 'note') => {
-    setForwardingNote({
-      ...note,
-      __forward_source_type: sourceType,
-    });
-    setForwardTargetUserIds(
-      selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
-        ? [String(selectedNoteUserId)]
-        : []
-    );
-    setForwardMessageText('');
-  };
-
-  const submitForward = async () => {
-    if (!forwardingNote || forwardTargetUserIds.length === 0) return;
-
-    const targetIds = Array.from(
-      new Set(
-        forwardTargetUserIds
-          .map((id) => String(id || '').trim())
-          .filter(Boolean)
-      )
-    );
-
-    if (targetIds.length === 0) {
-      message.warning('حداقل یک گیرنده معتبر انتخاب کنید.');
-      return;
-    }
-
-    const sourceType = String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'bot' ? 'bot' : 'note';
-    const scope = sourceType === 'note'
-      ? normalizeNoteScope(forwardingNote.module_id, forwardingNote.record_id)
-      : normalizeNoteScope(null, null);
-    const parsedContent = sourceType === 'note'
-      ? parseNoteContent(forwardingNote.content)
-      : { text: String(forwardingNote?.content_text || '').trim(), attachments: getBotMessageAttachments(forwardingNote as CounterpartyBotMessageRow) };
-
-    const customForwardMessageText = String(forwardMessageText || '').trim();
-    const baseForwardText = String(parsedContent.text || '').trim();
-    const finalForwardText = customForwardMessageText
-      ? [customForwardMessageText, baseForwardText].filter(Boolean).join('\n\n')
-      : baseForwardText;
-    const forwardedAttachments = parsedContent.attachments || [];
-    const payloads = targetIds.flatMap((targetId) => {
-      if (isBotGroupForwardSelection(targetId)) {
-        return [];
-      }
-      if (isChatGroupSelection(targetId)) {
-        const group = chatGroupMap[String(getChatGroupSelectionId(targetId) || '')] || null;
-        if (!group) return [];
-        const groupPayload = getChatGroupPayload(group);
-        return [{
-          module_id: scope.module_id,
-          record_id: scope.record_id,
-          content: serializeNoteContent(finalForwardText, forwardedAttachments),
-          reply_to: null,
-          mention_user_ids: groupPayload.mentionUserIds,
-          mention_role_ids: groupPayload.mentionRoleIds,
-          author_id: profile.id,
-          author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
-          metadata: groupPayload.metadata,
-        }];
-      }
-
-      if (targetId === String(profile.id || '')) return [];
-      return [{
-        module_id: scope.module_id,
-        record_id: scope.record_id,
-        content: serializeNoteContent(finalForwardText, forwardedAttachments),
-        reply_to: null,
-        mention_user_ids: [targetId],
-        mention_role_ids: [],
-        author_id: profile.id,
-        author_name: directoryUserMap[String(profile.id || '')]?.display_name || null,
-        metadata: null,
-      }];
-    });
-
-    const botTargets = targetIds
-      .filter((value) => isBotGroupForwardSelection(value))
-      .map((value) => String(getBotGroupForwardSelectionId(value) || '').trim())
-      .filter(Boolean);
-
-    if (payloads.length === 0 && botTargets.length === 0) {
-      message.warning('حداقل یک گیرنده معتبر انتخاب کنید.');
-      return;
-    }
-
-    setForwardSubmitting(true);
-    try {
-      if (payloads.length > 0) {
-        await insertNotesWithFallback(payloads);
-      }
-      for (const botGroupId of botTargets) {
-        const targetGroup = botGroups.find((row) => String(row.id) === botGroupId);
-        if (!targetGroup) continue;
-        const isRubikaTarget = String(targetGroup.channel_type || '').trim() === 'rubika';
-        const forwardedAttachmentNameText = buildAttachmentNameText(forwardedAttachments);
-        const rubikaTextWithPrefix = customForwardMessageText
-          ? [customForwardMessageText, String(parsedContent.text || '').trim()].filter(Boolean).join('\n\n')
-          : String(parsedContent.text || '').trim();
-        const targetText = isRubikaTarget && forwardedAttachments.length > 0
-          ? rubikaTextWithPrefix
-          : finalForwardText;
-        await sendTextToBotGroup(targetGroup, targetText, {
-          fallbackText: isRubikaTarget && forwardedAttachments.length > 0
-            ? [customForwardMessageText, String(parsedContent.text || '').trim(), forwardedAttachmentNameText].filter(Boolean).join('\n')
-            : undefined,
-          attachments: isRubikaTarget ? forwardedAttachments : undefined,
-          payload: {
-            attachments: forwardedAttachments,
-            forwarded_from: {
-              source_type: sourceType,
-              source_id: String(forwardingNote?.id || '').trim() || null,
-            },
-          },
-          messageType: forwardedAttachments.length > 0 ? 'file' : 'text',
-        });
-      }
-      noteShouldStickToBottomRef.current = true;
-      noteForceScrollToBottomRef.current = true;
-      setForwardingNote(null);
-      setForwardTargetUserIds([]);
-      setForwardMessageText('');
-      message.success('پیام فوروارد شد.');
-      await refreshSection('notes', { force: true });
-      await refreshSection('bot_messages', { force: true });
-    } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'فوروارد پیام ناموفق بود.'));
-    } finally {
-      setForwardSubmitting(false);
     }
   };
 
@@ -7410,61 +7167,36 @@ useEffect(() => {
           />
         </React.Suspense>
       ) : null}
-      <Modal
-        title="فوروارد پیام"
-        open={Boolean(forwardingNote)}
-        zIndex={1700}
-        onCancel={() => {
-          setForwardingNote(null);
-          setForwardTargetUserIds([]);
-          setForwardMessageText('');
-        }}
-        onOk={submitForward}
-        confirmLoading={forwardSubmitting}
-        okText="فوروارد"
-        cancelText="انصراف"
-        okButtonProps={{ disabled: forwardTargetUserIds.length === 0 }}
-      >
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="text-xs text-gray-500">متن پیام فوروارد</div>
-            <Button size="small" icon={<CopyOutlined />} onClick={() => openReadyTextsModal('forward')}>
-              پیام‌های آماده
-            </Button>
-          </div>
-          <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] px-3 py-2 text-sm text-gray-700">
-            {forwardingNote
-              ? (
-                String((forwardingNote as any)?.__forward_source_type || 'note').trim() === 'bot'
-                  ? (String(forwardingNote?.content_text || '').trim() || 'بدون متن')
-                  : (parseNoteContent(forwardingNote.content).text || 'بدون متن')
-              )
-              : ''}
-          </div>
-          <Input.TextArea
-            value={forwardMessageText}
-            onChange={(event) => setForwardMessageText(event.target.value)}
-            rows={3}
-            placeholder="متن اختیاری قبل از محتوای فوروارد"
-            className="w-full"
+      {forwardingNote ? (
+        <React.Suspense fallback={null}>
+          <ForwardMessageModalRuntime
+            messageApi={message}
+            forwardingNote={forwardingNote}
+            forwardTargetUserIds={forwardTargetUserIds}
+            forwardMessageText={forwardMessageText}
+            forwardSubmitting={forwardSubmitting}
+            setForwardingNote={setForwardingNote}
+            setForwardTargetUserIds={setForwardTargetUserIds}
+            setForwardMessageText={setForwardMessageText}
+            setForwardSubmitting={setForwardSubmitting}
+            selectedNoteUserId={selectedNoteUserId}
+            profileId={profile.id}
+            currentAuthorName={directoryUserMap[String(profile.id || '')]?.display_name || null}
+            botGroups={botGroups}
+            chatGroups={chatGroups}
+            chatGroupMap={chatGroupMap}
+            availableDirectUsers={availableDirectUsers}
+            roleLookup={roleLookup}
+            getChatGroupPayload={getChatGroupPayload}
+            getBotMessageAttachments={getBotMessageAttachments}
+            buildAttachmentNameText={buildAttachmentNameText}
+            sendTextToBotGroup={sendTextToBotGroup}
+            refreshSection={refreshSection}
+            onForwarded={handleForwarded}
+            onOpenReadyTexts={() => openReadyTextsModal('forward')}
           />
-          <Select
-            mode="multiple"
-            showSearch
-            allowClear
-            value={forwardTargetUserIds}
-            onChange={(values) => setForwardTargetUserIds((values || []).map((value) => String(value)))}
-            placeholder="یک یا چند گیرنده انتخاب کنید"
-            optionFilterProp="searchText"
-            filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').trim().toLowerCase())}
-            getPopupContainer={(trigger) => trigger.parentElement || document.body}
-            styles={{ popup: { root: { zIndex: 1710 } } }}
-            options={forwardTargetOptions}
-            maxTagCount="responsive"
-            className="w-full"
-          />
-        </div>
-      </Modal>
+        </React.Suspense>
+      ) : null}
     </>
   );
 };

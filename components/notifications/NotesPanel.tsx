@@ -430,7 +430,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               {/* Load older button */}
               {(selectedNoteUserId ? selectedConversationHasMoreBefore : myNotesHasMoreBefore) ? (
                 <div className="flex justify-center pb-2">
-                  <Button type="text" size="small" icon={<UpOutlined />} loading={selectedNoteUserId ? loadingOlderSelectedConversationNotes : false} onClick={() => selectedNoteUserId ? void loadOlderSelectedConversationNotes() : loadOlderMyNotes()} className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300">
+                  <Button type="text" size="small" icon={<UpOutlined />} loading={loadingOlderSelectedConversationNotes} onClick={() => selectedNoteUserId ? void loadOlderSelectedConversationNotes() : loadOlderMyNotes()} className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300">
                     مشاهده پیام‌های قبلی
                   </Button>
                 </div>
