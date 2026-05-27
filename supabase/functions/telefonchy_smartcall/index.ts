@@ -34,6 +34,8 @@ const parseJsonSafe = (raw: string) => {
 
 const firstValue = (...values: any[]) => {
   for (const value of values) {
+    if (value === false) continue;
+    if (value !== null && typeof value === 'object') continue;
     const normalized = String(value ?? '').trim();
     if (normalized) return normalized;
   }
@@ -46,6 +48,47 @@ const normalizePhone = (value: any) =>
     .replace(/[\u200e\u200f\s().-]/g, '');
 
 const trimTrailingSlash = (value: string) => String(value || '').replace(/\/+$/, '');
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+const gregorianToJalali = (date: Date) => {
+  const div = (a: number, b: number) => Math.floor(a / b);
+  const gDaysInMonth = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const jDaysInMonth = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29];
+  let gy = date.getFullYear() - 1600;
+  let gm = date.getMonth();
+  let gd = date.getDate() - 1;
+
+  let gDayNo = 365 * gy + div(gy + 3, 4) - div(gy + 99, 100) + div(gy + 399, 400);
+  for (let i = 0; i < gm; i += 1) gDayNo += gDaysInMonth[i];
+  if (gm > 1 && ((gy + 1600) % 4 === 0 && ((gy + 1600) % 100 !== 0 || (gy + 1600) % 400 === 0))) {
+    gDayNo += 1;
+  }
+  gDayNo += gd;
+
+  let jDayNo = gDayNo - 79;
+  const jNp = div(jDayNo, 12053);
+  jDayNo %= 12053;
+  let jy = 979 + 33 * jNp + 4 * div(jDayNo, 1461);
+  jDayNo %= 1461;
+  if (jDayNo >= 366) {
+    jy += div(jDayNo - 1, 365);
+    jDayNo = (jDayNo - 1) % 365;
+  }
+
+  let jm = 0;
+  while (jm < 11 && jDayNo >= jDaysInMonth[jm]) {
+    jDayNo -= jDaysInMonth[jm];
+    jm += 1;
+  }
+
+  return { year: jy, month: jm + 1, day: jDayNo + 1 };
+};
+
+const formatTelefonchyJalaliDateTime = (date: Date, time: string) => {
+  const jalali = gregorianToJalali(date);
+  return `${jalali.year}/${pad2(jalali.month)}/${pad2(jalali.day)} ${time}`;
+};
 
 const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, userToken: string) => {
   const response = await fetch(`${trimTrailingSlash(supabaseUrl)}/auth/v1/user`, {
@@ -146,16 +189,21 @@ const extractProviderIds = (parsed: any) => {
   const callId = firstValue(
     source.call_id,
     source.callId,
+    source.cuid,
+    source.unique_id,
     source.id,
     source.data?.call_id,
     source.data?.callId,
+    source.data?.cuid,
+    source.data?.unique_id,
     source.data?.id
   );
   const objectId = firstValue(
     source.object_id,
     source.objectId,
     source.data?.object_id,
-    source.data?.objectId
+    source.data?.objectId,
+    source.data?.id
   );
 
   return {
@@ -170,9 +218,47 @@ const toIntegerOrNull = (value: any) => {
   return Math.max(0, Math.floor(parsed));
 };
 
+const jalaliToGregorian = (jy: number, jm: number, jd: number) => {
+  const div = (a: number, b: number) => Math.floor(a / b);
+  jy += 1595;
+  let days = -355668 + (365 * jy) + (div(jy, 33) * 8) + div(((jy % 33) + 3), 4) + jd;
+  days += jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186;
+
+  let gy = 400 * div(days, 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * div(--days, 36524);
+    days %= 36524;
+    if (days >= 365) days += 1;
+  }
+  gy += 4 * div(days, 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += div(days - 1, 365);
+    days = (days - 1) % 365;
+  }
+
+  let gd = days + 1;
+  const leap = (gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0;
+  const monthDays = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 1;
+  while (gm <= 12 && gd > monthDays[gm]) {
+    gd -= monthDays[gm];
+    gm += 1;
+  }
+
+  return { year: gy, month: gm, day: gd };
+};
+
 const toIsoOrNull = (value: any) => {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
+  const jalaliMatch = raw.match(/^(1[34]\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (jalaliMatch) {
+    const [, jy, jm, jd, hh = '0', mm = '0', ss = '0'] = jalaliMatch;
+    const g = jalaliToGregorian(Number(jy), Number(jm), Number(jd));
+    return new Date(Date.UTC(g.year, g.month - 1, g.day, Number(hh), Number(mm), Number(ss))).toISOString();
+  }
   const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
   const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return null;
@@ -297,26 +383,27 @@ const normalizeProviderCallRow = (
   const direction = mapDirection(firstValue(item.type, item.direction, item.call_type));
   const sourceNumber = normalizePhone(firstValue(item.call_source, item.source_number, item.source, item.from, item.caller));
   const destinationNumber = normalizePhone(firstValue(item.call_dest, item.destination_number, item.destination, item.to, item.callee));
+  const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
   const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
 
   return {
     org_id: orgId,
     provider: 'telefonchy',
     service_id: firstValue(item.service_id, item.serviceId, serviceId) || null,
-    call_id: firstValue(item.call_id, item.callId, item.id) || null,
-    object_id: firstValue(item.object_id, item.objectId) || null,
+    call_id: firstValue(item.call_id, item.callId, item.cuid, item.unique_id) || null,
+    object_id: firstValue(item.object_id, item.objectId, item.id) || null,
     direction,
     status: mapStatus(firstValue(item.status, item.call_status, item.disposition), talkSeconds),
     source_number: sourceNumber || null,
     destination_number: destinationNumber || null,
-    extension: firstValue(item.exten, item.extension, item.operator_extension) || null,
+    extension: firstValue(item.extension, item.operator_extension, exten.number, exten.caller_id) || null,
     operator_code: firstValue(item.operator_code, item.operatorCode) || null,
-    trunk: firstValue(item.trunk) || null,
+    trunk: firstValue(item.trunk, item.trunk_number) || null,
     started_at: toIsoOrNull(firstValue(item.started_at, item.start_at, item.start_time, item.created_at)),
     ended_at: toIsoOrNull(firstValue(item.ended_at, item.end_at, item.end_time, item.updated_at)),
     wait_seconds: toIntegerOrNull(firstValue(item.time_wait, item.wait_seconds)),
     talk_seconds: talkSeconds,
-    file_id: firstValue(item.file_id, item.fileId) || null,
+    file_id: firstValue(item.file_id, item.fileId, item.record_id) || null,
     recording_url: firstValue(item.recording_url, item.recordingUrl, item.file_url, item.audio_url) || null,
     title: counterpartyPhone || sourceNumber || destinationNumber || 'تماس VoIP',
     metadata: {
@@ -334,38 +421,54 @@ const fetchTelefonchyCalls = async (
   serviceId: string,
   options?: { perPage?: number; days?: number }
 ) => {
-  const perPage = Math.min(Math.max(Number(options?.perPage || 20), 1), 100);
+  const limit = Math.min(Math.max(Number(options?.perPage || 20), 1), 100);
   const days = Math.min(Math.max(Number(options?.days || 7), 1), 90);
-  const startedAtFrom = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  const providerUrl = new URL(`${baseUrl}/webservice/v1/calls`);
-  providerUrl.searchParams.set('service_id', serviceId);
-  providerUrl.searchParams.set('page', '1');
-  providerUrl.searchParams.set('per_page', String(perPage));
-  providerUrl.searchParams.set('started_at_from', startedAtFrom);
+  const dateFrom = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const dateTo = new Date();
+  const calls: any[] = [];
+  const rawPages: string[] = [];
+  let parsed: any = null;
+  let page = 1;
+  let lastPage = 1;
 
-  const timeout = createTimeoutSignal(10000);
-  let response: Response;
-  try {
-    response = await fetch(providerUrl.toString(), {
-      method: 'GET',
-      headers: {
-        'webservice-token': token,
-        Accept: 'application/json',
-      },
-      signal: timeout.signal,
-    });
-  } finally {
-    timeout.cleanup();
-  }
+  do {
+    const providerUrl = new URL(`${baseUrl}/webservice/v1/calls`);
+    providerUrl.searchParams.set('service_id', serviceId);
+    providerUrl.searchParams.set('page', String(page));
+    providerUrl.searchParams.set('sort', 'DESC');
+    providerUrl.searchParams.set('date_from', formatTelefonchyJalaliDateTime(dateFrom, '00:00'));
+    providerUrl.searchParams.set('date_to', formatTelefonchyJalaliDateTime(dateTo, '23:59'));
 
-  const raw = await response.text();
-  const parsed = parseJsonSafe(raw);
-  if (!response.ok) throw new Error(raw || `Telefonchy HTTP ${response.status}`);
+    const timeout = createTimeoutSignal(10000);
+    let response: Response;
+    try {
+      response = await fetch(providerUrl.toString(), {
+        method: 'GET',
+        headers: {
+          'webservice-token': token,
+          Accept: 'application/json',
+        },
+        signal: timeout.signal,
+      });
+    } finally {
+      timeout.cleanup();
+    }
+
+    const raw = await response.text();
+    rawPages.push(raw);
+    parsed = parseJsonSafe(raw);
+    if (!response.ok) throw new Error(raw || `Telefonchy HTTP ${response.status}`);
+
+    calls.push(...extractCallsArray(parsed));
+    const paginator = parsed?.paginator || {};
+    lastPage = Math.max(1, Number(paginator.last || paginator.total_pages || page) || page);
+    page += 1;
+  } while (calls.length < limit && page <= lastPage && page <= 10);
 
   return {
-    raw,
+    raw: rawPages[0] || '',
     parsed,
-    calls: extractCallsArray(parsed),
+    calls: calls.slice(0, limit),
   };
 };
 

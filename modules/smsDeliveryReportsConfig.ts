@@ -9,10 +9,11 @@ import {
 } from '../types';
 
 const RELATED_MODULE_OPTIONS = [
-  { label: 'مشتریان', value: 'customers' },
-  { label: 'بازاریابی', value: 'marketing_leads' },
-  { label: 'تامین‌کنندگان', value: 'suppliers' },
+  { label: 'کاربران', value: 'profiles' },
   { label: 'کارکنان', value: 'employees' },
+  { label: 'مشتریان', value: 'customers' },
+  { label: 'تامین‌کنندگان', value: 'suppliers' },
+  { label: 'بازاریابی', value: 'marketing_leads' },
 ];
 
 export const smsDeliveryReportsConfig: ModuleDefinition = {
@@ -43,7 +44,7 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
       'tags',
     ],
     editableFields: ['tags', 'operator_report', 'module_id', 'record_id', 'assignee_id', 'related_task_id'],
-    relatedModuleOptions: ['customers', 'marketing_leads', 'suppliers', 'employees'],
+    relatedModuleOptions: ['profiles', 'employees', 'customers', 'suppliers', 'marketing_leads'],
   },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
@@ -57,7 +58,7 @@ export const smsDeliveryReportsConfig: ModuleDefinition = {
       isTableColumn: true,
       options: [
         { label: 'تطبیق قطعی', value: 'matched', color: 'green' },
-        { label: 'چند مخاطب احتمالی', value: 'ambiguous', color: 'orange' },
+        { label: 'نیاز به انتخاب مخاطب', value: 'ambiguous', color: 'orange' },
         { label: 'شماره ناشناس', value: 'unknown', color: 'gray' },
         { label: 'تطبیق دستی', value: 'manual', color: 'blue' },
       ],

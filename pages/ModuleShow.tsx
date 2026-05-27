@@ -2625,32 +2625,36 @@ const ModuleShow: React.FC = () => {
   }, [botStatusWatchTimerRef]);
 
   const loadBotStatusRow = useCallback(async (context: BotStatusModalContext) => {
-    const orgPrefix = await loadOrgBotPrefix();
     const counterpartyEnglishName = String(
       data?.company_name_en || data?.business_name_en || data?.english_name
       || data?.name_en || data?.legal_name_en || data?.full_name_en || ''
     ).trim();
 
-    let groupQuery = supabase
+    const groupQueryBase = supabase
       .from('counterparty_bot_groups')
       .select('id, channel_type, status, group_title, metadata, last_inbound_at, bot_chat_id')
       .limit(10);
-    groupQuery = context.targetType === 'customers'
-      ? groupQuery.eq('customer_id', context.counterpartyId)
-      : groupQuery.eq('supplier_id', context.counterpartyId);
-    const { data: rows, error } = await groupQuery;
-    if (error) throw error;
-    const rowMap = new Map((rows || []).map((row: any) => [String(row?.channel_type || '').trim(), row] as const));
+    const groupQueryFiltered = context.targetType === 'customers'
+      ? groupQueryBase.eq('customer_id', context.counterpartyId)
+      : groupQueryBase.eq('supplier_id', context.counterpartyId);
 
-    // بارگذاری تنظیمات پیش‌فرض از counterparty_bot_config
-    let prefQuery = supabase
+    const prefQueryBase = supabase
       .from('counterparty_bot_config')
       .select('default_channel, fallback_to_active')
       .limit(1);
-    prefQuery = context.targetType === 'customers'
-      ? prefQuery.eq('customer_id', context.counterpartyId)
-      : prefQuery.eq('supplier_id', context.counterpartyId);
-    const { data: prefRow } = await prefQuery.maybeSingle();
+    const prefQueryFiltered = context.targetType === 'customers'
+      ? prefQueryBase.eq('customer_id', context.counterpartyId)
+      : prefQueryBase.eq('supplier_id', context.counterpartyId);
+
+    const [orgPrefix, groupResult, { data: prefRow }] = await Promise.all([
+      loadOrgBotPrefix(),
+      groupQueryFiltered,
+      prefQueryFiltered.maybeSingle(),
+    ]);
+
+    const { data: rows, error } = groupResult;
+    if (error) throw error;
+    const rowMap = new Map((rows || []).map((row: any) => [String(row?.channel_type || '').trim(), row] as const));
     const defaultChannel = (['rubika', 'telegram', 'bale'].includes(String(prefRow?.default_channel || ''))
       ? prefRow!.default_channel
       : 'rubika') as BotChannel;
@@ -2772,6 +2776,7 @@ const ModuleShow: React.FC = () => {
 
     // ذخیره تنظیمات پیش‌فرض در counterparty_bot_config
     const configPayload = {
+      org_id: currentOrgId,
       default_channel: botStatusDefaultChannel,
       fallback_to_active: botStatusFallbackToActive,
       customer_id: context.targetType === 'customers' ? context.counterpartyId : null,
@@ -2793,7 +2798,7 @@ const ModuleShow: React.FC = () => {
       await updateCustomerBotLegacyFieldsWithFallback(context.counterpartyId, legacyPatch);
       setData((prev: any) => ({ ...prev, preferred_notification_channel: legacyPatch.preferred_notification_channel }));
     }
-  }, [botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusModalContext, botStatusPlatformData]);
+  }, [botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusModalContext, botStatusPlatformData, currentOrgId]);
 
   const handleCloseBotStatusModal = useCallback(() => {
     clearBotStatusWatchTimer();

@@ -17,6 +17,7 @@ type UseBotConversationTimelineOptions<TItem> = {
   botGroupId: string | null;
   pageSize?: number;
   fallbackLoadInitial?: LegacyLoader<TItem>;
+  cacheScopeKey?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -32,8 +33,11 @@ type TimelineCacheEntry<TItem> = {
 const _botTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
-const readCache = <TItem>(key: string): NotificationTimelinePayload<TItem> | null => {
-  const entry = _botTimelineCache.get(key);
+const buildCacheKey = (scopeKey: string | null | undefined, botGroupId: string) =>
+  `${String(scopeKey || 'default').trim() || 'default'}:${botGroupId}`;
+
+const readCache = <TItem>(cacheKey: string): NotificationTimelinePayload<TItem> | null => {
+  const entry = _botTimelineCache.get(cacheKey);
   if (entry && Date.now() - entry.fetchedAt < TIMELINE_CACHE_TTL_MS)
     return entry.payload as NotificationTimelinePayload<TItem>;
   return null;
@@ -47,14 +51,17 @@ const _botTimelinePrefetchInFlight = new Set<string>();
 export const prefetchBotConversationTimeline = async <TItem,>({
   supabase,
   botGroupId,
+  cacheScopeKey,
   pageSize = 10,
 }: {
   supabase: SupabaseClient<any, 'public', any>;
   botGroupId: string | null;
+  cacheScopeKey?: string | null;
   pageSize?: number;
 }) => {
   const normalizedBotGroupId = String(botGroupId || '').trim();
-  if (!normalizedBotGroupId || readCache<TItem>(normalizedBotGroupId) || _botTimelinePrefetchInFlight.has(normalizedBotGroupId)) return;
+  const cacheKey = buildCacheKey(cacheScopeKey, normalizedBotGroupId);
+  if (!normalizedBotGroupId || readCache<TItem>(cacheKey) || _botTimelinePrefetchInFlight.has(normalizedBotGroupId)) return;
   _botTimelinePrefetchInFlight.add(normalizedBotGroupId);
   try {
     const { data, error } = await supabase.rpc('get_communication_timeline', {
@@ -65,7 +72,7 @@ export const prefetchBotConversationTimeline = async <TItem,>({
     });
     if (error) return;
     const payload = normalizeTimelinePayload<TItem>(data);
-    _botTimelineCache.set(normalizedBotGroupId, {
+    _botTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
     });
@@ -82,6 +89,7 @@ export const useBotConversationTimeline = <TItem,>({
   botGroupId,
   pageSize = 10,
   fallbackLoadInitial,
+  cacheScopeKey,
 }: UseBotConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
@@ -94,6 +102,8 @@ export const useBotConversationTimeline = <TItem,>({
   const [communicationApiAvailable, setCommunicationApiAvailable] = useState(true);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
+  const normalizedBotGroupId = String(botGroupId || '').trim();
+  const timelineCacheKey = normalizedBotGroupId ? buildCacheKey(cacheScopeKey, normalizedBotGroupId) : '';
 
   // True when the current view was already populated from cache.
   // refresh() uses this to skip the loading skeleton for the background fetch.
@@ -150,7 +160,7 @@ export const useBotConversationTimeline = <TItem,>({
     refreshInFlightRef.current = false;
 
     // Cache hit → render instantly, background refresh will run without skeleton
-    const cached = readCache<TItem>(botGroupId);
+    const cached = readCache<TItem>(timelineCacheKey);
     if (cached) {
       applyPayload(cached);
       cacheAppliedRef.current = true;
@@ -165,7 +175,7 @@ export const useBotConversationTimeline = <TItem,>({
       setUnreadCount(0);
       setLoadingInitial(true);
     }
-  }, [enabled, botGroupId, applyPayload]);
+  }, [enabled, botGroupId, timelineCacheKey, applyPayload]);
 
   const loadFallbackInitial = useCallback(async (options?: { preserveExistingItemsOnEmpty?: boolean }) => {
     if (!fallbackLoadInitial) {
@@ -244,13 +254,13 @@ export const useBotConversationTimeline = <TItem,>({
       if ((payload.items || []).length === 0 && fallbackLoadInitial) {
         const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
         if ((fallbackPayload.items || []).length > 0) {
-          _botTimelineCache.set(botGroupId, { payload: fallbackPayload, fetchedAt: Date.now() });
+          _botTimelineCache.set(timelineCacheKey, { payload: fallbackPayload, fetchedAt: Date.now() });
           return fallbackPayload;
         }
       }
       const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
       if (applied) {
-        _botTimelineCache.set(botGroupId, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
+        _botTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }
       return payload;
     } finally {
@@ -258,7 +268,7 @@ export const useBotConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightRef.current = false;
     }
-  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial]);
+  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !botGroupId || !cursor || !available || loadingOlder) return;
@@ -279,9 +289,9 @@ export const useBotConversationTimeline = <TItem,>({
         const next = sortByDate(Array.from(unique.values()));
         itemsRef.current = next;
         // Persist the expanded history into cache
-        const existing = _botTimelineCache.get(botGroupId);
+        const existing = _botTimelineCache.get(timelineCacheKey);
         if (existing) {
-          _botTimelineCache.set(botGroupId, {
+          _botTimelineCache.set(timelineCacheKey, {
             ...existing,
             payload: {
               ...existing.payload,
@@ -298,7 +308,7 @@ export const useBotConversationTimeline = <TItem,>({
     } finally {
       setLoadingOlder(false);
     }
-  }, [available, botGroupId, cursor, enabled, fetchTimelinePage, loadingOlder]);
+  }, [available, botGroupId, cursor, enabled, fetchTimelinePage, loadingOlder, timelineCacheKey]);
 
   useEffect(() => {
     if (!enabled || !botGroupId) {
@@ -318,10 +328,10 @@ export const useBotConversationTimeline = <TItem,>({
             ? (updater as (p: TItem[]) => TItem[])(prev)
             : updater;
         itemsRef.current = next;
-        if (botGroupId) {
-          const existing = _botTimelineCache.get(botGroupId);
+        if (timelineCacheKey) {
+          const existing = _botTimelineCache.get(timelineCacheKey);
           if (existing) {
-            _botTimelineCache.set(botGroupId, {
+            _botTimelineCache.set(timelineCacheKey, {
               ...existing,
               payload: { ...existing.payload, items: next },
               fetchedAt: Date.now(),
@@ -331,7 +341,7 @@ export const useBotConversationTimeline = <TItem,>({
         return next;
       });
     },
-    [botGroupId],
+    [timelineCacheKey],
   );
 
   return {

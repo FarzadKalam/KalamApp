@@ -18,6 +18,7 @@ type UseInternalConversationTimelineOptions<TItem> = {
   conversationKey: string | null;
   pageSize?: number;
   fallbackLoadInitial?: LegacyLoader<TItem>;
+  cacheScopeKey?: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -33,8 +34,11 @@ type TimelineCacheEntry<TItem> = {
 const _internalTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
-const readCache = <TItem>(key: string): NotificationTimelinePayload<TItem> | null => {
-  const entry = _internalTimelineCache.get(key);
+const buildCacheKey = (scopeKey: string | null | undefined, conversationKey: string) =>
+  `${String(scopeKey || 'default').trim() || 'default'}:${conversationKey}`;
+
+const readCache = <TItem>(cacheKey: string): NotificationTimelinePayload<TItem> | null => {
+  const entry = _internalTimelineCache.get(cacheKey);
   if (entry && Date.now() - entry.fetchedAt < TIMELINE_CACHE_TTL_MS)
     return entry.payload as NotificationTimelinePayload<TItem>;
   return null;
@@ -48,17 +52,20 @@ const _internalTimelinePrefetchInFlight = new Set<string>();
 export const prefetchInternalConversationTimeline = async <TItem,>({
   supabase,
   conversationKey,
+  cacheScopeKey,
   pageSize = 10,
 }: {
   supabase: SupabaseClient<any, 'public', any>;
   conversationKey: string | null;
+  cacheScopeKey?: string | null;
   pageSize?: number;
 }) => {
   const normalizedConversationKey = String(conversationKey || '').trim();
+  const cacheKey = buildCacheKey(cacheScopeKey, normalizedConversationKey);
   if (
     !normalizedConversationKey
     || normalizedConversationKey === 'system'
-    || readCache<TItem>(normalizedConversationKey)
+    || readCache<TItem>(cacheKey)
     || _internalTimelinePrefetchInFlight.has(normalizedConversationKey)
   ) return;
   _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
@@ -71,7 +78,7 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
     });
     if (error) return;
     const payload = normalizeTimelinePayload<TItem>(data);
-    _internalTimelineCache.set(normalizedConversationKey, {
+    _internalTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
     });
@@ -88,6 +95,7 @@ export const useInternalConversationTimeline = <TItem,>({
   conversationKey,
   pageSize = 10,
   fallbackLoadInitial,
+  cacheScopeKey,
 }: UseInternalConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
@@ -100,6 +108,8 @@ export const useInternalConversationTimeline = <TItem,>({
   const [communicationApiAvailable, setCommunicationApiAvailable] = useState(true);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
+  const normalizedConversationKey = String(conversationKey || '').trim();
+  const timelineCacheKey = normalizedConversationKey ? buildCacheKey(cacheScopeKey, normalizedConversationKey) : '';
 
   // True when the current view was already populated from cache.
   // refresh() uses this to skip the loading skeleton for the background fetch.
@@ -161,7 +171,7 @@ export const useInternalConversationTimeline = <TItem,>({
     refreshInFlightRef.current = false;
 
     // Cache hit → render instantly, background refresh will run without skeleton
-    const cached = readCache<TItem>(conversationKey);
+    const cached = readCache<TItem>(timelineCacheKey);
     if (cached) {
       applyPayload(cached);
       cacheAppliedRef.current = true;
@@ -176,7 +186,7 @@ export const useInternalConversationTimeline = <TItem,>({
       setUnreadCount(0);
       setLoadingInitial(true);
     }
-  }, [enabled, conversationKey, applyPayload]);
+  }, [enabled, conversationKey, timelineCacheKey, applyPayload]);
 
   const loadFallbackInitial = useCallback(async (options?: { preserveExistingItemsOnEmpty?: boolean }) => {
     if (!fallbackLoadInitial) {
@@ -256,13 +266,13 @@ export const useInternalConversationTimeline = <TItem,>({
       if ((payload.items || []).length === 0 && fallbackLoadInitial) {
         const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
         if ((fallbackPayload.items || []).length > 0) {
-          _internalTimelineCache.set(conversationKey, { payload: fallbackPayload, fetchedAt: Date.now() });
+          _internalTimelineCache.set(timelineCacheKey, { payload: fallbackPayload, fetchedAt: Date.now() });
           return fallbackPayload;
         }
       }
       const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
       if (applied) {
-        _internalTimelineCache.set(conversationKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
+        _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }
       return payload;
     } finally {
@@ -270,7 +280,7 @@ export const useInternalConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightRef.current = false;
     }
-  }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial]);
+  }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !conversationKey || !cursor || !available || loadingOlder) return;
@@ -291,9 +301,9 @@ export const useInternalConversationTimeline = <TItem,>({
         const next = sortByDate(Array.from(unique.values()));
         itemsRef.current = next;
         // Persist the expanded history into cache
-        const existing = _internalTimelineCache.get(conversationKey);
+        const existing = _internalTimelineCache.get(timelineCacheKey);
         if (existing) {
-          _internalTimelineCache.set(conversationKey, {
+          _internalTimelineCache.set(timelineCacheKey, {
             ...existing,
             payload: {
               ...existing.payload,
@@ -310,7 +320,7 @@ export const useInternalConversationTimeline = <TItem,>({
     } finally {
       setLoadingOlder(false);
     }
-  }, [available, conversationKey, cursor, enabled, fetchTimelinePage, loadingOlder]);
+  }, [available, conversationKey, cursor, enabled, fetchTimelinePage, loadingOlder, timelineCacheKey]);
 
   useEffect(() => {
     if (!enabled || !conversationKey) {
@@ -330,10 +340,10 @@ export const useInternalConversationTimeline = <TItem,>({
             ? (updater as (p: TItem[]) => TItem[])(prev)
             : updater;
         itemsRef.current = next;
-        if (conversationKey) {
-          const existing = _internalTimelineCache.get(conversationKey);
+        if (timelineCacheKey) {
+          const existing = _internalTimelineCache.get(timelineCacheKey);
           if (existing) {
-            _internalTimelineCache.set(conversationKey, {
+            _internalTimelineCache.set(timelineCacheKey, {
               ...existing,
               payload: { ...existing.payload, items: next },
               fetchedAt: Date.now(),
@@ -343,7 +353,7 @@ export const useInternalConversationTimeline = <TItem,>({
         return next;
       });
     },
-    [conversationKey],
+    [timelineCacheKey],
   );
 
   return {

@@ -147,6 +147,7 @@ type SmsMessagesPanelProps = {
   requestReplySuggestion: (payload: any) => Promise<string>;
   refreshSection: (section: 'sms_messages', options?: { force?: boolean }) => Promise<void>;
   onOpenPhoneMatchPicker?: (phoneNumberId: string, phone: string) => void;
+  openCreateActivityFromMessage: (input: any) => void | Promise<void>;
 };
 
 const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
@@ -168,6 +169,7 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
   requestReplySuggestion,
   refreshSection,
   onOpenPhoneMatchPicker,
+  openCreateActivityFromMessage,
 }) => {
   const { message } = App.useApp();
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement>(null);
@@ -444,6 +446,16 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
                           ) : null}
                         </div>
                       )}
+                      onCreateActivity={() => openCreateActivityFromMessage({
+                        channel: 'sms',
+                        actorName: isMine ? 'ارسال پیامک' : (phone || 'پیامک ورودی'),
+                        createdAt: row.message_at || row.created_at,
+                        createdAtLabel: safeJalaliFormat(row.message_at || row.created_at, 'YYYY/MM/DD HH:mm'),
+                        content: String(row.message_text || ''),
+                        attachments: [],
+                        relatedModuleId: row.module_id || activeThread?.moduleId || null,
+                        relatedRecordId: row.record_id || activeThread?.recordId || null,
+                      })}
                       animateOnMount
                     />
                   );

@@ -12,7 +12,8 @@ import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import type { NoteAttachment } from '../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/noteAttachments';
 import { normalizeNoteScope } from '../utils/noteScope';
-import { resolveTaskSourceLink } from '../utils/taskMeta';
+import { buildTaskSourceInitialValues, normalizeTaskSourceValues, resolveTaskSourceLink } from '../utils/taskMeta';
+import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
 import SharedNoteComposer from './notes/SharedNoteComposer';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
@@ -38,6 +39,12 @@ import {
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { extractBotMessageAttachments } from '../utils/messageAttachments';
+import { buildMessageActivityDescription, buildMessageActivityTitle, filterUsableMessageAttachments } from '../utils/messageActivity';
+import { createFileManagerShortcut } from '../utils/fileManagerService';
+import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
+import { syncRecordTags } from '../utils/recordTags';
+import { insertRecordActivity } from '../utils/recordActivity';
+import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { useNotificationConversationList } from '../hooks/useNotificationConversationList';
 import { prefetchInternalConversationTimeline, useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
 import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
@@ -61,6 +68,7 @@ const AssistantPanel = React.lazy(() => import('./ai/AssistantPanel'));
 const MessageComposerModal = React.lazy(() => import('./MessageComposerModal'));
 const CounterpartyBotStatusModal = React.lazy(() => import('./bot/CounterpartyBotStatusModal'));
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
+const SmartForm = React.lazy(() => import('./SmartForm'));
 
 const renderNotificationTemplate = async (
   template: string,
@@ -94,6 +102,14 @@ type AiSuggestionPopoverActionProps = {
   loading: boolean;
   disabled: boolean;
   onSubmit: (instruction: string) => void | Promise<void>;
+};
+
+type MessageActivityDraft = {
+  initialValues: Record<string, any>;
+  attachments: NoteAttachment[];
+  relatedModuleId: string | null;
+  relatedRecordId: string | null;
+  sourceLabel: string;
 };
 
 const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
@@ -654,7 +670,7 @@ const getModuleFieldOptionLabel = (moduleId: string, fieldKey: string, value: an
 const getPhoneMatchLabel = (value: any) => {
   const rawValue = String(value ?? '').trim();
   if (!rawValue || rawValue === 'matched') return '';
-  if (rawValue === 'ambiguous') return 'چند مخاطب احتمالی';
+  if (rawValue === 'ambiguous') return 'نیاز به انتخاب مخاطب';
   if (rawValue === 'unknown') return 'شماره ناشناس';
   if (rawValue === 'manual') return 'تطبیق دستی';
   return rawValue;
@@ -1090,10 +1106,13 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [forwardSubmitting, setForwardSubmitting] = useState(false);
   const [desktopActiveKey, setDesktopActiveKey] = useState<DrawerTabKey>(initialTab);
   const [mobileActiveKey, setMobileActiveKey] = useState<DrawerTabKey>(initialTab);
+  const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
+  const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
   const [responsibilityViewKey, setResponsibilityViewKey] = useState('all');
   const [responsibilitySortDirection, setResponsibilitySortDirection] = useState<CreatedSortDirection>('desc');
   const [previewRecord, setPreviewRecord] = useState<{ moduleId: string; recordId: string; label?: string } | null>(null);
   const [taskProcessModalTask, setTaskProcessModalTask] = useState<any | null>(null);
+  const [messageActivityDraft, setMessageActivityDraft] = useState<MessageActivityDraft | null>(null);
   const [taskProcessHostKey] = useState(0);
   const [noteViewportReady, setNoteViewportReady] = useState(true);
   const [botViewportReady, setBotViewportReady] = useState(true);
@@ -1188,6 +1207,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const communicationCacheScopeKey = `${String(profile.org_id || '').trim() || 'org'}:${String(profile.id || '').trim() || 'user'}`;
   const shouldAnimateChatEntry = useCallback((createdAt: any) => {
     const time = new Date(createdAt || '').getTime();
     if (!Number.isFinite(time)) return false;
@@ -1205,6 +1225,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     supabase,
     section: 'bot_messages',
     enabled: variant === 'chat' && Boolean(profile.id),
+    cacheScopeKey: communicationCacheScopeKey,
   });
   const {
     items: rpcNoteConversationSummaries,
@@ -1215,6 +1236,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     supabase,
     section: 'notes',
     enabled: variant === 'chat' && Boolean(profile.id),
+    cacheScopeKey: communicationCacheScopeKey,
   });
 
   // Debounced conversation summary refreshes — prevents N RPC calls when N messages are marked as read
@@ -2684,6 +2706,7 @@ useEffect(() => {
     if (section === 'notes') {
       const shouldUseConversationScopedNotes = (
         variant === 'chat'
+        && activeDrawerSection === 'notes'
         && Boolean(selectedConversationKey)
       );
       if (shouldUseConversationScopedNotes) {
@@ -2691,6 +2714,11 @@ useEffect(() => {
           safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any),
           safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any),
         ]);
+        lastLoadedAtRef.current.notes = Date.now();
+        return;
+      }
+      if (variant === 'chat' && activeDrawerSection !== 'notes' && noteConversationSummaryAvailable) {
+        await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
         lastLoadedAtRef.current.notes = Date.now();
         return;
       }
@@ -2730,6 +2758,11 @@ useEffect(() => {
     }
 
     if (section === 'bot_messages') {
+      if (variant === 'chat' && activeDrawerSection !== 'bot_messages' && botConversationSummaryAvailable) {
+        await safeSectionFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
+        lastLoadedAtRef.current.bot_messages = Date.now();
+        return;
+      }
       const showSkeleton = botGroups.length === 0 && botMessages.length === 0;
       if (showSkeleton) setLoadingBotMessages(true);
       const groups = await safeSectionFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]);
@@ -2737,7 +2770,7 @@ useEffect(() => {
       if (!botConversationSummaryAvailable) {
         await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       }
-      if (resolvedGroupId) {
+      if (resolvedGroupId && activeDrawerSection === 'bot_messages') {
         // Skip refreshBotTimeline() here — the hook's useEffect will fire
         // automatically when selectedBotGroupId propagates via React state.
         // Calling it now would use stale state due to React batching.
@@ -2806,6 +2839,131 @@ useEffect(() => {
     }
   };
 
+  const openCreateActivityFromMessage = useCallback((input: any) => {
+    const actorName = String(input?.actorName || '').trim();
+    const createdAtLabel = String(input?.createdAtLabel || '').trim()
+      || safeJalaliFormat(input?.createdAt, 'YYYY/MM/DD HH:mm');
+    const relatedModuleId = String(input?.relatedModuleId || '').trim();
+    const relatedRecordId = String(input?.relatedRecordId || '').trim();
+    const relationInitialValues = relatedModuleId && relatedRecordId
+      ? buildTaskSourceInitialValues(relatedModuleId, relatedRecordId)
+      : {};
+    const attachments = filterUsableMessageAttachments(input?.attachments || []);
+
+    setMessageActivityDraft({
+      initialValues: {
+        ...relationInitialValues,
+        name: buildMessageActivityTitle({ actorName, sourceLabel: input?.channel }),
+        status: 'todo',
+        priority: 'medium',
+        task_type: String(input?.taskType || '').trim() || 'فعالیت سازمانی',
+        description: buildMessageActivityDescription({
+          actorName,
+          createdAtLabel,
+          content: input?.content,
+          attachments,
+          sourceLabel: input?.channel,
+        }),
+      },
+      attachments,
+      relatedModuleId: relatedModuleId || null,
+      relatedRecordId: relatedRecordId || null,
+      sourceLabel: actorName || String(input?.channel || '').trim() || 'پیام',
+    });
+  }, []);
+
+  const handleMessageActivitySave = async (values: any, meta?: { selectedTags?: any[] }) => {
+    if (!messageActivityDraft) return;
+    const tasksModule = MODULES.tasks;
+    if (!tasksModule?.table) throw new Error('ماژول فعالیت‌ها در دسترس نیست.');
+
+    const userId = String(profile.id || '').trim() || null;
+    const selectedTags = Array.isArray(meta?.selectedTags) ? meta?.selectedTags || [] : [];
+    let payload = attachTaskCompletionIfNeeded(normalizeTaskSourceValues(values || {}));
+    if (supportsSystemCode('tasks') && !payload.system_code) {
+      payload = {
+        ...payload,
+        system_code: await buildClientFallbackSystemCode(supabase, 'tasks', tasksModule.table),
+      };
+    }
+    const withAudit = userId
+      ? { ...payload, created_by: payload.created_by ?? userId, updated_by: payload.updated_by ?? userId }
+      : payload;
+
+    const isMissingAuditColumnError = (error: any) => {
+      const code = String(error?.code || '').toUpperCase();
+      const text = String(error?.message || error?.details || '').toLowerCase();
+      return code === '42703' || code === 'PGRST204' || text.includes('created_by') || text.includes('updated_by');
+    };
+
+    let insertResult = await supabase
+      .from(tasksModule.table)
+      .insert(withAudit)
+      .select('*')
+      .single();
+    if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+      insertResult = await supabase
+        .from(tasksModule.table)
+        .insert(payload)
+        .select('*')
+        .single();
+    }
+    if (insertResult.error) throw insertResult.error;
+    const inserted = insertResult.data;
+    const taskId = String(inserted?.id || '').trim();
+    if (!taskId) throw new Error('ایجاد فعالیت ناموفق بود.');
+
+    if (selectedTags.length > 0) {
+      await syncRecordTags(supabase, 'tasks', taskId, selectedTags);
+    }
+
+    for (const [index, attachment] of messageActivityDraft.attachments.entries()) {
+      try {
+        await createFileManagerShortcut({
+          assetId: attachment.assetId || null,
+          sourceEntryId: attachment.entryId || null,
+          sourceModuleId: attachment.moduleId || messageActivityDraft.relatedModuleId,
+          sourceRecordId: attachment.recordId || messageActivityDraft.relatedRecordId,
+          sourceRecordTitle: messageActivityDraft.sourceLabel,
+          targetModuleId: 'tasks',
+          targetRecordId: taskId,
+          targetRecordTitle: String(inserted?.name || payload?.name || 'فعالیت').trim(),
+          fileUrl: attachment.url,
+          fileName: attachment.name || null,
+          mimeType: attachment.mimeType || null,
+          fileType: attachment.fileType || null,
+          sortOrder: index,
+        });
+      } catch (error) {
+        console.warn('Could not attach message file to created activity', error);
+      }
+    }
+
+    try {
+      await insertRecordActivity({
+        supabase,
+        moduleId: 'tasks',
+        recordId: taskId,
+        action: 'create',
+        userId,
+        recordTitle: String(inserted?.name || payload?.name || '').trim() || null,
+      });
+    } catch (error) {
+      console.warn('Changelog insert failed:', error);
+    }
+
+    await runWorkflowsForEvent({
+      moduleId: 'tasks',
+      event: 'create',
+      currentRecord: inserted as Record<string, any>,
+    });
+
+    message.success('فعالیت ثبت شد');
+    setMessageActivityDraft(null);
+    lastLoadedAtRef.current.tasks = 0;
+    await refreshSection('tasks', { force: true });
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const unlockAudio = () => {
@@ -2849,16 +3007,21 @@ useEffect(() => {
     const shouldLoadBotMessages = sections.includes('bot_messages');
     const shouldLoadSmsMessages = sections.includes('sms_messages');
     const shouldLoadVoipCalls = sections.includes('voip_calls');
+    const shouldFetchBotGroups = shouldLoadBotMessages
+      && (activeDrawerSection === 'bot_messages' || !botConversationSummaryAvailable);
     const shouldUseConversationScopedNotes = (
       shouldLoadNotes
       && variant === 'chat'
+      && activeDrawerSection === 'notes'
       && Boolean(selectedConversationKey)
     );
-    const shouldFetchGlobalNotes = shouldLoadNotes && !shouldUseConversationScopedNotes;
+    const shouldFetchGlobalNotes = shouldLoadNotes
+      && !shouldUseConversationScopedNotes
+      && (!noteConversationSummaryAvailable || activeDrawerSection === 'notes');
     const showNotesSkeleton = shouldFetchGlobalNotes && notes.length === 0;
     const showTasksSkeleton = shouldLoadTasks && tasks.length === 0;
     const showResponsibilitiesSkeleton = shouldLoadResponsibilities && responsibilities.length === 0;
-    const showBotSkeleton = shouldLoadBotMessages && botGroups.length === 0 && botMessages.length === 0;
+    const showBotSkeleton = shouldFetchBotGroups && botGroups.length === 0 && botMessages.length === 0;
     const showSmsSkeleton = shouldLoadSmsMessages && smsMessages.length === 0;
 
     if (showNotesSkeleton) setLoadingNotes(true);
@@ -2886,13 +3049,13 @@ useEffect(() => {
       shouldFetchGlobalNotes ? safeFetch(() => fetchNotes(), 'notes', [] as any[]) : Promise.resolve(notes),
       shouldLoadTasks ? safeFetch(() => fetchTasks(), 'tasks', [] as any[]) : Promise.resolve(tasks),
       shouldLoadResponsibilities ? safeFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]) : Promise.resolve(responsibilities),
-      shouldLoadBotMessages ? safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]) : Promise.resolve(botGroups),
+      shouldFetchBotGroups ? safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]) : Promise.resolve(botGroups),
       shouldLoadSmsMessages ? safeFetch(() => fetchSmsMessages(), 'sms_messages', [] as any[]) : Promise.resolve(smsMessages),
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
     if (shouldFetchGlobalNotes) setNotes(notesData);
     await Promise.all([
-      shouldLoadNotes && selectedConversationKey
+      shouldUseConversationScopedNotes
         ? safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any)
         : Promise.resolve(null),
       shouldLoadNotes && noteConversationSummaryAvailable
@@ -2907,12 +3070,12 @@ useEffect(() => {
     sections.forEach((section) => {
       lastLoadedAtRef.current[section] = loadedAt;
     });
-    if (shouldLoadBotMessages) {
+    if (shouldFetchBotGroups) {
       const resolvedGroupId = String(selectedBotGroupId || botGroupsData[0]?.id || '').trim();
       if (!botConversationSummaryAvailable) {
         await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       }
-      if (resolvedGroupId) {
+      if (resolvedGroupId && activeDrawerSection === 'bot_messages') {
         // Skip refreshBotTimeline() here — the hook's useEffect will fire
         // automatically when selectedBotGroupId propagates via React state.
         if (!botTimelineAvailable) {
@@ -2924,6 +3087,9 @@ useEffect(() => {
       if (botConversationSummaryAvailable) {
         await safeFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
       }
+    }
+    if (shouldLoadBotMessages && !shouldFetchBotGroups && botConversationSummaryAvailable) {
+      await safeFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
     }
     const completedTaskIds = shouldLoadTasks ? tasksData
       .filter((task: any) => {
@@ -2994,6 +3160,8 @@ useEffect(() => {
       } else {
         work.push(refreshSection('bot_messages', options));
       }
+      work.push(refreshSection('sms_messages', options));
+      work.push(refreshSection('voip_calls', options));
       await Promise.all(work);
       return;
     }
@@ -3294,9 +3462,10 @@ useEffect(() => {
     loadOlder: loadOlderBotMessages,
   } = useBotConversationTimeline<CounterpartyBotMessageRow>({
     supabase,
-    enabled: open && Boolean(selectedBotGroupId),
+    enabled: open && activeDrawerSection === 'bot_messages' && Boolean(selectedBotGroupId),
     botGroupId: selectedBotGroupId,
     pageSize: 10,
+    cacheScopeKey: communicationCacheScopeKey,
   });
   useEffect(() => {
     setLoadingBotMessages(loadingBotTimelineInitial);
@@ -3513,9 +3682,6 @@ useEffect(() => {
       window.clearTimeout(backgroundSectionRefreshTimerRef.current);
     }
   }, []);
-
-  const activeDrawerTab = isMobile ? mobileActiveKey : desktopActiveKey;
-  const activeDrawerSection = isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null;
 
   useEffect(() => {
     if (!profile.id) return;
@@ -3786,7 +3952,7 @@ useEffect(() => {
   const botMessagesCount = useMemo(() => botConversationSummaryAvailable && rpcBotConversationSummaries
     ? (rpcBotConversationSummaries || []).reduce((sum, item) => {
         const groupId = String(item?.bot_group_id || '').trim();
-        if (!groupId || !visibleBotGroupIds.has(groupId)) return sum;
+        if (!groupId || (visibleBotGroupIds.size > 0 && !visibleBotGroupIds.has(groupId))) return sum;
         return sum + Number(item?.unread_count || 0);
       }, 0)
     : botNotificationMessages.filter((row) => {
@@ -4024,6 +4190,7 @@ useEffect(() => {
           void prefetchInternalConversationTimeline<any>({
             supabase,
             conversationKey: String(item.conversation_key || '').trim(),
+            cacheScopeKey: communicationCacheScopeKey,
             pageSize: 10,
           });
         });
@@ -4035,12 +4202,14 @@ useEffect(() => {
           void prefetchBotConversationTimeline<CounterpartyBotMessageRow>({
             supabase,
             botGroupId,
+            cacheScopeKey: communicationCacheScopeKey,
             pageSize: 10,
           });
         });
     }, 1200);
     return () => window.clearTimeout(timer);
   }, [
+    communicationCacheScopeKey,
     profile.id,
     rpcBotConversationSummaries,
     rpcNoteConversationSummaries,
@@ -4064,6 +4233,7 @@ useEffect(() => {
     enabled: open && activeDrawerSection === 'notes' && Boolean(profile.id) && Boolean(selectedConversationKey),
     conversationKey: selectedConversationKey,
     pageSize: 10,
+    cacheScopeKey: communicationCacheScopeKey,
   });
   const loadOlderNotesWithPreserve = useCallback(async () => {
     const container = notesScrollContainerRef.current;
@@ -6475,6 +6645,7 @@ useEffect(() => {
         mobileNoteSearchOpen,
         noteReplyTo,
         scrollMessageIntoView,
+        openCreateActivityFromMessage,
         selectedConversationInitialAnchorId,
         setNoteViewportReady,
         noteInitialAnchorDoneRef,
@@ -6500,6 +6671,7 @@ useEffect(() => {
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
       requestReplySuggestion={requestReplySuggestion}
       refreshSection={refreshSection}
+      openCreateActivityFromMessage={openCreateActivityFromMessage}
     />
   );
 
@@ -6515,6 +6687,7 @@ useEffect(() => {
       getCentralRecordLabel={getCentralRecordLabel}
       getPhoneMatchLabel={getPhoneMatchLabel}
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
+      openCreateActivityFromMessage={openCreateActivityFromMessage}
     />
   );
 
@@ -6786,6 +6959,7 @@ useEffect(() => {
         refreshBotTimeline={refreshBotTimeline}
         fetchBotMessages={fetchBotMessages}
         openForwardModal={openForwardModal}
+        openCreateActivityFromMessage={openCreateActivityFromMessage}
         botNewIncomingCount={botNewIncomingCount}
         setBotNewIncomingCount={setBotNewIncomingCount}
         botShouldStickToBottomRef={botShouldStickToBottomRef}
@@ -6913,7 +7087,7 @@ useEffect(() => {
         key: 'assistant',
         label: <span className="px-1">هوش مصنوعی</span>,
         children: renderLazyDrawerPane('assistant', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => (
-          <AssistantPanel active={open && desktopActiveKey === 'assistant'} />
+          <AssistantPanel active={open && desktopActiveKey === 'assistant'} openCreateActivityFromMessage={openCreateActivityFromMessage} />
         )),
       },
     ]
@@ -6977,7 +7151,7 @@ useEffect(() => {
         key: 'assistant',
         label: <span className="px-1">هوش مصنوعی</span>,
         children: renderLazyDrawerPane('assistant', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => (
-          <AssistantPanel active={open && mobileActiveKey === 'assistant'} />
+          <AssistantPanel active={open && mobileActiveKey === 'assistant'} openCreateActivityFromMessage={openCreateActivityFromMessage} />
         )),
       },
     ]
@@ -7108,6 +7282,19 @@ useEffect(() => {
             onOpenChange={(nextOpen) => {
               if (!nextOpen) setPreviewRecord(null);
             }}
+            overlayZIndex={NOTIFICATIONS_MODAL_Z_INDEX}
+          />
+        </React.Suspense>
+      ) : null}
+      {messageActivityDraft ? (
+        <React.Suspense fallback={null}>
+          <SmartForm
+            module={MODULES.tasks}
+            visible={Boolean(messageActivityDraft)}
+            title="ایجاد فعالیت"
+            initialValues={messageActivityDraft.initialValues}
+            onCancel={() => setMessageActivityDraft(null)}
+            onSave={handleMessageActivitySave}
             overlayZIndex={NOTIFICATIONS_MODAL_Z_INDEX}
           />
         </React.Suspense>

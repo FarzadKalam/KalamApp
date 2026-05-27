@@ -12,22 +12,19 @@ const MessagesPage: React.FC = () => {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  // Let the chat panels manage their own scroll — remove Layout Content's overflow and mobile padding.
+  // Let the chat panels manage their own scroll while keeping Layout's mobile footer inset.
   useEffect(() => {
     const content = document.querySelector('.layout-main-scroll') as HTMLElement | null;
     if (!content) return;
     const prevOverflow = content.style.overflow;
-    const prevPaddingBottom = content.style.paddingBottom;
     content.style.overflow = 'hidden';
-    content.style.paddingBottom = '0';
     return () => {
       content.style.overflow = prevOverflow;
-      content.style.paddingBottom = prevPaddingBottom;
     };
   }, []);
 
   return (
-    <div className="messages-page-root" style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="messages-page-root" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Suspense fallback={null}>
         <NotificationsPopover isMobile={isMobile} variant="chat" standalone />
       </Suspense>

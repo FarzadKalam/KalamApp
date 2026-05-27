@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App, Avatar, Button, Empty, Input, Popconfirm, Popover, Select, Space, Spin, Tag, Tooltip } from 'antd';
-import { DeleteOutlined, ReloadOutlined, SendOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { DeleteOutlined, ReloadOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -22,6 +22,7 @@ type ChatMessage = {
 
 interface AssistantPanelProps {
   active: boolean;
+  openCreateActivityFromMessage?: (input: any) => void | Promise<void>;
 }
 
 const parseRouteContext = (pathname: string, search: string): AssistantContext => {
@@ -120,7 +121,7 @@ const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
   return parts.join(' · ');
 };
 
-const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
+const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActivityFromMessage }) => {
   const { message } = App.useApp();
   const location = useLocation();
   const [input, setInput] = useState('');
@@ -435,6 +436,26 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active }) => {
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
+            {openCreateActivityFromMessage ? (
+              <Tooltip title="ایجاد فعالیت">
+                <Button
+                  type="text"
+                  size="small"
+                  className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+                  icon={<UserAddOutlined />}
+                  onClick={() => openCreateActivityFromMessage({
+                    channel: 'assistant',
+                    actorName: isUser ? 'شما' : 'دستیار هوشمند',
+                    createdAt: item.created_at || null,
+                    createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
+                    content: item.content,
+                    attachments: [],
+                    relatedModuleId: context.mode === 'record' ? context.moduleId : null,
+                    relatedRecordId: context.mode === 'record' ? context.recordId : null,
+                  })}
+                />
+              </Tooltip>
+            ) : null}
           </div>
         </div>
       </div>

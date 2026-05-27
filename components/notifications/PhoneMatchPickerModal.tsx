@@ -20,6 +20,14 @@ const ENTITY_COLORS: Record<string, string> = {
   marketing_leads: 'cyan',
 };
 
+const ENTITY_PRIORITY: Record<string, number> = {
+  profiles: 1,
+  employees: 2,
+  customers: 3,
+  suppliers: 4,
+  marketing_leads: 9,
+};
+
 type Candidate = {
   id: string;
   entity_type: string;
@@ -77,15 +85,22 @@ const PhoneMatchPickerModal: React.FC<Props> = ({
       });
   }, [visible, phoneNumberId, message]);
 
-  const filtered = candidates.filter((c) => {
-    const q = String(search || '').trim().toLowerCase();
-    if (!q) return true;
-    return (
-      String(c.display_title || '').toLowerCase().includes(q) ||
-      String(c.label || '').toLowerCase().includes(q) ||
-      (ENTITY_LABELS[c.entity_type] || '').includes(q)
-    );
-  });
+  const filtered = candidates
+    .filter((c) => {
+      const q = String(search || '').trim().toLowerCase();
+      if (!q) return true;
+      return (
+        String(c.display_title || '').toLowerCase().includes(q)
+        || String(c.label || '').toLowerCase().includes(q)
+        || (ENTITY_LABELS[c.entity_type] || '').includes(q)
+      );
+    })
+    .sort((left, right) => {
+      const leftPriority = ENTITY_PRIORITY[left.entity_type] || 99;
+      const rightPriority = ENTITY_PRIORITY[right.entity_type] || 99;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return String(left.display_title || '').localeCompare(String(right.display_title || ''), 'fa');
+    });
 
   const handleSelect = useCallback(async (candidate: Candidate) => {
     setSaving(true);

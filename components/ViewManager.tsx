@@ -10,7 +10,6 @@ import {
   Modal,
   Popconfirm,
   Radio,
-  Select,
   Skeleton,
   Tabs,
   Tag,
@@ -35,6 +34,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField, SavedView, ViewConfig } from '../types';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
+import AdaptiveSelectField from './AdaptiveSelectField';
 import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperatorNeedsValue } from '../utils/filterUtils';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
@@ -129,7 +129,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     const fields = moduleConfig?.fields || [];
     const timeSystemKeys = ['created_at', 'updated_at'];
     const dateTypes = new Set<FieldType>([FieldType.DATE, FieldType.DATETIME]);
-    const timeSystemFields = fields.filter((f) => timeSystemKeys.includes(f.key));
+    const systemFieldDefaults: Record<string, ModuleField> = {
+      created_at: { key: 'created_at', labels: { fa: 'زمان ایجاد' }, type: FieldType.DATETIME },
+      updated_at: { key: 'updated_at', labels: { fa: 'زمان ویرایش' }, type: FieldType.DATETIME },
+    };
+    const timeSystemFields = timeSystemKeys.map((k) => fields.find((f) => f.key === k) ?? systemFieldDefaults[k]);
     const otherDateFields = fields.filter((f) => !timeSystemKeys.includes(f.key) && dateTypes.has(f.type as FieldType));
     const otherFields = fields.filter((f) => !timeSystemKeys.includes(f.key) && !dateTypes.has(f.type as FieldType));
     return [...timeSystemFields, ...otherDateFields, ...otherFields];
@@ -927,7 +931,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                     <div className="flex flex-col gap-4">
                       <div className="flex items-center gap-3">
                         <span className="w-20 shrink-0 text-sm text-gray-600 dark:text-gray-400">فیلد</span>
-                        <Select
+                        <AdaptiveSelectField
                           className="flex-1"
                           allowClear
                           placeholder="انتخاب فیلد..."
@@ -938,7 +942,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                               sort: val ? [{ field: val, order: prev.sort?.[0]?.order || 'desc' }] : [],
                             }))
                           }
-                          getPopupContainer={popupContainer}
+                          overlayZIndexBase={1200}
+                          pickerTitle="انتخاب فیلد ترتیب"
+                          filterOption={(input: string, opt: any) => String(opt?.searchText || opt?.label || '').includes(input)}
                           options={sortableFields.map((f, idx) => {
                             const isTimeSystem = f.key === 'created_at' || f.key === 'updated_at';
                             const isDateType = f.type === FieldType.DATE || f.type === FieldType.DATETIME;
@@ -963,6 +969,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                 </span>
                               ),
                               value: f.key,
+                              searchText: f.labels.fa,
                             };
                           })}
                         />
@@ -1045,7 +1052,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                             {loadingAccessDirectory ? (
                               <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
                             ) : (
-                              <Select
+                              <AdaptiveSelectField
                                 mode="multiple"
                                 className="w-full"
                                 placeholder="انتخاب کاربران..."
@@ -1056,8 +1063,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                     access: { ...prev.access, type: 'specific', userIds: val, roleIds: prev.access?.roleIds || [] },
                                   }))
                                 }
-                                getPopupContainer={popupContainer}
-                                tagRender={({ label, value, closable, onClose }) => (
+                                overlayZIndexBase={1200}
+                                pickerTitle="انتخاب کاربران"
+                                tagRender={({ label, value, closable, onClose }: any) => (
                                   <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
                                     {label}
                                   </Tag>
@@ -1066,7 +1074,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                   label: String(u?.display_name || u?.full_name || u?.id || ''),
                                   value: String(u?.id || ''),
                                 }))}
-                                filterOption={(input, opt) =>
+                                filterOption={(input: string, opt: any) =>
                                   String(opt?.label || '').includes(input)
                                 }
                               />
@@ -1079,7 +1087,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                             {loadingAccessDirectory ? (
                               <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
                             ) : (
-                              <Select
+                              <AdaptiveSelectField
                                 mode="multiple"
                                 className="w-full"
                                 placeholder="انتخاب نقش‌ها..."
@@ -1090,8 +1098,9 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                     access: { ...prev.access, type: 'specific', userIds: prev.access?.userIds || [], roleIds: val },
                                   }))
                                 }
-                                getPopupContainer={popupContainer}
-                                tagRender={({ label, value, closable, onClose }) => (
+                                overlayZIndexBase={1200}
+                                pickerTitle="انتخاب نقش‌ها"
+                                tagRender={({ label, value, closable, onClose }: any) => (
                                   <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
                                     {label}
                                   </Tag>
@@ -1100,7 +1109,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                                   label: String(r?.title || r?.id || ''),
                                   value: String(r?.id || ''),
                                 }))}
-                                filterOption={(input, opt) =>
+                                filterOption={(input: string, opt: any) =>
                                   String(opt?.label || '').includes(input)
                                 }
                               />

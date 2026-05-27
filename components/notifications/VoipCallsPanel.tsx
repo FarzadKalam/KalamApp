@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Empty } from 'antd';
-import { EyeOutlined } from '@ant-design/icons';
+import { EyeOutlined, UserAddOutlined } from '@ant-design/icons';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 
 export type VoipThreadItem = {
@@ -27,6 +27,7 @@ type VoipCallsPanelProps = {
   getCentralRecordLabel: (moduleId?: string | null, recordId?: string | null, fallback?: string | null) => string;
   getPhoneMatchLabel: (value: any) => string;
   getModuleFieldOptionLabel: (moduleId: string, fieldKey: string, value: any) => string;
+  openCreateActivityFromMessage: (input: any) => void | Promise<void>;
 };
 
 const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
@@ -40,6 +41,7 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
   getCentralRecordLabel,
   getPhoneMatchLabel,
   getModuleFieldOptionLabel,
+  openCreateActivityFromMessage,
 }) => {
   const isDesktop = layout === 'desktop';
   const activeThread = selectedVoipThread;
@@ -200,6 +202,29 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                         ) : null}
                       </div>
                       <div className="mt-3 flex items-center gap-3 text-[12px]">
+                        <Button
+                          type="link"
+                          size="small"
+                          className="!px-0"
+                          icon={<UserAddOutlined />}
+                          onClick={() => openCreateActivityFromMessage({
+                            channel: 'voip',
+                            actorName: String(row?.source_number || activeThread?.phone || 'شماره تماس').trim(),
+                            createdAt: startedAt,
+                            createdAtLabel: safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm'),
+                            content: [
+                              `تماس ورودی از ${String(row?.source_number || activeThread?.phone || '').trim() || 'شماره نامشخص'}`,
+                              String(row?.extension || '').trim() ? `داخلی: ${String(row.extension).trim()}` : '',
+                              statusLabel ? `وضعیت: ${statusLabel}` : '',
+                            ].filter(Boolean).join(' | '),
+                            attachments: [],
+                            relatedModuleId: row?.module_id || activeThread?.moduleId || null,
+                            relatedRecordId: row?.record_id || activeThread?.recordId || null,
+                            taskType: 'تماس ورودی',
+                          })}
+                        >
+                          ایجاد فعالیت
+                        </Button>
                         <Button type="link" size="small" className="!px-0" onClick={() => openPreviewRecord('voip_call_reports', String(row.id), String(row?.title || 'تماس VoIP'))}>
                           گزارش تماس
                         </Button>

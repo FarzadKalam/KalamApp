@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Modal, Tag, theme } from 'antd';
+import { Button, Input, Modal, Tag, Tooltip, theme } from 'antd';
 import {
   CheckOutlined,
   CloseOutlined,
@@ -13,6 +13,7 @@ import {
   LikeFilled,
   LikeOutlined,
   PaperClipOutlined,
+  UserAddOutlined,
 } from '@ant-design/icons';
 import { isAudioNoteAttachment, type NoteAttachment } from '../../utils/noteContent';
 import { isImageFileLike } from '../../utils/imagePreview';
@@ -54,6 +55,7 @@ interface SharedNoteCardProps {
   onDelete?: () => void;
   onForward?: () => void;
   onLike?: () => void;
+  onCreateActivity?: () => void | Promise<void>;
   onAttachmentClick?: (attachment: NoteAttachment) => void | Promise<void>;
   variant?: 'default' | 'ai';
   renderTemplateBold?: boolean;
@@ -142,6 +144,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   onDelete,
   onForward,
   onLike,
+  onCreateActivity,
   onAttachmentClick,
   variant = 'default',
   renderTemplateBold = false,
@@ -573,6 +576,11 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         <div className="mt-1.5 flex items-center gap-0.5 opacity-65 transition group-hover/message:opacity-100 focus-within:opacity-100">
           <Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopyText} disabled={!String(text || '').trim()} />
           {onForward ? <Button type="text" size="small" icon={<ForwardOutlined />} onClick={onForward} /> : null}
+          {onCreateActivity ? (
+            <Tooltip title="ایجاد فعالیت">
+              <Button type="text" size="small" icon={<UserAddOutlined />} onClick={() => void onCreateActivity()} />
+            </Tooltip>
+          ) : null}
           {onLike ? (
             <Button
               type="text"

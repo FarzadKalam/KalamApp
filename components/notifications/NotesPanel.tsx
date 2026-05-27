@@ -114,6 +114,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     mobileNoteSearchOpen,
     noteReplyTo,
     scrollMessageIntoView,
+    openCreateActivityFromMessage,
     // new — for virtualizer-driven initial anchor scroll
     selectedConversationInitialAnchorId,
     setNoteViewportReady,
@@ -514,6 +515,16 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                         onCancelEdit={() => { setEditingNoteId(null); setEditingNoteValue(''); }}
                         onReply={() => { setNoteReplyTo(note.id); setNoteModuleId(note.module_id || null); setNoteRecordId(note.record_id || null); }}
                         onForward={() => openForwardModal(note)}
+                        onCreateActivity={openCreateActivityFromMessage ? () => openCreateActivityFromMessage({
+                          channel: isAi ? 'ai' : 'internal',
+                          actorName: authorName,
+                          createdAt: note.created_at,
+                          createdAtLabel: safeJalaliFormat(note.created_at, 'YYYY/MM/DD HH:mm'),
+                          content: parsedContent.text,
+                          attachments: parsedContent.attachments,
+                          relatedModuleId: note.module_id || null,
+                          relatedRecordId: note.record_id || null,
+                        }) : undefined}
                         onLike={!isSystem ? () => {
                           void toggleNoteLike(note).catch((error: any) => {
                             console.warn('Could not toggle note like', error);

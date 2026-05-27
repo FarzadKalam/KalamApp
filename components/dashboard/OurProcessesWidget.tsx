@@ -43,6 +43,19 @@ const PROCESS_RECORD_SCAN_EXCLUDED_MODULE_IDS = new Set([
   'instructions',
 ]);
 
+const PROCESS_MODULE_QUERY_CONCURRENCY = 5;
+
+const runWithConcurrencyLimit = async (tasks: (() => Promise<void>)[], limit: number): Promise<void> => {
+  let index = 0;
+  const worker = async () => {
+    while (index < tasks.length) {
+      const current = index++;
+      await tasks[current]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+};
+
 const TASK_PROCESS_COLUMNS = [
   'id',
   'name',
@@ -363,7 +376,8 @@ const OurProcessesWidget: React.FC = () => {
       );
       const templateIds = new Set<string>();
 
-      await Promise.all(getProcessModuleIds(access).map(async (moduleId) => {
+      await runWithConcurrencyLimit(
+        getProcessModuleIds(access).map((moduleId) => async () => {
         if (unavailableProcessModulesRef.current.has(moduleId)) return;
         const module = MODULES[moduleId] as any;
         const result = await runSelectWithCompatibleColumns<any[]>({
@@ -429,7 +443,9 @@ const OurProcessesWidget: React.FC = () => {
             });
           });
         });
-      }));
+      }),
+        PROCESS_MODULE_QUERY_CONCURRENCY
+      );
 
       const itemsBeforeTemplateNames = Array.from(candidateMap.values());
       itemsBeforeTemplateNames.forEach((item) => {

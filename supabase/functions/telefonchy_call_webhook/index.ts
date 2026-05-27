@@ -58,6 +58,8 @@ const readBody = async (req: Request) => {
 
 const firstValue = (...values: any[]) => {
   for (const value of values) {
+    if (value === false) continue;
+    if (value !== null && typeof value === 'object') continue;
     const normalized = String(value ?? '').trim();
     if (normalized) return normalized;
   }
@@ -76,6 +78,30 @@ const scrubSecrets = (value: Record<string, any>) => {
   return scrubbed;
 };
 
+const isPlainObject = (value: any) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const normalizeTelefonchyPayload = (payload: Record<string, any>) => {
+  const data = isPlainObject(payload?.data) ? payload.data : {};
+  const exten = isPlainObject(data?.exten) ? data.exten : isPlainObject(payload?.exten) ? payload.exten : {};
+
+  return {
+    ...payload,
+    ...data,
+    call_id: firstValue(data.call_id, data.cuid, data.unique_id, payload.call_id, payload.cuid, payload.unique_id, payload.id),
+    object_id: firstValue(data.object_id, data.id, payload.object_id, payload.objectId),
+    extension: firstValue(data.extension, data.operator_extension, exten.number, exten.caller_id, payload.extension, payload.operator_extension),
+    file_id: firstValue(data.file_id, data.record_id, payload.file_id, payload.fileId, payload.record_id),
+    trunk: firstValue(data.trunk, data.trunk_number, payload.trunk, payload.trunk_number),
+    started_at: firstValue(data.started_at, data.start_at, data.start_time, data.datetime, data.created_at, payload.started_at, payload.start_at, payload.start_time, payload.created_at),
+    ended_at: firstValue(data.ended_at, data.end_at, data.end_time, payload.ended_at, payload.end_at, payload.end_time, payload.updated_at),
+    call_source: firstValue(data.call_source, data.src, payload.call_source, payload.src),
+    call_dest: firstValue(data.call_dest, data.dest, payload.call_dest, payload.dest),
+    status: firstValue(data.status, data.call_status, data.disposition, data.event, payload.status, payload.call_status, payload.disposition, payload.event),
+    type: firstValue(data.type, data.direction, data.call_type, payload.type, payload.direction, payload.call_type),
+  };
+};
+
 const normalizePhone = (value: any) =>
   String(value || '')
     .trim()
@@ -87,9 +113,47 @@ const toIntegerOrNull = (value: any) => {
   return Math.max(0, Math.floor(parsed));
 };
 
+const jalaliToGregorian = (jy: number, jm: number, jd: number) => {
+  const div = (a: number, b: number) => Math.floor(a / b);
+  jy += 1595;
+  let days = -355668 + (365 * jy) + (div(jy, 33) * 8) + div(((jy % 33) + 3), 4) + jd;
+  days += jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186;
+
+  let gy = 400 * div(days, 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * div(--days, 36524);
+    days %= 36524;
+    if (days >= 365) days += 1;
+  }
+  gy += 4 * div(days, 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += div(days - 1, 365);
+    days = (days - 1) % 365;
+  }
+
+  let gd = days + 1;
+  const leap = (gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0;
+  const monthDays = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 1;
+  while (gm <= 12 && gd > monthDays[gm]) {
+    gd -= monthDays[gm];
+    gm += 1;
+  }
+
+  return { year: gy, month: gm, day: gd };
+};
+
 const toIsoOrNull = (value: any) => {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
+  const jalaliMatch = raw.match(/^(1[34]\d{2})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (jalaliMatch) {
+    const [, jy, jm, jd, hh = '0', mm = '0', ss = '0'] = jalaliMatch;
+    const g = jalaliToGregorian(Number(jy), Number(jm), Number(jd));
+    return new Date(Date.UTC(g.year, g.month - 1, g.day, Number(hh), Number(mm), Number(ss))).toISOString();
+  }
   const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
   const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return null;
@@ -241,6 +305,7 @@ Deno.serve(async (req) => {
     const query = Object.fromEntries(url.searchParams.entries());
     const body = await readBody(req);
     const payload = { ...query, ...body };
+    const providerPayload = normalizeTelefonchyPayload(payload);
 
     const requestSecret = firstValue(
       req.headers.get('x-kalam-webhook-secret'),
@@ -258,33 +323,33 @@ Deno.serve(async (req) => {
 
     const settings = settingsRow.settings || {};
     const provider = 'telefonchy';
-    const talkSeconds = toIntegerOrNull(firstValue(payload.time_talk, payload.talk_seconds, payload.duration, payload.billsec));
-    const direction = mapDirection(firstValue(payload.type, payload.direction, payload.call_type));
-    const sourceNumber = normalizePhone(firstValue(payload.call_source, payload.source_number, payload.source, payload.from, payload.caller));
-    const destinationNumber = normalizePhone(firstValue(payload.call_dest, payload.destination_number, payload.destination, payload.to, payload.callee));
-    const extension = firstValue(payload.exten, payload.extension, payload.operator_extension);
+    const talkSeconds = toIntegerOrNull(firstValue(providerPayload.time_talk, providerPayload.talk_seconds, providerPayload.duration, providerPayload.billsec));
+    const direction = mapDirection(firstValue(providerPayload.type, providerPayload.direction, providerPayload.call_type));
+    const sourceNumber = normalizePhone(firstValue(providerPayload.call_source, providerPayload.source_number, providerPayload.source, providerPayload.from, providerPayload.caller));
+    const destinationNumber = normalizePhone(firstValue(providerPayload.call_dest, providerPayload.destination_number, providerPayload.destination, providerPayload.to, providerPayload.callee));
+    const extension = firstValue(providerPayload.extension, providerPayload.operator_extension, providerPayload.exten);
     const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
-    const status = mapStatus(firstValue(payload.status, payload.call_status, payload.disposition), talkSeconds);
+    const status = mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
 
     await saveCallLog(supabaseUrl, serviceRoleKey, {
       org_id: settingsRow.org_id,
       provider,
-      service_id: firstValue(payload.service_id, payload.serviceId, settings.service_id) || null,
-      call_id: firstValue(payload.call_id, payload.callId, payload.id) || null,
-      object_id: firstValue(payload.object_id, payload.objectId) || null,
+      service_id: firstValue(providerPayload.service_id, providerPayload.serviceId, settings.service_id) || null,
+      call_id: firstValue(providerPayload.call_id, providerPayload.callId, providerPayload.cuid, providerPayload.unique_id) || null,
+      object_id: firstValue(providerPayload.object_id, providerPayload.objectId) || null,
       direction,
       status,
       source_number: sourceNumber || null,
       destination_number: destinationNumber || null,
       extension: extension || null,
-      operator_code: firstValue(payload.operator_code, payload.operatorCode) || null,
-      trunk: firstValue(payload.trunk) || null,
-      started_at: toIsoOrNull(firstValue(payload.started_at, payload.start_at, payload.start_time, payload.created_at)),
-      ended_at: toIsoOrNull(firstValue(payload.ended_at, payload.end_at, payload.end_time, payload.updated_at)),
-      wait_seconds: toIntegerOrNull(firstValue(payload.time_wait, payload.wait_seconds)),
+      operator_code: firstValue(providerPayload.operator_code, providerPayload.operatorCode) || null,
+      trunk: firstValue(providerPayload.trunk) || null,
+      started_at: toIsoOrNull(firstValue(providerPayload.started_at, providerPayload.start_at, providerPayload.start_time, providerPayload.created_at)),
+      ended_at: toIsoOrNull(firstValue(providerPayload.ended_at, providerPayload.end_at, providerPayload.end_time, providerPayload.updated_at)),
+      wait_seconds: toIntegerOrNull(firstValue(providerPayload.time_wait, providerPayload.wait_seconds)),
       talk_seconds: talkSeconds,
-      file_id: firstValue(payload.file_id, payload.fileId) || null,
-      recording_url: firstValue(payload.recording_url, payload.recordingUrl, payload.file_url, payload.audio_url) || null,
+      file_id: firstValue(providerPayload.file_id, providerPayload.fileId, providerPayload.record_id) || null,
+      recording_url: firstValue(providerPayload.recording_url, providerPayload.recordingUrl, providerPayload.file_url, providerPayload.audio_url) || null,
       title: counterpartyPhone || sourceNumber || destinationNumber || 'تماس VoIP',
       metadata: {
         provider,
@@ -292,6 +357,7 @@ Deno.serve(async (req) => {
         method: req.method,
         query: scrubSecrets(query),
         payload: scrubSecrets(payload),
+        provider_payload: scrubSecrets(providerPayload),
         user_agent: req.headers.get('user-agent') || null,
       },
     });

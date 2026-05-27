@@ -195,6 +195,7 @@ type BotMessagesPanelProps = {
   refreshBotTimeline: () => Promise<any>;
   fetchBotMessages: (groupId?: string | null, options?: { forceFull?: boolean }) => Promise<any>;
   openForwardModal: (row: BotMessageRow, sourceType: 'bot') => void;
+  openCreateActivityFromMessage: (input: any) => void | Promise<void>;
   botNewIncomingCount: number;
   setBotNewIncomingCount: (value: number) => void;
   botShouldStickToBottomRef: React.MutableRefObject<boolean>;
@@ -268,6 +269,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   refreshBotTimeline,
   fetchBotMessages,
   openForwardModal,
+  openCreateActivityFromMessage,
   botNewIncomingCount,
   setBotNewIncomingCount,
   botShouldStickToBottomRef,
@@ -583,6 +585,46 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                       }}
                       onReply={isPersistedBotMessage ? () => setBotReplyToId(row.id) : undefined}
                       onForward={() => openForwardModal(row, 'bot')}
+                      onCreateActivity={async () => {
+                        let activityAttachments = displayAttachments
+                          .map((item: any) => ({
+                            name: item.name,
+                            url: item.url,
+                            mimeType: item.mimeType,
+                            fileType: item.fileType,
+                          }))
+                          .filter((item: any) => String(item?.url || '').trim());
+                        if (activityAttachments.length === 0 && fileId) {
+                          try {
+                            const hydrated = await importBotMessageAttachment(row, { force: true });
+                            if (hydrated?.url) {
+                              activityAttachments = [hydrated];
+                            }
+                          } catch (error) {
+                            message.warning(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود؛ فعالیت بدون پیوست باز شد.'));
+                          }
+                        }
+                        const relatedModuleId = selectedGroup?.customer_id
+                          ? 'customers'
+                          : (selectedGroup?.supplier_id ? 'suppliers' : null);
+                        const relatedRecordId = selectedGroup?.customer_id
+                          ? String(selectedGroup.customer_id || '').trim()
+                          : (selectedGroup?.supplier_id ? String(selectedGroup.supplier_id || '').trim() : null);
+                        const counterpartyLabel = String(selectedGroup?.counterparty_label || '').trim();
+                        const actorName = counterpartyLabel
+                          ? `${selectedGroup?.customer_id ? 'مشتری' : selectedGroup?.supplier_id ? 'تامین‌کننده' : 'طرف حساب'} ${counterpartyLabel}`
+                          : author.name;
+                        await openCreateActivityFromMessage({
+                          channel: 'bot',
+                          actorName,
+                          createdAt: row.created_at,
+                          createdAtLabel: safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm'),
+                          content: body,
+                          attachments: activityAttachments,
+                          relatedModuleId,
+                          relatedRecordId,
+                        });
+                      }}
                       onEdit={outgoing && isPersistedBotMessage ? () => {
                         setEditingBotMessageId(row.id);
                         setEditingBotMessageValue(String(row.content_text || '').trim());

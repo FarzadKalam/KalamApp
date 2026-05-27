@@ -49,6 +49,34 @@ describe('notification view models', () => {
     expect(threads[0].messages.map((item) => item.id)).toEqual(['sms-1', 'sms-2']);
   });
 
+  it('groups sms messages by normalized phone before phone directory row id', () => {
+    const threads = buildSmsThreads({
+      messages: [
+        {
+          id: 'sms-1',
+          direction: 'inbound',
+          sender: '+98 912 345 6789',
+          phone_number_id: 'phone-row-1',
+          message_text: 'سلام',
+          message_at: '2026-04-15T08:00:00Z',
+        },
+        {
+          id: 'sms-2',
+          direction: 'outbound',
+          recipient: '09123456789',
+          phone_number_id: 'phone-row-2',
+          message_text: 'پیگیری شد',
+          message_at: '2026-04-15T09:00:00Z',
+        },
+      ],
+      isNotificationRead: unread,
+    });
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].id).toBe('sms:9123456789');
+    expect(threads[0].messages.map((item) => item.id)).toEqual(['sms-1', 'sms-2']);
+  });
+
   it('groups voip calls and sorts newest thread first', () => {
     const threads = buildVoipThreads({
       calls: [
@@ -61,6 +89,32 @@ describe('notification view models', () => {
 
     expect(threads.map((thread) => thread.phone)).toEqual(['021222222', '021111111']);
     expect(threads[1].calls.map((call) => call.id)).toEqual(['call-3', 'call-1']);
+  });
+
+  it('groups voip calls by normalized phone before phone directory row id', () => {
+    const threads = buildVoipThreads({
+      calls: [
+        {
+          id: 'call-1',
+          direction: 'incoming',
+          source_number: '+98 21 1111 1111',
+          phone_number_id: 'phone-row-1',
+          started_at: '2026-04-15T07:00:00Z',
+        },
+        {
+          id: 'call-2',
+          direction: 'outgoing',
+          destination_number: '02111111111',
+          phone_number_id: 'phone-row-2',
+          started_at: '2026-04-15T08:00:00Z',
+        },
+      ],
+      isNotificationRead: unread,
+    });
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].id).toBe('voip:2111111111');
+    expect(threads[0].calls.map((call) => call.id)).toEqual(['call-2', 'call-1']);
   });
 
   it('builds note conversations in one pass for large notification datasets', () => {

@@ -90,11 +90,11 @@ export const resolveSmsCounterpartyPhone = (row: any) => {
 };
 
 export const getSmsThreadKey = (row: any) => {
-  const phoneNumberId = String(row?.phone_number_id || '').trim();
-  if (phoneNumberId) return `sms_phone:${phoneNumberId}`;
   const phone = resolveSmsCounterpartyPhone(row);
   const normalizedPhone = normalizePhoneThreadValue(phone);
   if (normalizedPhone) return `sms:${normalizedPhone}`;
+  const phoneNumberId = String(row?.phone_number_id || '').trim();
+  if (phoneNumberId) return `sms_phone:${phoneNumberId}`;
   const fallbackId = String(row?.id || '').trim();
   return fallbackId ? `sms:${fallbackId}` : 'sms:unknown';
 };
@@ -108,11 +108,11 @@ export const resolveVoipCounterpartyPhone = (row: any) => {
 };
 
 export const getVoipThreadKey = (row: any) => {
-  const phoneNumberId = String(row?.phone_number_id || '').trim();
-  if (phoneNumberId) return `voip_phone:${phoneNumberId}`;
   const phone = resolveVoipCounterpartyPhone(row);
   const normalizedPhone = normalizePhoneThreadValue(phone);
   if (normalizedPhone) return `voip:${normalizedPhone}`;
+  const phoneNumberId = String(row?.phone_number_id || '').trim();
+  if (phoneNumberId) return `voip_phone:${phoneNumberId}`;
   const fallbackId = String(row?.id || '').trim();
   return fallbackId ? `voip:${fallbackId}` : 'voip:unknown';
 };

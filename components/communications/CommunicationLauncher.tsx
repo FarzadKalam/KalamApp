@@ -44,7 +44,10 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
       setTotalUnread(0);
       return;
     }
-    const { data, error } = await supabase.rpc('get_communication_badge_summary');
+    let { data, error } = await supabase.rpc('get_communication_badge_summary_v2');
+    if (error && isMissingRpcError(error)) {
+      ({ data, error } = await supabase.rpc('get_communication_badge_summary'));
+    }
     if (error) {
       if (isMissingRpcError(error)) {
         setLightweightAvailable(false);
@@ -107,6 +110,34 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
   }, [lightweightAvailable, normalizedOrgId, normalizedRoleId, normalizedUserId, panelMounted, refreshBadge]);
 
   useEffect(() => {
+    if (!normalizedUserId || !normalizedOrgId || panelMounted || lightweightAvailable !== true) return undefined;
+    const channel = supabase
+      .channel(`communication-launcher-live-${normalizedOrgId}-${normalizedUserId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'outbound_messages', filter: `org_id=eq.${normalizedOrgId}` },
+        (payload: any) => {
+          const row = payload?.new || payload?.old || {};
+          if (String(row?.channel_type || '').trim() === 'sms') {
+            void refreshBadge();
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'voip_call_logs', filter: `org_id=eq.${normalizedOrgId}` },
+        () => {
+          void refreshBadge();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [lightweightAvailable, normalizedOrgId, normalizedUserId, panelMounted, refreshBadge]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const handleAiOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ requestedTab?: CommunicationTab }>).detail;
@@ -158,6 +189,15 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
               setPanelMounted(false);
               void refreshBadge();
             }}
+          />
+        </React.Suspense>
+      ) : null}
+      {lightweightAvailable === true && !panelMounted ? (
+        <React.Suspense fallback={null}>
+          <NotificationsPopover
+            isMobile={isMobile}
+            variant="chat"
+            triggerless
           />
         </React.Suspense>
       ) : null}

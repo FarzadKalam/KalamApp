@@ -19,8 +19,11 @@ type ConvListCacheEntry = {
 const _convListCache = new Map<string, ConvListCacheEntry>();
 const CONV_LIST_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
 
-const readCache = (section: string): NotificationConversationSummary[] | null => {
-  const entry = _convListCache.get(section);
+const buildCacheKey = (scopeKey: string | null | undefined, section: string) =>
+  `${String(scopeKey || 'default').trim() || 'default'}:${section}`;
+
+const readCache = (cacheKey: string): NotificationConversationSummary[] | null => {
+  const entry = _convListCache.get(cacheKey);
   if (entry && Date.now() - entry.fetchedAt < CONV_LIST_CACHE_TTL_MS) return entry.items;
   return null;
 };
@@ -31,22 +34,30 @@ type UseNotificationConversationListOptions = {
   supabase: SupabaseClient<any, 'public', any>;
   section: NotificationConversationSection;
   enabled: boolean;
+  cacheScopeKey?: string | null;
 };
 
 export const useNotificationConversationList = ({
   supabase,
   section,
   enabled,
+  cacheScopeKey,
 }: UseNotificationConversationListOptions) => {
+  const cacheKey = buildCacheKey(cacheScopeKey, section);
   // Initialize from module-level cache so first render shows data immediately
   const [items, setItemsState] = useState<NotificationConversationSummary[] | null>(
-    () => readCache(section),
+    () => readCache(cacheKey),
   );
   const [loading, setLoading] = useState(false);
   const [available, setAvailable] = useState(true);
   const [v2Available, setV2Available] = useState(true);
   // Deduplicate concurrent refresh() calls — only one in-flight at a time.
   const refreshInFlightRef = useRef(false);
+
+  useEffect(() => {
+    setItemsState(readCache(cacheKey));
+    refreshInFlightRef.current = false;
+  }, [cacheKey]);
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -81,12 +92,12 @@ export const useNotificationConversationList = ({
               )(prev)
             : updater;
         if (Array.isArray(next)) {
-          _convListCache.set(section, { items: next, fetchedAt: Date.now() });
+          _convListCache.set(cacheKey, { items: next, fetchedAt: Date.now() });
         }
         return next;
       });
     },
-    [section],
+    [cacheKey],
   );
 
   const refresh = useCallback(async () => {
@@ -140,13 +151,13 @@ export const useNotificationConversationList = ({
         ? (data as NotificationConversationSummary[])
         : [];
       setItemsState(nextItems);
-      _convListCache.set(section, { items: nextItems, fetchedAt: Date.now() });
+      _convListCache.set(cacheKey, { items: nextItems, fetchedAt: Date.now() });
       return nextItems;
     } finally {
       setLoading(false);
       refreshInFlightRef.current = false;
     }
-  }, [available, enabled, section, supabase, v2Available]);
+  }, [available, cacheKey, enabled, section, supabase, v2Available]);
 
   useEffect(() => {
     if (!enabled || !available) return;
