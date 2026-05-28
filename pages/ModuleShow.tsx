@@ -2334,6 +2334,17 @@ const ModuleShow: React.FC = () => {
         const { error } = await supabase.from(moduleConfig?.table || moduleId).update(payload).eq('id', id);
         if (error) throw error;
 
+        await runWorkflowsForEvent({
+          moduleId,
+          event: 'upsert',
+          currentRecord: {
+            ...(data || {}),
+            ...payload,
+            id,
+          } as Record<string, any>,
+          previousRecord: (data || null) as Record<string, any> | null,
+        });
+
         const previousAssigneeId = getResolvedAssigneeId(data);
         const prevAssigneeType = String(data?.assignee_type || (data?.assignee_role_id ? 'role' : 'user'));
         const prevAssignee = previousAssigneeId ? `${prevAssigneeType}:${previousAssigneeId}` : null;
@@ -6671,7 +6682,6 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
-
 
 
 

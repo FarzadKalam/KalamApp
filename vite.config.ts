@@ -104,6 +104,7 @@ export default defineConfig(({ mode }) => {
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
+          '@tanstack/react-virtual': path.resolve(__dirname, 'utils/reactVirtualShim.ts'),
         }
       },
       test: {

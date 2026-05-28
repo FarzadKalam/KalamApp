@@ -32,6 +32,7 @@ type TimelineCacheEntry<TItem> = {
 };
 const _botTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+let _botUnifiedTimelineRpcAvailable = false;
 
 const buildCacheKey = (scopeKey: string | null | undefined, botGroupId: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${botGroupId}`;
@@ -69,14 +70,32 @@ export const prefetchBotConversationTimeline = async <TItem,>({
   if (!normalizedBotGroupId || readCache<TItem>(cacheKey) || _botTimelinePrefetchInFlight.has(normalizedBotGroupId)) return;
   _botTimelinePrefetchInFlight.add(normalizedBotGroupId);
   try {
-    const { data, error } = await supabase.rpc('get_communication_timeline', {
-      p_channel: 'bot',
-      p_conversation_key: `bot:${normalizedBotGroupId}`,
-      p_before_cursor: null,
+    if (_botUnifiedTimelineRpcAvailable) {
+      const { data, error } = await supabase.rpc('get_communication_timeline', {
+        p_channel: 'bot',
+        p_conversation_key: `bot:${normalizedBotGroupId}`,
+        p_before_cursor: null,
+        p_limit: pageSize,
+      });
+      if (!error) {
+        const payload = normalizeTimelinePayload<TItem>(data);
+        _botTimelineCache.set(cacheKey, {
+          payload: { ...payload, items: sortByDate(payload.items || []) },
+          fetchedAt: Date.now(),
+        });
+        return;
+      }
+      _botUnifiedTimelineRpcAvailable = false;
+    }
+
+    const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_bot_conversation_timeline', {
+      p_bot_group_id: normalizedBotGroupId,
       p_limit: pageSize,
+      p_before_cursor: null,
+      p_include_unread_window: false,
     });
-    if (error) return;
-    const payload = normalizeTimelinePayload<TItem>(data);
+    if (fallbackError) return;
+    const payload = normalizeTimelinePayload<TItem>(fallbackData);
     _botTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
@@ -104,7 +123,7 @@ export const useBotConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
-  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(true);
+  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(_botUnifiedTimelineRpcAvailable);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedBotGroupId = String(botGroupId || '').trim();
@@ -120,7 +139,7 @@ export const useBotConversationTimeline = <TItem,>({
   useEffect(() => {
     if (enabled) {
       setAvailable(true);
-      setCommunicationApiAvailable(true);
+      setCommunicationApiAvailable(_botUnifiedTimelineRpcAvailable);
     }
   }, [enabled]);
 
@@ -207,9 +226,7 @@ export const useBotConversationTimeline = <TItem,>({
       if (!error) {
         return normalizeTimelinePayload<TItem>(data);
       }
-      if (!isMissingRpcError(error)) {
-        throw error;
-      }
+      _botUnifiedTimelineRpcAvailable = false;
       setCommunicationApiAvailable(false);
     }
 

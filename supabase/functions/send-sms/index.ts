@@ -732,6 +732,15 @@ const sendSmsWithProviderFallback = async (to: string[], text: string, settings:
     throw new Error('متن پیامک خالی است.');
   }
 
+  const isTimeoutLikeError = (value: unknown) => {
+    const message = String(value || '').toLowerCase();
+    return (
+      message.includes('timeout') ||
+      message.includes('aborted') ||
+      message.includes('aborterror')
+    );
+  };
+
   const sendViaRest = async (timeoutMs = 8000) => {
     const providerResults: Array<{ recipient: string; raw: string; result: string; method: string; provider_status?: string; provider_status_text?: string; delivery?: Record<string, any> | null }> = [];
 
@@ -817,16 +826,56 @@ const sendSmsWithProviderFallback = async (to: string[], text: string, settings:
     };
   };
 
+  const attempts: Array<{ method: string; success: boolean; error?: string }> = [];
+
   try {
-    const result = await sendViaRest();
+    const result = await sendViaRest(10000);
+    attempts.push({ method: 'rest_send_sms', success: true });
     return {
       ...result,
-      provider_attempts: [{ method: 'rest_send_sms', success: true }],
+      provider_attempts: attempts,
     };
   } catch (error: any) {
     const message = String(error?.message || error);
+    attempts.push({ method: 'rest_send_sms', success: false, error: message });
     console.warn('[send-sms] send provider=rest_send_sms:failed', message);
-    throw new Error(`ارسال پیامک از مسیر REST ملی پیامک ناموفق بود. ${message}`);
+
+    if (isTimeoutLikeError(message)) {
+      try {
+        const retryResult = await sendViaRest(14000);
+        attempts.push({ method: 'rest_send_sms_retry', success: true });
+        return {
+          ...retryResult,
+          provider_attempts: attempts,
+        };
+      } catch (retryError: any) {
+        const retryMessage = String(retryError?.message || retryError);
+        attempts.push({ method: 'rest_send_sms_retry', success: false, error: retryMessage });
+        console.warn('[send-sms] send provider=rest_send_sms_retry:failed', retryMessage);
+      }
+    }
+
+    try {
+      const soapSettings: SmsSettings = {
+        ...settings,
+        mode: 'soap',
+        base_url: String(settings?.base_url || '').trim() || DEFAULT_SMS_SEND_URL,
+      };
+      const soapResult = await sendSmsWithProvider(recipients, messageText, soapSettings);
+      attempts.push({ method: 'soap_send_simple_sms2', success: true });
+      return {
+        ...soapResult,
+        provider_method: 'soap_send_simple_sms2',
+        provider_attempts: attempts,
+      };
+    } catch (soapError: any) {
+      const soapMessage = String(soapError?.message || soapError);
+      attempts.push({ method: 'soap_send_simple_sms2', success: false, error: soapMessage });
+      console.warn('[send-sms] send provider=soap_send_simple_sms2:failed', soapMessage);
+    }
+
+    const lastError = attempts[attempts.length - 1]?.error || message;
+    throw new Error(`ارسال پیامک از مسیر REST/SOAP ملی پیامک ناموفق بود. ${lastError}`);
   }
 };
 

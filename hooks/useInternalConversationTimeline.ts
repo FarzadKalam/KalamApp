@@ -33,6 +33,7 @@ type TimelineCacheEntry<TItem> = {
 };
 const _internalTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+let _internalUnifiedTimelineRpcAvailable = false;
 
 const buildCacheKey = (scopeKey: string | null | undefined, conversationKey: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${conversationKey}`;
@@ -75,14 +76,32 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
   ) return;
   _internalTimelinePrefetchInFlight.add(normalizedConversationKey);
   try {
-    const { data, error } = await supabase.rpc('get_communication_timeline', {
-      p_channel: 'internal',
+    if (_internalUnifiedTimelineRpcAvailable) {
+      const { data, error } = await supabase.rpc('get_communication_timeline', {
+        p_channel: 'internal',
+        p_conversation_key: normalizedConversationKey,
+        p_before_cursor: null,
+        p_limit: pageSize,
+      });
+      if (!error) {
+        const payload = normalizeTimelinePayload<TItem>(data);
+        _internalTimelineCache.set(cacheKey, {
+          payload: { ...payload, items: sortByDate(payload.items || []) },
+          fetchedAt: Date.now(),
+        });
+        return;
+      }
+      _internalUnifiedTimelineRpcAvailable = false;
+    }
+
+    const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_internal_conversation_timeline', {
       p_conversation_key: normalizedConversationKey,
-      p_before_cursor: null,
       p_limit: pageSize,
+      p_before_cursor: null,
+      p_include_unread_window: false,
     });
-    if (error) return;
-    const payload = normalizeTimelinePayload<TItem>(data);
+    if (fallbackError) return;
+    const payload = normalizeTimelinePayload<TItem>(fallbackData);
     _internalTimelineCache.set(cacheKey, {
       payload: { ...payload, items: sortByDate(payload.items || []) },
       fetchedAt: Date.now(),
@@ -110,7 +129,7 @@ export const useInternalConversationTimeline = <TItem,>({
   const [initialAnchorId, setInitialAnchorId] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [available, setAvailable] = useState(true);
-  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(true);
+  const [communicationApiAvailable, setCommunicationApiAvailable] = useState(_internalUnifiedTimelineRpcAvailable);
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedConversationKey = String(conversationKey || '').trim();
@@ -126,7 +145,7 @@ export const useInternalConversationTimeline = <TItem,>({
   useEffect(() => {
     if (enabled) {
       setAvailable(true);
-      setCommunicationApiAvailable(true);
+      setCommunicationApiAvailable(_internalUnifiedTimelineRpcAvailable);
     }
   }, [enabled]);
 
@@ -218,9 +237,7 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!error) {
         return normalizeTimelinePayload<TItem>(data);
       }
-      if (!isMissingRpcError(error)) {
-        throw error;
-      }
+      _internalUnifiedTimelineRpcAvailable = false;
       setCommunicationApiAvailable(false);
     }
 

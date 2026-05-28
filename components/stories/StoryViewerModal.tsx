@@ -47,6 +47,14 @@ interface ViewerEntry {
   viewed_at: string;
 }
 
+type ViewerProfileRow = {
+  id: string;
+  full_name: string | null;
+  email?: string | null;
+  mobile_1?: string | null;
+  avatar_url: string | null;
+};
+
 const PROGRESS_INTERVAL_MS = 50;
 // ارتفاع ناحیه هدر — ناحیه‌های کلیک از پایین هدر شروع می‌شوند
 const HEADER_ZONE_PX = 88;
@@ -178,14 +186,16 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
         return;
       }
 
-      const userIds = viewData.map((v: { user_id: string }) => v.user_id);
+      const userIds = Array.from(
+        new Set(viewData.map((v: { user_id: string }) => String(v?.user_id || '').trim()).filter(Boolean))
+      );
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('id, full_name, display_name, avatar_url')
+        .select('id, full_name, email, mobile_1, avatar_url')
         .in('id', userIds);
 
       const profileMap = new Map(
-        (profileData ?? []).map((p: { id: string; full_name: string | null; display_name: string | null; avatar_url: string | null }) => [p.id, p])
+        ((profileData ?? []) as ViewerProfileRow[]).map((p) => [p.id, p])
       );
 
       setViewersList(
@@ -193,7 +203,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           const profile = profileMap.get(v.user_id);
           return {
             user_id: v.user_id,
-            user_name: profile?.full_name || profile?.display_name || null,
+            user_name: profile?.full_name || profile?.email || profile?.mobile_1 || null,
             avatar_url: profile?.avatar_url ?? null,
             viewed_at: v.viewed_at,
           };

@@ -1110,24 +1110,28 @@ const getAttendanceCheckOutAt = (row: AttendanceLogRecord) => {
     null;
 };
 
+const calculateAttendanceRowPresenceMinutes = (row: AttendanceComputedRow) => {
+  if (row.shiftDeltas.length) {
+    const shiftPresenceMinutes = row.shiftDeltas.reduce((sum, shift) => {
+      const checkIn = parseDate(shift.checkInAt || null);
+      const checkOut = parseDate(shift.checkOutAt || null);
+      if (!checkIn || !checkOut) return sum;
+      const diff = checkOut.diff(checkIn, 'minute');
+      return diff > 0 && diff < 24 * 60 ? sum + diff : sum;
+    }, 0);
+    if (shiftPresenceMinutes > 0) return shiftPresenceMinutes;
+  }
+
+  const checkIn = parseDate(row.checkInAt || null);
+  const checkOut = parseDate(row.checkOutAt || null);
+  if (!checkIn || !checkOut) return 0;
+  const diff = checkOut.diff(checkIn, 'minute');
+  return diff > 0 && diff < 24 * 60 ? diff : 0;
+};
+
 const calculatePresenceMinutes = (rows: AttendanceComputedRow[]) => {
   return rows.reduce((total, row) => {
-    if (row.shiftDeltas.length) {
-      const shiftPresenceMinutes = row.shiftDeltas.reduce((sum, shift) => {
-        const checkIn = parseDate(shift.checkInAt || null);
-        const checkOut = parseDate(shift.checkOutAt || null);
-        if (!checkIn || !checkOut) return sum;
-        const diff = checkOut.diff(checkIn, 'minute');
-        return diff > 0 && diff < 24 * 60 ? sum + diff : sum;
-      }, 0);
-      if (shiftPresenceMinutes > 0) return total + shiftPresenceMinutes;
-    }
-
-    const checkIn = parseDate(row.checkInAt || null);
-    const checkOut = parseDate(row.checkOutAt || null);
-    if (!checkIn || !checkOut) return total;
-    const diff = checkOut.diff(checkIn, 'minute');
-    return diff > 0 && diff < 24 * 60 ? total + diff : total;
+    return total + calculateAttendanceRowPresenceMinutes(row);
   }, 0);
 };
 
@@ -5086,10 +5090,14 @@ const HRPage: React.FC = () => {
       render: (_: unknown, row: AttendanceComputedRow) => <Tag color={row.deltaColor}>{row.deltaLabel}</Tag>,
     },
     {
-      title: 'جزئیات اختلاف',
+      title: 'جزئیات',
       key: 'delta_details',
       render: (_: unknown, row: AttendanceComputedRow) => (
         <div className="text-xs leading-6">
+          <div className="mb-2">
+            <div>جمع حضور: <span className="persian-number text-blue-700">{formatMinutesLabel(calculateAttendanceRowPresenceMinutes(row))}</span></div>
+            <div>جمع دیرکرد: <span className="persian-number text-red-700">{formatMinutesLabel(row.lateMinutes)}</span></div>
+          </div>
           {row.attendanceSegments.length > 1 && (
             <div className="mb-2">
               <div className="font-bold text-gray-700">بازه‌های حضور</div>
