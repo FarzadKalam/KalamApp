@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined, OpenAIOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
@@ -12,7 +12,6 @@ import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, fetchCurrentUserRole
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
 import ModuleSettingsTab from './ModuleSettingsTab';
 import PrintTemplatesTab from './PrintTemplatesTab';
-import AiKnowledgeTab from './AiKnowledgeTab';
 import { useSearchParams } from 'react-router-dom';
 
 const SettingsPage: React.FC = () => {
@@ -51,7 +50,6 @@ const SettingsPage: React.FC = () => {
               customer_leveling: false,
               workflows: false,
               print_templates: false,
-              ai_knowledge: false,
             });
           } else {
             setTabPermissions({
@@ -63,7 +61,6 @@ const SettingsPage: React.FC = () => {
               connections: fields.connections !== false,
               customer_leveling: fields.customer_leveling !== false,
               print_templates: fields.print_templates !== false,
-              ai_knowledge: fields.ai_knowledge !== false,
               workflows:
                 fields.workflows !== false &&
                 workflowsPerms.view !== false &&
@@ -130,11 +127,6 @@ const SettingsPage: React.FC = () => {
         key: 'print_templates',
         label: <span className="flex items-center gap-2 text-base"><FileTextOutlined /> قالب‌های پرینت</span>,
         children: <PrintTemplatesTab />,
-      },
-      {
-        key: 'ai_knowledge',
-        label: <span className="flex items-center gap-2 text-base"><OpenAIOutlined /> دانش سازمان</span>,
-        children: <AiKnowledgeTab />,
       },
       {
         key: 'workflows',

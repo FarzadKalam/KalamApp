@@ -479,7 +479,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
                 content={(
                   <div style={{ width: 'min(88vw, 280px)' }} className="text-xs leading-6 text-gray-600 dark:text-gray-300">
                     برای بازخورد موثرتر در استفاده هوش مصنوعی، ابتدا{' '}
-                    <Link to="/settings?tab=ai_knowledge" className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2">
+                    <Link to="/org-knowledge" className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2">
                       دانش سازمان
                     </Link>{' '}
                     را تکمیل کنید

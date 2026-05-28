@@ -25,6 +25,7 @@ type TaxpayerSubmission = {
   created_at?: string | null;
   request_payload?: any;
   response_payload?: any;
+  inquiry_payload?: any;
   integration_mode?: string | null;
 };
 
@@ -47,6 +48,11 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   inquired: { label: 'استعلام شده', color: 'purple' },
 };
 
+const getStatusMeta = (value?: string | null) => {
+  const key = String(value || '').trim().toLowerCase();
+  return STATUS_LABELS[key] || { label: value || '-', color: 'default' };
+};
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return '-';
   try {
@@ -61,18 +67,30 @@ const getSubmissionDebug = (record: TaxpayerSubmission) => {
   const responseDebug = record?.response_payload?._kalam_debug || {};
   return {
     stage: String(responseDebug?.stage || requestDebug?.stage || '').trim(),
-    requestTraceId: String(
-      responseDebug?.enqueue_debug?.request_trace_id
-      || requestDebug?.enqueue_debug?.request_trace_id
-      || ''
-    ).trim(),
-    packetUid: String(
-      responseDebug?.enqueue_debug?.packet_uid
-      || requestDebug?.packet_debug?.packet_uid
-      || requestDebug?.enqueue_debug?.packet_uid
-      || ''
-    ).trim(),
   };
+};
+
+const collectTaxpayerMessages = (items: any, prefix = '') => {
+  const list = Array.isArray(items) ? items : [];
+  return list
+    .map((item: any) => `${item?.code ? `[${item.code}] ` : ''}${prefix}${String(item?.message || item?.errorDetail || item?.errorMessage || '').trim()}`.trim())
+    .filter(Boolean);
+};
+
+const getSubmissionErrorMessage = (record: TaxpayerSubmission) => {
+  const row = Array.isArray(record?.inquiry_payload?.result?.data)
+    ? record.inquiry_payload.result.data[0]
+    : Array.isArray(record?.inquiry_payload?.data)
+      ? record.inquiry_payload.data[0]
+      : null;
+  const data = row?.data || {};
+  const inquiryMessages = [
+    ...collectTaxpayerMessages(data.error),
+    ...collectTaxpayerMessages(data.errors),
+    ...collectTaxpayerMessages(data.warning, 'هشدار: '),
+    ...collectTaxpayerMessages(data.warnings, 'هشدار: '),
+  ];
+  return record.error_message || inquiryMessages.join(' | ') || '';
 };
 
 const TAXPAYER_FIELDS: ModuleField[] = [
@@ -187,7 +205,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
     try {
       const { data, error } = await supabase
         .from('taxpayer_invoice_submissions')
-        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at,request_payload,response_payload,integration_mode')
+        .select('id,taxid,uid,reference_number,status,error_message,sent_at,last_inquiry_at,created_at,request_payload,response_payload,inquiry_payload,integration_mode')
         .eq('invoice_id', invoiceId)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -287,7 +305,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
         dataIndex: 'status',
         key: 'status',
         render: (value: string) => {
-          const meta = STATUS_LABELS[String(value || '')] || { label: value || '-', color: 'default' };
+          const meta = getStatusMeta(value);
           return <Tag color={meta.color}>{meta.label}</Tag>;
         },
       },
@@ -299,7 +317,6 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
         key: 'integration_mode',
         render: (value: string) => value === 'no_certificate_legacy' ? 'بدون گواهی' : value === 'certificate_v2' ? 'نسخه ۲' : '-',
       },
-      { title: 'UID', dataIndex: 'uid', key: 'uid', render: (value: string) => value || '-' },
       { title: 'رسید', dataIndex: 'reference_number', key: 'reference_number', render: (value: string) => value || '-' },
       { title: 'ارسال', dataIndex: 'sent_at', key: 'sent_at', render: formatDateTime },
       { title: 'استعلام', dataIndex: 'last_inquiry_at', key: 'last_inquiry_at', render: formatDateTime },
@@ -377,18 +394,17 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           expandable={{
             expandedRowRender: (record) => {
               const debug = getSubmissionDebug(record);
+              const errorMessage = getSubmissionErrorMessage(record);
               return (
                 <Space direction="vertical" size={4} className="w-full">
                   <Typography.Paragraph className="!mb-0 whitespace-pre-wrap text-xs">
-                    {record.error_message || 'متن خطایی برای این ارسال ثبت نشده است.'}
+                    {errorMessage || 'متن خطایی برای این ارسال ثبت نشده است.'}
                   </Typography.Paragraph>
                   {debug.stage ? <Typography.Text className="text-xs">مرحله: {debug.stage}</Typography.Text> : null}
-                  {debug.requestTraceId ? <Typography.Text className="text-xs">شناسه رهگیری درخواست: {debug.requestTraceId}</Typography.Text> : null}
-                  {debug.packetUid ? <Typography.Text className="text-xs">شناسه بسته: {debug.packetUid}</Typography.Text> : null}
                 </Space>
               );
             },
-            rowExpandable: (record) => !!record.error_message || !!getSubmissionDebug(record).stage,
+            rowExpandable: (record) => !!getSubmissionErrorMessage(record) || !!getSubmissionDebug(record).stage,
           }}
         />
       </Space>

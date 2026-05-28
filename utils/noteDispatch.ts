@@ -68,8 +68,8 @@ export const insertNotesWithFallback = async (rows: Record<string, any>[]) => {
   const omittedColumns = new Set<string>();
 
   while (true) {
-    const { error } = await supabase.from('notes').insert(payloads);
-    if (!error) return;
+    const { data, error } = await supabase.from('notes').insert(payloads).select('*');
+    if (!error) return data || [];
 
     const missingColumn = NOTE_OPTIONAL_INSERT_COLUMNS.find((column) =>
       !omittedColumns.has(column) && isMissingColumnError(error, column),

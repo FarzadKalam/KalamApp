@@ -22,6 +22,10 @@ import {
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { loadProfilesWithCompat } from '../../utils/profileDirectory';
 import { insertNotesWithFallback } from '../../utils/noteDispatch';
+import {
+  KnowledgeVisibilityOption,
+  normalizeKnowledgeVisibilityIds,
+} from '../../utils/knowledgeVisibility';
 
 const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 
@@ -42,11 +46,15 @@ export type OrgDocumentForEditor = {
   status: 'active' | 'draft' | 'archived';
   use_for_ai?: boolean;
   metadata?: Record<string, any> | null;
+  allowed_user_ids?: string[] | null;
+  allowed_role_ids?: string[] | null;
 };
 
 interface KnowledgeDocumentEditorProps {
   document: OrgDocumentForEditor;
   typeOptions: Array<{ label: string; value: string }>;
+  visibilityUserOptions?: KnowledgeVisibilityOption[];
+  visibilityRoleOptions?: KnowledgeVisibilityOption[];
   onClose: () => void;
   onSaved: (updated: OrgDocumentForEditor) => void;
   rebuildChunks: (doc: OrgDocumentForEditor) => Promise<void>;
@@ -85,6 +93,8 @@ const escapePrintHtml = (value: string) =>
 const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   document,
   typeOptions,
+  visibilityUserOptions = [],
+  visibilityRoleOptions = [],
   onClose,
   onSaved,
   rebuildChunks,
@@ -100,6 +110,8 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   const [status, setStatus] = useState<'active' | 'draft' | 'archived'>(document.status || 'active');
   const [docType, setDocType] = useState<string>(document.document_type || 'general');
   const [useForAi, setUseForAi] = useState<boolean>(document.use_for_ai !== false);
+  const [allowedUserIds, setAllowedUserIds] = useState<string[]>(normalizeKnowledgeVisibilityIds(document.allowed_user_ids));
+  const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>(normalizeKnowledgeVisibilityIds(document.allowed_role_ids));
   const [saving, setSaving] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -127,6 +139,8 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
         status,
         document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : docType,
         use_for_ai: useForAi,
+        allowed_user_ids: normalizeKnowledgeVisibilityIds(allowedUserIds),
+        allowed_role_ids: normalizeKnowledgeVisibilityIds(allowedRoleIds),
         updated_by: authData?.user?.id || null,
       };
       if (isSystemDocument) {
@@ -137,7 +151,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
         .from('org_documents')
         .update(payload)
         .eq('id', document.id)
-        .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+        .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata, allowed_user_ids, allowed_role_ids')
         .maybeSingle();
       if (error) throw error;
 
@@ -400,6 +414,38 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
             style={{ width: 110 }}
           />
 
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            value={allowedUserIds}
+            onChange={(values) => setAllowedUserIds(normalizeKnowledgeVisibilityIds(values))}
+            options={visibilityUserOptions}
+            optionFilterProp="label"
+            placeholder="اشخاص مجاز"
+            maxTagCount="responsive"
+            size="small"
+            style={{ width: 180 }}
+            getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
+            styles={{ popup: { root: { zIndex: 1710 } } }}
+          />
+
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            value={allowedRoleIds}
+            onChange={(values) => setAllowedRoleIds(normalizeKnowledgeVisibilityIds(values))}
+            options={visibilityRoleOptions}
+            optionFilterProp="label"
+            placeholder="نقش‌های مجاز"
+            maxTagCount="responsive"
+            size="small"
+            style={{ width: 180 }}
+            getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
+            styles={{ popup: { root: { zIndex: 1710 } } }}
+          />
+
           {/* استفاده برای هوش مصنوعی */}
           <Tooltip title={useForAi ? 'هوش مصنوعی از این سند استفاده می‌کند' : 'هوش مصنوعی از این سند استفاده نمی‌کند'}>
             <div className="flex items-center gap-1 cursor-pointer" onClick={() => setUseForAi((v) => !v)}>
@@ -515,7 +561,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
             optionFilterProp="searchText"
             filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').trim().toLowerCase())}
             options={shareTargetOptions}
-            getPopupContainer={(trigger) => trigger.parentElement || document.body}
+            getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
             styles={{ popup: { root: { zIndex: 1710 } } }}
             maxTagCount="responsive"
             className="w-full"

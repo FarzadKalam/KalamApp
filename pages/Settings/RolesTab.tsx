@@ -69,6 +69,8 @@ type ModuleConditionOptions = {
 };
 
 const { Panel } = Collapse;
+const SETTINGS_PAGE_FIELD_PERMISSIONS = SETTINGS_TAB_PERMISSIONS.filter((item) => item.key !== 'ai_knowledge');
+const SETTINGS_TOOL_FIELD_PERMISSIONS = SETTINGS_TAB_PERMISSIONS.filter((item) => item.key === 'ai_knowledge');
 
 type PermissionFieldItem = {
   key: string;
@@ -1111,9 +1113,21 @@ const RolesTab: React.FC = () => {
                     </Divider>
                     {renderFieldSwitches(
                       SETTINGS_PERMISSION_KEY,
-                      SETTINGS_TAB_PERMISSIONS,
+                      SETTINGS_PAGE_FIELD_PERMISSIONS,
                       getModulePerms(SETTINGS_PERMISSION_KEY).view === false
                     )}
+                    {SETTINGS_TOOL_FIELD_PERMISSIONS.length > 0 ? (
+                      <>
+                        <Divider orientation="left" className="text-xs text-gray-400 m-0 my-3 border-gray-200 dark:border-gray-700">
+                          دسترسی ابزارهای مدیریتی
+                        </Divider>
+                        {renderFieldSwitches(
+                          SETTINGS_PERMISSION_KEY,
+                          SETTINGS_TOOL_FIELD_PERMISSIONS,
+                          getModulePerms(SETTINGS_PERMISSION_KEY).view === false
+                        )}
+                      </>
+                    ) : null}
                   </div>
                 </Panel>
 

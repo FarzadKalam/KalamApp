@@ -24,6 +24,12 @@ import {
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { loadProfilesWithCompat } from '../../utils/profileDirectory';
+import {
+  formatKnowledgeVisibilitySummary,
+  normalizeKnowledgeVisibilityIds,
+} from '../../utils/knowledgeVisibility';
 import {
   AI_INSTRUCTIONS_DEFAULT_BODY,
   AI_INSTRUCTIONS_DOCUMENT_TYPE,
@@ -43,6 +49,8 @@ type OrgDocument = {
   use_for_ai?: boolean;
   updated_at?: string | null;
   metadata?: Record<string, any> | null;
+  allowed_user_ids?: string[] | null;
+  allowed_role_ids?: string[] | null;
 };
 
 type KnowledgeFormValues = {
@@ -50,6 +58,8 @@ type KnowledgeFormValues = {
   document_type: string;
   status: 'active' | 'draft' | 'archived';
   body: string;
+  allowed_user_ids: string[];
+  allowed_role_ids: string[];
 };
 
 const DEFAULT_FORM_VALUES: KnowledgeFormValues = {
@@ -57,7 +67,11 @@ const DEFAULT_FORM_VALUES: KnowledgeFormValues = {
   document_type: 'business_plan',
   status: 'active',
   body: '',
+  allowed_user_ids: [],
+  allowed_role_ids: [],
 };
+
+const DOCUMENT_SELECT_FIELDS = 'id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata, allowed_user_ids, allowed_role_ids';
 
 const BASE_DOCUMENT_TYPE_OPTIONS = [
   { label: 'دستورهای هوش مصنوعی', value: AI_INSTRUCTIONS_DOCUMENT_TYPE },
@@ -129,6 +143,8 @@ const AiKnowledgeTab: React.FC = () => {
   const [editingDocument, setEditingDocument] = useState<OrgDocument | null>(null);
   const [editorDocument, setEditorDocument] = useState<OrgDocument | null>(null);
   const [rebuildingId, setRebuildingId] = useState<string | null>(null);
+  const [visibilityUserOptions, setVisibilityUserOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [visibilityRoleOptions, setVisibilityRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
 
   // مدیریت آپشن‌های داینامیک نوع سند
   const [customTypeOptions, setCustomTypeOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -154,6 +170,48 @@ const AiKnowledgeTab: React.FC = () => {
     if (extras.length) setCustomTypeOptions(extras);
   }, [documents]);
 
+  useEffect(() => {
+    let active = true;
+    const loadVisibilityOptions = async () => {
+      try {
+        const bootstrap = await fetchSessionBootstrap(supabase);
+        const currentOrgId = String(bootstrap?.orgId || '').trim();
+        if (!currentOrgId) return;
+        const [profilesResult, rolesResult] = await Promise.all([
+          loadProfilesWithCompat(supabase, {
+            orgId: currentOrgId,
+            limit: 500,
+            cacheKey: `knowledge-visibility:profiles:${currentOrgId}`,
+            orderByFullName: true,
+          }),
+          supabase
+            .from('org_roles')
+            .select('id, title')
+            .eq('org_id', currentOrgId)
+            .order('title', { ascending: true })
+            .limit(200),
+        ]);
+        if (!active) return;
+        if (profilesResult.error) throw profilesResult.error;
+        if (rolesResult.error) throw rolesResult.error;
+        setVisibilityUserOptions((profilesResult.data || []).map((user: any) => ({
+          label: String(user?.full_name || user?.email || user?.mobile_1 || '').trim() || 'کاربر بدون نام',
+          value: String(user.id),
+        })));
+        setVisibilityRoleOptions((rolesResult.data || []).map((role: any) => ({
+          label: String(role?.title || '').trim() || 'نقش بدون نام',
+          value: String(role.id),
+        })));
+      } catch (error) {
+        console.warn('Could not load knowledge visibility options', error);
+      }
+    };
+    void loadVisibilityOptions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const sortedDocuments = useMemo(
     () =>
       [...documents].sort((a, b) => {
@@ -168,7 +226,7 @@ const AiKnowledgeTab: React.FC = () => {
   const ensureAiInstructionsDocument = async () => {
     const { data, error } = await supabase
       .from('org_documents')
-      .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+      .select(DOCUMENT_SELECT_FIELDS)
       .eq('document_type', AI_INSTRUCTIONS_DOCUMENT_TYPE)
       .order('updated_at', { ascending: false })
       .limit(1);
@@ -193,9 +251,11 @@ const AiKnowledgeTab: React.FC = () => {
           },
           created_by: authData?.user?.id || null,
           updated_by: authData?.user?.id || null,
+          allowed_user_ids: [],
+          allowed_role_ids: [],
         },
       ])
-      .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+      .select(DOCUMENT_SELECT_FIELDS)
       .maybeSingle();
     if (insertError) throw insertError;
     const insertedDocument = inserted as OrgDocument | null;
@@ -209,7 +269,7 @@ const AiKnowledgeTab: React.FC = () => {
       await ensureAiInstructionsDocument();
       const { data, error } = await supabase
         .from('org_documents')
-        .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+        .select(DOCUMENT_SELECT_FIELDS)
         .order('updated_at', { ascending: false });
       if (error) throw error;
       setDocuments((data || []) as OrgDocument[]);
@@ -246,6 +306,8 @@ const AiKnowledgeTab: React.FC = () => {
       content_hash: hashText(content),
       token_estimate: Math.ceil(content.length / 4),
       status: 'active',
+      allowed_user_ids: normalizeKnowledgeVisibilityIds(doc.allowed_user_ids),
+      allowed_role_ids: normalizeKnowledgeVisibilityIds(doc.allowed_role_ids),
       metadata: {
         document_title: doc.title,
         document_type: doc.document_type || 'general',
@@ -271,6 +333,8 @@ const AiKnowledgeTab: React.FC = () => {
       body: doc.body || '',
       document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (doc.document_type || 'general'),
       status: doc.status || 'active',
+      allowed_user_ids: normalizeKnowledgeVisibilityIds(doc.allowed_user_ids),
+      allowed_role_ids: normalizeKnowledgeVisibilityIds(doc.allowed_role_ids),
     });
     setModalOpen(true);
   };
@@ -287,6 +351,8 @@ const AiKnowledgeTab: React.FC = () => {
         body_html: null,
         document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (values.document_type || 'general'),
         status: values.status || 'active',
+        allowed_user_ids: normalizeKnowledgeVisibilityIds(values.allowed_user_ids),
+        allowed_role_ids: normalizeKnowledgeVisibilityIds(values.allowed_role_ids),
         updated_by: authData?.user?.id || null,
         metadata: isSystemDocument
           ? {
@@ -304,7 +370,7 @@ const AiKnowledgeTab: React.FC = () => {
           .from('org_documents')
           .update(payload)
           .eq('id', editingDocument.id)
-          .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+          .select(DOCUMENT_SELECT_FIELDS)
           .maybeSingle();
         if (error) throw error;
         nextDocument = data as OrgDocument;
@@ -312,7 +378,7 @@ const AiKnowledgeTab: React.FC = () => {
         const { data, error } = await supabase
           .from('org_documents')
           .insert([{ ...payload, created_by: authData?.user?.id || null, use_for_ai: true }])
-          .select('id, title, body, body_html, document_type, status, use_for_ai, updated_at, metadata')
+          .select(DOCUMENT_SELECT_FIELDS)
           .maybeSingle();
         if (error) throw error;
         nextDocument = data as OrgDocument;
@@ -471,6 +537,17 @@ const AiKnowledgeTab: React.FC = () => {
             },
           },
           {
+            title: 'قابل مشاهده برای',
+            width: 180,
+            render: (_: unknown, row: OrgDocument) => (
+              <Tooltip title={formatKnowledgeVisibilitySummary(row.allowed_user_ids, row.allowed_role_ids, visibilityUserOptions, visibilityRoleOptions)}>
+                <Typography.Text type="secondary" className="text-xs">
+                  {formatKnowledgeVisibilitySummary(row.allowed_user_ids, row.allowed_role_ids, visibilityUserOptions, visibilityRoleOptions)}
+                </Typography.Text>
+              </Tooltip>
+            ),
+          },
+          {
             title: 'حجم متن',
             dataIndex: 'body',
             width: 110,
@@ -553,6 +630,30 @@ const AiKnowledgeTab: React.FC = () => {
                 getPopupContainer={(trigger) => trigger.parentNode as HTMLElement}
               />
             </Form.Item>
+            <Form.Item label="قابل مشاهده برای اشخاص" name="allowed_user_ids" className="md:col-span-2">
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                options={visibilityUserOptions}
+                optionFilterProp="label"
+                placeholder="همه اشخاص سازمان"
+                maxTagCount="responsive"
+                getPopupContainer={(trigger) => trigger.parentNode as HTMLElement}
+              />
+            </Form.Item>
+            <Form.Item label="قابل مشاهده برای نقش‌ها" name="allowed_role_ids">
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                options={visibilityRoleOptions}
+                optionFilterProp="label"
+                placeholder="همه نقش‌ها"
+                maxTagCount="responsive"
+                getPopupContainer={(trigger) => trigger.parentNode as HTMLElement}
+              />
+            </Form.Item>
           </div>
           <Form.Item
             label="متن"
@@ -572,6 +673,8 @@ const AiKnowledgeTab: React.FC = () => {
         <KnowledgeDocumentEditor
           document={editorDocument}
           typeOptions={allTypeOptions}
+          visibilityUserOptions={visibilityUserOptions}
+          visibilityRoleOptions={visibilityRoleOptions}
           onClose={() => setEditorDocument(null)}
           onSaved={() => {
             setEditorDocument(null);

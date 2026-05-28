@@ -75,6 +75,9 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     editingNoteId,
     editingNoteValue,
     setNotes,
+    setSelectedConversationNotes,
+    refreshNoteConversationSummaries,
+    refreshUnreadSummary,
     setEditingNoteId,
     setEditingNoteValue,
     setNoteReplyTo,
@@ -517,9 +520,29 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                           });
                         } : undefined}
                         onEdit={isMine ? () => { setEditingNoteId(note.id); setEditingNoteValue(parsedContent.text || ''); } : undefined}
-                        onDelete={isMine ? async () => {
-                          await supabase.from('notes').delete().eq('id', note.id);
-                          setNotes((prev: any[]) => prev.filter((n: any) => n.id !== note.id));
+                        onDelete={isMine ? () => {
+                          Modal.confirm({
+                            title: 'حذف پیام',
+                            content: 'این پیام حذف شود؟',
+                            okText: 'حذف',
+                            cancelText: 'انصراف',
+                            okButtonProps: { danger: true },
+                            onOk: async () => {
+                              const noteId = String(note.id || '').trim();
+                              const { error } = await supabase
+                                .from('notes')
+                                .delete()
+                                .eq('id', noteId)
+                                .eq('author_id', String(profile.id || '').trim());
+                              if (error) throw error;
+                              setNotes((prev: any[]) => prev.filter((n: any) => String(n.id) !== noteId));
+                              setSelectedConversationNotes?.((prev: any[]) => prev.filter((n: any) => String(n.id) !== noteId));
+                              await Promise.all([
+                                refreshNoteConversationSummaries?.(),
+                                refreshUnreadSummary?.(),
+                              ]);
+                            },
+                          });
                         } : undefined}
                         footer={note.module_id && note.record_id ? (
                           <span>رکورد مرتبط:{' '}<Link to={`/${note.module_id}/${note.record_id}`} className="text-leather-600" onClick={handleClose}>{recordTitle}</Link></span>

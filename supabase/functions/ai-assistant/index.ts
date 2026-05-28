@@ -1042,15 +1042,27 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
     org_id: `eq.${authContext.orgId}`,
     status: 'eq.active',
-    select: 'id,document_id,chunk_index,content,metadata,updated_at',
+    select: 'id,document_id,chunk_index,content,metadata,updated_at,allowed_user_ids,allowed_role_ids',
     order: 'updated_at.desc',
     limit: 80,
   });
-  const instructionRows = rows.filter((row: any) =>
+  const visibleRows = rows.filter((row: any) => {
+    const allowedUserIds = Array.isArray(row?.allowed_user_ids)
+      ? row.allowed_user_ids.map(normalizeId).filter(isUuid)
+      : [];
+    const allowedRoleIds = Array.isArray(row?.allowed_role_ids)
+      ? row.allowed_role_ids.map(normalizeId).filter(isUuid)
+      : [];
+    if (allowedUserIds.length === 0 && allowedRoleIds.length === 0) return true;
+    const userId = normalizeId(authContext?.userId);
+    const roleId = normalizeId(authContext?.roleId);
+    return (!!userId && allowedUserIds.includes(userId)) || (!!roleId && allowedRoleIds.includes(roleId));
+  });
+  const instructionRows = visibleRows.filter((row: any) =>
     String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
     || String(row?.metadata?.document_type || '').trim() === 'ai_instructions'
   );
-  const otherRows = rows.filter((row: any) => !instructionRows.includes(row));
+  const otherRows = visibleRows.filter((row: any) => !instructionRows.includes(row));
   const tokens = tokenize(query);
   if (!tokens.length) return [...instructionRows.slice(0, 2), ...otherRows.slice(0, Math.max(0, 4 - instructionRows.slice(0, 2).length))];
   const scoredRows = otherRows

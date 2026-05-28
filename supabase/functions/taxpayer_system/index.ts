@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-04-29-v2-dual';
+const FUNCTION_BUILD = 'taxpayer-system-2026-05-29-buyer-id-repair';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
 
@@ -22,6 +22,34 @@ const enc = (value: string) => encodeURIComponent(String(value || ''));
 const fiscal = (value: string) => String(value || '').trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
 const parse = (raw: string) => { try { return raw ? JSON.parse(raw) : null; } catch { return raw || null; } };
 const requestMeta = () => ({ requestTraceId: crypto.randomUUID(), timestamp: String(Date.now()) });
+const faDigitMap: Record<string, string> = {
+  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4', '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+};
+const numericId = (value: any) => String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => faDigitMap[digit] || digit).replace(/\D/g, '');
+const isValidIranNationalCode = (value: string) => {
+  const code = numericId(value);
+  if (!/^\d{10}$/.test(code) || /^(\d)\1{9}$/.test(code)) return false;
+  const sum = code.slice(0, 9).split('').reduce((acc, digit, index) => acc + Number(digit) * (10 - index), 0);
+  const remainder = sum % 11;
+  const checkDigit = Number(code[9]);
+  return remainder < 2 ? checkDigit === remainder : checkDigit === 11 - remainder;
+};
+const normalizeBuyerIdentity = (customer: any) => {
+  const buyerType = String(customer?.person_type || 'real') === 'legal' ? 2 : 1;
+  if (buyerType === 2) {
+    const legalId = numericId(customer?.national_id || customer?.national_code || '');
+    if (!/^\d{11}$/.test(legalId)) throw new Error('شناسه ملی خریدار حقوقی باید ۱۱ رقم باشد.');
+    return { buyerType, buyerId: legalId };
+  }
+  const rawNationalCode = numericId(customer?.national_code || customer?.national_id || '');
+  const nationalCode = rawNationalCode.length >= 8 && rawNationalCode.length < 10
+    ? rawNationalCode.padStart(10, '0')
+    : rawNationalCode;
+  if (!/^\d{10}$/.test(nationalCode)) throw new Error('کد ملی خریدار حقیقی باید ۱۰ رقم باشد.');
+  if (!isValidIranNationalCode(nationalCode)) throw new Error('کد ملی خریدار حقیقی معتبر نیست.');
+  return { buyerType, buyerId: nationalCode };
+};
 
 const bytesToBinary = (bytes: Uint8Array) => {
   let binary = '';
@@ -62,6 +90,34 @@ const taxErrorMessage = (value: any) => {
   if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message.trim();
   if (typeof value === 'string' && value.trim()) return value.trim();
   return payload ? JSON.stringify(payload) : 'درخواست به سامانه مودیان ناموفق بود.';
+};
+const taxpayerMessageItems = (items: any, prefix = '') => {
+  const list = Array.isArray(items) ? items : [];
+  return list
+    .map((item: any) => `${item?.code ? `[${item.code}] ` : ''}${prefix}${String(item?.message || item?.errorDetail || item?.errorMessage || '').trim()}`.trim())
+    .filter(Boolean);
+};
+const inquiryRowMessage = (row: any) => {
+  const data = row?.data || row?.result || row;
+  const messages = [
+    ...taxpayerMessageItems(data?.error),
+    ...taxpayerMessageItems(data?.errors),
+    ...taxpayerMessageItems(data?.warning, 'هشدار: '),
+    ...taxpayerMessageItems(data?.warnings, 'هشدار: '),
+  ];
+  if (row?.errorCode || row?.errorMessage || row?.errorDetail) {
+    messages.push([row?.errorCode, row?.errorMessage || row?.errorDetail].filter(Boolean).join(' - '));
+  }
+  if (data?.message) messages.push(String(data.message).trim());
+  return Array.from(new Set(messages.filter(Boolean))).join(' | ');
+};
+const normalizeInquiryStatus = (row: any) => {
+  const status = String(row?.status || row?.invoiceStatus || row?.processingStatus || row?.state || '').trim();
+  if (!status) return 'inquired';
+  const lower = status.toLowerCase();
+  if (['failed', 'failure', 'rejected', 'reject'].includes(lower)) return lower === 'rejected' || lower === 'reject' ? 'rejected' : 'failed';
+  if (['success', 'succeeded', 'accepted', 'accept'].includes(lower)) return lower === 'success' || lower === 'succeeded' ? 'success' : 'accepted';
+  return lower;
 };
 const readTaxResponse = async (response: Response) => {
   const raw = await response.text();
@@ -444,9 +500,8 @@ const invoicePayload = (args: any) => {
   if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
   const currency = String(company?.currency_code || 'IRT');
   const settlementCode = setm(settlement);
-  const buyerType = String(customer?.person_type || 'real') === 'legal' ? 2 : 1;
-  const buyerId = buyerType === 2 ? String(customer?.national_id || '').trim() : String(customer?.national_code || '').trim();
-  if (!customer?.id || !buyerId) throw new Error('اطلاعات هویتی مشتری برای ارسال به سامانه مودیان کامل نیست.');
+  if (!customer?.id) throw new Error('اطلاعات هویتی مشتری برای ارسال به سامانه مودیان کامل نیست.');
+  const { buyerType, buyerId } = normalizeBuyerIdentity(customer);
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
     const product = products[String(item?.product_id || '')] || {};
@@ -465,7 +520,7 @@ const invoicePayload = (args: any) => {
   const cap = settlementCode === 1 ? tbill : settlementCode === 2 ? null : Math.min(Math.max(received, 0), tbill);
   const insp = settlementCode === 2 ? tbill : settlementCode === 1 ? null : Math.max(tbill - (cap || 0), 0);
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  return { packetType: 'INVOICE.V01', data: { header: { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: indatim, inty: Number(invoice.taxpayer_invoice_type || 1), inp: Number(invoice.taxpayer_invoice_pattern || 1), ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb: String(customer?.economic_code || '').trim() || null, bpc: String(customer?.postal_code || '') || null, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop: tvam, tax17: null }, body, payments: [] } };
+  return { packetType: 'INVOICE.V01', data: { header: { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: indatim, inty: Number(invoice.taxpayer_invoice_type || 1), inp: Number(invoice.taxpayer_invoice_pattern || 1), ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb: numericId(customer?.economic_code || '') || null, bpc: numericId(customer?.postal_code || '') || null, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop: tvam, tax17: null }, body, payments: [] } };
 };
 
 Deno.serve(async (req) => {
@@ -596,8 +651,9 @@ Deno.serve(async (req) => {
             : await invokeLegacySync(settings, privateKey, 'INQUIRY_BY_TAX_ID', [sub.taxid], token);
       }
       const row = first(res?.result?.data) || first(res?.data) || first(res?.result) || res;
-      const status = String(row?.status || row?.invoiceStatus || row?.processingStatus || row?.state || 'inquired');
-      const updated = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status, inquiry_payload: res || {}, last_inquiry_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
+      const status = normalizeInquiryStatus(row);
+      const errorMessage = inquiryRowMessage(row);
+      const updated = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status, inquiry_payload: res || {}, error_message: errorMessage || null, last_inquiry_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
       return json(200, { success: true, message: 'استعلام وضعیت ارسال با موفقیت انجام شد.', submission: updated || sub });
     }
 

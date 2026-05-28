@@ -3,9 +3,12 @@ import {
   buildTaxpayerTaxDateHex,
   buildTaxpayerTaxId,
   buildTaxpayerVerhoeffInput,
+  isValidIranNationalCode,
   mapTaxpayerSettlementMethodToSetm,
+  normalizeTaxpayerNumericId,
   normalizeTaxpayerMoneyToRial,
   normalizeTaxpayerLegacySignatureValue,
+  normalizeTaxpayerRealBuyerNationalCode,
   omitNullTaxpayerLegacySignatureKeyId,
   stableStringifyForTaxpayer,
 } from './taxpayerSystem';
@@ -31,6 +34,13 @@ describe('taxpayerSystem', () => {
   it('normalizes money to rial', () => {
     expect(normalizeTaxpayerMoneyToRial(100, 'IRT')).toBe(1000);
     expect(normalizeTaxpayerMoneyToRial(100, 'IRR')).toBe(100);
+  });
+
+  it('normalizes taxpayer buyer national codes without losing leading zeroes', () => {
+    expect(normalizeTaxpayerNumericId('۰۹۲-۲۳۵-۶۷۴۲')).toBe('0922356742');
+    expect(isValidIranNationalCode('0922356742')).toBe(true);
+    expect(normalizeTaxpayerRealBuyerNationalCode('922356742')).toBe('0922356742');
+    expect(normalizeTaxpayerRealBuyerNationalCode('1111111111')).toBe('');
   });
 
   it('maps settlement method to setm', () => {

@@ -59,6 +59,48 @@ const VERHOEFF_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9] as const;
 export const normalizeTaxpayerFiscalId = (value: string) =>
   String(value || '').trim().toUpperCase().replace(/[^0-9A-Z]/g, '');
 
+const PERSIAN_ARABIC_DIGITS: Record<string, string> = {
+  '۰': '0',
+  '۱': '1',
+  '۲': '2',
+  '۳': '3',
+  '۴': '4',
+  '۵': '5',
+  '۶': '6',
+  '۷': '7',
+  '۸': '8',
+  '۹': '9',
+  '٠': '0',
+  '١': '1',
+  '٢': '2',
+  '٣': '3',
+  '٤': '4',
+  '٥': '5',
+  '٦': '6',
+  '٧': '7',
+  '٨': '8',
+  '٩': '9',
+};
+
+export const normalizeTaxpayerNumericId = (value: unknown) =>
+  String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => PERSIAN_ARABIC_DIGITS[digit] || digit).replace(/\D/g, '');
+
+export const isValidIranNationalCode = (value: unknown) => {
+  const code = normalizeTaxpayerNumericId(value);
+  if (!/^\d{10}$/.test(code) || /^(\d)\1{9}$/.test(code)) return false;
+  const sum = code.slice(0, 9).split('').reduce((total, digit, index) => total + Number(digit) * (10 - index), 0);
+  const remainder = sum % 11;
+  const checkDigit = Number(code[9]);
+  return remainder < 2 ? checkDigit === remainder : checkDigit === 11 - remainder;
+};
+
+export const normalizeTaxpayerRealBuyerNationalCode = (value: unknown) => {
+  const digits = normalizeTaxpayerNumericId(value);
+  const code = digits.length >= 8 && digits.length < 10 ? digits.padStart(10, '0') : digits;
+  if (!/^\d{10}$/.test(code) || !isValidIranNationalCode(code)) return '';
+  return code;
+};
+
 const parseDateUtc = (date: string | Date) => {
   if (date instanceof Date) {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());

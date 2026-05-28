@@ -54,6 +54,12 @@ import {
   type NotificationUnreadSummaryMap,
 } from '../utils/notificationUnreadSummary';
 import {
+  fetchAssignedTaskReadEntries,
+  fetchResponsibilityReadEntries,
+  getResponsibilityNotificationSourceType,
+  mergeRowsByIdCreatedAsc,
+} from '../utils/notificationAlertReadEntries';
+import {
   CHAT_GROUP_PREFIX,
   MY_NOTES_CONVERSATION_KEY,
   SYSTEM_MESSAGES_USER_ID,
@@ -254,6 +260,11 @@ const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
   telegram: 'تلگرام',
   bale: 'بله',
 };
+
+const BOT_BIND_CAPTURE_SECONDS = 60;
+
+const isActiveCounterpartyBotGroup = (row: Pick<CounterpartyBotGroupRow, 'status'> | null | undefined) =>
+  String(row?.status || '').trim() === 'active';
 
 type ConversationListItem = {
   id: string;
@@ -508,7 +519,7 @@ const buildNotificationStateKey = (
 ) => `${section}:${String(sourceType || '').trim()}:${String(sourceId || '').trim()}`;
 
 const getResponsibilitySourceType = (item: any) =>
-  String(MODULES[String(item?.module_id || '')]?.table || item?.module_id || 'responsibility').trim();
+  getResponsibilityNotificationSourceType(item, MODULES);
 
 const getModuleFieldOptionLabel = (moduleId: string, fieldKey: string, value: any) => {
   const rawValue = String(value ?? '').trim();
@@ -1121,7 +1132,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     return map;
   }, [rpcBotConversationSummaries]);
   const effectiveBotGroups = useMemo(() => {
-    if (!(botConversationSummaryAvailable && rpcBotConversationSummaries)) return botGroups;
+    if (!(botConversationSummaryAvailable && rpcBotConversationSummaries)) {
+      return botGroups.filter(isActiveCounterpartyBotGroup);
+    }
     const localById = new Map(botGroups.map((row) => [String(row.id), row] as const));
     const summaryRows = (rpcBotConversationSummaries || [])
       .map((summary) => {
@@ -1154,9 +1167,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
         } as CounterpartyBotGroupRow;
         return merged;
       })
-      .filter(Boolean) as CounterpartyBotGroupRow[];
+      .filter(Boolean)
+      .filter(isActiveCounterpartyBotGroup) as CounterpartyBotGroupRow[];
     const summaryIds = new Set(summaryRows.map((row) => String(row.id)));
-    const localOnlyRows = botGroups.filter((row) => !summaryIds.has(String(row.id)));
+    const localOnlyRows = botGroups.filter((row) => !summaryIds.has(String(row.id)) && isActiveCounterpartyBotGroup(row));
     return [...summaryRows, ...localOnlyRows].sort((left, right) => {
       const leftSummary = botSummaryMap.get(String(left.id));
       const rightSummary = botSummaryMap.get(String(right.id));
@@ -1181,7 +1195,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     }
   }, []);
 
-  const loadBotStatusRow = useCallback(async (group: CounterpartyBotGroupRow) => {
+  const loadBotStatusRow = useCallback(async (group: CounterpartyBotGroupRow, options?: { activeTab?: BotChannel | null }) => {
     const orgPrefix = await loadOrgBotPrefix();
     const counterpartyLabel = String(group?.counterparty_label || '').trim();
     const targetType = String(group?.target_type || '').trim() as 'customers' | 'suppliers';
@@ -1248,7 +1262,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     setBotStatusPlatformData(platforms);
     setBotStatusDefaultChannel(defaultChannel);
     setBotStatusFallbackToActive(Boolean(prefRow?.fallback_to_active));
-    setBotStatusActiveTab(defaultChannel);
+    setBotStatusActiveTab(options?.activeTab || defaultChannel);
   }, []);
 
   const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureChannel?: BotChannel; captureSeconds?: number }) => {
@@ -1326,24 +1340,24 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     try {
       setBotStatusModalSaving(true);
       await saveBotStatusSettings();
-      await loadBotStatusRow(selectedBotGroup);
+      await loadBotStatusRow(selectedBotGroup, { activeTab: botStatusActiveTab });
       message.success('وضعیت گروه بات ذخیره شد.');
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ذخیره وضعیت گروه بات ناموفق بود.'));
     } finally {
       setBotStatusModalSaving(false);
     }
-  }, [loadBotStatusRow, message, saveBotStatusSettings, selectedBotGroup]);
+  }, [botStatusActiveTab, loadBotStatusRow, message, saveBotStatusSettings, selectedBotGroup]);
   const handleStartBotBindWatch = useCallback(async (channel: BotChannel) => {
     if (!selectedBotGroup) return;
     try {
       setBotStatusModalSaving(true);
-      await saveBotStatusSettings({ forceCapture: true, captureChannel: channel, captureSeconds: 30 });
-      await loadBotStatusRow(selectedBotGroup);
+      await saveBotStatusSettings({ forceCapture: true, captureChannel: channel, captureSeconds: BOT_BIND_CAPTURE_SECONDS });
+      await loadBotStatusRow(selectedBotGroup, { activeTab: channel });
       clearBotStatusWatchTimer();
       setBotStatusWatchingChannel(channel);
-      setBotStatusCountdown(30);
-      let remaining = 30;
+      setBotStatusCountdown(BOT_BIND_CAPTURE_SECONDS);
+      let remaining = BOT_BIND_CAPTURE_SECONDS;
       botStatusWatchTimerRef.current = window.setInterval(async () => {
         remaining -= 1;
         setBotStatusCountdown(Math.max(remaining, 0));
@@ -2700,10 +2714,9 @@ useEffect(() => {
         await safeSectionFetch(() => fetchBotNotificationMessages(groups), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       }
       if (resolvedGroupId && activeDrawerSection === 'bot_messages') {
-        // Skip refreshBotTimeline() here — the hook's useEffect will fire
-        // automatically when selectedBotGroupId propagates via React state.
-        // Calling it now would use stale state due to React batching.
-        if (!botTimelineAvailable) {
+        if (botTimelineAvailable) {
+          await safeSectionFetch(() => refreshBotTimeline({ force: Boolean(options?.force) }), 'bot_messages', null as any);
+        } else {
           await safeSectionFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
         }
       } else {
@@ -3010,9 +3023,9 @@ useEffect(() => {
         await safeFetch(() => fetchBotNotificationMessages(botGroupsData), 'bot_messages', [] as CounterpartyBotMessageRow[]);
       }
       if (resolvedGroupId && activeDrawerSection === 'bot_messages') {
-        // Skip refreshBotTimeline() here — the hook's useEffect will fire
-        // automatically when selectedBotGroupId propagates via React state.
-        if (!botTimelineAvailable) {
+        if (botTimelineAvailable) {
+          await safeFetch(() => refreshBotTimeline({ force: Boolean(options?.force) }), 'bot_messages', null as any);
+        } else {
           await safeFetch(() => fetchBotMessages(resolvedGroupId), 'bot_messages', [] as CounterpartyBotMessageRow[]);
         }
       } else {
@@ -3252,6 +3265,7 @@ useEffect(() => {
     const { data, error } = await supabase
       .from('counterparty_bot_groups')
       .select('id,target_type,customer_id,supplier_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,metadata')
+      .eq('status', 'active')
       .order('updated_at', { ascending: false, nullsFirst: false })
       .limit(200);
     if (error) throw error;
@@ -3521,9 +3535,10 @@ useEffect(() => {
         },
       };
     });
-    const { error: insertError } = await supabase
+    const { data: insertedRows, error: insertError } = await supabase
       .from('counterparty_bot_messages')
-      .insert(rowsToInsert);
+      .insert(rowsToInsert)
+      .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at');
     if (insertError) throw insertError;
 
     const { error: patchError } = await supabase
@@ -3535,7 +3550,10 @@ useEffect(() => {
       .eq('id', group.id);
     if (patchError) throw patchError;
 
-    return providerResponse;
+    return {
+      providerResponse,
+      rows: (insertedRows || []) as CounterpartyBotMessageRow[],
+    };
   }, [buildCurrentBotSenderPayload]);
 
   const syncBotProviderMessageAction = useCallback(async (
@@ -5260,28 +5278,52 @@ useEffect(() => {
   }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, refreshUnreadSummary, seenBotMessageIds, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
-    const taskIds = (rows || [])
+    const visibleTaskIds = (rows || [])
       .map((row) => String(row?.id || '').trim())
       .filter((id) => id && !isNotificationRead('tasks', 'task', id, seenTaskIds.has(id)));
-    if (taskIds.length === 0) return;
-    startTransition(() => { setSeenTaskIds((prev) => new Set([...prev, ...taskIds])); });
-    markNotificationEntriesRead(taskIds.map((sourceId) => ({ section: 'tasks' as const, sourceType: 'task', sourceId })));
-  }, [isNotificationRead, markNotificationEntriesRead, seenTaskIds]);
+    const visibleEntries = visibleTaskIds.map((sourceId) => ({ section: 'tasks' as const, sourceType: 'task', sourceId }));
+    if (visibleEntries.length > 0) {
+      startTransition(() => { setSeenTaskIds((prev) => new Set([...prev, ...visibleTaskIds])); });
+      markNotificationEntriesRead(visibleEntries);
+    }
+    if (unreadSummaryAvailable && unreadSummary.tasks > visibleEntries.length) {
+      void fetchAssignedTaskReadEntries(supabase, profile).then((entries) => {
+        if (entries.length === 0) return;
+        startTransition(() => {
+          setSeenTaskIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)]));
+        });
+        markNotificationEntriesRead(entries);
+        setUnreadSummary((prev) => ({ ...prev, tasks: 0 }));
+      });
+    }
+  }, [isNotificationRead, markNotificationEntriesRead, profile.id, profile.role_id, seenTaskIds, unreadSummary.tasks, unreadSummaryAvailable]);
 
   const markResponsibilitiesAsSeen = useCallback((rows: any[]) => {
-    const entries = (rows || [])
+    const visibleEntries = (rows || [])
       .map((row) => {
-        const sourceId = String(row?.id || '').trim();
+        const inboxItem = row?.__notification_inbox_item;
+        const sourceId = String(inboxItem?.source_id || row?.id || '').trim();
         const sourceType = getResponsibilitySourceType(row);
         if (!sourceId || !sourceType) return null;
         if (isNotificationRead('responsibilities', sourceType, sourceId, seenResponsibilityIds.has(sourceId))) return null;
         return { section: 'responsibilities' as const, sourceType, sourceId };
       })
       .filter(Boolean) as NotificationStateEntryInput[];
-    if (entries.length === 0) return;
-    startTransition(() => { setSeenResponsibilityIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)])); });
-    markNotificationEntriesRead(entries);
-  }, [isNotificationRead, markNotificationEntriesRead, seenResponsibilityIds]);
+    if (visibleEntries.length > 0) {
+      startTransition(() => { setSeenResponsibilityIds((prev) => new Set([...prev, ...visibleEntries.map((entry) => entry.sourceId)])); });
+      markNotificationEntriesRead(visibleEntries);
+    }
+    if (unreadSummaryAvailable && unreadSummary.responsibilities > visibleEntries.length) {
+      void fetchResponsibilityReadEntries(supabase).then((entries) => {
+        if (entries.length === 0) return;
+        startTransition(() => {
+          setSeenResponsibilityIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)]));
+        });
+        markNotificationEntriesRead(entries);
+        setUnreadSummary((prev) => ({ ...prev, responsibilities: 0 }));
+      });
+    }
+  }, [isNotificationRead, markNotificationEntriesRead, seenResponsibilityIds, unreadSummary.responsibilities, unreadSummaryAvailable]);
 
   const markSmsMessagesAsSeen = useCallback((rows: any[]) => {
     const messageIds = (rows || [])
@@ -5821,7 +5863,17 @@ useEffect(() => {
         metadata: isSavingToMyNotes ? { saved_message: true } : groupPayload.metadata,
       };
 
-      await insertNotesWithFallback([payload]);
+      const insertedNotes = await insertNotesWithFallback([payload]);
+      if (Array.isArray(insertedNotes) && insertedNotes.length > 0) {
+        const nextRows = insertedNotes as any[];
+        setNotes((prev) => {
+          const seen = new Set(nextRows.map((row) => String(row?.id || '').trim()).filter(Boolean));
+          return [...prev.filter((row: any) => !seen.has(String(row?.id || '').trim())), ...nextRows];
+        });
+        if (selectedConversationKey) {
+          setSelectedConversationNotes((prev) => mergeRowsByIdCreatedAsc(prev, nextRows));
+        }
+      }
       if (noteSmsNotificationEnabled) {
         await sendNoteSmsNotifications({
           authorName: String(directoryUserMap[String(profile.id || '')]?.display_name || '').trim() || 'کاربر',
@@ -5836,7 +5888,10 @@ useEffect(() => {
       noteShouldStickToBottomRef.current = true;
       noteForceScrollToBottomRef.current = true;
       resetNoteComposer();
-      await refreshSection('notes', { force: true });
+      await Promise.all([
+        noteConversationSummaryAvailable ? refreshNoteConversationSummaries() : Promise.resolve(null),
+        refreshUnreadSummary(),
+      ]);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ثبت یادداشت ناموفق بود.'));
     } finally {
@@ -6407,6 +6462,9 @@ useEffect(() => {
         editingNoteId,
         editingNoteValue,
         setNotes,
+        setSelectedConversationNotes,
+        refreshNoteConversationSummaries,
+        refreshUnreadSummary,
         setEditingNoteId,
         setEditingNoteValue,
         setNoteReplyTo,
@@ -6632,7 +6690,7 @@ useEffect(() => {
         }
         botShouldStickToBottomRef.current = true;
         botForceScrollToBottomRef.current = true;
-        await sendTextToBotGroup(selectedGroup, finalText, {
+        const sendResult = await sendTextToBotGroup(selectedGroup, finalText, {
           fallbackText: isRubikaGroup && attachments.length > 0
             ? [String(renderedText || '').trim(), attachmentNameText].filter(Boolean).join('\n')
             : undefined,
@@ -6643,6 +6701,12 @@ useEffect(() => {
           },
           messageType: attachments.length > 0 ? 'file' : 'text',
         });
+        const insertedRows = Array.isArray((sendResult as any)?.rows)
+          ? (sendResult as any).rows as CounterpartyBotMessageRow[]
+          : [];
+        if (insertedRows.length > 0) {
+          setBotMessages((prev) => mergeRowsByIdCreatedAsc(prev, insertedRows));
+        }
         setBotMessageText('');
         setBotReplyToId(null);
         setBotAttachments([]);
@@ -6651,7 +6715,9 @@ useEffect(() => {
         await Promise.all([
           fetchBotGroups(),
           botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
-          botTimelineAvailable ? refreshBotTimeline() : fetchBotMessages(selectedGroup.id, { forceFull: true }),
+          insertedRows.length > 0
+            ? Promise.resolve(null)
+            : (botTimelineAvailable ? refreshBotTimeline({ force: true }) : fetchBotMessages(selectedGroup.id, { forceFull: true })),
         ]);
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
@@ -6729,6 +6795,7 @@ useEffect(() => {
         botMessageSearch={botMessageSearch}
         setBotMessageSearch={setBotMessageSearch}
         botMessages={botMessages}
+        setBotMessages={setBotMessages}
         filteredBotMessages={filteredBotMessages}
         botMessageMap={botMessageMap}
         loadingBotMessages={loadingBotMessages}
@@ -6757,6 +6824,7 @@ useEffect(() => {
         botTimelineAvailable={botTimelineAvailable}
         refreshBotConversationSummaries={refreshBotConversationSummaries}
         refreshBotTimeline={refreshBotTimeline}
+        refreshUnreadSummary={refreshUnreadSummary}
         fetchBotMessages={fetchBotMessages}
         openForwardModal={openForwardModal}
         openCreateActivityFromMessage={openCreateActivityFromMessage}

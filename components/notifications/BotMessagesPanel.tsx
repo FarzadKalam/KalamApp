@@ -1,5 +1,5 @@
 import React from 'react';
-import { App, Avatar, Badge, Button, Empty, Input, Popover, Skeleton } from 'antd';
+import { App, Avatar, Badge, Button, Empty, Input, Modal, Popover, Skeleton } from 'antd';
 import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined, UpOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
@@ -165,6 +165,7 @@ type BotMessagesPanelProps = {
   botMessageSearch: string;
   setBotMessageSearch: (value: string) => void;
   botMessages: BotMessageRow[];
+  setBotMessages: (updater: any[] | ((prev: any[]) => any[])) => void;
   filteredBotMessages: BotMessageRow[];
   botMessageMap: Map<string, BotMessageRow>;
   loadingBotMessages: boolean;
@@ -192,7 +193,8 @@ type BotMessagesPanelProps = {
   botConversationSummaryAvailable: boolean;
   botTimelineAvailable: boolean;
   refreshBotConversationSummaries: () => Promise<any>;
-  refreshBotTimeline: () => Promise<any>;
+  refreshBotTimeline: (options?: { force?: boolean }) => Promise<any>;
+  refreshUnreadSummary: () => Promise<any>;
   fetchBotMessages: (groupId?: string | null, options?: { forceFull?: boolean }) => Promise<any>;
   openForwardModal: (row: BotMessageRow, sourceType: 'bot') => void;
   openCreateActivityFromMessage: (input: any) => void | Promise<void>;
@@ -239,6 +241,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   botMessageSearch,
   setBotMessageSearch,
   botMessages,
+  setBotMessages,
   filteredBotMessages,
   botMessageMap,
   loadingBotMessages,
@@ -267,6 +270,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   botTimelineAvailable,
   refreshBotConversationSummaries,
   refreshBotTimeline,
+  refreshUnreadSummary,
   fetchBotMessages,
   openForwardModal,
   openCreateActivityFromMessage,
@@ -629,18 +633,28 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                         setEditingBotMessageId(row.id);
                         setEditingBotMessageValue(String(row.content_text || '').trim());
                       } : undefined}
-                      onDelete={outgoing && isPersistedBotMessage ? async () => {
-                        await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
-                        const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', row.id);
-                        if (error) throw error;
-                        if (botConversationSummaryAvailable) {
-                          await refreshBotConversationSummaries();
-                        }
-                        if (botTimelineAvailable) {
-                          await refreshBotTimeline();
-                        } else {
-                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
-                        }
+                      onDelete={outgoing && isPersistedBotMessage ? () => {
+                        Modal.confirm({
+                          title: 'حذف پیام بات',
+                          content: 'این پیام حذف شود؟',
+                          okText: 'حذف',
+                          cancelText: 'انصراف',
+                          okButtonProps: { danger: true },
+                          onOk: async () => {
+                            const rowId = String(row.id || '').trim();
+                            await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
+                            const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', rowId);
+                            if (error) throw error;
+                            setBotMessages((prev) => prev.filter((item) => String(item?.id || '') !== rowId));
+                            await Promise.all([
+                              botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
+                              refreshUnreadSummary(),
+                            ]);
+                            if (!botTimelineAvailable) {
+                              await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+                            }
+                          },
+                        });
                       } : undefined}
                     />
                   </div>

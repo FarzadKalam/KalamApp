@@ -87,6 +87,7 @@ const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
+const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 const loadMessagesPage = () => import("./pages/MessagesPage");
@@ -127,6 +128,7 @@ const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
+const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const MessagesPage = lazy(loadMessagesPage);
@@ -145,6 +147,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
   else if (section === "settings") preloader = loadSettingsPage;
   else if (section === "messages") preloader = loadMessagesPage;
   else if (section === "gallery") preloader = loadFilesGalleryPage;
+  else if (section === "org-knowledge") preloader = loadOrgKnowledgePage;
   else if (section === "recycle-bin") preloader = loadRecycleBinPage;
   else if (section === "search") preloader = loadGlobalSearchPage;
   else if (section === "hr") preloader = loadHRPage;
@@ -569,6 +572,7 @@ function App() {
     if (/^\/web_forms\/[^/]+$/.test(pathname)) return "ویرایش وب فرم";
     if (/^\/web_forms\/[^/]+\/edit$/.test(pathname)) return "ویرایش وب فرم";
     if (pathname.startsWith("/settings")) return "تنظیمات";
+    if (pathname.startsWith("/org-knowledge")) return "دانش سازمان";
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
     if (pathname.startsWith("/work_schedules")) return "برنامه حضور";
@@ -746,6 +750,7 @@ function App() {
             <Route path="/hr/:employeeId" element={<HRPage />} />
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
+            <Route path="/org-knowledge" element={<OrgKnowledgePage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />
             <Route path="/search" element={<GlobalSearchPage />} />

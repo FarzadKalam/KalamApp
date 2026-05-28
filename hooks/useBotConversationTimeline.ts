@@ -300,7 +300,7 @@ export const useBotConversationTimeline = <TItem,>({
           return fallbackPayload;
         }
       }
-      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
+      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: !options?.force });
       if (applied) {
         _botTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }

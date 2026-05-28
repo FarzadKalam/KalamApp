@@ -49,6 +49,11 @@ const CHANNEL_OPTIONS: Array<{ label: string; value: BotChannel }> = [
   { label: 'بله', value: 'bale' },
 ];
 
+const CHANNEL_LABEL_BY_VALUE: Record<BotChannel, string> = CHANNEL_OPTIONS.reduce((acc, item) => {
+  acc[item.value] = item.label;
+  return acc;
+}, {} as Record<BotChannel, string>);
+
 const STATUS_COLOR: Record<string, string> = {
   active: 'text-emerald-600 dark:text-emerald-400',
   error: 'text-red-500',
@@ -81,23 +86,37 @@ export type CounterpartyBotStatusModalProps = {
   open: boolean;
   loading: boolean;
   saving: boolean;
-  watchingChannel: BotChannel | null;
+  watchingChannel?: BotChannel | null;
   countdown: number;
-  activeTab: BotChannel;
-  defaultChannel: BotChannel;
-  fallbackToActive: boolean;
-  counterpartyType: 'customer' | 'supplier';
-  platforms: Record<BotChannel, BotPlatformState>;
+  activeTab?: BotChannel;
+  defaultChannel?: BotChannel;
+  fallbackToActive?: boolean;
+  counterpartyType?: 'customer' | 'supplier';
+  platforms?: Record<BotChannel, BotPlatformState>;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
   onClose: () => void;
   onSave: () => void;
-  onChangeTab: (channel: BotChannel) => void;
-  onChangeDefaultChannel: (channel: BotChannel) => void;
-  onChangeFallbackToActive: (value: boolean) => void;
+  onChangeTab?: (channel: BotChannel) => void;
+  onChangeDefaultChannel?: (channel: BotChannel) => void;
+  onChangeFallbackToActive?: (value: boolean) => void;
   onStartBindWatch: (channel: BotChannel) => void;
   onCopyActivationCode: (channel: BotChannel) => void;
-  onChangePlatform: (channel: BotChannel, key: keyof BotPlatformState, value: any) => void;
+  onChangePlatform?: (channel: BotChannel, key: keyof BotPlatformState, value: any) => void;
+  channel?: BotChannel;
+  groupTitle?: string;
+  currentStatus?: string;
+  activationCode?: string;
+  lastInboundAt?: string;
+  lastInboundText?: string;
+  allowedUserIds?: string[];
+  allowedRoleIds?: string[];
+  aiAutoReplyEnabled?: boolean;
+  aiCounterpartyGuide?: string;
+  onChangeAllowedUserIds?: (value: string[]) => void;
+  onChangeAllowedRoleIds?: (value: string[]) => void;
+  onChangeAiAutoReplyEnabled?: (value: boolean) => void;
+  onChangeAiCounterpartyGuide?: (value: string) => void;
 };
 
 const PlatformTabContent: React.FC<{
@@ -112,6 +131,7 @@ const PlatformTabContent: React.FC<{
   onStartBindWatch: () => void;
   onCopyActivationCode: () => void;
 }> = ({
+  channel,
   state,
   watching,
   countdown,
@@ -122,6 +142,7 @@ const PlatformTabContent: React.FC<{
   onStartBindWatch,
   onCopyActivationCode,
 }) => {
+  const channelLabel = CHANNEL_LABEL_BY_VALUE[channel] || '';
   const normalizedUserOptions = React.useMemo(
     () => ensureSelectedOptions(userOptions, state.allowedUserIds, 'کاربر'),
     [state.allowedUserIds, userOptions]
@@ -225,7 +246,7 @@ const PlatformTabContent: React.FC<{
       </div>
       <div className="flex justify-end pt-1">
         <Button type="primary" loading={saving} disabled={watching} onClick={onStartBindWatch}>
-          {watching ? 'در حال انتظار...' : 'انتظار برای پیام در گروه'}
+          {watching ? `در حال انتظار ${channelLabel}...` : `انتظار برای پیام در گروه ${channelLabel}`}
         </Button>
       </div>
     </div>
@@ -253,8 +274,50 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
   onStartBindWatch,
   onCopyActivationCode,
   onChangePlatform,
+  channel: legacyChannel,
+  groupTitle,
+  currentStatus,
+  activationCode,
+  lastInboundAt,
+  lastInboundText,
+  allowedUserIds,
+  allowedRoleIds,
+  aiAutoReplyEnabled,
+  aiCounterpartyGuide,
+  onChangeAllowedUserIds,
+  onChangeAllowedRoleIds,
+  onChangeAiAutoReplyEnabled,
+  onChangeAiCounterpartyGuide,
 }) => {
+  const normalizedActiveTab = activeTab || legacyChannel || 'rubika';
+  const normalizedDefaultChannel = defaultChannel || normalizedActiveTab;
   const counterpartyLabel = counterpartyType === 'supplier' ? 'تامین‌کننده' : 'مشتری';
+  const legacyPlatformState: BotPlatformState = {
+    groupTitle: groupTitle || '',
+    currentStatus: currentStatus || 'pending_join',
+    activationCode: activationCode || '',
+    lastInboundAt: lastInboundAt || '',
+    lastInboundText: lastInboundText || '',
+    allowedUserIds: allowedUserIds || [],
+    allowedRoleIds: allowedRoleIds || [],
+    aiAutoReplyEnabled: Boolean(aiAutoReplyEnabled),
+    aiCounterpartyGuide: aiCounterpartyGuide || '',
+  };
+  const normalizedPlatforms: Record<BotChannel, BotPlatformState> = {
+    rubika: { ...DEFAULT_PLATFORM_STATE, ...(platforms?.rubika || (normalizedActiveTab === 'rubika' ? legacyPlatformState : null) || {}) },
+    telegram: { ...DEFAULT_PLATFORM_STATE, ...(platforms?.telegram || (normalizedActiveTab === 'telegram' ? legacyPlatformState : null) || {}) },
+    bale: { ...DEFAULT_PLATFORM_STATE, ...(platforms?.bale || (normalizedActiveTab === 'bale' ? legacyPlatformState : null) || {}) },
+  };
+  const handlePlatformChange = (channel: BotChannel, key: keyof BotPlatformState, value: any) => {
+    if (onChangePlatform) {
+      onChangePlatform(channel, key, value);
+      return;
+    }
+    if (key === 'allowedUserIds') onChangeAllowedUserIds?.(value);
+    if (key === 'allowedRoleIds') onChangeAllowedRoleIds?.(value);
+    if (key === 'aiAutoReplyEnabled') onChangeAiAutoReplyEnabled?.(Boolean(value));
+    if (key === 'aiCounterpartyGuide') onChangeAiCounterpartyGuide?.(String(value || ''));
+  };
 
   const tabItems = CHANNEL_OPTIONS.map(({ label, value: channel }) => ({
     key: channel,
@@ -262,13 +325,13 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
     children: (
       <PlatformTabContent
         channel={channel}
-        state={platforms[channel] || { ...DEFAULT_PLATFORM_STATE }}
+        state={normalizedPlatforms[channel]}
         watching={watchingChannel === channel}
         countdown={watchingChannel === channel ? countdown : 0}
         saving={saving}
         userOptions={userOptions}
         roleOptions={roleOptions}
-        onChangePlatform={(key, val) => onChangePlatform(channel, key, val)}
+        onChangePlatform={(key, val) => handlePlatformChange(channel, key, val)}
         onStartBindWatch={() => onStartBindWatch(channel)}
         onCopyActivationCode={() => onCopyActivationCode(channel)}
       />
@@ -306,9 +369,9 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               <div>
                 <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">پلتفرم پیش‌فرض {counterpartyLabel}</div>
                 <Select
-                  value={defaultChannel}
+                  value={normalizedDefaultChannel}
                   options={CHANNEL_OPTIONS}
-                  onChange={(value) => onChangeDefaultChannel(value as BotChannel)}
+                  onChange={(value) => onChangeDefaultChannel?.(value as BotChannel)}
                   className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                   optionLabelProp="label"
                   getPopupContainer={resolveSelectPopupContainer}
@@ -318,7 +381,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
               <div className="flex items-center pt-5">
                 <Checkbox
                   checked={fallbackToActive}
-                  onChange={(e) => onChangeFallbackToActive(Boolean(e.target.checked))}
+                  onChange={(e) => onChangeFallbackToActive?.(Boolean(e.target.checked))}
                 >
                   <span className="text-xs">در صورت قطع پلتفرم اصلی، از اولین پلتفرم فعال استفاده شود</span>
                 </Checkbox>
@@ -328,8 +391,8 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
 
           {/* تب‌های پلتفرم */}
           <Tabs
-            activeKey={activeTab}
-            onChange={(key) => onChangeTab(key as BotChannel)}
+            activeKey={normalizedActiveTab}
+            onChange={(key) => onChangeTab?.(key as BotChannel)}
             items={tabItems}
             size="small"
           />

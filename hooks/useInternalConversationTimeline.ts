@@ -312,7 +312,7 @@ export const useInternalConversationTimeline = <TItem,>({
           return fallbackPayload;
         }
       }
-      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
+      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: !options?.force });
       if (applied) {
         _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }

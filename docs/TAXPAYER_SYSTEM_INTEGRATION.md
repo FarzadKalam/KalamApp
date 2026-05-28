@@ -35,6 +35,7 @@
 ## Invoice Payload Rules
 - `sstid` remains a string. Do not coerce it to number.
 - `mu` must come from the official taxpayer-system measure unit code stored on the product or invoice row.
+- Real-person buyer national code (`bid`) is normalized as a 10-digit numeric string. If a leading zero was lost in stored customer data, 8-9 digit values are left-padded and then checked with the Iranian national-code checksum before sending.
 - Money is sent in rial; company currency `IRT` is multiplied by 10 and `IRR` is sent as-is.
 - Settlement fields are mapped as:
   - cash: `setm = 1`, `cap = tbill`, `insp = null`

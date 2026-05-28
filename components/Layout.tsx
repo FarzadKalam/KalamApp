@@ -29,6 +29,7 @@ import {
   ArrowLeftOutlined,
   CloudServerOutlined,
   MessageOutlined,
+  OpenAIOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -373,6 +374,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const canViewModule = (moduleId: string) => rolePermissions?.[moduleId]?.view !== false;
   const canViewSettingsRoot = rolePermissions?.[SETTINGS_PERMISSION_KEY]?.view !== false;
+  const canViewOrgKnowledge = canViewSettingsRoot && rolePermissions?.[SETTINGS_PERMISSION_KEY]?.fields?.ai_knowledge !== false;
   const saasAdminPermissions = rolePermissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
   const saasAdminPermissionFields = saasAdminPermissions.fields || {};
   const canViewSaasAdmin = Boolean(
@@ -635,6 +637,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
+          { key: '/org-knowledge', icon: <OpenAIOutlined />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'مدیریت فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
@@ -654,7 +657,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -679,6 +682,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return filesAccess.canViewRecycleBin;
         case '/settings':
           return canViewSettingsRoot;
+        case '/org-knowledge':
+          return canViewOrgKnowledge;
         case '/taze-system':
         case '/saas_users':
         case '/saas_orgs':
@@ -719,6 +724,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewCashBank,
     canViewReportsHub,
     canViewSettingsRoot,
+    canViewOrgKnowledge,
     canViewSaasAdmin,
     filesAccess.canViewGallery,
     filesAccess.canViewRecycleBin,
