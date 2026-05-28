@@ -114,6 +114,8 @@ export const useInternalConversationTimeline = <TItem,>({
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedConversationKey = String(conversationKey || '').trim();
+  const activeConversationKeyRef = useRef(normalizedConversationKey);
+  activeConversationKeyRef.current = normalizedConversationKey;
   const timelineCacheKey = normalizedConversationKey ? buildCacheKey(cacheScopeKey, normalizedConversationKey) : '';
 
   // True when the current view was already populated from cache.
@@ -246,6 +248,7 @@ export const useInternalConversationTimeline = <TItem,>({
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
+    const requestConversationKey = String(conversationKey || '').trim();
 
     if (!options?.force && timelineCacheKey && isCacheFresh(timelineCacheKey)) {
       const cached = readCache<TItem>(timelineCacheKey);
@@ -268,11 +271,20 @@ export const useInternalConversationTimeline = <TItem,>({
     }
 
     try {
+      if (activeConversationKeyRef.current !== requestConversationKey) {
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+      }
       if (!available) {
+        if (activeConversationKeyRef.current !== requestConversationKey) {
+          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+        }
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
 
       const payload = await fetchTimelinePage(null);
+      if (activeConversationKeyRef.current !== requestConversationKey) {
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+      }
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
@@ -297,9 +309,11 @@ export const useInternalConversationTimeline = <TItem,>({
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !conversationKey || !cursor || !available || loadingOlder) return;
+    const requestConversationKey = String(conversationKey || '').trim();
     setLoadingOlder(true);
     try {
       const payload = await fetchTimelinePage(cursor);
+      if (activeConversationKeyRef.current !== requestConversationKey) return;
       if (!payload) {
         setHasMore(false);
         return;

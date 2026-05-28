@@ -1,9 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Button } from 'antd';
 import { MessageOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { AI_OPEN_EVENT } from '../../utils/aiAssistantEvents';
 import { isMissingRpcError } from '../../utils/notificationConversationRpc';
+import {
+  normalizeNotificationUnreadSummary,
+  sumNotificationUnread,
+  type NotificationUnreadSection,
+} from '../../utils/notificationUnreadSummary';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 
 const NotificationsPopover = React.lazy(() => import('../NotificationsPopover'));
@@ -20,6 +25,8 @@ type CommunicationLauncherProps = {
 type CommunicationBadgeSummary = {
   total_unread?: number | string | null;
 };
+
+const COMMUNICATION_UNREAD_SECTIONS = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'] as const satisfies readonly NotificationUnreadSection[];
 
 const isCommunicationSection = (section: unknown) => (
   ['notes', 'bot_messages', 'sms', 'sms_messages', 'voip_calls'].includes(String(section || '').trim())
@@ -38,13 +45,23 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
   const [totalUnread, setTotalUnread] = useState(0);
   const [panelMounted, setPanelMounted] = useState(false);
   const [requestedTab, setRequestedTab] = useState<CommunicationTab>('notes');
+  const badgeRefreshTimerRef = useRef<number | null>(null);
 
   const refreshBadge = useCallback(async () => {
     if (!normalizedUserId) {
       setTotalUnread(0);
       return;
     }
-    let { data, error } = await supabase.rpc('get_communication_badge_summary_v2');
+    let { data, error } = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: 'chat' });
+    if (!error) {
+      const summary = normalizeNotificationUnreadSummary(data);
+      setTotalUnread(sumNotificationUnread(summary, COMMUNICATION_UNREAD_SECTIONS));
+      setLightweightAvailable(true);
+      return;
+    }
+    if (error && isMissingRpcError(error)) {
+      ({ data, error } = await supabase.rpc('get_communication_badge_summary_v2'));
+    }
     if (error && isMissingRpcError(error)) {
       ({ data, error } = await supabase.rpc('get_communication_badge_summary'));
     }
@@ -61,6 +78,26 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
     setTotalUnread(Number.isFinite(nextTotal) ? nextTotal : 0);
     setLightweightAvailable(true);
   }, [normalizedUserId]);
+
+  const scheduleBadgeRefresh = useCallback((delay = 350) => {
+    if (typeof window === 'undefined') {
+      void refreshBadge();
+      return;
+    }
+    if (badgeRefreshTimerRef.current !== null) {
+      window.clearTimeout(badgeRefreshTimerRef.current);
+    }
+    badgeRefreshTimerRef.current = window.setTimeout(() => {
+      badgeRefreshTimerRef.current = null;
+      void refreshBadge();
+    }, delay);
+  }, [refreshBadge]);
+
+  useEffect(() => () => {
+    if (badgeRefreshTimerRef.current !== null) {
+      window.clearTimeout(badgeRefreshTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     void refreshBadge();
@@ -97,7 +134,7 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
         .channel(topic, { config: { private: true } } as any)
         .on('broadcast', { event: 'notification' }, (message: any) => {
           if (isCommunicationSection(message?.payload?.section)) {
-            void refreshBadge();
+            scheduleBadgeRefresh();
           }
         })
         .subscribe()
@@ -107,7 +144,7 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
         void supabase.removeChannel(channel);
       });
     };
-  }, [lightweightAvailable, normalizedOrgId, normalizedRoleId, normalizedUserId, panelMounted, refreshBadge]);
+  }, [lightweightAvailable, normalizedOrgId, normalizedRoleId, normalizedUserId, panelMounted, scheduleBadgeRefresh]);
 
   useEffect(() => {
     if (!normalizedUserId || !normalizedOrgId || panelMounted || lightweightAvailable !== true) return undefined;
@@ -115,11 +152,59 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
       .channel(`communication-launcher-live-${normalizedOrgId}-${normalizedUserId}`)
       .on(
         'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notes', filter: `org_id=eq.${normalizedOrgId}` },
+        () => {
+          scheduleBadgeRefresh();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'notes', filter: `org_id=eq.${normalizedOrgId}` },
+        () => {
+          scheduleBadgeRefresh();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'counterparty_bot_groups', filter: `org_id=eq.${normalizedOrgId}` },
+        () => {
+          scheduleBadgeRefresh();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'counterparty_bot_messages', filter: `org_id=eq.${normalizedOrgId}` },
+        () => {
+          scheduleBadgeRefresh();
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'communication_read_cursors', filter: `org_id=eq.${normalizedOrgId}` },
+        (payload: any) => {
+          const row = payload?.new || payload?.old || {};
+          if (String(row?.user_id || '') === normalizedUserId) {
+            scheduleBadgeRefresh();
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notification_read_states', filter: `org_id=eq.${normalizedOrgId}` },
+        (payload: any) => {
+          const row = payload?.new || payload?.old || {};
+          if (String(row?.user_id || '') === normalizedUserId) {
+            scheduleBadgeRefresh();
+          }
+        },
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'outbound_messages', filter: `org_id=eq.${normalizedOrgId}` },
         (payload: any) => {
           const row = payload?.new || payload?.old || {};
           if (String(row?.channel_type || '').trim() === 'sms') {
-            void refreshBadge();
+            scheduleBadgeRefresh();
           }
         },
       )
@@ -127,7 +212,7 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'voip_call_logs', filter: `org_id=eq.${normalizedOrgId}` },
         () => {
-          void refreshBadge();
+          scheduleBadgeRefresh();
         },
       )
       .subscribe();
@@ -135,7 +220,7 @@ const CommunicationLauncher: React.FC<CommunicationLauncherProps> = ({
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [lightweightAvailable, normalizedOrgId, normalizedUserId, panelMounted, refreshBadge]);
+  }, [lightweightAvailable, normalizedOrgId, normalizedUserId, panelMounted, scheduleBadgeRefresh]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;

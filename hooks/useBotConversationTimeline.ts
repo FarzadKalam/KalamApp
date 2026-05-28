@@ -108,6 +108,8 @@ export const useBotConversationTimeline = <TItem,>({
   const [readModel, setReadModel] = useState<NotificationReadModel>('item');
   const itemsRef = useRef<TItem[]>([]);
   const normalizedBotGroupId = String(botGroupId || '').trim();
+  const activeBotGroupIdRef = useRef(normalizedBotGroupId);
+  activeBotGroupIdRef.current = normalizedBotGroupId;
   const timelineCacheKey = normalizedBotGroupId ? buildCacheKey(cacheScopeKey, normalizedBotGroupId) : '';
 
   // True when the current view was already populated from cache.
@@ -235,6 +237,7 @@ export const useBotConversationTimeline = <TItem,>({
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
+    const requestBotGroupId = String(botGroupId || '').trim();
 
     if (!options?.force && timelineCacheKey && isCacheFresh(timelineCacheKey)) {
       const cached = readCache<TItem>(timelineCacheKey);
@@ -256,11 +259,20 @@ export const useBotConversationTimeline = <TItem,>({
     }
 
     try {
+      if (activeBotGroupIdRef.current !== requestBotGroupId) {
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+      }
       if (!available) {
+        if (activeBotGroupIdRef.current !== requestBotGroupId) {
+          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+        }
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
 
       const payload = await fetchTimelinePage(null);
+      if (activeBotGroupIdRef.current !== requestBotGroupId) {
+        return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+      }
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
@@ -285,9 +297,11 @@ export const useBotConversationTimeline = <TItem,>({
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !botGroupId || !cursor || !available || loadingOlder) return;
+    const requestBotGroupId = String(botGroupId || '').trim();
     setLoadingOlder(true);
     try {
       const payload = await fetchTimelinePage(cursor);
+      if (activeBotGroupIdRef.current !== requestBotGroupId) return;
       if (!payload) {
         setHasMore(false);
         return;

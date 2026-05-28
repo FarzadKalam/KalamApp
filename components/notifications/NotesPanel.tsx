@@ -115,8 +115,6 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     noteReplyTo,
     scrollMessageIntoView,
     openCreateActivityFromMessage,
-    // new — for virtualizer-driven initial anchor scroll
-    selectedConversationInitialAnchorId,
     setNoteViewportReady,
     noteInitialAnchorDoneRef,
   } = context;
@@ -181,20 +179,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     if (noteViewportReady) return;
     if (!isSelectedConversationLoaded || data.length === 0) return;
 
-    const anchorId = selectedConversationInitialAnchorId
-      || (data.find((n: any) => isUnreadNoteRow(n)) as any)?.id;
-    const anchorIndex = anchorId
-      ? data.findIndex((note: any) => String(note?.id || '') === String(anchorId))
-      : -1;
-
-    if (anchorIndex >= 0) {
-      messageVirtualizer.scrollToIndex(anchorIndex, { align: 'start' });
-      noteShouldStickToBottomRef.current = false;
-    } else {
-      messageVirtualizer.scrollToIndex(data.length - 1, { align: 'end' });
-      noteShouldStickToBottomRef.current = true;
-    }
-
+    messageVirtualizer.scrollToIndex(data.length - 1, { align: 'end' });
+    noteShouldStickToBottomRef.current = true;
     noteForceScrollToBottomRef.current = false;
     if (noteInitialAnchorDoneRef) noteInitialAnchorDoneRef.current = true;
     setNoteViewportReady(true);
@@ -208,8 +194,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     const container = notesScrollContainerRef.current;
     if (!container) return;
     if (noteForceScrollToBottomRef.current || noteShouldStickToBottomRef.current) {
-      const behavior = noteForceScrollToBottomRef.current ? ('instant' as ScrollBehavior) : 'smooth';
-      container.scrollTo({ top: container.scrollHeight, behavior });
+      container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
       noteForceScrollToBottomRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -558,7 +543,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                 noteShouldStickToBottomRef.current = true;
                 noteForceScrollToBottomRef.current = true;
                 setNoteNewIncomingCount(0);
-                scrollNotesToBottom('smooth');
+                scrollNotesToBottom('auto');
               }}
             >
               +{toPersianNumber(String(noteNewIncomingCount))} پیام جدید

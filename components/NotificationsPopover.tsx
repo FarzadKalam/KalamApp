@@ -49,6 +49,11 @@ import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
 import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
 import {
+  EMPTY_NOTIFICATION_UNREAD_SUMMARY,
+  normalizeNotificationUnreadSummary,
+  type NotificationUnreadSummaryMap,
+} from '../utils/notificationUnreadSummary';
+import {
   CHAT_GROUP_PREFIX,
   MY_NOTES_CONVERSATION_KEY,
   SYSTEM_MESSAGES_USER_ID,
@@ -928,7 +933,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
   const [noteLinkedAttachments, setNoteLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [noteSmsNotificationEnabled, setNoteSmsNotificationEnabled] = useState(false);
-  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(null);
+  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(
+    () => (variant === 'chat' ? SYSTEM_MESSAGES_USER_ID : null),
+  );
   const [noteUserSearch, setNoteUserSearch] = useState('');
   const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
@@ -966,6 +973,10 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [seenVoipCallIds, setSeenVoipCallIds] = useState<Set<string>>(() => loadSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY));
   const [dismissedUiNotificationIds, setDismissedUiNotificationIds] = useState<Set<string>>(() => new Set());
   const [notificationStateMap, setNotificationStateMap] = useState<Record<string, NotificationStateEntry>>({});
+  const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
+  const [notificationReadStateFallbackMode, setNotificationReadStateFallbackMode] = useState(false);
+  const [unreadSummary, setUnreadSummary] = useState<NotificationUnreadSummaryMap>(EMPTY_NOTIFICATION_UNREAD_SUMMARY);
+  const [unreadSummaryAvailable, setUnreadSummaryAvailable] = useState(false);
   const [uiNotifications, setUiNotifications] = useState<UiNotificationItem[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
   const [loadingTasks, setLoadingTasks] = useState(false);
@@ -1111,25 +1122,48 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   }, [rpcBotConversationSummaries]);
   const effectiveBotGroups = useMemo(() => {
     if (!(botConversationSummaryAvailable && rpcBotConversationSummaries)) return botGroups;
-    return botGroups
-      .map((row) => {
-        const summary = botSummaryMap.get(String(row.id)) || null;
-        return summary ? {
+    const localById = new Map(botGroups.map((row) => [String(row.id), row] as const));
+    const summaryRows = (rpcBotConversationSummaries || [])
+      .map((summary) => {
+        const botGroupId = String(summary?.bot_group_id || '').trim();
+        if (!botGroupId) return null;
+        const row = localById.get(botGroupId);
+        const merged = row ? {
           ...row,
           group_title: String(summary.title || row.group_title || '').trim() || row.group_title,
           status: String(summary.status || row.status || '').trim() || row.status,
           channel_type: String(summary.channel_type || row.channel_type || '').trim() || row.channel_type,
           counterparty_label: summary.counterparty_label || row.counterparty_label || null,
           bot_chat_id: summary.bot_chat_id || row.bot_chat_id || null,
-        } : row;
+        } : {
+          id: botGroupId,
+          target_type: '',
+          customer_id: null,
+          supplier_id: null,
+          channel_type: String(summary.channel_type || '').trim(),
+          status: String(summary.status || '').trim() || 'active',
+          group_title: String(summary.title || '').trim() || 'گروه بات',
+          group_join_link: null,
+          bot_chat_id: summary.bot_chat_id || null,
+          updated_at: summary.latest_message_at,
+          last_inbound_at: null,
+          last_outbound_at: null,
+          metadata: null,
+          counterparty_label: summary.counterparty_label || summary.subtitle || null,
+          counterparty_image_url: null,
+        } as CounterpartyBotGroupRow;
+        return merged;
       })
-      .sort((left, right) => {
-        const leftSummary = botSummaryMap.get(String(left.id));
-        const rightSummary = botSummaryMap.get(String(right.id));
-        const leftTime = new Date(leftSummary?.latest_message_at || left.last_inbound_at || left.last_outbound_at || left.updated_at || 0).getTime() || 0;
-        const rightTime = new Date(rightSummary?.latest_message_at || right.last_inbound_at || right.last_outbound_at || right.updated_at || 0).getTime() || 0;
-        return rightTime - leftTime;
-      });
+      .filter(Boolean) as CounterpartyBotGroupRow[];
+    const summaryIds = new Set(summaryRows.map((row) => String(row.id)));
+    const localOnlyRows = botGroups.filter((row) => !summaryIds.has(String(row.id)));
+    return [...summaryRows, ...localOnlyRows].sort((left, right) => {
+      const leftSummary = botSummaryMap.get(String(left.id));
+      const rightSummary = botSummaryMap.get(String(right.id));
+      const leftTime = new Date(leftSummary?.latest_message_at || left.last_inbound_at || left.last_outbound_at || left.updated_at || 0).getTime() || 0;
+      const rightTime = new Date(rightSummary?.latest_message_at || right.last_inbound_at || right.last_outbound_at || right.updated_at || 0).getTime() || 0;
+      return rightTime - leftTime;
+    });
   }, [botConversationSummaryAvailable, botGroups, botSummaryMap, rpcBotConversationSummaries]);
   const selectedBotGroup = useMemo(
     () => effectiveBotGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
@@ -1647,9 +1681,13 @@ useEffect(() => {
   useEffect(() => {
     if (!profile.id || !profile.org_id || relevantNotificationStateSections.length === 0) {
       setNotificationStateMap({});
+      setNotificationReadStateReady(false);
+      setNotificationReadStateFallbackMode(false);
       return;
     }
     let cancelled = false;
+    setNotificationReadStateReady(false);
+    setNotificationReadStateFallbackMode(false);
     const loadNotificationReadStates = async () => {
       const { data, error } = await supabase
         .from('notification_read_states')
@@ -1663,7 +1701,11 @@ useEffect(() => {
         if (!isMissingTableLikeError(error)) {
           console.warn('Could not load notification read states', error);
         }
-        if (!cancelled) setNotificationStateMap({});
+        if (!cancelled) {
+          setNotificationStateMap({});
+          setNotificationReadStateFallbackMode(true);
+          setNotificationReadStateReady(true);
+        }
         return;
       }
       if (cancelled) return;
@@ -1679,6 +1721,8 @@ useEffect(() => {
         };
       });
       setNotificationStateMap(nextMap);
+      setNotificationReadStateFallbackMode(false);
+      setNotificationReadStateReady(true);
     };
     void loadNotificationReadStates();
     return () => {
@@ -1700,8 +1744,8 @@ useEffect(() => {
     const key = buildNotificationStateKey(toNotificationStateSection(section), sourceType, sourceId);
     const entry = notificationStateMap[key];
     if (entry?.dismissedAt || entry?.readAt) return true;
-    return fallbackSeen;
-  }, [notificationStateMap]);
+    return Boolean(fallbackSeen && (!notificationReadStateReady || notificationReadStateFallbackMode));
+  }, [notificationReadStateFallbackMode, notificationReadStateReady, notificationStateMap]);
 
   const markNotificationEntriesRead = useCallback((entries: NotificationStateEntryInput[]) => {
     if (!Array.isArray(entries) || entries.length === 0) return;
@@ -1717,7 +1761,41 @@ useEffect(() => {
     if (normalized.length === 0) return;
     mergeNotificationStateEntries(normalized);
     void persistNotificationStateEntries(normalized);
-  }, [mergeNotificationStateEntries, persistNotificationStateEntries]);
+    if (unreadSummaryAvailable) {
+      setUnreadSummary((prev) => {
+        const next = { ...prev };
+        normalized.forEach((entry) => {
+          const section = entry.section === 'sms_messages' ? 'sms_messages' : entry.section;
+          next[section] = Math.max(0, Number(next[section] || 0) - 1);
+        });
+        return next;
+      });
+    }
+  }, [mergeNotificationStateEntries, persistNotificationStateEntries, unreadSummaryAvailable]);
+
+  const refreshUnreadSummary = useCallback(async () => {
+    if (!profile.id || !profile.org_id) {
+      setUnreadSummary(EMPTY_NOTIFICATION_UNREAD_SUMMARY);
+      setUnreadSummaryAvailable(false);
+      return;
+    }
+    const { data, error } = await supabase.rpc('get_notification_unread_summary_v1', {
+      p_variant: variant,
+    });
+    if (error) {
+      if (!isMissingRpcError(error)) {
+        console.warn('Could not refresh notification unread summary', error);
+      }
+      setUnreadSummaryAvailable(false);
+      return;
+    }
+    setUnreadSummary(normalizeNotificationUnreadSummary(data));
+    setUnreadSummaryAvailable(true);
+  }, [profile.id, profile.org_id, variant]);
+
+  useEffect(() => {
+    void refreshUnreadSummary();
+  }, [refreshUnreadSummary]);
 
   useEffect(() => {
     if (!profile.id) return;
@@ -2555,12 +2633,16 @@ useEffect(() => {
         await Promise.all([
           safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any),
           safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any),
+          safeSectionFetch(() => refreshUnreadSummary(), 'notes', null as any),
         ]);
         lastLoadedAtRef.current.notes = Date.now();
         return;
       }
       if (variant === 'chat' && activeDrawerSection !== 'notes' && noteConversationSummaryAvailable) {
-        await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
+        await Promise.all([
+          safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any),
+          safeSectionFetch(() => refreshUnreadSummary(), 'notes', null as any),
+        ]);
         lastLoadedAtRef.current.notes = Date.now();
         return;
       }
@@ -2575,6 +2657,7 @@ useEffect(() => {
       if (noteConversationSummaryAvailable) {
         await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
       }
+      await safeSectionFetch(() => refreshUnreadSummary(), 'notes', null as any);
       lastLoadedAtRef.current.notes = Date.now();
       if (showSkeleton) setLoadingNotes(false);
       return;
@@ -2585,6 +2668,7 @@ useEffect(() => {
       if (showSkeleton) setLoadingTasks(true);
       const tasksData = await safeSectionFetch(() => fetchTasks(), 'tasks', [] as any[]);
       setTasks(tasksData);
+      await safeSectionFetch(() => refreshUnreadSummary(), 'tasks', null as any);
       lastLoadedAtRef.current.tasks = Date.now();
       const completedTaskIds = tasksData
         .filter((task: any) => {
@@ -2601,7 +2685,10 @@ useEffect(() => {
 
     if (section === 'bot_messages') {
       if (variant === 'chat' && activeDrawerSection !== 'bot_messages' && botConversationSummaryAvailable) {
-        await safeSectionFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
+        await Promise.all([
+          safeSectionFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any),
+          safeSectionFetch(() => refreshUnreadSummary(), 'bot_messages', null as any),
+        ]);
         lastLoadedAtRef.current.bot_messages = Date.now();
         return;
       }
@@ -2625,6 +2712,7 @@ useEffect(() => {
       if (botConversationSummaryAvailable) {
         await safeSectionFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
       }
+      await safeSectionFetch(() => refreshUnreadSummary(), 'bot_messages', null as any);
       lastLoadedAtRef.current.bot_messages = Date.now();
       if (showSkeleton) setLoadingBotMessages(false);
       return;
@@ -2637,6 +2725,7 @@ useEffect(() => {
       setSmsMessages(messagesData);
       await buildRecordTitleMap(collectRecordReferences(messagesData));
       await loadPeopleMaps(messagesData);
+      await safeSectionFetch(() => refreshUnreadSummary(), 'sms_messages', null as any);
       lastLoadedAtRef.current.sms_messages = Date.now();
       if (showSkeleton) setLoadingSmsMessages(false);
       return;
@@ -2647,6 +2736,7 @@ useEffect(() => {
       setVoipCalls(callsData);
       await buildRecordTitleMap(collectRecordReferences(callsData));
       await loadPeopleMaps(callsData);
+      await safeSectionFetch(() => refreshUnreadSummary(), 'voip_calls', null as any);
       lastLoadedAtRef.current.voip_calls = Date.now();
       return;
     }
@@ -2655,6 +2745,7 @@ useEffect(() => {
     if (showSkeleton) setLoadingResponsibilities(true);
     const responsibilitiesData = await safeSectionFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]);
     setResponsibilities(responsibilitiesData);
+    await safeSectionFetch(() => refreshUnreadSummary(), 'responsibilities', null as any);
     lastLoadedAtRef.current.responsibilities = Date.now();
     await buildRecordTitleMap(responsibilitiesData.map((r: any) => ({ module_id: r.module_id, record_id: r.id })));
     await loadPeopleMaps(responsibilitiesData);
@@ -2903,6 +2994,7 @@ useEffect(() => {
       shouldLoadNotes && noteConversationSummaryAvailable
         ? safeFetch(() => refreshNoteConversationSummaries(), 'notes', null as any)
         : Promise.resolve(null),
+      safeFetch(() => refreshUnreadSummary(), variant === 'chat' ? 'notes' : 'tasks', null as any),
     ]);
     if (shouldLoadTasks) setTasks(tasksData);
     if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
@@ -3004,12 +3096,14 @@ useEffect(() => {
       }
       work.push(refreshSection('sms_messages', options));
       work.push(refreshSection('voip_calls', options));
+      work.push(refreshUnreadSummary());
       await Promise.all(work);
       return;
     }
     await Promise.all([
       refreshSection('tasks', options),
       refreshSection('responsibilities', options),
+      refreshUnreadSummary(),
     ]);
   }, [
     botConversationSummaryAvailable,
@@ -3018,6 +3112,7 @@ useEffect(() => {
     refreshBotConversationSummaries,
     refreshNoteConversationSummaries,
     refreshSection,
+    refreshUnreadSummary,
     variant,
   ]);
 
@@ -3769,6 +3864,9 @@ useEffect(() => {
   });
 
   const notesCount = useMemo(() => {
+    if (unreadSummaryAvailable) {
+      return unreadSummary.notes;
+    }
     if (noteConversationSummaryAvailable && rpcNoteConversationSummaries) {
       return (rpcNoteConversationSummaries || [])
         .filter((item) => String(item?.section || '').trim() === 'notes' && String(item?.kind || '').trim() !== 'system')
@@ -3785,36 +3883,53 @@ useEffect(() => {
     }).length + noteLikeNotifications.filter((item) => (
       !isNotificationRead('notes', 'note_like', String(item?.source_id || ''), false)
     )).length;
-  }, [notes, noteLikeNotifications, profile.id, isNotificationRead, seenNoteIds, noteConversationSummaryAvailable, rpcNoteConversationSummaries]);
+  }, [notes, noteLikeNotifications, profile.id, isNotificationRead, seenNoteIds, noteConversationSummaryAvailable, rpcNoteConversationSummaries, unreadSummary.notes, unreadSummaryAvailable]);
   const tasksCount = useMemo(() => tasks.filter((t: any) => (
     !isNotificationRead('tasks', 'task', String(t?.id || ''), seenTaskIds.has(String(t?.id || '')))
   )).length, [tasks, seenTaskIds, isNotificationRead]);
   const responsibilitiesCount = useMemo(() => responsibilities.filter((r: any) => (
     !isNotificationRead('responsibilities', getResponsibilitySourceType(r), String(r?.id || ''), seenResponsibilityIds.has(String(r?.id || '')))
   )).length, [responsibilities, seenResponsibilityIds, isNotificationRead]);
-  const botMessagesCount = useMemo(() => botConversationSummaryAvailable && rpcBotConversationSummaries
-    ? (rpcBotConversationSummaries || []).reduce((sum, item) => {
+  const effectiveTasksCount = unreadSummaryAvailable ? unreadSummary.tasks : tasksCount;
+  const effectiveResponsibilitiesCount = unreadSummaryAvailable ? unreadSummary.responsibilities : responsibilitiesCount;
+  const botMessagesCount = useMemo(() => {
+    if (unreadSummaryAvailable) {
+      return unreadSummary.bot_messages;
+    }
+    return botConversationSummaryAvailable && rpcBotConversationSummaries
+      ? (rpcBotConversationSummaries || []).reduce((sum, item) => {
         const groupId = String(item?.bot_group_id || '').trim();
         if (!groupId || (visibleBotGroupIds.size > 0 && !visibleBotGroupIds.has(groupId))) return sum;
         return sum + Number(item?.unread_count || 0);
       }, 0)
-    : botNotificationMessages.filter((row) => {
+      : botNotificationMessages.filter((row) => {
       const id = String(row?.id || '').trim();
       return String(row?.direction || '').trim() === 'inbound'
         && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
-    }).length, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead, visibleBotGroupIds]);
+    }).length;
+  }, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead, visibleBotGroupIds, unreadSummary.bot_messages, unreadSummaryAvailable]);
   const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => {
+    if (unreadSummaryAvailable) {
+      return false;
+    }
     const id = String(row?.id || '').trim();
     return String(row?.direction || '').trim() === 'inbound'
       && !isNotificationRead('sms_messages', 'inbound_sms', id, seenSmsMessageIds.has(id));
-  }).length, [smsMessages, isNotificationRead, seenSmsMessageIds]);
-  const voipCallsCount = useMemo(() => voipCalls.filter((row: any) => (
-    String(row?.direction || '').trim() === 'incoming'
-    && !isNotificationRead('voip_calls', 'voip_call', String(row?.id || '').trim(), seenVoipCallIds.has(String(row?.id || '').trim()))
-  )).length, [voipCalls, seenVoipCallIds, isNotificationRead]);
-  const chatTotalCount = notesCount + botMessagesCount + smsMessagesCount + voipCallsCount;
-  const alertsTotalCount = tasksCount + responsibilitiesCount;
-  const totalCount = variant === 'chat' ? chatTotalCount : alertsTotalCount;
+  }).length, [smsMessages, isNotificationRead, seenSmsMessageIds, unreadSummaryAvailable]);
+  const effectiveSmsMessagesCount = unreadSummaryAvailable ? unreadSummary.sms_messages : smsMessagesCount;
+  const voipCallsCount = useMemo(() => {
+    if (unreadSummaryAvailable) {
+      return 0;
+    }
+    return voipCalls.filter((row: any) => (
+      String(row?.direction || '').trim() === 'incoming'
+      && !isNotificationRead('voip_calls', 'voip_call', String(row?.id || '').trim(), seenVoipCallIds.has(String(row?.id || '').trim()))
+    )).length;
+  }, [voipCalls, seenVoipCallIds, isNotificationRead, unreadSummaryAvailable]);
+  const effectiveVoipCallsCount = unreadSummaryAvailable ? unreadSummary.voip_calls : voipCallsCount;
+  const effectiveChatTotalCount = notesCount + botMessagesCount + effectiveSmsMessagesCount + effectiveVoipCallsCount;
+  const alertsTotalCount = effectiveTasksCount + effectiveResponsibilitiesCount;
+  const totalCount = variant === 'chat' ? effectiveChatTotalCount : alertsTotalCount;
   const smsThreads = useMemo<SmsThreadItem[]>(
     () => buildSmsThreads({
       messages: smsMessages,
@@ -4488,14 +4603,6 @@ useEffect(() => {
       return haystack.includes(normalizedNoteMessageSearch);
     });
   }, [authorNameMap, directoryUserMap, myNotesDisplayLimit, normalizedNoteMessageSearch, orderedFilteredNotes, selectedNoteUserId]);
-  const firstUnreadBotMessageDomId = useMemo(() => {
-    const rowId = String(
-      botTimelineInitialAnchorId
-      || botMessages.find((row) => isUnreadBotRow(row))?.id
-      || ''
-    ).trim();
-    return rowId ? `bot-message-${rowId}` : null;
-  }, [botMessages, botTimelineInitialAnchorId, isUnreadBotRow]);
   useEffect(() => {
     if (!noteConversationSummaryAvailable) return;
     if (!open || activeDrawerSection !== 'notes') return;
@@ -4954,66 +5061,13 @@ useEffect(() => {
   function scrollNotesToBottom(behavior: ScrollBehavior = 'auto') {
     const node = notesScrollContainerRef.current;
     if (!node) return;
-    if (behavior === 'auto') {
-      node.scrollTop = node.scrollHeight;
-      return;
-    }
-    if (typeof window === 'undefined') {
-      node.scrollTop = node.scrollHeight;
-      return;
-    }
-    window.requestAnimationFrame(() => {
-      const currentNode = notesScrollContainerRef.current;
-      if (!currentNode) return;
-      currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
-    });
+    node.scrollTo({ top: node.scrollHeight, behavior });
   }
   function scrollBotMessagesToBottom(behavior: ScrollBehavior = 'auto') {
     const node = botMessagesScrollContainerRef.current;
     if (!node) return;
-    if (behavior === 'auto') {
-      node.scrollTop = node.scrollHeight;
-      return;
-    }
-    if (typeof window === 'undefined') {
-      node.scrollTop = node.scrollHeight;
-      return;
-    }
-    window.requestAnimationFrame(() => {
-      const currentNode = botMessagesScrollContainerRef.current;
-      if (!currentNode) return;
-      currentNode.scrollTo({ top: currentNode.scrollHeight, behavior });
-    });
+    node.scrollTo({ top: node.scrollHeight, behavior });
   }
-  const scrollConversationToAnchor = useCallback((
-    container: HTMLDivElement | null,
-    domId: string | null | undefined,
-    fallback: 'bottom' | 'none' = 'bottom',
-  ) => {
-    if (!container) return false;
-    const normalizedId = String(domId || '').trim();
-    if (!normalizedId) {
-      if (fallback === 'bottom') {
-        container.scrollTop = container.scrollHeight;
-        return true;
-      }
-      return false;
-    }
-    if (typeof document === 'undefined') {
-      if (fallback === 'bottom') container.scrollTop = container.scrollHeight;
-      return false;
-    }
-    const target = document.getElementById(normalizedId);
-    if (!target) {
-      if (fallback === 'bottom') {
-        container.scrollTop = container.scrollHeight;
-        return true;
-      }
-      return false;
-    }
-    target.scrollIntoView({ behavior: 'auto', block: 'center' });
-    return true;
-  }, []);
   const scrollMessageIntoView = useCallback((domId: string) => {
     if (typeof document === 'undefined') return;
     const normalizedId = String(domId || '').trim();
@@ -5139,6 +5193,7 @@ useEffect(() => {
         if (noteConversationSummaryAvailable) {
           debouncedRefreshNoteConversationSummaries();
         }
+        void refreshUnreadSummary();
       });
     } else {
       markNotificationEntriesRead(readEntries);
@@ -5149,7 +5204,7 @@ useEffect(() => {
     if (selectedNoteUserId) {
       patchLocalNoteConversationSummary(selectedNoteUserId, { unreadCount: 0 });
     }
-  }, [debouncedRefreshNoteConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, profile.id, seenNoteIds, selectedConversationKey, selectedConversationReadModel, selectedNoteUserId]);
+  }, [debouncedRefreshNoteConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, profile.id, refreshUnreadSummary, seenNoteIds, selectedConversationKey, selectedConversationReadModel, selectedNoteUserId]);
 
   const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
     const unreadInboundRows = rows.filter((row) => {
@@ -5190,6 +5245,7 @@ useEffect(() => {
           if (botConversationSummaryAvailable) {
             debouncedRefreshBotConversationSummaries();
           }
+          void refreshUnreadSummary();
         });
       } else {
         markNotificationEntriesRead(readEntries);
@@ -5201,7 +5257,7 @@ useEffect(() => {
         patchLocalBotConversationSummary(selectedBotGroupId, { unreadCount: 0 });
       }
     }
-  }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, seenBotMessageIds, selectedBotGroupId]);
+  }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, refreshUnreadSummary, seenBotMessageIds, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const taskIds = (rows || [])
@@ -5351,16 +5407,12 @@ useEffect(() => {
 
   useEffect(() => {
     setBotViewportReady(!selectedBotGroupId);
-    // Mark as loading immediately so the viewport init useLayoutEffect waits for real data
-    if (selectedBotGroupId) setLoadingBotMessages(true);
     botShouldStickToBottomRef.current = false;
     botForceScrollToBottomRef.current = false;
     botInitialAnchorDoneRef.current = false;
     setBotNewIncomingCount(0);
     botConversationKeyRef.current = null;
     botConversationMessageIdsRef.current = new Set();
-    setBotMessages([]);
-    botMessagesRef.current = [];
     botMessagesGroupIdRef.current = null;
   }, [selectedBotGroupId]);
 
@@ -5388,10 +5440,8 @@ useEffect(() => {
     }
     const shouldForceScroll = noteForceScrollToBottomRef.current;
     if (!shouldForceScroll && !noteShouldStickToBottomRef.current) return;
-    // Use 'auto' (instant) on the very first scroll so the chat doesn't animate from top to bottom
-    const noteBehavior = shouldForceScroll || !noteInitialAnchorDoneRef.current ? 'auto' : 'smooth';
     noteInitialAnchorDoneRef.current = true;
-    scrollNotesToBottom(noteBehavior);
+    scrollNotesToBottom('auto');
     noteForceScrollToBottomRef.current = false;
   }, [activeDrawerSection, displayedChatNotes, isSelectedConversationLoaded, noteViewportReady, open]);
 
@@ -5421,13 +5471,9 @@ useEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
     if (loadingBotMessages) return;
     if (!botViewportReady) {
-      const scrolledToUnread = scrollConversationToAnchor(
-        botMessagesScrollContainerRef.current,
-        firstUnreadBotMessageDomId,
-        'bottom',
-      );
+      scrollBotMessagesToBottom('auto');
       botInitialAnchorDoneRef.current = true;
-      botShouldStickToBottomRef.current = !scrolledToUnread || !firstUnreadBotMessageDomId;
+      botShouldStickToBottomRef.current = true;
       botForceScrollToBottomRef.current = false;
       setBotViewportReady(true);
       return;
@@ -5447,12 +5493,10 @@ useEffect(() => {
     }
     const shouldForceScroll = botForceScrollToBottomRef.current;
     if (!shouldForceScroll && !botShouldStickToBottomRef.current) return;
-    // Use 'auto' (instant) on the very first scroll so the chat doesn't animate from old to new messages
-    const botBehavior = shouldForceScroll || !botInitialAnchorDoneRef.current ? 'auto' : 'smooth';
     botInitialAnchorDoneRef.current = true;
-    scrollBotMessagesToBottom(botBehavior);
+    scrollBotMessagesToBottom('auto');
     botForceScrollToBottomRef.current = false;
-  }, [activeDrawerSection, botMessages, botViewportReady, firstUnreadBotMessageDomId, loadingBotMessages, open, scrollConversationToAnchor, selectedBotGroupId]);
+  }, [activeDrawerSection, botMessages, botViewportReady, loadingBotMessages, open, selectedBotGroupId]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'bot_messages') return;
@@ -6403,7 +6447,6 @@ useEffect(() => {
         noteReplyTo,
         scrollMessageIntoView,
         openCreateActivityFromMessage,
-        selectedConversationInitialAnchorId,
         setNoteViewportReady,
         noteInitialAnchorDoneRef,
       }}
@@ -6832,12 +6875,12 @@ useEffect(() => {
       },
       {
         key: 'sms_messages',
-        label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveSmsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
         children: renderLazyDrawerPane('sms_messages', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderSmsMessagesPanel('desktop')),
       },
       {
         key: 'voip_calls',
-        label: <Badge count={formatBadgeCount(voipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveVoipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
         children: renderLazyDrawerPane('voip_calls', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderVoipCallsPanel('desktop')),
       },
       {
@@ -6851,12 +6894,12 @@ useEffect(() => {
     : [
       {
         key: 'tasks',
-        label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveTasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
         children: renderLazyDrawerPane('tasks', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderTasksPanel('grid')),
       },
       {
         key: 'responsibilities',
-        label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveResponsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
         children: renderLazyDrawerPane('responsibilities', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden px-3 pb-3`, () => renderResponsibilitiesPanel('grid')),
       },
     ];
@@ -6896,12 +6939,12 @@ useEffect(() => {
       },
       {
         key: 'sms_messages',
-        label: <Badge count={formatBadgeCount(smsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveSmsMessagesCount)} color={badgeColor}>پیامک‌ها</Badge>,
         children: renderLazyDrawerPane('sms_messages', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderSmsMessagesPanel('mobile')),
       },
       {
         key: 'voip_calls',
-        label: <Badge count={formatBadgeCount(voipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveVoipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
         children: renderLazyDrawerPane('voip_calls', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderVoipCallsPanel('mobile')),
       },
       {
@@ -6915,12 +6958,12 @@ useEffect(() => {
     : [
       {
         key: 'tasks',
-        label: <Badge count={formatBadgeCount(tasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveTasksCount)} color={badgeColor}>فعالیت‌های من</Badge>,
         children: renderLazyDrawerPane('tasks', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderTasksPanel('grid')),
       },
       {
         key: 'responsibilities',
-        label: <Badge count={formatBadgeCount(responsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
+        label: <Badge count={formatBadgeCount(effectiveResponsibilitiesCount)} color={badgeColor}>مسئولیت‌های من</Badge>,
         children: renderLazyDrawerPane('responsibilities', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden px-2 pb-2', () => renderResponsibilitiesPanel('grid')),
       },
     ];

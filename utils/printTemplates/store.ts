@@ -1454,7 +1454,6 @@ const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => (
     <div><span style="font-weight:800;">موضوع:</span> <span style="font-weight:700;">{{record.name}}</span></div>
     <div><span style="font-weight:800;">از:</span> {{system.letter_sender_display}}</div>
     <div><span style="font-weight:800;">به:</span> {{system.letter_recipient_display}}</div>
-    <div style="margin-top:8px; font-weight:800;">متن نامه</div>
   </div>
   <div style="min-height:470px; text-align:right; padding:0 2px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
   <div style="margin-top:26px; margin-right:auto; width:230px; min-height:92px; text-align:center; line-height:1.9;">
@@ -2185,4 +2184,3 @@ export const materializeSystemTemplateForCopy = (
     footerHtml: replaceSystemPlaceholders(template.footerHtml),
   };
 };
-

@@ -1,22 +1,27 @@
 import React, { useCallback, useState } from 'react';
+import DOMPurify from 'dompurify';
 import {
   ArrowRightOutlined,
   PaperClipOutlined,
   PrinterOutlined,
   RobotOutlined,
   SaveOutlined,
+  ShareAltOutlined,
 } from '@ant-design/icons';
-import { App, Button, Select, Spin, Switch, Tooltip, Typography } from 'antd';
+import { App, Button, Input, Modal, Select, Spin, Switch, Tooltip, Typography } from 'antd';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
-import { printInIframe } from '../../utils/printTemplates/printInIframe';
+import { printAsPdf } from '../../utils/printTemplates/printAsPdf';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
 import RecordFilesManager from '../../components/RecordFilesManager';
 import {
   AI_INSTRUCTIONS_DOCUMENT_TYPE,
   AI_INSTRUCTIONS_TITLE,
 } from '../../utils/aiKnowledge';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { loadProfilesWithCompat } from '../../utils/profileDirectory';
+import { insertNotesWithFallback } from '../../utils/noteDispatch';
 
 const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 
@@ -53,6 +58,30 @@ const STATUS_OPTIONS = [
   { label: 'آرشیو', value: 'archived' },
 ];
 
+type ShareTargetOption = {
+  label: string;
+  value: string;
+  searchText: string;
+  userIds?: string[];
+  roleIds?: string[];
+};
+
+const sanitizePrintFilename = (value: string) => {
+  const normalized = String(value || '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || 'سند دانش سازمان';
+};
+
+const escapePrintHtml = (value: string) =>
+  String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
 const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   document,
   typeOptions,
@@ -75,6 +104,16 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   const [filesOpen, setFilesOpen] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [typeSearch, setTypeSearch] = useState('');
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareTargetIds, setShareTargetIds] = useState<string[]>([]);
+  const [shareMessageText, setShareMessageText] = useState('');
+  const [shareTargetOptions, setShareTargetOptions] = useState<ShareTargetOption[]>([]);
+  const [shareContext, setShareContext] = useState<{
+    userId: string;
+    authorName: string | null;
+  }>({ userId: '', authorName: null });
 
   const handleSave = async () => {
     try {
@@ -116,15 +155,184 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   const handlePrint = async () => {
     try {
       setPrinting(true);
-      const html = bodyHtml || `<p>${document.body || ''}</p>`;
-      await printInIframe({
+      const html = DOMPurify.sanitize(bodyHtml || `<p>${escapePrintHtml(document.body || '')}</p>`, {
+        ADD_ATTR: ['style', 'class', 'colspan', 'rowspan'],
+      });
+      await printAsPdf({
         title: document.title || 'سند دانش سازمان',
-        sourceHtml: `<div style="font-family: inherit; direction: rtl; line-height: 1.8;">${html}</div>`,
+        filename: sanitizePrintFilename(document.title || 'سند دانش سازمان'),
+        pageSize: 'A4 portrait',
+        sourceHtml: `
+          <div class="invoice-custom-print-shell" dir="rtl">
+            <div class="print-template-page" style="width:210mm; min-height:297mm; box-sizing:border-box; padding:14mm; background:#fff; color:#111827; direction:rtl;">
+              <h1 style="margin:0 0 12px; font-size:18px; line-height:1.8;">${escapePrintHtml(document.title || 'سند دانش سازمان')}</h1>
+              <div style="font-family:inherit; direction:rtl; line-height:1.9; font-size:12px;">${html}</div>
+            </div>
+          </div>
+        `,
       });
     } catch (err: any) {
-      message.error('خطا در پرینت');
+      message.error(toFaErrorMessage(err, 'خطا در آماده‌سازی فایل پرینت'));
     } finally {
       setPrinting(false);
+    }
+  };
+
+  const loadShareTargets = async () => {
+    setShareLoading(true);
+    try {
+      const bootstrap = await fetchSessionBootstrap(supabase);
+      const currentUserId = String(bootstrap?.user?.id || '').trim();
+      const currentOrgId = String(bootstrap?.orgId || '').trim();
+      if (!currentUserId || !currentOrgId) {
+        message.warning('برای اشتراک‌گذاری باید وارد حساب کاربری شوید.');
+        return;
+      }
+
+      const [directory, groupsResult] = await Promise.all([
+        loadProfilesWithCompat(supabase, {
+          orgId: currentOrgId,
+          limit: 500,
+          cacheKey: `knowledge-share:profiles:${currentOrgId}`,
+          orderByFullName: true,
+        }),
+        supabase
+          .from('chat_groups')
+          .select('id, name, user_ids, role_ids')
+          .eq('org_id', currentOrgId)
+          .order('updated_at', { ascending: false })
+          .limit(200),
+      ]);
+
+      if (directory.error) throw directory.error;
+      if (groupsResult.error) throw groupsResult.error;
+
+      const users = Array.isArray(directory.data) ? directory.data : [];
+      const currentUser = users.find((item: any) => String(item?.id || '') === currentUserId);
+      const authorName = String(currentUser?.full_name || currentUser?.email || currentUser?.mobile_1 || '').trim() || null;
+      const options: ShareTargetOption[] = [
+        ...(groupsResult.data || []).map((group: any) => {
+          const label = `گروه داخلی: ${String(group?.name || '').trim() || 'گروه بدون نام'}`;
+          const explicitUserIds = Array.isArray(group?.user_ids) ? group.user_ids.map((value: any) => String(value)) : [];
+          const roleIds = Array.isArray(group?.role_ids) ? group.role_ids.map((value: any) => String(value)) : [];
+          const roleDrivenUserIds = users
+            .filter((user: any) => user?.role_id && roleIds.includes(String(user.role_id)))
+            .map((user: any) => String(user.id));
+          return {
+            label,
+            value: `chat_group:${String(group?.id || '').trim()}`,
+            searchText: label.toLowerCase(),
+            userIds: Array.from(new Set([...explicitUserIds, ...roleDrivenUserIds])),
+            roleIds,
+          };
+        }),
+        ...users
+          .filter((user: any) => String(user?.id || '') !== currentUserId)
+          .map((user: any) => {
+            const displayName = String(user?.full_name || user?.email || user?.mobile_1 || '').trim() || 'کاربر بدون نام';
+            return {
+              label: `داخلی: ${displayName}`,
+              value: `user:${String(user.id)}`,
+              searchText: displayName.toLowerCase(),
+            };
+          }),
+      ].filter((option) => option.value && !option.value.endsWith(':'));
+
+      setShareContext({ userId: currentUserId, authorName });
+      setShareTargetOptions(options);
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'بارگذاری مقصدهای اشتراک‌گذاری ناموفق بود'));
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const openShareModal = () => {
+    setShareOpen(true);
+    setShareMessageText(`سند دانش سازمان: ${isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند بدون عنوان')}`);
+    if (shareTargetOptions.length === 0) {
+      void loadShareTargets();
+    }
+  };
+
+  const closeShareModal = () => {
+    setShareOpen(false);
+    setShareTargetIds([]);
+    setShareMessageText('');
+  };
+
+  const handleShare = async () => {
+    const normalizedTargets = Array.from(new Set(shareTargetIds.map((value) => String(value || '').trim()).filter(Boolean)));
+    if (normalizedTargets.length === 0) {
+      message.warning('حداقل یک مقصد انتخاب کنید.');
+      return;
+    }
+    if (!shareContext.userId) {
+      message.warning('اطلاعات کاربر فعلی برای اشتراک‌گذاری آماده نیست.');
+      return;
+    }
+
+    const plainBody = htmlToPlainText(bodyHtml || document.body || '');
+    const excerpt = plainBody.length > 700 ? `${plainBody.slice(0, 700)}...` : plainBody;
+    const noteText = [String(shareMessageText || '').trim(), excerpt].filter(Boolean).join('\n\n');
+    const optionMap = new Map(shareTargetOptions.map((option) => [option.value, option]));
+    const payloads: Record<string, any>[] = normalizedTargets.flatMap<Record<string, any>>((targetId) => {
+      if (targetId.startsWith('chat_group:')) {
+        const option = optionMap.get(targetId);
+        if (!option) return [];
+        return [{
+          module_id: 'org_knowledge',
+          record_id: document.id,
+          content: noteText,
+          reply_to: null,
+          mention_user_ids: Array.from(new Set(option.userIds || [])).filter((id) => id !== shareContext.userId),
+          mention_role_ids: option.roleIds || [],
+          author_id: shareContext.userId,
+          author_name: shareContext.authorName,
+          metadata: {
+            chat_group_id: targetId.replace('chat_group:', ''),
+            source_type: 'knowledge_document_share',
+            document_title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند بدون عنوان'),
+          },
+        }];
+      }
+
+      if (targetId.startsWith('user:')) {
+        const userId = targetId.replace('user:', '');
+        if (!userId || userId === shareContext.userId) return [];
+        return [{
+          module_id: 'org_knowledge',
+          record_id: document.id,
+          content: noteText,
+          reply_to: null,
+          mention_user_ids: [userId],
+          mention_role_ids: [],
+          author_id: shareContext.userId,
+          author_name: shareContext.authorName,
+          metadata: {
+            source_type: 'knowledge_document_share',
+            document_title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند بدون عنوان'),
+          },
+        }];
+      }
+
+      return [];
+    });
+
+    if (payloads.length === 0) {
+      message.warning('حداقل یک مقصد معتبر انتخاب کنید.');
+      return;
+    }
+
+    setShareSubmitting(true);
+    try {
+      await insertNotesWithFallback(payloads);
+      message.success('سند به اشتراک گذاشته شد.');
+      closeShareModal();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'اشتراک‌گذاری سند ناموفق بود'));
+    } finally {
+      setShareSubmitting(false);
     }
   };
 
@@ -227,6 +435,15 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
             پرینت
           </Button>
 
+          {/* اشتراک‌گذاری */}
+          <Button
+            icon={<ShareAltOutlined />}
+            size="small"
+            onClick={openShareModal}
+          >
+            اشتراک‌گذاری
+          </Button>
+
           {/* ذخیره */}
           <Button
             type="primary"
@@ -268,6 +485,43 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
         canEdit
         canDelete
       />
+
+      <Modal
+        title="اشتراک‌گذاری سند"
+        open={shareOpen}
+        onCancel={closeShareModal}
+        onOk={() => void handleShare()}
+        confirmLoading={shareSubmitting}
+        okText="ارسال"
+        cancelText="انصراف"
+        okButtonProps={{ disabled: shareTargetIds.length === 0 }}
+        zIndex={1700}
+      >
+        <div className="space-y-3">
+          <Input.TextArea
+            value={shareMessageText}
+            onChange={(event) => setShareMessageText(event.target.value)}
+            rows={3}
+            placeholder="متن پیام اشتراک‌گذاری"
+          />
+          <Select
+            mode="multiple"
+            showSearch
+            allowClear
+            loading={shareLoading}
+            value={shareTargetIds}
+            onChange={(values) => setShareTargetIds((values || []).map((value) => String(value)))}
+            placeholder="انتخاب پیام یا گروه داخلی"
+            optionFilterProp="searchText"
+            filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').trim().toLowerCase())}
+            options={shareTargetOptions}
+            getPopupContainer={(trigger) => trigger.parentElement || document.body}
+            styles={{ popup: { root: { zIndex: 1710 } } }}
+            maxTagCount="responsive"
+            className="w-full"
+          />
+        </div>
+      </Modal>
     </div>
   );
 };

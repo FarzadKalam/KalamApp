@@ -660,7 +660,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                 botForceScrollToBottomRef.current = true;
                 setBotNewIncomingCount(0);
                 markBotMessagesAsSeen(botMessages);
-                scrollBotMessagesToBottom('smooth');
+                scrollBotMessagesToBottom('auto');
               }}
             >
               +{toPersianNumber(String(botNewIncomingCount))} پیام جدید
