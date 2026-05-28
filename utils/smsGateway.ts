@@ -1,4 +1,4 @@
-import { supabase } from '../supabaseClient';
+﻿import { supabase } from '../supabaseClient';
 import { getActiveChannelSettings } from './channelSettings';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
 
@@ -219,7 +219,7 @@ const decodeSoapScalar = (raw: string) => {
 
 const getActiveSmsSettings = async (): Promise<SmsSettings> => {
   const data = await getActiveChannelSettings('sms');
-  if (!data) throw new Error('تنظیمات سامانه پیامک فعال نیست.');
+  if (!data) throw new Error('طھظ†ط¸غŒظ…ط§طھ ط³ط§ظ…ط§ظ†ظ‡ ظ¾غŒط§ظ…ع© ظپط¹ط§ظ„ ظ†غŒط³طھ.');
 
   return (data.settings || {}) as SmsSettings;
 };
@@ -246,9 +246,9 @@ const sendSmsDirect = async (
   const bodyId = String(settings.body_id || '').trim();
   const isFlash = !!settings.is_flash;
 
-  if (!baseUrl || !senderNumber) throw new Error('تنظیمات ارسال پیامک ناقص است.');
+  if (!baseUrl || !senderNumber) throw new Error('طھظ†ط¸غŒظ…ط§طھ ط§ط±ط³ط§ظ„ ظ¾غŒط§ظ…ع© ظ†ط§ظ‚طµ ط§ط³طھ.');
   if (!apiKey && (!username || !password)) {
-    throw new Error('نام کاربری/رمز عبور یا API Key برای پیامک کامل نیست.');
+    throw new Error('ظ†ط§ظ… ع©ط§ط±ط¨ط±غŒ/ط±ظ…ط² ط¹ط¨ظˆط± غŒط§ API Key ط¨ط±ط§غŒ ظ¾غŒط§ظ…ع© ع©ط§ظ…ظ„ ظ†غŒط³طھ.');
   }
 
   const requestUrl = resolveSmsRequestUrl(baseUrl);
@@ -256,7 +256,7 @@ const sendSmsDirect = async (
   const recipients = Array.from(new Set((to || []).map((value) => String(value || '').trim()).filter(Boolean)));
 
   if (recipients.length === 0) {
-    throw new Error('گیرنده پیامک مشخص نشده است.');
+    throw new Error('ع¯غŒط±ظ†ط¯ظ‡ ظ¾غŒط§ظ…ع© ظ…ط´ط®طµ ظ†ط´ط¯ظ‡ ط§ط³طھ.');
   }
 
   const providerResults: SmsProviderResult[] = [];
@@ -320,6 +320,25 @@ const sendSmsDirect = async (
   };
 };
 
+const isRetryableSmsInvokeError = (value: unknown) => {
+  const text = String(value || '').toLowerCase();
+  return (
+    text.includes('timeout:') ||
+    text.includes('timeout') ||
+    text.includes('aborted') ||
+    text.includes('aborterror') ||
+    text.includes('failed to fetch') ||
+    text.includes('network') ||
+    text.includes('fetcherror') ||
+    text.includes('functionsfetcherror') ||
+    text.includes('http 502') ||
+    text.includes('http 503') ||
+    text.includes('http 504')
+  );
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const invokeSmsFunction = async (
   to: string[],
   text: string,
@@ -330,12 +349,34 @@ const invokeSmsFunction = async (
     payload.overrideSettings = overrideSettings;
   }
 
-  const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
-  if (error) throw new Error(await getInvokeErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.'));
-  if (data && data.success === false) {
-    throw new Error(getErrorMessage(data, 'ارسال پیامک ناموفق بود.'));
+  let lastError: unknown = null;
+  const maxAttempts = 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
+    if (error) {
+      const message = await getInvokeErrorMessage(error, 'خطا در فراخوانی سرویس پیامک.');
+      lastError = new Error(message);
+      if (attempt < maxAttempts && isRetryableSmsInvokeError(message)) {
+        await sleep(700);
+        continue;
+      }
+      throw lastError;
+    }
+
+    if (data && data.success === false) {
+      const message = getErrorMessage(data, 'ارسال پیامک ناموفق بود.');
+      lastError = new Error(message);
+      if (attempt < maxAttempts && isRetryableSmsInvokeError(message)) {
+        await sleep(700);
+        continue;
+      }
+      throw lastError;
+    }
+
+    return (data || { success: true }) as SmsGatewaySendResult;
   }
-  return (data || { success: true }) as SmsGatewaySendResult;
+
+  throw (lastError instanceof Error ? lastError : new Error('ارسال پیامک ناموفق بود.'));
 };
 
 export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) => {
@@ -345,9 +386,9 @@ export const getSmsBalanceViaGateway = async (overrideSettings?: SmsSettings) =>
   }
 
   const { data, error } = await supabase.functions.invoke('send-sms', { body: payload });
-  if (error) throw new Error(await getInvokeErrorMessage(error, 'خطا در دریافت اعتبار پیامک.'));
+  if (error) throw new Error(await getInvokeErrorMessage(error, 'ط®ط·ط§ ط¯ط± ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع©.'));
   if (data && data.success === false) {
-    throw new Error(getErrorMessage(data, 'دریافت اعتبار پیامک ناموفق بود.'));
+    throw new Error(getErrorMessage(data, 'ط¯ط±غŒط§ظپطھ ط§ط¹طھط¨ط§ط± ظ¾غŒط§ظ…ع© ظ†ط§ظ…ظˆظپظ‚ ط¨ظˆط¯.'));
   }
 
   return {
@@ -373,10 +414,10 @@ export const sendSmsViaGateway = async ({
   const messageText = String(text || '').trim();
 
   if (recipients.length === 0) {
-    throw new Error('گیرنده پیامک مشخص نشده است.');
+    throw new Error('ع¯غŒط±ظ†ط¯ظ‡ ظ¾غŒط§ظ…ع© ظ…ط´ط®طµ ظ†ط´ط¯ظ‡ ط§ط³طھ.');
   }
   if (!messageText) {
-    throw new Error('متن پیامک خالی است.');
+    throw new Error('ظ…طھظ† ظ¾غŒط§ظ…ع© ط®ط§ظ„غŒ ط§ط³طھ.');
   }
 
   const pendingLogRows = skipReportLog
@@ -406,6 +447,9 @@ export const sendSmsViaGateway = async ({
         rawMessage.includes('network') ||
         rawMessage.includes('fetcherror') ||
         rawMessage.includes('functionsfetcherror') ||
+        rawMessage.includes('timeout:') ||
+        rawMessage.includes(' timeout') ||
+        rawMessage.includes('abort') ||
         rawMessage.includes('gateway timeout') ||
         rawMessage.includes('http 502') ||
         rawMessage.includes('http 503') ||

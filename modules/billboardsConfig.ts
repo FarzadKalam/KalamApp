@@ -158,6 +158,8 @@ const fieldsArray: any[] = [
   { key: 'category', labels: { fa: 'نوع تابلو', en: 'Billboard Category' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 1, dynamicOptionsCategory: 'billboard_categories', nature: FieldNature.STANDARD, validation: { required: false } },
   { key: 'grade', labels: { fa: 'گرید تابلو', en: 'Billboard Grade' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2, dynamicOptionsCategory: 'billboard_grade', nature: FieldNature.STANDARD, validation: { required: false } },
   { key: 'features', labels: { fa: 'ویژگی‌ها', en: 'Billboard Features' }, type: FieldType.MULTI_SELECT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2.5, dynamicOptionsCategory: 'billboard_features', nature: FieldNature.STANDARD, validation: { required: false } },
+  { key: 'obstacles', labels: { fa: 'موانع', en: 'Obstacles' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2.6, nature: FieldNature.STANDARD, isTableColumn: false },
+  { key: 'advantages', labels: { fa: 'مزایا', en: 'Advantages' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2.65, nature: FieldNature.STANDARD, isTableColumn: false },
   
   { key: 'width', labels: { fa: 'طول', en: 'Width' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2.7, nature: FieldNature.STANDARD, validation: { required: false } },
   { key: 'height', labels: { fa: 'ارتفاع', en: 'Height' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 2.8, nature: FieldNature.STANDARD, validation: { required: false } },
@@ -219,8 +221,8 @@ export const billboardConfig: ModuleDefinition = {
       title: 'فاکتورها',
       icon: 'FileTextOutlined',
       relationType: 'jsonb_contains',
-      targetModule: 'billboards',
-      jsonbColumn: 'billboardItems',
+      targetModule: 'invoices',
+      jsonbColumn: 'invoiceItems',
       jsonbMatchKey: 'billboard_id',
     },
     {
