@@ -20,7 +20,7 @@ import { getTodayLocalDateValue } from '../utils/defaultValues';
 const BLOCKS = {
   baseInfo: {
     id: 'baseInfo',
-    titles: { fa: 'اطلاعات فاکتور خرید', en: 'Purchase Invoice Info' },
+    titles: { fa: 'اطلاعات فاکتور برگشت خرید', en: 'Purchase Return Invoice Info' },
     icon: 'FileTextOutlined',
     order: 1,
     type: BlockType.FIELD_GROUP,
@@ -37,7 +37,7 @@ const BLOCKS = {
 
   invoiceItems: {
     id: 'invoiceItems',
-    titles: { fa: 'اقلام فاکتور خرید', en: 'Purchase Invoice Items' },
+    titles: { fa: 'اقلام برگشتی', en: 'Returned Items' },
     icon: 'ShoppingOutlined',
     order: 2,
     type: BlockType.TABLE,
@@ -90,7 +90,7 @@ const BLOCKS = {
       { key: 'total_price', title: 'جمع کل', type: FieldType.PRICE, width: 160, showTotal: true, readonly: true },
       {
         key: 'source_shelf_id',
-        title: 'محل ورود',
+        title: 'محل بازگشت',
         type: FieldType.RELATION,
         width: 150,
         relationConfig: { targetModule: 'shelves', targetField: 'name' },
@@ -103,7 +103,7 @@ const BLOCKS = {
 
   payments: {
     id: 'payments',
-    titles: { fa: 'جدول پرداخت‌ها', en: 'Payments' },
+    titles: { fa: 'جدول بازپرداخت‌ها', en: 'Refunds' },
     icon: 'CreditCardOutlined',
     order: 3,
     type: BlockType.TABLE,
@@ -135,10 +135,7 @@ const BLOCKS = {
         title: 'تهاتر',
         type: FieldType.RELATION,
         width: 180,
-        relationConfig: {
-          targetModule: 'barters',
-          targetField: 'name',
-        },
+        relationConfig: { targetModule: 'barters', targetField: 'name' },
       },
       {
         key: 'status',
@@ -163,20 +160,20 @@ const BLOCKS = {
       },
       {
         key: 'source_account',
-        title: 'حساب پرداخت',
+        title: 'حساب دریافت استرداد',
         type: FieldType.RELATION,
         width: 220,
         relationConfig: {
           targetModule: 'bank_accounts',
           targetField: 'bank_name',
           filter: { is_active: true },
-           sourceModules: [
-             { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
-             { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
-             { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
-           ],
-         },
-       },
+          sourceModules: [
+            { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
+            { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
+            { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
+          ],
+        },
+      },
       { key: 'use_existing_received_cheque', title: 'خرج چک', type: FieldType.CHECKBOX, width: 90 },
       {
         key: 'spent_cheque_id',
@@ -212,7 +209,8 @@ const BLOCKS = {
         remaining: 'remaining_balance',
       },
       labels: {
-        received: 'پرداخت شده',
+        received: 'بازپرداخت شده',
+        remaining: 'مانده استرداد',
       },
     },
   },
@@ -224,30 +222,27 @@ const BLOCKS = {
     order: 3.5,
     type: BlockType.FIELD_GROUP,
   },
-
-  onlineInvoice: {
-    id: 'onlineInvoice',
-    titles: { fa: 'فاکتور آنلاین', en: 'Online Invoice' },
-    icon: 'LinkOutlined',
-    order: 4.5,
-    type: BlockType.FIELD_GROUP,
-  },
 };
 
-export const purchaseInvoicesConfig: ModuleDefinition = {
-  id: 'purchase_invoices',
-  titles: { fa: 'فاکتورهای خرید', faSingular: 'فاکتور خرید', en: 'Purchase Invoices' },
+export const purchaseReturnInvoicesConfig: ModuleDefinition = {
+  id: 'purchase_return_invoices',
+  titles: { fa: 'فاکتورهای برگشت از خرید', faSingular: 'فاکتور برگشت از خرید', en: 'Purchase Return Invoices' },
   nature: ModuleNature.INVOICE,
   table: 'purchase_invoices',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  permanentFilters: [{ field: 'taxpayer_invoice_pattern', operator: 'ne', value: '2' }],
+  permanentFilters: [{ field: 'taxpayer_invoice_pattern', operator: 'eq', value: '2' }],
+
+  relationDisplay: {
+    labelTemplate: '{{name}} - {{total_invoice_amount}}',
+    searchFields: ['name', 'system_code', 'id'],
+  },
+
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
-    { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
+    { key: 'name', labels: { fa: 'عنوان فاکتور برگشت', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'invoice_date', labels: { fa: 'تاریخ', en: 'Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 2, validation: { required: true }, nature: FieldNature.PREDEFINED, defaultValue: getTodayLocalDateValue },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'public_link', labels: { fa: 'لینک فاکتور آنلاین', en: 'Online Invoice Link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 1, readonly: true, nature: FieldNature.STANDARD, isTableColumn: false, hideInCreateForm: true },
     {
       key: 'status',
       labels: { fa: 'وضعیت', en: 'Status' },
@@ -256,7 +251,6 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       order: 4,
       options: [
         { label: 'ایجاد شده', value: 'created', color: 'blue' },
-        { label: 'منتظر تایید', value: 'proforma', color: 'orange' },
         { label: 'تایید شده', value: 'final', color: 'green' },
         { label: 'تسویه شده', value: 'settled', color: 'purple' },
         { label: 'لغو شده', value: 'canceled', color: 'red' },
@@ -266,7 +260,6 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       defaultValue: 'created',
       isTableColumn: true,
     },
-
     {
       key: 'supplier_id',
       labels: { fa: 'تامین‌کننده', en: 'Supplier' },
@@ -277,6 +270,32 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       validation: { required: true },
       nature: FieldNature.STANDARD,
       isTableColumn: true,
+    },
+    {
+      key: 'source_invoice_id',
+      labels: { fa: 'فاکتور خرید اصلی', en: 'Original Purchase Invoice' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 5.5,
+      relationConfig: {
+        targetModule: 'purchase_invoices',
+        targetField: 'name',
+        disableImportAutoCreate: true,
+      },
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
+    {
+      key: 'taxpayer_invoice_pattern',
+      labels: { fa: 'نوع فاکتور مودیان', en: 'Invoice Pattern' },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 0.01,
+      nature: FieldNature.SYSTEM,
+      isTableColumn: false,
+      hideInCreateForm: false,
+      readonly: true,
+      defaultValue: '2',
     },
     {
       key: 'purchase_source',
@@ -295,20 +314,10 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       order: 6.2,
       nature: FieldNature.STANDARD,
     },
-    {
-      key: 'estimated_invoice_amount',
-      labels: { fa: 'مبلغ تقریبی فاکتور', en: 'Estimated Invoice Amount' },
-      type: FieldType.PRICE,
-      location: FieldLocation.HEADER,
-      order: 6.5,
-      nature: FieldNature.STANDARD,
-      isTableColumn: true,
-    },
-    
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.6, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'description',
-      labels: { fa: '\u062A\u0648\u0636\u06CC\u062D\u0627\u062A \u0641\u0627\u06A9\u062A\u0648\u0631 \u062E\u0631\u06CC\u062F', en: 'Purchase Invoice Description' },
+      labels: { fa: 'توضیحات', en: 'Description' },
       type: FieldType.SUPER_LONG_TEXT,
       location: FieldLocation.BLOCK,
       blockId: 'baseInfo',
@@ -384,12 +393,13 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       order: 2,
       nature: FieldNature.STANDARD,
     },
-    { key: 'total_invoice_amount', labels: { fa: 'مبلغ کل فاکتور', en: 'Total Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'total_received_amount', labels: { fa: 'مبلغ پرداخت شده', en: 'Paid Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'remaining_balance', labels: { fa: 'مانده بدهی', en: 'Remaining Balance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
-    { key: 'supplier_confirmed_at', labels: { fa: 'زمان تایید توسط تامین‌کننده', en: 'Supplier Confirmed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 2, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
-    { key: 'supplier_confirmer_name', labels: { fa: 'تایید کننده (تامین‌کننده)', en: 'Confirmer Name' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'onlineInvoice', order: 3, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'total_invoice_amount', labels: { fa: 'مبلغ کل برگشت', en: 'Total Return Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'total_received_amount', labels: { fa: 'مبلغ بازپرداخت شده', en: 'Refunded Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'remaining_balance', labels: { fa: 'مانده استرداد', en: 'Remaining Refund' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 3, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'legacyInfo', order: 6, readonly: true, nature: FieldNature.STANDARD },
+    { key: 'updated_at', labels: { fa: 'زمان ویرایش', en: 'Updated At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'legacyInfo', order: 7, readonly: true, nature: FieldNature.STANDARD },
   ],
+
   blocks: [
     BLOCKS.baseInfo,
     BLOCKS.legacyInfo,
@@ -397,11 +407,11 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
     BLOCKS.payments,
     BLOCKS.process,
     BLOCKS.summary,
-    BLOCKS.onlineInvoice,
   ],
+
   relatedTabs: [
     {
-      id: 'purchase_invoice_journal_entries',
+      id: 'purchase_return_invoice_journal_entries',
       title: 'اسناد حسابداری',
       icon: 'FileTextOutlined',
       targetModule: 'journal_entries',

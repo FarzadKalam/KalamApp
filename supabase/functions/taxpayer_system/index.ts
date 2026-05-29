@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-05-29-buyer-id-repair';
+const FUNCTION_BUILD = 'taxpayer-system-2026-05-29-settlement-auto';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
 
@@ -40,15 +40,16 @@ const normalizeBuyerIdentity = (customer: any) => {
   if (buyerType === 2) {
     const legalId = numericId(customer?.national_id || customer?.national_code || '');
     if (!/^\d{11}$/.test(legalId)) throw new Error('شناسه ملی خریدار حقوقی باید ۱۱ رقم باشد.');
-    return { buyerType, buyerId: legalId };
+    return { buyerType, buyerId: legalId, nationalCodeInvalid: false };
   }
   const rawNationalCode = numericId(customer?.national_code || customer?.national_id || '');
+  if (!rawNationalCode) return { buyerType, buyerId: null, nationalCodeInvalid: false };
   const nationalCode = rawNationalCode.length >= 8 && rawNationalCode.length < 10
     ? rawNationalCode.padStart(10, '0')
     : rawNationalCode;
   if (!/^\d{10}$/.test(nationalCode)) throw new Error('کد ملی خریدار حقیقی باید ۱۰ رقم باشد.');
-  if (!isValidIranNationalCode(nationalCode)) throw new Error('کد ملی خریدار حقیقی معتبر نیست.');
-  return { buyerType, buyerId: nationalCode };
+  if (!isValidIranNationalCode(nationalCode)) return { buyerType, buyerId: null, nationalCodeInvalid: true };
+  return { buyerType, buyerId: nationalCode, nationalCodeInvalid: false };
 };
 
 const bytesToBinary = (bytes: Uint8Array) => {
@@ -189,6 +190,23 @@ const rial = (value: any, currency: string) => {
   throw new Error('برای فاکتورهای سامانه مودیان فقط واحد پولی ریال یا تومان پشتیبانی می‌شود.');
 };
 const setm = (value: string) => value === 'cash' ? 1 : value === 'credit' ? 2 : value === 'mixed' ? 3 : (() => { throw new Error('برای ارسال فاکتور به سامانه مودیان، انتخاب روش تسویه الزامی است.'); })();
+const CASH_RECEIPT_TYPES = new Set(['cash', 'bank', 'card', 'pos', 'transfer', 'online']);
+const VOID_RECEIPT_STATUSES = new Set(['returned', 'canceled']);
+const SETTLED_RECEIPT_STATUSES = new Set(['received', 'approved']);
+const computeSettlement = (receipts: any[], currency: string) => {
+  if (!Array.isArray(receipts) || !receipts.length) return { setm: 'credit', cashAmount: 0, creditAmount: 0 };
+  let cashAmount = 0, creditAmount = 0;
+  for (const r of receipts) {
+    if (VOID_RECEIPT_STATUSES.has(String(r.status || ''))) continue;
+    if (String(r.payment_type || '') === 'barter') continue;
+    const amount = rial(Number(r.amount || 0), currency);
+    const isSettledCash = CASH_RECEIPT_TYPES.has(String(r.payment_type || '')) && SETTLED_RECEIPT_STATUSES.has(String(r.status || ''));
+    if (isSettledCash) { cashAmount += amount; } else { creditAmount += amount; }
+  }
+  if (cashAmount > 0 && creditAmount > 0) return { setm: 'mixed', cashAmount, creditAmount };
+  if (cashAmount > 0) return { setm: 'cash', cashAmount, creditAmount: 0 };
+  return { setm: 'credit', cashAmount: 0, creditAmount };
+};
 const rowAmounts = (row: any) => {
   const q = Number(row?.quantity || 0), price = Number(row?.unit_price || 0), base = q * price, di = Number(row?.discount || 0), vi = Number(row?.vat || 0);
   const dis = String(row?.discount_type || 'amount') === 'percent' ? base * di / 100 : di;
@@ -491,17 +509,45 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
     const rows = await select(urlBase, key, 'products', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,product_identifier,main_unit,taxpayer_measure_unit_code,vat_percentage,is_vat_exempt' });
     products = rows.reduce((acc: any, p: any) => ({ ...acc, [String(p.id)]: p }), {});
   }
-  return { invoice, customer, products };
+  const receipts = await select(urlBase, key, 'cash_bank_operations', {
+    sales_invoice_id: `eq.${invoiceId}`,
+    operation_type: 'eq.receipt',
+    status: 'not.in.(returned,canceled)',
+    select: 'id,amount,payment_type,status',
+  });
+  let originalTaxid: string | null = null;
+  if (invoice.source_invoice_id) {
+    const subs = await select(urlBase, key, 'taxpayer_invoice_submissions', {
+      invoice_id: `eq.${invoice.source_invoice_id}`,
+      select: 'taxid,status',
+      order: 'created_at.desc',
+      limit: '5',
+    });
+    const best = subs.find((s: any) => s.status === 'confirmed' && s.taxid) || subs.find((s: any) => s.taxid);
+    originalTaxid = best?.taxid || null;
+  }
+  return { invoice, customer, products, receipts: Array.isArray(receipts) ? receipts : [], originalTaxid };
 };
 const invoicePayload = (args: any) => {
-  const { invoice, customer, products, company, settings, txid, serial, settlement } = args;
+  const { invoice, customer, products, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
   const invDate = String(invoice.invoice_date || '').slice(0,10);
   const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
   if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
   const currency = String(company?.currency_code || 'IRT');
   const settlementCode = setm(settlement);
   if (!customer?.id) throw new Error('اطلاعات هویتی مشتری برای ارسال به سامانه مودیان کامل نیست.');
-  const { buyerType, buyerId } = normalizeBuyerIdentity(customer);
+  const { buyerType, buyerId, nationalCodeInvalid } = normalizeBuyerIdentity(customer);
+  const tinb = numericId(customer?.economic_code || '') || null;
+  const bpc = numericId(customer?.postal_code || '') || null;
+  if (!buyerId && !tinb) throw new Error(nationalCodeInvalid ? 'کد ملی خریدار معتبر نیست و شماره اقتصادی نیز ثبت نشده است. برای ارسال فاکتور، یکی از این دو الزامی است.' : 'مشتری باید کد ملی معتبر یا شماره اقتصادی داشته باشد تا فاکتور به سامانه مودیان ارسال شود.');
+  const inp = Number(invoice.taxpayer_invoice_pattern || 1);
+  const orif = inp === 2 ? (originalTaxid || null) : null;
+  if (inp === 2 && !orif) throw new Error('برای فاکتور برگشت از فروش، کد مالیاتی فاکتور اصلی (orif) الزامی است. مطمئن شوید فاکتور اصلی به سامانه مودیان ارسال و تأیید شده است.');
+  let preTbill = 0;
+  for (const it of items) { preTbill += rial(rowAmounts(it).total, currency); }
+  const receivedBase = cashOverride !== null && cashOverride !== undefined ? cashOverride : rial(invoice.total_received_amount || 0, currency);
+  const cap = settlementCode === 3 ? Math.min(Math.max(receivedBase, 0), preTbill) : null;
+  const insp = settlementCode === 2 ? preTbill : settlementCode === 3 ? Math.max(preTbill - (cap || 0), 0) : null;
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
     const product = products[String(item?.product_id || '')] || {};
@@ -514,13 +560,14 @@ const invoicePayload = (args: any) => {
     const a = rowAmounts(item);
     const base = rial(a.base,currency), dis = rial(a.dis,currency), after = rial(a.after,currency), vat = rial(a.vat,currency), total = rial(a.total,currency);
     tprdis += base; tdis += dis; tadis += after; tvam += vat; tbill += total;
-    return { sstid, sstt: String(item?.description || product?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop: settlementCode === 1 ? vat : null, tsstam: total };
+    const vop = settlementCode === 3 && cap !== null && preTbill > 0 ? Math.round(vat * cap / preTbill) : null;
+    return { sstid, sstt: String(item?.description || product?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop, tsstam: total };
   });
-  const received = rial(invoice.total_received_amount || 0, currency);
-  const cap = settlementCode === 1 ? tbill : settlementCode === 2 ? null : Math.min(Math.max(received, 0), tbill);
-  const insp = settlementCode === 2 ? tbill : settlementCode === 1 ? null : Math.max(tbill - (cap || 0), 0);
+  const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  return { packetType: 'INVOICE.V01', data: { header: { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: indatim, inty: Number(invoice.taxpayer_invoice_type || 1), inp: Number(invoice.taxpayer_invoice_pattern || 1), ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb: numericId(customer?.economic_code || '') || null, bpc: numericId(customer?.postal_code || '') || null, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop: tvam, tax17: null }, body, payments: [] } };
+  const header: Record<string, any> = { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: null, inty: Number(invoice.taxpayer_invoice_type || 1), inp, ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb, bpc, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop, tax17: null };
+  if (orif) header.orif = orif;
+  return { packetType: 'INVOICE.V01', data: { header, body, payments: [] } };
 };
 
 Deno.serve(async (req) => {
@@ -596,13 +643,16 @@ Deno.serve(async (req) => {
         currentSettings = { ...settings, server_information: info };
       }
       const bundle = await invoiceBundle(urlBase,key,orgId,invoiceId);
-      const settlement = String(body?.settlement_method || bundle.invoice.taxpayer_settlement_method || '').trim();
+      const currency = String(company?.currency_code || 'IRT');
+      const manualSettlement = String(body?.settlement_method || bundle.invoice.taxpayer_settlement_method || '').trim();
+      const computed = !manualSettlement ? computeSettlement(bundle.receipts, currency) : null;
+      const settlement = manualSettlement || computed?.setm || '';
       const serial = BigInt(await rpc(urlBase,key,'reserve_taxpayer_invoice_serial',{ p_org_id: orgId, p_fiscal_id: currentSettings.fiscal_id, p_min_last_serial: String(currentSettings.legacy_last_serial || 0) }));
       const txid = taxId(currentSettings.fiscal_id, String(bundle.invoice.invoice_date || ''), serial);
       const debugPayload = { build: FUNCTION_BUILD, taxpayer_settings: { fiscal_id: currentSettings.fiscal_id, base_url: currentSettings.base_url, integration_mode: currentSettings.integration_mode } };
       let sub = first(await insert(urlBase,key,'taxpayer_invoice_submissions',[{ org_id: orgId, invoice_id: invoiceId, fiscal_id: currentSettings.fiscal_id, integration_mode: currentSettings.integration_mode, internal_serial: Number(serial), taxid: txid, status: 'sending', invoice_type: String(bundle.invoice.taxpayer_invoice_type || '1'), invoice_pattern: String(bundle.invoice.taxpayer_invoice_pattern || '1'), invoice_subject: String(bundle.invoice.taxpayer_invoice_subject || '1'), settlement_method: settlement, request_payload: { _kalam_debug: { ...debugPayload, stage: 'preflight' } }, created_by: user.id }]));
       try {
-        const payload = invoicePayload({ ...bundle, company, settings: currentSettings, txid, serial, settlement });
+        const payload = invoicePayload({ ...bundle, company, settings: currentSettings, txid, serial, settlement, cashOverride: computed?.cashAmount ?? null });
         const uid = crypto.randomUUID();
         const built = currentSettings.integration_mode === 'certificate_v2'
           ? await buildV2InvoicePacket(currentSettings, privateKey, certificatePem, payload, uid)

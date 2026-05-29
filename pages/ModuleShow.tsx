@@ -3316,7 +3316,7 @@ const ModuleShow: React.FC = () => {
       void handleOpenQuickProjectModal();
       return;
     }
-    if (actionId === 'send_taxpayer_system' && moduleId === 'invoices') {
+    if (actionId === 'send_taxpayer_system' && (moduleId === 'invoices' || moduleId === 'sales_return_invoices')) {
       setIsTaxpayerModalOpen(true);
       return;
     }
@@ -5960,7 +5960,7 @@ const ModuleShow: React.FC = () => {
       onClick: handleIssueAccountingEntry,
     });
   }
-  if (moduleId === 'invoices' && canUseAction('send_taxpayer_system')) {
+  if ((moduleId === 'invoices' || moduleId === 'sales_return_invoices') && canUseAction('send_taxpayer_system')) {
     headerActions.push({
       id: 'send_taxpayer_system',
       label: 'ارسال به سامانه مودیان',

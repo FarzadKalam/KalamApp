@@ -8,6 +8,8 @@ import { supplierModule } from './modules/supplierConfig';
 import { tasksModule } from './modules/tasksConfig';
 import { invoicesConfig } from './modules/invoicesConfig';
 import { purchaseInvoicesConfig } from './modules/purchaseInvoicesConfig';
+import { salesReturnInvoicesConfig } from './modules/salesReturnInvoicesConfig';
+import { purchaseReturnInvoicesConfig } from './modules/purchaseReturnInvoicesConfig';
 import { warehousesConfig } from './modules/warehousesConfig';
 import { shelvesConfig } from './modules/shelvesConfig';
 import { stockTransfersConfig } from './modules/stockTransfersConfig';
@@ -163,6 +165,8 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   suppliers: supplierModule,
   invoices: invoicesConfig,
   purchase_invoices: purchaseInvoicesConfig,
+  sales_return_invoices: salesReturnInvoicesConfig,
+  purchase_return_invoices: purchaseReturnInvoicesConfig,
   projects: projectsModule,
   marketing_leads: marketingLeadsModule,
   personas: personasModule,

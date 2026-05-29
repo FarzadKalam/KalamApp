@@ -19,10 +19,19 @@ export const getAvailableTemplates = (moduleId: string): PrintTemplate[] => {
 
   // قالب فاکتور فروش
   if (moduleId === 'invoices') {
-    templates.push({ 
-      id: 'invoice_sales', 
-      title: 'فاکتور فروش', 
-      description: 'فاکتور رسمی برای فروش' 
+    templates.push({
+      id: 'invoice_sales',
+      title: 'فاکتور فروش',
+      description: 'فاکتور رسمی برای فروش'
+    });
+  }
+
+  // قالب فاکتور برگشت از فروش
+  if (moduleId === 'sales_return_invoices') {
+    templates.push({
+      id: 'invoice_sales',
+      title: 'فاکتور برگشت از فروش',
+      description: 'فاکتور رسمی برگشت از فروش'
     });
   }
 

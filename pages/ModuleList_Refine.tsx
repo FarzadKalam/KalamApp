@@ -762,7 +762,7 @@ export const ModuleListRefine: React.FC<{
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
     },
-    filters: { initial: effectiveInitialFilters },
+    filters: { permanent: (moduleConfig?.permanentFilters ?? []) as any, initial: effectiveInitialFilters },
     syncWithLocation: false,
   });
 

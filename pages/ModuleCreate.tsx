@@ -335,16 +335,20 @@ export const ModuleCreate = () => {
                 return;
               }
 
-              if (moduleId === "invoices" || moduleId === "purchase_invoices") {
+              const isReturnInvoiceModule = moduleId === "sales_return_invoices" || moduleId === "purchase_return_invoices";
+              if (moduleId === "invoices" || moduleId === "purchase_invoices" || isReturnInvoiceModule) {
+                const invoiceValues = isReturnInvoiceModule
+                  ? { ...values, taxpayer_invoice_pattern: '2' }
+                  : values;
                 let insertResult = await supabase
                   .from(moduleConfig.table)
-                  .insert(withCreateAuditFields(values))
+                  .insert(withCreateAuditFields(invoiceValues))
                   .select("*")
                   .single();
                 if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
                   insertResult = await supabase
                     .from(moduleConfig.table)
-                    .insert(values)
+                    .insert(invoiceValues)
                     .select("*")
                     .single();
                 }
@@ -356,19 +360,21 @@ export const ModuleCreate = () => {
                   await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
                 }
                 await runPostCreateCopy(String(inserted.id));
-                await applyInvoiceFinalizationInventory({
-                  supabase: supabase as any,
-                  moduleId,
-                  recordId: inserted.id,
-                  previousStatus: null,
-                  nextStatus: values?.status ?? null,
-                  invoiceItems: values?.invoiceItems ?? [],
-                  userId,
-                });
+                if (!isReturnInvoiceModule) {
+                  await applyInvoiceFinalizationInventory({
+                    supabase: supabase as any,
+                    moduleId,
+                    recordId: inserted.id,
+                    previousStatus: null,
+                    nextStatus: invoiceValues?.status ?? null,
+                    invoiceItems: invoiceValues?.invoiceItems ?? [],
+                    userId,
+                  });
+                }
                 if (shouldAutoSyncInvoiceAccounting(moduleId)) {
                   const accountingSync = await syncInvoiceAccountingEntries({
                   supabase: supabase as any,
-                  moduleId,
+                  moduleId: moduleId as any,
                   recordId: inserted.id,
                   recordData: inserted,
                   includePayments: true,
@@ -377,10 +383,10 @@ export const ModuleCreate = () => {
                   console.warn("هشدارهای همگام‌سازی سند حسابداری فاکتور:", accountingSync.errors);
                   }
                 }
-                if (moduleId === "invoices") {
+                if (moduleId === "invoices" || moduleId === "sales_return_invoices") {
                   await syncCustomerLevelsByInvoiceCustomers({
                     supabase: supabase as any,
-                    customerIds: [inserted?.customer_id || values?.customer_id],
+                    customerIds: [inserted?.customer_id || invoiceValues?.customer_id],
                   });
                 }
                 if (moduleId) {

@@ -557,8 +557,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
-          { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: true },
-          { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: true },
+          { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: !canViewModule('sales_return_invoices') },
+          { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: !canViewModule('purchase_return_invoices') },
         ]
       },
       {

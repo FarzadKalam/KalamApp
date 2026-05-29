@@ -8,6 +8,13 @@ import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatt
 import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { supportsModuleAssignee } from '../utils/assigneeSupport';
+import {
+  isMissingTableLikeError,
+  isMissingColumnError,
+  fetchAssignedIdsForModule,
+} from '../utils/notificationAssigneeHelpers';
+import { useMyActivities } from '../hooks/useMyActivities';
+import { useMyResponsibilities } from '../hooks/useMyResponsibilities';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import type { NoteAttachment } from '../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/noteAttachments';
@@ -24,7 +31,7 @@ import { resolveTemplateOptionLabelMaps } from '../utils/messageTemplateRenderer
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
-import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns, selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
+import { selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
 import { resolveVoipAccessPermissions } from '../utils/permissions';
 import {
   buildNoteConversations,
@@ -136,8 +143,6 @@ const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
-type AssigneeQueryMode = 'primary' | 'typed_legacy_role' | 'id_only' | 'owner_only' | 'none';
-const ASSIGNEE_QUERY_MODE_CACHE = new Map<string, AssigneeQueryMode>();
 // Module-level directory cache: keeps users/roles across popover open-close cycles
 // so avatars load instantly on re-open instead of re-fetching each time.
 const _notifDirectoryCache: {
@@ -654,134 +659,6 @@ const buildDirectConversationKey = (currentUserId: string, otherUserId: string) 
   return left <= right ? `direct:${left}:${right}` : `direct:${right}:${left}`;
 };
 
-const isMissingColumnError = (error: any, columnName: string) => {
-  const code = String(error?.code || '').toUpperCase();
-  if (code === 'PGRST200' || code === 'PGRST204' || code === '42703') return true;
-  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
-  const col = columnName.toLowerCase();
-  return (
-    message.includes(`column "${col}"`) ||
-    message.includes(`${col} does not exist`) ||
-    message.includes(`could not find the '${col}' column`) ||
-    message.includes(`could not find the "${col}" column`) ||
-    message.includes(`schema cache`) && message.includes(col)
-  );
-};
-
-const isMissingTableLikeError = (error: any) => {
-  const code = String(error?.code || '').toUpperCase();
-  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
-  return code === '42P01' || code === 'PGRST205' || message.includes('could not find the table') || message.includes('relation') && message.includes('does not exist');
-};
-
-const isAssigneeValueTypeError = (error: any) => {
-  const code = String(error?.code || '').toUpperCase();
-  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
-  return (
-    code === '22P02'
-    || code === '42883'
-    || message.includes('invalid input syntax')
-    || message.includes('operator does not exist')
-  );
-};
-
-const probeAssigneeSelect = async (table: string, select: string) => {
-  const { error } = await supabase
-    .from(table)
-    .select(select)
-    .limit(0);
-  return error || null;
-};
-
-const buildResponsibilitySelectColumns = (moduleId?: string | null) => {
-  const normalizedModuleId = String(moduleId || '').trim();
-  const moduleConfig = MODULES[normalizedModuleId];
-  const moduleFieldKeys = new Set(
-    (moduleConfig?.fields || [])
-      .map((field: any) => String(field?.key || '').trim())
-      .filter(Boolean)
-  );
-
-  const moduleAwareColumns = [
-    ...buildRecordTitleSelectColumns(normalizedModuleId),
-    ...(moduleFieldKeys.has('status') ? ['status'] : []),
-    ...(moduleFieldKeys.has('category') ? ['category'] : []),
-    ...(moduleFieldKeys.has('created_by') ? ['created_by'] : []),
-    ...(moduleFieldKeys.has('created_by_id') ? ['created_by_id'] : []),
-  ];
-
-  return Array.from(
-    new Set([
-      'id',
-      'created_at',
-      'updated_at',
-      ...moduleAwareColumns,
-    ])
-  );
-};
-
-const safeFetchResponsibilityRows = async (table: string, moduleId: string, ids: string[]) => {
-  const normalizedTable = String(table || '').trim();
-  const normalizedModuleId = String(moduleId || '').trim();
-  const normalizedIds = Array.from(new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean)));
-  if (!normalizedTable || normalizedIds.length === 0) return [] as any[];
-
-  const rows: any[] = [];
-  const chunkSize = normalizedTable === 'customers' || normalizedTable === 'suppliers' ? 40 : 80;
-  const selectColumns = buildResponsibilitySelectColumns(normalizedModuleId);
-
-  for (let index = 0; index < normalizedIds.length; index += chunkSize) {
-    const chunk = normalizedIds.slice(index, index + chunkSize);
-    const result = await runSelectWithCompatibleColumns<any[]>({
-      cacheKey: `responsibility:${normalizedModuleId || normalizedTable}:${normalizedTable}`,
-      columns: selectColumns,
-      execute: (selectExpr) =>
-        supabase
-          .from(normalizedTable)
-          .select(selectExpr)
-          .in('id', chunk),
-    });
-
-    if (result.error) {
-      if (isMissingTableLikeError(result.error)) {
-        throw result.error;
-      }
-      throw result.error;
-    }
-
-    rows.push(...(result.data || []));
-  }
-
-  return rows;
-};
-
-const resolveAssigneeQueryModeForTable = async (table: string): Promise<AssigneeQueryMode> => {
-  const normalizedTable = String(table || '').trim();
-  if (!normalizedTable) return 'none';
-
-  const cached = ASSIGNEE_QUERY_MODE_CACHE.get(normalizedTable);
-  if (cached) return cached;
-
-  const cache = (mode: AssigneeQueryMode) => {
-    ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, mode);
-    return mode;
-  };
-
-  const primaryError = await probeAssigneeSelect(normalizedTable, 'id,assignee_id,assignee_type,assignee_role_id');
-  if (!primaryError) return cache('primary');
-  if (isMissingTableLikeError(primaryError) || isMissingColumnError(primaryError, 'assignee_id')) return cache('none');
-
-  const typedError = await probeAssigneeSelect(normalizedTable, 'id,assignee_id,assignee_type');
-  if (!typedError) return cache('typed_legacy_role');
-  if (isMissingTableLikeError(typedError) || isMissingColumnError(typedError, 'assignee_id')) return cache('none');
-
-  const idOnlyError = await probeAssigneeSelect(normalizedTable, 'id,assignee_id');
-  if (!idOnlyError) return cache('id_only');
-  if (isMissingTableLikeError(idOnlyError) || isMissingColumnError(idOnlyError, 'assignee_id')) return cache('none');
-
-  return cache('none');
-};
-
 const normalizeRoleRows = (rows: any[]) =>
   (rows || []).map((row: any) => ({
     id: row?.id,
@@ -879,8 +756,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [drawerContentMounted, setDrawerContentMounted] = useState(standalone || initialOpen);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [responsibilities, setResponsibilities] = useState<any[]>([]);
+  // tasks and responsibilities are managed by hooks (see below)
   const [botGroups, setBotGroups] = useState<CounterpartyBotGroupRow[]>([]);
   const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
   const [botMessageText, setBotMessageText] = useState('');
@@ -923,6 +799,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
   const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
+
+  // ── Activity & Responsibility hooks (optimized: cache + efficient queries) ──
+  const { tasks, setTasks, loading: loadingTasks, refresh: refreshTasks } = useMyActivities({
+    userId: profile.id,
+    roleId: profile.role_id,
+    enabled: Boolean(profile.id),
+  });
+  const { responsibilities, loading: loadingResponsibilities, refresh: refreshResponsibilities } = useMyResponsibilities({
+    userId: profile.id,
+    roleId: profile.role_id,
+    enabled: Boolean(profile.id),
+  });
+
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
@@ -990,8 +879,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [unreadSummaryAvailable, setUnreadSummaryAvailable] = useState(false);
   const [uiNotifications, setUiNotifications] = useState<UiNotificationItem[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
-  const [loadingTasks, setLoadingTasks] = useState(false);
-  const [loadingResponsibilities, setLoadingResponsibilities] = useState(false);
+  // loadingTasks and loadingResponsibilities come from hooks (see below)
   const [loadingBotMessages, setLoadingBotMessages] = useState(false);
   const [loadingSmsMessages, setLoadingSmsMessages] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1995,163 +1883,6 @@ useEffect(() => {
     return (data || []) as NotificationInboxItemRow[];
   };
 
-  const fetchAssignedIdsForModule = async (table: string, userId: string, roleId: string | null) => {
-    const mergeUniqueRows = (rows: any[]) => {
-      const map = new Map<string, any>();
-      (rows || []).forEach((row) => {
-        if (!row?.id) return;
-        map.set(String(row.id), row);
-      });
-      return Array.from(map.values());
-    };
-
-    const normalizedTable = String(table || '').trim();
-    if (!normalizedTable || !userId) return [];
-
-    const queryIds = async (query: any) => {
-      const { data, error } = await query.limit(200);
-      if (error) return { data: [] as any[], error };
-      return { data: data || [], error: null };
-    };
-
-    const cacheRuntimeFailure = (error: any) => {
-      if (!error) return;
-      if (
-        isMissingTableLikeError(error)
-        || isMissingColumnError(error, 'assignee_id')
-        || isAssigneeValueTypeError(error)
-      ) {
-        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'none');
-        return;
-      }
-      if (isMissingColumnError(error, 'assignee_type')) {
-        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'id_only');
-        return;
-      }
-      if (isMissingColumnError(error, 'assignee_role_id')) {
-        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'typed_legacy_role');
-      }
-    };
-
-    const ownerFallbackQuery = async () => {
-      const { data, error } = await supabase
-        .from(normalizedTable)
-        .select('id')
-        .limit(200)
-        .eq('owner_id', userId);
-      if (error) return { data: [] as any[], error };
-      return { data: data || [], error: null };
-    };
-
-    const queryByMode = async (mode: AssigneeQueryMode) => {
-      if (mode === 'none') return { data: [] as any[], error: null };
-      if (mode === 'owner_only') {
-        return ownerFallbackQuery();
-      }
-
-      if (mode === 'id_only') {
-        const [userResult, roleResult] = await Promise.all([
-          queryIds(
-            supabase
-              .from(normalizedTable)
-              .select('id')
-              .eq('assignee_id', userId)
-          ),
-          roleId
-            ? queryIds(
-                supabase
-                  .from(normalizedTable)
-                  .select('id')
-                  .eq('assignee_id', roleId)
-              )
-            : Promise.resolve({ data: [] as any[], error: null }),
-        ]);
-        const firstError = userResult.error || roleResult.error;
-        if (firstError) return { data: [] as any[], error: firstError };
-        return { data: mergeUniqueRows([...(userResult.data || []), ...(roleResult.data || [])]), error: null };
-      }
-
-      if (mode === 'typed_legacy_role') {
-        const [userResult, roleResult] = await Promise.all([
-          queryIds(
-            supabase
-              .from(normalizedTable)
-              .select('id')
-              .eq('assignee_type', 'user')
-              .eq('assignee_id', userId)
-          ),
-          roleId
-            ? queryIds(
-                supabase
-                  .from(normalizedTable)
-                  .select('id')
-                  .eq('assignee_type', 'role')
-                  .eq('assignee_id', roleId)
-              )
-            : Promise.resolve({ data: [] as any[], error: null }),
-        ]);
-        const firstError = userResult.error || roleResult.error;
-        if (firstError) return { data: [] as any[], error: firstError };
-        return { data: mergeUniqueRows([...(userResult.data || []), ...(roleResult.data || [])]), error: null };
-      }
-
-      const [userResult, roleTypedResult] = await Promise.all([
-        queryIds(
-          supabase
-            .from(normalizedTable)
-            .select('id')
-            .eq('assignee_type', 'user')
-            .eq('assignee_id', userId)
-        ),
-        roleId
-          ? queryIds(
-              supabase
-                .from(normalizedTable)
-                .select('id')
-                .eq('assignee_type', 'role')
-                .eq('assignee_role_id', roleId)
-            )
-          : Promise.resolve({ data: [] as any[], error: null }),
-      ]);
-
-      if (userResult.error) {
-        return { data: [] as any[], error: userResult.error };
-      }
-      if (roleTypedResult.error) {
-        return { data: [] as any[], error: roleTypedResult.error };
-      }
-      return { data: mergeUniqueRows([...(userResult.data || []), ...(roleTypedResult.data || [])]), error: null };
-    };
-
-    const mode = await resolveAssigneeQueryModeForTable(normalizedTable);
-    if (mode === 'none' && normalizedTable === 'projects') {
-      const ownerFallback = await ownerFallbackQuery();
-      if (!ownerFallback.error) {
-        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'owner_only');
-        return ownerFallback.data || [];
-      }
-      if (isMissingColumnError(ownerFallback.error, 'owner_id')) {
-        ASSIGNEE_QUERY_MODE_CACHE.set(normalizedTable, 'none');
-      }
-    }
-
-    let result = await queryByMode(mode);
-    if (!result.error) {
-      return result.data || [];
-    }
-
-    cacheRuntimeFailure(result.error);
-    const nextMode = ASSIGNEE_QUERY_MODE_CACHE.get(normalizedTable);
-    if (nextMode && nextMode !== mode && nextMode !== 'none') {
-      result = await queryByMode(nextMode);
-      if (!result.error) return result.data || [];
-      cacheRuntimeFailure(result.error);
-      return [];
-    }
-
-    return [];
-  };
-
   const getAssignedRecordPairs = async () => {
     if (!profile.id) return [] as { module_id: string; record_id: string }[];
     const userId = String(profile.id || '').trim();
@@ -2391,189 +2122,6 @@ useEffect(() => {
     return uniqueRows;
   };
 
-  const fetchTasks = async () => {
-    if (!profile.id) return [];
-    const userId = profile.id;
-    const roleId = profile.role_id;
-    const buildTasksQuery = () =>
-      supabase
-        .from('tasks')
-        .select('id, name, status, priority, produced_qty, created_at, start_date, due_date, assignee_id, assignee_role_id, assignee_type, production_line_id, related_to_module, related_product, related_customer, related_supplier, related_production_order, related_invoice, purchase_invoice_id, project_id, marketing_lead_id, source_module_id, source_record_id')
-        .neq('status', 'canceled')
-        .order('created_at', { ascending: false })
-        .limit(50);
-
-    const { data } = roleId
-      ? await (async () => {
-          const [userResult, roleTypedResult] = await Promise.all([
-            buildTasksQuery().eq('assignee_type', 'user').eq('assignee_id', userId),
-            buildTasksQuery().eq('assignee_type', 'role').eq('assignee_role_id', roleId),
-          ]);
-          if (!userResult.error && !roleTypedResult.error) {
-            return { data: [...(userResult.data || []), ...(roleTypedResult.data || [])], error: null };
-          }
-          if (userResult.error && !isMissingColumnError(userResult.error, 'assignee_type') && !isMissingColumnError(userResult.error, 'assignee_id')) return userResult;
-          if (roleTypedResult.error && !isMissingColumnError(roleTypedResult.error, 'assignee_role_id') && !isMissingColumnError(roleTypedResult.error, 'assignee_type') && !isMissingColumnError(roleTypedResult.error, 'assignee_id')) return roleTypedResult;
-          const [legacyUserResult, legacyRoleResult] = await Promise.all([
-            buildTasksQuery().eq('assignee_id', userId),
-            buildTasksQuery().eq('assignee_id', roleId),
-          ]);
-          if (legacyUserResult.error && !isMissingColumnError(legacyUserResult.error, 'assignee_id')) return legacyUserResult;
-          if (legacyRoleResult.error && !isMissingColumnError(legacyRoleResult.error, 'assignee_id')) return legacyRoleResult;
-          return { data: [...(legacyUserResult.data || []), ...(legacyRoleResult.data || [])], error: null };
-        })()
-      : await buildTasksQuery().eq('assignee_type', 'user').eq('assignee_id', userId);
-    const tasksList = (data || []).filter((task: any) => {
-      const normalizedStatus = String(task?.status || '').toLowerCase();
-      const isCompleted = normalizedStatus === 'done' || normalizedStatus === 'completed';
-      if (isCompleted && seenCompletedTaskIds.has(String(task?.id || ''))) {
-        return false;
-      }
-      return normalizedStatus !== 'canceled';
-    });
-
-    const relatedPairs: { module_id: string; record_id: string }[] = [];
-    tasksList.forEach((task) => {
-      const sourceLink = resolveTaskSourceLink(task);
-      if (sourceLink.moduleId && sourceLink.recordId) {
-        relatedPairs.push({ module_id: sourceLink.moduleId, record_id: sourceLink.recordId });
-      }
-    });
-    const assigneeIds = Array.from(
-      new Set(tasksList.filter((task: any) => task.assignee_type !== 'role').map((task: any) => task.assignee_id).filter(Boolean))
-    );
-    const roleIds = Array.from(
-      new Set(tasksList.filter((task: any) => task.assignee_type === 'role').map((task: any) => task.assignee_role_id || task.assignee_id).filter(Boolean))
-    );
-    if (assigneeIds.length) {
-      const { userNameMap } = await buildDirectoryMaps();
-      const map = assigneeIds.reduce<Record<string, string>>((acc, assigneeId) => {
-        acc[String(assigneeId)] = userNameMap[String(assigneeId)] || String(assigneeId);
-        return acc;
-      }, {});
-      setAssigneeNameMap(map);
-    }
-    if (roleIds.length) {
-      const { roleTitleMap } = await buildDirectoryMaps();
-      const map = roleIds.reduce<Record<string, string>>((acc, roleLookupId) => {
-        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || 'نقش';
-        return acc;
-      }, {});
-      setRoleNameMap(map);
-    }
-    await buildRecordTitleMap(relatedPairs);
-    return tasksList;
-  };
-
-  const fetchResponsibilities = async () => {
-    if (!profile.id) return [];
-    const userId = profile.id;
-    const roleId = profile.role_id;
-
-    const fetchRowsByIds = async (table: string, moduleId: string, ids: string[]) =>
-      safeFetchResponsibilityRows(table, moduleId, ids);
-
-    const inboxItems = await fetchNotificationInboxSection('responsibilities', 200);
-    if (inboxItems) {
-      const moduleByTable = new Map<string, any>();
-      Object.values(MODULES).forEach((mod: any) => {
-        const moduleId = String(mod?.id || '').trim();
-        const tableName = String(mod?.table || mod?.id || '').trim();
-        if (moduleId) moduleByTable.set(moduleId, mod);
-        if (tableName) moduleByTable.set(tableName, mod);
-      });
-
-      const grouped = new Map<string, { mod: any; table: string; ids: string[]; items: NotificationInboxItemRow[] }>();
-      inboxItems.forEach((item) => {
-        const payload = isPlainRecord(item.payload) ? item.payload : {};
-        const sourceTable = String(item.module_id || (payload as any)?.table || item.source_type || '').trim();
-        const recordId = String(item.record_id || item.source_id || '').trim();
-        if (!sourceTable || !recordId) return;
-        const mod = moduleByTable.get(sourceTable) || { id: sourceTable, table: sourceTable, titles: { fa: sourceTable } };
-        const moduleId = String(mod?.id || sourceTable).trim();
-        const table = String(mod?.table || sourceTable).trim();
-        const key = `${moduleId}:${table}`;
-        const current = grouped.get(key) || { mod, table, ids: [], items: [] };
-        current.ids.push(recordId);
-        current.items.push(item);
-        grouped.set(key, current);
-      });
-
-        const results: any[] = [];
-      for (const group of grouped.values()) {
-        const idList = Array.from(new Set(group.ids.filter(Boolean)));
-        const itemByRecordId = new Map(group.items.map((item) => [String(item.record_id || item.source_id || '').trim(), item]));
-        let rows: any[] = [];
-        if (idList.length > 0) {
-          try {
-            rows = await fetchRowsByIds(group.table, String(group.mod?.id || group.table), idList);
-          } catch (error) {
-            console.warn('Failed to load full responsibility rows from inbox group', group.table, error);
-            rows = [];
-          }
-        }
-
-        const loadedIds = new Set(rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean));
-        rows.forEach((row: any) => {
-          const item = itemByRecordId.get(String(row?.id || '').trim());
-          results.push({
-            ...row,
-            module_id: group.mod.id,
-            module_title: group.mod.titles?.fa || group.mod.id,
-            __notification_inbox_item: item || null,
-          });
-        });
-
-        group.items.forEach((item) => {
-          const recordId = String(item.record_id || item.source_id || '').trim();
-          if (!recordId || loadedIds.has(recordId)) return;
-          results.push({
-            id: recordId,
-            name: item.title,
-            title: item.title,
-            description: item.body,
-            created_at: item.last_event_at || item.created_at,
-            updated_at: item.last_event_at || item.created_at,
-            module_id: group.mod.id,
-            module_title: group.mod.titles?.fa || group.mod.id,
-            __notification_inbox_item: item,
-          });
-        });
-      }
-
-      return results.sort((a, b) => new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime());
-    }
-
-    const modules = Object.values(MODULES)
-      .filter((mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id))
-      .filter((mod: any) => supportsModuleAssignee(mod));
-
-    const results: any[] = [];
-    for (const mod of modules) {
-      const table = mod.table || mod.id;
-      const ids = await fetchAssignedIdsForModule(table, userId, roleId);
-      const idList = (ids || []).map((row: any) => row.id).filter(Boolean);
-      if (!idList.length) continue;
-      let data: any[] = [];
-      try {
-        data = await fetchRowsByIds(table, String(mod?.id || table), idList);
-      } catch (error) {
-        if (isMissingTableLikeError(error) || isMissingColumnError(error, 'id')) {
-          ASSIGNEE_QUERY_MODE_CACHE.set(String(table || '').trim(), 'none');
-        }
-        continue;
-      }
-      (data || []).forEach((row: any) => {
-        results.push({
-          ...row,
-          module_id: mod.id,
-          module_title: mod.titles?.fa || mod.id,
-        });
-      });
-    }
-    return results.sort((a, b) => new Date(b.created_at || b.updated_at || 0).getTime() - new Date(a.created_at || a.updated_at || 0).getTime());
-  };
-
   const loadPeopleMaps = async (items: any[]) => {
     const assigneeIds = Array.from(
       new Set(items.filter((item: any) => item.assignee_type !== 'role').map((item: any) => item.assignee_id).filter(Boolean))
@@ -2606,6 +2154,28 @@ useEffect(() => {
       setCreatedByNameMap((prev) => ({ ...prev, ...map }));
     }
   };
+
+  useEffect(() => {
+    if (tasks.length === 0) return;
+    const relatedPairs: { module_id: string; record_id: string }[] = [];
+    tasks.forEach((task: any) => {
+      const sourceLink = resolveTaskSourceLink(task);
+      if (sourceLink.moduleId && sourceLink.recordId) {
+        relatedPairs.push({ module_id: sourceLink.moduleId, record_id: sourceLink.recordId });
+      }
+    });
+    void buildRecordTitleMap(relatedPairs);
+    void loadPeopleMaps(tasks);
+  }, [tasks]);
+
+  useEffect(() => {
+    if (responsibilities.length === 0) return;
+    void buildRecordTitleMap(responsibilities.map((item: any) => ({
+      module_id: String(item?.module_id || '').trim(),
+      record_id: String(item?.id || '').trim(),
+    })));
+    void loadPeopleMaps(responsibilities);
+  }, [responsibilities]);
 
   const isSectionFresh = (section: NotificationSectionKey) => (
     Date.now() - lastLoadedAtRef.current[section] < NOTIFICATIONS_CACHE_TTL_MS
@@ -2678,10 +2248,7 @@ useEffect(() => {
     }
 
     if (section === 'tasks') {
-      const showSkeleton = tasks.length === 0;
-      if (showSkeleton) setLoadingTasks(true);
-      const tasksData = await safeSectionFetch(() => fetchTasks(), 'tasks', [] as any[]);
-      setTasks(tasksData);
+      const tasksData = await safeSectionFetch(() => refreshTasks(options), 'tasks', tasks);
       await safeSectionFetch(() => refreshUnreadSummary(), 'tasks', null as any);
       lastLoadedAtRef.current.tasks = Date.now();
       const completedTaskIds = tasksData
@@ -2693,7 +2260,6 @@ useEffect(() => {
       if (completedTaskIds.length) {
         setSeenCompletedTaskIds((prev) => new Set([...prev, ...completedTaskIds]));
       }
-      if (showSkeleton) setLoadingTasks(false);
       return;
     }
 
@@ -2754,15 +2320,11 @@ useEffect(() => {
       return;
     }
 
-    const showSkeleton = responsibilities.length === 0;
-    if (showSkeleton) setLoadingResponsibilities(true);
-    const responsibilitiesData = await safeSectionFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]);
-    setResponsibilities(responsibilitiesData);
+    const responsibilitiesData = await safeSectionFetch(() => refreshResponsibilities(options), 'responsibilities', responsibilities);
     await safeSectionFetch(() => refreshUnreadSummary(), 'responsibilities', null as any);
     lastLoadedAtRef.current.responsibilities = Date.now();
     await buildRecordTitleMap(responsibilitiesData.map((r: any) => ({ module_id: r.module_id, record_id: r.id })));
     await loadPeopleMaps(responsibilitiesData);
-    if (showSkeleton) setLoadingResponsibilities(false);
   };
 
   const refreshSection = async (section: NotificationSectionKey, options?: { force?: boolean }) => {
@@ -2965,14 +2527,10 @@ useEffect(() => {
       && !shouldUseConversationScopedNotes
       && (!noteConversationSummaryAvailable || activeDrawerSection === 'notes');
     const showNotesSkeleton = shouldFetchGlobalNotes && notes.length === 0;
-    const showTasksSkeleton = shouldLoadTasks && tasks.length === 0;
-    const showResponsibilitiesSkeleton = shouldLoadResponsibilities && responsibilities.length === 0;
     const showBotSkeleton = shouldFetchBotGroups && botGroups.length === 0 && botMessages.length === 0;
     const showSmsSkeleton = shouldLoadSmsMessages && smsMessages.length === 0;
 
     if (showNotesSkeleton) setLoadingNotes(true);
-    if (showTasksSkeleton) setLoadingTasks(true);
-    if (showResponsibilitiesSkeleton) setLoadingResponsibilities(true);
     if (showBotSkeleton) setLoadingBotMessages(true);
     if (showSmsSkeleton) setLoadingSmsMessages(true);
     const safeFetch = async <T,>(loader: () => Promise<T>, type: NotificationSectionKey, fallback: T) => {
@@ -2993,8 +2551,8 @@ useEffect(() => {
     };
     const [notesData, tasksData, responsibilitiesData, botGroupsData, smsData, voipCallsData] = await Promise.all([
       shouldFetchGlobalNotes ? safeFetch(() => fetchNotes(), 'notes', [] as any[]) : Promise.resolve(notes),
-      shouldLoadTasks ? safeFetch(() => fetchTasks(), 'tasks', [] as any[]) : Promise.resolve(tasks),
-      shouldLoadResponsibilities ? safeFetch(() => fetchResponsibilities(), 'responsibilities', [] as any[]) : Promise.resolve(responsibilities),
+      shouldLoadTasks ? safeFetch(() => refreshTasks(options), 'tasks', tasks) : Promise.resolve(tasks),
+      shouldLoadResponsibilities ? safeFetch(() => refreshResponsibilities(options), 'responsibilities', responsibilities) : Promise.resolve(responsibilities),
       shouldFetchBotGroups ? safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]) : Promise.resolve(botGroups),
       shouldLoadSmsMessages ? safeFetch(() => fetchSmsMessages(), 'sms_messages', [] as any[]) : Promise.resolve(smsMessages),
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
@@ -3009,8 +2567,6 @@ useEffect(() => {
         : Promise.resolve(null),
       safeFetch(() => refreshUnreadSummary(), variant === 'chat' ? 'notes' : 'tasks', null as any),
     ]);
-    if (shouldLoadTasks) setTasks(tasksData);
-    if (shouldLoadResponsibilities) setResponsibilities(responsibilitiesData);
     if (shouldLoadSmsMessages) setSmsMessages(smsData);
     if (shouldLoadVoipCalls) setVoipCalls(voipCallsData);
     const loadedAt = Date.now();
@@ -3060,8 +2616,6 @@ useEffect(() => {
       await loadPeopleMaps(voipCallsData);
     }
     if (showNotesSkeleton) setLoadingNotes(false);
-    if (showTasksSkeleton) setLoadingTasks(false);
-    if (showResponsibilitiesSkeleton) setLoadingResponsibilities(false);
     if (showBotSkeleton) setLoadingBotMessages(false);
     if (showSmsSkeleton) setLoadingSmsMessages(false);
 
@@ -7313,8 +6867,3 @@ useEffect(() => {
 };
 
 export default NotificationsPopover;
-
-
-
-
-

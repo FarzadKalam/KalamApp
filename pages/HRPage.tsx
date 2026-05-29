@@ -59,7 +59,6 @@ import {
   isMissingPayrollLedgerError,
   mapPayrollLedgerEntriesToLines,
   markPayrollLedgerEntriesIncluded,
-  sumPayrollLedgerEntries,
 } from '../utils/payrollLedger';
 
 const HR_TASK_FETCH_LIMIT = 1500;
@@ -71,11 +70,11 @@ const HR_EMPLOYEE_SELECT =
 const HR_PROFILE_SELECT =
   'id, full_name, role, salary_type, default_work_schedule_id, has_flexible_hours, expected_daily_minutes, grace_minutes_for_late, overtime_auto_approve, leave_auto_approve, mission_auto_approve, base_salary, hourly_rate, overtime_rate, late_penalty_rate, early_bonus_rate, production_bonus_rate, commission_percentage';
 const HR_TASK_SELECT =
-  'id, name, status, assignee_id, due_date, created_at, wage, produced_qty, spent_hours, estimated_hours, related_to_module, related_production_order, production_line_id';
+  'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, due_date, due_at, completed_at, created_at, wage, produced_qty, spent_hours, estimated_hours, actual_hours, duration_hours, weight, related_to_module, related_production_order, production_line_id, recurrence_info, source_template_id';
 const HR_PROFILE_SELECT_FALLBACK = 'id, full_name, role';
 const HR_PROFILE_SELECT_MINIMAL = 'id, full_name';
 const HR_TASK_SELECT_FALLBACK =
-  'id, name, status, assignee_id, due_date, created_at, wage, produced_qty, spent_hours, estimated_hours';
+  'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, due_date, due_at, completed_at, created_at, wage, produced_qty, spent_hours, estimated_hours, weight, related_to_module, related_production_order, production_line_id, recurrence_info, source_template_id';
 const HR_TASK_SELECT_MINIMAL =
   'id, name, status, assignee_id, created_at, spent_hours, wage, produced_qty';
 const isMissingSelectColumnError = (error: any) => {
@@ -188,6 +187,10 @@ type TaskDetailRow = {
   wageBase: number;
   wageMultiplier: number;
   wageFinal: number;
+  activityWageAmount: number;
+  activityBonusAmount: number;
+  activityPenaltyAmount: number;
+  activityPerformanceAmount: number;
   performanceCode: TaskPerformanceCode;
   performanceLabel: string;
   performanceColor: string;
@@ -209,6 +212,9 @@ type EmployeeSummaryRow = {
   doneLateCount: number;
   producedQty: number;
   taskWageTotal: number;
+  activityWageTotal: number;
+  activityBonusTotal: number;
+  activityPenaltyTotal: number;
   activityPerformanceTotal: number;
   overtimeHours: number;
   lateHours: number;
@@ -532,6 +538,31 @@ const toNumber = (value: unknown): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const isActivityPerformancePenalty = (entry: ActivityPerformanceEntry) =>
+  String(entry.output_type || '').trim() === 'penalty' || toNumber(entry.amount) < 0;
+
+const isActivityPerformanceWage = (entry: ActivityPerformanceEntry) =>
+  !isActivityPerformancePenalty(entry) && String(entry.output_type || '').trim() === 'wage';
+
+const summarizeActivityPerformanceEntries = (entries: ActivityPerformanceEntry[]) => {
+  return (entries || []).reduce(
+    (acc, entry) => {
+      const amount = toNumber(entry.amount);
+      if (amount === 0) return acc;
+      if (isActivityPerformancePenalty(entry)) {
+        acc.penalty += Math.abs(amount);
+      } else if (isActivityPerformanceWage(entry)) {
+        acc.wage += amount;
+      } else {
+        acc.bonus += amount;
+      }
+      acc.net += amount;
+      return acc;
+    },
+    { wage: 0, bonus: 0, penalty: 0, net: 0 },
+  );
+};
+
 const isMissingSourceKeyError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
   return text.includes('source_key') && (text.includes('column') || text.includes('could not find') || text.includes('schema cache'));
@@ -621,6 +652,58 @@ const toNativeGregorianDateString = (value: Dayjs | null | undefined): string | 
 const HR_SESSION_KEY_RANGE = 'hr_filter_range';
 const HR_SESSION_KEY_EMPLOYEES = 'hr_filter_employee_ids';
 
+const normalizePersistedHrRange = (value: unknown): [Dayjs, Dayjs] | null => {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as { from?: unknown; to?: unknown };
+  const savedFrom = parseDateParam(typeof raw.from === 'string' ? raw.from : null);
+  const savedTo = parseDateParam(typeof raw.to === 'string' ? raw.to : null);
+  if (savedFrom?.isValid() && savedTo?.isValid() && savedFrom.valueOf() <= savedTo.valueOf()) {
+    return [savedFrom.startOf('day'), savedTo.endOf('day')];
+  }
+  return null;
+};
+
+const readPersistedHrRange = (): [Dayjs, Dayjs] | null => {
+  const readFromStorage = (storage: Storage | null): [Dayjs, Dayjs] | null => {
+    if (!storage) return null;
+    try {
+      const saved = storage.getItem(HR_SESSION_KEY_RANGE);
+      if (!saved) return null;
+      return normalizePersistedHrRange(JSON.parse(saved));
+    } catch {}
+    return null;
+  };
+  try {
+    const range = readFromStorage(window.sessionStorage);
+    if (range) return range;
+  } catch {}
+  try {
+    const range = readFromStorage(window.localStorage);
+    if (range) return range;
+  } catch {}
+  return null;
+};
+
+const writeHrRangeToStorage = (storage: Storage | null, serialized: string) => {
+  if (!storage) return;
+  try {
+    storage.setItem(HR_SESSION_KEY_RANGE, serialized);
+  } catch {}
+};
+
+const persistHrRange = (range: [Dayjs, Dayjs]) => {
+  const from = toNativeGregorianDateString(range[0]);
+  const to = toNativeGregorianDateString(range[1]);
+  if (!from || !to) return;
+  const serialized = JSON.stringify({ from, to });
+  try {
+    writeHrRangeToStorage(window.sessionStorage, serialized);
+  } catch {}
+  try {
+    writeHrRangeToStorage(window.localStorage, serialized);
+  } catch {}
+};
+
 const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
   const query = new URLSearchParams(window.location.search);
   const from = parseDateParam(query.get('from'));
@@ -628,17 +711,8 @@ const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
   if (from && to && from.valueOf() <= to.valueOf()) {
     return [from.startOf('day'), to.endOf('day')];
   }
-  try {
-    const saved = sessionStorage.getItem(HR_SESSION_KEY_RANGE);
-    if (saved) {
-      const parsed = JSON.parse(saved) as { from: string; to: string };
-      const savedFrom = parseDateParam(parsed.from);
-      const savedTo = parseDateParam(parsed.to);
-      if (savedFrom?.isValid() && savedTo?.isValid() && savedFrom.valueOf() <= savedTo.valueOf()) {
-        return [savedFrom.startOf('day'), savedTo.endOf('day')];
-      }
-    }
-  } catch {}
+  const persistedRange = readPersistedHrRange();
+  if (persistedRange) return persistedRange;
   return [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')];
 };
 
@@ -1157,11 +1231,16 @@ const buildSummaries = ({
   const now = dayjs();
   const tasksByAssignee = new Map<string, TaskRecord[]>();
   const activityEntriesByEmployee = new Map<string, ActivityPerformanceEntry[]>();
+  const activityEntriesByTask = new Map<string, ActivityPerformanceEntry[]>();
 
   (activityPerformanceEntries || []).forEach((entry) => {
     const employeeId = String(entry.employee_id || '').trim();
     if (!employeeId) return;
     activityEntriesByEmployee.set(employeeId, [...(activityEntriesByEmployee.get(employeeId) || []), entry]);
+    const taskId = String(entry.task_id || '').trim();
+    if (taskId) {
+      activityEntriesByTask.set(taskId, [...(activityEntriesByTask.get(taskId) || []), entry]);
+    }
   });
 
   tasks.forEach((task) => {
@@ -1175,6 +1254,7 @@ const buildSummaries = ({
 
   const rows = profiles.map((profile) => {
     const assigneeLookupId = String(profile.related_profile_id || profile.id || '');
+    const employeeLookupId = String(profile.source_id || profile.id || '');
     const assigneeTasks = tasksByAssignee.get(assigneeLookupId) || [];
     const detailRows: TaskDetailRow[] = assigneeTasks.map((task) => {
       const performance = evaluateTaskPerformance(task, now);
@@ -1182,6 +1262,10 @@ const buildSummaries = ({
       const wageBase = toNumber(task.wage);
       const wageMultiplier = getProductionWageMultiplier(task, lineQuantityById, orderQuantityById);
       const wageFinal = wageBase * wageMultiplier;
+      const taskActivitySummary = summarizeActivityPerformanceEntries(
+        (activityEntriesByTask.get(String(task.id)) || [])
+          .filter((entry) => String(entry.employee_id || '').trim() === employeeLookupId),
+      );
 
       return {
         key: String(task.id),
@@ -1195,6 +1279,10 @@ const buildSummaries = ({
         wageBase,
         wageMultiplier,
         wageFinal,
+        activityWageAmount: taskActivitySummary.wage,
+        activityBonusAmount: taskActivitySummary.bonus,
+        activityPenaltyAmount: taskActivitySummary.penalty,
+        activityPerformanceAmount: taskActivitySummary.net,
         performanceCode: performance.code,
         performanceLabel: performanceMeta.label,
         performanceColor: performanceMeta.color,
@@ -1229,16 +1317,20 @@ const buildSummaries = ({
 
     const taskWageTotal = payrollDetailRows.reduce((sum, row) => sum + row.wageFinal, 0);
     const producedQty = payrollDetailRows.reduce((sum, row) => sum + row.producedQty, 0);
-    const employeeActivityEntries = (activityEntriesByEmployee.get(String(profile.source_id || profile.id || '')) || [])
+    const employeeActivityEntries = (activityEntriesByEmployee.get(employeeLookupId) || [])
       .filter((entry) => payrollEligibleTaskIds.has(String(entry.task_id)));
-    const activityPerformanceTotal = employeeActivityEntries.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
+    const activitySummary = summarizeActivityPerformanceEntries(employeeActivityEntries);
+    const activityWageTotal = activitySummary.wage;
+    const activityBonusTotal = activitySummary.bonus;
+    const activityPenaltyTotal = activitySummary.penalty;
+    const activityPerformanceTotal = activitySummary.net;
     const overtimeHours = 0;
     const lateHours = payrollDetailRows.reduce((sum, row) => sum + row.lateHours, 0);
 
     const baseSalary = toNumber(profile.base_salary);
-    const bonusTotal = 0;
-    const penaltyTotal = 0;
-    const netPayable = baseSalary + taskWageTotal + bonusTotal - penaltyTotal;
+    const bonusTotal = activityBonusTotal;
+    const penaltyTotal = activityPenaltyTotal;
+    const netPayable = baseSalary + taskWageTotal + activityWageTotal + bonusTotal - penaltyTotal;
 
     return {
       key: String(profile.id),
@@ -1254,6 +1346,9 @@ const buildSummaries = ({
       doneLateCount: doneLateRows.length,
       producedQty,
       taskWageTotal,
+      activityWageTotal,
+      activityBonusTotal,
+      activityPenaltyTotal,
       activityPerformanceTotal,
       overtimeHours,
       lateHours,
@@ -1403,6 +1498,7 @@ const HRPage: React.FC = () => {
     const from = toNativeGregorianDateString(monthStart);
     const to = toNativeGregorianDateString(monthEnd);
     if (!from || !to) return;
+    persistHrRange([monthStart, monthEnd]);
     const nextPath = employeeId ? `/hr/${employeeId}` : '/hr';
     const nextUrl = `${nextPath}?from=${from}&to=${to}`;
     const currentUrl = `${window.location.pathname}${window.location.search}`;
@@ -1421,12 +1517,7 @@ const HRPage: React.FC = () => {
       if (nextStart.valueOf() > nextEnd.valueOf()) {
         [nextStart, nextEnd] = [current[0].startOf('day'), current[1].endOf('day')];
       }
-      try {
-        sessionStorage.setItem(HR_SESSION_KEY_RANGE, JSON.stringify({
-          from: toNativeGregorianDateString(nextStart),
-          to: toNativeGregorianDateString(nextEnd),
-        }));
-      } catch {}
+      persistHrRange([nextStart, nextEnd]);
       return [nextStart, nextEnd];
     });
   }, []);
@@ -1588,26 +1679,37 @@ const HRPage: React.FC = () => {
         ? normalizedEmployees
         : normalizedProfilesFallback;
 
-      const normalizedTasks = (tasksResult.data || []).map((row: any) => ({
-        ...row,
-        id: String(row?.id),
-        name: row?.name || null,
-        status: row?.status || null,
-        assignee_id: row?.assignee_id || null,
-        assignee_role_id: row?.assignee_role_id || null,
-        assignee_type: row?.assignee_type || null,
-        due_date: row?.due_date || null,
-        due_at: row?.due_at || null,
-        completed_at: row?.completed_at || null,
-        created_at: row?.created_at || null,
-        wage: row?.wage ?? 0,
-        produced_qty: row?.produced_qty ?? 0,
-        spent_hours: row?.spent_hours ?? 0,
-        estimated_hours: row?.estimated_hours ?? 0,
-        related_to_module: row?.related_to_module || null,
-        related_production_order: row?.related_production_order || null,
-        production_line_id: row?.production_line_id || null,
-      })) as TaskRecord[];
+      const normalizedTasks = (tasksResult.data || []).map((row: any) => {
+        const recurrenceInfo = row?.recurrence_info && typeof row.recurrence_info === 'object'
+          ? row.recurrence_info
+          : null;
+        return {
+          ...row,
+          id: String(row?.id),
+          name: row?.name || null,
+          status: row?.status || null,
+          task_type: row?.task_type || recurrenceInfo?.task_type || null,
+          assignee_id: row?.assignee_id || null,
+          assignee_role_id: row?.assignee_role_id || null,
+          assignee_type: row?.assignee_type || null,
+          due_date: row?.due_date || null,
+          due_at: row?.due_at || null,
+          completed_at: row?.completed_at || null,
+          created_at: row?.created_at || null,
+          wage: row?.wage ?? 0,
+          produced_qty: row?.produced_qty ?? 0,
+          spent_hours: row?.spent_hours ?? 0,
+          estimated_hours: row?.estimated_hours ?? 0,
+          actual_hours: row?.actual_hours ?? 0,
+          duration_hours: row?.duration_hours ?? 0,
+          weight: row?.weight ?? recurrenceInfo?.weight ?? 0,
+          related_to_module: row?.related_to_module || null,
+          related_production_order: row?.related_production_order || null,
+          production_line_id: row?.production_line_id || null,
+          recurrence_info: recurrenceInfo,
+          source_template_id: row?.source_template_id || recurrenceInfo?.source_template_id || null,
+        };
+      }) as TaskRecord[];
 
       let nextActivityPerformanceEntries: ActivityPerformanceEntry[] = [];
       try {
@@ -4511,6 +4613,26 @@ const HRPage: React.FC = () => {
     }
   }, []);
 
+  useEffect(() => {
+    if (!payrollWizardOpen || !payrollWizardSummary) return;
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (!periodStart || !periodEnd) return;
+    let cancelled = false;
+    const run = async () => {
+      try {
+        await ensureActivityPerformanceLedgerForSummary(payrollWizardSummary, periodStart, periodEnd);
+        if (!cancelled) await refreshPayrollPeriodState();
+      } catch (error) {
+        console.warn('Could not prepare activity performance ledger for payroll wizard.', error);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [ensureActivityPerformanceLedgerForSummary, monthEnd, monthStart, payrollWizardOpen, payrollWizardSummary, refreshPayrollPeriodState]);
+
   const handleCreatePayrollSlipFromWizard = useCallback(async () => {
     const row = payrollWizardSummary;
     if (!row?.profile?.source_id) {
@@ -4550,7 +4672,6 @@ const HRPage: React.FC = () => {
 
       const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, [employeeIdValue], periodStart, periodEnd);
       const ledgerLines = mapPayrollLedgerEntriesToLines(ledgerEntries);
-      const ledgerNet = sumPayrollLedgerEntries(ledgerEntries);
       const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
       const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
 
@@ -4589,7 +4710,7 @@ const HRPage: React.FC = () => {
         insurance_employee_amount: employeeInsuranceAmount,
         insurance_employer_amount: employerInsuranceAmount,
         gross_amount: totalEarnings,
-        net_amount: totalEarnings + ledgerNet - employeeInsuranceAmount,
+        net_amount: totalEarnings - ledgerDeductionTotal - employeeInsuranceAmount,
         lines: [
           ...(isHourly && hourlyWageTotal > 0 ? [{ line_type: 'earning', title: 'دستمزد ساعتی', amount: hourlyWageTotal, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} تومان/ساعت` }] : []),
           ...(!isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: 'حقوق پایه', amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
@@ -4837,6 +4958,9 @@ const HRPage: React.FC = () => {
           <div>دستمزد فعالیت: <span className="persian-number">{formatMoney(row.wageBase)}</span></div>
         <div>ضریب تولید: <span className="persian-number">{toPersianNumber(row.wageMultiplier)}</span></div>
           <div className="font-bold text-gray-800">دستمزد نهایی: <span className="persian-number">{formatMoney(row.wageFinal)}</span></div>
+        <div>دستمزد ضریب: <span className="persian-number text-blue-700">{formatMoney(row.activityWageAmount)}</span></div>
+        <div>پاداش: <span className="persian-number text-green-700">{formatMoney(row.activityBonusAmount)}</span></div>
+        <div>جریمه: <span className="persian-number text-red-700">{formatMoney(row.activityPenaltyAmount)}</span></div>
       </div>
     </Card>
   );
@@ -4878,6 +5002,29 @@ const HRPage: React.FC = () => {
       title: 'تکمیل‌شده',
       key: 'doneCount',
       render: (_: unknown, row: EmployeeSummaryRow) => <span className="persian-number text-blue-700">{toPersianNumber(row.doneCount)}</span>,
+    },
+    {
+      title: 'دستمزد',
+      key: 'wageTotal',
+      render: (_: unknown, row: EmployeeSummaryRow) => (
+        <span className="persian-number font-bold">{formatMoney(row.taskWageTotal + row.activityWageTotal)}</span>
+      ),
+    },
+    {
+      title: 'پاداش',
+      key: 'activityBonusTotal',
+      render: (_: unknown, row: EmployeeSummaryRow) => (
+        <span className="persian-number text-green-700">{formatMoney(row.activityBonusTotal)}</span>
+      ),
+    },
+    {
+      title: 'عملکرد',
+      key: 'activityPerformanceTotal',
+      render: (_: unknown, row: EmployeeSummaryRow) => (
+        <span className={`persian-number font-bold ${row.activityPerformanceTotal < 0 ? 'text-red-700' : 'text-green-700'}`}>
+          {formatMoney(row.activityPerformanceTotal)}
+        </span>
+      ),
     },
     {
       title: 'ضریب',
@@ -4978,6 +5125,24 @@ const HRPage: React.FC = () => {
       dataIndex: 'wageFinal',
       key: 'wageFinal',
       render: (val: number) => <span className="persian-number font-bold">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'دستمزد',
+      dataIndex: 'activityWageAmount',
+      key: 'activityWageAmount',
+      render: (val: number) => <span className="persian-number text-blue-700">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'پاداش',
+      dataIndex: 'activityBonusAmount',
+      key: 'activityBonusAmount',
+      render: (val: number) => <span className="persian-number text-green-700">{formatMoney(val)}</span>,
+    },
+    {
+      title: 'جریمه',
+      dataIndex: 'activityPenaltyAmount',
+      key: 'activityPenaltyAmount',
+      render: (val: number) => <span className="persian-number text-red-700">{formatMoney(val)}</span>,
     },
   ];
 
@@ -5719,7 +5884,7 @@ const HRPage: React.FC = () => {
                 onClick: () => goToEmployeeDetails(String(row.profile.id)),
                 style: { cursor: 'pointer' },
               })}
-              scroll={{ x: 1100 }}
+              scroll={{ x: 1450 }}
             />
           )
         )}
@@ -6294,8 +6459,9 @@ const HRPage: React.FC = () => {
                         const metricLabelByKey = new Map(
                           group.entries.map((entry) => [String(entry.metric_key || 'amount'), entry.metric_label || entry.metric_key || 'مقدار']),
                         );
+                        const baseDetailColumnCount = detailColumns.length;
                         const groupColumns = [
-                          ...detailColumns.slice(0, 8),
+                          ...detailColumns,
                           ...group.metricKeys.map((metricKey) => ({
                             title: metricLabelByKey.get(metricKey) || metricKey,
                             key: `metric_${metricKey}`,
@@ -6325,13 +6491,13 @@ const HRPage: React.FC = () => {
                               columns={groupColumns as any}
                               dataSource={group.rows}
                               pagination={{ pageSize: 30, showSizeChanger: false }}
-                              scroll={{ x: 1200 + (group.metricKeys.length * 180) }}
+                              scroll={{ x: 1700 + (group.metricKeys.length * 180) }}
                               summary={() => group.entries.length > 0 ? (
                                 <Table.Summary fixed>
                                   <Table.Summary.Row>
-                                    <Table.Summary.Cell index={0} colSpan={8}>جمع</Table.Summary.Cell>
+                                    <Table.Summary.Cell index={0} colSpan={baseDetailColumnCount}>جمع</Table.Summary.Cell>
                                     {group.metricKeys.map((metricKey, index) => (
-                                      <Table.Summary.Cell key={metricKey} index={index + 8}>
+                                      <Table.Summary.Cell key={metricKey} index={index + baseDetailColumnCount}>
                                         <div className="text-xs leading-6">
                                           <div className="persian-number">
                                             {toPersianNumber((group.rows as any[]).reduce((sum: number, row: any) => sum + toNumber(row.metricValues?.[metricKey]), 0).toFixed(2))}
@@ -6342,7 +6508,7 @@ const HRPage: React.FC = () => {
                                         </div>
                                       </Table.Summary.Cell>
                                     ))}
-                                    <Table.Summary.Cell index={8 + group.metricKeys.length}>
+                                    <Table.Summary.Cell index={baseDetailColumnCount + group.metricKeys.length}>
                                       <span className="persian-number font-bold">{formatMoney(group.totalAmount)}</span>
                                     </Table.Summary.Cell>
                                   </Table.Summary.Row>

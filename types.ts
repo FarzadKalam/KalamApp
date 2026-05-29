@@ -414,6 +414,7 @@ export interface ModuleDefinition {
   }[];
   formAdapter?: ModuleFormAdapter;
   recordActions?: ModuleRecordAction[];
+  permanentFilters?: Array<{ field: string; operator: string; value: any }>;
 }
 
 // --- VIEW & FILTER INTERFACES ---

@@ -413,6 +413,20 @@ const ActivityPerformanceRulesManager: React.FC<ActivityPerformanceRulesManagerP
 
   return (
     <div className="space-y-4">
+      {rows.length === 0 ? (
+        <Empty description="ردیف محاسبه عملکردی ثبت نشده است." image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <Table
+          rowKey="id"
+          size="small"
+          loading={loading}
+          columns={columns}
+          dataSource={rows}
+          pagination={{ pageSize: 5, showSizeChanger: false }}
+          scroll={{ x: 1100 }}
+        />
+      )}
+
       <div className="rounded-xl border border-gray-200 p-3 dark:border-gray-800">
         <Form form={form} layout="vertical">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -490,7 +504,7 @@ const ActivityPerformanceRulesManager: React.FC<ActivityPerformanceRulesManagerP
           </div>
 
           <div className="mt-3 rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-            <div className="mb-3 font-bold">معیارهای دستمزد</div>
+            <div className="mb-3 font-bold">معیارهای محاسبه</div>
             <Form.List name="pay_items">
               {(fields, { add, remove }) => (
                 <div className="space-y-2">
@@ -552,20 +566,6 @@ const ActivityPerformanceRulesManager: React.FC<ActivityPerformanceRulesManagerP
           </Space>
         </Form>
       </div>
-
-      {rows.length === 0 ? (
-        <Empty description="ردیف محاسبه عملکردی ثبت نشده است." image={Empty.PRESENTED_IMAGE_SIMPLE} />
-      ) : (
-        <Table
-          rowKey="id"
-          size="small"
-          loading={loading}
-          columns={columns}
-          dataSource={rows}
-          pagination={{ pageSize: 5, showSizeChanger: false }}
-          scroll={{ x: 1100 }}
-        />
-      )}
     </div>
   );
 };

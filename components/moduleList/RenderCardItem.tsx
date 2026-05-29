@@ -39,6 +39,7 @@ export interface RenderCardItemProps {
   isDragActive?: boolean;
   dragHandleTitle?: string;
   onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
+  moduleBadgeLabel?: string | null;
 }
 
 const getAdaptiveCardTitleClassName = (value: unknown, minimal = false) => {
@@ -75,6 +76,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   isDragActive = false,
   dragHandleTitle = "جابجایی کارت",
   onDragHandlePointerDown,
+  moduleBadgeLabel,
 }) => {
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const isSelected = selectedRowKeys.includes(item.id);
@@ -349,8 +351,13 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             <Checkbox checked={isSelected} onChange={toggleSelect} />
           </div>
         )}
+        {moduleBadgeLabel ? (
+          <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200">
+            {moduleBadgeLabel}
+          </div>
+        ) : null}
 
-        <div className="flex items-start gap-3">
+        <div className={`flex items-start gap-3 ${moduleBadgeLabel ? 'pt-5' : ''}`}>
           <Avatar
             shape="square"
             size={minimal ? 36 : 52}
@@ -497,14 +504,19 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Checkbox checked={isSelected} onChange={toggleSelect} />
         </div>
       )}
+      {moduleBadgeLabel ? (
+        <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200">
+          {moduleBadgeLabel}
+        </div>
+      ) : null}
 
       {isTasks && imageUrl ? (
-        <div className={`mb-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 ${minimal ? 'h-24' : 'h-32'}`}>
+        <div className={`mb-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 ${moduleBadgeLabel ? 'mt-5' : ''} ${minimal ? 'h-24' : 'h-32'}`}>
           <ResilientImage src={String(imageUrl)} preset="card" alt={title} className="h-full w-full object-cover" loading="lazy" />
         </div>
       ) : null}
 
-      <div className="mb-2 flex items-start gap-3">
+      <div className={`mb-2 flex items-start gap-3 ${moduleBadgeLabel && !imageUrl ? 'pt-5' : ''}`}>
         {!isTasks && (
           <Avatar
             shape="square"

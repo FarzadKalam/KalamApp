@@ -189,24 +189,83 @@ const mergeSchemaBlocksWithBase = (
   return [...mergedIncomingBlocks, ...cloneDeep(missingBaseBlocks)];
 };
 
+const ORIGINAL_INVOICE_MODULE_IDS = new Set(['invoices', 'purchase_invoices']);
+const RETURN_INVOICE_LABEL_PATTERN = /برگشت|استرداد|بازپرداخت/;
+
+const restoreBaseInvoiceLabels = (
+  moduleId: string,
+  baseFields: ModuleField[],
+  mergedFields: ModuleField[],
+  baseBlocks: BlockDefinition[],
+  mergedBlocks: BlockDefinition[]
+) => {
+  if (!ORIGINAL_INVOICE_MODULE_IDS.has(moduleId)) {
+    return { fields: mergedFields, blocks: mergedBlocks };
+  }
+
+  const baseFieldByKey = new Map(
+    (baseFields || [])
+      .map((field) => [String(field?.key || '').trim(), field] as const)
+      .filter(([key]) => Boolean(key))
+  );
+  const baseBlockById = new Map(
+    (baseBlocks || [])
+      .map((block) => [String(block?.id || '').trim(), block] as const)
+      .filter(([id]) => Boolean(id))
+  );
+
+  const fields = (mergedFields || []).map((field) => {
+    const fieldKey = String(field?.key || '').trim();
+    const baseField = fieldKey ? baseFieldByKey.get(fieldKey) : null;
+    const nextFa = String(field?.labels?.fa || '').trim();
+    const baseFa = String(baseField?.labels?.fa || '').trim();
+    if (!baseField || !nextFa || !baseFa) return field;
+    if (!RETURN_INVOICE_LABEL_PATTERN.test(nextFa) || RETURN_INVOICE_LABEL_PATTERN.test(baseFa)) return field;
+    return {
+      ...field,
+      labels: {
+        ...(field.labels || {}),
+        fa: baseFa,
+      },
+    };
+  });
+
+  const blocks = (mergedBlocks || []).map((block) => {
+    const blockId = String(block?.id || '').trim();
+    const baseBlock = blockId ? baseBlockById.get(blockId) : null;
+    const nextFa = String(block?.titles?.fa || '').trim();
+    const baseFa = String(baseBlock?.titles?.fa || '').trim();
+    if (!baseBlock || !nextFa || !baseFa) return block;
+    if (!RETURN_INVOICE_LABEL_PATTERN.test(nextFa) || RETURN_INVOICE_LABEL_PATTERN.test(baseFa)) return block;
+    return {
+      ...block,
+      titles: {
+        ...(block.titles || {}),
+        fa: baseFa,
+      },
+    };
+  });
+
+  return { fields, blocks };
+};
+
 export const mergeModuleSchemaWithBase = (
   baseSchema: { fields?: ModuleField[]; blocks?: BlockDefinition[] } | null | undefined,
-  incomingSchema: { fields?: ModuleField[]; blocks?: BlockDefinition[] } | null | undefined
+  incomingSchema: { fields?: ModuleField[]; blocks?: BlockDefinition[] } | null | undefined,
+  moduleId?: string | null
 ) => {
   const baseFields = cloneDeep((baseSchema?.fields || []) as ModuleField[]);
+  const baseBlocks = cloneDeep((baseSchema?.blocks || []) as BlockDefinition[]);
   const incomingFields = cloneDeep((incomingSchema?.fields || baseFields) as ModuleField[]);
   const mergedFields = mergeRequiredTagsField(
     baseFields,
     mergeSchemaFieldsWithBase(baseFields, incomingFields)
   );
   const mergedBlocks = mergeSchemaBlocksWithBase(
-    cloneDeep((baseSchema?.blocks || []) as BlockDefinition[]),
+    baseBlocks,
     cloneDeep((incomingSchema?.blocks || baseSchema?.blocks || []) as BlockDefinition[])
   );
-  return {
-    fields: mergedFields,
-    blocks: mergedBlocks,
-  };
+  return restoreBaseInvoiceLabels(String(moduleId || ''), baseFields, mergedFields, baseBlocks, mergedBlocks);
 };
 
 const getIncomingModuleSettings = (
@@ -225,7 +284,7 @@ export const applyModuleSettingsStoreToRegistry = (
     const base = baseModuleRegistrySnapshot[moduleId];
     const incoming = getIncomingModuleSettings(store, moduleId);
     const incomingSchema = incoming?.schema;
-    const mergedSchema = mergeModuleSchemaWithBase(base, incomingSchema);
+    const mergedSchema = mergeModuleSchemaWithBase(base, incomingSchema, moduleId);
     const activeSchema = filterActiveSchema(mergedSchema);
     const normalizedSchema = moduleId === 'attendance_logs'
       ? normalizeAttendanceLogsDetailSchema(activeSchema.fields)

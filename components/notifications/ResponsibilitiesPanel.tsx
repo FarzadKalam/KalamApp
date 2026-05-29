@@ -1,38 +1,13 @@
 import React from 'react';
-import { Button, Empty, List, Skeleton } from 'antd';
-import { DownOutlined, UpOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Button, Empty, Skeleton } from 'antd';
+import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { FieldType } from '../../types';
-import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
-import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import RenderCardItem from '../moduleList/RenderCardItem';
 
 type CreatedSortDirection = 'desc' | 'asc';
 
 type ResponsibilityView = { key: string; label: string };
-
-const resolveOptionLabel = (value: any, options?: { label: string; value: any }[]) => {
-  if (!options?.length) return null;
-  const found = options.find(opt => String(opt.value) === String(value));
-  return found ? found.label : null;
-};
-
-const STATUS_LABEL_FALLBACKS: Record<string, string> = {
-  todo: 'انجام نشده',
-  pending: 'در انتظار',
-  in_progress: 'در حال انجام',
-  review: 'بازبینی',
-  done: 'تکمیل شده',
-  completed: 'تکمیل شده',
-  canceled: 'لغو شده',
-};
-
-const resolveStatusLabelFallback = (value: unknown) => {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (!normalized) return '';
-  return STATUS_LABEL_FALLBACKS[normalized] || String(value || '').trim();
-};
 
 const getModuleCardFields = (moduleConfig: any) => {
   const fields = moduleConfig?.fields || [];
@@ -83,9 +58,6 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   openPreviewRecord,
   recordTitleMap,
   formatRecordLabel,
-  roleNameMap,
-  assigneeNameMap,
-  createdByNameMap,
   handleClose,
   maxItems,
 }) => {
@@ -153,7 +125,10 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
               return (
                 <RenderCardItem
                   key={`${item.module_id}:${item.id}`}
-                  item={item}
+                  item={{
+                    ...item,
+                    name: recordTitleMap[`${item.module_id}:${item.id}`] || item.name,
+                  }}
                   moduleId={item.module_id}
                   moduleConfig={moduleConfig}
                   imageField={imageField}
@@ -175,68 +150,56 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
                   }}
                   canViewField={() => true}
                   hideSelection
+                  moduleBadgeLabel={moduleConfig.titles?.fa || item.module_title || item.module_id}
                 />
               );
             })}
           </div>
         </div>
       ) : (
-        <List
-          dataSource={data}
-          renderItem={(item: any) => {
-            const recordKey = `${item.module_id}:${item.id}`;
-            const title = recordTitleMap[recordKey] || formatRecordLabel(item, item.module_id);
-            const moduleConfig = MODULES[item.module_id];
-            const statusField = moduleConfig?.fields?.find((f: any) => f.key === 'status');
-            const categoryField = moduleConfig?.fields?.find((f: any) => f.key === 'category');
-            const statusLabel = resolveOptionLabel(item.status, statusField?.options) || resolveStatusLabelFallback(item.status);
-            const categoryLabel = resolveOptionLabel(item.category, categoryField?.options);
-            const assigneeLabel = item.assignee_type === 'role'
-              ? (roleNameMap[String(getResolvedAssigneeId(item) || '')] || 'نقش')
-              : (assigneeNameMap[String(getResolvedAssigneeId(item) || '')] || 'کاربر');
-            const createdById = item.created_by || item.created_by_id;
-            const createdByLabel = createdById ? (createdByNameMap[createdById] || createdById) : null;
-            return (
-              <div className="mb-2">
-                <div className="rounded-xl border border-gray-200/80 bg-white/92 p-3 shadow-sm dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)]">
-                  <div className="text-xs text-gray-500 mb-2">{item.module_title}</div>
-                  <Link
-                    to={`/${item.module_id}/${item.id}`}
-                    className="block w-full text-right text-sm font-semibold leading-5 text-gray-800 line-clamp-2 break-words overflow-hidden dark:text-gray-200"
-                    title={title}
-                    onClick={handleClose}
-                  >
-                    {title}
-                  </Link>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {categoryLabel ? (
-                      <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                        {categoryLabel}
-                      </span>
-                    ) : null}
-                    {statusLabel ? (
-                      <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-white/10 text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-                        {statusLabel}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
-                    <span className="flex items-center gap-1">
-                      {item.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
-                      {assigneeLabel}
-                    </span>
-                    <span>{safeJalaliFormat(item.created_at, 'YYYY/MM/DD HH:mm')}</span>
-                  </div>
-                  {createdByLabel ? (
-                    <div className="text-[11px] text-gray-400 mt-1">
-                      ایجاد کننده: {createdByLabel}
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            );
-          }}
-        />
+        <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="grid grid-cols-1 gap-3">
+            {data.map((item: any) => {
+              const moduleConfig = MODULES[item.module_id];
+              if (!moduleConfig) return null;
+              const { imageField, tagsField, statusField, categoryField } = getModuleCardFields(moduleConfig);
+              const moduleBadgeLabel = moduleConfig.titles?.fa || item.module_title || item.module_id;
+              return (
+                <RenderCardItem
+                  key={`${item.module_id}:${item.id}`}
+                  item={{
+                    ...item,
+                    name: recordTitleMap[`${item.module_id}:${item.id}`] || item.name,
+                  }}
+                  moduleId={item.module_id}
+                  moduleConfig={moduleConfig}
+                  imageField={imageField}
+                  tagsField={tagsField}
+                  statusField={statusField}
+                  categoryField={categoryField}
+                  allUsers={directoryUsers}
+                  allRoles={directoryRoles}
+                  selectedRowKeys={[]}
+                  setSelectedRowKeys={() => undefined}
+                  navigate={(path) => {
+                    const [, moduleId, recordId] = String(path || '').split('/');
+                    if (!moduleId || !recordId) return;
+                    openPreviewRecord(
+                      moduleId,
+                      recordId,
+                      recordTitleMap[`${moduleId}:${recordId}`] || formatRecordLabel({ ...item, id: recordId, module_id: moduleId }, moduleId)
+                    );
+                    handleClose();
+                  }}
+                  canViewField={() => true}
+                  hideSelection
+                  minimal
+                  moduleBadgeLabel={moduleBadgeLabel}
+                />
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {filteredResponsibilities.length > maxItems ? (

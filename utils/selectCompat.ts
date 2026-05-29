@@ -44,6 +44,13 @@ const RECORD_TITLE_COLUMN_OVERRIDES: Record<string, string[]> = {
   purchase_invoices: ['id', 'system_code'],
 };
 
+const CACHE_KEY_COLUMN_EXCLUSIONS: Array<{ pattern: RegExp; columns: string[] }> = [
+  {
+    pattern: /(?:^|:)purchase_invoices(?::|$)/,
+    columns: ['description'],
+  },
+];
+
 const normalizeColumns = (columns: readonly string[]) =>
   Array.from(
     new Set(
@@ -52,6 +59,17 @@ const normalizeColumns = (columns: readonly string[]) =>
         .filter(Boolean)
     )
   );
+
+const applyCacheKeyColumnExclusions = (cacheKey: string, columns: string[]) => {
+  const excluded = new Set<string>();
+  CACHE_KEY_COLUMN_EXCLUSIONS.forEach((rule) => {
+    if (!rule.pattern.test(cacheKey)) return;
+    rule.columns.forEach((column) => excluded.add(column.toLowerCase()));
+  });
+  if (excluded.size === 0) return columns;
+  const next = columns.filter((column) => !excluded.has(column.toLowerCase()));
+  return next.length > 0 ? next : ['id'];
+};
 
 const unique = (items: string[]) => Array.from(new Set(items.filter(Boolean)));
 
@@ -223,7 +241,7 @@ export const runSelectWithCompatibleColumns = async <T>({
   columns: readonly string[];
   execute: (selectExpr: string) => PromiseLike<{ data: T | null; error: any }>;
 }): Promise<CompatResult<T>> => {
-  const normalizedColumns = normalizeColumns(columns);
+  const normalizedColumns = applyCacheKeyColumnExclusions(cacheKey, normalizeColumns(columns));
   const cachedColumns = normalizeColumns(selectColumnCache.get(cacheKey) || []).filter((column) =>
     normalizedColumns.includes(column)
   );
