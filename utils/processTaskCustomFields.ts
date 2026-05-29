@@ -173,6 +173,64 @@ export const mergeProcessTaskCustomFieldValues = (
   };
 };
 
+const hasProcessTaskCustomFieldValue = (field: ModuleField, value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+
+  if (typeof value === 'boolean') {
+    return true;
+  }
+
+  if (field.type === FieldType.RELATION && typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
+
+  return true;
+};
+
+export const getMissingRequiredProcessTaskCustomFields = (task: any): ModuleField[] => {
+  const recurrence = task?.recurrence_info && typeof task.recurrence_info === 'object'
+    ? task.recurrence_info
+    : {};
+  const fields = getProcessTaskCustomFieldsFromRecurrence(recurrence);
+  if (fields.length === 0) return [];
+
+  const fallbackValues = fields.reduce<Record<string, any>>((acc, field) => {
+    const key = String(field?.key || '').trim();
+    if (!key) return acc;
+    if (Object.prototype.hasOwnProperty.call(task || {}, key)) {
+      acc[key] = task[key];
+    }
+    return acc;
+  }, {});
+
+  const values = mergeProcessTaskCustomFieldValues(
+    fields,
+    {
+      ...getProcessTaskCustomFieldValuesFromRecurrence(recurrence),
+      ...fallbackValues,
+    }
+  );
+
+  return fields.filter((field) => {
+    if (!field?.validation?.required) return false;
+    const key = String(field?.key || '').trim();
+    if (!key) return false;
+    return !hasProcessTaskCustomFieldValue(field, values[key]);
+  });
+};
+
 export const withProcessTaskCustomFieldValues = (task: any) => {
   const recurrence = task?.recurrence_info && typeof task.recurrence_info === 'object'
     ? task.recurrence_info

@@ -34,6 +34,7 @@ import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
+import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -1992,6 +1993,24 @@ const resolveWorkflowOrgId = async (currentRecord: Record<string, any>) => {
   return String(profile?.org_id || '').trim() || null;
 };
 
+const resolveWorkflowStoryPublisher = async (
+  orgId: string
+) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) {
+    throw new Error('org_id برای انتشار استوری مشخص نیست');
+  }
+
+  const { data: companyRows, error: companyError } = await supabase
+    .from('company_settings')
+    .select('logo_url')
+    .eq('org_id', normalizedOrgId)
+    .limit(1);
+  if (companyError) throw companyError;
+
+  return resolveSystemWorkflowStoryPublisher((companyRows || [])[0]?.logo_url || null);
+};
+
 const loadProcessTemplateStages = async (templateId: string) => {
   const { data, error } = await supabase
     .from('process_template_stages')
@@ -2521,6 +2540,65 @@ export const executeWorkflowAction = async (
     if (error) throw error;
 
     Object.assign(currentRecord, patch);
+    return;
+  }
+
+  if (action.type === 'publish_story') {
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (!orgId) {
+      throw new Error('org_id برای انتشار استوری مشخص نیست');
+    }
+
+    const content = (await renderWorkflowTemplate(
+      String(config.content || config.text_template || ''),
+      currentRecord,
+      moduleId
+    )).trim();
+    if (!content) return;
+
+    const publisher = await resolveWorkflowStoryPublisher(orgId);
+
+    const expiresHoursRaw = config.expires_hours;
+    const expiresHours = expiresHoursRaw === null || expiresHoursRaw === undefined || expiresHoursRaw === ''
+      ? null
+      : Number(expiresHoursRaw);
+    const expiresAt = Number.isFinite(expiresHours as number) && Number(expiresHours) > 0
+      ? new Date(Date.now() + Number(expiresHours) * 60 * 60 * 1000).toISOString()
+      : null;
+
+    const slide = {
+      id: crypto.randomUUID(),
+      type: 'gradient',
+      gradient_key: String(config.gradient_key || 'brand_indigo').trim() || 'brand_indigo',
+      text_layers: [{
+        id: crypto.randomUUID(),
+        content,
+        x: 50,
+        y: 50,
+        font_size: 18,
+        color: '#FFFFFF',
+        align: 'center',
+        bold: false,
+      }],
+      duration_ms: 5000,
+    };
+
+    const { error } = await supabase.rpc('create_workflow_org_story', {
+      p_org_id: orgId,
+      p_creator_id: publisher.creatorId,
+      p_creator_name: publisher.creatorName,
+      p_creator_avatar: publisher.creatorAvatar,
+      p_slides: [slide],
+      p_is_org_wide: config.is_org_wide !== false,
+      p_viewer_user_ids: asArray(config.viewer_user_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      p_viewer_role_ids: asArray(config.viewer_role_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      p_mention_user_ids: asArray(config.mention_user_ids).map((id) => String(id || '').trim()).filter(Boolean),
+      p_mention_role_ids: [],
+      p_expires_at: expiresAt,
+      p_is_saas_wide: false,
+      p_is_saas_admins_only: false,
+    });
+    if (error) throw error;
     return;
   }
 

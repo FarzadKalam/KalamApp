@@ -6192,9 +6192,10 @@ const ModuleShow: React.FC = () => {
         />
       )}
 
-      {moduleId === 'invoices' && id && (
+      {(moduleId === 'invoices' || moduleId === 'sales_return_invoices') && id && (
         <TaxpayerInvoiceModal
           open={isTaxpayerModalOpen}
+          moduleId={moduleId}
           invoiceId={id}
           invoiceRecord={data}
           onClose={() => setIsTaxpayerModalOpen(false)}
@@ -6682,6 +6683,5 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
-
 
 

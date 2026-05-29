@@ -29,7 +29,7 @@ export interface StorySlide {
 export interface OrgStory {
   id: string;
   org_id: string;
-  creator_id: string;
+  creator_id: string | null;
   creator_name: string | null;
   creator_avatar: string | null;
   slides: StorySlide[];

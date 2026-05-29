@@ -1,11 +1,12 @@
 import { supabase } from '../supabaseClient';
 import { runProcessAutomationsForTaskEvent } from './processAutomationRuntime';
-import { attachTaskCompletionIfNeeded, buildTaskStatusUpdatePayload } from './taskCompletion';
+import { attachTaskCompletionIfNeeded, buildTaskStatusUpdatePayload, isTaskDoneStatus } from './taskCompletion';
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { dispatchTaskRuntimeUpdated } from './taskRuntimeEvents';
 import { syncProjectStatusWithProcessState } from './projectProcessStatus';
 import { resolveTaskSourceLink } from './taskMeta';
 import { syncProcessRunStageFromTask } from './processRunRuntime';
+import { getMissingRequiredProcessTaskCustomFields } from './processTaskCustomFields';
 
 type TaskAutomationActor = {
   id?: string | null;
@@ -143,6 +144,20 @@ export const updateTaskStatusWithAutomation = async ({
 
   if (String(currentTask?.status || '').trim() === String(nextStatus || '').trim()) {
     return currentTask;
+  }
+
+  if (isTaskDoneStatus(nextStatus)) {
+    const missingRequiredFields = getMissingRequiredProcessTaskCustomFields(currentTask);
+    if (missingRequiredFields.length > 0) {
+      const firstMissingField = missingRequiredFields[0];
+      const fieldLabel = String(
+        firstMissingField?.labels?.fa
+        || firstMissingField?.labels?.en
+        || firstMissingField?.key
+        || 'نامشخص'
+      ).trim();
+      throw new Error(`برای تکمیل شدن این فعالیت، فیلد ${fieldLabel} اجباری است.`);
+    }
   }
 
   const payload: Record<string, any> = buildTaskStatusUpdatePayload(nextStatus, {

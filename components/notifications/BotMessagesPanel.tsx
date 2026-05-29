@@ -1,15 +1,16 @@
 import React from 'react';
-import { App, Avatar, Badge, Button, Empty, Input, Modal, Popover, Skeleton } from 'antd';
-import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined, UpOutlined } from '@ant-design/icons';
+import { App, Avatar, Badge, Button, Empty, Input, Modal, Popover } from 'antd';
+import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
-import { useVirtualizer } from '@tanstack/react-virtual';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import SharedNoteCard from '../notes/SharedNoteCard';
 import SharedNoteComposer from '../notes/SharedNoteComposer';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import ConversationTimeline from './ConversationTimeline';
+import UnreadCountBadge, { NOTIFICATION_UNREAD_BADGE_COLOR } from './UnreadCountBadge';
 
 type BotGroupRow = {
   id: string;
@@ -312,14 +313,6 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   const inactiveConversationClass = 'border border-transparent text-gray-700 hover:bg-white/80 dark:text-gray-200 dark:hover:bg-white/[0.055]';
   const activeRailClass = 'bg-[rgba(var(--brand-500-rgb),0.14)] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.22)] dark:bg-[rgba(var(--brand-300-rgb),0.15)] dark:shadow-[inset_0_0_0_1px_rgba(var(--brand-300-rgb),0.24)]';
   const inactiveRailClass = 'hover:bg-white/75 dark:hover:bg-white/5';
-  const messageVirtualizer = useVirtualizer({
-    count: filteredBotMessages.length,
-    getScrollElement: () => botMessagesScrollContainerRef.current,
-    estimateSize: () => 118,
-    overscan: 8,
-    getItemKey: (index) => String(filteredBotMessages[index]?.id || index),
-  });
-
   return (
     <div dir="ltr" className="flex min-w-0 flex-1 min-h-0 overflow-hidden bg-[rgba(var(--brand-50-rgb),0.16)] dark:bg-[#151113]">
       {withDesktopSidebar ? (
@@ -365,11 +358,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                       <div className="truncate text-sm font-medium">{rowTitle}</div>
                       <div className="truncate text-[11px] text-gray-400">{rowChannel} | {rowStatus}</div>
                     </div>
-                    {unreadCount > 0 ? (
-                      <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                        {toPersianNumber(String(unreadCount))}
-                      </span>
-                    ) : null}
+                    <UnreadCountBadge count={unreadCount} className="h-5" />
                   </div>
                 </button>
               );
@@ -423,40 +412,18 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
           ) : null}
         </div>
 
-        <div
-          ref={botMessagesScrollContainerRef as React.Ref<HTMLDivElement>}
+        <ConversationTimeline
+          containerRef={botMessagesScrollContainerRef}
           onScroll={handleBotMessagesScroll}
-          className={`flex-1 overflow-y-auto ${withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'} space-y-2.5 bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideBotTimelineUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
+          layoutPaddingClass={withDesktopSidebar ? 'px-3 py-3' : 'px-2 py-2'}
+          hideUntilSettled={hideBotTimelineUntilSettled}
+          loading={loadingBotMessages}
+          emptyDescription={!selectedGroup ? 'یک گروه بات را انتخاب کنید.' : 'پیامی برای این گروه ثبت نشده است.'}
+          hasMoreBefore={botTimelineHasMoreBefore}
+          loadingOlder={loadingOlderBotMessages}
+          onLoadOlder={loadOlderBotMessages}
         >
-          {loadingBotMessages ? (
-            <div className="space-y-3">
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-            </div>
-          ) : !selectedGroup ? (
-            <Empty description="یک گروه بات را انتخاب کنید." />
-          ) : filteredBotMessages.length === 0 ? (
-            <Empty description="پیامی برای این گروه ثبت نشده است." />
-          ) : (
-            <>
-              {botTimelineHasMoreBefore ? (
-                <div className="flex justify-center pb-2">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<UpOutlined />}
-                    loading={loadingOlderBotMessages}
-                    onClick={() => void loadOlderBotMessages()}
-                    className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300"
-                  >
-                    مشاهده پیام‌های قبلی
-                  </Button>
-                </div>
-              ) : null}
-              <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
-              {messageVirtualizer.getVirtualItems().map((virtualRow) => {
-                const row = filteredBotMessages[virtualRow.index];
+          {selectedGroup ? filteredBotMessages.map((row) => {
                 if (!row) return null;
                 const outgoing = String(row.direction || '') === 'outbound';
                 const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
@@ -492,17 +459,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                 const isUnreadBotMessage = isUnreadBotRow(row);
                 return (
                   <div
-                    key={row.id}
-                    data-index={virtualRow.index}
-                    ref={messageVirtualizer.measureElement}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      transform: `translateY(${virtualRow.start}px)`,
-                      paddingBottom: 10,
-                    }}
+                    key={String(row.id)}
                   >
                     <SharedNoteCard
                       authorName={author.name}
@@ -659,11 +616,8 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                     />
                   </div>
                 );
-              })}
-              </div>
-            </>
-          )}
-        </div>
+              }) : null}
+        </ConversationTimeline>
         {selectedGroup && botNewIncomingCount > 0 ? (
           <div className="pb-1 text-center">
             <button
@@ -793,7 +747,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
                   className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${active ? activeRailClass : inactiveRailClass}`}
                   title={rowTitle}
                 >
-                  <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]}>
+                  <Badge count={unreadCount > 0 ? toPersianNumber(String(unreadCount)) : 0} size="small" offset={[-2, 2]} color={NOTIFICATION_UNREAD_BADGE_COLOR}>
                     <BotGroupAvatar
                       row={row}
                       size={38}

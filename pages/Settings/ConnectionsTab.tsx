@@ -16,7 +16,7 @@ import { CopyOutlined, ReloadOutlined, SafetyCertificateOutlined, SaveOutlined, 
 import { supabase } from '../../supabaseClient';
 import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
-import type { BotChannel } from '../../utils/botGateway';
+import { OFFICIAL_BOT_API_BASE_URL, type BotChannel } from '../../utils/botGateway';
 import { formatIranMobileForInput } from '../../utils/phoneNumber';
 import PhoneActionsPopover from '../../components/PhoneActionsPopover';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
@@ -65,7 +65,9 @@ type BotInboundContact = {
   capture_diagnostic?: Record<string, any> | null;
 };
 
-const RUBIKA_OFFICIAL_API_BASE_URL = 'https://botapi.rubika.ir';
+const TELEGRAM_OFFICIAL_API_BASE_URL = OFFICIAL_BOT_API_BASE_URL.telegram;
+const BALE_OFFICIAL_API_BASE_URL = OFFICIAL_BOT_API_BASE_URL.bale;
+const RUBIKA_OFFICIAL_API_BASE_URL = OFFICIAL_BOT_API_BASE_URL.rubika;
 
 type FormValues = {
   sms: {
@@ -239,7 +241,7 @@ const DEFAULT_VALUES: FormValues = {
   telegram_bot: {
     provider: 'telegram_bot_api',
     bot_token: '',
-    api_base_url: 'https://api.telegram.org',
+    api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
     webhook_secret: '',
     bot_username: '',
     is_active: false,
@@ -247,7 +249,7 @@ const DEFAULT_VALUES: FormValues = {
   bale_bot: {
     provider: 'bale_bot_api',
     bot_token: '',
-    api_base_url: 'https://tapi.bale.ai',
+    api_base_url: BALE_OFFICIAL_API_BASE_URL,
     webhook_secret: '',
     bot_username: '',
     is_active: false,
@@ -646,12 +648,14 @@ const ConnectionsTab: React.FC = () => {
           ...DEFAULT_VALUES.telegram_bot,
           provider: String(byType.telegram_bot?.provider || DEFAULT_VALUES.telegram_bot.provider),
           ...(byType.telegram_bot?.settings || {}),
+          api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
           is_active: byType.telegram_bot?.is_active ?? DEFAULT_VALUES.telegram_bot.is_active,
         },
         bale_bot: {
           ...DEFAULT_VALUES.bale_bot,
           provider: String(byType.bale_bot?.provider || DEFAULT_VALUES.bale_bot.provider),
           ...(byType.bale_bot?.settings || {}),
+          api_base_url: BALE_OFFICIAL_API_BASE_URL,
           is_active: byType.bale_bot?.is_active ?? DEFAULT_VALUES.bale_bot.is_active,
         },
         rubika_bot: {
@@ -766,13 +770,21 @@ const ConnectionsTab: React.FC = () => {
         ...(values.rubika_bot || {}),
         api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
       };
-      const ensuredTelegramSecret = String(values.telegram_bot?.webhook_secret || '').trim() || createWebhookSecret('telegram');
-      const ensuredBaleSecret = String(values.bale_bot?.webhook_secret || '').trim() || createWebhookSecret('bale');
+      const normalizedTelegramValues = {
+        ...(values.telegram_bot || {}),
+        api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
+      };
+      const normalizedBaleValues = {
+        ...(values.bale_bot || {}),
+        api_base_url: BALE_OFFICIAL_API_BASE_URL,
+      };
+      const ensuredTelegramSecret = String(normalizedTelegramValues?.webhook_secret || '').trim() || createWebhookSecret('telegram');
+      const ensuredBaleSecret = String(normalizedBaleValues?.webhook_secret || '').trim() || createWebhookSecret('bale');
       const ensuredRubikaSecret = String(normalizedRubikaValues?.webhook_secret || '').trim() || createWebhookSecret('rubika');
 
       form.setFieldsValue({
-        telegram_bot: { ...(values.telegram_bot || {}), webhook_secret: ensuredTelegramSecret },
-        bale_bot: { ...(values.bale_bot || {}), webhook_secret: ensuredBaleSecret },
+        telegram_bot: { ...normalizedTelegramValues, webhook_secret: ensuredTelegramSecret },
+        bale_bot: { ...normalizedBaleValues, webhook_secret: ensuredBaleSecret },
         rubika_bot: { ...normalizedRubikaValues, webhook_secret: ensuredRubikaSecret, api_base_url: RUBIKA_OFFICIAL_API_BASE_URL },
       });
       setSaving(true);
@@ -829,26 +841,26 @@ const ConnectionsTab: React.FC = () => {
         {
           id: rowIds.telegram_bot,
           connection_type: 'telegram_bot',
-          provider: values.telegram_bot?.provider || 'telegram_bot_api',
+          provider: normalizedTelegramValues?.provider || 'telegram_bot_api',
           settings: {
-            bot_token: values.telegram_bot?.bot_token || '',
-            api_base_url: values.telegram_bot?.api_base_url || '',
+            bot_token: normalizedTelegramValues?.bot_token || '',
+            api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
             webhook_secret: ensuredTelegramSecret,
-            bot_username: values.telegram_bot?.bot_username || '',
+            bot_username: normalizedTelegramValues?.bot_username || '',
           },
-          is_active: values.telegram_bot?.is_active === true,
+          is_active: normalizedTelegramValues?.is_active === true,
         },
         {
           id: rowIds.bale_bot,
           connection_type: 'bale_bot',
-          provider: values.bale_bot?.provider || 'bale_bot_api',
+          provider: normalizedBaleValues?.provider || 'bale_bot_api',
           settings: {
-            bot_token: values.bale_bot?.bot_token || '',
-            api_base_url: values.bale_bot?.api_base_url || '',
+            bot_token: normalizedBaleValues?.bot_token || '',
+            api_base_url: BALE_OFFICIAL_API_BASE_URL,
             webhook_secret: ensuredBaleSecret,
-            bot_username: values.bale_bot?.bot_username || '',
+            bot_username: normalizedBaleValues?.bot_username || '',
           },
-          is_active: values.bale_bot?.is_active === true,
+          is_active: normalizedBaleValues?.is_active === true,
         },
         {
           id: rowIds.rubika_bot,
@@ -1323,9 +1335,7 @@ const ConnectionsTab: React.FC = () => {
     try {
       const botValues = form.getFieldValue(formKey) || {};
       const botToken = String(botValues?.bot_token || '').trim();
-      const apiBaseUrl = channel === 'rubika'
-        ? RUBIKA_OFFICIAL_API_BASE_URL
-        : String(botValues?.api_base_url || '').trim();
+      const apiBaseUrl = OFFICIAL_BOT_API_BASE_URL[channel];
       const chatId = String(botTestChatIds[channel] || '').trim();
       const text = String(botTestTexts[channel] || '').trim();
 
@@ -2139,7 +2149,7 @@ const ConnectionsTab: React.FC = () => {
                     </Form.Item>
 
                     <Form.Item label="API Base URL" name={['telegram_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input />
+                      <Input readOnly disabled placeholder={TELEGRAM_OFFICIAL_API_BASE_URL} />
                     </Form.Item>
                   </div>
                   <div className="text-xs text-gray-500">
@@ -2201,7 +2211,7 @@ const ConnectionsTab: React.FC = () => {
                     </Form.Item>
 
                     <Form.Item label="API Base URL" name={['bale_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input />
+                      <Input readOnly disabled placeholder={BALE_OFFICIAL_API_BASE_URL} />
                     </Form.Item>
                   </div>
                   <div className="text-xs text-gray-500">

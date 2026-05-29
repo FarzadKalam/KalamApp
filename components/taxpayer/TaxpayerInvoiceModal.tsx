@@ -4,7 +4,6 @@ import { ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import {
-  TAXPAYER_INVOICE_PATTERN_OPTIONS,
   TAXPAYER_INVOICE_SUBJECT_OPTIONS,
   TAXPAYER_INVOICE_TYPE_OPTIONS,
   TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
@@ -12,6 +11,7 @@ import {
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { FieldNature, FieldType, ModuleField } from '../../types';
+import { getTaxpayerInvoicePatternForModule } from '../../utils/invoiceModuleRouting';
 
 type TaxpayerSubmission = {
   id: string;
@@ -31,6 +31,7 @@ type TaxpayerSubmission = {
 
 type Props = {
   open: boolean;
+  moduleId: 'invoices' | 'sales_return_invoices';
   invoiceId: string;
   invoiceRecord: any;
   onClose: () => void;
@@ -102,13 +103,6 @@ const TAXPAYER_FIELDS: ModuleField[] = [
     options: TAXPAYER_INVOICE_TYPE_OPTIONS,
   },
   {
-    key: 'taxpayer_invoice_pattern',
-    labels: { fa: 'الگوی صورتحساب', en: 'Taxpayer Invoice Pattern' },
-    type: FieldType.SELECT,
-    nature: FieldNature.STANDARD,
-    options: TAXPAYER_INVOICE_PATTERN_OPTIONS,
-  },
-  {
     key: 'taxpayer_invoice_subject',
     labels: { fa: 'موضوع صورتحساب', en: 'Taxpayer Invoice Subject' },
     type: FieldType.SELECT,
@@ -124,9 +118,9 @@ const TAXPAYER_FIELDS: ModuleField[] = [
   },
 ];
 
-const getInitialTaxpayerValues = (invoiceRecord: any) => ({
+const getInitialTaxpayerValues = (moduleId: Props['moduleId'], invoiceRecord: any) => ({
   taxpayer_invoice_type: String(invoiceRecord?.taxpayer_invoice_type || '1'),
-  taxpayer_invoice_pattern: String(invoiceRecord?.taxpayer_invoice_pattern || '1'),
+  taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, invoiceRecord?.taxpayer_invoice_pattern),
   taxpayer_invoice_subject: String(invoiceRecord?.taxpayer_invoice_subject || '1'),
   taxpayer_settlement_method: String(invoiceRecord?.taxpayer_settlement_method || ''),
 });
@@ -153,13 +147,13 @@ const resolveInvokeErrorMessage = async (error: any, fallback: string) => {
   return raw || toFaErrorMessage(error, fallback);
 };
 
-const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord, onClose, onRefresh }) => {
+const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invoiceRecord, onClose, onRefresh }) => {
   const { message } = App.useApp();
   const [history, setHistory] = useState<TaxpayerSubmission[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [inquiringId, setInquiringId] = useState<string | null>(null);
-  const [formValues, setFormValues] = useState<Record<string, string>>(() => getInitialTaxpayerValues(invoiceRecord));
+  const [formValues, setFormValues] = useState<Record<string, string>>(() => getInitialTaxpayerValues(moduleId, invoiceRecord));
   const [lastError, setLastError] = useState<string>('');
   const invoiceStatus = String(invoiceRecord?.status || '').trim();
   const canSendInvoice = ['confirmed', 'final', 'settled', 'completed'].includes(invoiceStatus);
@@ -184,20 +178,20 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
         forceEditMode
         compactMode
         options={field.options}
-        moduleId="invoices"
+        moduleId={moduleId}
         allValues={formValues}
         overlayZIndexBase={overlayZIndexBase}
         popupContainer={popupContainer}
         preferLocalPopupContainer
       />
     </div>
-  ), [formValues, popupContainer]);
+  ), [formValues, moduleId, popupContainer]);
 
   useEffect(() => {
     if (!open) return;
-    setFormValues(getInitialTaxpayerValues(invoiceRecord));
+    setFormValues(getInitialTaxpayerValues(moduleId, invoiceRecord));
     setLastError('');
-  }, [invoiceId, open]);
+  }, [invoiceId, invoiceRecord, moduleId, open]);
 
   const fetchHistory = useCallback(async () => {
     if (!invoiceId || !open) return;
@@ -236,7 +230,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
     try {
       setLastError('');
       const nextInvoiceType = String(formValues.taxpayer_invoice_type || '1');
-      const nextInvoicePattern = String(formValues.taxpayer_invoice_pattern || '1');
+      const nextInvoicePattern = getTaxpayerInvoicePatternForModule(moduleId, formValues.taxpayer_invoice_pattern);
       const nextInvoiceSubject = String(formValues.taxpayer_invoice_subject || '1');
       const nextSettlementMethod = String(settlementMethod || '').trim();
       const updatePayload: Record<string, string> = {};
@@ -353,7 +347,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, invoiceId, invoiceRecord,
           type="info"
           showIcon
           message="ارسال مستقیم توسط خود مودی"
-          description="فاز اول فقط فاکتور فروش عادی را ارسال می‌کند. نوع صورتحساب پیش‌فرض نوع اول است و روش تسویه باید برای همین فاکتور مشخص شود."
+          description="نوع صورتحساب مودیان بر اساس همین فاکتور به‌صورت خودکار تعیین می‌شود و فقط کافی است روش تسویه را مشخص کنید."
         />
         {!canSendInvoice ? (
           <Alert

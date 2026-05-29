@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag } from 'antd';
+import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag, message } from 'antd';
 import {
   AppstoreOutlined,
   BankOutlined,
@@ -1092,8 +1092,29 @@ const Dashboard: React.FC = () => {
   }, []);
 
   const handleDeleteStory = useCallback(async (storyId: string) => {
-    await supabase.from('org_stories').delete().eq('id', storyId);
+    const storyIdNormalized = String(storyId || '').trim();
+    if (!storyIdNormalized) return false;
+
+    const { data, error } = await supabase
+      .from('org_stories')
+      .delete()
+      .eq('id', storyIdNormalized)
+      .select('id');
+
+    if (error) {
+      message.error(String(error.message || 'حذف استوری انجام نشد.'));
+      return false;
+    }
+
+    if (!Array.isArray(data) || data.length === 0) {
+      message.error('استوری حذف نشد. احتمالاً هنوز مجوز حذف روی دیتابیس اعمال نشده یا این استوری متعلق به شما نیست.');
+      setStoryRefreshKey((k) => k + 1);
+      return false;
+    }
+
+    setStoryViewerList((prev) => prev.filter((story) => story.id !== storyIdNormalized));
     setStoryRefreshKey((k) => k + 1);
+    return true;
   }, []);
 
   const handleTogglePin = useCallback(async (storyId: string, isPinned: boolean) => {

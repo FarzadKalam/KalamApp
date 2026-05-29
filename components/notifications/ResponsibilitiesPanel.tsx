@@ -3,6 +3,7 @@ import { Button, Empty, Skeleton } from 'antd';
 import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { FieldType } from '../../types';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import RenderCardItem from '../moduleList/RenderCardItem';
 
 type CreatedSortDirection = 'desc' | 'asc';
@@ -22,8 +23,9 @@ const getModuleCardFields = (moduleConfig: any) => {
 type ResponsibilitiesPanelProps = {
   mode: 'list' | 'grid';
   filteredResponsibilities: any[];
-  showMore: boolean;
-  setShowMore: (value: boolean) => void;
+  visibleCount: number;
+  onShowMore: () => void;
+  onShowLess: () => void;
   loadingResponsibilities: boolean;
   responsibilityViewKey: string;
   setResponsibilityViewKey: (key: string) => void;
@@ -45,8 +47,9 @@ type ResponsibilitiesPanelProps = {
 const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   mode,
   filteredResponsibilities,
-  showMore,
-  setShowMore,
+  visibleCount,
+  onShowMore,
+  onShowLess,
   loadingResponsibilities,
   responsibilityViewKey,
   setResponsibilityViewKey,
@@ -61,7 +64,9 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   handleClose,
   maxItems,
 }) => {
-  const data = showMore ? filteredResponsibilities : filteredResponsibilities.slice(0, maxItems);
+  const data = filteredResponsibilities.slice(0, visibleCount);
+  const remainingCount = Math.max(0, filteredResponsibilities.length - data.length);
+  const canShowLess = visibleCount > maxItems;
 
   const renderCreatedAtSortControls = () => (
     <div className="flex items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50 px-1 py-0.5 dark:border-gray-700 dark:bg-white/5">
@@ -93,7 +98,6 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
                 key={view.key}
                 onClick={() => {
                   setResponsibilityViewKey(view.key);
-                  setShowMore(false);
                 }}
                 className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                   responsibilityViewKey === view.key
@@ -203,9 +207,18 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
       )}
 
       {filteredResponsibilities.length > maxItems ? (
-        <Button type="link" onClick={() => setShowMore(!showMore)}>
-          {showMore ? 'نمایش کمتر' : 'نمایش بیشتر'}
-        </Button>
+        <div className="flex items-center justify-between gap-2">
+          {canShowLess ? (
+            <Button type="link" onClick={onShowLess}>
+              نمایش کمتر
+            </Button>
+          ) : <span />}
+          {remainingCount > 0 ? (
+            <Button type="link" onClick={onShowMore}>
+              مشاهده موارد بیشتر ({toPersianNumber(String(remainingCount))})
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

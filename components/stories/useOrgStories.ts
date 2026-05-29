@@ -67,6 +67,11 @@ export const useOrgStories = ({
       )
       .on(
         'postgres_changes',
+        { event: '*', schema: 'public', table: 'org_stories', filter: 'is_saas_wide=eq.true' },
+        () => { fetchData(); }
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'org_story_reactions', filter: `org_id=eq.${orgId}` },
         () => { fetchData(); }
       )

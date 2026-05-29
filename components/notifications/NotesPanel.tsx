@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef } from 'react';
-import { Badge, Button, Empty, Input, Modal, Popover, Skeleton } from 'antd';
-import { DeleteOutlined, EditOutlined, LeftOutlined, LinkOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined, TeamOutlined, UpOutlined } from '@ant-design/icons';
+import { Badge, Button, Input, Modal, Popover } from 'antd';
+import { DeleteOutlined, EditOutlined, LeftOutlined, LinkOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined, TeamOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { supabase } from '../../supabaseClient';
@@ -10,6 +10,8 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AdaptiveScopePicker from '../messaging/AdaptiveScopePicker';
 import SharedNoteCard from '../notes/SharedNoteCard';
 import SharedNoteComposer from '../notes/SharedNoteComposer';
+import ConversationTimeline from './ConversationTimeline';
+import UnreadCountBadge, { NOTIFICATION_UNREAD_BADGE_COLOR } from './UnreadCountBadge';
 
 type NotesPanelProps = {
   layout: 'desktop' | 'mobile';
@@ -169,26 +171,19 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     overscan: 6,
   });
 
-  const messageVirtualizer = useVirtualizer({
-    count: data.length,
-    getScrollElement: () => notesScrollContainerRef.current,
-    estimateSize: () => 118,
-    overscan: 8,
-    getItemKey: (index) => String(data[index]?.id || index),
-  });
-
   // ─── Initial anchor scroll ──────────────────────────────────────────────────
   useLayoutEffect(() => {
     if (noteViewportReady) return;
     if (!isSelectedConversationLoaded || data.length === 0) return;
-
-    messageVirtualizer.scrollToIndex(data.length - 1, { align: 'end' });
+    const container = notesScrollContainerRef.current;
+    if (!container) return;
+    container.scrollTo({ top: container.scrollHeight, behavior: 'auto' });
     noteShouldStickToBottomRef.current = true;
     noteForceScrollToBottomRef.current = false;
     if (noteInitialAnchorDoneRef) noteInitialAnchorDoneRef.current = true;
     setNoteViewportReady(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSelectedConversationLoaded, noteViewportReady, data.length, messageVirtualizer]);
+  }, [isSelectedConversationLoaded, noteViewportReady, data.length]);
 
   // Stick-to-bottom when new messages arrive
   useLayoutEffect(() => {
@@ -234,11 +229,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                 {effectiveSystemNoteStats.noteCount > 0 ? `${toPersianNumber(String(effectiveSystemNoteStats.noteCount))} پیام` : 'بدون پیام'}
               </div>
             </div>
-            {effectiveSystemNoteStats.unreadCount > 0 ? (
-              <span className="inline-flex min-w-5 h-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">
-                {toPersianNumber(String(effectiveSystemNoteStats.unreadCount))}
-              </span>
-            ) : null}
+            <UnreadCountBadge count={effectiveSystemNoteStats.unreadCount} className="h-5" />
           </div>
         </button>
       );
@@ -263,11 +254,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
               {item.noteCount > 0 ? `${toPersianNumber(String(item.noteCount))} پیام` : 'بدون پیام'}
             </div>
           </div>
-          {item.unreadCount > 0 ? (
-            <span className={`inline-flex min-w-5 h-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white ${item.isGroup ? 'bg-amber-500' : 'bg-red-500'}`}>
-              {toPersianNumber(String(item.unreadCount))}
-            </span>
-          ) : null}
+          <UnreadCountBadge count={item.unreadCount} className="h-5" />
         </div>
       </button>
     );
@@ -295,7 +282,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
           title="پیام‌های سیستم"
         >
           <div className="relative">
-            <Badge count={effectiveSystemNoteStats.unreadCount > 0 ? toPersianNumber(String(effectiveSystemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]}>
+            <Badge count={effectiveSystemNoteStats.unreadCount > 0 ? toPersianNumber(String(effectiveSystemNoteStats.unreadCount)) : 0} size="small" offset={[-2, 2]} color={NOTIFICATION_UNREAD_BADGE_COLOR}>
               <UnifiedConversationAvatar size={38} src={systemConversationAvatar.src} className={`${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''} ${systemConversationAvatar.className || ''}`.trim()} fallback={systemConversationAvatar.fallback} />
             </Badge>
           </div>
@@ -314,7 +301,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
         title={item.displayName}
       >
         <div className="relative">
-          <Badge count={item.unreadCount > 0 ? toPersianNumber(String(item.unreadCount)) : 0} size="small" offset={[-2, 2]}>
+          <Badge count={item.unreadCount > 0 ? toPersianNumber(String(item.unreadCount)) : 0} size="small" offset={[-2, 2]} color={NOTIFICATION_UNREAD_BADGE_COLOR}>
             <UnifiedConversationAvatar size={38} src={avatar.src} className={`${selectedNoteUserId === item.id ? 'ring-2 ring-[rgba(var(--brand-500-rgb),0.42)] ring-offset-2 ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.55)] dark:ring-offset-[#151113]' : ''} ${avatar.className || ''}`.trim()} fallback={avatar.fallback} />
           </Badge>
           <span className="absolute -left-1 bottom-0 inline-flex h-4 w-4 items-center justify-center rounded-full bg-white text-[9px] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:bg-[rgba(var(--app-dark-surface-rgb),0.96)] dark:text-[rgb(var(--brand-300-rgb))]">
@@ -400,34 +387,18 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
         </div>
 
         {/* ── Virtualized message thread ───────────────────────────────── */}
-        <div
-          ref={notesScrollContainerRef}
+        <ConversationTimeline
+          containerRef={notesScrollContainerRef}
           onScroll={handleNotesScroll}
-          className={`flex-1 overflow-y-auto ${withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'} bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideConversationUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
+          layoutPaddingClass={withUserSidebar ? 'px-3 py-3' : 'px-2 py-2'}
+          hideUntilSettled={hideConversationUntilSettled}
+          loading={showConversationSkeleton}
+          emptyDescription={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'}
+          hasMoreBefore={selectedNoteUserId ? selectedConversationHasMoreBefore : myNotesHasMoreBefore}
+          loadingOlder={loadingOlderSelectedConversationNotes}
+          onLoadOlder={() => (selectedNoteUserId ? loadOlderSelectedConversationNotes() : loadOlderMyNotes())}
         >
-          {showConversationSkeleton ? (
-            <div className="space-y-3">
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-              <Skeleton active paragraph={{ rows: 2 }} />
-            </div>
-          ) : data.length === 0 ? (
-            <Empty description={normalizedNoteMessageSearch ? 'پیامی با این جستجو پیدا نشد' : 'پیامی یافت نشد'} />
-          ) : (
-            <>
-              {/* Load older button */}
-              {(selectedNoteUserId ? selectedConversationHasMoreBefore : myNotesHasMoreBefore) ? (
-                <div className="flex justify-center pb-2">
-                  <Button type="text" size="small" icon={<UpOutlined />} loading={loadingOlderSelectedConversationNotes} onClick={() => selectedNoteUserId ? void loadOlderSelectedConversationNotes() : loadOlderMyNotes()} className="text-xs text-gray-400 hover:!text-gray-600 dark:text-gray-500 dark:hover:!text-gray-300">
-                    مشاهده پیام‌های قبلی
-                  </Button>
-                </div>
-              ) : null}
-
-              {/* Message list: keep only viewport and overscan items in DOM. */}
-              <div style={{ height: `${messageVirtualizer.getTotalSize()}px`, position: 'relative', width: '100%' }}>
-                {messageVirtualizer.getVirtualItems().map((virtualRow) => {
-                  const note: any = data[virtualRow.index];
+          {data.map((note: any) => {
                   if (!note) return null;
                   const recordKey = `${note.module_id}:${note.record_id}`;
                   const recordTitle = recordTitleMap[recordKey] || formatRecordLabel({ id: note.record_id, module_id: note.module_id }, note.module_id);
@@ -452,18 +423,8 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
 
                   return (
                     <div
-                      key={note.id}
+                      key={String(note.id)}
                       data-note-id={note.id}
-                      data-index={virtualRow.index}
-                      ref={messageVirtualizer.measureElement}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        width: '100%',
-                        transform: `translateY(${virtualRow.start}px)`,
-                        paddingBottom: 10,
-                      }}
                     >
                       <SharedNoteCard
                         authorName={authorName}
@@ -551,10 +512,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
                     </div>
                   );
                 })}
-              </div>
-            </>
-          )}
-        </div>
+        </ConversationTimeline>
 
         {/* New messages indicator */}
         {selectedNoteUserId && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID && noteNewIncomingCount > 0 ? (

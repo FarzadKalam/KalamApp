@@ -8,6 +8,7 @@ import {
   fetchAssignedIdsForModule,
   safeFetchResponsibilityRows,
 } from '../utils/notificationAssigneeHelpers';
+import { resolveInvoiceModuleIdForRecord } from '../utils/invoiceModuleRouting';
 
 // ---------------------------------------------------------------------------
 // Module-level cache — persists across popover open/close cycles.
@@ -64,31 +65,30 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
   // ── Primary path: notification_inbox_items (single query) ──────────────
   const inboxItems = await fetchInboxSection(200);
   if (inboxItems !== null) {
-    const moduleByTable = new Map<string, any>();
+    const moduleBySource = new Map<string, any>();
     Object.values(MODULES).forEach((mod: any) => {
       const moduleId = String(mod?.id || '').trim();
       const tableName = String(mod?.table || mod?.id || '').trim();
-      if (moduleId) moduleByTable.set(moduleId, mod);
-      if (tableName) moduleByTable.set(tableName, mod);
+      if (moduleId && !moduleBySource.has(moduleId)) moduleBySource.set(moduleId, mod);
+      if (tableName && !moduleBySource.has(tableName)) moduleBySource.set(tableName, mod);
     });
 
-    const grouped = new Map<string, { mod: any; table: string; ids: string[]; items: InboxItem[] }>();
+    const grouped = new Map<string, { moduleId: string; table: string; ids: string[]; items: InboxItem[] }>();
     inboxItems.forEach((item) => {
       const payload = isPlainObject(item.payload) ? item.payload : {};
-      const sourceTable = String(
-        item.module_id || (payload as any)?.table || item.source_type || '',
+      const sourceKey = String(
+        item.module_id || (payload as any)?.module_id || (payload as any)?.table || item.source_type || '',
       ).trim();
       const recordId = String(item.record_id || item.source_id || '').trim();
-      if (!sourceTable || !recordId) return;
+      if (!sourceKey || !recordId) return;
 
-      const mod = moduleByTable.get(sourceTable) || { id: sourceTable, table: sourceTable, titles: { fa: sourceTable } };
-      const moduleId = String(mod?.id || sourceTable).trim();
-      const table = String(mod?.table || sourceTable).trim();
-      const key = `${moduleId}:${table}`;
-      const current = grouped.get(key) || { mod, table, ids: [], items: [] };
+      const mod = moduleBySource.get(sourceKey) || { id: sourceKey, table: sourceKey, titles: { fa: sourceKey } };
+      const moduleId = String(mod?.id || sourceKey).trim();
+      const table = String(mod?.table || sourceKey).trim();
+      const current = grouped.get(table) || { moduleId, table, ids: [], items: [] };
       current.ids.push(recordId);
       current.items.push(item);
-      grouped.set(key, current);
+      grouped.set(table, current);
     });
 
     const groupEntries = Array.from(grouped.values());
@@ -99,11 +99,7 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
         const idList = Array.from(new Set(group.ids.filter(Boolean)));
         if (idList.length === 0) return [];
         try {
-          return await safeFetchResponsibilityRows(
-            group.table,
-            String(group.mod?.id || group.table),
-            idList,
-          );
+          return await safeFetchResponsibilityRows(group.table, group.moduleId, idList);
         } catch {
           return [];
         }
@@ -113,18 +109,29 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
     const results: any[] = [];
     groupEntries.forEach((group, i) => {
       const rows: any[] = rowsPerGroup[i] || [];
-      const itemByRecordId = new Map(
-        group.items.map((item) => [String(item.record_id || item.source_id || '').trim(), item]),
-      );
+      const itemByRecordId = new Map<string, InboxItem[]>();
+      group.items.forEach((item) => {
+        const recordId = String(item.record_id || item.source_id || '').trim();
+        if (!recordId) return;
+        itemByRecordId.set(recordId, [...(itemByRecordId.get(recordId) || []), item]);
+      });
       const loadedIds = new Set(rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean));
 
       rows.forEach((row: any) => {
-        const item = itemByRecordId.get(String(row?.id || '').trim());
+        const recordId = String(row?.id || '').trim();
+        const matchedItems = itemByRecordId.get(recordId) || [];
+        const matchedItem = matchedItems[0] || null;
+        const payload = isPlainObject(matchedItem?.payload) ? matchedItem.payload : {};
+        const sourceKey = String(
+          matchedItem?.module_id || (payload as any)?.module_id || (payload as any)?.table || matchedItem?.source_type || group.table,
+        ).trim();
+        const resolvedModuleId = resolveInvoiceModuleIdForRecord(sourceKey, row);
+        const resolvedModule = MODULES[resolvedModuleId] || moduleBySource.get(sourceKey) || { id: resolvedModuleId, titles: { fa: resolvedModuleId } };
         results.push({
           ...row,
-          module_id: group.mod.id,
-          module_title: group.mod.titles?.fa || group.mod.id,
-          __notification_inbox_item: item || null,
+          module_id: resolvedModuleId,
+          module_title: resolvedModule.titles?.fa || resolvedModule.id,
+          __notification_inbox_item: matchedItem,
         });
       });
 
@@ -132,6 +139,10 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
       group.items.forEach((item) => {
         const recordId = String(item.record_id || item.source_id || '').trim();
         if (!recordId || loadedIds.has(recordId)) return;
+        const payload = isPlainObject(item.payload) ? item.payload : {};
+        const sourceKey = String(item.module_id || (payload as any)?.module_id || (payload as any)?.table || item.source_type || group.table).trim();
+        const resolvedModuleId = resolveInvoiceModuleIdForRecord(sourceKey, payload);
+        const resolvedModule = MODULES[resolvedModuleId] || moduleBySource.get(sourceKey) || { id: resolvedModuleId, titles: { fa: resolvedModuleId } };
         results.push({
           id: recordId,
           name: item.title,
@@ -139,8 +150,8 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
           description: item.body,
           created_at: item.last_event_at || item.created_at,
           updated_at: item.last_event_at || item.created_at,
-          module_id: group.mod.id,
-          module_title: group.mod.titles?.fa || group.mod.id,
+          module_id: resolvedModuleId,
+          module_title: resolvedModule.titles?.fa || resolvedModule.id,
           __notification_inbox_item: item,
         });
       });
@@ -157,21 +168,30 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
   const modules = Object.values(MODULES).filter(
     (mod: any) => mod?.id !== 'tasks' && (mod?.table || mod?.id) && supportsModuleAssignee(mod),
   );
+  const primaryModuleByTable = new Map<string, string>();
+  modules.forEach((mod: any) => {
+    const table = String(mod?.table || mod?.id || '').trim();
+    const moduleId = String(mod?.id || table).trim();
+    if (!table || !moduleId || primaryModuleByTable.has(table)) return;
+    primaryModuleByTable.set(table, moduleId);
+  });
 
   // All modules queried simultaneously — O(1) latency regardless of module count
   const moduleResults = await Promise.all(
-    modules.map(async (mod: any) => {
-      const table = String(mod?.table || mod?.id || '').trim();
+    Array.from(primaryModuleByTable.entries()).map(async ([table, primaryModuleId]) => {
       try {
         const ids = await fetchAssignedIdsForModule(table, userId, roleId);
         const idList = (ids || []).map((row: any) => row.id).filter(Boolean);
         if (!idList.length) return [];
-        const data = await safeFetchResponsibilityRows(table, String(mod?.id || table), idList);
-        return (data || []).map((row: any) => ({
-          ...row,
-          module_id: mod.id,
-          module_title: mod.titles?.fa || mod.id,
-        }));
+        const data = await safeFetchResponsibilityRows(table, primaryModuleId, idList);
+        return (data || []).map((row: any) => {
+          const resolvedModuleId = resolveInvoiceModuleIdForRecord(primaryModuleId, row);
+          return {
+            ...row,
+            module_id: resolvedModuleId,
+            module_title: MODULES[resolvedModuleId]?.titles?.fa || resolvedModuleId,
+          };
+        });
       } catch {
         return [];
       }

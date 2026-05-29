@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   profilesByRole: [] as any[],
   rowsByTable: {} as Record<string, any[]>,
   from: vi.fn(),
+  rpc: vi.fn(),
   insertNotesWithFallback: vi.fn(),
   sendNoteSmsNotifications: vi.fn(),
   sendSmsViaGateway: vi.fn(),
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../supabaseClient', () => ({
   supabase: {
     from: mocks.from,
+    rpc: mocks.rpc,
     auth: {
       getUser: vi.fn(async () => ({ data: { user: null } })),
     },
@@ -151,6 +153,7 @@ describe('workflow action recipients', () => {
     mocks.profilesByRole = [];
     mocks.rowsByTable = {};
     mocks.from.mockImplementation((table: string) => makeQuery(table));
+    mocks.rpc.mockResolvedValue({ data: null, error: null });
     mocks.insertNotesWithFallback.mockResolvedValue(undefined);
     mocks.sendNoteSmsNotifications.mockResolvedValue({ recipients: [] });
     mocks.sendSmsViaGateway.mockResolvedValue({ success: true, sent: 0 });
@@ -226,6 +229,40 @@ describe('workflow action recipients', () => {
       to: ['09111111111', '09222222222'],
       title: 'ارسال پیامک خودکار',
     }));
+  });
+
+  it('publishes workflow stories with system identity and mention users', async () => {
+    mocks.rowsByTable = {
+      company_settings: [
+        { org_id: 'org-1', logo_url: 'https://example.com/logo.png' },
+      ],
+    };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-story-1',
+        type: 'publish_story',
+        config: {
+          text_template: 'استوری خودکار',
+          gradient_key: 'brand_indigo',
+          is_org_wide: true,
+          mention_user_ids: [DIRECT_USER_ID, USER_ID],
+        },
+      },
+      'customers',
+      { id: 'customer-1', org_id: 'org-1' }
+    );
+
+    expect(mocks.rpc).toHaveBeenCalledWith(
+      'create_workflow_org_story',
+      expect.objectContaining({
+        p_org_id: 'org-1',
+        p_creator_id: null,
+        p_creator_name: 'سیستم',
+        p_creator_avatar: 'https://example.com/logo.png',
+        p_mention_user_ids: [DIRECT_USER_ID, USER_ID],
+      })
+    );
   });
 
   it('skips workflow system notes that do not resolve any explicit recipients', async () => {

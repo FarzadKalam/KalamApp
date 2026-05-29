@@ -61,8 +61,6 @@ import {
   type NotificationUnreadSummaryMap,
 } from '../utils/notificationUnreadSummary';
 import {
-  fetchAssignedTaskReadEntries,
-  fetchResponsibilityReadEntries,
   getResponsibilityNotificationSourceType,
   mergeRowsByIdCreatedAsc,
 } from '../utils/notificationAlertReadEntries';
@@ -77,6 +75,7 @@ import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 import type { BotChannel, BotPlatformState } from './bot/CounterpartyBotStatusModal';
 import { loadScopedCompanySettings } from '../utils/companySettings';
+import { NOTIFICATION_UNREAD_BADGE_COLOR } from './notifications/UnreadCountBadge';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 const VoipCallsPanel = React.lazy(() => import('./notifications/VoipCallsPanel'));
@@ -795,7 +794,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [mobileBotSearchOpen, setMobileBotSearchOpen] = useState(false);
   const [noteNewIncomingCount, setNoteNewIncomingCount] = useState(0);
   const [botNewIncomingCount, setBotNewIncomingCount] = useState(0);
-  const [showMore, setShowMore] = useState({ notes: false, tasks: false, responsibilities: false });
+  const [panelVisibleCounts, setPanelVisibleCounts] = useState({ tasks: MAX_ITEMS, responsibilities: MAX_ITEMS });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
   const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
@@ -3637,6 +3636,10 @@ useEffect(() => {
 
     return sortRows(next, taskSortDirection);
   }, [taskSortDirection, taskViewKey, tasks]);
+  const displayedTaskAlerts = useMemo(
+    () => filteredTasks.slice(0, panelVisibleCounts.tasks),
+    [filteredTasks, panelVisibleCounts.tasks]
+  );
   const directoryUserMap = useMemo(
     () => directoryUsers.reduce<Record<string, { id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>>((acc, user) => {
       acc[String(user.id)] = user;
@@ -4586,11 +4589,33 @@ useEffect(() => {
       return responsibilitySortDirection === 'asc' ? aTime - bTime : bTime - aTime;
     })
   ), [responsibilities, responsibilitySortDirection, responsibilityViewKey]);
+  const displayedResponsibilities = useMemo(
+    () => filteredResponsibilities.slice(0, panelVisibleCounts.responsibilities),
+    [filteredResponsibilities, panelVisibleCounts.responsibilities]
+  );
   useEffect(() => {
     if (responsibilityViewKey === 'all') return;
     if (responsibilityViews.some((view) => view.key === responsibilityViewKey)) return;
     setResponsibilityViewKey('all');
   }, [responsibilityViewKey, responsibilityViews]);
+  useEffect(() => {
+    setPanelVisibleCounts((prev) => ({ ...prev, tasks: MAX_ITEMS }));
+  }, [taskSortDirection, taskViewKey]);
+  useEffect(() => {
+    setPanelVisibleCounts((prev) => ({ ...prev, responsibilities: MAX_ITEMS }));
+  }, [responsibilitySortDirection, responsibilityViewKey]);
+  useEffect(() => {
+    setPanelVisibleCounts((prev) => ({
+      ...prev,
+      tasks: Math.max(MAX_ITEMS, Math.min(prev.tasks, Math.max(filteredTasks.length, MAX_ITEMS))),
+    }));
+  }, [filteredTasks.length]);
+  useEffect(() => {
+    setPanelVisibleCounts((prev) => ({
+      ...prev,
+      responsibilities: Math.max(MAX_ITEMS, Math.min(prev.responsibilities, Math.max(filteredResponsibilities.length, MAX_ITEMS))),
+    }));
+  }, [filteredResponsibilities.length]);
   const openPreviewRecord = useCallback((moduleId: string, recordId: string, label?: string) => {
     if (!moduleId || !recordId) return;
     setPreviewRecord({ moduleId, recordId, label });
@@ -4612,7 +4637,7 @@ useEffect(() => {
       lineId: taskProcessModalTask?.production_line_id ? String(taskProcessModalTask.production_line_id) : null,
     };
   }, [taskProcessModalTask]);
-  const badgeColor = 'rgb(var(--brand-500-rgb))';
+  const badgeColor = NOTIFICATION_UNREAD_BADGE_COLOR;
   const overlaySource = useMemo(() => `notifications:${variant}`, [variant]);
   const drawerHeaderStyle = useMemo<React.CSSProperties>(() => ({
     background: 'rgb(var(--app-dark-surface-rgb))',
@@ -4840,17 +4865,7 @@ useEffect(() => {
       startTransition(() => { setSeenTaskIds((prev) => new Set([...prev, ...visibleTaskIds])); });
       markNotificationEntriesRead(visibleEntries);
     }
-    if (unreadSummaryAvailable && unreadSummary.tasks > visibleEntries.length) {
-      void fetchAssignedTaskReadEntries(supabase, profile).then((entries) => {
-        if (entries.length === 0) return;
-        startTransition(() => {
-          setSeenTaskIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)]));
-        });
-        markNotificationEntriesRead(entries);
-        setUnreadSummary((prev) => ({ ...prev, tasks: 0 }));
-      });
-    }
-  }, [isNotificationRead, markNotificationEntriesRead, profile.id, profile.role_id, seenTaskIds, unreadSummary.tasks, unreadSummaryAvailable]);
+  }, [isNotificationRead, markNotificationEntriesRead, seenTaskIds]);
 
   const markResponsibilitiesAsSeen = useCallback((rows: any[]) => {
     const visibleEntries = (rows || [])
@@ -4867,17 +4882,7 @@ useEffect(() => {
       startTransition(() => { setSeenResponsibilityIds((prev) => new Set([...prev, ...visibleEntries.map((entry) => entry.sourceId)])); });
       markNotificationEntriesRead(visibleEntries);
     }
-    if (unreadSummaryAvailable && unreadSummary.responsibilities > visibleEntries.length) {
-      void fetchResponsibilityReadEntries(supabase).then((entries) => {
-        if (entries.length === 0) return;
-        startTransition(() => {
-          setSeenResponsibilityIds((prev) => new Set([...prev, ...entries.map((entry) => entry.sourceId)]));
-        });
-        markNotificationEntriesRead(entries);
-        setUnreadSummary((prev) => ({ ...prev, responsibilities: 0 }));
-      });
-    }
-  }, [isNotificationRead, markNotificationEntriesRead, seenResponsibilityIds, unreadSummary.responsibilities, unreadSummaryAvailable]);
+  }, [isNotificationRead, markNotificationEntriesRead, seenResponsibilityIds]);
 
   const markSmsMessagesAsSeen = useCallback((rows: any[]) => {
     const messageIds = (rows || [])
@@ -5115,17 +5120,17 @@ useEffect(() => {
   useEffect(() => {
     if (!open) return;
     if (activeDrawerSection === 'tasks') {
-      markTasksAsSeen(tasks);
+      markTasksAsSeen(displayedTaskAlerts);
       return;
     }
     if (activeDrawerSection === 'responsibilities') {
-      markResponsibilitiesAsSeen(responsibilities);
+      markResponsibilitiesAsSeen(displayedResponsibilities);
       return;
     }
     if (variant === 'chat' && activeDrawerSection === 'voip_calls') {
       markVoipCallsAsSeen(displayedVoipCalls);
     }
-  }, [activeDrawerSection, displayedVoipCalls, markResponsibilitiesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, open, responsibilities, tasks, variant]);
+  }, [activeDrawerSection, displayedResponsibilities, displayedTaskAlerts, displayedVoipCalls, markResponsibilitiesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, open, variant]);
 
   useEffect(() => {
     const currentUserId = String(profile.id || '').trim();
@@ -5597,6 +5602,19 @@ useEffect(() => {
       if (currentNoteIds.size > 0 || currentTaskIds.size > 0 || currentResponsibilityIds.size > 0 || currentBotMessageIds.size > 0 || currentSmsMessageIds.size > 0 || currentVoipCallIds.size > 0) {
         notificationsReadyRef.current = true;
       }
+      return;
+    }
+
+    // Catch-up: tasks/responsibilities load async (via hooks) AFTER notificationsReadyRef was
+    // set by another source (e.g. notes). Without this, all existing tasks look "new" and
+    // trigger a popup flash that immediately closes when the read-filter runs.
+    if (prevTasksRef.current.size === 0 && currentTaskIds.size > 0) {
+      prevTasksRef.current = currentTaskIds;
+      prevResponsibilitiesRef.current = currentResponsibilityIds;
+      return;
+    }
+    if (prevResponsibilitiesRef.current.size === 0 && currentResponsibilityIds.size > 0) {
+      prevResponsibilitiesRef.current = currentResponsibilityIds;
       return;
     }
 
@@ -6417,8 +6435,9 @@ useEffect(() => {
       mode={mode}
       tasks={tasks}
       filteredTasks={filteredTasks}
-      showMore={showMore.tasks}
-      setShowMore={(value: boolean) => setShowMore((prev) => ({ ...prev, tasks: value }))}
+      visibleCount={panelVisibleCounts.tasks}
+      onShowMore={() => setPanelVisibleCounts((prev) => ({ ...prev, tasks: prev.tasks + MAX_ITEMS }))}
+      onShowLess={() => setPanelVisibleCounts((prev) => ({ ...prev, tasks: MAX_ITEMS }))}
       loadingTasks={loadingTasks}
       taskViewKey={taskViewKey}
       setTaskViewKey={setTaskViewKey}
@@ -6446,8 +6465,9 @@ useEffect(() => {
     <ResponsibilitiesPanel
       mode={mode}
       filteredResponsibilities={filteredResponsibilities}
-      showMore={showMore.responsibilities}
-      setShowMore={(value: boolean) => setShowMore((prev) => ({ ...prev, responsibilities: value }))}
+      visibleCount={panelVisibleCounts.responsibilities}
+      onShowMore={() => setPanelVisibleCounts((prev) => ({ ...prev, responsibilities: prev.responsibilities + MAX_ITEMS }))}
+      onShowLess={() => setPanelVisibleCounts((prev) => ({ ...prev, responsibilities: MAX_ITEMS }))}
       loadingResponsibilities={loadingResponsibilities}
       responsibilityViewKey={responsibilityViewKey}
       setResponsibilityViewKey={setResponsibilityViewKey}

@@ -65,8 +65,11 @@ export type PublishStoryActionConfig = {
   slide_type: 'gradient' | 'template';
   gradient_key: string;
   text_template: string;     // متن با متغیر مثل {{field_name}} یا {{creator_name}}
+  publisher_token?: string;
   expires_hours: number | null;
   is_org_wide: boolean;
+  mention_user_ids: string[];
+  viewer_user_ids?: string[];
   viewer_role_ids: string[];
   notify_sms: boolean;
   sms_template: string;

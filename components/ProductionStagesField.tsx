@@ -4880,7 +4880,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <div className="space-y-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-gray-900/80 p-2">
                 {customFields.map((field) => (
                   <div key={`${task.id}-${field.key}`} className="space-y-1">
-                    <div className="text-[11px] text-gray-500">{field.labels?.fa || field.key}</div>
+                    <div className="flex flex-wrap items-center gap-1 text-[11px] text-gray-500">
+                      <span>{field.labels?.fa || field.key}</span>
+                      {field.validation?.required ? <Tag color="error" className="!m-0">الزامی</Tag> : null}
+                    </div>
                     {renderTaskCustomFieldInline(task, field, currentCustomFieldValues[String(field.key)])}
                   </div>
                 ))}
@@ -6475,6 +6478,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       key: nextField?.key || undefined,
       labelFa: nextField?.labels?.fa || '',
       type: nextField?.type || FieldType.TEXT,
+      required: !!nextField?.validation?.required,
       relationTargetModule: nextField?.relationConfig?.targetModule || undefined,
       relationTargetField: nextField?.relationConfig?.targetField || undefined,
       dynamicCategory: nextField?.dynamicOptionsCategory || undefined,
@@ -6519,6 +6523,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         key: normalizedKey,
         type: fieldType,
         labels: { fa: String(values?.labelFa || normalizedKey).trim() || normalizedKey, en: normalizedKey },
+        validation: { required: !!values?.required },
         relationConfig: fieldType === FieldType.RELATION
           ? {
               targetModule: String(values?.relationTargetModule || '').trim(),
@@ -7972,7 +7977,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           : 'col-span-12 md:col-span-6'
                       }
                     >
-                      <div className="mb-1 text-xs text-gray-500">{field.labels?.fa || field.key}</div>
+                      <div className="mb-1 flex flex-wrap items-center gap-1 text-xs text-gray-500">
+                        <span>{field.labels?.fa || field.key}</span>
+                        {field.validation?.required ? <Tag color="error" className="!m-0">الزامی</Tag> : null}
+                      </div>
                       {renderTaskCustomFieldInput(
                         { id: TASK_MODAL_CUSTOM_FIELD_DRAFT_ID },
                         field,
@@ -8374,6 +8382,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                         {field.labels?.fa || field.key}
                                       </div>
                                       <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
+                                      {field.validation?.required ? <Tag color="error">اجباری در تکمیل</Tag> : null}
                                       <Tag>{field.key}</Tag>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
@@ -9009,7 +9018,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         <Form
           form={draftCustomFieldForm}
           layout="vertical"
-          initialValues={{ type: FieldType.TEXT }}
+          initialValues={{ type: FieldType.TEXT, required: false }}
         >
           <Form.Item label="کلید فیلد" name="key" rules={[{ required: true, message: 'کلید فیلد لازم است.' }]}>
             <Input
@@ -9051,6 +9060,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <Input placeholder="مثال: meeting_type" />
             </Form.Item>
           )}
+
+          <Form.Item label="الزام در تکمیل فعالیت" name="required" valuePropName="checked">
+            <Switch checkedChildren="اجباری" unCheckedChildren="اختیاری" />
+          </Form.Item>
         </Form>
       </Modal>
 

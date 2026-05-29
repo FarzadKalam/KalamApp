@@ -21,6 +21,7 @@ import { normalizeOperationalDocumentTotals } from "../utils/operationalDocument
 import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
 import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID, normalizeInstructionIdList } from "../utils/instructionSupport";
 import { syncProcessTemplateStageInstructionLinks } from "../utils/processTemplateStageInstructions";
+import { getTaxpayerInvoicePatternForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -335,11 +336,12 @@ export const ModuleCreate = () => {
                 return;
               }
 
-              const isReturnInvoiceModule = moduleId === "sales_return_invoices" || moduleId === "purchase_return_invoices";
+              const isReturnInvoiceModule = isReturnInvoiceModuleId(moduleId);
               if (moduleId === "invoices" || moduleId === "purchase_invoices" || isReturnInvoiceModule) {
-                const invoiceValues = isReturnInvoiceModule
-                  ? { ...values, taxpayer_invoice_pattern: '2' }
-                  : values;
+                const invoiceValues = {
+                  ...values,
+                  taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, values?.taxpayer_invoice_pattern),
+                };
                 let insertResult = await supabase
                   .from(moduleConfig.table)
                   .insert(withCreateAuditFields(invoiceValues))
@@ -363,7 +365,7 @@ export const ModuleCreate = () => {
                 if (!isReturnInvoiceModule) {
                   await applyInvoiceFinalizationInventory({
                     supabase: supabase as any,
-                    moduleId,
+                    moduleId: String(moduleId),
                     recordId: inserted.id,
                     previousStatus: null,
                     nextStatus: invoiceValues?.status ?? null,

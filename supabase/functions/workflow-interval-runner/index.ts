@@ -824,6 +824,24 @@ function parseRecipientToken(value: string): { kind: 'user' | 'role' | 'chat_gro
   return { kind, id };
 }
 
+async function resolveStoryPublisher(
+  url: string,
+  key: string,
+  orgId: string
+): Promise<{ creatorId: string | null; creatorName: string; creatorAvatar: string | null }> {
+  const companyRows = await dbGet(
+    url,
+    key,
+    `company_settings?org_id=eq.${orgId}&select=logo_url&limit=1`
+  ).catch(() => []);
+
+  return {
+    creatorId: null,
+    creatorName: 'سیستم',
+    creatorAvatar: String(companyRows[0]?.logo_url || '').trim() || null,
+  };
+}
+
 function normalizePhone(p: string): string {
   const raw = String(p ?? '')
     .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
@@ -1438,13 +1456,17 @@ async function executeAction(
   if (action.type === 'publish_story') {
     const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key)).trim();
     if (!content) return actionResult(action, 'skipped', 'متن استوری خالی است.');
-    const profileRows = await dbGet(url, key, `profiles?org_id=eq.${orgId}&select=id,full_name,avatar_url&limit=1`).catch(() => []);
-    const creator = profileRows[0] || {};
-    const creatorId = String(creator?.id || '').trim();
-    if (!creatorId) return actionResult(action, 'skipped', 'کاربر سیستمی برای انتشار استوری پیدا نشد.');
-    const expiresHours = Number(config.expires_hours || 24);
-    const expiresAt = Number.isFinite(expiresHours) && expiresHours > 0
-      ? new Date(Date.now() + expiresHours * 60 * 60 * 1000).toISOString()
+    const publisher = await resolveStoryPublisher(
+      url,
+      key,
+      orgId
+    );
+    const expiresHoursRaw = config.expires_hours;
+    const expiresHours = expiresHoursRaw === null || expiresHoursRaw === undefined || expiresHoursRaw === ''
+      ? null
+      : Number(expiresHoursRaw);
+    const expiresAt = Number.isFinite(expiresHours as number) && Number(expiresHours) > 0
+      ? new Date(Date.now() + Number(expiresHours) * 60 * 60 * 1000).toISOString()
       : null;
     const slideType = String(config.slide_type || 'gradient') === 'image' ? 'image' : 'gradient';
     const slide = {
@@ -1466,14 +1488,14 @@ async function executeAction(
     };
     await dbInsert(url, key, 'org_stories', {
       org_id: orgId,
-      creator_id: creatorId,
-      creator_name: String(creator?.full_name || 'سیستم').trim() || 'سیستم',
-      creator_avatar: creator?.avatar_url || null,
+      creator_id: publisher.creatorId,
+      creator_name: publisher.creatorName,
+      creator_avatar: publisher.creatorAvatar,
       slides: [slide],
       is_org_wide: config.is_org_wide !== false,
       viewer_user_ids: asArray(config.viewer_user_ids).map((id) => String(id || '').trim()).filter(Boolean),
       viewer_role_ids: asArray(config.viewer_role_ids).map((id) => String(id || '').trim()).filter(Boolean),
-      mention_user_ids: [],
+      mention_user_ids: asArray(config.mention_user_ids).map((id) => String(id || '').trim()).filter(Boolean),
       mention_role_ids: [],
       expires_at: expiresAt,
       is_active: true,

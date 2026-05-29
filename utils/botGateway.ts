@@ -4,6 +4,12 @@ import { supabase } from '../supabaseClient';
 
 export type BotChannel = 'telegram' | 'bale' | 'rubika';
 
+export const OFFICIAL_BOT_API_BASE_URL: Record<BotChannel, string> = {
+  telegram: 'https://api.telegram.org',
+  bale: 'https://tapi.bale.ai',
+  rubika: 'https://botapi.rubika.ir',
+};
+
 export type BotGatewaySettings = {
   bot_token?: string;
   api_base_url?: string;
@@ -63,11 +69,7 @@ type SendCustomerBotMessageArgs = {
   recordId?: string;
 };
 
-const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
-  telegram: 'https://api.telegram.org',
-  bale: 'https://tapi.bale.ai',
-  rubika: 'https://botapi.rubika.ir',
-};
+const DEFAULT_API_BASE_URL: Record<BotChannel, string> = OFFICIAL_BOT_API_BASE_URL;
 
 const DEFAULT_SEND_PATH: Record<BotChannel, string> = {
   telegram: '/bot{token}/sendMessage',

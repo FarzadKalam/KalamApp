@@ -901,7 +901,7 @@ export const runProcessAutomationsForTaskEvent = async ({
           }
 
           const actionType = String(action?.type || '');
-          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_telegram_bot', 'send_bale_bot', 'send_rubika_bot'].includes(actionType);
+          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_telegram_bot', 'send_bale_bot', 'send_rubika_bot', 'publish_story'].includes(actionType);
           if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
 
           const actionConfig = (action as any)?.config || {};

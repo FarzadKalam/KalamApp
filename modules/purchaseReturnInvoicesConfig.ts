@@ -286,18 +286,6 @@ export const purchaseReturnInvoicesConfig: ModuleDefinition = {
       isTableColumn: true,
     },
     {
-      key: 'taxpayer_invoice_pattern',
-      labels: { fa: 'نوع فاکتور مودیان', en: 'Invoice Pattern' },
-      type: FieldType.TEXT,
-      location: FieldLocation.HEADER,
-      order: 0.01,
-      nature: FieldNature.SYSTEM,
-      isTableColumn: false,
-      hideInCreateForm: false,
-      readonly: true,
-      defaultValue: '2',
-    },
-    {
       key: 'purchase_source',
       labels: { fa: 'منبع خرید', en: 'Source' },
       type: FieldType.SELECT,

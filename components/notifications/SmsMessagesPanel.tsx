@@ -1,7 +1,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { App, Button, Empty, Input, Skeleton } from 'antd';
 import { EyeOutlined } from '@ant-design/icons';
-import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
 import { sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
@@ -11,6 +11,7 @@ import {
 import SharedNoteCard from '../notes/SharedNoteCard';
 import SharedNoteComposer from '../notes/SharedNoteComposer';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import UnreadCountBadge from './UnreadCountBadge';
 
 export type SmsThreadItem = {
   id: string;
@@ -327,11 +328,7 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      {thread.unreadCount > 0 ? (
-                        <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                          {toPersianNumber(String(thread.unreadCount))}
-                        </span>
-                      ) : null}
+                      <UnreadCountBadge count={thread.unreadCount} className="px-2 py-0.5" />
                       <span className="text-[10px] text-gray-400">{safeJalaliFormat(thread.messages[thread.messages.length - 1]?.message_at || thread.messages[thread.messages.length - 1]?.created_at, 'MM/DD HH:mm')}</span>
                     </div>
                   </div>
@@ -360,11 +357,7 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
                       <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
                       <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'بدون شماره'}</div>
                     </div>
-                    {thread.unreadCount > 0 ? (
-                      <span className="shrink-0 rounded-full bg-rose-500 px-2 py-0.5 text-[10px] text-white">
-                        {toPersianNumber(String(thread.unreadCount))}
-                      </span>
-                    ) : null}
+                    <UnreadCountBadge count={thread.unreadCount} className="shrink-0 px-2 py-0.5" />
                   </div>
                   {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
                     <div className="mt-0.5 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>

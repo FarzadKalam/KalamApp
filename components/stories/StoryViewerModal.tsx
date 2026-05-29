@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  CaretRightOutlined,
   CloseOutlined,
   DeleteOutlined,
   EditOutlined,
   EllipsisOutlined,
   EyeOutlined,
   LeftOutlined,
+  PauseOutlined,
   PushpinFilled,
   PushpinOutlined,
+  ReloadOutlined,
   RightOutlined,
 } from '@ant-design/icons';
 import { Button, Dropdown, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
@@ -34,7 +37,7 @@ interface StoryViewerModalProps {
   canViewReactions: boolean;
   onClose: () => void;
   onEdit: (story: OrgStoryWithMeta) => void;
-  onDelete: (storyId: string) => void;
+  onDelete: (storyId: string) => Promise<boolean>;
   onTogglePin: (storyId: string, isPinned: boolean) => void;
   onMarkViewed: (storyId: string) => void;
   onReact: (storyId: string, emoji: string) => void;
@@ -59,7 +62,7 @@ const PROGRESS_INTERVAL_MS = 50;
 // ارتفاع ناحیه هدر — ناحیه‌های کلیک از پایین هدر شروع می‌شوند
 const HEADER_ZONE_PX = 88;
 // ارتفاع ناحیه فوتر
-const FOOTER_ZONE_PX = 72;
+const FOOTER_ZONE_PX = 136;
 
 const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   open,
@@ -98,6 +101,10 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const currentSlide: StorySlide | null = currentStory?.slides?.[slideIndex] ?? null;
   const slideDuration = currentSlide?.duration_ms ?? 5000;
   const totalSlides = currentStory?.slides?.length ?? 0;
+  const currentSlideText = (currentSlide?.text_layers || [])
+    .map((layer) => String(layer?.content || '').trim())
+    .filter(Boolean)
+    .join('\n');
 
   // reset وقتی استوری عوض می‌شود
   useEffect(() => {
@@ -158,6 +165,12 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       setStoryIndex((i) => i - 1);
     }
   }, [slideIndex, storyIndex]);
+
+  const replayCurrentSlideText = useCallback(() => {
+    progressRef.current = 0;
+    setProgress(0);
+    setPaused(false);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -256,9 +269,9 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
       icon: <DeleteOutlined />,
       label: 'حذف',
       danger: true,
-      onClick: () => {
-        onDelete(currentStory.id);
-        onClose();
+      onClick: async () => {
+        const deleted = await onDelete(currentStory.id);
+        if (deleted) onClose();
       },
     },
     canPin && {
@@ -438,6 +451,19 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
             </Dropdown>
           )}
 
+          <Tooltip title={paused ? 'ادامه' : 'توقف'}>
+            <Button
+              type="text"
+              icon={paused ? <CaretRightOutlined /> : <PauseOutlined />}
+              style={{ color: '#fff', zIndex: 20 }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPaused((prev) => !prev);
+              }}
+            />
+          </Tooltip>
+
           <Button
             type="text"
             icon={<CloseOutlined />}
@@ -501,7 +527,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           <div
             style={{
               position: 'absolute',
-              bottom: 80,
+              bottom: currentSlideText ? 124 : 80,
               left: '50%',
               transform: 'translateX(-50%)',
               zIndex: 20,
@@ -531,6 +557,57 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                 <LinkOutlined style={{ fontSize: 14 }} />
                 {currentSlide.link_label || 'مشاهده بیشتر'}
               </button>
+            </Tooltip>
+          </div>
+        )}
+
+        {currentSlideText && (
+          <div
+            style={{
+              position: 'absolute',
+              left: 16,
+              right: 16,
+              bottom: 64,
+              zIndex: 20,
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'space-between',
+              gap: 10,
+              padding: '10px 12px',
+              borderRadius: 16,
+              background: 'rgba(0,0,0,0.3)',
+              backdropFilter: 'blur(8px)',
+              border: '1px solid rgba(255,255,255,0.16)',
+            }}
+          >
+            <div
+              style={{
+                flex: 1,
+                color: '#fff',
+                fontSize: 12,
+                lineHeight: 1.7,
+                whiteSpace: 'pre-wrap',
+                textShadow: '0 1px 4px rgba(0,0,0,0.45)',
+              }}
+            >
+              {currentSlideText}
+            </div>
+            <Tooltip title="بازپخش متن">
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                style={{
+                  color: '#fff',
+                  background: 'rgba(255,255,255,0.12)',
+                  borderRadius: 12,
+                  flexShrink: 0,
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  replayCurrentSlideText();
+                }}
+              />
             </Tooltip>
           </div>
         )}

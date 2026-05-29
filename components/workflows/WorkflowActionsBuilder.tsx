@@ -31,6 +31,7 @@ import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelp
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
 import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
 
 const Select = AdaptiveSelectField;
 
@@ -148,6 +149,8 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         text_template: '',
         expires_hours: 24,
         is_org_wide: true,
+        mention_user_ids: [],
+        viewer_user_ids: [],
         viewer_role_ids: [],
         notify_sms: false,
         sms_template: '',
@@ -445,6 +448,36 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()).sort((a, b) => a.label.localeCompare(b.label, 'fa')),
     [assigneeDirectoryOptions, chatGroupOptions]
   );
+  const [storyMentionUserOptions, setStoryMentionUserOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [storyViewerRoleOptions, setStoryViewerRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadStoryAudienceDirectory = async () => {
+      const directory = await fetchAssigneeDirectory(supabase);
+      if (cancelled) return;
+
+      setStoryMentionUserOptions(
+        directory.users.map((user) => ({
+          label: user.display_name,
+          value: user.id,
+        }))
+      );
+      setStoryViewerRoleOptions(
+        directory.roles
+          .filter((role) => !role.is_system)
+          .map((role) => ({
+            label: role.title,
+            value: role.id,
+          }))
+      );
+    };
+
+    void loadStoryAudienceDirectory();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const templateVariableOptions = useMemo(
     () =>
       (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
@@ -2030,6 +2063,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (actionType === 'publish_story') {
       return (
         <div className="space-y-3">
+          <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
+            این استوری همیشه با هویت «سیستم» منتشر می‌شود و برای آواتار آن از لوگوی سازمان استفاده خواهد شد.
+          </div>
+
           {/* نوع اسلاید */}
           <div className="space-y-1">
             <div className="text-xs text-gray-500">نوع اسلاید</div>
@@ -2078,6 +2115,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             />
           </div>
 
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">منشن کاربران</div>
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.mention_user_ids) ? config.mention_user_ids : []}
+              disabled={disabled}
+              options={storyMentionUserOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { mention_user_ids: nextVal })}
+              placeholder="@ انتخاب کاربران برای منشن"
+              maxTagCount="responsive"
+            />
+          </div>
+
           {/* مدت انقضا */}
           <div className="space-y-1">
             <div className="text-xs text-gray-500">انقضا (ساعت، خالی = بدون انقضا)</div>
@@ -2102,6 +2153,38 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               size="small"
             />
           </div>
+
+          {config.is_org_wide === false && (
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-white/10">
+              <div className="space-y-1">
+                <div className="text-xs text-gray-500">کاربران مجاز</div>
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(config.viewer_user_ids) ? config.viewer_user_ids : []}
+                  disabled={disabled}
+                  options={storyMentionUserOptions}
+                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_user_ids: nextVal })}
+                  placeholder="انتخاب کاربران مجاز"
+                  maxTagCount="responsive"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <div className="text-xs text-gray-500">نقش‌های مجاز</div>
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(config.viewer_role_ids) ? config.viewer_role_ids : []}
+                  disabled={disabled}
+                  options={storyViewerRoleOptions}
+                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_role_ids: nextVal })}
+                  placeholder="انتخاب نقش‌های مجاز"
+                  maxTagCount="responsive"
+                />
+              </div>
+            </div>
+          )}
 
           {/* اطلاع‌رسانی پیامکی */}
           <div className="flex items-center gap-2">

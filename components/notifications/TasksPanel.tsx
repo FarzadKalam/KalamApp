@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Empty, List, Skeleton } from 'antd';
 import { PlusOutlined, DownOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { buildRecordReferenceKey } from '../../utils/recordReference';
@@ -23,8 +24,9 @@ type TasksPanelProps = {
   mode: 'list' | 'grid';
   tasks: any[];
   filteredTasks: any[];
-  showMore: boolean;
-  setShowMore: (value: boolean) => void;
+  visibleCount: number;
+  onShowMore: () => void;
+  onShowLess: () => void;
   loadingTasks: boolean;
   taskViewKey: TaskViewPresetKey;
   setTaskViewKey: (key: TaskViewPresetKey) => void;
@@ -51,8 +53,9 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
   mode,
   tasks,
   filteredTasks,
-  showMore,
-  setShowMore,
+  visibleCount,
+  onShowMore,
+  onShowLess,
   loadingTasks,
   taskViewKey,
   setTaskViewKey,
@@ -78,7 +81,9 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
   const priorityOptions = tasksConfig?.fields?.find((f: any) => f.key === 'priority')?.options || [];
 
-  const data = showMore ? filteredTasks : filteredTasks.slice(0, maxItems);
+  const data = filteredTasks.slice(0, visibleCount);
+  const remainingCount = Math.max(0, filteredTasks.length - data.length);
+  const canShowLess = visibleCount > maxItems;
 
   const relationOptionsByField = tasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
     const sourceLink = resolveTaskSourceLink(task);
@@ -130,7 +135,6 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
               key={view.key}
               onClick={() => {
                 setTaskViewKey(view.key);
-                setShowMore(false);
               }}
               className={`group px-3 py-1 rounded-lg text-xs cursor-pointer whitespace-nowrap transition-all flex items-center gap-2 select-none border ${
                 taskViewKey === view.key
@@ -267,9 +271,18 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
       </div>
 
       {filteredTasks.length > maxItems ? (
-        <Button type="link" onClick={() => setShowMore(!showMore)}>
-          {showMore ? 'نمایش کمتر' : 'نمایش بیشتر'}
-        </Button>
+        <div className="flex items-center justify-between gap-2">
+          {canShowLess ? (
+            <Button type="link" onClick={onShowLess}>
+              نمایش کمتر
+            </Button>
+          ) : <span />}
+          {remainingCount > 0 ? (
+            <Button type="link" onClick={onShowMore}>
+              مشاهده موارد بیشتر ({toPersianNumber(String(remainingCount))})
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

@@ -255,7 +255,10 @@ export const safeFetchResponsibilityRows = async (
 
   const rows: any[] = [];
   const chunkSize = normalizedTable === 'customers' || normalizedTable === 'suppliers' ? 40 : 80;
-  const selectColumns = buildResponsibilitySelectColumns(normalizedModuleId);
+  const selectColumns = Array.from(new Set([
+    ...buildResponsibilitySelectColumns(normalizedModuleId),
+    ...((normalizedTable === 'invoices' || normalizedTable === 'purchase_invoices') ? ['taxpayer_invoice_pattern'] : []),
+  ]));
 
   for (let index = 0; index < normalizedIds.length; index += chunkSize) {
     const chunk = normalizedIds.slice(index, index + chunkSize);

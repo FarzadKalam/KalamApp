@@ -17,7 +17,7 @@ export const personasModule: ModuleDefinition = {
   defaultViewMode: ViewMode.LIST,
   relationDisplay: {
     labelTemplate: '{{display_name}} - {{persona_type}}',
-    searchFields: ['name', 'display_name', 'persona_type', 'financial_status', 'traits', 'preferences', 'pain_points', 'basket', 'id'],
+    searchFields: ['name', 'display_name', 'persona_type', 'access_channel', 'sales_cycle', 'financial_status', 'traits', 'preferences', 'pain_points', 'basket', 'id'],
   },
   fields: [
     {
@@ -63,6 +63,22 @@ export const personasModule: ModuleDefinition = {
       type: FieldType.LONG_TEXT,
       blockId: 'persona_profile',
       order: 2,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'access_channel',
+      labels: { fa: 'کانال دسترسی', en: 'Access Channel' },
+      type: FieldType.TEXT,
+      blockId: 'persona_profile',
+      order: 2.01,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'sales_cycle',
+      labels: { fa: 'چرخه فروش', en: 'Sales Cycle' },
+      type: FieldType.TEXT,
+      blockId: 'persona_profile',
+      order: 2.02,
       nature: FieldNature.STANDARD,
     },
     {
