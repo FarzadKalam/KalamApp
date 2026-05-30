@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const SHELL_CACHE = `tazesystem-shell-${CACHE_VERSION}`;
 const PAGE_CACHE = `tazesystem-pages-${CACHE_VERSION}`;
 const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
