@@ -11,6 +11,7 @@ import { getPreferredRelationTargetField } from './relationTargetField';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { resolveScopedChartOfAccountIds } from './chartOfAccountsScope';
+import { isUuidLikeValue } from './optionHelpers';
 
 const RELATION_RECENT_LIMIT = 50;
 const relationOptionsCache = new Map<string, any[]>();
@@ -379,7 +380,12 @@ const runRelationQuery = async (
     targetField: string;
   }
 ) => {
-  const orderStrategies = exactId
+  const normalizedExactId = exactId === undefined || exactId === null ? '' : String(exactId).trim();
+  if (normalizedExactId && !isUuidLikeValue(normalizedExactId)) {
+    return [];
+  }
+
+  const orderStrategies = normalizedExactId
     ? [null]
     : [
         [{ column: 'updated_at', ascending: false }, { column: 'created_at', ascending: false }],
@@ -394,8 +400,8 @@ const runRelationQuery = async (
       let query = supabaseClient.from(moduleName).select(selectExpr);
       query = applyQueryFilters(query, filter);
 
-      if (exactId) {
-        query = query.eq('id', exactId).limit(1);
+      if (normalizedExactId) {
+        query = query.eq('id', normalizedExactId).limit(1);
       } else {
         const normalizedSearch = String(search || '').trim();
         if (normalizedSearch) {
