@@ -1783,6 +1783,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const needle = columnName.toLowerCase();
     return text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
   }, []);
+  const isMissingColumnLikeError = useCallback((error: any, columnName?: string) => {
+    const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+    if (!text) return false;
+    const hasSchemaProblem = text.includes('column') || text.includes('schema cache') || text.includes('relation');
+    if (!hasSchemaProblem) return false;
+    if (!columnName) return true;
+    return text.includes(String(columnName || '').toLowerCase());
+  }, []);
   const extractMissingColumnNames = useCallback((error: any): string[] => {
     const text = [error?.message, error?.details, error?.hint]
       .map((part) => String(part || '').trim())
@@ -2138,6 +2146,126 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   };
 
+  const fetchProcessRunStageRowsForRecord = async () => {
+    if (!isProcessRecordModule || !recordId || !moduleId || isProcessPreviewModule) return [] as any[];
+
+    const processRunSelect = 'id, template_id, process_name, status, module_id, record_id, started_at, completed_at, updated_at';
+    const runRowsById = new Map<string, any>();
+
+    try {
+      const { data: directRuns, error: directRunsError } = await supabase
+        .from('process_runs')
+        .select(processRunSelect)
+        .eq('module_id', moduleId)
+        .eq('record_id', recordId)
+        .limit(200);
+      if (directRunsError) throw directRunsError;
+      (directRuns || []).forEach((run: any) => {
+        if (run?.id) runRowsById.set(String(run.id), run);
+      });
+    } catch (error) {
+      if (!isMissingColumnLikeError(error)) {
+        console.warn('Could not load direct process runs for record', error);
+      }
+    }
+
+    try {
+      const { data: linkRows, error: linkRowsError } = await supabase
+        .from('process_run_links')
+        .select('process_run_id')
+        .eq('module_id', moduleId)
+        .eq('record_id', recordId)
+        .limit(200);
+      if (linkRowsError) throw linkRowsError;
+
+      const linkedRunIds = Array.from(new Set(
+        (linkRows || [])
+          .map((row: any) => String(row?.process_run_id || '').trim())
+          .filter(Boolean)
+          .filter((runId: string) => !runRowsById.has(runId))
+      ));
+
+      if (linkedRunIds.length > 0) {
+        const { data: linkedRuns, error: linkedRunsError } = await supabase
+          .from('process_runs')
+          .select(processRunSelect)
+          .in('id', linkedRunIds)
+          .limit(200);
+        if (linkedRunsError) throw linkedRunsError;
+        (linkedRuns || []).forEach((run: any) => {
+          if (run?.id) runRowsById.set(String(run.id), run);
+        });
+      }
+    } catch (error) {
+      if (!isMissingColumnLikeError(error)) {
+        console.warn('Could not load linked process runs for record', error);
+      }
+    }
+
+    const runRows = Array.from(runRowsById.values());
+    if (runRows.length === 0) return [] as any[];
+
+    try {
+      const runIds = runRows.map((run: any) => String(run?.id || '').trim()).filter(Boolean);
+      const { data: stageRows, error: stageRowsError } = await supabase
+        .from('process_run_stages')
+        .select('id, process_run_id, template_stage_id, stage_name, sort_order, status, task_id, assignee_user_id, assignee_role_id, wage, metadata')
+        .in('process_run_id', runIds)
+        .order('sort_order', { ascending: true });
+      if (stageRowsError) throw stageRowsError;
+
+      const runById = new Map(runRows.map((run: any) => [String(run?.id || ''), run]));
+      return (stageRows || []).map((stage: any, index: number) => {
+        const run = runById.get(String(stage?.process_run_id || '')) || {};
+        const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
+        const groupId = String(metadata?.process_group_id || `process_run_${run?.id || stage?.process_run_id || index}`).trim();
+        const groupName = String(run?.process_name || metadata?.process_group_name || metadata?.source_template_name || 'فرآیند').trim();
+        const normalizedStatus = String(stage?.status || '').trim().toLowerCase();
+        const fallbackStatus = String(run?.status || '').trim().toLowerCase() === 'completed' ? 'done' : 'todo';
+        const effectiveStatus = fallbackStatus === 'done' && (!normalizedStatus || normalizedStatus === 'todo')
+          ? 'done'
+          : (normalizedStatus || fallbackStatus);
+
+        return withProcessTaskCustomFieldValues({
+          id: stage?.task_id ? String(stage.task_id) : `process_run_stage:${String(stage?.id || index)}`,
+          name: stage?.stage_name || `مرحله ${index + 1}`,
+          title: stage?.stage_name || `مرحله ${index + 1}`,
+          status: effectiveStatus,
+          sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
+          wage: Number(stage?.wage || 0),
+          assignee_id: stage?.assignee_user_id || null,
+          assignee_role_id: stage?.assignee_role_id || null,
+          assignee_type: stage?.assignee_user_id ? 'user' : (stage?.assignee_role_id ? 'role' : null),
+          source_template_id: run?.template_id || metadata?.source_template_id || null,
+          source_module_id: run?.module_id || moduleId,
+          source_record_id: run?.record_id || recordId,
+          process_group_id: groupId,
+          process_run_id: run?.id || stage?.process_run_id || null,
+          process_run_stage_id: stage?.id || null,
+          isProcessRunStagePreview: !stage?.task_id,
+          recurrence_info: {
+            ...(metadata?.recurrence_info && typeof metadata.recurrence_info === 'object' ? metadata.recurrence_info : {}),
+            process_group: {
+              id: groupId,
+              name: groupName,
+              template_id: run?.template_id || metadata?.source_template_id || null,
+              template_name: groupName,
+            },
+            process_links: {
+              ...(metadata?.process_link_map && typeof metadata.process_link_map === 'object' ? metadata.process_link_map : {}),
+              [moduleId]: recordId,
+            },
+          },
+        });
+      });
+    } catch (error) {
+      if (!isMissingColumnLikeError(error)) {
+        console.warn('Could not load process run stages for record', error);
+      }
+      return [] as any[];
+    }
+  };
+
   const fetchTasks = async () => {
     if (isDraftOnlyModule) return [] as any[];
     if (!recordId) {
@@ -2177,7 +2305,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       if (isProcessRecordModule) {
-        const [sourceResult, linkedResult] = await Promise.all([
+        const [sourceResult, linkedResult, processRunStageRows] = await Promise.all([
           applyTaskSourceRecordFilter(query, moduleId, recordId)
             .order('sort_order', { ascending: true }),
           supabase
@@ -2189,12 +2317,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             `)
             .contains('recurrence_info', { process_links: { [String(moduleId || '')]: String(recordId || '') } })
             .order('sort_order', { ascending: true }),
+          fetchProcessRunStageRowsForRecord(),
         ]);
 
         if (sourceResult.error) throw sourceResult.error;
         if (linkedResult.error) throw linkedResult.error;
 
         const mergedRows = [
+          ...(processRunStageRows || []),
           ...(sourceResult.data || []),
           ...((linkedResult.data || []).filter((row: any) => {
             const processLinks = parseProcessLinkMap(parseRecurrenceInfo(row?.recurrence_info)?.process_links);
@@ -7221,11 +7351,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           ? processLineGroups
           : [{ id: 'default_process_group', label: '', templateId: null, templateName: null, stages: [], tasks: [], lineSegments: [] as any[] }];
           const normalizedOnlyProcessGroupId = String(onlyProcessGroupId || '').trim();
+          const hiddenCompletedGroupCount = normalizedProcessLineGroups.filter((group: any) => isProcessGroupCompleted(group)).length;
           const visibleProcessLineGroups = normalizedProcessLineGroups.filter((group: any) => {
             const groupId = String(group?.id || '').trim();
             if (normalizedOnlyProcessGroupId && groupId !== normalizedOnlyProcessGroupId) return false;
             return showCompletedProcessGroups || !isProcessGroupCompleted(group);
           });
+          const hasHiddenCompletedProcessGroups = hiddenCompletedGroupCount > 0 && visibleProcessLineGroups.length === 0;
         const isProcessEmptyState = isProcessRecordModule
           && normalizedProcessLineGroups.length === 1
           && (!Array.isArray(normalizedProcessLineGroups[0]?.stages) || normalizedProcessLineGroups[0].stages.length === 0)
@@ -7542,6 +7674,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   )
                 ) : (
                   <div className="space-y-2">
+                    {hasHiddenCompletedProcessGroups ? (
+                      <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 px-3 py-3 text-center text-xs text-gray-500 dark:text-gray-400">
+                        <div className="mb-2">
+                          {toPersianNumber(hiddenCompletedGroupCount)} فرآیند تکمیل‌شده برای این رکورد وجود دارد.
+                        </div>
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<DownOutlined />}
+                          onClick={() => setShowCompletedProcessGroups(true)}
+                          className="px-0 text-xs text-gray-500 hover:!text-leather-600"
+                        >
+                          مشاهده فرآیندهای تکمیل شده
+                        </Button>
+                      </div>
+                    ) : null}
                     {visibleProcessLineGroups.map((group: any, groupIndex: number) => {
                       const showAutoAssignButton = canAutoAssignProcessGroup(group);
                       const isTemplateLocked = hasProcessGroupStarted(group);
@@ -7686,7 +7834,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     </Button>
                   </div>
                 )}
-                {normalizedProcessLineGroups.some((group: any) => isProcessGroupCompleted(group)) && (
+                {hiddenCompletedGroupCount > 0 && !hasHiddenCompletedProcessGroups && (
                   <div className="flex justify-center">
                     <Button
                       size="small"
