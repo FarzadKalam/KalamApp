@@ -22,6 +22,9 @@ import {
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { getMarketingPanelUrl, getMarketingSiteBasePath } from '../utils/hostRouting';
+import useUserAnnouncements from '../hooks/useUserAnnouncements';
+import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
+import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
 
 type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo';
 
@@ -571,7 +574,39 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
     if (path === '/demo') return 'demo';
     return 'home';
   }, [location.pathname, page]);
-  return <div className="min-h-screen bg-zinc-50 text-zinc-950"><Header />{resolvedPage === 'home' && <HomePage />}{resolvedPage === 'features' && <FeaturesPage />}{resolvedPage === 'pricing' && <PricingSection detailed />}{resolvedPage === 'blog' && <ResourcesPage kind="blog" />}{resolvedPage === 'blog-post' && <SimplePostPage type="blog" />}{resolvedPage === 'learn' && <ResourcesPage kind="learn" />}{resolvedPage === 'learn-post' && <SimplePostPage type="learn" />}{resolvedPage === 'updates' && <ResourcesPage kind="updates" />}{resolvedPage === 'about' && <AboutPage />}{(resolvedPage === 'contact' || resolvedPage === 'demo') && <ContactPage />}<Footer /></div>;
+  const {
+    headerAnnouncements,
+    popupAnnouncements,
+    dismissAnnouncement,
+  } = useUserAnnouncements({
+    surface: 'public_site',
+    path: `${location.pathname}${location.search || ''}`,
+  });
+
+  return (
+    <div className="min-h-screen bg-zinc-50 text-zinc-950">
+      <UserAnnouncementsBanner
+        items={headerAnnouncements}
+        onDismiss={dismissAnnouncement}
+      />
+      <Header />
+      {resolvedPage === 'home' && <HomePage />}
+      {resolvedPage === 'features' && <FeaturesPage />}
+      {resolvedPage === 'pricing' && <PricingSection detailed />}
+      {resolvedPage === 'blog' && <ResourcesPage kind="blog" />}
+      {resolvedPage === 'blog-post' && <SimplePostPage type="blog" />}
+      {resolvedPage === 'learn' && <ResourcesPage kind="learn" />}
+      {resolvedPage === 'learn-post' && <SimplePostPage type="learn" />}
+      {resolvedPage === 'updates' && <ResourcesPage kind="updates" />}
+      {resolvedPage === 'about' && <AboutPage />}
+      {(resolvedPage === 'contact' || resolvedPage === 'demo') && <ContactPage />}
+      <Footer />
+      <UserAnnouncementsPopupHost
+        items={popupAnnouncements}
+        onDismiss={dismissAnnouncement}
+      />
+    </div>
+  );
 };
 
 export default PublicSite;

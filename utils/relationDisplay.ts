@@ -99,6 +99,9 @@ export const getRelationSearchFields = (moduleId: string, targetField: string) =
     normalizeConfiguredRelationField(normalizedModuleId, 'name'),
     normalizeConfiguredRelationField(normalizedModuleId, 'title'),
     normalizeConfiguredRelationField(normalizedModuleId, 'full_name'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'email'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'mobile'),
+    normalizeConfiguredRelationField(normalizedModuleId, 'phone'),
     normalizeConfiguredRelationField(normalizedModuleId, 'business_name'),
     normalizeConfiguredRelationField(normalizedModuleId, 'legal_name'),
     normalizeConfiguredRelationField(normalizedModuleId, 'system_code'),
@@ -186,6 +189,9 @@ export const buildRelationDisplayLabel = (moduleId: string, row: any, targetFiel
     row?.name ||
     row?.title ||
     row?.full_name ||
+    row?.email ||
+    row?.mobile ||
+    row?.phone ||
     row?.business_name ||
     row?.legal_name ||
     row?.system_code ||

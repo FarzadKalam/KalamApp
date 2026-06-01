@@ -1450,13 +1450,18 @@ export const ModuleListRefine: React.FC<{
           ? "edit_orgs"
           : resolvedModuleId === "saas_demo_requests"
             ? "edit_requests"
+            : resolvedModuleId === "saas_user_announcements"
+              ? "edit_user_announcements"
             : null;
         const canViewSaas = saasPerms.view === true || saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false);
         const canEditSaas = canViewSaas && (saasPerms.edit === true || (editFieldKey ? saasFields[editFieldKey] === true : false) || resolvedModuleId === "saas_users");
+        const canDeleteSaas = resolvedModuleId === "saas_user_announcements"
+          ? canEditSaas
+          : false;
         setModulePermissions({
           view: canViewSaas,
           edit: canEditSaas,
-          delete: false,
+          delete: canDeleteSaas,
           record_scope: "all",
         });
         setFieldPermissions({});
@@ -1624,6 +1629,8 @@ export const ModuleListRefine: React.FC<{
   const canDeleteModule = modulePermissions.delete !== false;
   const canOpenModuleSettings = modulePermissions.view !== false && fieldPermissions.__module_settings !== false;
   const isSystemManagedModule = moduleConfig?.systemManaged === true;
+  const allowSystemManagedDelete = resolvedModuleId === "saas_user_announcements";
+  const allowSystemManagedFullBulkEdit = resolvedModuleId === "saas_user_announcements";
   const createDisabled = moduleConfig?.disableCreate === true;
   const detailDisabled = moduleConfig?.disableDetailView === true;
   const useSaasUserDrawer = moduleConfig?.listDetailSurface === "saas_user_drawer";
@@ -1635,7 +1642,7 @@ export const ModuleListRefine: React.FC<{
   const tagsField = moduleConfig?.fields.find(f => f.type === FieldType.TAGS)?.key;
   const tagOnlyBulkEditModule = useMemo<ModuleDefinition | null>(() => {
     if (!moduleConfig) return null;
-    if (!isSystemManagedModule || !tagsField) return moduleConfig;
+    if (!isSystemManagedModule || !tagsField || allowSystemManagedFullBulkEdit) return moduleConfig;
     const tagField = moduleConfig.fields.find((field) => field.type === FieldType.TAGS);
     if (!tagField) return moduleConfig;
     return {
@@ -1650,7 +1657,7 @@ export const ModuleListRefine: React.FC<{
         },
       ],
     };
-  }, [isSystemManagedModule, moduleConfig, tagsField]);
+  }, [allowSystemManagedFullBulkEdit, isSystemManagedModule, moduleConfig, tagsField]);
   const statusField = moduleConfig?.fields.find(f => f.type === FieldType.STATUS)?.key;
   const categoryField = resolvedModuleId === 'tasks'
     ? 'related_to_module'
@@ -3224,7 +3231,7 @@ export const ModuleListRefine: React.FC<{
 
   const handleBulkDelete = () => {
     if (selectedRowKeys.length === 0) return;
-    if (isSystemManagedModule) {
+    if (isSystemManagedModule && !allowSystemManagedDelete) {
       showListMessage("warning", "رکوردهای سیستمی قابل حذف نیستند.");
       return;
     }
@@ -3266,7 +3273,7 @@ export const ModuleListRefine: React.FC<{
   };
 
   const handleBulkEditOpen = () => {
-      if (isSystemManagedModule) {
+      if (isSystemManagedModule && !allowSystemManagedFullBulkEdit) {
         if (!tagsField) {
           showListMessage("warning", "برای این گزارش فیلد برچسب فعال نیست.");
           return;
@@ -3977,9 +3984,9 @@ export const ModuleListRefine: React.FC<{
                       }
                       selectAllPagesLoading={selectAllPagesLoading}
                       selectAllPagesDisabled={selectAllPagesLoading}
-                      onEdit={selectedRowKeys.length && canEditModule && (!isSystemManagedModule || !!tagsField) ? handleBulkEditOpen : undefined}
+                      onEdit={selectedRowKeys.length && canEditModule && (!isSystemManagedModule || !!tagsField || allowSystemManagedFullBulkEdit) ? handleBulkEditOpen : undefined}
                       onCopy={selectedRowKeys.length && canEditModule && !isSystemManagedModule ? handleCopyViaCreateForm : undefined}
-                      onDelete={selectedRowKeys.length && canDeleteModule && !isSystemManagedModule ? handleBulkDelete : undefined}
+                      onDelete={selectedRowKeys.length && canDeleteModule && (!isSystemManagedModule || allowSystemManagedDelete) ? handleBulkDelete : undefined}
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
                       extraActions={[

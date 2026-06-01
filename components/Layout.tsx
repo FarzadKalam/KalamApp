@@ -67,6 +67,9 @@ import {
 import ProfileAvatar from './common/ProfileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 import CommunicationLauncher from './communications/CommunicationLauncher';
+import useUserAnnouncements from '../hooks/useUserAnnouncements';
+import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
+import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -382,6 +385,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     || saasAdminPermissions.edit
     || saasAdminPermissionFields.edit_orgs
     || saasAdminPermissionFields.edit_requests
+    || saasAdminPermissionFields.edit_user_announcements
     || saasAdminPermissionFields.demo_override
   );
   const canViewAccountingDashboard = rolePermissions?.[ACCOUNTING_PERMISSION_KEY]?.view !== false;
@@ -403,6 +407,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       || canViewModule('workflows')
       || canViewModule('automation_execution_reports')
     ));
+  const {
+    headerAnnouncements: userHeaderAnnouncements,
+    popupAnnouncements: userPopupAnnouncements,
+    dismissAnnouncement: dismissUserAnnouncement,
+  } = useUserAnnouncements({
+    surface: 'user_panel',
+    path: `${location.pathname}${location.search || ''}`,
+  });
 
   const acquireIntervalRunnerLock = useCallback((ttlMs = 140000) => {
     try {
@@ -451,6 +463,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const profileId = String(currentUserProfile?.id || currentUser?.id || '').trim();
     if (!profileId) return;
 
+    let isSubscribed = false;
     const channel = supabase
       .channel(`layout-profile-avatar-${profileId}`)
       .on(
@@ -461,10 +474,16 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           setCurrentUserProfile((prev: any) => ({ ...(prev || {}), ...(nextProfile || {}) }));
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        isSubscribed = status === 'SUBSCRIBED';
+      });
 
     return () => {
-      void supabase.removeChannel(channel);
+      if (isSubscribed) {
+        void supabase.removeChannel(channel);
+        return;
+      }
+      void channel.unsubscribe();
     };
   }, [currentUser?.id, currentUserProfile?.id]);
 
@@ -652,6 +671,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_users', label: 'همه کاربران' },
           { key: '/saas_orgs', label: 'سازمان‌ها' },
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
+          { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
         ],
       }] : []),
@@ -688,6 +708,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/saas_users':
         case '/saas_orgs':
         case '/saas_demo_requests':
+        case '/saas_user_announcements':
         case '/taze-system/plans':
           return canViewSaasAdmin;
         case '/accounting/account-review':
@@ -1141,6 +1162,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           height: 'var(--app-viewport-height, 100dvh)',
         }}
       >
+        <UserAnnouncementsBanner
+          items={userHeaderAnnouncements}
+          onDismiss={dismissUserAnnouncement}
+        />
         <Header 
           className="sticky top-0 z-[1000] px-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-border h-16 w-full transition-colors duration-300"
           style={{ 
@@ -1457,6 +1482,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         <React.Suspense fallback={null}>
           <GlobalTaskProcessModalHost />
         </React.Suspense>
+        <UserAnnouncementsPopupHost
+          items={userPopupAnnouncements}
+          onDismiss={dismissUserAnnouncement}
+        />
       </AntLayout>
     </AntLayout>
   );
