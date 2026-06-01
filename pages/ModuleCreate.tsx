@@ -162,7 +162,13 @@ export const ModuleCreate = () => {
         if (isSaasAdminModuleId(moduleId)) {
           const saasPerms = context.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
           const saasFields = saasPerms.fields || {};
-          const editFieldKey = moduleId === "saas_orgs" ? "edit_orgs" : "edit_requests";
+          const editFieldKey = moduleId === "saas_orgs"
+            ? "edit_orgs"
+            : moduleId === "saas_demo_requests"
+              ? "edit_requests"
+              : moduleId === "saas_user_announcements"
+                ? "edit_user_announcements"
+                : undefined;
           const canViewSaas = saasPerms.view === true || saasPerms.edit === true || saasFields[editFieldKey] === true;
           if (active) {
             setCanCreate(canViewSaas && (saasPerms.edit === true || saasFields[editFieldKey] === true));

@@ -1785,6 +1785,7 @@ const ModuleShow: React.FC = () => {
       const SAAS_ADMIN_EDIT_MAP: Record<string, string> = {
         saas_orgs: 'edit_orgs',
         saas_demo_requests: 'edit_requests',
+        saas_user_announcements: 'edit_user_announcements',
       };
       if (isSaasAdminModuleId(moduleId)) {
         const saasPerms = (permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {}) as Record<string, any>;
@@ -6683,5 +6684,4 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
-
 

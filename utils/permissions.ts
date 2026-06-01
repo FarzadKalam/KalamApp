@@ -51,7 +51,7 @@ export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
-export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users'] as const;
+export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
   SAAS_ADMIN_MODULE_ID_SET.has(String(moduleId || '').trim());
@@ -59,6 +59,7 @@ export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
   { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
   { key: 'edit_requests', label: 'ویرایش درخواست‌های دمو' },
+  { key: 'edit_user_announcements', label: 'ویرایش اعلانات کاربران' },
   { key: 'publish_saas_story', label: 'انتشار استوری برای همه سازمان‌ها' },
   { key: 'publish_saas_admin_story', label: 'انتشار استوری برای مدیران سازمان‌ها' },
 ];

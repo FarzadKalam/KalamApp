@@ -299,6 +299,24 @@ const formatTextForInput = (raw: any): string => {
   return toPersianNumber(normalizeDigitsToEnglish(raw));
 };
 
+const formatJsonForEditor = (raw: any): string => {
+  if (raw === null || raw === undefined || raw === '') return '';
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return '';
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return raw;
+    }
+  }
+  try {
+    return JSON.stringify(raw, null, 2);
+  } catch {
+    return String(raw);
+  }
+};
+
 interface SmartFieldRendererProps {
   field: ModuleField;
   value: any;
@@ -440,6 +458,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const fieldKey = field?.key || 'unknown';
   const isLongTextField = fieldType === FieldType.LONG_TEXT || fieldType === FieldType.SUPER_LONG_TEXT;
   const isSuperLongTextField = fieldType === FieldType.SUPER_LONG_TEXT;
+  const isJsonField = fieldType === FieldType.JSON;
   const formattedLongTextValue = isLongTextField ? formatTextForInput(value) : '';
   const [longTextDraftValue, setLongTextDraftValue] = useState(formattedLongTextValue);
   const longTextDraftValueRef = useRef(formattedLongTextValue);
@@ -448,6 +467,8 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const longTextCommitTimerRef = useRef<number | null>(null);
   const lastCommittedLongTextValueRef = useRef(normalizeDigitsToEnglish(formattedLongTextValue));
   const onChangeRef = useRef(onChange);
+  const [jsonDraftValue, setJsonDraftValue] = useState(() => formatJsonForEditor(value));
+  const [jsonValidationError, setJsonValidationError] = useState('');
   const { label: currencyLabel } = useCurrencyConfig();
   const getProtectedDynamicValues = (dynamicCategory?: string) => (
     ['main_unit', 'task_type'].includes(String(dynamicCategory || '').trim())
@@ -478,6 +499,12 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       setLongTextDraftValue(formattedLongTextValue);
     }
   }, [formattedLongTextValue, isLongTextField]);
+
+  useEffect(() => {
+    if (!isJsonField) return;
+    setJsonDraftValue(formatJsonForEditor(value));
+    setJsonValidationError('');
+  }, [fieldKey, isJsonField, value]);
 
   useEffect(() => () => {
     if (longTextCommitTimerRef.current !== null) {
@@ -883,15 +910,39 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   }, [fieldKey, forceEditMode]);
 
   const effectiveRelationField = useMemo(() => {
-    if (fieldType === FieldType.MULTI_RELATION && field.multiRelationConfig) {
-      return { ...field, relationConfig: field.multiRelationConfig };
+    if (fieldType === FieldType.MULTI_RELATION) {
+      const multiRelationConfig = field.multiRelationConfig || field.relationConfig;
+      if (multiRelationConfig) {
+        return { ...field, relationConfig: multiRelationConfig };
+      }
     }
     return field;
   }, [field, fieldType]);
 
+  const commitJsonValue = useCallback((rawValue: string, finalAttempt = false) => {
+    const trimmed = String(rawValue || '').trim();
+    if (!trimmed) {
+      setJsonValidationError('');
+      onChange('');
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      setJsonValidationError('');
+      onChange(parsed);
+      if (finalAttempt) {
+        setJsonDraftValue(formatJsonForEditor(parsed));
+      }
+    } catch {
+      if (finalAttempt) {
+        setJsonValidationError('فرمت JSON معتبر نیست');
+      }
+    }
+  }, [onChange]);
+
   const loadRelationOptions = async (searchText = '', exactId?: string | number | null) => {
     if (fieldType === FieldType.MULTI_RELATION) {
-      if (!field.multiRelationConfig) return;
+      if (!(field.multiRelationConfig || field.relationConfig)) return;
     } else if (fieldType !== FieldType.RELATION || !field.relationConfig) {
       return;
     }
@@ -2236,6 +2287,35 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             )}
           </div>
         );
+
+      case FieldType.JSON:
+        return (
+          <div className="w-full">
+            <Input.TextArea
+              {...commonProps}
+              value={jsonDraftValue}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setJsonDraftValue(nextValue);
+                setJsonValidationError('');
+                commitJsonValue(nextValue, false);
+              }}
+              onBlur={(event) => {
+                commitJsonValue(event.target.value, true);
+              }}
+              rows={compactMode ? 1 : 4}
+              autoSize={compactMode ? undefined : { minRows: 4, maxRows: 10 }}
+              status={jsonValidationError ? 'error' : undefined}
+              placeholder={compactMode ? undefined : 'مثال: [] یا {"field":"value"}'}
+              style={{ width: '100%', direction: 'ltr', textAlign: 'left' }}
+            />
+            {jsonValidationError ? (
+              <div className="mt-1 text-xs text-red-500">
+                {jsonValidationError}
+              </div>
+            ) : null}
+          </div>
+        );
       
       case FieldType.NUMBER:
       case FieldType.PRICE:
@@ -2345,7 +2425,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
         const multiRelIsSearching = multiRelNormalizedQuery.length > 0;
         const multiRelOptions = multiRelIsSearching ? relationLiveOptions : relationResolvedOptions;
         const multiRelValues = Array.isArray(value) ? value.filter(Boolean) : [];
-        const multiRelTargetModule = String(field.multiRelationConfig?.targetModule || '').trim();
+        const multiRelTargetModule = String(field.multiRelationConfig?.targetModule || field.relationConfig?.targetModule || '').trim();
         return (
           <AdaptiveSelectField
             {...commonProps}

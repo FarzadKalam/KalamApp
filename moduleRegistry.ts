@@ -58,6 +58,7 @@ import { surveysModule } from './modules/surveysConfig';
 import { saasOrgsConfig } from './modules/saasOrgsConfig';
 import { saasDemoRequestsConfig } from './modules/saasDemoRequestsConfig';
 import { saasUsersConfig } from './modules/saasUsersConfig';
+import { saasUserAnnouncementsConfig } from './modules/saasUserAnnouncementsConfig';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
 import { supportsGlobalAssignee } from './utils/assigneeSupport';
 import { getAssigneeLabel } from './utils/assigneeLabel';
@@ -210,6 +211,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   saas_orgs: saasOrgsConfig,
   saas_demo_requests: saasDemoRequestsConfig,
   saas_users: saasUsersConfig,
+  saas_user_announcements: saasUserAnnouncementsConfig,
 };
 
 export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(

@@ -9,6 +9,7 @@ import SmartFieldRenderer from './SmartFieldRenderer';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
 import SmartTableRenderer from './SmartTableRenderer';
+import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import SummaryCard from './SummaryCard';
 import RecordImageBox from './RecordImageBox';
 import { calculateSummary } from '../utils/calculations';
@@ -57,6 +58,26 @@ import { evaluateLegacyVisibilityRule, isConditionalFieldValueEmpty } from '../u
 import { buildModuleOnChangePatch, normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
+const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
+const SAAS_ANNOUNCEMENT_CONDITION_FIELDS: ModuleDefinition['fields'] = [
+  {
+    key: 'surface',
+    type: FieldType.SELECT,
+    labels: { fa: 'سطح نمایش', en: 'Surface' },
+    options: [
+      { value: 'public_site', label: 'سایت عمومی' },
+      { value: 'user_panel', label: 'پنل کاربران' },
+      { value: 'login_page', label: 'صفحه لاگین' },
+    ],
+  } as any,
+  { key: 'path', type: FieldType.TEXT, labels: { fa: 'مسیر', en: 'Path' } } as any,
+  { key: 'host', type: FieldType.TEXT, labels: { fa: 'هاست', en: 'Host' } } as any,
+  { key: 'org_id', type: FieldType.TEXT, labels: { fa: 'شناسه سازمان', en: 'Org ID' } } as any,
+  { key: 'user_id', type: FieldType.TEXT, labels: { fa: 'شناسه کاربر', en: 'User ID' } } as any,
+  { key: 'role_id', type: FieldType.TEXT, labels: { fa: 'شناسه نقش', en: 'Role ID' } } as any,
+  { key: 'is_demo_user', type: FieldType.CHECKBOX, labels: { fa: 'کاربر دمو باشد', en: 'Is Demo User' } } as any,
+  { key: 'is_authenticated', type: FieldType.CHECKBOX, labels: { fa: 'کاربر لاگین باشد', en: 'Is Authenticated' } } as any,
+];
 
 interface SmartFormProps {
   module: ModuleDefinition;
@@ -265,9 +286,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const liveValues = form.getFieldsValue(true);
     return { ...formData, ...(watchedValues || {}), ...(liveValues || {}) };
   };
-  const currentValues = watchedValues && Object.keys(watchedValues).length > 0
-    ? watchedValues
-    : formData;
+  const currentValues = useMemo(() => {
+    const normalizedWatchedValues = Object.fromEntries(
+      Object.entries((watchedValues as Record<string, any>) || {})
+        .filter(([, value]) => value !== undefined)
+    );
+    return {
+      ...(formData || {}),
+      ...normalizedWatchedValues,
+    };
+  }, [formData, watchedValues]);
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
@@ -1509,7 +1537,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
         if (field.type === FieldType.MULTI_RELATION) {
           if (!Array.isArray(currentValue) || currentValue.length === 0) {
-            values[field.key] = null;
+            values[field.key] = module.id === 'saas_user_announcements' ? [] : null;
           }
           return;
         }
@@ -2649,7 +2677,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
                         {block.icon && <i className={`ml-2 ${block.icon}`}></i>}
                         {block.titles.fa}
                       </Divider>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div
+                        className={
+                          module.id === 'saas_user_announcements' && block.id === 'advanced'
+                            ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4'
+                            : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4'
+                        }
+                      >
                           {blockFields.map(field => {
                             const preparedField = conditionalFieldRuntime.getRuntimeField(getPreparedField(field));
                             if (!preparedField || !conditionalFieldRuntime.isFieldVisible(preparedField)) return null;
@@ -2659,39 +2693,62 @@ const SmartForm: React.FC<SmartFormProps> = ({
                             if (currentSummaryData && summaryConfigObj?.calculationType === SummaryCalculationType.INVOICE_FINANCIALS) {
                             }
                             const options = getResolvedOptions(preparedField);
+                            const isSaasAnnouncementConditionField =
+                              module.id === 'saas_user_announcements' &&
+                              SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS.has(String(preparedField.key || ''));
                             return (
                               <div
                                 key={preparedField.key}
-                                className={(preparedField.key === 'execution_process_draft' ||
+                                className={((preparedField.key === 'execution_process_draft' ||
                                   preparedField.key === 'marketing_process_draft' ||
                                   preparedField.key === 'template_stages_preview' ||
                                   preparedField.key === 'run_stages_preview' ||
                                   preparedField.type === FieldType.SUPER_LONG_TEXT)
                                   ? 'md:col-span-2 lg:col-span-3'
-                                  : ''}
+                                  : '')}
                               >
-                                 <SmartFieldRenderer
-                                  field={preparedField}
-                                  value={fieldValue}
-                                  recordId={recordId}
-                                  onChange={(val) => {
-                                    if (!isReadOnly) {
-                                      form.setFieldValue(preparedField.key, val);
+                                {isSaasAnnouncementConditionField ? (
+                                  <WorkflowConditionsGroup
+                                    value={Array.isArray(fieldValue) ? fieldValue : []}
+                                    onChange={(nextConditions) => {
+                                      if (isReadOnly) return;
+                                      form.setFieldValue(preparedField.key, nextConditions);
                                       setFormData((prev: any) => ({
                                         ...prev,
-                                        [preparedField.key]: val,
+                                        [preparedField.key]: nextConditions,
                                       }));
-                                    }
-                                 }}
-                                  forceEditMode={true} options={options}
-                                  disableRequired={isBulkEdit}
-                                  onOptionsUpdate={loadDynamicOptions}
-                                  moduleId={module.id}
-                                  allValues={currentValues}
-                                  overlayZIndexBase={fieldPopupZIndexBase}
-                                  popupContainer={resolveSmartFormPopupContainer}
-                                  preferLocalPopupContainer
-                                />
+                                    }}
+                                    fields={SAAS_ANNOUNCEMENT_CONDITION_FIELDS as any}
+                                    dynamicOptions={{}}
+                                    relationOptions={{}}
+                                    disabled={Boolean(isReadOnly)}
+                                    overlayZIndexBase={fieldPopupZIndexBase + 30}
+                                    popupContainer={resolveSmartFormPopupContainer}
+                                  />
+                                ) : (
+                                  <SmartFieldRenderer
+                                    field={preparedField}
+                                    value={fieldValue}
+                                    recordId={recordId}
+                                    onChange={(val) => {
+                                      if (!isReadOnly) {
+                                        form.setFieldValue(preparedField.key, val);
+                                        setFormData((prev: any) => ({
+                                          ...prev,
+                                          [preparedField.key]: val,
+                                        }));
+                                      }
+                                   }}
+                                    forceEditMode={true} options={options}
+                                    disableRequired={isBulkEdit}
+                                    onOptionsUpdate={loadDynamicOptions}
+                                    moduleId={module.id}
+                                    allValues={currentValues}
+                                    overlayZIndexBase={fieldPopupZIndexBase}
+                                    popupContainer={resolveSmartFormPopupContainer}
+                                    preferLocalPopupContainer
+                                  />
+                                )}
                              </div>
                            );
                          })}

@@ -11,6 +11,9 @@ import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLogi
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 import { signOutLocalSession } from '../utils/authSession';
+import useUserAnnouncements from '../hooks/useUserAnnouncements';
+import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
+import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -48,6 +51,14 @@ const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { token } = theme.useToken();
+  const {
+    headerAnnouncements,
+    popupAnnouncements,
+    dismissAnnouncement,
+  } = useUserAnnouncements({
+    surface: 'login_page',
+    path: `${location.pathname}${location.search || ''}`,
+  });
   const postLoginRedirect = useMemo(() => {
     const params = new URLSearchParams(location.search || '');
     const redirectTo = String(params.get('redirectTo') || '').trim();
@@ -595,6 +606,12 @@ const Login = () => {
         background: `radial-gradient(circle at top, rgba(var(--brand-200-rgb), 0.28), transparent 36%), ${token.colorBgLayout}`,
       }}
     >
+      <div className="fixed top-0 left-0 right-0 z-[1200]">
+        <UserAnnouncementsBanner
+          items={headerAnnouncements}
+          onDismiss={dismissAnnouncement}
+        />
+      </div>
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <div
@@ -777,6 +794,10 @@ const Login = () => {
           نسخه آزمایشی {import.meta.env.VITE_APP_VERSION || '1.0.2'}
         </div>
       </div>
+      <UserAnnouncementsPopupHost
+        items={popupAnnouncements}
+        onDismiss={dismissAnnouncement}
+      />
     </div>
   );
 };

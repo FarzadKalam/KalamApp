@@ -784,6 +784,7 @@ function App() {
             <Route path="/taze-system" element={<SaasAdminDashboard />} />
             <Route path="/taze-system/orgs" element={<Navigate to="/saas_orgs" replace />} />
             <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />
+            <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
 
             <Route path="/settings" element={<SettingsPage />} />

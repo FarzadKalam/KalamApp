@@ -19,6 +19,7 @@ const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
 
 type RelationSourceConfig = {
   targetModule: string;
+  targetTable: string;
   targetField?: string;
   filter?: Record<string, any>;
   tagLabel?: string;
@@ -96,6 +97,17 @@ const buildFinancialOperationalSearchValues = (targetModule: string, item: any) 
 };
 
 const buildRelationOptionLabel = (targetModule: string, item: any, targetField: string) => {
+  if (targetModule === 'saas_users') {
+    const fullName = String(item?.[targetField] || item?.full_name || '').trim();
+    const email = String(item?.email || '').trim();
+    const mobile = String(item?.mobile || '').trim();
+    const roleTitle = String(item?.role_title || '').trim();
+    const orgName = String(item?.org_name || '').trim();
+    const roleWithOrg = [roleTitle, orgName].filter(Boolean).join(' - ');
+    const resolvedLabel = fullName || email || mobile || roleWithOrg;
+    return resolvedLabel || 'کاربر بدون نام';
+  }
+
   if (targetModule === 'customers') {
     return String(item?.[targetField] || item?.business_name || item?.full_name || item?.system_code || item?.id || 'بدون نام').trim();
   }
@@ -129,6 +141,9 @@ const buildRelationOptionLabel = (targetModule: string, item: any, targetField: 
   const baseLabel = getRecordDisplayLabel(item, targetModule, {
     fallback: buildRelationDisplayLabel(targetModule, item, targetField),
   });
+  if (isUuidLikeValue(baseLabel)) {
+    return 'بدون عنوان';
+  }
   const statusLabel = getRelationStatusLabel(targetModule, item);
   return statusLabel ? `${baseLabel} [${statusLabel}]` : baseLabel;
 };
@@ -341,6 +356,7 @@ const buildRelationSources = (
   return configuredSources
     .map((source: any): RelationSourceConfig => ({
       targetModule: dependsOnModule || String(source?.targetModule || relationConfig?.targetModule || '').trim(),
+      targetTable: '',
       targetField: source?.targetField || relationConfig?.targetField,
       filter: dependsOnModule ? undefined : source?.filter || relationConfig?.filter,
       tagLabel: source?.tagLabel,
@@ -355,6 +371,15 @@ const buildRelationSources = (
         ? source.requireDetail
         : relationConfig?.requireDetail,
     }))
+    .map((source: RelationSourceConfig) => {
+      const normalizedModule = String(source?.targetModule || '').trim();
+      const configuredTable = String((MODULES[normalizedModule]?.table || normalizedModule) || '').trim();
+      return {
+        ...source,
+        targetModule: normalizedModule,
+        targetTable: configuredTable || normalizedModule,
+      };
+    })
     .filter((source: RelationSourceConfig) => String(source?.targetModule || '').trim());
 };
 
@@ -478,6 +503,7 @@ export const fetchRelationOptionsForField = async (
   if (!targetModule) return [];
   const sources = buildRelationSources(relationConfig, dependsOnModule).map((source: RelationSourceConfig) => {
     const sourceTargetModule = String(source.targetModule || '').trim();
+    const sourceTargetTable = String(source.targetTable || sourceTargetModule).trim();
     const sourceTargetField = getPreferredRelationTargetField(sourceTargetModule, source.targetField || relationConfig.targetField);
     const includeSystemCode = sourceTargetModule !== 'cheques' && supportsSystemCode(sourceTargetModule);
     const configuredDisplayFields = getRelationDisplayFields(sourceTargetModule, sourceTargetField);
@@ -497,6 +523,7 @@ export const fetchRelationOptionsForField = async (
 
     return {
       moduleName: sourceTargetModule,
+      tableName: sourceTargetTable,
       targetField: sourceTargetField,
       filter: source.filter,
       searchFields,
@@ -510,6 +537,7 @@ export const fetchRelationOptionsForField = async (
   const cacheKey = JSON.stringify({
     sources: sources.map((source: any) => ({
       moduleName: source.moduleName,
+      tableName: source.tableName,
       targetField: source.targetField,
       filter: source.filter || null,
     })),
@@ -554,7 +582,7 @@ export const fetchRelationOptionsForField = async (
 
       for (const selectExpr of source.selectVariants) {
         try {
-          const rows = await runRelationQuery(supabaseClient, source.moduleName, selectExpr, {
+          const rows = await runRelationQuery(supabaseClient, source.tableName || source.moduleName, selectExpr, {
             filter: scopedFilter,
             search,
             searchFields: source.searchFields,
