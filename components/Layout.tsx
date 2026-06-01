@@ -66,7 +66,6 @@ import {
 } from '../utils/orgSaasStatus';
 import ProfileAvatar from './common/ProfileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
-import CommunicationLauncher from './communications/CommunicationLauncher';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
@@ -1345,15 +1344,21 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </Popconfirm>
             )}
             <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
-            <React.Suspense fallback={null}>
-              {communicationsAccess.canUsePanel && location.pathname !== '/messages' ? (
-                <CommunicationLauncher
-                  isMobile={isMobile}
-                  currentUserId={currentUserProfile?.id || currentUser?.id || null}
-                  currentRoleId={currentUserProfile?.role_id || null}
-                  currentOrgId={resolvedOrgId || currentUserProfile?.org_id || null}
+            {communicationsAccess.canUseWorkspace ? (
+              <Tooltip title="پیام‌رسانی" placement="bottom">
+                <Button
+                  type="text"
+                  shape="circle"
+                  icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
+                  onPointerEnter={() => preloadRoute?.('/messages')}
+                  onFocus={() => preloadRoute?.('/messages')}
+                  onClick={() => handleSidebarNavigate('/messages')}
+                  aria-label="پیام‌رسانی"
+                  className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
                 />
-              ) : null}
+              </Tooltip>
+            ) : null}
+            <React.Suspense fallback={null}>
               <NotificationsPopover isMobile={isMobile} variant="alerts" />
             </React.Suspense>
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>

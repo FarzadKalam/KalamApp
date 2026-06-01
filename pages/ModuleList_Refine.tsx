@@ -13,15 +13,10 @@ import type { FilterValue } from "antd/es/table/interface";
 import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined } from "@ant-design/icons";
 import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
-import SmartForm from "../components/SmartForm";
 import { supabase } from "../supabaseClient";
 import Toolbar from "../components/moduleList/Toolbar";
 import BulkActionsBar from "../components/moduleList/BulkActionsBar";
-import MergeRecordsModal from "../components/moduleList/MergeRecordsModal";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
-import GridView from "../components/moduleList/GridView";
-import ModuleCalendarView from "../components/moduleList/CalendarView";
-import RenderCardItem from "../components/moduleList/RenderCardItem";
 import {
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
@@ -32,18 +27,10 @@ import {
   WORKFLOWS_PERMISSION_KEY,
   type RecordScope,
 } from "../utils/permissions";
-import BulkProductsCreateModal from "../components/products/BulkProductsCreateModal";
-import WorkflowsManager from "../components/workflows/WorkflowsManager";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
-import ExcelImportWizard from "../components/moduleList/ExcelImportWizard";
-import PrintSection from "../components/moduleShow/PrintSection";
-import { useListPrintManager } from "../utils/printTemplates/useListPrintManager";
-import { buildListPrintableFields, escapeCsvCell, formatListCellValue } from "../utils/listPrintExport";
 import { readCurrencyConfig } from "../utils/currency";
-
-const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagIdMap, fetchRecordTagsMap } from "../utils/referenceData";
 import { getFieldLabelFa } from "../utils/fieldLabel";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
@@ -54,15 +41,11 @@ import { mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } 
 import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListVisibleFields } from "../utils/moduleListOptions";
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
-import GoalsManager from "../components/goals/GoalsManager";
-import GoalProgressSlider from "../components/goals/GoalProgressSlider";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
-import RelatedRecordPopover from "../components/RelatedRecordPopover";
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
 import { formatIranMobileForInput } from "../utils/phoneNumber";
-import MessageComposerModal from "../components/MessageComposerModal";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
 import { getAssigneeLabel } from "../utils/assigneeLabel";
 import { syncDefaultPriceListItemsToProducts } from "../utils/priceListDefaults";
@@ -78,7 +61,6 @@ import { enrichAttendancePresenceRows } from "../utils/attendancePresence";
 import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill";
 import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
-import SaasUserAdminDrawer from "../components/saas/SaasUserAdminDrawer";
 import type { SaasAdminUserRow } from "../utils/saasUserAdmin";
 import {
   buildModuleListSearchFieldKeys,
@@ -86,6 +68,22 @@ import {
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
 import { getBaseModuleFieldDefinition } from "../utils/moduleSettingsRuntime";
+
+const MapView = React.lazy(() => import("../components/moduleList/MapView"));
+const SmartForm = React.lazy(() => import("../components/SmartForm"));
+const MergeRecordsModal = React.lazy(() => import("../components/moduleList/MergeRecordsModal"));
+const GridView = React.lazy(() => import("../components/moduleList/GridView"));
+const ModuleCalendarView = React.lazy(() => import("../components/moduleList/CalendarView"));
+const RenderCardItem = React.lazy(() => import("../components/moduleList/RenderCardItem"));
+const BulkProductsCreateModal = React.lazy(() => import("../components/products/BulkProductsCreateModal"));
+const WorkflowsManager = React.lazy(() => import("../components/workflows/WorkflowsManager"));
+const GoalsManager = React.lazy(() => import("../components/goals/GoalsManager"));
+const GoalProgressSlider = React.lazy(() => import("../components/goals/GoalProgressSlider"));
+const ExcelImportWizard = React.lazy(() => import("../components/moduleList/ExcelImportWizard"));
+const ListPrintRuntime = React.lazy(() => import("../components/moduleList/ListPrintRuntime"));
+const MessageComposerModal = React.lazy(() => import("../components/MessageComposerModal"));
+const SaasUserAdminDrawer = React.lazy(() => import("../components/saas/SaasUserAdminDrawer"));
+const RelatedRecordPopover = React.lazy(() => import("../components/RelatedRecordPopover"));
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -703,6 +701,7 @@ export const ModuleListRefine: React.FC<{
   const [canOpenWorkflows, setCanOpenWorkflows] = useState(true);
   const [canOpenGoals, setCanOpenGoals] = useState(true);
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
+  const [isListPrintModalOpen, setIsListPrintModalOpen] = useState(false);
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
@@ -1597,10 +1596,6 @@ export const ModuleListRefine: React.FC<{
     [fieldPermissions]
   );
 
-  const listPrintableFields = useMemo(
-    () => buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions),
-    [canViewField, dynamicOptions, moduleConfig, visibleColumns]
-  );
   const handleVisibleDataChange = useCallback((rows: any[]) => {
     const nextKeys = rows.map((row: any) => row?.id).filter(Boolean);
     setListVisibleRowKeys((prev) => {
@@ -1614,14 +1609,6 @@ export const ModuleListRefine: React.FC<{
       return nextKeys;
     });
   }, []);
-
-  const listPrintManager = useListPrintManager({
-    moduleId: resolvedModuleId || '',
-    moduleConfig,
-    rows: listPrintRows,
-    printableFields: listPrintableFields,
-    relationOptions,
-  });
 
   const recordScope = modulePermissions.record_scope ?? (modulePermissions.view === false ? 'own' : 'all');
   const canViewModule = modulePermissions.view !== false || recordScope !== 'all';
@@ -3487,9 +3474,12 @@ export const ModuleListRefine: React.FC<{
         return;
       }
 
-      const exportFields = listPrintableFields.length > 0
-        ? listPrintableFields
-        : buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions);
+      const {
+        buildListPrintableFields,
+        escapeCsvCell,
+        formatListCellValue,
+      } = await import("../utils/listPrintExport");
+      const exportFields = buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions);
       const currencyLabel = readCurrencyConfig().label || '';
       const headers = exportFields.map((field) => escapeCsvCell(field.label)).join(',');
       const rows = recordsToExport
@@ -3515,7 +3505,7 @@ export const ModuleListRefine: React.FC<{
     } finally {
       hide();
     }
-  }, [canViewField, dynamicOptions, fetchSelectedRecords, listPrintableFields, moduleConfig, relationOptions, resolvedModuleId, selectedRowKeys.length, showListMessage, visibleColumns]);
+  }, [canViewField, dynamicOptions, fetchSelectedRecords, moduleConfig, relationOptions, resolvedModuleId, selectedRowKeys.length, showListMessage, visibleColumns]);
 
   const handleExportPrint = useCallback(async () => {
     if (!selectedRowKeys.length) return;
@@ -3527,13 +3517,13 @@ export const ModuleListRefine: React.FC<{
         return;
       }
       setListPrintRows(recordsToPrint);
-      listPrintManager.setIsPrintModalOpen(true);
+      setIsListPrintModalOpen(true);
     } catch (error: any) {
       showListMessage('error', toFaErrorMessage(error, 'آماده‌سازی چاپ ناموفق بود.'));
     } finally {
       hide();
     }
-  }, [fetchSelectedRecords, listPrintManager, selectedRowKeys.length, showListMessage]);
+  }, [fetchSelectedRecords, selectedRowKeys.length, showListMessage]);
 
   const handleBulkCopy = () => {
     if (!selectedRowKeys.length || !resolvedModuleId || !moduleConfig) return;
@@ -4052,10 +4042,12 @@ export const ModuleListRefine: React.FC<{
                     />
                   ) : (
                     isMobileViewport && !isSystemManagedModule ? (
-                      <GoalProgressSlider
-                        moduleId={resolvedModuleId}
-                        placement="module_list"
-                      />
+                      <React.Suspense fallback={null}>
+                        <GoalProgressSlider
+                          moduleId={resolvedModuleId}
+                          placement="module_list"
+                        />
+                      </React.Suspense>
                     ) : null
                   )}
                 </div>
@@ -4303,6 +4295,7 @@ export const ModuleListRefine: React.FC<{
                 )}
                   {viewMode === ViewMode.GRID && (
                 <div className="h-full overflow-y-auto px-1 pb-1 custom-scrollbar flex flex-col">
+                  <React.Suspense fallback={<ModuleListContentSkeleton viewMode={viewMode} />}>
                             <GridView
                               data={gridData}
                               moduleId={resolvedModuleId}
@@ -4319,6 +4312,7 @@ export const ModuleListRefine: React.FC<{
                               allRoles={allRoles}
                               relationOptions={effectiveRelationOptions}
                             />
+                  </React.Suspense>
                             
                     {/* Load More Button */}
                     {gridPageSize < enrichedData.length && (
@@ -4348,19 +4342,22 @@ export const ModuleListRefine: React.FC<{
                 )}
                 {viewMode === ViewMode.CALENDAR && moduleConfig && resolvedModuleId && (
                 <div className="h-full">
-                  <ModuleCalendarView
-                    data={enrichedData}
-                    moduleId={resolvedModuleId}
-                    moduleConfig={moduleConfig}
-                    dateFields={availableCalendarFields}
-                    dateFieldKey={calendarDateField || availableCalendarFields[0]?.key || ""}
-                    onDateFieldChange={setCalendarDateField}
-                    navigate={moduleListNavigate}
-                  />
+                  <React.Suspense fallback={<ModuleListContentSkeleton viewMode={viewMode} />}>
+                    <ModuleCalendarView
+                      data={enrichedData}
+                      moduleId={resolvedModuleId}
+                      moduleConfig={moduleConfig}
+                      dateFields={availableCalendarFields}
+                      dateFieldKey={calendarDateField || availableCalendarFields[0]?.key || ""}
+                      onDateFieldChange={setCalendarDateField}
+                      navigate={moduleListNavigate}
+                    />
+                  </React.Suspense>
                 </div>
                 )}
                 {viewMode === ViewMode.KANBAN && (
                 <div className="flex items-start gap-4 md:gap-5 h-full overflow-x-auto pb-2 px-1">
+                  <React.Suspense fallback={<ModuleListContentSkeleton viewMode={viewMode} />}>
                   {moduleConfig.fields.find(f => f.key === kanbanGroupBy)?.options?.map((col: any) => {
                     const columnKey = String(col?.value ?? '');
                     const columnItems = enrichedData.filter((d: any) => d[kanbanGroupBy] === col.value);
@@ -4445,6 +4442,7 @@ export const ModuleListRefine: React.FC<{
                       </div>
                     );
                   })}
+                  </React.Suspense>
                 </div>
                )}
              </>
@@ -4452,6 +4450,7 @@ export const ModuleListRefine: React.FC<{
          </div>
          </ViewWrapper>
        {isBulkEditOpen && (
+         <React.Suspense fallback={null}>
            <SmartForm 
                module={isSystemManagedModule && isBulkEditMode ? (tagOnlyBulkEditModule || moduleConfig) : moduleConfig}
                visible={isBulkEditOpen}
@@ -4466,8 +4465,10 @@ export const ModuleListRefine: React.FC<{
                 title={isBulkEditMode ? `ویرایش گروهی ${selectedRowKeys.length} مورد` : `ویرایش مورد انتخابی`}
                isBulkEdit={isBulkEditMode}
            />
+         </React.Suspense>
        )}
       {bulkBuildModule && (
+        <React.Suspense fallback={null}>
         <SmartForm
           module={bulkBuildModule}
           visible={!!bulkBuildModule}
@@ -4479,8 +4480,10 @@ export const ModuleListRefine: React.FC<{
               : `ساخت لیست قیمت از ${selectedRowKeys.length} مورد`
           }
         />
+        </React.Suspense>
       )}
       {isMergeModalOpen && moduleConfig ? (
+        <React.Suspense fallback={null}>
         <MergeRecordsModal
           open={isMergeModalOpen}
           moduleConfig={moduleConfig}
@@ -4497,8 +4500,10 @@ export const ModuleListRefine: React.FC<{
           }}
           onConfirm={handleMergeConfirm}
         />
+        </React.Suspense>
       ) : null}
-      {resolvedModuleId === 'products' && (
+      {resolvedModuleId === 'products' && isBulkProductsModalOpen ? (
+        <React.Suspense fallback={null}>
         <BulkProductsCreateModal
           open={isBulkProductsModalOpen}
           onClose={() => setIsBulkProductsModalOpen(false)}
@@ -4507,8 +4512,10 @@ export const ModuleListRefine: React.FC<{
             tableQueryResult.refetch();
           }}
         />
-      )}
+        </React.Suspense>
+      ) : null}
       {isWorkflowsModalOpen ? (
+        <React.Suspense fallback={null}>
         <WorkflowsManager
           inline={false}
           open={isWorkflowsModalOpen}
@@ -4516,47 +4523,49 @@ export const ModuleListRefine: React.FC<{
           defaultModuleId={resolvedModuleId}
           context="module_list"
         />
+        </React.Suspense>
       ) : null}
       {isGoalsModalOpen ? (
+        <React.Suspense fallback={null}>
         <GoalsManager
           inline={false}
           open={isGoalsModalOpen}
           onClose={() => setIsGoalsModalOpen(false)}
           defaultModuleId={resolvedModuleId}
         />
+        </React.Suspense>
       ) : null}
-      <ExcelImportWizard
-        open={isExcelImportModalOpen}
-        moduleId={resolvedModuleId}
-        moduleConfig={moduleConfig}
-        onClose={() => setIsExcelImportModalOpen(false)}
-        onImported={() => {
-          setIsExcelImportModalOpen(false);
-          tableQueryResult.refetch();
-        }}
-      />
-      <PrintSection
-        isPrintModalOpen={listPrintManager.isPrintModalOpen}
-        onClose={() => listPrintManager.setIsPrintModalOpen(false)}
-        onPreparePrint={listPrintManager.preparePrint}
-        onPrint={listPrintManager.handlePrint}
-        printTemplates={listPrintManager.printTemplates}
-        selectedTemplateId={listPrintManager.selectedTemplateId}
-        onSelectTemplate={listPrintManager.setSelectedTemplateId}
-        renderPrintCard={listPrintManager.renderPrintCard}
-        printMode={listPrintManager.printMode}
-        printableFields={listPrintManager.printableFieldsForTemplate}
-        selectedPrintFields={listPrintManager.selectedPrintFields}
-        onTogglePrintField={listPrintManager.handleTogglePrintField}
-        onTogglePrintFieldGroup={listPrintManager.handleTogglePrintFieldGroup}
-        onMovePrintField={listPrintManager.handleMovePrintField}
-        onSavePrintFields={listPrintManager.handleSavePrintFields}
-        savingPrintFields={listPrintManager.savingPrintFields}
-        onRefreshPreview={listPrintManager.refreshTemplates}
-        allowFieldSelectionTab={listPrintManager.allowFieldSelectionTab}
-        previewMeta={listPrintManager.previewMeta}
-      />
+      {isExcelImportModalOpen ? (
+        <React.Suspense fallback={null}>
+          <ExcelImportWizard
+            open
+            moduleId={resolvedModuleId}
+            moduleConfig={moduleConfig}
+            onClose={() => setIsExcelImportModalOpen(false)}
+            onImported={() => {
+              setIsExcelImportModalOpen(false);
+              tableQueryResult.refetch();
+            }}
+          />
+        </React.Suspense>
+      ) : null}
+      {isListPrintModalOpen && moduleConfig ? (
+        <React.Suspense fallback={null}>
+          <ListPrintRuntime
+            open
+            moduleId={resolvedModuleId || ""}
+            moduleConfig={moduleConfig}
+            rows={listPrintRows}
+            canViewField={canViewField}
+            visibleColumns={visibleColumns}
+            dynamicOptions={dynamicOptions}
+            relationOptions={relationOptions}
+            onClose={() => setIsListPrintModalOpen(false)}
+          />
+        </React.Suspense>
+      ) : null}
             {isBulkSmsComposerOpen ? (
+        <React.Suspense fallback={null}>
         <MessageComposerModal
           open
           mode="sms"
@@ -4569,34 +4578,39 @@ export const ModuleListRefine: React.FC<{
             setBulkSmsSourceRecord(null);
           }}
         />
+        </React.Suspense>
       ) : null}
       {saasUserDrawerRecord && useSaasUserDrawer ? (
-        <SaasUserAdminDrawer
-          open
-          record={saasUserDrawerRecord}
-          onClose={() => setSaasUserDrawerRecord(null)}
-          onChanged={() => {
-            setSaasUserDrawerRecord(null);
-            void tableQueryResult.refetch();
-          }}
-        />
+        <React.Suspense fallback={null}>
+          <SaasUserAdminDrawer
+            open
+            record={saasUserDrawerRecord}
+            onClose={() => setSaasUserDrawerRecord(null)}
+            onChanged={() => {
+              setSaasUserDrawerRecord(null);
+              void tableQueryResult.refetch();
+            }}
+          />
+        </React.Suspense>
       ) : null}
       {previewRecordId && useQuickPreviewModal && !useSaasUserDrawer ? (
-        <RelatedRecordPopover
-          mode="modal"
-          moduleId={resolvedModuleId}
-          recordId={previewRecordId}
-          open={!!previewRecordId}
-          overlayZIndex={6200}
-          hideFullRecordAction={moduleConfig?.hideFullRecordAction ?? detailDisabled}
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) setPreviewRecordId(null);
-          }}
-          onNavigate={(path) => {
-            setPreviewRecordId(null);
-            navigate(path);
-          }}
-        />
+        <React.Suspense fallback={null}>
+          <RelatedRecordPopover
+            mode="modal"
+            moduleId={resolvedModuleId}
+            recordId={previewRecordId}
+            open={!!previewRecordId}
+            overlayZIndex={6200}
+            hideFullRecordAction={moduleConfig?.hideFullRecordAction ?? detailDisabled}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) setPreviewRecordId(null);
+            }}
+            onNavigate={(path) => {
+              setPreviewRecordId(null);
+              navigate(path);
+            }}
+          />
+        </React.Suspense>
       ) : null}
     </div>
   );

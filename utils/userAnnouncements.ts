@@ -58,7 +58,9 @@ const normalizeArray = (value: unknown) => {
   return text.split(',').map((item) => item.trim()).filter(Boolean);
 };
 
-const toComparable = (value: unknown) => {
+type ComparableValue = string | ComparableValue[];
+
+const toComparable = (value: unknown): ComparableValue => {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim().toLowerCase();
   if (typeof value === 'number' || typeof value === 'boolean') return String(value).toLowerCase();

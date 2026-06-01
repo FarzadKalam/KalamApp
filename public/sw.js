@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const SHELL_CACHE = `tazesystem-shell-${CACHE_VERSION}`;
 const PAGE_CACHE = `tazesystem-pages-${CACHE_VERSION}`;
 const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
@@ -154,6 +154,8 @@ const isStaticAssetRequest = (requestUrl, request) => {
   return ['style', 'script', 'font', 'image', 'worker'].includes(request.destination);
 };
 
+const isImmutableBuildAssetRequest = (requestUrl) => requestUrl.pathname.startsWith('/assets/');
+
 const handleNavigationRequest = async (event) => {
   try {
     const preloadedResponse = await event.preloadResponse;
@@ -175,7 +177,13 @@ const handleNavigationRequest = async (event) => {
 };
 
 const handleStaticAssetRequest = async (request) => {
+  const requestUrl = new URL(request.url);
   const cached = await caches.match(request, { ignoreSearch: false });
+
+  if (cached && isImmutableBuildAssetRequest(requestUrl)) {
+    return cached;
+  }
+
   const networkPromise = fetch(request)
     .then((response) => putInCache(ASSET_CACHE, request, response, MAX_ASSET_ENTRIES))
     .catch(() => undefined);

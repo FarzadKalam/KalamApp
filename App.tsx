@@ -189,60 +189,6 @@ const preloadAuthenticatedShell = (pathname?: string) => {
   preloadAuthenticatedRouteChunk(pathname);
 };
 
-const routePreloaders = [
-  loadProfilePage,
-  loadSettingsPage,
-  loadModuleListRefine,
-  loadModuleShow,
-  loadModuleCreate,
-  loadLogin,
-  loadDashboard,
-  loadAccountingPage,
-  loadAccountingAccountReviewPage,
-  loadAccountingReportsPage,
-  loadAccountingReportViewerPage,
-  loadAccountingSettingsPage,
-  loadCashBankPage,
-  loadChartOfAccountsTreePage,
-  loadAccountingRecordPage,
-  loadJournalEntryCreatePage,
-  loadJournalEntryShowPage,
-  loadInquiryForm,
-  loadProductionGroupOrdersList,
-  loadProductionGroupOrderWizard,
-  loadHRPage,
-  loadFilesGalleryPage,
-  loadWebFormsHubPage,
-  loadWebFormBuilderPage,
-  loadReportsHubPage,
-  loadReportBuilderPage,
-  loadReportViewerPage,
-  loadPublicSite,
-  loadSaasPortalPage,
-  loadWorkSchedulesPage,
-  loadRecycleBinPage,
-  loadShareTargetPage,
-  loadFileShortLinkRedirectPage,
-  loadGlobalSearchPage,
-] as const;
-
-const ROUTE_PRELOAD_DELAY_MS = 8_000;
-const ROUTE_PRELOAD_GAP_MS = 350;
-
-const shouldPreloadRouteChunks = () => {
-  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
-  if (document.visibilityState === "hidden") return false;
-  const connection = (navigator as any).connection;
-  if (connection?.saveData) return false;
-  const effectiveType = String(connection?.effectiveType || "").toLowerCase();
-  return effectiveType !== "slow-2g" && effectiveType !== "2g";
-};
-
-const waitForRoutePreloadGap = () =>
-  new Promise<void>((resolve) => {
-    globalThis.setTimeout(resolve, ROUTE_PRELOAD_GAP_MS);
-  });
-
 const getInitialDarkMode = () => {
   if (typeof window === "undefined") return false;
   const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -429,41 +375,6 @@ function App() {
     applyBrandingRuntime(branding);
     window.dispatchEvent(new CustomEvent(BRANDING_APPLIED_EVENT));
   }, [branding]);
-
-  useEffect(() => {
-    if (!moduleSettingsReady || typeof window === "undefined") return undefined;
-    let cancelled = false;
-    let idleId: number | null = null;
-
-    const preloadRoutes = async () => {
-      if (!shouldPreloadRouteChunks()) return;
-      for (const preload of routePreloaders) {
-        if (cancelled || !shouldPreloadRouteChunks()) return;
-        await preload().catch(() => undefined);
-        if (!cancelled) {
-          await waitForRoutePreloadGap();
-        }
-      }
-    };
-
-    const timeoutId = globalThis.setTimeout(() => {
-      if ("requestIdleCallback" in window) {
-        idleId = window.requestIdleCallback(() => {
-          void preloadRoutes();
-        }, { timeout: 15_000 });
-        return;
-      }
-      void preloadRoutes();
-    }, ROUTE_PRELOAD_DELAY_MS);
-
-    return () => {
-      cancelled = true;
-      globalThis.clearTimeout(timeoutId);
-      if (idleId !== null) {
-        window.cancelIdleCallback?.(idleId);
-      }
-    };
-  }, [moduleSettingsReady]);
 
   useEffect(() => {
     const publicPaths = saasAppHost ? ["/", "/login", "/inquiry", "/i"] : ["/inquiry", "/i", "/login", "/tazesystem"];

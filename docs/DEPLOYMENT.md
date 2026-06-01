@@ -173,6 +173,26 @@ To:
 Keep SPA routing:
 
 ```nginx
+location = /index.html {
+  add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+  try_files $uri =404;
+}
+
+location = /version.json {
+  add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+  try_files $uri =404;
+}
+
+location = /sw.js {
+  add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+  try_files $uri =404;
+}
+
+location /assets/ {
+  add_header Cache-Control "public, max-age=31536000, immutable" always;
+  try_files $uri =404;
+}
+
 location / {
   try_files $uri $uri/ /index.html;
 }

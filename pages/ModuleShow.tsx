@@ -5,7 +5,6 @@ import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, CopyOutlined 
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, BlockType, FieldLocation, FieldNature } from '../types';
-import SmartForm from '../components/SmartForm';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import DateObject from 'react-date-object';
@@ -17,11 +16,8 @@ import HeaderActions from '../components/moduleShow/HeaderActions';
 import HeroSection from '../components/moduleShow/HeroSection';
 import FieldGroupsTabs from '../components/moduleShow/FieldGroupsTabs';
 import TablesSection from '../components/moduleShow/TablesSection';
-import PrintSection from '../components/moduleShow/PrintSection';
 import RecordImageBox from '../components/RecordImageBox';
-import OperationalFinancialOverviewPanel from '../components/accounting/OperationalFinancialOverviewPanel';
-import AccountLedgerPanel from '../components/accounting/AccountLedgerPanel';
-import StartProductionModal, { type StartMaterialGroup, type StartMaterialPiece, type StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
+import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
@@ -85,10 +81,8 @@ import {
 } from '../utils/processTaskCustomFields';
 import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
-import TaxpayerInvoiceModal from '../components/taxpayer/TaxpayerInvoiceModal';
-import CounterpartyBotStatusModal, { type BotChannel, type BotPlatformState, DEFAULT_PLATFORM_STATE as DEFAULT_BOT_PLATFORM_STATE } from '../components/bot/CounterpartyBotStatusModal';
+import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
 import { loadScopedCompanySettings } from '../utils/companySettings';
-import MessageComposerModal from '../components/MessageComposerModal';
 import { serializeNoteContent } from '../utils/noteContent';
 import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
@@ -111,6 +105,27 @@ import {
   normalizeInstructionIdList,
 } from '../utils/instructionSupport';
 import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
+
+const SmartForm = React.lazy(() => import('../components/SmartForm'));
+const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
+const OperationalFinancialOverviewPanel = React.lazy(() => import('../components/accounting/OperationalFinancialOverviewPanel'));
+const AccountLedgerPanel = React.lazy(() => import('../components/accounting/AccountLedgerPanel'));
+const StartProductionModal = React.lazy(() => import('../components/production/StartProductionModal'));
+const TaxpayerInvoiceModal = React.lazy(() => import('../components/taxpayer/TaxpayerInvoiceModal'));
+const CounterpartyBotStatusModal = React.lazy(() => import('../components/bot/CounterpartyBotStatusModal'));
+const MessageComposerModal = React.lazy(() => import('../components/MessageComposerModal'));
+
+const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
+  groupTitle: '',
+  currentStatus: 'pending_join',
+  activationCode: '',
+  lastInboundAt: '',
+  lastInboundText: '',
+  allowedUserIds: [],
+  allowedRoleIds: [],
+  aiAutoReplyEnabled: false,
+  aiCounterpartyGuide: '',
+};
 
 const isStatementTimeoutError = (error: any) => {
   const code = String(error?.code || '').trim();
@@ -5624,13 +5639,25 @@ const ModuleShow: React.FC = () => {
   const extraBlockContent = useMemo<Record<string, React.ReactNode>>(() => {
     const content: Record<string, React.ReactNode> = {};
     if (moduleId === 'customers' && id) {
-      content.financial_stats = <OperationalFinancialOverviewPanel entityType="customer" entityId={id} entityData={data} />;
+      content.financial_stats = (
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+          <OperationalFinancialOverviewPanel entityType="customer" entityId={id} entityData={data} />
+        </React.Suspense>
+      );
     }
     if (moduleId === 'suppliers' && id) {
-      content.financial_info = <OperationalFinancialOverviewPanel entityType="supplier" entityId={id} entityData={data} />;
+      content.financial_info = (
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+          <OperationalFinancialOverviewPanel entityType="supplier" entityId={id} entityData={data} />
+        </React.Suspense>
+      );
     }
     if (moduleId === 'employees' && id) {
-      content.payroll_info = <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityData={data} />;
+      content.payroll_info = (
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+          <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityData={data} />
+        </React.Suspense>
+      );
     }
     if (moduleId === 'projects' && projectProcessLinkedFields.length > 0) {
       content.process = (
@@ -6144,14 +6171,17 @@ const ModuleShow: React.FC = () => {
       />
 
       {moduleId === 'chart_of_accounts' && id ? (
-        <AccountLedgerPanel
-          accountId={id}
-          accountCode={data?.code ?? null}
-          accountName={data?.name ?? null}
-        />
+        <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+          <AccountLedgerPanel
+            accountId={id}
+            accountCode={data?.code ?? null}
+            accountName={data?.name ?? null}
+          />
+        </React.Suspense>
       ) : null}
 
       {isEditDrawerOpen && (
+        <React.Suspense fallback={null}>
         <SmartForm
           module={moduleConfig}
           visible={isEditDrawerOpen}
@@ -6162,9 +6192,11 @@ const ModuleShow: React.FC = () => {
             setIsEditDrawerOpen(false);
           }}
         />
+        </React.Suspense>
       )}
 
       {isCreateOrderOpen && MODULES['production_orders'] && (
+        <React.Suspense fallback={null}>
         <SmartForm
           module={MODULES['production_orders']}
           visible={isCreateOrderOpen}
@@ -6180,9 +6212,11 @@ const ModuleShow: React.FC = () => {
           onCancel={() => setIsCreateOrderOpen(false)}
           onSave={handleCreateOrderFromBom}
         />
+        </React.Suspense>
       )}
 
       {isCreateCustomerFromLeadOpen && MODULES['customers'] && (
+        <React.Suspense fallback={null}>
         <SmartForm
           module={MODULES['customers']}
           visible={isCreateCustomerFromLeadOpen}
@@ -6191,17 +6225,20 @@ const ModuleShow: React.FC = () => {
           onCancel={() => setIsCreateCustomerFromLeadOpen(false)}
           onSave={handleCreateCustomerFromLeadSave}
         />
+        </React.Suspense>
       )}
 
-      {(moduleId === 'invoices' || moduleId === 'sales_return_invoices') && id && (
+      {(moduleId === 'invoices' || moduleId === 'sales_return_invoices') && id && isTaxpayerModalOpen && (
+        <React.Suspense fallback={null}>
         <TaxpayerInvoiceModal
-          open={isTaxpayerModalOpen}
+          open
           moduleId={moduleId}
           invoiceId={id}
           invoiceRecord={data}
           onClose={() => setIsTaxpayerModalOpen(false)}
           onRefresh={() => fetchRecord(true)}
         />
+        </React.Suspense>
       )}
 
       <Modal
@@ -6328,25 +6365,29 @@ const ModuleShow: React.FC = () => {
 
       {moduleId === 'production_orders' && (
         <>
-          <StartProductionModal
-            open={productionModal === 'start'}
-            loading={statusLoading}
-            materials={startMaterials}
-            orderName={String(data?.name || '')}
-            sourceShelfOptionsByProduct={sourceShelfOptionsByProduct}
-            productionShelfOptions={productionShelfOptions}
-            onCancel={() => setProductionModal(null)}
-            onStart={handleConfirmStartProduction}
-            onToggleGroup={setStartMaterialCollapsed}
-            onDeliveryRowAdd={addStartDeliveryRow}
-            onDeliveryRowsDelete={deleteStartDeliveryRows}
-            onDeliveryRowsTransfer={transferStartDeliveryRows}
-            onDeliveryRowFieldChange={updateStartDeliveryRowField}
-            onSourceShelfChange={setStartMaterialSourceShelf}
-            onSourceShelfScan={handleSourceShelfScan}
-            onProductionShelfChange={setStartMaterialProductionShelf}
-            onConfirmGroup={handleConfirmStartGroup}
-          />
+          {productionModal === 'start' ? (
+            <React.Suspense fallback={null}>
+              <StartProductionModal
+                open
+                loading={statusLoading}
+                materials={startMaterials}
+                orderName={String(data?.name || '')}
+                sourceShelfOptionsByProduct={sourceShelfOptionsByProduct}
+                productionShelfOptions={productionShelfOptions}
+                onCancel={() => setProductionModal(null)}
+                onStart={handleConfirmStartProduction}
+                onToggleGroup={setStartMaterialCollapsed}
+                onDeliveryRowAdd={addStartDeliveryRow}
+                onDeliveryRowsDelete={deleteStartDeliveryRows}
+                onDeliveryRowsTransfer={transferStartDeliveryRows}
+                onDeliveryRowFieldChange={updateStartDeliveryRowField}
+                onSourceShelfChange={setStartMaterialSourceShelf}
+                onSourceShelfScan={handleSourceShelfScan}
+                onProductionShelfChange={setStartMaterialProductionShelf}
+                onConfirmGroup={handleConfirmStartGroup}
+              />
+            </React.Suspense>
+          ) : null}
 
           <Modal
             title={PRODUCTION_MESSAGES.stopTitle}
@@ -6497,6 +6538,7 @@ const ModuleShow: React.FC = () => {
           </Modal>
 
           {isCreateProductOpen && MODULES['products'] && (
+            <React.Suspense fallback={null}>
             <SmartForm
               module={MODULES['products']}
               visible={isCreateProductOpen}
@@ -6505,41 +6547,46 @@ const ModuleShow: React.FC = () => {
               onCancel={() => setIsCreateProductOpen(false)}
               onSave={handleCreateProductSave}
             />
+            </React.Suspense>
           )}
         </>
       )}
 
-      <CounterpartyBotStatusModal
-        open={botStatusModalOpen}
-        loading={botStatusModalLoading}
-        saving={botStatusModalSaving}
-        watchingChannel={botStatusWatchingChannel}
-        countdown={botStatusCountdown}
-        activeTab={botStatusActiveTab}
-        defaultChannel={botStatusDefaultChannel}
-        fallbackToActive={botStatusFallbackToActive}
-        counterpartyType={botStatusModalContext?.moduleId === 'suppliers' ? 'supplier' : 'customer'}
-        platforms={botStatusPlatformData}
-        userOptions={allUsers.map((user: any) => ({
-          label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '-').trim(),
-          value: String(user?.id || '').trim(),
-        })).filter((item: any) => item.value)}
-        roleOptions={allRoles.map((role: any) => ({
-          label: String(role?.title || role?.name || role?.id || '-').trim(),
-          value: String(role?.id || '').trim(),
-        })).filter((item: any) => item.value)}
-        onClose={handleCloseBotStatusModal}
-        onSave={() => void handleSaveBotStatusModal()}
-        onChangeTab={setBotStatusActiveTab}
-        onChangeDefaultChannel={setBotStatusDefaultChannel}
-        onChangeFallbackToActive={setBotStatusFallbackToActive}
-        onStartBindWatch={(channel) => void handleStartBotBindWatch(channel)}
-        onCopyActivationCode={(channel) => void handleCopyBotActivationCode(channel)}
-        onChangePlatform={(channel, key, value) => setBotStatusPlatformData((prev) => ({
-          ...prev,
-          [channel]: { ...prev[channel], [key]: value },
-        }))}
-      />
+      {botStatusModalOpen ? (
+        <React.Suspense fallback={null}>
+          <CounterpartyBotStatusModal
+            open
+            loading={botStatusModalLoading}
+            saving={botStatusModalSaving}
+            watchingChannel={botStatusWatchingChannel}
+            countdown={botStatusCountdown}
+            activeTab={botStatusActiveTab}
+            defaultChannel={botStatusDefaultChannel}
+            fallbackToActive={botStatusFallbackToActive}
+            counterpartyType={botStatusModalContext?.moduleId === 'suppliers' ? 'supplier' : 'customer'}
+            platforms={botStatusPlatformData}
+            userOptions={allUsers.map((user: any) => ({
+              label: String(user?.full_name || user?.email || user?.mobile_1 || user?.id || '-').trim(),
+              value: String(user?.id || '').trim(),
+            })).filter((item: any) => item.value)}
+            roleOptions={allRoles.map((role: any) => ({
+              label: String(role?.title || role?.name || role?.id || '-').trim(),
+              value: String(role?.id || '').trim(),
+            })).filter((item: any) => item.value)}
+            onClose={handleCloseBotStatusModal}
+            onSave={() => void handleSaveBotStatusModal()}
+            onChangeTab={setBotStatusActiveTab}
+            onChangeDefaultChannel={setBotStatusDefaultChannel}
+            onChangeFallbackToActive={setBotStatusFallbackToActive}
+            onStartBindWatch={(channel) => void handleStartBotBindWatch(channel)}
+            onCopyActivationCode={(channel) => void handleCopyBotActivationCode(channel)}
+            onChangePlatform={(channel, key, value) => setBotStatusPlatformData((prev) => ({
+              ...prev,
+              [channel]: { ...prev[channel], [key]: value },
+            }))}
+          />
+        </React.Suspense>
+      ) : null}
 
       <Modal
         open={accountingEntryPickerOpen}
@@ -6572,29 +6619,33 @@ const ModuleShow: React.FC = () => {
         </div>
       </Modal>
 
-      <PrintSection
-        isPrintModalOpen={printManager.isPrintModalOpen}
-        onClose={() => printManager.setIsPrintModalOpen(false)}
-        onPreparePrint={printManager.preparePrint}
-        onPrint={printManager.handlePrint}
-        onSendInternalPdf={handleOpenPrintShare}
-        onSavePdfToRecord={recordSupportsFileSave ? handleSavePrintPdfToRecord : undefined}
-        printTemplates={printManager.printTemplates}
-        selectedTemplateId={printManager.selectedTemplateId}
-        onSelectTemplate={printManager.setSelectedTemplateId}
-        renderPrintCard={printManager.renderPrintCard}
-        printMode={printManager.printMode}
-        printableFields={printManager.printableFieldsForTemplate || printableFields}
-        selectedPrintFields={printManager.selectedPrintFields}
-        onTogglePrintField={printManager.handleTogglePrintField}
-        onTogglePrintFieldGroup={printManager.handleTogglePrintFieldGroup}
-        onMovePrintField={printManager.handleMovePrintField}
-        onSavePrintFields={printManager.handleSavePrintFields}
-        savingPrintFields={printManager.savingPrintFields}
-        onRefreshPreview={printManager.refreshTemplates}
-        allowFieldSelectionTab={printManager.allowFieldSelectionTab}
-        previewMeta={printManager.previewMeta}
-      />
+      {(printManager.isPrintModalOpen || printManager.printMode) ? (
+        <React.Suspense fallback={null}>
+          <PrintSection
+            isPrintModalOpen={printManager.isPrintModalOpen}
+            onClose={() => printManager.setIsPrintModalOpen(false)}
+            onPreparePrint={printManager.preparePrint}
+            onPrint={printManager.handlePrint}
+            onSendInternalPdf={handleOpenPrintShare}
+            onSavePdfToRecord={recordSupportsFileSave ? handleSavePrintPdfToRecord : undefined}
+            printTemplates={printManager.printTemplates}
+            selectedTemplateId={printManager.selectedTemplateId}
+            onSelectTemplate={printManager.setSelectedTemplateId}
+            renderPrintCard={printManager.renderPrintCard}
+            printMode={printManager.printMode}
+            printableFields={printManager.printableFieldsForTemplate || printableFields}
+            selectedPrintFields={printManager.selectedPrintFields}
+            onTogglePrintField={printManager.handleTogglePrintField}
+            onTogglePrintFieldGroup={printManager.handleTogglePrintFieldGroup}
+            onMovePrintField={printManager.handleMovePrintField}
+            onSavePrintFields={printManager.handleSavePrintFields}
+            savingPrintFields={printManager.savingPrintFields}
+            onRefreshPreview={printManager.refreshTemplates}
+            allowFieldSelectionTab={printManager.allowFieldSelectionTab}
+            previewMeta={printManager.previewMeta}
+          />
+        </React.Suspense>
+      ) : null}
       <Modal
         title="ارسال مستقیم PDF"
         open={printShareModalOpen}
@@ -6646,6 +6697,7 @@ const ModuleShow: React.FC = () => {
         </div>
       </Modal>
       {printShareTemplateModalOpen ? (
+        <React.Suspense fallback={null}>
         <MessageComposerModal
           open
           mode="template"
@@ -6666,6 +6718,7 @@ const ModuleShow: React.FC = () => {
           }}
           onCancel={() => setPrintShareTemplateModalOpen(false)}
         />
+        </React.Suspense>
       ) : null}
 
       <style>{`
@@ -6684,4 +6737,3 @@ const ModuleShow: React.FC = () => {
 };
 
 export default ModuleShow;
-

@@ -169,9 +169,10 @@ export const ModuleCreate = () => {
               : moduleId === "saas_user_announcements"
                 ? "edit_user_announcements"
                 : undefined;
-          const canViewSaas = saasPerms.view === true || saasPerms.edit === true || saasFields[editFieldKey] === true;
+          const canEditField = editFieldKey ? saasFields[editFieldKey] === true : false;
+          const canViewSaas = saasPerms.view === true || saasPerms.edit === true || canEditField;
           if (active) {
-            setCanCreate(canViewSaas && (saasPerms.edit === true || saasFields[editFieldKey] === true));
+            setCanCreate(canViewSaas && (saasPerms.edit === true || canEditField));
             setPermissionLoading(false);
           }
           return;
