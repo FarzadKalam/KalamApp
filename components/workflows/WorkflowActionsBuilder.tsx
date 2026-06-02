@@ -21,9 +21,11 @@ import {
   WorkflowActionType,
   WorkflowModuleOption,
   actionTypeOptions,
+  createWorkflowNoteRecipientFieldKey,
   createWorkflowRelatedFieldKey,
   createWorkflowMultiRelationFieldKey,
   createWorkflowId,
+  parseWorkflowNoteRecipientFieldKey,
   parseWorkflowRelatedFieldKey,
 } from '../../utils/workflowTypes';
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
@@ -167,6 +169,29 @@ const getFieldLabel = (field?: ModuleField | null) => {
   if (!fa) return field.key;
   if (fa === field.key) return field.key;
   return `${fa} (${field.key})`;
+};
+
+const getRelationTargetModuleId = (field?: ModuleField | null) =>
+  String(
+    (field?.type === FieldType.MULTI_RELATION
+      ? field?.multiRelationConfig?.targetModule
+      : field?.relationConfig?.targetModule)
+    || ''
+  ).trim();
+
+const isProfileRecipientField = (field?: ModuleField | null) => {
+  if (!field) return false;
+  const key = String(field?.key || '').trim();
+  const targetModuleId = getRelationTargetModuleId(field);
+  return field.type === FieldType.USER
+    || key === 'related_profile_id'
+    || targetModuleId === 'profiles';
+};
+
+const isRoleRecipientField = (field?: ModuleField | null) => {
+  if (!field) return false;
+  const targetModuleId = getRelationTargetModuleId(field);
+  return targetModuleId === 'org_roles' || targetModuleId === 'roles';
 };
 
 const getRequiredTargetFields = (targetModuleId: string, relationFieldKey?: string) => {
@@ -317,8 +342,32 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()),
     [additionalRecipientFieldOptions, assigneeRecipientFieldOptions]
   );
+  const noteScopedRecipientFieldOptions = useMemo(
+    () => communicationFieldSource
+      .filter((field) => {
+        const key = String(field?.key || '').trim();
+        if (!key) return false;
+        if (
+          key === WORKFLOW_ASSIGNEE_FIELD_KEY
+          || key === '__task____workflow_assignee'
+          || key.endsWith('____workflow_assignee')
+          || key.startsWith('__comm_recipient__')
+        ) {
+          return false;
+        }
+        return isProfileRecipientField(field) || isRoleRecipientField(field);
+      })
+      .map((field) => ({
+        label: getFieldLabel(field),
+        value: createWorkflowNoteRecipientFieldKey(
+          String(field.key || ''),
+          isRoleRecipientField(field) ? 'role' : 'user',
+        ),
+      })),
+    [communicationFieldSource]
+  );
   const getMultiRelationTargetFieldOptions = useCallback((
-    matcher: (targetField: ModuleField) => boolean,
+    matcher: (targetField: ModuleField, targetModuleId: string) => boolean,
     fallbackLabel: string,
   ) =>
     communicationFieldSource
@@ -327,7 +376,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         const targetModuleId = String(field.multiRelationConfig?.targetModule || '').trim();
         const targetFields = MODULES[targetModuleId]?.fields || [];
         return targetFields
-          .filter((targetField) => !!String(targetField?.key || '').trim() && matcher(targetField))
+          .filter((targetField) => !!String(targetField?.key || '').trim() && matcher(targetField, targetModuleId))
           .map((targetField) => ({
             label: `${getFieldLabel(field)} (${String(targetField?.labels?.fa || fallbackLabel || targetField.key).trim() || fallbackLabel})`,
             value: createWorkflowMultiRelationFieldKey(
@@ -341,20 +390,37 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const multiRelationProfileRecipientFields = useMemo(
     () => getMultiRelationTargetFieldOptions(
-      (targetField) => {
+      (targetField, targetModuleId) => {
         const key = String(targetField?.key || '').trim();
-        return key === 'related_profile_id' || key === 'id';
+        return key === 'related_profile_id'
+          || targetField.type === FieldType.USER
+          || getRelationTargetModuleId(targetField) === 'profiles'
+          || (targetModuleId === 'profiles' && key === 'id');
       },
       'کاربر مرتبط',
+    ),
+    [getMultiRelationTargetFieldOptions]
+  );
+  const multiRelationRoleRecipientFields = useMemo(
+    () => getMultiRelationTargetFieldOptions(
+      (targetField, targetModuleId) => {
+        const key = String(targetField?.key || '').trim();
+        return getRelationTargetModuleId(targetField) === 'org_roles'
+          || getRelationTargetModuleId(targetField) === 'roles'
+          || ((targetModuleId === 'org_roles' || targetModuleId === 'roles') && key === 'id');
+      },
+      'نقش مرتبط',
     ),
     [getMultiRelationTargetFieldOptions]
   );
   const noteRecipientFieldOptions = useMemo(
     () => Array.from(new Map([
       ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...noteScopedRecipientFieldOptions.map((item) => [String(item.value), item] as const),
       ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+      ...multiRelationRoleRecipientFields.map((item) => [String(item.value), item] as const),
     ]).values()),
-    [recipientFieldOptions, multiRelationProfileRecipientFields]
+    [recipientFieldOptions, noteScopedRecipientFieldOptions, multiRelationProfileRecipientFields, multiRelationRoleRecipientFields]
   );
   const multiRelationPhoneFieldOptions = useMemo(
     () => getMultiRelationTargetFieldOptions(
@@ -390,6 +456,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       'روبیکا',
     ),
     [getMultiRelationTargetFieldOptions]
+  );
+  const noteRecipientOptionValueSet = useMemo(
+    () => new Set(noteRecipientFieldOptions.map((item) => String(item.value || '').trim()).filter(Boolean)),
+    [noteRecipientFieldOptions]
+  );
+  const noteScopedFieldMap = useMemo(
+    () => new Map(
+      communicationFieldSource
+        .filter((field) => !!String(field?.key || '').trim())
+        .map((field) => [String(field.key).trim(), field] as const)
+    ),
+    [communicationFieldSource]
   );
   const assigneeDirectoryOptions = useMemo(() => {
     const optionsByValue = new Map<string, { label: string; value: string }>();
@@ -1031,6 +1109,33 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   useEffect(() => {
     let hasChanges = false;
     const next = safeValue.map((action) => {
+      if (action.type === 'send_note' || action.type === 'send_note_sms') {
+        const config = action.config || {};
+        const rawRecipientFields = Array.isArray(config.recipient_fields) ? config.recipient_fields : [];
+        const normalizedRecipientFields = Array.from(new Set(
+          rawRecipientFields.map((item: any) => {
+            const value = String(item || '').trim();
+            if (!value) return '';
+            if (noteRecipientOptionValueSet.has(value) || parseWorkflowNoteRecipientFieldKey(value)) return value;
+            const field = noteScopedFieldMap.get(value);
+            if (field && (isProfileRecipientField(field) || isRoleRecipientField(field))) {
+              return createWorkflowNoteRecipientFieldKey(value, isRoleRecipientField(field) ? 'role' : 'user');
+            }
+            return value;
+          }).filter(Boolean)
+        ));
+        if (JSON.stringify(normalizedRecipientFields) === JSON.stringify(rawRecipientFields)) {
+          return action;
+        }
+        hasChanges = true;
+        return {
+          ...action,
+          config: {
+            ...config,
+            recipient_fields: normalizedRecipientFields,
+          },
+        };
+      }
       if (action.type !== 'create_related_record') return action;
       const config = action.config || {};
       const targetModuleId = String(config.target_module_id || '');
@@ -1078,7 +1183,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (hasChanges) {
       onChange(next);
     }
-  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings]);
+  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap]);
 
   const renderActionFields = (action: WorkflowAction) => {
     const actionType = action.type;

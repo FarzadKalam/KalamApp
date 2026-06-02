@@ -1,4 +1,5 @@
 import { MODULES } from '../moduleRegistry';
+import { FieldType, ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
 import { loadScopedIntegrationSettings } from './integrationSettings';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
@@ -10,10 +11,12 @@ import { normalizeNoteScope } from './noteScope';
 import { parseProcessLinkedFieldKey, parseProcessLinkMap } from './processTargets';
 import { resolveWorkflowProcessDraftFieldKey } from './workflowHelpers';
 import {
+  parseWorkflowNoteRecipientFieldKey,
   parseWorkflowRelatedFieldKey,
   parseWorkflowMultiRelationFieldKey,
   parseProcessNextStageFieldKey,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  WorkflowNoteRecipientStrategy,
   WorkflowAction,
   WorkflowCondition,
   WorkflowRecord,
@@ -1358,8 +1361,74 @@ const normalizeMultiRelationCommunicationValues = (
       .filter(Boolean)
       .map((value) => `user_${value}`);
   }
+  if (
+    (normalizedTargetModuleId === 'org_roles' || normalizedTargetModuleId === 'roles')
+    && normalizedTargetFieldKey === 'id'
+  ) {
+    return values
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .map((value) => `role_${value}`);
+  }
   return values;
 };
+
+const getDirectWorkflowField = (moduleId: string, fieldKey: string) =>
+  (MODULES[moduleId]?.fields || []).find((field) => String(field?.key || '').trim() === String(fieldKey || '').trim()) || null;
+
+const getNoteRecipientStrategyFromField = (field?: ModuleField | null): WorkflowNoteRecipientStrategy | null => {
+  if (!field) return null;
+  const key = String(field?.key || '').trim();
+  const relationTargetModule = String(field?.relationConfig?.targetModule || '').trim();
+  if (field.type === FieldType.USER || key === 'related_profile_id' || relationTargetModule === 'profiles') {
+    return 'user';
+  }
+  if (relationTargetModule === 'org_roles' || relationTargetModule === 'roles') {
+    return 'role';
+  }
+  return null;
+};
+
+const inferLegacyNoteRecipientStrategy = (moduleId: string, fieldKey: string): WorkflowNoteRecipientStrategy | null => {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  if (!normalizedFieldKey) return null;
+
+  const directField = getDirectWorkflowField(moduleId, normalizedFieldKey);
+  if (directField) return getNoteRecipientStrategyFromField(directField);
+
+  const processLinkedMeta = parseProcessLinkedFieldKey(normalizedFieldKey);
+  if (processLinkedMeta) {
+    const targetField = getDirectWorkflowField(processLinkedMeta.moduleId, processLinkedMeta.targetFieldKey);
+    if (targetField) return getNoteRecipientStrategyFromField(targetField);
+    if (processLinkedMeta.moduleId === 'profiles' && processLinkedMeta.targetFieldKey === 'id') return 'user';
+    if ((processLinkedMeta.moduleId === 'org_roles' || processLinkedMeta.moduleId === 'roles') && processLinkedMeta.targetFieldKey === 'id') return 'role';
+  }
+
+  const workflowRelatedMeta = parseWorkflowRelatedFieldKey(normalizedFieldKey);
+  if (workflowRelatedMeta) {
+    const targetField = getDirectWorkflowField(workflowRelatedMeta.targetModuleId, workflowRelatedMeta.targetFieldKey);
+    if (targetField) return getNoteRecipientStrategyFromField(targetField);
+    if (workflowRelatedMeta.targetModuleId === 'profiles' && workflowRelatedMeta.targetFieldKey === 'id') return 'user';
+    if ((workflowRelatedMeta.targetModuleId === 'org_roles' || workflowRelatedMeta.targetModuleId === 'roles') && workflowRelatedMeta.targetFieldKey === 'id') return 'role';
+  }
+
+  return null;
+};
+
+const normalizeNoteRecipientValuesByStrategy = (
+  values: any,
+  strategy: WorkflowNoteRecipientStrategy
+) => asArray(values)
+  .map((entry) => {
+    const token = parseCommunicationRecipientToken(entry);
+    if (token?.kind === 'user') return `user_${token.id}`;
+    if (token?.kind === 'role') return `role_${token.id}`;
+    if (token?.kind === 'chat_group') return `chat_group:${token.id}`;
+    const normalized = String(entry || '').trim();
+    if (!normalized) return '';
+    return `${strategy}_${normalized}`;
+  })
+  .filter(Boolean);
 
 const collectRecipientTargets = (
   values: any[],
@@ -1701,13 +1770,17 @@ export const resolveNoteRecipientsFromFields = async ({
   collectRecipientTargets(recipientAssignees, { directValues: [], userIds, roleIds, groupIds });
 
   for (const fieldKey of asArray(recipientFields)) {
+    const wrappedMeta = parseWorkflowNoteRecipientFieldKey(String(fieldKey || '').trim());
+    const resolvedFieldKey = wrappedMeta?.fieldKey || String(fieldKey || '').trim();
     const rawValue = await resolveConditionFieldValue(
-      String(fieldKey || ''),
+      resolvedFieldKey,
       currentRecord,
       moduleId,
       context
     );
-    collectRecipientTargets(rawValue, { directValues: [], userIds, roleIds, groupIds });
+    const strategy = wrappedMeta?.strategy || inferLegacyNoteRecipientStrategy(moduleId, resolvedFieldKey);
+    const normalizedValue = strategy ? normalizeNoteRecipientValuesByStrategy(rawValue, strategy) : rawValue;
+    collectRecipientTargets(normalizedValue, { directValues: [], userIds, roleIds, groupIds });
   }
 
   const directUserIds = Array.from(userIds);

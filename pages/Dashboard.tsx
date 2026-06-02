@@ -48,6 +48,7 @@ import OurProcessesWidget from '../components/dashboard/OurProcessesWidget';
 import StoryBar from '../components/stories/StoryBar';
 import StoryViewerModal from '../components/stories/StoryViewerModal';
 import StoryEditorModal from '../components/stories/StoryEditorModal';
+import ResilientImage from '../components/common/ResilientImage';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
 import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
@@ -1188,7 +1189,14 @@ const Dashboard: React.FC = () => {
             <div className="flex-1">
               <div className="mb-2 flex items-center gap-3">
                 {brandLogoUrl ? (
-                  <img src={brandLogoUrl} alt={brandTitle} className="h-12 w-12 rounded-xl object-contain ring-1 ring-gray-200 dark:ring-dark-border" />
+                  <ResilientImage
+                    src={brandLogoUrl}
+                    preset="gallery"
+                    alt={brandTitle}
+                    className="h-12 w-12 rounded-xl object-contain ring-1 ring-gray-200 dark:ring-dark-border"
+                    loading="lazy"
+                    decoding="async"
+                  />
                 ) : null}
                 <h1 className="text-3xl font-black text-leather-500">{brandTitle}</h1>
               </div>

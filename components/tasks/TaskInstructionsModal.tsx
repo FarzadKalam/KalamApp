@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Empty, Image, Modal, Tag } from 'antd';
 import { FileTextOutlined, PaperClipOutlined, PlayCircleOutlined, SoundOutlined } from '@ant-design/icons';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { buildImagePreviewUrl } from '../../utils/imagePreview';
 
 type InstructionAttachment = {
   id: string;
@@ -40,6 +41,15 @@ const resolveFileKind = (attachment: InstructionAttachment): 'image' | 'video' |
   return 'file';
 };
 
+const buildInstructionImageSources = (url?: string | null) => {
+  const original = String(url || '').trim();
+  if (!original) return { thumb: '', preview: '' };
+  return {
+    thumb: buildImagePreviewUrl(original, 'gallery'),
+    preview: buildImagePreviewUrl(original, 'hero'),
+  };
+};
+
 const AttachmentsGallery: React.FC<{ attachments: InstructionAttachment[]; imageUrl?: string | null }> = ({ attachments, imageUrl }) => {
   const images: InstructionAttachment[] = attachments.filter((a) => resolveFileKind(a) === 'image');
   const videos: InstructionAttachment[] = attachments.filter((a) => resolveFileKind(a) === 'video');
@@ -47,6 +57,7 @@ const AttachmentsGallery: React.FC<{ attachments: InstructionAttachment[]; image
   const files: InstructionAttachment[] = attachments.filter((a) => resolveFileKind(a) === 'file');
 
   const legacyImageUrl = imageUrl && images.length === 0 ? imageUrl : null;
+  const legacyImageSources = buildInstructionImageSources(legacyImageUrl);
 
   return (
     <div className="space-y-3">
@@ -57,21 +68,26 @@ const AttachmentsGallery: React.FC<{ attachments: InstructionAttachment[]; image
             <div className="flex flex-wrap gap-2">
               {legacyImageUrl && (
                 <Image
-                  src={legacyImageUrl}
+                  src={legacyImageSources.thumb}
                   alt="تصویر دستورالعمل"
                   className="rounded-xl border border-gray-200 object-cover dark:border-gray-700"
                   style={{ maxHeight: 160, maxWidth: 240, cursor: 'pointer' }}
+                  preview={{ src: legacyImageSources.preview || legacyImageSources.thumb }}
                 />
               )}
-              {images.map((img) => (
-                <Image
-                  key={img.id}
-                  src={img.url}
-                  alt={img.name}
-                  className="rounded-xl border border-gray-200 object-cover dark:border-gray-700"
-                  style={{ maxHeight: 160, maxWidth: 240, cursor: 'pointer' }}
-                />
-              ))}
+              {images.map((img) => {
+                const sources = buildInstructionImageSources(img.url);
+                return (
+                  <Image
+                    key={img.id}
+                    src={sources.thumb}
+                    alt={img.name}
+                    className="rounded-xl border border-gray-200 object-cover dark:border-gray-700"
+                    style={{ maxHeight: 160, maxWidth: 240, cursor: 'pointer' }}
+                    preview={{ src: sources.preview || sources.thumb }}
+                  />
+                );
+              })}
             </div>
           </Image.PreviewGroup>
         </div>
@@ -80,12 +96,18 @@ const AttachmentsGallery: React.FC<{ attachments: InstructionAttachment[]; image
       {!legacyImageUrl && imageUrl && images.length > 0 && (
         <Image.PreviewGroup>
           <div className="flex flex-wrap gap-2">
-            <Image
-              src={imageUrl}
-              alt="تصویر دستورالعمل"
-              className="rounded-xl border border-gray-200 object-cover dark:border-gray-700"
-              style={{ maxHeight: 160, maxWidth: 240, cursor: 'pointer' }}
-            />
+            {(() => {
+              const sources = buildInstructionImageSources(imageUrl);
+              return (
+                <Image
+                  src={sources.thumb}
+                  alt="تصویر دستورالعمل"
+                  className="rounded-xl border border-gray-200 object-cover dark:border-gray-700"
+                  style={{ maxHeight: 160, maxWidth: 240, cursor: 'pointer' }}
+                  preview={{ src: sources.preview || sources.thumb }}
+                />
+              );
+            })()}
           </div>
         </Image.PreviewGroup>
       )}

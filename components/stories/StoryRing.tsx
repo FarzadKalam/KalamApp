@@ -3,6 +3,8 @@ import { PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import { Tooltip } from 'antd';
 import type { OrgStoryWithMeta } from './storyTypes';
 import { getGradientPreset } from '../../utils/storyGradients';
+import { buildImageBackgroundStyle } from '../../utils/imagePreview';
+import ProfileAvatar from '../common/ProfileAvatar';
 
 interface StoryRingProps {
   story: OrgStoryWithMeta;
@@ -24,11 +26,7 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
 
   const previewStyle: React.CSSProperties = (() => {
     if (firstSlide?.type === 'image' && firstSlide.image_url) {
-      return {
-        backgroundImage: `url(${firstSlide.image_url})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-      };
+      return buildImageBackgroundStyle(firstSlide.image_url, 'thumb');
     }
     return { background: getGradientPreset(firstSlide?.gradient_key).gradient };
   })();
@@ -122,36 +120,38 @@ export const StoryRing: React.FC<StoryRingProps> = ({ story, size = 60, onClick 
         {(() => {
           const badgeSize = Math.round(size * 0.36);
           const initial = (story.creator_name || '').trim().charAt(0).toUpperCase() || '؟';
-          const badgeStyle: React.CSSProperties = {
-            position: 'absolute',
-            bottom: 0,
-            right: 0,
-            width: badgeSize,
-            height: badgeSize,
-            borderRadius: '50%',
-            border: `2px solid ${separatorColor}`,
-            backgroundColor: '#94A3B8',
-            overflow: 'hidden',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          };
           if (story.creator_avatar) {
             return (
-              <div style={badgeStyle}>
-                <img
-                  src={story.creator_avatar}
-                  alt={story.creator_name || ''}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              </div>
+              <ProfileAvatar
+                size={badgeSize}
+                src={story.creator_avatar}
+                name={story.creator_name || ''}
+                preset="avatar"
+                style={{
+                  position: 'absolute',
+                  bottom: 0,
+                  right: 0,
+                  border: `2px solid ${separatorColor}`,
+                  backgroundColor: '#94A3B8',
+                }}
+              />
             );
           }
           return (
-            <div style={{ ...badgeStyle, background: 'linear-gradient(135deg, #6B7280, #9CA3AF)' }}>
+            <div style={{
+              position: 'absolute',
+              bottom: 0,
+              right: 0,
+              width: badgeSize,
+              height: badgeSize,
+              borderRadius: '50%',
+              border: `2px solid ${separatorColor}`,
+              background: 'linear-gradient(135deg, #6B7280, #9CA3AF)',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}>
               <span style={{
                 color: '#fff',
                 fontSize: Math.max(7, Math.round(badgeSize * 0.45)),

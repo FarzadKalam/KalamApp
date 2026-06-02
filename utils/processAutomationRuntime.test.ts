@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWorkflowNoteRecipientFieldKey } from './workflowTypes';
 
 const mocks = vi.hoisted(() => ({
   from: vi.fn(),
@@ -170,6 +171,65 @@ describe('processAutomationRuntime', () => {
     expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
       mentionUserIds: ['profile-1', 'profile-2'],
       mentionRoleIds: [],
+    }));
+  });
+
+  it('resolves wrapped user and role recipient fields from the source record', async () => {
+    mocks.rowsByTable = {
+      secretariat_documents: [
+        {
+          id: 'doc-1',
+          recipient_profile_id: 'profile-9',
+          recipient_role_id: 'role-9',
+        },
+      ],
+    };
+
+    await runProcessAutomationsForTaskEvent({
+      event: 'create',
+      task: {
+        id: 'task-3',
+        name: 'فعالیت دبیرخانه',
+        source_module_id: 'secretariat_documents',
+        source_record_id: 'doc-1',
+        recurrence_info: {
+          process_automation_rules: [
+            {
+              id: 'rule-direct-recipient-note',
+              is_active: true,
+              trigger_type: 'on_create',
+              execution_mode: 'every_match',
+              target_type: 'specific_user',
+              target_user_id: 'fallback-user',
+              actions: [
+                {
+                  id: 'action-direct-recipient-note',
+                  type: 'send_note_sms',
+                  config: {
+                    note_text: 'اطلاع به گیرنده‌ها',
+                    recipient_fields: [
+                      createWorkflowNoteRecipientFieldKey('recipient_profile_id', 'user'),
+                      createWorkflowNoteRecipientFieldKey('recipient_role_id', 'role'),
+                    ],
+                    attachment_fields: [],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        mention_user_ids: ['profile-9'],
+        mention_role_ids: ['role-9'],
+      }),
+    ]);
+    expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
+      mentionUserIds: ['profile-9'],
+      mentionRoleIds: ['role-9'],
     }));
   });
 });

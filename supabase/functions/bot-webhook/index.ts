@@ -16,7 +16,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-05-26-01';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-06-02-01';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -372,23 +372,286 @@ const extractContact = (payload: Record<string, any>) => {
   };
 };
 
-const extractMediaInfo = (payload: Record<string, any>) => {
+type ResolvedInboundPayloadNodes = {
+  rubikaUpdate: Record<string, any> | null;
+  rubikaRootMessage: Record<string, any> | null;
+  rubikaNewMessage: Record<string, any> | null;
+  rubikaUpdatedMessage: Record<string, any> | null;
+  rubikaInlineMessage: Record<string, any> | null;
+  callbackQuery: Record<string, any> | null;
+  message: Record<string, any> | null;
+};
+
+type ExtractedInboundMediaItem = {
+  messageType: string;
+  fileUrl: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  fileId: string | null;
+};
+
+type ExtractedInboundMediaEnvelope = {
+  messageType: string;
+  items: ExtractedInboundMediaItem[];
+  mediaGroupId: string | null;
+  providerMessageIds: string[];
+};
+
+const resolveInboundPayloadNodes = (payload: Record<string, any>): ResolvedInboundPayloadNodes => {
   const rubikaUpdate = payload?.update || null;
   const rubikaRootMessage = payload?.new_message || null;
   const rubikaNewMessage = rubikaUpdate?.new_message || null;
   const rubikaUpdatedMessage = rubikaUpdate?.updated_message || null;
   const rubikaInlineMessage = payload?.inline_message || null;
+  const callbackQuery = payload?.callback_query || payload?.body?.callback_query || payload?.data?.callback_query || null;
   const message =
     payload?.message ||
     payload?.body?.message ||
     payload?.data?.message ||
     payload?.event?.message ||
     payload?.update?.message ||
+    callbackQuery?.message ||
     rubikaNewMessage ||
     rubikaUpdatedMessage ||
     rubikaRootMessage ||
     rubikaInlineMessage ||
     null;
+
+  return {
+    rubikaUpdate,
+    rubikaRootMessage,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaInlineMessage,
+    callbackQuery,
+    message,
+  };
+};
+
+const dedupeTextList = (values: any[]) => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  values.forEach((value) => {
+    const text = String(value || '').trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    result.push(text);
+  });
+  return result;
+};
+
+const extractMediaGroupId = (payload: Record<string, any>) => {
+  const {
+    rubikaUpdate,
+    rubikaRootMessage,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaInlineMessage,
+    message,
+  } = resolveInboundPayloadNodes(payload);
+
+  return pick(
+    message?.media_group_id,
+    message?.mediaGroupId,
+    message?.grouped_id,
+    message?.groupedId,
+    message?.album_id,
+    message?.albumId,
+    message?.gallery_id,
+    message?.galleryId,
+    message?.media_group_guid,
+    message?.mediaGroupGuid,
+    rubikaUpdate?.media_group_id,
+    rubikaUpdate?.mediaGroupId,
+    rubikaUpdate?.album_id,
+    rubikaUpdate?.albumId,
+    rubikaRootMessage?.media_group_id,
+    rubikaRootMessage?.mediaGroupId,
+    rubikaRootMessage?.album_id,
+    rubikaRootMessage?.albumId,
+    rubikaNewMessage?.media_group_id,
+    rubikaNewMessage?.mediaGroupId,
+    rubikaNewMessage?.album_id,
+    rubikaNewMessage?.albumId,
+    rubikaUpdatedMessage?.media_group_id,
+    rubikaUpdatedMessage?.mediaGroupId,
+    rubikaUpdatedMessage?.album_id,
+    rubikaUpdatedMessage?.albumId,
+    rubikaInlineMessage?.media_group_id,
+    rubikaInlineMessage?.mediaGroupId,
+    payload?.media_group_id,
+    payload?.mediaGroupId,
+    payload?.album_id,
+    payload?.albumId,
+    payload?.gallery_id,
+    payload?.galleryId
+  ) || null;
+};
+
+const buildMediaExtractionWrapper = (candidate: any, hint?: string | null) => {
+  const normalizedHint = String(hint || '').trim().toLowerCase();
+  if (normalizedHint === 'image' || normalizedHint === 'photo') {
+    return { message: { photo: candidate, image: candidate, file: candidate } };
+  }
+  if (normalizedHint === 'video') {
+    return { message: { video: candidate, file: candidate } };
+  }
+  if (normalizedHint === 'audio') {
+    return { message: { audio: candidate, file: candidate } };
+  }
+  if (normalizedHint === 'voice') {
+    return { message: { voice: candidate, file: candidate } };
+  }
+  return { message: candidate };
+};
+
+const normalizeExtractedMedia = (
+  mediaInfo: ExtractedInboundMediaItem | null | undefined,
+  hint?: string | null
+): ExtractedInboundMediaItem | null => {
+  if (!mediaInfo) return null;
+  const fileUrl = String(mediaInfo.fileUrl || '').trim() || null;
+  const fileId = String(mediaInfo.fileId || '').trim() || null;
+  const fileName = String(mediaInfo.fileName || '').trim() || null;
+  const mimeType = String(mediaInfo.mimeType || '').trim() || null;
+  let messageType = String(mediaInfo.messageType || '').trim().toLowerCase() || 'text';
+  const normalizedHint = String(hint || '').trim().toLowerCase();
+  if (messageType === 'text' && (fileUrl || fileId || fileName)) {
+    if (normalizedHint === 'image' || normalizedHint === 'photo') {
+      messageType = 'image';
+    } else if (normalizedHint === 'video') {
+      messageType = 'file';
+    } else if (normalizedHint === 'voice') {
+      messageType = 'voice';
+    } else if (normalizedHint === 'audio') {
+      messageType = 'audio';
+    } else {
+      messageType = 'file';
+    }
+  }
+  if (messageType === 'text' && !fileUrl && !fileId) return null;
+  return {
+    messageType,
+    fileUrl,
+    fileName,
+    mimeType,
+    fileId,
+  };
+};
+
+const dedupeExtractedMediaItems = (items: Array<ExtractedInboundMediaItem | null | undefined>) => {
+  const byKey = new Map<string, ExtractedInboundMediaItem>();
+  items.forEach((item) => {
+    const normalized = normalizeExtractedMedia(item);
+    if (!normalized) return;
+    const key = String(
+      normalized.fileUrl
+      || normalized.fileId
+      || `${normalized.fileName || 'file'}|${normalized.messageType}|${normalized.mimeType || ''}`
+    ).trim();
+    if (!key) return;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, normalized);
+      return;
+    }
+    byKey.set(key, {
+      messageType: existing.messageType === 'text' ? normalized.messageType : existing.messageType,
+      fileUrl: existing.fileUrl || normalized.fileUrl,
+      fileName: existing.fileName || normalized.fileName,
+      mimeType: existing.mimeType || normalized.mimeType,
+      fileId: existing.fileId || normalized.fileId,
+    });
+  });
+  return Array.from(byKey.values());
+};
+
+const resolveCompositeMediaMessageType = (
+  items: ExtractedInboundMediaItem[],
+  fallbackMessageType = 'text'
+) => {
+  const types = new Set(items.map((item) => String(item?.messageType || '').trim().toLowerCase()).filter(Boolean));
+  if (types.size === 0) return fallbackMessageType;
+  if (types.size === 1) return Array.from(types)[0];
+  if (Array.from(types).every((type) => type === 'image')) return 'image';
+  if (types.has('audio') && types.size === 1) return 'audio';
+  if (types.has('voice') && types.size === 1) return 'voice';
+  return fallbackMessageType === 'text' ? 'file' : fallbackMessageType;
+};
+
+const collectMediaCollectionCandidates = (payload: Record<string, any>) => {
+  const {
+    rubikaUpdate,
+    rubikaRootMessage,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaInlineMessage,
+    message,
+  } = resolveInboundPayloadNodes(payload);
+  const result: Array<{ node: any; hint?: string | null }> = [];
+  const seen = new Set<any>();
+
+  const pushNode = (node: any, hint?: string | null, options?: { pickLast?: boolean }) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      const values = options?.pickLast ? (node.length ? [node[node.length - 1]] : []) : node;
+      values.forEach((entry) => pushNode(entry, hint));
+      return;
+    }
+    if (typeof node !== 'object' || seen.has(node)) return;
+    seen.add(node);
+    result.push({ node, hint });
+  };
+
+  const messageRoots = [
+    message,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaRootMessage,
+    rubikaInlineMessage,
+    payload,
+    payload?.body,
+    payload?.data,
+    payload?.event,
+    rubikaUpdate,
+  ];
+
+  messageRoots.forEach((root) => {
+    if (!root || typeof root !== 'object') return;
+    pushNode(root?.attachments, null);
+    pushNode(root?.media, null);
+    pushNode(root?.medias, null);
+    pushNode(root?.files, null);
+    pushNode(root?.images, 'image');
+    pushNode(root?.gallery, 'image');
+    pushNode(root?.album, 'image');
+    pushNode(root?.album?.items, 'image');
+    pushNode(root?.gallery?.items, 'image');
+    pushNode(root?.photo, 'image', { pickLast: true });
+    pushNode(root?.photos, 'image', { pickLast: true });
+    pushNode(root?.video, 'video');
+    pushNode(root?.videos, 'video');
+    pushNode(root?.audio, 'audio');
+    pushNode(root?.audios, 'audio');
+    pushNode(root?.voice, 'voice');
+    pushNode(root?.voices, 'voice');
+    pushNode(root?.document, 'file');
+    pushNode(root?.documents, 'file');
+    pushNode(root?.file, 'file');
+  });
+
+  return result;
+};
+
+const extractMediaInfo = (payload: Record<string, any>) => {
+  const {
+    rubikaUpdate,
+    rubikaRootMessage,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaInlineMessage,
+    message,
+  } = resolveInboundPayloadNodes(payload);
 
   const directUrl = pick(
     message?.file_url,
@@ -631,25 +894,33 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   };
 };
 
+const extractMediaEnvelope = (payload: Record<string, any>): ExtractedInboundMediaEnvelope => {
+  const primaryMedia = normalizeExtractedMedia(extractMediaInfo(payload));
+  const collectionItems = collectMediaCollectionCandidates(payload)
+    .map(({ node, hint }) => normalizeExtractedMedia(extractMediaInfo(buildMediaExtractionWrapper(node, hint)), hint));
+  const baseItems = collectionItems.length > 0 && primaryMedia && !primaryMedia.fileUrl
+    ? collectionItems
+    : [primaryMedia, ...collectionItems];
+  const items = dedupeExtractedMediaItems(baseItems);
+  const messageIdentity = extractMessageIdentity(payload);
+
+  return {
+    messageType: resolveCompositeMediaMessageType(items, primaryMedia?.messageType || 'text'),
+    items,
+    mediaGroupId: extractMediaGroupId(payload),
+    providerMessageIds: dedupeTextList([messageIdentity.providerMessageId]),
+  };
+};
+
 const extractMessageIdentity = (payload: Record<string, any>) => {
-  const rubikaUpdate = payload?.update || null;
-  const rubikaRootMessage = payload?.new_message || null;
-  const rubikaNewMessage = rubikaUpdate?.new_message || null;
-  const rubikaUpdatedMessage = rubikaUpdate?.updated_message || null;
-  const rubikaInlineMessage = payload?.inline_message || null;
-  const callbackQuery = payload?.callback_query || payload?.body?.callback_query || payload?.data?.callback_query || null;
-  const message =
-    payload?.message ||
-    payload?.body?.message ||
-    payload?.data?.message ||
-    payload?.event?.message ||
-    payload?.update?.message ||
-    callbackQuery?.message ||
-    rubikaNewMessage ||
-    rubikaUpdatedMessage ||
-    rubikaRootMessage ||
-    rubikaInlineMessage ||
-    null;
+  const {
+    rubikaUpdate,
+    rubikaRootMessage,
+    rubikaNewMessage,
+    rubikaUpdatedMessage,
+    rubikaInlineMessage,
+    message,
+  } = resolveInboundPayloadNodes(payload);
   const replyMessage =
     message?.reply_to_message ||
     message?.replyToMessage ||
@@ -1400,6 +1671,125 @@ const insertCounterpartyBotMessage = async (
   return Array.isArray(parsed) ? parsed[0] : parsed;
 };
 
+const patchCounterpartyBotMessage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  messageId: string,
+  payload: Record<string, any>
+) => {
+  const normalizedMessageId = String(messageId || '').trim();
+  if (!normalizedMessageId) return null;
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  url.searchParams.set('id', `eq.${normalizedMessageId}`);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not update counterparty bot message');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
+const loadConversationCounterpartyBotMessages = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    botGroupId,
+    channel,
+    chatId,
+    limit = 40,
+  }: {
+    orgId?: string | null;
+    botGroupId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    limit?: number;
+  }
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('select', 'id,bot_group_id,chat_id,provider_message_id,created_at,content_text,file_url,file_name,mime_type,message_type,payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', String(Math.max(1, Math.min(limit, 80))));
+
+  const normalizedBotGroupId = String(botGroupId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
+  const normalizedOrgId = String(orgId || '').trim();
+  if (normalizedBotGroupId) {
+    url.searchParams.set('bot_group_id', `eq.${normalizedBotGroupId}`);
+  } else if (normalizedChatId) {
+    url.searchParams.set('chat_id', `eq.${normalizedChatId}`);
+  }
+  if (normalizedOrgId) {
+    url.searchParams.set('org_id', `eq.${normalizedOrgId}`);
+  }
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    console.warn('[bot-webhook] could not load conversation bot messages', raw);
+    return [];
+  }
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
+};
+
+const normalizeBotPayloadAttachment = (value: any) => {
+  const url = String(value?.url || value?.file_url || '').trim();
+  const fileId = String(value?.media_file_id || value?.file_id || value?.fileId || '').trim();
+  if (!url && !fileId) return null;
+  const fallbackName = String(url.split('?')[0].split('#')[0].split('/').pop() || 'فایل').trim() || 'فایل';
+  return {
+    name: String(value?.name || value?.file_name || value?.fileName || fallbackName).trim() || fallbackName,
+    url,
+    mime_type: String(value?.mime_type || value?.mimeType || '').trim() || null,
+    file_type: String(value?.file_type || value?.fileType || '').trim() || 'file',
+    media_file_id: fileId || null,
+    provider_message_id: String(value?.provider_message_id || value?.providerMessageId || '').trim() || null,
+    media_group_id: String(value?.media_group_id || value?.mediaGroupId || '').trim() || null,
+  };
+};
+
+const mergeBotPayloadAttachments = (currentItems: any[], incomingItems: any[]) => {
+  const byKey = new Map<string, Record<string, any>>();
+  [...(currentItems || []), ...(incomingItems || [])].forEach((item) => {
+    const normalized = normalizeBotPayloadAttachment(item);
+    if (!normalized) return;
+    const key = String(
+      normalized.url
+      || normalized.media_file_id
+      || `${normalized.name}|${normalized.file_type}|${normalized.mime_type || ''}`
+    ).trim();
+    if (!key) return;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, normalized);
+      return;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...normalized,
+      name: normalized.name || existing.name,
+      url: normalized.url || existing.url,
+      mime_type: normalized.mime_type || existing.mime_type || null,
+      file_type: normalized.file_type || existing.file_type || 'file',
+      media_file_id: normalized.media_file_id || existing.media_file_id || null,
+      provider_message_id: normalized.provider_message_id || existing.provider_message_id || null,
+      media_group_id: normalized.media_group_id || existing.media_group_id || null,
+    });
+  });
+  return Array.from(byKey.values());
+};
+
 const loadCounterpartyBotMessageByProviderId = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1423,7 +1813,7 @@ const loadCounterpartyBotMessageByProviderId = async (
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
   url.searchParams.set('provider_message_id', `eq.${normalizedProviderMessageId}`);
   url.searchParams.set('channel_type', `eq.${channel}`);
-  url.searchParams.set('select', 'id,bot_group_id,chat_id,provider_message_id,created_at');
+  url.searchParams.set('select', 'id,bot_group_id,chat_id,provider_message_id,created_at,content_text,file_url,file_name,mime_type,message_type,payload');
   url.searchParams.set('order', 'created_at.desc');
   url.searchParams.set('limit', '1');
 
@@ -1449,7 +1839,56 @@ const loadCounterpartyBotMessageByProviderId = async (
     return null;
   }
   const parsed = raw ? JSON.parse(raw) : [];
-  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+  const exactMatch = Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+  if (exactMatch) return exactMatch;
+
+  const recentRows = await loadConversationCounterpartyBotMessages(supabaseUrl, serviceRoleKey, {
+    orgId,
+    botGroupId,
+    channel,
+    chatId,
+    limit: 50,
+  });
+  return recentRows.find((row: any) => {
+    const payloadBox = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const providerIds = Array.isArray((payloadBox as any)?.provider_message_ids)
+      ? (payloadBox as any).provider_message_ids
+      : [];
+    return providerIds.some((value: any) => String(value || '').trim() === normalizedProviderMessageId);
+  }) || null;
+};
+
+const loadCounterpartyBotMessageByMediaGroupId = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    botGroupId,
+    channel,
+    chatId,
+    mediaGroupId,
+  }: {
+    orgId?: string | null;
+    botGroupId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    mediaGroupId?: string | null;
+  }
+) => {
+  const normalizedMediaGroupId = String(mediaGroupId || '').trim();
+  if (!normalizedMediaGroupId) return null;
+  const recentRows = await loadConversationCounterpartyBotMessages(supabaseUrl, serviceRoleKey, {
+    orgId,
+    botGroupId,
+    channel,
+    chatId,
+    limit: 60,
+  });
+  return recentRows.find((row: any) => {
+    const payloadBox = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const rowMediaGroupId = String((payloadBox as any)?.media_group_id || '').trim();
+    return rowMediaGroupId === normalizedMediaGroupId;
+  }) || null;
 };
 
 const syncCounterpartyBotGroupByInbound = async ({
@@ -1685,8 +2124,12 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const mediaInfo = extractMediaInfo(payload);
+      const mediaEnvelope = extractMediaEnvelope(payload);
       const messageIdentity = extractMessageIdentity(payload);
+      const providerMessageIds = dedupeTextList([
+        messageIdentity.providerMessageId,
+        ...mediaEnvelope.providerMessageIds,
+      ]);
       const replyTarget = messageIdentity.replyProviderMessageId
         ? await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
           orgId: integration.org_id || null,
@@ -1696,61 +2139,164 @@ Deno.serve(async (req) => {
           providerMessageId: messageIdentity.replyProviderMessageId,
         })
         : null;
+      const existingMessage = providerMessageIds[0]
+        ? await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
+          orgId: integration.org_id || null,
+          botGroupId: matchedGroup?.id || null,
+          channel,
+          chatId: String(contact.chatId || '').trim() || null,
+          providerMessageId: providerMessageIds[0],
+        })
+        : null;
+      const mediaGroupTarget = mediaEnvelope.mediaGroupId
+        ? await loadCounterpartyBotMessageByMediaGroupId(supabaseUrl, serviceRoleKey, {
+          orgId: integration.org_id || null,
+          botGroupId: matchedGroup?.id || null,
+          channel,
+          chatId: String(contact.chatId || '').trim() || null,
+          mediaGroupId: mediaEnvelope.mediaGroupId,
+        })
+        : null;
       const normalizedOrgId = String(integration?.org_id || '').trim() || 'unknown_org';
-      const mediaStored = await resolveAndStoreInboundMedia({
-        supabaseUrl,
-        serviceRoleKey,
-        requestUrl: req.url,
-        requestHeaders: req.headers,
-        channel,
-        orgId: normalizedOrgId,
-        integrationSettings: (integration?.settings || {}) as IntegrationSettings,
-        mediaInfo,
-      });
-      const fallbackSourceUrl = String(mediaInfo.fileUrl || '').trim();
-      const finalMediaUrl = String(
-        mediaStored?.fileUrl
-        || (channel === 'rubika' && isRubikaHostedUrl(fallbackSourceUrl) ? '' : fallbackSourceUrl)
-        || ''
-      ).trim();
-      const attachmentEntry = finalMediaUrl
-        ? [{
+      const mediaItems = mediaEnvelope.items.length > 0
+        ? mediaEnvelope.items
+        : dedupeExtractedMediaItems([normalizeExtractedMedia(extractMediaInfo(payload))]);
+      const resolvedMediaEntries: Array<{
+        mediaInfo: ExtractedInboundMediaItem;
+        mediaStored: Record<string, any> | null;
+        finalMediaUrl: string;
+      }> = [];
+
+      for (const mediaInfo of mediaItems) {
+        const mediaStored = await resolveAndStoreInboundMedia({
+          supabaseUrl,
+          serviceRoleKey,
+          requestUrl: req.url,
+          requestHeaders: req.headers,
+          channel,
+          orgId: normalizedOrgId,
+          integrationSettings: (integration?.settings || {}) as IntegrationSettings,
+          mediaInfo,
+        });
+        const fallbackSourceUrl = String(mediaInfo.fileUrl || '').trim();
+        const finalMediaUrl = String(
+          mediaStored?.fileUrl
+          || (channel === 'rubika' && isRubikaHostedUrl(fallbackSourceUrl) ? '' : fallbackSourceUrl)
+          || ''
+        ).trim();
+        resolvedMediaEntries.push({
+          mediaInfo,
+          mediaStored,
+          finalMediaUrl,
+        });
+      }
+
+      const attachmentEntries = resolvedMediaEntries
+        .map(({ mediaInfo, mediaStored, finalMediaUrl }) => normalizeBotPayloadAttachment({
           name: String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل',
           url: finalMediaUrl,
           mime_type: String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null,
           file_type: String(mediaInfo.messageType || 'file').trim() || 'file',
-        }]
-        : [];
-      await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
-        org_id: integration.org_id || null,
-        bot_group_id: matchedGroup?.id || null,
-        customer_id: matchedGroup?.customer_id || null,
-        supplier_id: matchedGroup?.supplier_id || null,
-        channel_type: channel,
-        direction: 'inbound',
-        message_type: mediaInfo.messageType,
-        chat_id: String(contact.chatId || '').trim() || null,
-        provider_message_id: messageIdentity.providerMessageId || null,
-        content_text: String(contact.text || '').trim() || null,
-        file_url: finalMediaUrl || null,
-        file_name: mediaStored?.fileName || mediaInfo.fileName,
-        mime_type: mediaStored?.mimeType || mediaInfo.mimeType,
-        payload: {
-          ...(payload && typeof payload === 'object' ? payload : {}),
-          media_pipeline_build: BOT_WEBHOOK_BUILD,
-          sender_id: String(contact.senderId || '').trim() || null,
-          sender_display_name: String(contact.displayName || '').trim() || null,
-          username: String(contact.username || '').trim() || null,
           media_file_id: mediaInfo.fileId,
-          media_stored: Boolean(mediaStored?.stored),
-          media_storage_bucket: mediaStored?.storageBucket || null,
-          media_storage_path: mediaStored?.storagePath || null,
-          attachments: attachmentEntry,
+          provider_message_id: providerMessageIds[0] || null,
+          media_group_id: mediaEnvelope.mediaGroupId || null,
+        }))
+        .filter(Boolean);
+
+      const primaryStoredEntry = resolvedMediaEntries.find((entry) => Boolean(entry?.mediaStored?.stored)) || null;
+      const primaryAttachment = attachmentEntries[0] || null;
+      const mergeTarget = mediaGroupTarget || existingMessage || null;
+      const rawPayload = payload && typeof payload === 'object' ? payload : {};
+      const baseContentText = String(contact.text || '').trim() || null;
+
+      if (mergeTarget) {
+        const existingPayload = mergeTarget?.payload && typeof mergeTarget.payload === 'object' ? mergeTarget.payload : {};
+        const mergedAttachments = mergeBotPayloadAttachments(
+          Array.isArray((existingPayload as any)?.attachments) ? (existingPayload as any).attachments : [],
+          attachmentEntries,
+        );
+        const mergedProviderMessageIds = dedupeTextList([
+          ...(Array.isArray((existingPayload as any)?.provider_message_ids) ? (existingPayload as any).provider_message_ids : []),
+          ...providerMessageIds,
+        ]);
+        const mergedAttachmentItems = dedupeExtractedMediaItems(
+          mergedAttachments.map((item: any) => normalizeExtractedMedia({
+            messageType: String(item?.file_type || 'file').trim() || 'file',
+            fileUrl: String(item?.url || '').trim() || null,
+            fileName: String(item?.name || '').trim() || null,
+            mimeType: String(item?.mime_type || '').trim() || null,
+            fileId: String(item?.media_file_id || '').trim() || null,
+          }))
+        );
+        const mergedPrimaryAttachment = mergedAttachments[0] || primaryAttachment || null;
+        await patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, String(mergeTarget.id || ''), {
+          message_type: resolveCompositeMediaMessageType(
+            mergedAttachmentItems,
+            String(mergeTarget?.message_type || mediaEnvelope.messageType || 'text').trim() || 'text',
+          ),
+          content_text: String(mergeTarget?.content_text || '').trim() || baseContentText || null,
+          file_url: String(mergedPrimaryAttachment?.url || mergeTarget?.file_url || '').trim() || null,
+          file_name: String(mergedPrimaryAttachment?.name || mergeTarget?.file_name || '').trim() || null,
+          mime_type: String(mergedPrimaryAttachment?.mime_type || mergeTarget?.mime_type || '').trim() || null,
+          payload: {
+            ...existingPayload,
+            ...rawPayload,
+            media_pipeline_build: BOT_WEBHOOK_BUILD,
+            sender_id: String(contact.senderId || '').trim() || null,
+            sender_display_name: String(contact.displayName || '').trim() || null,
+            username: String(contact.username || '').trim() || null,
+            media_group_id: mediaEnvelope.mediaGroupId || String((existingPayload as any)?.media_group_id || '').trim() || null,
+            media_file_id: String(primaryAttachment?.media_file_id || (existingPayload as any)?.media_file_id || '').trim() || null,
+            media_stored: Boolean((existingPayload as any)?.media_stored) || Boolean(primaryStoredEntry?.mediaStored?.stored),
+            media_storage_bucket: primaryStoredEntry?.mediaStored?.storageBucket || (existingPayload as any)?.media_storage_bucket || null,
+            media_storage_path: primaryStoredEntry?.mediaStored?.storagePath || (existingPayload as any)?.media_storage_path || null,
+            attachments: mergedAttachments,
+            provider_message_id: String((existingPayload as any)?.provider_message_id || messageIdentity.providerMessageId || '').trim() || null,
+            provider_message_ids: mergedProviderMessageIds,
+            reply_provider_message_id: String((existingPayload as any)?.reply_provider_message_id || messageIdentity.replyProviderMessageId || '').trim() || null,
+            reply_to_message_id: String((existingPayload as any)?.reply_to_message_id || replyTarget?.id || '').trim() || null,
+          },
+        });
+      } else {
+        await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+          org_id: integration.org_id || null,
+          bot_group_id: matchedGroup?.id || null,
+          customer_id: matchedGroup?.customer_id || null,
+          supplier_id: matchedGroup?.supplier_id || null,
+          channel_type: channel,
+          direction: 'inbound',
+          message_type: resolveCompositeMediaMessageType(attachmentEntries.map((item: any) => normalizeExtractedMedia({
+            messageType: String(item?.file_type || mediaEnvelope.messageType || 'text').trim() || 'text',
+            fileUrl: String(item?.url || '').trim() || null,
+            fileName: String(item?.name || '').trim() || null,
+            mimeType: String(item?.mime_type || '').trim() || null,
+            fileId: String(item?.media_file_id || '').trim() || null,
+          })), mediaEnvelope.messageType),
+          chat_id: String(contact.chatId || '').trim() || null,
           provider_message_id: messageIdentity.providerMessageId || null,
-          reply_provider_message_id: messageIdentity.replyProviderMessageId || null,
-          reply_to_message_id: replyTarget?.id || null,
-        },
-      });
+          content_text: baseContentText,
+          file_url: String(primaryAttachment?.url || '').trim() || null,
+          file_name: primaryAttachment?.name || (resolvedMediaEntries[0]?.mediaStored?.fileName || resolvedMediaEntries[0]?.mediaInfo?.fileName || null),
+          mime_type: primaryAttachment?.mime_type || (resolvedMediaEntries[0]?.mediaStored?.mimeType || resolvedMediaEntries[0]?.mediaInfo?.mimeType || null),
+          payload: {
+            ...rawPayload,
+            media_pipeline_build: BOT_WEBHOOK_BUILD,
+            sender_id: String(contact.senderId || '').trim() || null,
+            sender_display_name: String(contact.displayName || '').trim() || null,
+            username: String(contact.username || '').trim() || null,
+            media_group_id: mediaEnvelope.mediaGroupId || null,
+            media_file_id: String(primaryAttachment?.media_file_id || '').trim() || null,
+            media_stored: Boolean(primaryStoredEntry?.mediaStored?.stored),
+            media_storage_bucket: primaryStoredEntry?.mediaStored?.storageBucket || null,
+            media_storage_path: primaryStoredEntry?.mediaStored?.storagePath || null,
+            attachments: attachmentEntries,
+            provider_message_id: messageIdentity.providerMessageId || null,
+            provider_message_ids: providerMessageIds,
+            reply_provider_message_id: messageIdentity.replyProviderMessageId || null,
+            reply_to_message_id: replyTarget?.id || null,
+          },
+        });
+      }
     } catch (error) {
       console.warn('[bot-webhook] could not write counterparty bot message', error);
     }

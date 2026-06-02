@@ -16,6 +16,7 @@ import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
 import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
+import ResilientImage from "../components/common/ResilientImage";
 import {
   isWebFormCurrentEmployeeDefaultField,
   normalizeWebFormConfig,
@@ -1020,10 +1021,13 @@ const InquiryForm = () => {
                   }}
                 >
                   {isSlideMode && field.field_type === "image" ? (
-                    <img
+                    <ResilientImage
                       src={asset.url}
+                      preset="thumb"
                       alt={asset.name}
                       className="h-20 w-20 rounded-2xl object-cover"
+                      loading="lazy"
+                      decoding="async"
                     />
                   ) : null}
                   <div className="min-w-0 flex-1">
@@ -1335,7 +1339,14 @@ const InquiryForm = () => {
 
               {companySettings.logo_url ? (
                 <div className="rounded-3xl bg-white/10 p-3 backdrop-blur">
-                  <img src={companySettings.logo_url} alt={appTitle} className="h-16 w-16 rounded-2xl object-contain md:h-20 md:w-20" />
+                  <ResilientImage
+                    src={companySettings.logo_url}
+                    preset="gallery"
+                    alt={appTitle}
+                    className="h-16 w-16 rounded-2xl object-contain md:h-20 md:w-20"
+                    loading="lazy"
+                    decoding="async"
+                  />
                 </div>
               ) : null}
             </div>

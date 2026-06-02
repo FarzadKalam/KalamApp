@@ -14,6 +14,7 @@ import { signOutLocalSession } from '../utils/authSession';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
+import ResilientImage from '../components/common/ResilientImage';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -624,7 +625,14 @@ const Login = () => {
           >
             {brandLogoUrl ? (
               <div className="mb-3 flex justify-center">
-                <img src={brandLogoUrl} alt={brandTitle} className="h-14 max-w-[180px] object-contain" />
+                <ResilientImage
+                  src={brandLogoUrl}
+                  preset="gallery"
+                  alt={brandTitle}
+                  className="h-14 max-w-[180px] object-contain"
+                  loading="lazy"
+                  decoding="async"
+                />
               </div>
             ) : null}
             <div className="text-lg font-black text-leather-600">{brandTitle}</div>

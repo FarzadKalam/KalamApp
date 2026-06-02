@@ -79,7 +79,9 @@ export type PublishStoryActionConfig = {
 export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
+const WORKFLOW_NOTE_RECIPIENT_FIELD_PREFIX = '__workflow_note_recipient__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
+export type WorkflowNoteRecipientStrategy = 'user' | 'role';
 
 export type WorkflowCondition = {
   id: string;
@@ -215,4 +217,21 @@ export const parseWorkflowMultiRelationFieldKey = (value: string) => {
   const [fieldKey, targetModuleId, targetPhoneFieldKey] = raw.split('::');
   if (!fieldKey || !targetModuleId || !targetPhoneFieldKey) return null;
   return { fieldKey, targetModuleId, targetPhoneFieldKey };
+};
+
+export const createWorkflowNoteRecipientFieldKey = (
+  fieldKey: string,
+  strategy: WorkflowNoteRecipientStrategy
+) => `${WORKFLOW_NOTE_RECIPIENT_FIELD_PREFIX}${strategy}::${String(fieldKey || '').trim()}`;
+
+export const parseWorkflowNoteRecipientFieldKey = (value: string) => {
+  const normalized = String(value || '').trim();
+  if (!normalized.startsWith(WORKFLOW_NOTE_RECIPIENT_FIELD_PREFIX)) return null;
+  const raw = normalized.slice(WORKFLOW_NOTE_RECIPIENT_FIELD_PREFIX.length);
+  const separatorIndex = raw.indexOf('::');
+  if (separatorIndex <= 0) return null;
+  const strategy = raw.slice(0, separatorIndex) as WorkflowNoteRecipientStrategy;
+  const fieldKey = raw.slice(separatorIndex + 2).trim();
+  if (!fieldKey || (strategy !== 'user' && strategy !== 'role')) return null;
+  return { strategy, fieldKey };
 };

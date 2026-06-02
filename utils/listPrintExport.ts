@@ -6,7 +6,7 @@ import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persian
 import { getAssigneeLabel } from './assigneeLabel';
 import { getResolvedAssigneeId } from './assigneeValue';
 import { buildCatalogFullPageLayout } from './printTemplates/catalogFullPageLayout';
-import { buildImagePreviewUrl } from './imagePreview';
+import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 
 export interface ListFieldDefinition {
   key: string;
@@ -40,12 +40,7 @@ const escapeHtml = (value: any) =>
 const getPrintImageUrl = (value: any, preset: 'card' | 'hero' = 'card') =>
   buildImagePreviewUrl(String(value || '').trim(), preset);
 
-/**
- * For catalog print (PDF via Gotenberg), use the raw storage URL without Supabase Image
- * Transformation API. The render/image endpoint requires Pro plan and may not be reachable
- * from within Gotenberg's network context. The raw /object/public/ URL is always accessible.
- */
-const getCatalogPrintImageUrl = (value: any): string => String(value || '').trim();
+const getCatalogPrintImageUrl = (value: any): string => buildPrintImageUrl(String(value || '').trim(), 'printHero');
 
 const resolveOptionLabel = (options: any[] = [], value: any) => {
   const normalized = String(value ?? '').trim();
@@ -520,7 +515,7 @@ export const buildListCatalogFullPageHtml = (
     null;
   const detailFields = fields.filter((f) => f !== imageField && f !== titleField);
 
-  const companyLogoUrl = escapeHtml(companyInfo?.logo_url || '');
+  const companyLogoUrl = escapeHtml(buildPrintImageUrl(companyInfo?.logo_url || '', 'printLogo'));
   const companyName = escapeHtml(companyInfo?.company_full_name || '');
   const slogan = escapeHtml(companyInfo?.slogan || companyInfo?.trade_name || '');
   const companyPhone = escapeHtml(companyInfo?.phone || '');
@@ -574,7 +569,7 @@ export const buildListCatalogFullPageHtml = (
       const qrSectionHtml = publicLink
         ? `<div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:2mm; gap:1mm; background:#fff; box-sizing:border-box; overflow:hidden;"><div style="font-size:6px; font-weight:800; color:rgb(var(--brand-600-rgb,37,99,235)); letter-spacing:0.4px; text-align:center; flex-shrink:0;">QR کاتالوگ</div><div style="background:#fff; border:1.5px solid rgb(var(--brand-200-rgb,191,219,254)); border-radius:8px; padding:3px; box-shadow:0 1px 6px rgba(59,130,246,0.1); flex-shrink:0;">${renderToStaticMarkup(React.createElement(QRCode, { value: publicLink, type: 'svg', size: 56, bordered: false }))}</div><a href="${escapeHtml(publicLink)}" target="_blank" style="display:block; font-size:5px; color:rgb(var(--brand-500-rgb,59,130,246)); text-decoration:none; text-align:center; direction:ltr; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; border:1px solid rgb(var(--brand-100-rgb,219,234,254)); border-radius:4px; padding:1px 3px; background:rgb(var(--brand-50-rgb,239,246,255)); box-sizing:border-box; flex-shrink:0;">${escapeHtml(publicLink.length > 32 ? `${publicLink.slice(0, 30)}…` : publicLink)}</a></div>`
         : '';
-      const mapImageUrl = getCatalogPrintImageUrl(row?.location_image);
+      const mapImageUrl = buildPrintImageUrl(row?.location_image, 'printMap');
       let mapSectionHtml = '';
       if (mapImageUrl) {
         let googleUrl = '#';
@@ -593,7 +588,7 @@ export const buildListCatalogFullPageHtml = (
           googleUrl = `https://www.google.com/maps?q=${parsedLocation.lat},${parsedLocation.lng}`;
           locationText = `${parsedLocation.lat.toFixed(4)}, ${parsedLocation.lng.toFixed(4)}`;
         }
-        mapSectionHtml = `<a href="${escapeHtml(googleUrl)}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${escapeHtml(mapImageUrl)}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${escapeHtml(locationText)}</div>` : ''}</div></a>`;
+          mapSectionHtml = `<a href="${escapeHtml(googleUrl)}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><img src="${escapeHtml(mapImageUrl)}" alt="نقشه موقعیت" loading="eager" decoding="sync" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;" /><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${escapeHtml(locationText)}</div>` : ''}</div></a>`;
       }
 
       return buildCatalogFullPageLayout({

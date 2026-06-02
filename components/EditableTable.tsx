@@ -38,6 +38,7 @@ import {
 } from '../utils/salesCatalog';
 import PersianDatePicker from './PersianDatePicker';
 import { getImplicitCreateDefaultValue, getTodayLocalDateValue } from '../utils/defaultValues';
+import ResilientImage from './common/ResilientImage';
 
 const { Text } = Typography;
 
@@ -5330,10 +5331,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
       >
         {previewAttachmentUrl ? (
           <div className="flex justify-center">
-            <img
+            <ResilientImage
               src={previewAttachmentUrl}
+              preset="gallery"
               alt="Attachment"
               className="max-h-[70vh] w-auto rounded-lg border border-gray-200"
+              loading="lazy"
+              decoding="async"
             />
           </div>
         ) : null}
@@ -5417,5 +5421,4 @@ const EditableTable: React.FC<EditableTableProps> = ({
 };
 
 export default EditableTable;
-
 

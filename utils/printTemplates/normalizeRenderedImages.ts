@@ -1,5 +1,14 @@
+import { normalizePublicAssetUrl } from '../assetUrl';
+
 const readStyleValue = (styleText: string, propertyName: string) =>
   styleText.match(new RegExp(`(?:^|;)\\s*${propertyName}\\s*:\\s*([^;]+)`, 'i'))?.[1]?.trim() || '';
+
+const normalizeStyleAssetUrls = (styleText: string) =>
+  String(styleText || '').replace(/url\((['"]?)(.*?)\1\)/gi, (_match, _quote, rawUrl: string) => {
+    const normalizedUrl = normalizePublicAssetUrl(rawUrl) || String(rawUrl || '').trim();
+    if (!normalizedUrl) return 'url("")';
+    return `url("${normalizedUrl.replace(/"/g, '&quot;')}")`;
+  });
 
 export const normalizeRenderedImages = (html: string) => {
   if (typeof window === 'undefined' || !html) return html;
@@ -20,7 +29,12 @@ export const normalizeRenderedImages = (html: string) => {
       return;
     }
 
-    const style = img.getAttribute('style') || '';
+    const normalizedSrc = normalizePublicAssetUrl(src) || src;
+    img.setAttribute('src', normalizedSrc);
+    img.setAttribute('loading', 'eager');
+    img.setAttribute('decoding', 'sync');
+
+    const style = normalizeStyleAssetUrls(img.getAttribute('style') || '');
     const widthAttr = String(img.getAttribute('width') || '').trim();
     const heightAttr = String(img.getAttribute('height') || '').trim();
     const widthStyle = readStyleValue(style, 'width');
@@ -66,6 +80,12 @@ export const normalizeRenderedImages = (html: string) => {
     }
 
     img.setAttribute('style', Array.from(new Set(nextStyleParts)).join(';'));
+  });
+
+  root.querySelectorAll<HTMLElement>('[style]').forEach((element) => {
+    const style = String(element.getAttribute('style') || '').trim();
+    if (!style || !style.includes('url(')) return;
+    element.setAttribute('style', normalizeStyleAssetUrls(style));
   });
 
   return root.innerHTML;

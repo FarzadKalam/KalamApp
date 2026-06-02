@@ -148,4 +148,31 @@ describe('AdaptiveSelectField', () => {
 
     host.remove();
   });
+
+  it('supports adding freeform tag values in mobile sheet mode', async () => {
+    const handleChange = vi.fn();
+
+    render(
+      <AdaptiveSelectField
+        adaptiveMode="mobile-sheet"
+        mode="tags"
+        value={[]}
+        onChange={handleChange}
+        placeholder="شماره‌های دستی"
+        pickerTitle="شماره‌های دستی"
+        tokenSeparators={[',', ';']}
+        options={[]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'شماره‌های دستی' }));
+    fireEvent.change(await screen.findByPlaceholderText('جستجو...'), {
+      target: { value: '09120000000,09350000000' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'افزودن' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ثبت انتخاب‌ها' }));
+
+    expect(handleChange).toHaveBeenCalledWith(['09120000000', '09350000000']);
+    expect(screen.getByRole('button', { name: 'شماره‌های دستی' })).toHaveTextContent('09120000000، 09350000000');
+  });
 });

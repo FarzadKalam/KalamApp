@@ -36,7 +36,9 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { DEFAULT_BRANDING, BRAND_PALETTE_PRESETS, type BrandingConfig, type BrandingPaletteKey } from '../theme/brandTheme';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
+import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { supabase } from '../supabaseClient';
+import ResilientImage from '../components/common/ResilientImage';
 
 const anonClient = supabase;
 
@@ -488,7 +490,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     const companyAddress = companySt?.address || '';
     const companyPhone = [companySt?.phone, companySt?.mobile].filter(Boolean)
       .map((p: string) => formatPhoneDisplay(p)).join(' | ');
-    const logoSrc = branding.logoUrl ? normalizePublicAssetUrl(branding.logoUrl) : null;
+    const logoSrc = branding.logoUrl ? buildImagePreviewUrl(branding.logoUrl, 'gallery') : null;
 
     const buyerNamePrint = isSales ? invoice.customer_name : invoice.supplier_name;
     const buyerPhonePrint = formatPhoneDisplay(
@@ -804,8 +806,9 @@ ${invoice.description ? `
         }}>
           {/* logo */}
           {logoUrl ? (
-            <img
+            <ResilientImage
               src={logoUrl}
+              preset="gallery"
               alt={branding.brandName}
               style={{
                 width: 52,
@@ -816,6 +819,8 @@ ${invoice.description ? `
                 padding: 4,
                 flexShrink: 0,
               }}
+              loading="lazy"
+              decoding="async"
             />
           ) : (
             <Avatar

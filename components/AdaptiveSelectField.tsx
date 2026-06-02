@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Input, Select, Tag } from 'antd';
+import { Button, Input, Select, Tag } from 'antd';
 import { DownOutlined } from '@ant-design/icons';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
 import {
@@ -28,6 +28,7 @@ interface AdaptiveSelectFieldProps {
   loading?: boolean;
   placeholder?: string;
   allowClear?: boolean;
+  tokenSeparators?: string[];
   showSearch?: boolean;
   getPopupContainer?: (trigger: HTMLElement) => HTMLElement;
   modalContainer?: (trigger?: HTMLElement | null) => HTMLElement;
@@ -63,6 +64,22 @@ const normalizeScalar = (value: any) => String(value ?? '').trim();
 const normalizeArray = (value: any) =>
   Array.isArray(value) ? value.map((item) => normalizeScalar(item)).filter(Boolean) : [];
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const splitFreeformValues = (value: string, separators: string[]) => {
+  const normalizedValue = String(value || '').trim();
+  if (!normalizedValue) return [];
+  const effectiveSeparators = (Array.isArray(separators) ? separators : [])
+    .map((item) => String(item || ''))
+    .filter(Boolean);
+  if (effectiveSeparators.length === 0) return [normalizedValue];
+  const pattern = new RegExp(`[${effectiveSeparators.map(escapeRegExp).join('')}]`, 'g');
+  return normalizedValue
+    .split(pattern)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 const defaultOptionLabel = (option: OptionLike) => {
   const raw = option?.label ?? option?.value ?? '';
   return typeof raw === 'string' ? raw : String(raw ?? '');
@@ -78,6 +95,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   loading = false,
   placeholder = 'انتخاب کنید',
   allowClear = true,
+  tokenSeparators,
   showSearch = true,
   getPopupContainer = resolveSelectPopupContainer,
   modalContainer,
@@ -198,6 +216,21 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
     onOpenChange?.(false);
   };
 
+  const appendDraftTagValues = (inputValue: string) => {
+    if (mode !== 'tags') return;
+    const nextTokens = splitFreeformValues(inputValue, tokenSeparators || []);
+    if (nextTokens.length === 0) return;
+    const nextValue = Array.from(new Set([
+      ...normalizeArray(draftValue),
+      ...nextTokens,
+    ]));
+    setDraftValue(nextValue);
+    if (searchValue === undefined) {
+      setInternalSearch('');
+    }
+    onSearch?.('');
+  };
+
   const toggleDraftValue = (option: OptionLike) => {
     if (option?.disabled) return;
     const optionValue = normalizeScalar(option?.value);
@@ -233,6 +266,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         onChange={handleDesktopChange}
         options={normalizedOptions as any}
         mode={mode}
+        tokenSeparators={tokenSeparators}
         className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, className)}
         disabled={disabled}
         loading={loading}
@@ -321,19 +355,35 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         confirmLabel={isMulti ? 'ثبت انتخاب‌ها' : 'تایید'}
       >
         {showSearch ? (
-          <Input
-            value={currentSearch}
-            onChange={(event) => {
-              const nextValue = event.target.value;
-              if (searchValue === undefined) {
-                setInternalSearch(nextValue);
-              }
-              onSearch?.(nextValue);
-            }}
-            placeholder={mobileSearchPlaceholder}
-            className="kalam-adaptive-picker__search"
-            allowClear
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              value={currentSearch}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (searchValue === undefined) {
+                  setInternalSearch(nextValue);
+                }
+                onSearch?.(nextValue);
+              }}
+              onPressEnter={(event) => {
+                if (mode !== 'tags') return;
+                event.preventDefault();
+                appendDraftTagValues(currentSearch);
+              }}
+              placeholder={mobileSearchPlaceholder}
+              className="kalam-adaptive-picker__search"
+              allowClear
+            />
+            {mode === 'tags' ? (
+              <Button
+                type="default"
+                disabled={!String(currentSearch || '').trim()}
+                onClick={() => appendDraftTagValues(currentSearch)}
+              >
+                افزودن
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         {sheetToolbar ? (
           <div

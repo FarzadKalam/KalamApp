@@ -11,6 +11,7 @@ import SharedNoteComposer from '../notes/SharedNoteComposer';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import ConversationTimeline from './ConversationTimeline';
 import UnreadCountBadge, { NOTIFICATION_UNREAD_BADGE_COLOR } from './UnreadCountBadge';
+import ProfileAvatar from '../common/ProfileAvatar';
 
 type BotGroupRow = {
   id: string;
@@ -73,7 +74,7 @@ const CHANNEL_AVATAR_CONFIG: Record<string, { className: string; label: string }
 const BotGroupAvatar: React.FC<{ row: Pick<BotGroupRow, 'channel_type' | 'counterparty_image_url'>; size: number; extraClassName?: string }> = ({ row, size, extraClassName = '' }) => {
   const imgSrc = normalizePublicAssetUrl(row.counterparty_image_url || '');
   if (imgSrc) {
-    return <Avatar size={size} src={imgSrc} className={extraClassName} />;
+    return <ProfileAvatar size={size} src={imgSrc} preset="avatar" className={extraClassName} name="مخاطب" />;
   }
   const channelCfg = CHANNEL_AVATAR_CONFIG[String(row.channel_type || '')];
   if (channelCfg) {

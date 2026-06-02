@@ -29,6 +29,7 @@ import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { STORY_GRADIENT_PRESET_LIST, getGradientPreset } from '../../utils/storyGradients';
 import { createWorkflowId as createId } from '../../utils/workflowTypes';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
+import { buildImageBackgroundStyle } from '../../utils/imagePreview';
 import type {
   OrgStory,
   StorySlide,
@@ -301,7 +302,7 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
   const slideBackground: React.CSSProperties = (() => {
     if (!activeSlide) return {};
     if (activeSlide.type === 'image' && activeSlide.image_url)
-      return { backgroundImage: `url(${activeSlide.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' };
+      return buildImageBackgroundStyle(activeSlide.image_url, 'hero');
     return { background: getGradientPreset(activeSlide.gradient_key).gradient };
   })();
 
@@ -384,7 +385,7 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
                   overflow: 'hidden',
                   position: 'relative',
                   ...(slide.type === 'image' && slide.image_url
-                    ? { backgroundImage: `url(${slide.image_url})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                    ? buildImageBackgroundStyle(slide.image_url, 'thumb')
                     : { background: getGradientPreset(slide.gradient_key).gradient }),
                 }}
               >

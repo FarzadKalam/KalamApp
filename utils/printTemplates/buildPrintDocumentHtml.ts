@@ -192,9 +192,76 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
     <div id="print-root">${sourceHtml}</div>
     <script>
       window.__KALAMAPP_PRINT_READY = false;
-      Promise.resolve(document.fonts && document.fonts.ready)
-        .catch(function () { return null; })
-        .then(function () { window.__KALAMAPP_PRINT_READY = true; });
+      (function () {
+        function waitForFonts() {
+          return Promise.resolve(document.fonts && document.fonts.ready).catch(function () { return null; });
+        }
+
+        function waitForDomImage(img) {
+          if (!img || !img.getAttribute || !img.getAttribute('src')) {
+            return Promise.resolve();
+          }
+          if (img.complete) {
+            return Promise.resolve();
+          }
+          return new Promise(function (resolve) {
+            var done = function () { resolve(); };
+            img.addEventListener('load', done, { once: true });
+            img.addEventListener('error', done, { once: true });
+          });
+        }
+
+        function extractInlineStyleUrls() {
+          var styleElements = Array.prototype.slice.call(document.querySelectorAll('[style]'));
+          var urls = [];
+          styleElements.forEach(function (element) {
+            var styleText = String(element.getAttribute('style') || '');
+            if (styleText.indexOf('url(') === -1) {
+              return;
+            }
+            styleText.replace(/url\\((['"]?)(.*?)\\1\\)/gi, function (_match, _quote, rawUrl) {
+              var nextUrl = String(rawUrl || '').trim();
+              if (nextUrl && !/^data:/i.test(nextUrl)) {
+                urls.push(nextUrl);
+              }
+              return _match;
+            });
+          });
+          return Array.from(new Set(urls));
+        }
+
+        function preloadImageUrl(url) {
+          if (!url || /^data:/i.test(url)) {
+            return Promise.resolve();
+          }
+          return new Promise(function (resolve) {
+            var probe = new Image();
+            probe.decoding = 'sync';
+            probe.onload = function () { resolve(); };
+            probe.onerror = function () { resolve(); };
+            probe.src = url;
+          });
+        }
+
+        function waitForAssets() {
+          var domImages = Array.prototype.slice.call(document.images || []).map(waitForDomImage);
+          var inlineAssets = extractInlineStyleUrls().map(preloadImageUrl);
+          return Promise.all(domImages.concat(inlineAssets));
+        }
+
+        function withTimeout(promise, timeoutMs) {
+          return Promise.race([
+            promise,
+            new Promise(function (resolve) {
+              window.setTimeout(resolve, timeoutMs);
+            }),
+          ]);
+        }
+
+        withTimeout(Promise.all([waitForFonts(), waitForAssets()]), 8000)
+          .catch(function () { return null; })
+          .then(function () { window.__KALAMAPP_PRINT_READY = true; });
+      })();
     </script>
   </body>
 </html>`;

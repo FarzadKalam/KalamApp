@@ -96,7 +96,7 @@ const watermarkLayer = watermarkText ? `
 
   // ── Background image (full-cover via background-image for reliable print rendering) ─
   const bgLayer = imageUrl
-    ? `<div style="position:absolute; inset:0; background-image:url('${imageUrl}'); background-size:cover; background-position:center center; z-index:1;"></div>`
+    ? `<img src="${imageUrl}" alt="تصویر کاتالوگ" loading="eager" decoding="sync" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center center; display:block; z-index:1;" />`
     : `<div style="position:absolute; inset:0; background:linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); z-index:1;"></div>`;
 
   // ── Code fields below title ────────────────────────────────────────────────
@@ -169,11 +169,13 @@ const watermarkLayer = watermarkText ? `
       <!-- 2. Watermarks (z:2) — above image, below gradient -->
       ${watermarkLayer}
       <!-- 3. Gradient overlay (z:3) — extended dark zone ensures multi-line titles are always readable -->
-      <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.72) 18%, rgba(0,0,0,0.38) 40%, rgba(0,0,0,0.08) 65%, rgba(0,0,0,0) 82%); z-index:3;"></div>
+      <div style="position:absolute; inset:0; background:linear-gradient(to top, rgba(0,0,0,0.94) 0%, rgba(0,0,0,0.82) 22%, rgba(0,0,0,0.5) 42%, rgba(0,0,0,0.12) 66%, rgba(0,0,0,0) 84%); z-index:3;"></div>
       <!-- 4. Title + code fields — anchored to bottom (z:5, above gradient:3) -->
       <div style="position:absolute; left:0; right:0; bottom:0; padding:5mm 6mm 6mm; z-index:5;">
-        <div style="color:#fff; font-size:22px; font-weight:900; line-height:1.35; text-shadow:0 2px 16px rgba(0,0,0,0.98), 0 0px 4px rgba(0,0,0,0.9); overflow-wrap:anywhere;">${primaryTitle}</div>
-        ${codeSection}
+        <div style="display:inline-block; max-width:92%; min-width:42%; background:linear-gradient(135deg, rgba(3,7,18,0.84) 0%, rgba(15,23,42,0.62) 100%); border:1px solid rgba(255,255,255,0.14); border-right:4px solid rgba(255,255,255,0.82); border-radius:16px 16px 0 16px; padding:4mm 4.5mm 3.5mm; box-shadow:0 14px 34px rgba(0,0,0,0.34);">
+          <div style="color:#fff; font-size:21px; font-weight:950; line-height:1.5; text-shadow:0 2px 12px rgba(0,0,0,0.98), 0 0 2px rgba(0,0,0,0.92); overflow-wrap:anywhere;">${primaryTitle}</div>
+          ${codeSection}
+        </div>
       </div>
     </div>
 

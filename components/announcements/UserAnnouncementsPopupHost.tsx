@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Carousel, Grid, Modal } from 'antd';
 import type { ActiveUserAnnouncement, AnnouncementMediaItem } from '../../utils/userAnnouncements';
+import ResilientImage from '../common/ResilientImage';
 
 type UserAnnouncementsPopupHostProps = {
   items: ActiveUserAnnouncement[];
@@ -74,7 +75,14 @@ const renderMediaItem = (item: AnnouncementMediaItem, index: number) => {
     return (
       <div key={`image-${index}`} className="rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-dark-surface shadow-sm">
         <div className="min-h-[84px] md:min-h-[180px] max-h-[18vh] md:max-h-[34vh] flex items-center justify-center bg-gray-50 dark:bg-black/30 p-2">
-          <img src={attachment} alt={caption || 'announcement'} className="max-h-[18vh] md:max-h-[34vh] w-auto max-w-[90%] object-contain" />
+          <ResilientImage
+            src={attachment}
+            preset="gallery"
+            alt={caption || 'announcement'}
+            className="max-h-[18vh] md:max-h-[34vh] w-auto max-w-[90%] object-contain"
+            loading="lazy"
+            decoding="async"
+          />
         </div>
         {caption ? <div className="px-4 py-3 text-xs md:text-sm text-gray-600 dark:text-gray-300">{caption}</div> : null}
       </div>

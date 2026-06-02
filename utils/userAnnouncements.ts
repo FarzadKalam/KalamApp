@@ -42,7 +42,32 @@ export type AnnouncementRuntimeContext = {
   is_authenticated?: boolean;
 };
 
+export type AnnouncementDismissIdentity = {
+  userId?: string | null;
+  orgId?: string | null;
+};
+
 const normalizeText = (value: unknown) => String(value ?? '').trim();
+const normalizeIdentityPart = (value: unknown, fallback: string) => normalizeText(value) || fallback;
+
+const isMissingAnnouncementRpcError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return (
+    Number(error?.status) === 404
+    || code === 'PGRST202'
+    || code === 'PGRST205'
+    || code === '42883'
+    || message.includes('could not find the function')
+    || message.includes('function public.get_active_user_announcements')
+    || message.includes('function public.dismiss_user_announcement')
+  );
+};
+
+const announcementRpcAvailability = {
+  loadUnavailable: false,
+  dismissUnavailable: false,
+};
 
 const normalizeBool = (value: unknown) => {
   if (typeof value === 'boolean') return value;
@@ -177,13 +202,23 @@ export const normalizeAnnouncementRow = (row: any): ActiveUserAnnouncement => ({
 export const loadActiveUserAnnouncements = async (
   runtime: AnnouncementRuntimeContext,
 ): Promise<ActiveUserAnnouncement[]> => {
+  if (announcementRpcAvailability.loadUnavailable) {
+    return [];
+  }
+
   const { data, error } = await supabase.rpc('get_active_user_announcements', {
     p_surface: runtime.surface,
     p_path: runtime.path || null,
     p_host: runtime.host || null,
   });
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingAnnouncementRpcError(error)) {
+      announcementRpcAvailability.loadUnavailable = true;
+      return [];
+    }
+    throw error;
+  }
 
   const rows = Array.isArray(data) ? data.map(normalizeAnnouncementRow).filter((row) => row.id) : [];
   return rows.filter((row) => evaluateAnnouncementConditions(row, runtime));
@@ -192,14 +227,69 @@ export const loadActiveUserAnnouncements = async (
 const getGuestDismissStorageKey = (surface: AnnouncementSurface, announcementId: string) =>
   `kalam.user_announcement.dismissed.${surface}.${announcementId}`;
 
-export const isGuestAnnouncementDismissed = (surface: AnnouncementSurface, announcementId: string) => {
+const getAnnouncementDismissStorageKey = (
+  surface: AnnouncementSurface,
+  announcementId: string,
+  identity?: AnnouncementDismissIdentity,
+) => {
+  const normalizedAnnouncementId = normalizeText(announcementId);
+  const normalizedUserId = normalizeIdentityPart(identity?.userId, 'guest');
+  const normalizedOrgId = normalizeIdentityPart(identity?.orgId, 'guest-org');
+  return `kalam.user_announcement.dismissed.v2.${surface}.${normalizedOrgId}.${normalizedUserId}.${normalizedAnnouncementId}`;
+};
+
+export const isAnnouncementDismissedLocally = (
+  surface: AnnouncementSurface,
+  announcementId: string,
+  identity?: AnnouncementDismissIdentity,
+) => {
   if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem(getGuestDismissStorageKey(surface, announcementId)) === '1';
+  const normalizedAnnouncementId = normalizeText(announcementId);
+  if (!normalizedAnnouncementId) return false;
+
+  const scopedKey = getAnnouncementDismissStorageKey(surface, normalizedAnnouncementId, identity);
+  if (window.localStorage.getItem(scopedKey) === '1') {
+    return true;
+  }
+
+  if (!normalizeText(identity?.userId)) {
+    return window.localStorage.getItem(getGuestDismissStorageKey(surface, normalizedAnnouncementId)) === '1';
+  }
+
+  return false;
+};
+
+export const dismissAnnouncementLocally = (
+  surface: AnnouncementSurface,
+  announcementId: string,
+  identity?: AnnouncementDismissIdentity,
+) => {
+  if (typeof window === 'undefined') return;
+  const normalizedAnnouncementId = normalizeText(announcementId);
+  if (!normalizedAnnouncementId) return;
+
+  window.localStorage.setItem(
+    getAnnouncementDismissStorageKey(surface, normalizedAnnouncementId, identity),
+    '1',
+  );
+
+  if (!normalizeText(identity?.userId)) {
+    window.localStorage.setItem(getGuestDismissStorageKey(surface, normalizedAnnouncementId), '1');
+  }
+};
+
+export const filterAnnouncementsByLocalDismissals = (
+  surface: AnnouncementSurface,
+  rows: ActiveUserAnnouncement[],
+  identity?: AnnouncementDismissIdentity,
+) => rows.filter((row) => !isAnnouncementDismissedLocally(surface, row.id, identity));
+
+export const isGuestAnnouncementDismissed = (surface: AnnouncementSurface, announcementId: string) => {
+  return isAnnouncementDismissedLocally(surface, announcementId);
 };
 
 export const dismissGuestAnnouncement = (surface: AnnouncementSurface, announcementId: string) => {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(getGuestDismissStorageKey(surface, announcementId), '1');
+  dismissAnnouncementLocally(surface, announcementId);
 };
 
 export const dismissActiveUserAnnouncement = async (
@@ -208,12 +298,19 @@ export const dismissActiveUserAnnouncement = async (
 ) => {
   const normalizedId = normalizeText(announcementId);
   if (!normalizedId) return false;
+  if (announcementRpcAvailability.dismissUnavailable) return false;
 
   const { data, error } = await supabase.rpc('dismiss_user_announcement', {
     p_announcement_id: normalizedId,
     p_surface: surface,
   });
 
-  if (error) throw error;
+  if (error) {
+    if (isMissingAnnouncementRpcError(error)) {
+      announcementRpcAvailability.dismissUnavailable = true;
+      return false;
+    }
+    throw error;
+  }
   return Boolean(data);
 };

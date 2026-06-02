@@ -44,7 +44,7 @@ vi.mock('./botGateway', () => ({
 }));
 
 import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
-import { createProcessNextStageFieldKey } from './workflowTypes';
+import { createProcessNextStageFieldKey, createWorkflowNoteRecipientFieldKey } from './workflowTypes';
 import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
@@ -319,6 +319,40 @@ describe('workflow action recipients', () => {
     expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
       mentionUserIds: [USER_ID, DIRECT_USER_ID],
       mentionRoleIds: [],
+    }));
+  });
+
+  it('normalizes direct user and role recipient fields for workflow notes', async () => {
+    await executeWorkflowAction(
+      {
+        id: 'action-note-explicit-recipients',
+        type: 'send_note_sms',
+        config: {
+          note_text: 'یادداشت برای مسئول و نقش',
+          recipient_fields: [
+            createWorkflowNoteRecipientFieldKey('recipient_profile_id', 'user'),
+            createWorkflowNoteRecipientFieldKey('recipient_role_id', 'role'),
+          ],
+          recipient_assignees: [],
+        },
+      },
+      'secretariat_documents',
+      {
+        id: 'doc-1',
+        recipient_profile_id: DIRECT_USER_ID,
+        recipient_role_id: ROLE_ID,
+      }
+    );
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        mention_user_ids: [DIRECT_USER_ID],
+        mention_role_ids: [ROLE_ID],
+      }),
+    ]);
+    expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
+      mentionUserIds: [DIRECT_USER_ID],
+      mentionRoleIds: [ROLE_ID],
     }));
   });
 

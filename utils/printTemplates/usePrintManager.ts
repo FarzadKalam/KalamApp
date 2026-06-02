@@ -43,7 +43,7 @@ import {
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { getCachedAuthUser } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
-import { buildImagePreviewUrl } from '../imagePreview';
+import { buildImagePreviewUrl, buildPrintImageUrl, isPrintImageTransformEnabled } from '../imagePreview';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
@@ -835,11 +835,11 @@ export const usePrintManager = ({
     [data, recordImageField]
   );
   const recordCardImageUrl = useMemo(
-    () => buildImagePreviewUrl(recordImageUrl, 'card'),
+    () => buildImagePreviewUrl(recordImageUrl, 'card', { forceTransform: isPrintImageTransformEnabled() }),
     [recordImageUrl]
   );
   const recordHeroImageUrl = useMemo(
-    () => buildImagePreviewUrl(recordImageUrl, 'hero'),
+    () => buildPrintImageUrl(recordImageUrl, 'printHero'),
     [recordImageUrl]
   );
   const recordQrSvgMarkup = useMemo(() => {
@@ -2057,7 +2057,7 @@ export const usePrintManager = ({
       }
       if (path === 'system.catalog_map_section') {
         // Compact square map box — full-cover image, designed for side-by-side placement
-        const mapImageUrl = String(data?.location_image || '').trim();
+        const mapImageUrl = buildPrintImageUrl(String(data?.location_image || '').trim(), 'printMap');
         if (!mapImageUrl) return '';
         const locationRaw = data?.location;
         let googleUrl = '#';
@@ -2070,7 +2070,7 @@ export const usePrintManager = ({
           }
         } catch { /* ignore */ }
         const safeImg = mapImageUrl.replace(/"/g, '&quot;');
-        return `<a href="${googleUrl}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><div style="position:absolute; inset:0; background-image:url('${safeImg}'); background-size:cover; background-position:center;"></div><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${locationText}</div>` : ''}</div></a>`;
+        return `<a href="${googleUrl}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><img src="${safeImg}" alt="نقشه موقعیت" loading="eager" decoding="sync" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;" /><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${locationText}</div>` : ''}</div></a>`;
       }
       if (path === 'system.compact_fields_sidebar') {
         // Renders fields in user-selected order (orderedSidebarFieldDefs respects templateSelectedKeySet order)
@@ -2199,8 +2199,8 @@ export const usePrintManager = ({
       }
 
       if (root === 'company' && (nestedPath === 'logo_url' || path === 'company.logo_url')) {
-        const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || '';
-        return String(logo || '');
+          const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || '';
+          return buildPrintImageUrl(String(logo || ''), 'printLogo');
       }
       if (root === 'company' && nestedPath === 'currency_label') {
         return localizePlainText(source?.currency_label || source?.currency_code || 'ریال');
@@ -2261,8 +2261,8 @@ export const usePrintManager = ({
         return toPersianNumber(safeJalaliFormat(raw, 'YYYY/MM/DD'));
       }
       if (path === 'company.logo_url' || nestedPath.endsWith('logo_url')) {
-        const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || raw || '';
-        return String(logo || '');
+          const logo = source?.logo_url || source?.logo || source?.icon_url || source?.image_url || raw || '';
+          return buildPrintImageUrl(String(logo || ''), 'printLogo');
       }
       if (typeof raw === 'number') return toPersianNumber(String(raw));
       if (typeof raw === 'string') {

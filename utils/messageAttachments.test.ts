@@ -2,23 +2,49 @@ import { describe, expect, it } from 'vitest';
 import { extractBotMessageAttachments } from './messageAttachments';
 
 describe('extractBotMessageAttachments', () => {
-  it('dedupes payload and top-level urls while preserving mime metadata', () => {
+  it('reads multiple bot attachments from payload.attachments', () => {
     const attachments = extractBotMessageAttachments({
-      file_url: 'https://example.com/a.jpg',
-      file_name: 'a.jpg',
-      mime_type: 'image/jpeg',
       payload: {
-        media_url: 'https://example.com/a.jpg',
         attachments: [
-          { url: 'https://example.com/a.jpg', mime_type: 'image/jpeg' },
-          { url: 'https://example.com/b.pdf', file_name: 'b.pdf', mime_type: 'application/pdf' },
+          {
+            name: 'img-1.jpg',
+            url: 'https://api.tazesystem.ir/storage/v1/object/public/images/a/img-1.jpg',
+            mime_type: 'image/jpeg',
+            file_type: 'image',
+          },
+          {
+            name: 'img-2.jpg',
+            url: 'https://api.tazesystem.ir/storage/v1/object/public/images/a/img-2.jpg',
+            mime_type: 'image/jpeg',
+            file_type: 'image',
+          },
         ],
       },
     });
 
     expect(attachments).toHaveLength(2);
-    expect(attachments[0]).toMatchObject({ url: 'https://example.com/a.jpg', mimeType: 'image/jpeg' });
-    expect(attachments[1]).toMatchObject({ url: 'https://example.com/b.pdf', mimeType: 'application/pdf' });
+    expect(attachments.map((item) => item.name)).toEqual(['img-1.jpg', 'img-2.jpg']);
+    expect(attachments.every((item) => item.fileType === 'image')).toBe(true);
+  });
+
+  it('dedupes repeated album attachments by url', () => {
+    const attachments = extractBotMessageAttachments({
+      file_url: 'https://api.tazesystem.ir/storage/v1/object/public/images/a/img-1.jpg',
+      file_name: 'img-1.jpg',
+      mime_type: 'image/jpeg',
+      payload: {
+        attachments: [
+          {
+            name: 'img-1.jpg',
+            url: 'https://api.tazesystem.ir/storage/v1/object/public/images/a/img-1.jpg',
+            mime_type: 'image/jpeg',
+            file_type: 'image',
+          },
+        ],
+      },
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.url).toContain('img-1.jpg');
   });
 });
-

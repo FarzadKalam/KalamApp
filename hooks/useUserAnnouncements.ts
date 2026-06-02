@@ -1,13 +1,15 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { getOrgSaasStatus } from '../utils/orgSaasStatus';
 import {
   type ActiveUserAnnouncement,
+  type AnnouncementDismissIdentity,
   type AnnouncementSurface,
+  dismissAnnouncementLocally,
   dismissActiveUserAnnouncement,
   dismissGuestAnnouncement,
-  isGuestAnnouncementDismissed,
+  filterAnnouncementsByLocalDismissals,
   loadActiveUserAnnouncements,
 } from '../utils/userAnnouncements';
 
@@ -31,6 +33,7 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
   );
   const [loading, setLoading] = useState(false);
   const [announcements, setAnnouncements] = useState<ActiveUserAnnouncement[]>([]);
+  const viewerIdentityRef = useRef<AnnouncementDismissIdentity>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,6 +42,8 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
       const userId = String(bootstrap.user?.id || '').trim() || null;
       const orgId = String(bootstrap.orgId || '').trim() || null;
       const roleId = String(bootstrap.roleId || '').trim() || null;
+      const dismissIdentity = { userId, orgId };
+      viewerIdentityRef.current = dismissIdentity;
       let isDemoUser = false;
 
       if (orgId) {
@@ -61,11 +66,7 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
         is_authenticated: Boolean(userId),
       });
 
-      if (!userId) {
-        setAnnouncements(rows.filter((row) => !isGuestAnnouncementDismissed(surface, row.id)));
-      } else {
-        setAnnouncements(rows);
-      }
+      setAnnouncements(filterAnnouncementsByLocalDismissals(surface, rows, dismissIdentity));
     } catch {
       setAnnouncements([]);
     } finally {
@@ -82,12 +83,23 @@ export const useUserAnnouncements = ({ surface, path, host }: UseUserAnnouncemen
     setAnnouncements((prev) => prev.filter((item) => item.id !== announcement.id));
 
     if (!announcement.allow_dismiss) return;
+    dismissAnnouncementLocally(surface, announcement.id, viewerIdentityRef.current);
 
     void (async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const hasUser = Boolean(sessionData?.session?.user?.id);
-        if (hasUser) {
+        let resolvedUserId = String(viewerIdentityRef.current.userId || '').trim();
+
+        if (!resolvedUserId) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          resolvedUserId = String(sessionData?.session?.user?.id || '').trim();
+        }
+
+        if (!resolvedUserId) {
+          const { data: userData } = await supabase.auth.getUser();
+          resolvedUserId = String(userData?.user?.id || '').trim();
+        }
+
+        if (resolvedUserId) {
           try {
             await dismissActiveUserAnnouncement(announcement.id, surface);
           } catch {

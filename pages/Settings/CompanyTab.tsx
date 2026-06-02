@@ -7,6 +7,7 @@ import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCur
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 import { getResolvedCurrentOrgId, loadScopedCompanySettings } from '../../utils/companySettings';
+import ResilientImage from '../../components/common/ResilientImage';
 
 const CompanyTab: React.FC = () => {
   const { message } = App.useApp();
@@ -176,7 +177,7 @@ const CompanyTab: React.FC = () => {
         <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-2">
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
             <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {logoUrl ? <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+              {logoUrl ? <ResilientImage src={logoUrl} preset="gallery" alt="Logo" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
             </div>
             <div className="flex-1">
               <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">لوگوی اصلی</div>
@@ -189,7 +190,7 @@ const CompanyTab: React.FC = () => {
 
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
             <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {iconUrl ? <img src={iconUrl} alt="Icon" className="w-full h-full object-contain" /> : <GlobalOutlined className="text-2xl text-gray-300" />}
+              {iconUrl ? <ResilientImage src={iconUrl} preset="gallery" alt="Icon" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <GlobalOutlined className="text-2xl text-gray-300" />}
             </div>
             <div className="flex-1">
               <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">آیکون سایت (Favicon)</div>
@@ -202,7 +203,7 @@ const CompanyTab: React.FC = () => {
 
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
             <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {signatureUrl ? <img src={signatureUrl} alt="Signature" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+              {signatureUrl ? <ResilientImage src={signatureUrl} preset="gallery" alt="Signature" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
             </div>
             <div className="flex-1">
               <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">امضای سازمانی</div>
@@ -215,7 +216,7 @@ const CompanyTab: React.FC = () => {
 
           <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
             <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {stampUrl ? <img src={stampUrl} alt="Stamp" className="w-full h-full object-contain" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+              {stampUrl ? <ResilientImage src={stampUrl} preset="gallery" alt="Stamp" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
             </div>
             <div className="flex-1">
               <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">مهر سازمانی</div>

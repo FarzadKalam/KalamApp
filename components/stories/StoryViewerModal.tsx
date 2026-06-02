@@ -23,6 +23,7 @@ import { STORY_REACTION_EMOJIS } from '../../utils/storyGradients';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import ProfileAvatar from '../common/ProfileAvatar';
+import { buildImageBackgroundStyle } from '../../utils/imagePreview';
 
 interface StoryViewerModalProps {
   open: boolean;
@@ -247,11 +248,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   // پس‌زمینه اسلاید
   const slideBackground: React.CSSProperties = (() => {
     if (currentSlide.type === 'image' && currentSlide.image_url) {
-      return {
-        backgroundImage: `url(${currentSlide.image_url})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-      };
+      return buildImageBackgroundStyle(currentSlide.image_url, 'hero');
     }
     const preset = getGradientPreset(currentSlide.gradient_key);
     return { background: preset.gradient };
