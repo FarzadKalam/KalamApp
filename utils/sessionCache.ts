@@ -8,6 +8,7 @@ type SessionBootstrapSnapshot = {
   orgId: string | null;
   permissions: Record<string, any> | null;
   loadedAt: number;
+  bootstrapError?: any;
 };
 
 const AUTH_USER_TTL_MS = 60_000;
@@ -169,6 +170,19 @@ export const fetchSessionBootstrap = async (
             .eq('id', user.id)
             .maybeSingle(),
       });
+
+      if (profileResult.error) {
+        return {
+          user,
+          profile: null,
+          roleId: null,
+          orgId: null,
+          permissions: null,
+          loadedAt: Date.now(),
+          bootstrapError: profileResult.error,
+        };
+      }
+
       const profile = profileResult.data
         ? {
             ...profileResult.data,
@@ -189,6 +203,23 @@ export const fetchSessionBootstrap = async (
               .eq('id', profile.role_id)
               .maybeSingle(),
         });
+
+        if (roleResult.error) {
+          const snapshot: SessionBootstrapSnapshot = {
+            user,
+            profile: profile || null,
+            roleId: profile?.role_id ? String(profile.role_id) : null,
+            orgId: resolvedOrgId,
+            permissions: null,
+            loadedAt: Date.now(),
+            bootstrapError: roleResult.error,
+          };
+
+          sessionBootstrapCache.snapshot = snapshot;
+          sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
+          return snapshot;
+        }
+
         const role = roleResult.data || null;
         permissions = (role?.permissions || null) as Record<string, any> | null;
         if (!resolvedOrgId && role?.org_id) {

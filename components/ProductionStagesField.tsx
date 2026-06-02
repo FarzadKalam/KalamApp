@@ -2324,7 +2324,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (linkedResult.error) throw linkedResult.error;
 
         const mergedRows = [
-          ...(processRunStageRows || []),
+          ...((processRunStageRows || []).filter((row: any) => !row?.isProcessRunStagePreview)),
           ...(sourceResult.data || []),
           ...((linkedResult.data || []).filter((row: any) => {
             const processLinks = parseProcessLinkMap(parseRecurrenceInfo(row?.recurrence_info)?.process_links);

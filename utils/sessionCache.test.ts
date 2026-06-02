@@ -122,4 +122,40 @@ describe('fetchSessionBootstrap', () => {
 
     expect(snapshot.profile?.avatar_url).toBe('https://api.tazesystem.ir/storage/v1/object/public/images/avatar.jpg');
   });
+
+  it('keeps the authenticated user and marks bootstrap errors instead of returning a successful no-org snapshot', async () => {
+    const networkError = { message: 'Failed to fetch' };
+    const supabaseClient = {
+      auth: {
+        getSession: async () => ({
+          data: {
+            session: {
+              user: { id: 'user-network' },
+              expires_at: Math.floor(Date.now() / 1000) + 300,
+            },
+          },
+        }),
+        getUser: async () => ({ data: { user: { id: 'user-network' } } }),
+      },
+      from: (table: string) => {
+        if (table !== 'profiles') throw new Error(`Unexpected table ${table}`);
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: null,
+                error: networkError,
+              }),
+            }),
+          }),
+        };
+      },
+    };
+
+    const snapshot = await fetchSessionBootstrap(supabaseClient, { force: true });
+
+    expect(snapshot.user?.id).toBe('user-network');
+    expect(snapshot.orgId).toBeNull();
+    expect(snapshot.bootstrapError).toBe(networkError);
+  });
 });

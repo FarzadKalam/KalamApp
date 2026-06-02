@@ -12,10 +12,22 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
 import { resolveScopedChartOfAccountIds } from './chartOfAccountsScope';
 import { isUuidLikeValue } from './optionHelpers';
+import { fetchSessionBootstrap } from './sessionCache';
 
 const RELATION_RECENT_LIMIT = 50;
 const relationOptionsCache = new Map<string, any[]>();
 const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
+
+// جداول/ویوهایی که org_id ندارند یا cross-org هستند — نباید فیلتر org_id روی‌شان اعمال شود
+const NO_ORG_SCOPE_TABLES = new Set([
+  'organizations',
+  'saas_orgs',
+  'saas_users',
+  'saas_admin_org_candidates_view',
+  'saas_admin_users_view',
+  'saas_admin_orgs_view',
+  'saas_onboarding_requests',
+]);
 
 type RelationSourceConfig = {
   targetModule: string;
@@ -534,7 +546,11 @@ export const fetchRelationOptionsForField = async (
     };
   });
 
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim();
+
   const cacheKey = JSON.stringify({
+    orgId,
     sources: sources.map((source: any) => ({
       moduleName: source.moduleName,
       tableName: source.tableName,
@@ -575,6 +591,14 @@ export const fetchRelationOptionsForField = async (
         scopedFilter = {
           ...(scopedFilter || {}),
           id__in: scopedIds,
+        };
+      }
+
+      // اعمال فیلتر org_id برای جداول tenant-scoped
+      if (orgId && !NO_ORG_SCOPE_TABLES.has(source.moduleName) && !NO_ORG_SCOPE_TABLES.has(source.tableName)) {
+        scopedFilter = {
+          ...(scopedFilter || {}),
+          org_id: orgId,
         };
       }
 

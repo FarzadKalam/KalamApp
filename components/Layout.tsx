@@ -110,6 +110,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
+  const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
@@ -119,6 +120,32 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   const wasMobileViewportRef = useRef(initialIsMobile);
   const previousPathnameRef = useRef(location.pathname);
+
+  const applySessionBootstrapSnapshot = useCallback((snapshot: any, isMounted = true) => {
+    if (!isMounted) return;
+    const user = snapshot.user;
+    setCurrentUser(user);
+    setSessionBootstrapError(snapshot.bootstrapError || null);
+    if (user?.id) {
+      setCurrentUserProfile(snapshot.profile || null);
+      setResolvedOrgId(snapshot.bootstrapError ? undefined : (snapshot.orgId || null));
+      setRolePermissions((snapshot.permissions || {}) as PermissionMap);
+    } else {
+      setCurrentUserProfile(null);
+      setResolvedOrgId(null);
+      setRolePermissions({});
+    }
+  }, []);
+
+  const retrySessionBootstrap = useCallback(async () => {
+    setRolePermissionsReady(false);
+    try {
+      const snapshot = await fetchSessionBootstrap(supabase, { force: true });
+      applySessionBootstrapSnapshot(snapshot);
+    } finally {
+      setRolePermissionsReady(true);
+    }
+  }, [applySessionBootstrapSnapshot]);
 
   useEffect(() => {
     document.documentElement.classList.add('kalam-app-shell-lock');
@@ -260,19 +287,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const getUser = async () => {
       try {
         const snapshot = await fetchSessionBootstrap(supabase);
-        const user = snapshot.user;
-        if (!isMounted) return;
-        setCurrentUser(user);
-        if (user?.id) {
-          if (!isMounted) return;
-          setCurrentUserProfile(snapshot.profile || null);
-          setResolvedOrgId(snapshot.orgId || null);
-          setRolePermissions((snapshot.permissions || {}) as PermissionMap);
-        } else {
-          setCurrentUserProfile(null);
-          setResolvedOrgId(null);
-          setRolePermissions({});
-        }
+        applySessionBootstrapSnapshot(snapshot, isMounted);
       } finally {
         if (isMounted) setRolePermissionsReady(true);
       }
@@ -307,7 +322,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       window.removeEventListener('focusin', handleResize);
       window.removeEventListener('focusout', handleResize);
     };
-  }, []);
+  }, [applySessionBootstrapSnapshot]);
 
   useEffect(() => {
     const orgId = currentUserProfile?.org_id;
@@ -1042,6 +1057,38 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     if (moduleId === 'cash_boxes' || moduleId === 'bank_accounts' || moduleId === 'journal_entries') return <BankOutlined />;
     return <AppstoreOutlined />;
   };
+
+  if (rolePermissionsReady && currentUser?.id && sessionBootstrapError) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100dvh',
+          gap: 16,
+          padding: 24,
+          textAlign: 'center',
+          direction: 'rtl',
+        }}
+      >
+        <ReloadOutlined style={{ fontSize: 48, color: '#1677ff' }} spin={!rolePermissionsReady} />
+        <div style={{ fontSize: 18, fontWeight: 600 }}>اتصال به اطلاعات سازمان کامل نشد</div>
+        <div style={{ color: '#666', maxWidth: 380 }}>
+          اتصال شبکه یا پاسخ سرور کامل نبود. پس از برقراری اینترنت دوباره تلاش کنید.
+        </div>
+        <Button
+          type="primary"
+          icon={<ReloadOutlined />}
+          loading={!rolePermissionsReady}
+          onClick={retrySessionBootstrap}
+        >
+          تلاش مجدد
+        </Button>
+      </div>
+    );
+  }
 
   if (rolePermissionsReady && currentUser?.id && resolvedOrgId === null) {
     return (

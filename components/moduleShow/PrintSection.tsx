@@ -80,7 +80,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   const [zoom, setZoom] = useState(1);
   const previewStageRef = useRef<HTMLDivElement | null>(null);
   const pinchDistanceRef = useRef<number | null>(null);
-  const pendingPrintRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => (typeof window !== 'undefined' ? window.innerWidth < 768 : false));
   const supportsZoom =
     typeof CSS !== 'undefined' &&
@@ -204,7 +203,6 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   };
 
   const handleCancel = () => {
-    pendingPrintRef.current = false;
     onClose();
   };
 
@@ -215,18 +213,11 @@ const PrintSection: React.FC<PrintSectionProps> = ({
       console.error('Prepare print failed', error);
     }
 
-    pendingPrintRef.current = true;
     onClose();
-  };
-
-  useEffect(() => {
-    if (isPrintModalOpen || !pendingPrintRef.current) return;
-    pendingPrintRef.current = false;
-    const timer = window.setTimeout(() => {
+    window.setTimeout(() => {
       onPrint();
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [isPrintModalOpen, onPrint]);
+  };
 
   const handleSendInternalPdf = async () => {
     if (!onSendInternalPdf) return;

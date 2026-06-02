@@ -13,6 +13,12 @@ type TaskProcessTarget = {
   lineId: string | null;
 };
 
+const isProcessRunStagePreviewTask = (task: any) => {
+  if (!task || typeof task !== 'object') return false;
+  if (task?.isProcessRunStagePreview && !task?.task_id) return true;
+  return String(task?.id || '').trim().startsWith('process_run_stage:');
+};
+
 const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
   if (!task || typeof task !== 'object') return null;
   const sourceLink = resolveTaskSourceLink(task);
@@ -72,6 +78,10 @@ const GlobalTaskProcessModalHost: React.FC = () => {
       const resolvedTaskId = String(detail?.taskId || providedTask?.id || '').trim();
       if (!resolvedTaskId) return;
       if (!mountedRef.current) return;
+      if (isProcessRunStagePreviewTask(providedTask) || resolvedTaskId.startsWith('process_run_stage:')) {
+        message.info('این مرحله هنوز به فعالیت واقعی تبدیل نشده است.');
+        return;
+      }
       if (providedTask) {
         setTask(providedTask);
         setHostKey((prev) => prev + 1);
@@ -144,4 +154,3 @@ const GlobalTaskProcessModalHost: React.FC = () => {
 };
 
 export default GlobalTaskProcessModalHost;
-

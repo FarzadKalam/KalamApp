@@ -50,24 +50,9 @@ const assigneeDirectoryCache: {
 
 const dynamicOptionsCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number }>();
 const dynamicOptionsPromiseCache = new Map<string, Promise<DynamicOptionRow[]>>();
-const tagOptionsCache: {
-  data: DynamicOptionRow[] | null;
-  expiresAt: number;
-  promise: Promise<DynamicOptionRow[]> | null;
-} = {
-  data: null,
-  expiresAt: 0,
-  promise: null,
-};
-const processTemplateRowsCache: {
-  data: ProcessTemplateOptionRow[] | null;
-  expiresAt: number;
-  promise: Promise<ProcessTemplateOptionRow[]> | null;
-} = {
-  data: null,
-  expiresAt: 0,
-  promise: null,
-};
+// کلید: orgId (یا '' برای global) — جداسازی کامل per-org
+const tagOptionsByOrgCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number; promise: Promise<DynamicOptionRow[]> | null }>();
+const processTemplateRowsByOrgCache = new Map<string, { data: ProcessTemplateOptionRow[]; expiresAt: number; promise: Promise<ProcessTemplateOptionRow[]> | null }>();
 const recordTagsCache = new Map<string, { data: Record<string, any[]>; expiresAt: number }>();
 const recordTagsPromiseCache = new Map<string, Promise<Record<string, any[]>>>();
 const recordTagIdMapCache = new Map<string, { data: Record<string, string[]>; expiresAt: number }>();
@@ -83,15 +68,7 @@ type RecordTagsBatchEntry = {
 const recordTagsBatchQueues = new Map<string, RecordTagsBatchEntry[]>();
 const recordTagsBatchTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const RECORD_TAG_ID_MAP_FALLBACK_PAGE_SIZE = 1000;
-const formulaOptionsCache: {
-  data: DynamicOptionRow[] | null;
-  expiresAt: number;
-  promise: Promise<DynamicOptionRow[]> | null;
-} = {
-  data: null,
-  expiresAt: 0,
-  promise: null,
-};
+const formulaOptionsByOrgCache = new Map<string, { data: DynamicOptionRow[]; expiresAt: number; promise: Promise<DynamicOptionRow[]> | null }>();
 
 const normalizeDynamicOptions = (rows: any[]) =>
   (rows || [])
@@ -268,20 +245,13 @@ export const clearReferenceDataCache = () => {
 
   dynamicOptionsCache.clear();
   dynamicOptionsPromiseCache.clear();
-  tagOptionsCache.data = null;
-  tagOptionsCache.expiresAt = 0;
-  tagOptionsCache.promise = null;
-  processTemplateRowsCache.data = null;
-  processTemplateRowsCache.expiresAt = 0;
-  processTemplateRowsCache.promise = null;
+  tagOptionsByOrgCache.clear();
+  processTemplateRowsByOrgCache.clear();
   recordTagsCache.clear();
   recordTagsPromiseCache.clear();
   recordTagIdMapCache.clear();
   recordTagIdMapPromiseCache.clear();
-
-  formulaOptionsCache.data = null;
-  formulaOptionsCache.expiresAt = 0;
-  formulaOptionsCache.promise = null;
+  formulaOptionsByOrgCache.clear();
 };
 
 const buildRecordTagsCacheKey = (moduleId: string, recordIds: string[]) =>
@@ -739,21 +709,29 @@ export const fetchDynamicOptionsByCategory = async (
   const normalizedCategory = String(category || '').trim();
   if (!normalizedCategory) return [];
 
-  const cached = dynamicOptionsCache.get(normalizedCategory);
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim();
+  const cacheKey = orgId ? `${orgId}:${normalizedCategory}` : normalizedCategory;
+
+  const cached = dynamicOptionsCache.get(cacheKey);
   if (!options?.force && cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
-  if (!options?.force && dynamicOptionsPromiseCache.has(normalizedCategory)) {
-    return dynamicOptionsPromiseCache.get(normalizedCategory)!;
+  if (!options?.force && dynamicOptionsPromiseCache.has(cacheKey)) {
+    return dynamicOptionsPromiseCache.get(cacheKey)!;
   }
 
   const pending = (async () => {
-    const { data } = await supabaseClient
+    let query = supabaseClient
       .from('dynamic_options')
       .select('label, value')
       .eq('category', normalizedCategory)
       .eq('is_active', true);
+    if (orgId) {
+      query = query.eq('org_id', orgId);
+    }
+    const { data } = await query;
 
     const storedOptions = normalizedCategory === 'task_type'
       ? getMergedTaskTypeOptions(data || [])
@@ -762,18 +740,18 @@ export const fetchDynamicOptionsByCategory = async (
       ? await buildDynamicOptionsFromModuleFallback(supabaseClient, normalizedCategory)
       : [];
     const normalized = mergeDynamicOptionRows(storedOptions, fallbackOptions);
-    dynamicOptionsCache.set(normalizedCategory, {
+    dynamicOptionsCache.set(cacheKey, {
       data: normalized,
       expiresAt: Date.now() + REFERENCE_TTL_MS,
     });
-    dynamicOptionsPromiseCache.delete(normalizedCategory);
+    dynamicOptionsPromiseCache.delete(cacheKey);
     return normalized;
   })().catch((error) => {
-    dynamicOptionsPromiseCache.delete(normalizedCategory);
+    dynamicOptionsPromiseCache.delete(cacheKey);
     throw error;
   });
 
-  dynamicOptionsPromiseCache.set(normalizedCategory, pending);
+  dynamicOptionsPromiseCache.set(cacheKey, pending);
   return pending;
 };
 
@@ -781,19 +759,27 @@ export const fetchTagOptions = async (
   supabaseClient: any,
   options?: { force?: boolean }
 ): Promise<DynamicOptionRow[]> => {
-  if (!options?.force && tagOptionsCache.data && tagOptionsCache.expiresAt > Date.now()) {
-    return tagOptionsCache.data;
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim();
+  const orgCacheKey = orgId || '__global__';
+
+  const existing = tagOptionsByOrgCache.get(orgCacheKey);
+  if (!options?.force && existing && existing.data && existing.expiresAt > Date.now()) {
+    return existing.data;
+  }
+  if (!options?.force && existing?.promise) {
+    return existing.promise;
   }
 
-  if (!options?.force && tagOptionsCache.promise) {
-    return tagOptionsCache.promise;
-  }
+  const entry: { data: DynamicOptionRow[]; expiresAt: number; promise: Promise<DynamicOptionRow[]> | null } = existing || { data: [], expiresAt: 0, promise: null };
+  tagOptionsByOrgCache.set(orgCacheKey, entry);
 
-  tagOptionsCache.promise = (async () => {
-    const { data, error } = await supabaseClient
-      .from('tags')
-      .select('id, title')
-      .order('title', { ascending: true });
+  entry.promise = (async () => {
+    let query = supabaseClient.from('tags').select('id, title').order('title', { ascending: true });
+    if (orgId) {
+      query = query.eq('org_id', orgId);
+    }
+    const { data, error } = await query;
     if (error) throw error;
 
     const normalized = (data || [])
@@ -803,35 +789,46 @@ export const fetchTagOptions = async (
       }))
       .filter((item: DynamicOptionRow) => item.value);
 
-    tagOptionsCache.data = normalized;
-    tagOptionsCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
-    tagOptionsCache.promise = null;
+    entry.data = normalized;
+    entry.expiresAt = Date.now() + REFERENCE_TTL_MS;
+    entry.promise = null;
     return normalized;
   })().catch((error) => {
-    tagOptionsCache.promise = null;
+    entry.promise = null;
     throw error;
   });
 
-  return tagOptionsCache.promise;
+  return entry.promise;
 };
 
 export const fetchProcessTemplateRows = async (
   supabaseClient: any,
   options?: { force?: boolean }
 ): Promise<ProcessTemplateOptionRow[]> => {
-  if (!options?.force && processTemplateRowsCache.data && processTemplateRowsCache.expiresAt > Date.now()) {
-    return processTemplateRowsCache.data;
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim();
+  const orgCacheKey = orgId || '__global__';
+
+  const existing = processTemplateRowsByOrgCache.get(orgCacheKey);
+  if (!options?.force && existing && existing.data && existing.expiresAt > Date.now()) {
+    return existing.data;
+  }
+  if (!options?.force && existing?.promise) {
+    return existing.promise;
   }
 
-  if (!options?.force && processTemplateRowsCache.promise) {
-    return processTemplateRowsCache.promise;
-  }
+  const entry: { data: ProcessTemplateOptionRow[]; expiresAt: number; promise: Promise<ProcessTemplateOptionRow[]> | null } = existing || { data: [], expiresAt: 0, promise: null };
+  processTemplateRowsByOrgCache.set(orgCacheKey, entry);
 
-  processTemplateRowsCache.promise = (async () => {
-    const { data, error } = await supabaseClient
+  entry.promise = (async () => {
+    let query = supabaseClient
       .from('process_templates')
       .select('id, name, module_id, module_ids, is_active')
       .order('name', { ascending: true });
+    if (orgId) {
+      query = query.eq('org_id', orgId);
+    }
+    const { data, error } = await query;
     if (error) throw error;
 
     const rows = (data || []).map((row: any) => ({
@@ -842,16 +839,16 @@ export const fetchProcessTemplateRows = async (
       is_active: row?.is_active,
     })).filter((row: ProcessTemplateOptionRow) => row.id);
 
-    processTemplateRowsCache.data = rows;
-    processTemplateRowsCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
-    processTemplateRowsCache.promise = null;
+    entry.data = rows;
+    entry.expiresAt = Date.now() + REFERENCE_TTL_MS;
+    entry.promise = null;
     return rows;
   })().catch((error) => {
-    processTemplateRowsCache.promise = null;
+    entry.promise = null;
     throw error;
   });
 
-  return processTemplateRowsCache.promise;
+  return entry.promise;
 };
 
 export const fetchProcessTemplateOptions = async (
@@ -892,31 +889,42 @@ export const fetchFormulaOptions = async (
   supabaseClient: any,
   options?: { force?: boolean }
 ): Promise<DynamicOptionRow[]> => {
-  if (!options?.force && formulaOptionsCache.data && formulaOptionsCache.expiresAt > Date.now()) {
-    return formulaOptionsCache.data;
+  const session = await fetchSessionBootstrap(supabaseClient);
+  const orgId = String(session?.orgId || '').trim();
+  const orgCacheKey = orgId || '__global__';
+
+  const existing = formulaOptionsByOrgCache.get(orgCacheKey);
+  if (!options?.force && existing && existing.data && existing.expiresAt > Date.now()) {
+    return existing.data;
+  }
+  if (!options?.force && existing?.promise) {
+    return existing.promise;
   }
 
-  if (!options?.force && formulaOptionsCache.promise) {
-    return formulaOptionsCache.promise;
-  }
+  const entry: { data: DynamicOptionRow[]; expiresAt: number; promise: Promise<DynamicOptionRow[]> | null } = existing || { data: [], expiresAt: 0, promise: null };
+  formulaOptionsByOrgCache.set(orgCacheKey, entry);
 
-  formulaOptionsCache.promise = (async () => {
-    const { data } = await supabaseClient.from('calculation_formulas').select('id, name');
+  entry.promise = (async () => {
+    let query = supabaseClient.from('calculation_formulas').select('id, name');
+    if (orgId) {
+      query = query.eq('org_id', orgId);
+    }
+    const { data } = await query;
     const normalized = (data || []).map((item: any) => ({
       label: String(item?.name || item?.id || '').trim(),
       value: String(item?.id || '').trim(),
     })).filter((item: DynamicOptionRow) => item.value);
 
-    formulaOptionsCache.data = normalized;
-    formulaOptionsCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
-    formulaOptionsCache.promise = null;
+    entry.data = normalized;
+    entry.expiresAt = Date.now() + REFERENCE_TTL_MS;
+    entry.promise = null;
     return normalized;
   })().catch((error) => {
-    formulaOptionsCache.promise = null;
+    entry.promise = null;
     throw error;
   });
 
-  return formulaOptionsCache.promise;
+  return entry.promise;
 };
 
 export const fetchAllDynamicOptionCategories = async (

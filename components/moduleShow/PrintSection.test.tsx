@@ -28,6 +28,7 @@ const setDesktopViewport = () => {
 
 describe('PrintSection', () => {
   afterEach(() => {
+    vi.useRealTimers();
     document.body.innerHTML = '';
   });
 
@@ -123,6 +124,37 @@ describe('PrintSection', () => {
     });
 
     expect(screen.getByRole('button', { name: 'دکمه پشت مودال' })).toBeInTheDocument();
+  });
+
+  it('still triggers print after closing when the section unmounts immediately', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const onPrint = vi.fn();
+
+    const ControlledPrintSection = () => {
+      const [open, setOpen] = React.useState(true);
+      return open ? (
+        <PrintSection
+          isPrintModalOpen
+          onClose={() => setOpen(false)}
+          onPrint={onPrint}
+          printTemplates={templates}
+          selectedTemplateId="custom:a4"
+          onSelectTemplate={vi.fn()}
+          renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+          printMode={false}
+        />
+      ) : null;
+    };
+
+    render(<ControlledPrintSection />);
+
+    await user.click(await screen.findByRole('button', { name: 'چاپ' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('انتخاب قالب چاپ')).not.toBeInTheDocument();
+      expect(onPrint).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('groups printable fields by section and marks empty values', async () => {
