@@ -167,6 +167,21 @@ const QUERY_STOP_WORDS = new Set([
   'دریافت',
 ]);
 
+const MANAGEMENT_DIRECTORY_KEYWORDS = [
+  'مدیر',
+  'سرپرست',
+  'رئیس',
+  'مسئول',
+  'lead',
+  'manager',
+  'supervisor',
+  'head',
+  'director',
+  'chief',
+  'owner',
+  'ceo',
+];
+
 const SENSITIVE_FIELD_PATTERNS = [
   /password/i,
   /passcode/i,
@@ -1128,11 +1143,138 @@ const buildUserPromptContext = (authContext: any) => ({
   subordinate_roles: (authContext?.subordinateRoles || []).slice(0, 20),
 });
 
+const matchesDirectoryKeywords = (values: Array<unknown>, keywords: string[]) => {
+  const haystack = values
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  if (!haystack) return false;
+  return keywords.some((keyword) => haystack.includes(String(keyword || '').trim().toLowerCase()));
+};
+
+const loadOrgPeopleContext = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  message: string,
+) => {
+  if (!authContext?.orgId) {
+    return {
+      summary: 'سازمان کاربر مشخص نیست.',
+      total_roles: 0,
+      total_users: 0,
+      roles: [],
+      relevant_users: [],
+      leadership: [],
+    };
+  }
+
+  const [roleRows, userRows] = await Promise.all([
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,title,parent_id',
+      limit: 1000,
+    }),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+      org_id: `eq.${authContext.orgId}`,
+      select: 'id,full_name,role_id,job_title,position,team,updated_at',
+      order: 'updated_at.desc',
+      limit: 400,
+    }),
+  ]);
+
+  const roles = (roleRows || []).map((row: any) => ({
+    id: normalizeId(row?.id),
+    title: String(row?.title || '').trim() || null,
+    parent_id: normalizeId(row?.parent_id),
+  })).filter((row) => row.id);
+  const roleById = new Map(roles.map((row: any) => [String(row.id), row]));
+  const roleUserCounts = new Map<string, number>();
+  const roleChildCounts = new Map<string, number>();
+
+  roles.forEach((role: any) => {
+    if (role.parent_id) {
+      roleChildCounts.set(role.parent_id, (roleChildCounts.get(role.parent_id) || 0) + 1);
+    }
+  });
+
+  const users = (userRows || []).map((row: any) => {
+    const roleId = normalizeId(row?.role_id);
+    const roleTitle = roleId ? roleById.get(roleId)?.title || null : null;
+    if (roleId) {
+      roleUserCounts.set(roleId, (roleUserCounts.get(roleId) || 0) + 1);
+    }
+    const rolePathTitles = roleId
+      ? buildRolePath(roleId, roles as any[]).map((role) => String(role?.title || '').trim()).filter(Boolean)
+      : [];
+    const isLeader = Boolean(
+      (roleId && (roleChildCounts.get(roleId) || 0) > 0)
+      || matchesDirectoryKeywords(
+        [roleTitle, row?.job_title, row?.position, row?.team],
+        MANAGEMENT_DIRECTORY_KEYWORDS,
+      )
+    );
+    return {
+      id: normalizeId(row?.id),
+      full_name: String(row?.full_name || '').trim() || null,
+      role_id: roleId || null,
+      role_title: roleTitle,
+      role_path_titles: rolePathTitles,
+      job_title: String(row?.job_title || '').trim() || null,
+      position: String(row?.position || '').trim() || null,
+      team: String(row?.team || '').trim() || null,
+      is_leadership: isLeader,
+    };
+  }).filter((row) => row.id && row.full_name);
+
+  const queryTerms = getSearchTerms(message);
+  const matchingUsers = queryTerms.length > 0
+    ? users.filter((row: any) => matchesDirectoryKeywords(
+      [row.full_name, row.role_title, row.job_title, row.position, row.team, ...(row.role_path_titles || [])],
+      queryTerms,
+    ))
+    : [];
+  const leadership = users
+    .filter((row: any) => row.is_leadership)
+    .slice(0, 20);
+
+  const relevantUsers = Array.from(new Map(
+    [...matchingUsers.slice(0, 20), ...leadership]
+      .map((row: any) => [String(row.id), row]),
+  ).values()).slice(0, 40);
+
+  const summarizedRoles = roles.map((role: any) => ({
+    id: role.id,
+    title: role.title,
+    parent_title: role.parent_id ? roleById.get(role.parent_id)?.title || null : null,
+    child_role_count: roleChildCounts.get(role.id) || 0,
+    assigned_user_count: roleUserCounts.get(role.id) || 0,
+  }));
+
+  return {
+    summary: 'دایرکتوری کاربران و نقش‌های همین سازمان. خارج از این سازمان هیچ کاربر یا نقشی در این context وجود ندارد.',
+    total_roles: roles.length,
+    total_users: users.length,
+    roles: summarizedRoles.slice(0, 120),
+    relevant_users: relevantUsers,
+    leadership: leadership.map((row: any) => ({
+      id: row.id,
+      full_name: row.full_name,
+      role_title: row.role_title,
+      role_path_titles: row.role_path_titles,
+      job_title: row.job_title,
+      position: row.position,
+      team: row.team,
+    })),
+  };
+};
+
 const buildPromptMessages = (
   message: string,
   pageContext: any,
   knowledgeChunks: any[],
   companyContext: any,
+  orgPeopleContext: any,
   authContext: any,
   retrievedContexts: any[],
   historyRows: any[] = [],
@@ -1157,6 +1299,7 @@ const buildPromptMessages = (
   const contextPayload = {
     company: companyContext,
     current_user: buildUserPromptContext(authContext),
+    organization_directory: orgPeopleContext,
     current_page: {
       summary: pageContext.summary,
       moduleId: pageContext.moduleId,
@@ -1181,7 +1324,7 @@ const buildPromptMessages = (
 
   const systemContent = pageContext.intent === 'process_guide'
     ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : 'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.';
+    : 'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.';
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -1446,10 +1589,11 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
-  const [knowledgeChunks, providerConfig, companyContext] = await Promise.all([
+  const [knowledgeChunks, providerConfig, companyContext, orgPeopleContext] = await Promise.all([
     fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message),
     resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
   ]);
   const retrievedContexts = await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
@@ -1476,6 +1620,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     pageContext,
     knowledgeChunks,
     companyContext,
+    orgPeopleContext,
     authContext,
     retrievedContexts,
     previousMessages,

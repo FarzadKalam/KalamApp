@@ -1,9 +1,15 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 const NotificationsPopover = React.lazy(() => import('../components/NotificationsPopover'));
 
 const MessagesPage: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const requestedTab = useMemo(() => {
+    const tab = String(searchParams.get('tab') || '').trim();
+    return tab === 'assistant' ? 'assistant' : undefined;
+  }, [searchParams]);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -26,7 +32,12 @@ const MessagesPage: React.FC = () => {
   return (
     <div className="messages-page-root" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Suspense fallback={null}>
-        <NotificationsPopover isMobile={isMobile} variant="chat" standalone />
+        <NotificationsPopover
+          isMobile={isMobile}
+          variant="chat"
+          standalone
+          requestedTab={requestedTab}
+        />
       </Suspense>
     </div>
   );

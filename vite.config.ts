@@ -5,10 +5,51 @@ import fs from 'fs';
 
 const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 
+const includesAny = (value: string, patterns: string[]) =>
+  patterns.some((pattern) => value.includes(pattern));
+
 const resolveManualChunk = (id: string) => {
     const normalizedId = toPosixPath(id);
+
+    if (
+      normalizedId.endsWith('/moduleRegistry.ts') ||
+      normalizedId.endsWith('/types.ts') ||
+      normalizedId.endsWith('/utils/processModuleSupport.ts') ||
+      normalizedId.endsWith('/utils/assigneeSupport.ts') ||
+      normalizedId.endsWith('/utils/assigneeLabel.ts') ||
+      normalizedId.includes('/modules/')
+    ) {
+      return 'module-registry';
+    }
+
     if (!normalizedId.includes('/node_modules/')) {
       return undefined;
+    }
+
+    if (normalizedId.includes('/node_modules/@supabase/')) {
+      return 'supabase-vendor';
+    }
+
+    if (
+      includesAny(normalizedId, [
+        '/node_modules/@ant-design/icons/',
+        '/node_modules/@ant-design/icons-svg/',
+      ])
+    ) {
+      return 'ant-icons-vendor';
+    }
+
+    if (
+      includesAny(normalizedId, [
+        '/node_modules/@tiptap/',
+        '/node_modules/prosemirror-',
+        '/node_modules/orderedmap/',
+        '/node_modules/rope-sequence/',
+        '/node_modules/w3c-keyname/',
+        '/node_modules/dompurify/',
+      ])
+    ) {
+      return 'editor-vendor';
     }
 
     if (
@@ -89,7 +130,6 @@ export default defineConfig(({ mode }) => {
         rollupOptions: {
           output: {
             manualChunks: resolveManualChunk,
-            onlyExplicitManualChunks: true,
           },
         },
       },

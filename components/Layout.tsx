@@ -69,6 +69,7 @@ import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '.
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
+import AiAssistantLauncher from './communications/AiAssistantLauncher';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -1026,6 +1027,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const firstSegment = location.pathname.split('/').filter(Boolean)[0] || '';
     return firstSegment && MODULES[firstSegment] ? firstSegment : null;
   }, [location.pathname]);
+  const headerActionButtonClassName = isMobile
+    ? 'text-gray-500 dark:text-gray-300 hover:text-leather-500 !h-8 !w-8 !min-w-0 !p-0'
+    : 'text-gray-500 dark:text-gray-300 hover:text-leather-500';
 
   const openGlobalSearchPage = useCallback(() => {
     const term = globalSearch.trim();
@@ -1213,14 +1217,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           onDismiss={dismissUserAnnouncement}
         />
         <Header 
-          className="sticky top-0 z-[1000] px-4 flex items-center justify-between border-b border-gray-200 dark:border-dark-border h-16 w-full transition-colors duration-300"
+          className="sticky top-0 z-[1000] flex h-16 w-full items-center justify-between gap-2 border-b border-gray-200 px-2 sm:px-4 dark:border-dark-border transition-colors duration-300"
           style={{ 
             backdropFilter: 'blur(20px)', 
             backgroundColor: isDarkMode ? 'rgba(23, 28, 48, 0.82)' : 'rgba(255, 255, 255, 0.82)',
           }}
         >
-          <div className="relative flex items-center gap-4" ref={searchBoxRef}>
-            <div className="flex h-10 items-center rounded-2xl border border-gray-200 bg-white/80 px-3 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400 w-48 sm:w-80 lg:w-[360px]">
+          <div className="relative flex min-w-0 flex-1 items-center" ref={searchBoxRef}>
+            <div className="flex h-9 w-full min-w-0 max-w-[360px] items-center rounded-2xl border border-gray-200 bg-white/80 px-2.5 shadow-sm transition-all focus-within:border-leather-400 focus-within:bg-white focus-within:shadow-md sm:h-10 sm:px-3 dark:border-dark-border dark:bg-dark-surface/85 dark:focus-within:border-leather-400">
               <SearchOutlined className="text-gray-400 dark:text-gray-500" />
               <Input
                 ref={searchRef}
@@ -1228,7 +1232,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 onChange={(e) => setGlobalSearch(e.target.value)}
                 onPressEnter={openGlobalSearchPage}
                 placeholder="جستجو در همه جا..."
-                className="bg-transparent border-none outline-none text-xs text-gray-700 dark:text-gray-200 w-full mr-2 placeholder-gray-400"
+                className="mr-2 w-full border-none bg-transparent text-[11px] text-gray-700 outline-none placeholder-gray-400 sm:text-xs dark:text-gray-200"
                 variant="borderless"
               />
             </div>
@@ -1350,21 +1354,23 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               </React.Suspense>
             </div>
           ) : null}
-          <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2 md:gap-4">
             <Button
               type="text"
+              size={isMobile ? 'small' : 'middle'}
               shape="circle"
               icon={<ReloadOutlined spin={refreshingPage} />}
               onClick={handlePageRefresh}
-              className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
+              className={headerActionButtonClassName}
               title="رفرش صفحه"
             />
             <Button
               type="text"
+              size={isMobile ? 'small' : 'middle'}
               shape="circle"
               icon={isDarkMode ? <SunOutlined /> : <MoonOutlined />}
               onClick={toggleTheme}
-              className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
+              className={headerActionButtonClassName}
               title={isDarkMode ? 'حالت روشن' : 'حالت شب'}
             />
             {isDemoOrg && hasDemoBatch && (
@@ -1390,20 +1396,28 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                 </Tooltip>
               </Popconfirm>
             )}
-            <div className="w-[1px] h-6 bg-gray-300 dark:bg-gray-700 mx-1"></div>
+            <div className="mx-1 hidden h-6 w-[1px] bg-gray-300 dark:bg-gray-700 sm:block"></div>
             {communicationsAccess.canUseWorkspace ? (
               <Tooltip title="پیام‌رسانی" placement="bottom">
                 <Button
                   type="text"
+                  size={isMobile ? 'small' : 'middle'}
                   shape="circle"
                   icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
                   onPointerEnter={() => preloadRoute?.('/messages')}
                   onFocus={() => preloadRoute?.('/messages')}
                   onClick={() => handleSidebarNavigate('/messages')}
                   aria-label="پیام‌رسانی"
-                  className="text-gray-500 dark:text-gray-300 hover:text-leather-500"
+                  className={headerActionButtonClassName}
                 />
               </Tooltip>
+            ) : null}
+            {communicationsAccess.canUseWorkspace ? (
+              <AiAssistantLauncher
+                isMobile={isMobile}
+                buttonSize={isMobile ? 'small' : 'middle'}
+                buttonClassName={headerActionButtonClassName}
+              />
             ) : null}
             <React.Suspense fallback={null}>
               <NotificationsPopover isMobile={isMobile} variant="alerts" />
