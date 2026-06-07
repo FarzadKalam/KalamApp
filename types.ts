@@ -343,6 +343,7 @@ export interface ModuleFormAdapterContext {
   recordId?: string;
   values: Record<string, any>;
   currentValues?: Record<string, any> | null;
+  meta?: Record<string, any> | null;
 }
 
 export interface ModuleFormAdapterResult {

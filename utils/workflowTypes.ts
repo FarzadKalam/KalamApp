@@ -46,6 +46,7 @@ export const INTERVAL_DAY_CONDITION_OPTIONS: Array<{ label: string; value: Inter
 export type WorkflowActionType =
   | 'send_note'
   | 'send_note_sms'
+  | 'send_web_form_link'
   | 'send_sms'
   | 'send_email'
   | 'send_bot_message'
@@ -157,6 +158,7 @@ export const intervalUnitOptions: Array<{ label: string; value: WorkflowInterval
 
 export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType }> = [
   { label: 'ارسال یادداشت', value: 'send_note' },
+  { label: 'ارسال لینک وب‌فرم', value: 'send_web_form_link' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال ایمیل', value: 'send_email' },
   { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },

@@ -7,6 +7,7 @@ import {
   ModuleNature,
   ViewMode,
 } from "../types";
+import { saveSurveyRecord } from "../utils/surveyFormAdapter";
 
 export const surveysModule: ModuleDefinition = {
   id: "surveys",
@@ -15,6 +16,9 @@ export const surveysModule: ModuleDefinition = {
   table: "surveys",
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
+  formAdapter: {
+    save: saveSurveyRecord,
+  },
   fields: [
     {
       key: "title",
@@ -42,6 +46,23 @@ export const surveysModule: ModuleDefinition = {
         { label: "بسته شده", value: "closed", color: "green" },
       ],
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: "survey_template_id",
+      labels: { fa: "قالب نظرسنجی", en: "Survey Template" },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 2.5,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+      relationConfig: {
+        targetModule: "web_forms",
+        filter: {
+          target_module_id: "surveys",
+          form_type: "survey",
+          is_active: true,
+        },
+      },
     },
     {
       key: "survey_type",
@@ -102,6 +123,24 @@ export const surveysModule: ModuleDefinition = {
     },
     
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7.1, nature: FieldNature.STANDARD, isTableColumn: true },
+    {
+      key: "related_module_id",
+      labels: { fa: "ماژول مرتبط", en: "Related Module" },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 7.2,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
+    },
+    {
+      key: "related_record_id",
+      labels: { fa: "رکورد مرتبط", en: "Related Record" },
+      type: FieldType.TEXT,
+      location: FieldLocation.HEADER,
+      order: 7.3,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
+    },
     {
       key: "overall_experience",
       labels: { fa: "ارزیابی کلی", en: "Overall Experience" },
@@ -212,6 +251,28 @@ export const surveysModule: ModuleDefinition = {
       hideInCreateForm: true,
       nature: FieldNature.SYSTEM,
       isTableColumn: true,
+    },
+    {
+      key: "template_field_values",
+      labels: { fa: "داده‌های قالب", en: "Template Values" },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: "details",
+      order: 18,
+      readonly: true,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
+    },
+    {
+      key: "template_schema_snapshot",
+      labels: { fa: "اسنپ‌شات قالب", en: "Template Snapshot" },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: "details",
+      order: 19,
+      readonly: true,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
     },
   ],
   blocks: [

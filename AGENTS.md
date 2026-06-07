@@ -50,6 +50,16 @@ const title = getRecordTitle(record, moduleConfig);
 - تغییرات برای همه tenant ها باید کار کنند
 - index گذاری دیتابیس را جدی بگیر
 
+### ۷.۱. اصل SaaS و per-org بودن
+- این پروژه ذاتاً SaaS و multi-tenant است؛ پیش‌فرض همه طراحی‌ها، تنظیمات، queryها، cacheها، permissionها و UI stateها باید `per-org` باشد مگر اینکه صریحاً ثابت شود متعلق به لایه ۱ یا SaaS Admin است
+- هر تنظیم، فیچر، workflow، automation، branding، notification config و integration config باید در سطح سازمان قابل تفکیک باشد و نباید به‌صورت global برای همه tenantها فرض شود مگر با دلیل مستند
+- در طراحی دیتابیس، API، module config و frontend state، همیشه مسیر scale برای چندسازمانی را در نظر بگیر و از هر پیاده‌سازی‌ای که باعث leakage یا coupling بین orgها شود پرهیز کن
+
+### ۷.۲. ویژگی‌های پلن
+- هر قابلیتی که ماهیت plan/اشتراکی دارد باید از بخش `ویژگی‌های پلن` قابل اضافه/حذف باشد و به‌صورت hardcode در UI، permission یا business logic قفل نشود
+- پیش‌فرض پیاده‌سازی feature gating باید data-driven و قابل مدیریت باشد تا بتوان برای هر پلن، feature را فعال/غیرفعال کرد بدون fork کردن کد
+- اگر فیچری علاوه بر permission به plan dependency هم نیاز دارد، هر دو لایه باید جداگانه بررسی شوند: access control و plan feature availability
+
 ### ۸. معماری سه‌لایه — تداخل ممنوع
 ```
 لایه ۱: پنل داخلی (اپراتور TazeSystem)

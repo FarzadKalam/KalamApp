@@ -275,6 +275,7 @@ export const ModuleCreate = () => {
                   mode: "create",
                   values,
                   currentValues: initialValuesFromState || {},
+                  meta: meta || null,
                 });
                 const nextId = String(result?.id || "").trim();
                 messageApi.success("ثبت شد");

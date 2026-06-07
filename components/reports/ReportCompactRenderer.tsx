@@ -23,6 +23,7 @@ import {
   parseReportTableRelationFieldKey,
   type ReportDefinitionRecord,
 } from '../../utils/reporting';
+import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditionOptions';
 import { formatListCellValue } from '../../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -216,6 +217,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   const [renderMode, setRenderMode] = useState<RenderMode>('table');
   const [activeMetricKey, setActiveMetricKey] = useState<string>('__count');
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
 
   const config = useMemo(() => {
     const normalized = normalizeReportConfig(report?.config);
@@ -226,14 +228,28 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   }, [report?.config, rowLimitCap]);
 
   const moduleId = String(report?.module_id || '').trim();
+  const scopedSurveyTemplateId = useMemo(
+    () => (
+      moduleId === 'surveys'
+        ? getSurveyTemplateScopedIdFromConditions(config.conditions_all, config.conditions_any)
+        : null
+    ),
+    [config.conditions_all, config.conditions_any, moduleId]
+  );
   const moduleConfig = MODULES[moduleId];
   const currencyLabel = readCurrencyConfig().label || '';
   const selectedTableBlocks = useMemo(
     () => config.secondary_module_ids.map((sourceId) => getReportTableBlock(moduleId, sourceId)).filter(Boolean),
     [config.secondary_module_ids, moduleId]
   );
-  const reportableFields = useMemo(() => getReportableFields(moduleId, config.secondary_module_ids), [moduleId, config.secondary_module_ids]);
-  const fieldMap = useMemo(() => getReportableFieldMap(moduleId, config.secondary_module_ids), [moduleId, config.secondary_module_ids]);
+  const reportableFields = useMemo(
+    () => getReportableFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
+    [config.secondary_module_ids, moduleId, surveyTemplateSnapshot]
+  );
+  const fieldMap = useMemo(
+    () => getReportableFieldMap(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
+    [config.secondary_module_ids, moduleId, surveyTemplateSnapshot]
+  );
   const visibleFields = useMemo(
     () => reportableFields.filter((field) => config.columns.includes(field.key)),
     [config.columns, reportableFields]
@@ -255,6 +271,31 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   const chartDimensionField = config.chart_dimension_field || config.group_bys[0]?.field || null;
   const chartAvailable = !!chartDimensionField && chartRows.length > 0;
 
+  useEffect(() => {
+    let cancelled = false;
+    if (moduleId !== 'surveys' || !scopedSurveyTemplateId) {
+      setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+      return () => {
+        cancelled = true;
+      };
+    }
+    const run = async () => {
+      try {
+        const definition = await loadSurveyTemplateDefinition(supabase, scopedSurveyTemplateId);
+        if (cancelled) return;
+        setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(definition?.snapshot || {}));
+      } catch {
+        if (!cancelled) {
+          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleId, scopedSurveyTemplateId]);
+
   const executeReport = React.useCallback(async () => {
     if (!moduleConfig) return;
     setExecuting(true);
@@ -269,8 +310,8 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
       }
 
       const optionFields = [
-        ...getReportConditionFields(moduleId, config.secondary_module_ids),
-        ...getReportableFields(moduleId, config.secondary_module_ids),
+        ...getReportConditionFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
+        ...getReportableFields(moduleId, config.secondary_module_ids, surveyTemplateSnapshot),
       ];
       const loadedOptions = await loadWorkflowConditionEditorOptions(moduleId, optionFields);
       setRelationOptions(loadedOptions.relationOptions);

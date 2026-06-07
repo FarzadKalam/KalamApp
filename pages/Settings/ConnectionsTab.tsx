@@ -28,6 +28,7 @@ import {
   type TaxpayerIntegrationMode,
 } from '../../utils/taxpayerSystem';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import ApiIntegrationSection from '../../components/ApiIntegrationSection';
 
 type ConnectionType =
   | 'sms'
@@ -2374,6 +2375,7 @@ const ConnectionsTab: React.FC = () => {
           </Button>
         </div>
       </Form>
+      <ApiIntegrationSection />
     </div>
   );
 };

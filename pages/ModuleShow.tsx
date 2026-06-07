@@ -66,7 +66,7 @@ import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
-import { applyTaskSourceRecordFilter, buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
+import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
@@ -105,6 +105,8 @@ import {
   normalizeInstructionIdList,
 } from '../utils/instructionSupport';
 import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
+import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
+import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
 const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
@@ -443,11 +445,14 @@ const ModuleShow: React.FC = () => {
         })).filter((option) => option.value),
       });
     }
+    if (moduleId === 'surveys' && nextConfig && data?.template_schema_snapshot) {
+      nextConfig = buildSurveyRuntimeModule(nextConfig, data.template_schema_snapshot, 'show');
+    }
     return nextConfig;
-  }, [allRoles, allUsers, baseModuleConfig, moduleId, taskProcessCustomFields]);
+  }, [allRoles, allUsers, baseModuleConfig, data?.template_schema_snapshot, moduleId, taskProcessCustomFields]);
   const moduleTable = moduleConfig?.table || moduleId;
   const displayData = useMemo(
-    () => normalizeModuleFormValues(moduleId, data || {}),
+    () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
     [data, moduleId]
   );
   useEffect(() => {
@@ -525,6 +530,7 @@ const ModuleShow: React.FC = () => {
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
   const [processTemplateFieldOptions, setProcessTemplateFieldOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [hasStartedProcessExecution, setHasStartedProcessExecution] = useState(false);
+  const [processRuntimeSnapshot, setProcessRuntimeSnapshot] = useState<ProcessRuntimeSnapshot | null>(null);
   const bomCopyPromptRef = useRef<string | null>(null);
   const processTemplatePromptRef = useRef<string | null>(null);
   const processDraftFieldKey = useMemo(() => {
@@ -718,6 +724,7 @@ const ModuleShow: React.FC = () => {
     setAutoSyncedProcessTemplateId(null);
     setProcessTemplateFieldOptions([]);
     setHasStartedProcessExecution(false);
+    setProcessRuntimeSnapshot(null);
     setDynamicOptions(cachedOptionSnapshot?.dynamicOptions || {});
     setRelationOptions(cachedOptionSnapshot?.relationOptions || {});
     setOptionsReady(!!cachedOptionSnapshot);
@@ -1407,6 +1414,9 @@ const ModuleShow: React.FC = () => {
         }
         if (moduleId === 'tasks') {
           nextRecord = withProcessTaskCustomFieldValues(normalizeTaskSourceValues(nextRecord));
+        }
+        if (moduleId === 'surveys') {
+          nextRecord = mergeSurveyTemplateValuesIntoRecord(nextRecord) || nextRecord;
         }
         if (activeRecordRequestRef.current !== requestId) return;
         skipNextOptionsFetchRef.current = true;
@@ -2234,56 +2244,33 @@ const ModuleShow: React.FC = () => {
       setHasStartedProcessExecution(false);
       return;
     }
-    let cancelled = false;
-    const loadProcessStartedState = async () => {
-      try {
-        const startedQuery = applyTaskSourceRecordFilter(
-          supabase.from('tasks').select('id,status').limit(200),
-          moduleId,
-          String(id)
-        );
-        const { data: taskRows, error } = await startedQuery;
-        if (error) throw error;
-        if (cancelled) return;
-        setHasStartedProcessExecution(
-          (taskRows || []).some((row: any) => {
-            const normalizedStatus = String(row?.status || '').trim().toLowerCase();
-            return ['in_progress', 'done', 'completed', 'confirmed', 'final', 'settled'].includes(normalizedStatus);
-          })
-        );
-      } catch (error) {
-        console.warn('Could not resolve started-process state', error);
-        if (!cancelled) setHasStartedProcessExecution(false);
-      }
-    };
-    void loadProcessStartedState();
-    return () => {
-      cancelled = true;
-    };
-  }, [id, moduleId, processDraftFieldKey, data?.updated_at]);
+    if (
+      !processRuntimeSnapshot?.loaded
+      || processRuntimeSnapshot.moduleId !== moduleId
+      || processRuntimeSnapshot.recordId !== String(id || '')
+    ) return;
+    setHasStartedProcessExecution(processRuntimeSnapshot.hasStartedExecution);
+  }, [id, moduleId, processDraftFieldKey, processRuntimeSnapshot]);
 
   useEffect(() => {
     if (!processDraftFieldKey || !data?.process_template_id || !data?.id) return;
     if (autoSyncedProcessTemplateId === data.process_template_id) return;
+    if (
+      !processRuntimeSnapshot?.loaded
+      || processRuntimeSnapshot.moduleId !== moduleId
+      || processRuntimeSnapshot.recordId !== String(data.id)
+    ) return;
 
     const currentDraft = (data as any)?.[processDraftFieldKey];
     const isDraftEmpty = !Array.isArray(currentDraft) || currentDraft.length === 0;
     if (!isDraftEmpty) return;
+    if ((processRuntimeSnapshot.tasks || []).length > 0 || (processRuntimeSnapshot.runs || []).length > 0) {
+      setAutoSyncedProcessTemplateId(data.process_template_id);
+      return;
+    }
 
     const syncFromProcessTemplate = async () => {
       try {
-        const existingTasksQuery = applyTaskSourceRecordFilter(
-          supabase.from('tasks').select('id').limit(1),
-          moduleId,
-          String(data.id)
-        );
-        const { data: existingTasks, error: existingTasksError } = await existingTasksQuery;
-        if (existingTasksError) throw existingTasksError;
-        if (Array.isArray(existingTasks) && existingTasks.length > 0) {
-          setAutoSyncedProcessTemplateId(data.process_template_id);
-          return;
-        }
-
         const { data: stages, error } = await supabase
           .from('process_template_stages')
           .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
@@ -2308,7 +2295,7 @@ const ModuleShow: React.FC = () => {
     };
 
     syncFromProcessTemplate();
-  }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId, processTemplateFieldOptions]);
+  }, [moduleId, data, processDraftFieldKey, autoSyncedProcessTemplateId, processTemplateFieldOptions, processRuntimeSnapshot]);
 
   useEffect(() => {
     if (!moduleConfig) return;
@@ -4482,6 +4469,7 @@ const ModuleShow: React.FC = () => {
           recordId: String(id),
           values,
           currentValues: data || {},
+          meta: meta || null,
         });
         msg.success('ذخیره شد');
         setIsEditDrawerOpen(false);
@@ -6168,6 +6156,8 @@ const ModuleShow: React.FC = () => {
         onDataUpdate={handleRecordPatch}
         focusBlockId={focusBlockId}
         focusRowKey={focusRowKey}
+        processRuntimeSnapshot={processRuntimeSnapshot}
+        onProcessRuntimeSnapshot={setProcessRuntimeSnapshot}
       />
 
       {moduleId === 'chart_of_accounts' && id ? (

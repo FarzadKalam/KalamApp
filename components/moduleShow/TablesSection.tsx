@@ -14,6 +14,7 @@ import { normalizeInstructionIdList } from '../../utils/instructionSupport';
 import { syncProcessTemplateStageInstructionLinks } from '../../utils/processTemplateStageInstructions';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { buildProcessGuideContext } from '../../utils/processGuideContext';
+import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
 
@@ -30,6 +31,8 @@ interface TablesSectionProps {
   onDataUpdate?: (patch: Record<string, any>) => void;
   focusBlockId?: string | null;
   focusRowKey?: string | null;
+  processRuntimeSnapshot?: ProcessRuntimeSnapshot | null;
+  onProcessRuntimeSnapshot?: (snapshot: ProcessRuntimeSnapshot) => void;
 }
 
 const shouldShowInvoiceSummary = (summaryConfig: any) =>
@@ -47,6 +50,8 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   onDataUpdate,
   focusBlockId,
   focusRowKey,
+  processRuntimeSnapshot,
+  onProcessRuntimeSnapshot,
 }) => {
   if (!module || !data) return null;
 
@@ -133,75 +138,17 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   }, [module?.id, onDataUpdate, refreshInvoiceSummary]);
   const isProductionOrder = module.id === 'production_orders';
   const productionLocked = isProductionOrder && ['in_progress', 'completed'].includes(data?.status);
-  const [processGuideTasks, setProcessGuideTasks] = useState<any[]>([]);
   const processStageFieldKeys = useMemo(() => new Set([
     'execution_process_draft',
     'marketing_process_draft',
     'template_stages_preview',
     'run_stages_preview',
   ]), []);
-  const processGuideTaskIds = useMemo(() => {
-    const ids = new Set<string>();
-    processStageFieldKeys.forEach((fieldKey) => {
-      (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : []).forEach((stage: any) => {
-        const taskId = String(stage?.task_id || '').trim();
-        if (taskId) ids.add(taskId);
-      });
-    });
-    return Array.from(ids);
-  }, [data, processStageFieldKeys]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadProcessGuideTasks = async () => {
-      const moduleId = String(module?.id || '').trim();
-      const recordId = String(data?.id || '').trim();
-      if (!moduleId || !recordId) {
-        setProcessGuideTasks([]);
-        return;
-      }
-      const rowsById = new Map<string, any>();
-      const selectColumns = 'id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,sort_order,source_stage_sort_order,source_template_id,source_module_id,source_record_id,related_to_module,process_group_id,recurrence_info,due_date,start_date,completed_at';
-      try {
-        const { data: sourceRows, error: sourceError } = await supabase
-          .from('tasks')
-          .select(selectColumns)
-          .eq('source_module_id', moduleId)
-          .eq('source_record_id', recordId)
-          .limit(500);
-        if (sourceError) throw sourceError;
-        (sourceRows || []).forEach((row: any) => {
-          if (row?.id) rowsById.set(String(row.id), row);
-        });
-      } catch (error) {
-        console.warn('Could not load source tasks for process guide', error);
-      }
-
-      if (processGuideTaskIds.length > 0) {
-        try {
-          const { data: taskRows, error: taskError } = await supabase
-            .from('tasks')
-            .select(selectColumns)
-            .in('id', processGuideTaskIds)
-            .limit(500);
-          if (taskError) throw taskError;
-          (taskRows || []).forEach((row: any) => {
-            if (row?.id) rowsById.set(String(row.id), row);
-          });
-        } catch (error) {
-          console.warn('Could not load explicit stage tasks for process guide', error);
-        }
-      }
-
-      if (!cancelled) {
-        setProcessGuideTasks(Array.from(rowsById.values()));
-      }
-    };
-    void loadProcessGuideTasks();
-    return () => {
-      cancelled = true;
-    };
-  }, [data?.id, module?.id, processGuideTaskIds]);
+  const processGuideTasks = (
+    processRuntimeSnapshot?.loaded
+    && processRuntimeSnapshot.moduleId === String(module?.id || '')
+    && processRuntimeSnapshot.recordId === String(data?.id || '')
+  ) ? processRuntimeSnapshot.tasks : [];
   const isUuid = useCallback((value: any) => (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
       .test(String(value || ''))
@@ -432,6 +379,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 draftStages={stageDraftValue}
                 onDraftStagesChange={handleDraftStagesChange}
                 showWageSummary={module.id === 'production_orders'}
+                onRuntimeSnapshot={onProcessRuntimeSnapshot}
               />
             </React.Suspense>
             </div>

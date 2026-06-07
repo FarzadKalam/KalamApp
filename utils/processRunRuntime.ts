@@ -27,6 +27,12 @@ type EnsureProcessRunArgs = {
   currentUserId?: string | null;
 };
 
+export type EnsuredProcessRunContext = {
+  processRunId: string | null;
+  processRunStageId: string | null;
+  stageMap: Map<string, string>;
+};
+
 type SyncProcessRunStageArgs = {
   supabaseClient: any;
   task: Record<string, any>;
@@ -265,6 +271,7 @@ const insertProcessRun = async ({
 const ensureProcessRunLinks = async (
   supabaseClient: any,
   processRunId: string,
+  orgId: string,
   moduleId: string,
   recordId: string,
   stages: Record<string, any>[]
@@ -283,6 +290,7 @@ const ensureProcessRunLinks = async (
   });
 
   const payload = Array.from(links.values()).map((link) => ({
+    org_id: orgId,
     process_run_id: processRunId,
     module_id: link.moduleId,
     record_id: link.recordId,
@@ -316,6 +324,39 @@ const isSameDraftStage = (left: Record<string, any>, right: Record<string, any>)
   return Number(left?.sort_order || 0) === Number(right?.sort_order || 0)
     && normalizeText(left?.name || left?.stage_name || left?.title).toLowerCase()
       === normalizeText(right?.name || right?.stage_name || right?.title).toLowerCase();
+};
+
+export const buildProcessRunStageLookupKeys = (stage: Record<string, any>) => {
+  const stageName = normalizeText(stage?.name || stage?.stage_name || stage?.title) || 'مرحله';
+  return [
+    normalizeText(toUuidOrNull(stage?.template_stage_id)),
+    normalizeText(stage?.id),
+    `${Number(stage?.sort_order || 0)}:${stageName.toLowerCase()}`,
+  ].filter(Boolean);
+};
+
+export const resolveProcessRunStageId = (
+  stageMap: Map<string, string> | null | undefined,
+  stage: Record<string, any>
+) => buildProcessRunStageLookupKeys(stage)
+  .map((key) => stageMap?.get(key))
+  .find(Boolean) || null;
+
+export const ensureProcessRunContextsForStageGroups = async (
+  stages: Record<string, any>[],
+  ensureGroup: (firstStage: Record<string, any>, groupId: string) => Promise<EnsuredProcessRunContext>
+) => {
+  const firstStageByGroup = new Map<string, Record<string, any>>();
+  (Array.isArray(stages) ? stages : []).forEach((stage) => {
+    const groupId = getDraftStageProcessGroupMeta(stage).groupId;
+    if (!firstStageByGroup.has(groupId)) firstStageByGroup.set(groupId, stage);
+  });
+
+  const contexts = new Map<string, EnsuredProcessRunContext>();
+  for (const [groupId, firstStage] of firstStageByGroup.entries()) {
+    contexts.set(groupId, await ensureGroup(firstStage, groupId));
+  }
+  return contexts;
 };
 
 const upsertProcessRunStages = async (
@@ -357,11 +398,11 @@ const upsertProcessRunStages = async (
       source_template_name: normalizeText(stage?.source_template_name) || null,
       task_type: normalizeText(stage?.task_type) || null,
     };
-    const lookupKeys = [
-      normalizeText(templateStageId),
-      normalizeText(stage?.id),
-      `${Number(stage?.sort_order || 0)}:${stageName.toLowerCase()}`,
-    ].filter(Boolean);
+    const lookupKeys = buildProcessRunStageLookupKeys({
+      ...stage,
+      template_stage_id: templateStageId,
+      name: stageName,
+    });
     const existing = lookupKeys.map((key) => byKey.get(key)).find(Boolean);
     let processRunStageId = normalizeText(existing?.id);
     const payload = {
@@ -409,14 +450,20 @@ const upsertProcessRunStages = async (
 const backfillExistingTasksForRun = async (
   supabaseClient: any,
   processRunId: string,
-  groupId: string
+  groupId: string,
+  orgId: string,
+  moduleId: string,
+  recordId: string
 ) => {
-  if (!processRunId || !groupId) return;
+  if (!processRunId || !groupId || !orgId || !moduleId || !recordId) return;
   try {
     const { data } = await supabaseClient
       .from('tasks')
       .select('id, name, sort_order, process_run_id, process_run_stage_id')
+      .eq('org_id', orgId)
       .eq('process_group_id', groupId)
+      .eq('source_module_id', moduleId)
+      .eq('source_record_id', recordId)
       .is('process_run_id', null)
       .limit(500);
     const rows = Array.isArray(data) ? data : [];
@@ -424,7 +471,10 @@ const backfillExistingTasksForRun = async (
     await supabaseClient
       .from('tasks')
       .update({ process_run_id: processRunId })
+      .eq('org_id', orgId)
       .eq('process_group_id', groupId)
+      .eq('source_module_id', moduleId)
+      .eq('source_record_id', recordId)
       .is('process_run_id', null);
   } catch (error) {
     if (!isMissingColumnLikeError(error)) {
@@ -440,20 +490,20 @@ export const ensureProcessRunForDraftStageGroup = async ({
   stages,
   targetStage = null,
   currentUserId = null,
-}: EnsureProcessRunArgs): Promise<{ processRunId: string | null; processRunStageId: string | null }> => {
+}: EnsureProcessRunArgs): Promise<EnsuredProcessRunContext> => {
   const targetMeta = getDraftStageProcessGroupMeta(targetStage || stages[0]);
   const groupId = normalizeText(targetMeta.groupId);
   if (!supabaseClient || !moduleId || !recordId || !groupId || groupId === 'default_process_group') {
-    return { processRunId: null, processRunStageId: null };
+    return { processRunId: null, processRunStageId: null, stageMap: new Map() };
   }
 
   const groupStages = (Array.isArray(stages) ? stages : [])
     .filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === groupId)
     .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
-  if (groupStages.length === 0) return { processRunId: null, processRunStageId: null };
+  if (groupStages.length === 0) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
 
   const orgId = await resolveOrgId(supabaseClient, moduleId, recordId);
-  if (!orgId) return { processRunId: null, processRunStageId: null };
+  if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
 
   let run: Record<string, any> | null = null;
   try {
@@ -471,22 +521,34 @@ export const ensureProcessRunForDraftStageGroup = async ({
   } catch (error) {
     if (!isMissingColumnLikeError(error)) throw error;
     console.warn('Process run schema is not ready; task will be created without process_run_id', error);
-    return { processRunId: null, processRunStageId: null };
+    return { processRunId: null, processRunStageId: null, stageMap: new Map() };
   }
 
   const processRunId = normalizeText(run?.id);
-  if (!processRunId) return { processRunId: null, processRunStageId: null };
+  if (!processRunId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
 
   try {
-    await ensureProcessRunLinks(supabaseClient, processRunId, moduleId, recordId, groupStages);
-    const { processRunStageId } = await upsertProcessRunStages(supabaseClient, processRunId, groupStages, targetStage);
-    await backfillExistingTasksForRun(supabaseClient, processRunId, groupId);
+    await ensureProcessRunLinks(supabaseClient, processRunId, orgId, moduleId, recordId, groupStages);
+    const { processRunStageId, stageMap } = await upsertProcessRunStages(
+      supabaseClient,
+      processRunId,
+      groupStages,
+      targetStage
+    );
+    await backfillExistingTasksForRun(
+      supabaseClient,
+      processRunId,
+      groupId,
+      orgId,
+      moduleId,
+      recordId
+    );
 
-    return { processRunId, processRunStageId };
+    return { processRunId, processRunStageId, stageMap };
   } catch (error) {
     if (!isMissingColumnLikeError(error)) throw error;
     console.warn('Process run stages schema is not ready; task will be created without process_run_stage_id', error);
-    return { processRunId, processRunStageId: null };
+    return { processRunId, processRunStageId: null, stageMap: new Map() };
   }
 };
 

@@ -348,6 +348,15 @@ export const customerModule: ModuleDefinition = {
       relationType: 'phone_directory',
       targetModule: 'voip_call_reports',
       disableCreate: true
+    },
+    {
+      id: 'customer_surveys',
+      title: 'نظرسنجی‌ها',
+      icon: 'CommentOutlined',
+      relationType: 'fk',
+      targetModule: 'surveys',
+      foreignKey: 'related_record_id',
+      filters: [{ field: 'related_module_id', value: 'customers' }],
     }
   ],
   actionButtons: [

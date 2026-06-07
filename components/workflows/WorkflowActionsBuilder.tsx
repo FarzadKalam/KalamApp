@@ -102,6 +102,39 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_field: '',
         variable_target: 'note_text',
       };
+    case 'send_web_form_link':
+      return {
+        web_form_id: '',
+        related_module_id: '',
+        delivery_channels: ['sms'],
+        channel_configs: {
+          sms: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            manual_numbers: [],
+            message: 'لینک فرم برای شما ثبت شد:\n{{web_form_link}}',
+          },
+          email: {
+            recipient_fields: [],
+            manual_emails: [],
+            subject: 'لینک فرم',
+            body: 'برای تکمیل فرم از این لینک استفاده کنید:\n{{web_form_link}}',
+          },
+          bot: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            title: 'لینک فرم',
+            message: 'برای تکمیل فرم از این لینک استفاده کنید:\n{{web_form_link}}',
+            attachment_fields: [],
+          },
+          note: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            note_text: 'لینک فرم:\n{{web_form_link}}',
+            attachment_fields: [],
+          },
+        },
+      };
     case 'send_sms':
       return {
         recipient_fields: [],
@@ -528,6 +561,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const [storyMentionUserOptions, setStoryMentionUserOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [storyViewerRoleOptions, setStoryViewerRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [webFormOptions, setWebFormOptions] = useState<Array<{ label: string; value: string; targetModuleId: string }>>([]);
   useEffect(() => {
     let cancelled = false;
 
@@ -556,9 +590,48 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       cancelled = true;
     };
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadWebForms = async () => {
+      const { data, error } = await supabase
+        .from('web_forms')
+        .select('id, name, route_slug, target_module_id, form_type, is_active')
+        .eq('is_active', true)
+        .order('name', { ascending: true })
+        .limit(300);
+      if (cancelled) return;
+      if (error) {
+        setWebFormOptions([]);
+        return;
+      }
+      setWebFormOptions(
+        (data || [])
+          .map((row: any) => {
+            const id = String(row?.id || '').trim();
+            const targetModuleId = String(row?.target_module_id || '').trim();
+            if (!id || !targetModuleId) return null;
+            const moduleTitle = MODULES[targetModuleId]?.titles?.fa || targetModuleId;
+            const routeSlug = String(row?.route_slug || '').trim();
+            const name = String(row?.name || routeSlug || 'وب‌فرم').trim();
+            return {
+              value: id,
+              targetModuleId,
+              label: `${name} (${moduleTitle}${routeSlug ? ` / ${routeSlug}` : ''})`,
+            };
+          })
+          .filter((item): item is { label: string; value: string; targetModuleId: string } => Boolean(item))
+      );
+    };
+
+    void loadWebForms();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const templateVariableOptions = useMemo(
-    () =>
-      (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
+    () => {
+      const sourceFields = (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
         .filter((field) => !!String(field?.key || '').trim())
         .map((field) => {
           const key = String(field?.key || '').trim();
@@ -567,7 +640,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             label: String(field?.labels?.fa || field?.key || '').trim() || key,
             token: `{{${key}}}`,
           };
-        }),
+        });
+      if (!sourceFields.some((item) => item.key === 'web_form_link')) {
+        sourceFields.push({
+          key: 'web_form_link',
+          label: 'لینک وب‌فرم',
+          token: '{{web_form_link}}',
+        });
+      }
+      return sourceFields;
+    },
     [currentModuleFields, variableFields]
   );
   const formulaVariableOptions = useMemo(
@@ -659,6 +741,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     });
   }, [moduleOptions, currentModuleId, relationSourceModuleOptions]);
+  const webFormRelationModuleOptions = useMemo(() => {
+    const baseOptions = relationSourceModuleOptions && relationSourceModuleOptions.length > 0
+      ? relationSourceModuleOptions
+      : [{ label: MODULES[currentModuleId]?.titles?.fa || currentModuleId, value: currentModuleId }];
+    return Array.from(
+      new Map(
+        baseOptions
+          .map((item) => {
+            const value = String(item?.value || '').trim();
+            if (!value) return null;
+            return [value, {
+              label: String(item?.label || MODULES[value]?.titles?.fa || value).trim() || value,
+              value,
+            }] as const;
+          })
+          .filter(Boolean) as Array<readonly [string, { label: string; value: string }]>
+      ).values()
+    );
+  }, [currentModuleId, relationSourceModuleOptions]);
 
   const processTemplateOptions = relationOptions.process_template_id || [];
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
@@ -1136,6 +1237,42 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           },
         };
       }
+      if (action.type === 'send_web_form_link') {
+        const config = action.config || {};
+        const normalizedRelatedModuleId = String(
+          config.related_module_id
+          || webFormRelationModuleOptions[0]?.value
+          || currentModuleId
+        ).trim();
+        const normalizedDeliveryChannels = Array.from(
+          new Set(
+            (Array.isArray(config.delivery_channels) ? config.delivery_channels : [])
+              .map((item: any) => String(item || '').trim().toLowerCase())
+              .filter((item) => ['sms', 'email', 'bot', 'note'].includes(item))
+          )
+        );
+        const defaultConfig = getDefaultActionConfig('send_web_form_link');
+        const normalizedChannelConfigs = {
+          ...(defaultConfig.channel_configs || {}),
+          ...((config.channel_configs && typeof config.channel_configs === 'object') ? config.channel_configs : {}),
+        };
+        const shouldPatch =
+          normalizedRelatedModuleId !== String(config.related_module_id || '')
+          || JSON.stringify(normalizedDeliveryChannels) !== JSON.stringify(Array.isArray(config.delivery_channels) ? config.delivery_channels : [])
+          || JSON.stringify(normalizedChannelConfigs) !== JSON.stringify(config.channel_configs || {});
+        if (!shouldPatch) return action;
+        hasChanges = true;
+        return {
+          ...action,
+          config: {
+            ...defaultConfig,
+            ...config,
+            related_module_id: normalizedRelatedModuleId,
+            delivery_channels: normalizedDeliveryChannels.length > 0 ? normalizedDeliveryChannels : ['sms'],
+            channel_configs: normalizedChannelConfigs,
+          },
+        };
+      }
       if (action.type !== 'create_related_record') return action;
       const config = action.config || {};
       const targetModuleId = String(config.target_module_id || '');
@@ -1183,7 +1320,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     if (hasChanges) {
       onChange(next);
     }
-  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap]);
+  }, [safeValue, onChange, currentModuleId, ensureRequiredMappings, noteRecipientOptionValueSet, noteScopedFieldMap, webFormRelationModuleOptions]);
 
   const renderActionFields = (action: WorkflowAction) => {
     const actionType = action.type;
@@ -1239,6 +1376,269 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="متن یادداشت"
           />
           {renderVariableTools(action, [{ key: 'note_text', label: 'متن یادداشت' }])}
+        </div>
+      );
+    }
+    if (actionType === 'send_web_form_link') {
+      const selectedChannels = Array.isArray(config.delivery_channels)
+        ? config.delivery_channels.map((item: any) => String(item || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
+        ? config.channel_configs
+        : {};
+      const smsConfig = channelConfigs.sms || {};
+      const emailConfig = channelConfigs.email || {};
+      const botConfig = channelConfigs.bot || {};
+      const noteConfig = channelConfigs.note || {};
+      const relationModuleLocked = webFormRelationModuleOptions.length <= 1;
+      const activeWebFormOptions = webFormOptions;
+
+      const phoneFields = communicationFieldSource
+        .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
+        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const smsRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...phoneFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const emailFields = communicationFieldSource
+        .filter((f) => /email/i.test(f.key))
+        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const emailRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...emailFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const botRecipientFieldOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+
+      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
+        updateActionConfig(action.id, {
+          channel_configs: {
+            ...channelConfigs,
+            [channelKey]: {
+              ...((channelConfigs as any)?.[channelKey] || {}),
+              ...patch,
+            },
+          },
+        });
+      };
+
+      return (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">وب‌فرم</div>
+              <Select
+                {...commonSelectProps}
+                value={config.web_form_id || undefined}
+                disabled={disabled}
+                options={activeWebFormOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { web_form_id: nextVal })}
+                placeholder="انتخاب وب‌فرم"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">مرتبط با</div>
+              <Select
+                {...commonSelectProps}
+                value={config.related_module_id || undefined}
+                disabled={disabled || relationModuleLocked}
+                options={webFormRelationModuleOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { related_module_id: nextVal })}
+                placeholder="ماژول مرتبط"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">کانال‌های ارسال</div>
+            <Checkbox.Group
+              disabled={disabled}
+              value={selectedChannels}
+              options={[
+                { label: 'پیامک', value: 'sms' },
+                { label: 'ایمیل', value: 'email' },
+                { label: 'بات', value: 'bot' },
+                { label: 'یادداشت', value: 'note' },
+              ]}
+              onChange={(nextVal) => updateActionConfig(action.id, { delivery_channels: nextVal })}
+            />
+          </div>
+
+          {selectedChannels.includes('sms') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">ارسال پیامک</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(smsConfig.recipient_fields) ? smsConfig.recipient_fields : []}
+                  disabled={disabled}
+                  options={smsRecipientOptions}
+                  onChange={(nextVal) => updateChannelConfig('sms', { recipient_fields: nextVal })}
+                  placeholder="فیلدهای مقصد شماره تماس"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(smsConfig.recipient_assignees) ? smsConfig.recipient_assignees : []}
+                  disabled={disabled}
+                  options={noteAssigneeDirectoryOptions}
+                  onChange={(nextVal) => updateChannelConfig('sms', { recipient_assignees: nextVal })}
+                  placeholder="کاربر/نقش تکمیلی"
+                />
+              </div>
+              <Select
+                {...commonSelectProps}
+                mode="tags"
+                value={Array.isArray(smsConfig.manual_numbers) ? smsConfig.manual_numbers : []}
+                disabled={disabled}
+                onChange={(nextVal) => updateChannelConfig('sms', { manual_numbers: nextVal })}
+                tokenSeparators={[',', ';', ' ']}
+                placeholder="شماره‌های دستی"
+              />
+              <Input.TextArea
+                rows={3}
+                value={smsConfig.message}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('sms', { message: e.target.value })}
+                placeholder="متن پیامک"
+              />
+              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('email') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">ارسال ایمیل</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(emailConfig.recipient_fields) ? emailConfig.recipient_fields : []}
+                  disabled={disabled}
+                  options={emailRecipientOptions}
+                  onChange={(nextVal) => updateChannelConfig('email', { recipient_fields: nextVal })}
+                  placeholder="فیلدهای ایمیل مقصد"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="tags"
+                  value={Array.isArray(emailConfig.manual_emails) ? emailConfig.manual_emails : []}
+                  disabled={disabled}
+                  onChange={(nextVal) => updateChannelConfig('email', { manual_emails: nextVal })}
+                  tokenSeparators={[',', ';', ' ']}
+                  placeholder="ایمیل‌های دستی"
+                />
+              </div>
+              <Input
+                value={emailConfig.subject}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('email', { subject: e.target.value })}
+                placeholder="موضوع ایمیل"
+              />
+              <Input.TextArea
+                rows={3}
+                value={emailConfig.body}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('email', { body: e.target.value })}
+                placeholder="متن ایمیل"
+              />
+              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('bot') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">ارسال با بات</div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(botConfig.recipient_fields) ? botConfig.recipient_fields : []}
+                disabled={disabled}
+                options={botRecipientFieldOptions}
+                onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal })}
+                placeholder="فیلدهای گیرنده"
+                maxTagCount="responsive"
+              />
+              <Input
+                value={botConfig.title}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('bot', { title: e.target.value })}
+                placeholder="عنوان پیام"
+              />
+              <Input.TextArea
+                rows={3}
+                value={botConfig.message}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('bot', { message: e.target.value })}
+                placeholder="متن پیام"
+              />
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(botConfig.attachment_fields) ? botConfig.attachment_fields : []}
+                disabled={disabled || noteAttachmentFieldOptions.length === 0}
+                options={noteAttachmentFieldOptions}
+                onChange={(nextVal) => updateChannelConfig('bot', { attachment_fields: nextVal })}
+                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
+                maxTagCount="responsive"
+              />
+              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('note') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">ارسال یادداشت</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(noteConfig.recipient_fields) ? noteConfig.recipient_fields : []}
+                  disabled={disabled}
+                  options={noteRecipientFieldOptions}
+                  onChange={(nextVal) => updateChannelConfig('note', { recipient_fields: nextVal })}
+                  placeholder="گیرنده‌های یادداشت"
+                  maxTagCount="responsive"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(noteConfig.recipient_assignees) ? noteConfig.recipient_assignees : []}
+                  disabled={disabled}
+                  options={noteAssigneeDirectoryOptions}
+                  onChange={(nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal })}
+                  placeholder="کاربر/نقش/گروه تکمیلی"
+                  maxTagCount="responsive"
+                />
+              </div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(noteConfig.attachment_fields) ? noteConfig.attachment_fields : []}
+                disabled={disabled || noteAttachmentFieldOptions.length === 0}
+                options={noteAttachmentFieldOptions}
+                onChange={(nextVal) => updateChannelConfig('note', { attachment_fields: nextVal })}
+                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
+                maxTagCount="responsive"
+              />
+              <Input.TextArea
+                rows={3}
+                value={noteConfig.note_text}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('note', { note_text: e.target.value })}
+                placeholder="متن یادداشت"
+              />
+              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+            </div>
+          ) : null}
         </div>
       );
     }

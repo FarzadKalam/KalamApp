@@ -37,10 +37,10 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { DEFAULT_BRANDING, BRAND_PALETTE_PRESETS, type BrandingConfig, type BrandingPaletteKey } from '../theme/brandTheme';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
-import { supabase } from '../supabaseClient';
+import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
 
-const anonClient = supabase;
+const anonClient = supabasePublic;
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -139,7 +139,6 @@ type InvoiceData = {
     company_settings?: Record<string, any>;
   };
   online_config: OnlineConfig;
-  org_id: string;
 };
 
 type OnlineConfig = {
@@ -157,11 +156,11 @@ type OnlineConfig = {
 };
 
 type PublicNote = {
-  id: string;
+  id?: string;
   content: string;
   author_name: string;
   created_at: string;
-  reply_to: string | null;
+  reply_to?: string | null;
   metadata?: Record<string, any>;
 };
 
@@ -1013,7 +1012,7 @@ ${invoice.description ? `
             <div style={{ overflowX: 'auto' }}>
               <Table
                 dataSource={items.filter(Boolean)}
-                rowKey={(r) => r?.id || Math.random().toString()}
+                rowKey={(_, index) => `invoice-item-${index}`}
                 pagination={false}
                 size="small"
                 style={{ direction: 'rtl' }}
@@ -1176,7 +1175,7 @@ ${invoice.description ? `
             <div style={{ overflowX: 'auto' }}>
               <Table
                 dataSource={payments}
-                rowKey={(r) => r.id || Math.random().toString()}
+                rowKey={(_, index) => `invoice-payment-${index}`}
                 pagination={false}
                 size="small"
                 columns={[

@@ -12,11 +12,23 @@ type AnySupabaseClient = SupabaseClient<any, 'public', any>;
 
 const globalStore = globalThis as typeof globalThis & {
   __kalam_supabase_client__?: AnySupabaseClient;
+  __kalam_supabase_public_client__?: AnySupabaseClient;
   __kalam_supabase_signup_client__?: AnySupabaseClient;
 };
 
 if (!globalStore.__kalam_supabase_client__) {
   globalStore.__kalam_supabase_client__ = createClient<any>(supabaseUrl, supabaseAnonKey);
+}
+
+if (!globalStore.__kalam_supabase_public_client__) {
+  globalStore.__kalam_supabase_public_client__ = createClient<any>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      storageKey: 'sb-public-auth-token',
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
 }
 
 if (!globalStore.__kalam_supabase_signup_client__) {
@@ -31,6 +43,7 @@ if (!globalStore.__kalam_supabase_signup_client__) {
 }
 
 export const supabase = globalStore.__kalam_supabase_client__;
+export const supabasePublic = globalStore.__kalam_supabase_public_client__;
 export const supabaseSignUpClient = globalStore.__kalam_supabase_signup_client__;
 export const SUPABASE_URL = supabaseUrl;
 export const SUPABASE_ANON_KEY = supabaseAnonKey;

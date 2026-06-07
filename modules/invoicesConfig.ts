@@ -583,5 +583,14 @@ export const invoicesConfig: ModuleDefinition = {
       filters: [{ field: 'source_table', value: 'invoices' }],
       disableCreate: true,
     },
+    {
+      id: 'invoice_surveys',
+      title: 'نظرسنجی‌ها',
+      icon: 'CommentOutlined',
+      relationType: 'fk',
+      targetModule: 'surveys',
+      foreignKey: 'related_record_id',
+      filters: [{ field: 'related_module_id', value: 'invoices' }],
+    },
   ],
 };

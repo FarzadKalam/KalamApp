@@ -27,6 +27,7 @@ export type WebFormSelectOption = {
 export type WebFormAccessScope = "public" | "internal";
 export type WebFormDisplayMode = "list" | "slide";
 export type WebFormDuplicateStrategy = "allow" | "update" | "skip";
+export type WebFormKind = "record_create" | "survey";
 
 export type WebFormConfig = {
   header_title?: string;
@@ -61,6 +62,8 @@ export type WebFormFieldRecord = {
 export type WebFormFieldConfig = {
   select_options?: WebFormSelectOption[];
   default_to_current_employee?: boolean;
+  binding_type?: "record_field" | "template_field";
+  relation_target_module?: string;
   [key: string]: any;
 };
 
@@ -455,14 +458,27 @@ export const isWebFormCurrentEmployeeDefaultField = (
   return String(targetField?.relationConfig?.targetModule || "").trim() === "employees";
 };
 
-export const buildWebFormPublicPath = (slug?: string | null) => {
-  const normalized = String(slug || "").trim();
-  return normalized ? `/inquiry/${normalized}` : "/inquiry";
+export const getWebFormFieldBindingType = (field?: Pick<WebFormFieldRecord, "target_field_key" | "config"> | null) => {
+  const configured = String(field?.config?.binding_type || "").trim();
+  if (configured === "template_field") return "template_field";
+  return String(field?.target_field_key || "").trim() ? "record_field" : "template_field";
 };
 
-export const buildWebFormPublicUrl = (slug?: string | null) => {
-  if (typeof window === "undefined") return buildWebFormPublicPath(slug);
-  return `${window.location.origin}${buildWebFormPublicPath(slug)}`;
+export const isWebFormTemplateField = (field?: Pick<WebFormFieldRecord, "target_field_key" | "config"> | null) =>
+  getWebFormFieldBindingType(field) === "template_field";
+
+export const buildWebFormPublicPath = (slug?: string | null, accessToken?: string | null) => {
+  const normalized = String(slug || "").trim();
+  const basePath = normalized ? `/inquiry/${normalized}` : "/inquiry";
+  const normalizedToken = String(accessToken || "").trim();
+  if (!normalizedToken) return basePath;
+  const params = new URLSearchParams({ token: normalizedToken });
+  return `${basePath}?${params.toString()}`;
+};
+
+export const buildWebFormPublicUrl = (slug?: string | null, accessToken?: string | null) => {
+  if (typeof window === "undefined") return buildWebFormPublicPath(slug, accessToken);
+  return `${window.location.origin}${buildWebFormPublicPath(slug, accessToken)}`;
 };
 
 export const parseWebFormOptionsText = (raw: string): WebFormSelectOption[] =>

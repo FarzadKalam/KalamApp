@@ -659,19 +659,26 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
   if (!filteredItems.length) return <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
 
   const buildInitialValues = () => {
+    const filterInitialValues = (tab.filters || []).reduce<Record<string, any>>((acc, filter) => {
+      if (String(filter?.operator || 'eq').trim() !== 'eq') return acc;
+      const fieldKey = String(filter?.field || '').trim();
+      if (!fieldKey || filter?.value === undefined) return acc;
+      acc[fieldKey] = filter.value;
+      return acc;
+    }, {});
     if (tab.relationType === 'fk' && tab.foreignKey) {
-      return { [tab.foreignKey]: currentRecordId };
+      return { ...filterInitialValues, [tab.foreignKey]: currentRecordId };
     }
     if (tab.relationType === 'fk_from_field' && tab.foreignKey && sourceFieldValue) {
-      return { [tab.foreignKey]: sourceFieldValue };
+      return { ...filterInitialValues, [tab.foreignKey]: sourceFieldValue };
     }
     if (tab.relationType === 'jsonb_contains' && tab.targetModule === 'invoices' && tab.jsonbMatchKey) {
-      return { invoiceItems: [{ [tab.jsonbMatchKey]: currentRecordId, quantity: 1 }] };
+      return { ...filterInitialValues, invoiceItems: [{ [tab.jsonbMatchKey]: currentRecordId, quantity: 1 }] };
     }
     if (tab.relationType === 'customer_payments_from_field' && sourceFieldValue) {
-      return { customer_id: sourceFieldValue };
+      return { ...filterInitialValues, customer_id: sourceFieldValue };
     }
-    return {};
+    return filterInitialValues;
   };
 
   const canCreate = Boolean(tab.targetModule)

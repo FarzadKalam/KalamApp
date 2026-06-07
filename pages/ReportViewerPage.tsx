@@ -30,6 +30,7 @@ import {
   normalizeReportConfig,
   type ReportDefinitionRecord,
 } from '../utils/reporting';
+import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
@@ -317,18 +318,33 @@ const ReportViewerPage: React.FC = () => {
   const [savingPrintFields, setSavingPrintFields] = useState(false);
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
 
   const config = useMemo(() => normalizeReportConfig(report?.config), [report?.config]);
   const moduleId = String(report?.module_id || '').trim();
   const secondaryModuleIds = config.secondary_module_ids;
+  const scopedSurveyTemplateId = useMemo(
+    () => (
+      moduleId === 'surveys'
+        ? getSurveyTemplateScopedIdFromConditions(config.conditions_all, config.conditions_any)
+        : null
+    ),
+    [config.conditions_all, config.conditions_any, moduleId]
+  );
   const moduleConfig = MODULES[moduleId];
   const currencyLabel = readCurrencyConfig().label || '';
   const selectedTableBlocks = useMemo(
     () => secondaryModuleIds.map((sourceId) => getReportTableBlock(moduleId, sourceId)).filter(Boolean),
     [moduleId, secondaryModuleIds]
   );
-  const reportableFields = useMemo(() => getReportableFields(moduleId, secondaryModuleIds), [moduleId, secondaryModuleIds]);
-  const fieldMap = useMemo(() => getReportableFieldMap(moduleId, secondaryModuleIds), [moduleId, secondaryModuleIds]);
+  const reportableFields = useMemo(
+    () => getReportableFields(moduleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [moduleId, secondaryModuleIds, surveyTemplateSnapshot]
+  );
+  const fieldMap = useMemo(
+    () => getReportableFieldMap(moduleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [moduleId, secondaryModuleIds, surveyTemplateSnapshot]
+  );
   const visibleFields = useMemo(
     () => reportableFields.filter((field) => config.columns.includes(field.key)),
     [config.columns, reportableFields]
@@ -367,6 +383,31 @@ const ReportViewerPage: React.FC = () => {
       window.dispatchEvent(new CustomEvent('erp:breadcrumb', { detail: null }));
     };
   }, [report?.name]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (moduleId !== 'surveys' || !scopedSurveyTemplateId) {
+      setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+      return () => {
+        cancelled = true;
+      };
+    }
+    const run = async () => {
+      try {
+        const definition = await loadSurveyTemplateDefinition(supabase, scopedSurveyTemplateId);
+        if (cancelled) return;
+        setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(definition?.snapshot || {}));
+      } catch {
+        if (!cancelled) {
+          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleId, scopedSurveyTemplateId]);
 
   const loadReport = useCallback(async () => {
     if (!reportId) {
@@ -407,13 +448,21 @@ const ReportViewerPage: React.FC = () => {
       }
 
       const normalizedConfig = normalizeReportConfig(nextReport.config);
+      const nextModuleId = String(nextReport.module_id || '').trim();
+      const nextScopedSurveyTemplateId = nextModuleId === 'surveys'
+        ? getSurveyTemplateScopedIdFromConditions(normalizedConfig.conditions_all, normalizedConfig.conditions_any)
+        : null;
+      const nextSurveyTemplateSnapshot = nextScopedSurveyTemplateId
+        ? normalizeSurveyTemplateSnapshot((await loadSurveyTemplateDefinition(supabase, nextScopedSurveyTemplateId))?.snapshot || {})
+        : normalizeSurveyTemplateSnapshot({});
       const optionFields = [
-        ...getReportConditionFields(String(nextReport.module_id || '').trim(), normalizedConfig.secondary_module_ids),
-        ...getReportableFields(String(nextReport.module_id || '').trim(), normalizedConfig.secondary_module_ids),
+        ...getReportConditionFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot),
+        ...getReportableFields(nextModuleId, normalizedConfig.secondary_module_ids, nextSurveyTemplateSnapshot),
       ];
-      const loadedOptions = await loadWorkflowConditionEditorOptions(String(nextReport.module_id || '').trim(), optionFields);
+      const loadedOptions = await loadWorkflowConditionEditorOptions(nextModuleId, optionFields);
 
       setRelationOptions(loadedOptions.relationOptions);
+      setSurveyTemplateSnapshot(nextSurveyTemplateSnapshot);
       setReport(nextReport);
       setCanViewPage(true);
       setSetupMissing(false);

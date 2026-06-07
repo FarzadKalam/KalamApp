@@ -361,5 +361,14 @@ export const marketingLeadsModule: ModuleDefinition = {
       targetModule: 'voip_call_reports',
       disableCreate: true,
     },
+    {
+      id: 'lead_surveys',
+      title: 'نظرسنجی‌ها',
+      icon: 'CommentOutlined',
+      relationType: 'fk',
+      targetModule: 'surveys',
+      foreignKey: 'related_record_id',
+      filters: [{ field: 'related_module_id', value: 'marketing_leads' }],
+    },
   ],
 };

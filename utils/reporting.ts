@@ -1,6 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { isSaasAdminModuleId } from './permissions';
+import { buildSurveyReportFieldsFromSnapshot } from './surveyTemplates';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
 
@@ -305,12 +306,19 @@ export const isGroupableReportField = (field?: ModuleField | null) => !!field &&
 
 export const isSummableReportField = (field?: ModuleField | null) => !!field && SUMMABLE_FIELD_TYPES.has(field.type);
 
-export const getMainReportableFields = (moduleId?: string | null) => {
+export const getMainReportableFields = (
+  moduleId?: string | null,
+  surveyTemplateSnapshot?: unknown,
+) => {
   const normalizedModuleId = String(moduleId || '').trim();
   const fields = MODULES[normalizedModuleId]?.fields || [];
   const assigneeField = getSyntheticWorkflowAssigneeField(normalizedModuleId);
+  const surveyTemplateFields = normalizedModuleId === 'surveys'
+    ? buildSurveyReportFieldsFromSnapshot(surveyTemplateSnapshot)
+    : [];
   return dedupeFields([
     ...fields.filter((field) => isReportableField(field)),
+    ...surveyTemplateFields.filter((field) => isReportableField(field)),
     ...(assigneeField ? [assigneeField] : []),
   ]);
 };
@@ -349,7 +357,8 @@ export const getSecondaryModuleOptions = (
 
 export const getTableReportableFields = (
   mainModuleId?: string | null,
-  tableSourceId?: string | null
+  tableSourceId?: string | null,
+  surveyTemplateSnapshot?: unknown,
 ) => {
   const tableBlock = getReportTableBlock(mainModuleId, tableSourceId);
   if (!tableBlock) return [];
@@ -383,7 +392,7 @@ export const getTableReportableFields = (
       if (!targetModule) return [];
       const relationTitle = String(column?.title || column?.label || relationColumnKey);
       const targetModuleTitle = targetModule.titles?.fa || targetModuleId;
-      return getMainReportableFields(targetModuleId).map((field) => ({
+      return getMainReportableFields(targetModuleId, targetModuleId === 'surveys' ? surveyTemplateSnapshot : null).map((field) => ({
         ...field,
         key: buildReportTableRelationFieldKey(
           String(tableBlock.id || ''),
@@ -405,7 +414,8 @@ export const getTableReportableFields = (
 
 export const getSecondaryReportableFields = (
   mainModuleId?: string | null,
-  secondaryModuleId?: string | string[] | null
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
 ) => {
   const normalizedMain = String(mainModuleId || '').trim();
   const normalizedSecondaryIds = Array.from(
@@ -419,7 +429,7 @@ export const getSecondaryReportableFields = (
   return dedupeFields(
     normalizedSecondaryIds.flatMap((normalizedSecondary) => {
       if (isReportTableSourceId(normalizedSecondary)) {
-        return getTableReportableFields(normalizedMain, normalizedSecondary);
+        return getTableReportableFields(normalizedMain, normalizedSecondary, surveyTemplateSnapshot);
       }
       return getWorkflowConditionFields(normalizedMain).filter((field) => {
         const relatedMeta = parseWorkflowRelatedFieldKey(field.key);
@@ -430,27 +440,47 @@ export const getSecondaryReportableFields = (
   );
 };
 
-export const getReportableFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
+export const getReportableFields = (
+  mainModuleId?: string | null,
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
+) =>
   dedupeFields([
-    ...getMainReportableFields(mainModuleId),
-    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId),
+    ...getMainReportableFields(mainModuleId, surveyTemplateSnapshot),
+    ...getSecondaryReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot),
   ]);
 
-export const getReportConditionFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
-  getReportableFields(mainModuleId, secondaryModuleId);
+export const getReportConditionFields = (
+  mainModuleId?: string | null,
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
+) =>
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot);
 
-export const getReportableFieldMap = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) => {
-  return getReportableFields(mainModuleId, secondaryModuleId).reduce<Record<string, ModuleField>>((acc, field) => {
+export const getReportableFieldMap = (
+  mainModuleId?: string | null,
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
+) => {
+  return getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).reduce<Record<string, ModuleField>>((acc, field) => {
     acc[field.key] = field;
     return acc;
   }, {});
 };
 
-export const getGroupableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
-  getReportableFields(mainModuleId, secondaryModuleId).filter((field) => isGroupableReportField(field));
+export const getGroupableReportFields = (
+  mainModuleId?: string | null,
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
+) =>
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).filter((field) => isGroupableReportField(field));
 
-export const getSummableReportFields = (mainModuleId?: string | null, secondaryModuleId?: string | string[] | null) =>
-  getReportableFields(mainModuleId, secondaryModuleId).filter((field) => isSummableReportField(field));
+export const getSummableReportFields = (
+  mainModuleId?: string | null,
+  secondaryModuleId?: string | string[] | null,
+  surveyTemplateSnapshot?: unknown,
+) =>
+  getReportableFields(mainModuleId, secondaryModuleId, surveyTemplateSnapshot).filter((field) => isSummableReportField(field));
 
 export const getReportModuleOptions = (permissions?: Record<string, { view?: boolean }> | null) =>
   Object.values(MODULES)

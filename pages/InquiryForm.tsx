@@ -19,6 +19,7 @@ import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import ResilientImage from "../components/common/ResilientImage";
 import {
   isWebFormCurrentEmployeeDefaultField,
+  isWebFormTemplateField,
   normalizeWebFormConfig,
   normalizeWebFormFieldRecord,
   type WebFormAccessScope,
@@ -113,13 +114,15 @@ const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["fie
 
 const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: string | null): ModuleField => {
   const normalizedTargetModuleId = String(targetModuleId || "").trim();
-  const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+  const isTemplateField = isWebFormTemplateField(field);
+  const targetFieldKey = String((isTemplateField ? field.field_key : (field.target_field_key || field.field_key)) || "").trim();
   const targetField = normalizedTargetModuleId
     ? (MODULES[normalizedTargetModuleId]?.fields || []).find((item) => String(item?.key || "").trim() === targetFieldKey)
     : null;
   const configuredOptions = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
   const liveOptions = Array.isArray(targetField?.options) ? targetField.options : [];
   const resolvedOptions = liveOptions.length > 0 ? liveOptions : configuredOptions;
+  const relationTargetModule = String(field.config?.relation_target_module || "").trim();
   return {
     ...(targetField || {}),
     key: targetFieldKey || field.field_key,
@@ -134,7 +137,7 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
       required: field.is_required === true,
     },
     dynamicOptionsCategory: targetField?.dynamicOptionsCategory,
-    relationConfig: targetField?.relationConfig,
+    relationConfig: targetField?.relationConfig || (relationTargetModule ? { targetModule: relationTargetModule } : undefined),
     mode: targetField?.mode,
     readonly: false,
     hideInCreateForm: false,
@@ -353,6 +356,10 @@ const InquiryForm = () => {
     const querySlug = String(new URLSearchParams(location.search).get("slug") || "").trim();
     return querySlug || "inquiry";
   }, [location.search, params]);
+  const accessToken = useMemo(
+    () => String(new URLSearchParams(location.search).get("token") || "").trim(),
+    [location.search]
+  );
 
   const currentPathWithQuery = useMemo(
     () => `${location.pathname}${location.search || ""}${location.hash || ""}`,
@@ -564,6 +571,7 @@ const InquiryForm = () => {
           .rpc("get_public_web_form", {
             p_slug: requestedSlug,
             p_hostname: typeof window !== "undefined" ? window.location.hostname : null,
+            p_access_token: accessToken || null,
           });
 
         if (error) throw error;
@@ -625,7 +633,7 @@ const InquiryForm = () => {
     return () => {
       cancelled = true;
     };
-  }, [requestedSlug]);
+  }, [accessToken, requestedSlug]);
 
   const palette = branding.palette || DEFAULT_BRANDING.palette;
   const companySettings = publicForm?.companySettings || {};
@@ -1209,6 +1217,7 @@ const InquiryForm = () => {
           theme_mode: isDarkMode ? "dark" : "light",
         },
         p_hostname: typeof window !== "undefined" ? window.location.hostname : null,
+        p_access_token: accessToken || null,
       });
 
       if (error) throw error;

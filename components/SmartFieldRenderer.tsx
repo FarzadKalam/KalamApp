@@ -3158,6 +3158,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                 <SmartFormLazy
                   module={quickCreateTargetModule as any}
                   visible={quickCreateOpen}
+                  initialValues={configuredQuickCreateDefaults}
                   onCancel={closeQuickCreate}
                   title={`افزودن ${quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'} جدید`}
                   overlayZIndex={fullRelationCreateModalZIndex}
@@ -3229,6 +3230,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
             <SmartFormLazy
               module={quickCreateTargetModule as any}
               visible={quickCreateOpen}
+              initialValues={configuredQuickCreateDefaults}
               onCancel={closeQuickCreate}
               title={`افزودن ${quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'} جدید`}
               overlayZIndex={fullRelationCreateModalZIndex}

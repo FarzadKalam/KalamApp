@@ -693,6 +693,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_demo_requests', label: 'درخواست‌های دمو' },
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
+          { key: '/taze-system/api-docs', label: 'مستندات API' },
         ],
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
@@ -730,6 +731,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/saas_demo_requests':
         case '/saas_user_announcements':
         case '/taze-system/plans':
+        case '/taze-system/api-docs':
           return canViewSaasAdmin;
         case '/accounting/account-review':
           return canViewModule('journal_entries') && canViewModule('chart_of_accounts');

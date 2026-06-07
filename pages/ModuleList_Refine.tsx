@@ -68,6 +68,12 @@ import {
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
 import { getBaseModuleFieldDefinition } from "../utils/moduleSettingsRuntime";
+import {
+  buildSurveyRuntimeModule,
+  getSurveyTemplateScopedIdFromCrudFilters,
+  loadSurveyTemplateDefinition,
+  normalizeSurveyTemplateSnapshot,
+} from "../utils/surveyTemplates";
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -566,7 +572,16 @@ export const ModuleListRefine: React.FC<{
     [msg]
   );
   
-  const moduleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
+  const baseModuleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
+  const moduleConfig = useMemo(
+    () => (
+      resolvedModuleId === "surveys" && baseModuleConfig
+        ? buildSurveyRuntimeModule(baseModuleConfig, surveyTemplateSnapshot, "list")
+        : baseModuleConfig
+    ),
+    [baseModuleConfig, resolvedModuleId, surveyTemplateSnapshot]
+  );
   const dataResource = moduleConfig?.table || resolvedModuleId;
   const searchTargetField = useMemo(() => {
     if (!moduleConfig) return null;
@@ -713,6 +728,41 @@ export const ModuleListRefine: React.FC<{
     () => JSON.stringify(effectiveInitialFilters),
     [effectiveInitialFilters]
   );
+  const surveyTemplateScopedId = useMemo(
+    () => (
+      resolvedModuleId === "surveys"
+        ? getSurveyTemplateScopedIdFromCrudFilters(buildMergedFilters(viewFiltersState, searchTerm, columnFilters))
+        : null
+    ),
+    [columnFilters, resolvedModuleId, searchTerm, viewFiltersState]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (resolvedModuleId !== "surveys" || !surveyTemplateScopedId) {
+      setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const run = async () => {
+      try {
+        const definition = await loadSurveyTemplateDefinition(supabase, surveyTemplateScopedId);
+        if (cancelled) return;
+        setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(definition?.snapshot || {}));
+      } catch {
+        if (!cancelled) {
+          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+        }
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedModuleId, surveyTemplateScopedId]);
   const moduleListRowSelect = useMemo(
     () => buildModuleListRowSelect(moduleConfig, visibleColumns, {
       viewMode,

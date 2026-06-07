@@ -56,6 +56,14 @@ import {
 import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
 import { evaluateLegacyVisibilityRule, isConditionalFieldValueEmpty } from '../utils/conditionalFieldRules';
 import { buildModuleOnChangePatch, normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
+import {
+  buildSurveyRuntimeModule,
+  getSurveyTemplateFieldDefaultValues,
+  getSurveyTemplateValueKeys,
+  loadSurveyTemplateDefinition,
+  mergeSurveyTemplateValuesIntoRecord,
+  normalizeSurveyTemplateSnapshot,
+} from '../utils/surveyTemplates';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -296,6 +304,22 @@ const SmartForm: React.FC<SmartFormProps> = ({
       ...normalizedWatchedValues,
     };
   }, [formData, watchedValues]);
+  const isSurveyModule = module.id === 'surveys';
+  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot(
+    initialValuesProp?.template_schema_snapshot || {}
+  ));
+  const surveyTemplateConfirmOpenRef = useRef<string | null>(null);
+  const surveyTemplatePreviousIdRef = useRef<string | null>(null);
+  const effectiveModule = useMemo(
+    () => (
+      isSurveyModule
+        ? buildSurveyRuntimeModule(module, surveyTemplateSnapshot, 'form')
+        : module
+    ),
+    [isSurveyModule, module, surveyTemplateSnapshot]
+  );
+  const runtimeFields = effectiveModule.fields || [];
+  const runtimeBlocks = effectiveModule.blocks || [];
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
@@ -325,8 +349,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const supportsAssigneeType = supportsGlobalAssigneeType(module.id);
   const supportsRoleAssignee = supportsGlobalRoleAssignee(module.id);
   const assigneeLabel = getAssigneeLabel(module.id);
-  const hasAutoNameToggle = module.fields.some((field) => field.key === 'auto_name_enabled');
-  const conditionalFieldRuntime = useConditionalFieldRuntime(module, currentValues || {});
+  const hasAutoNameToggle = effectiveModule.fields.some((field) => field.key === 'auto_name_enabled');
+  const conditionalFieldRuntime = useConditionalFieldRuntime(effectiveModule, currentValues || {});
 
   const buildAssigneeCombo = (assigneeType?: string | null, assigneeId?: string | null) => {
     if (!assigneeType || !assigneeId) return null;
@@ -354,7 +378,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             type: FieldType.RELATION,
           }))
       : [];
-    return [...module.fields, ...projectProcessRelationFields]
+    return [...runtimeFields, ...projectProcessRelationFields]
       .filter((field) => (
         field.type === FieldType.RELATION
         || field.type === FieldType.MULTI_RELATION
@@ -369,7 +393,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         return `${field.key}:${normalized}`;
       })
       .join('|');
-  }, [formData, module.fields, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm, watchedValues]);
+  }, [formData, runtimeFields, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm, watchedValues]);
 
   const getRestorableDraftValues = useCallback(() => {
     const draft = readSmartFormDraft(draftKey);
@@ -399,13 +423,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
         // --- حالت ویرایش ---
         const hasInitialProps = initialValues && Object.keys(initialValues).length > 0;
         if (hasInitialProps) {
-          const normalizedInitialValues = normalizeModuleFormValues(module.id, initialValues);
+          const normalizedInitialValues = mergeSurveyTemplateValuesIntoRecord(
+            normalizeModuleFormValues(module.id, initialValues)
+          ) || normalizeModuleFormValues(module.id, initialValues);
           const assigneeCombo = buildResolvedAssigneeCombo(normalizedInitialValues);
           const prefetchedValues = {
             ...normalizedInitialValues,
             assignee_combo: assigneeCombo,
             ...(hasAutoNameToggle ? { auto_name_enabled: false } : {}),
           };
+          if (isSurveyModule) {
+            setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(initialValues?.template_schema_snapshot || {}));
+            surveyTemplatePreviousIdRef.current = String(initialValues?.survey_template_id || '').trim() || null;
+          }
           const draftValues = getRestorableDraftValues();
           applyProgrammaticValues(draftValues ? { ...prefetchedValues, ...draftValues } : prefetchedValues);
           if (draftValues) formDirtyRef.current = true;
@@ -429,14 +459,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
         const applyCreateDefaults = async () => {
           const defaults: Record<string, any> = {};
-          module.fields.forEach((field) => {
+          runtimeFields.forEach((field) => {
             const fieldDefault = getImplicitCreateDefaultValue(field);
             if (fieldDefault !== undefined) {
               defaults[field.key] = fieldDefault;
             }
           });
 
-          const initialProps = normalizeModuleFormValues(module.id, initialValues || {});
+          const initialProps = mergeSurveyTemplateValuesIntoRecord(
+            normalizeModuleFormValues(module.id, initialValues || {})
+          ) || normalizeModuleFormValues(module.id, initialValues || {});
           const assigneeCombo = buildResolvedAssigneeCombo(initialProps);
           let finalValues: Record<string, any> = { ...defaults, ...initialProps, assignee_combo: assigneeCombo };
           Object.entries(defaults).forEach(([key, value]) => {
@@ -464,6 +496,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (module.id === 'tasks') {
             finalValues = normalizeTaskSourceValues(finalValues);
           }
+          if (isSurveyModule) {
+            setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(initialValues?.template_schema_snapshot || {}));
+            surveyTemplatePreviousIdRef.current = String(initialProps?.survey_template_id || '').trim() || null;
+          }
           if (Object.prototype.hasOwnProperty.call(finalValues, 'auto_name_enabled')) {
             finalValues.auto_name_enabled = normalizeAutoNameEnabled(
               finalValues.auto_name_enabled,
@@ -485,7 +521,76 @@ const SmartForm: React.FC<SmartFormProps> = ({
       // فراخوانی توابع کمکی
       fetchUserPermissions();
     }
-  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues]);
+  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues, runtimeFields]);
+
+  useEffect(() => {
+    if (!visible || !isSurveyModule) return;
+    const nextTemplateId = String(currentValues?.survey_template_id || '').trim() || null;
+    const previousTemplateId = surveyTemplatePreviousIdRef.current;
+    if (nextTemplateId === previousTemplateId) return;
+
+    const hasMeaningfulTemplateValues = (fieldKeys: string[]) =>
+      fieldKeys.some((fieldKey) => {
+        const value = getLiveFormValues()?.[fieldKey];
+        if (Array.isArray(value)) return value.length > 0;
+        return value !== undefined && value !== null && value !== '';
+      });
+
+    const commitTemplateChange = async (resetPreviousValues: boolean) => {
+      const definition = nextTemplateId
+        ? await loadSurveyTemplateDefinition(supabase, nextTemplateId)
+        : null;
+      const nextSnapshot = normalizeSurveyTemplateSnapshot(definition?.snapshot || {});
+      const previousFieldKeys = getSurveyTemplateValueKeys(surveyTemplateSnapshot);
+      const nextDefaultValues = getSurveyTemplateFieldDefaultValues(nextSnapshot);
+
+      setSurveyTemplateSnapshot(nextSnapshot);
+      surveyTemplatePreviousIdRef.current = nextTemplateId;
+
+      if (!resetPreviousValues) return;
+
+      previousFieldKeys.forEach((fieldKey) => {
+        form.setFieldValue(fieldKey, undefined);
+      });
+      if (Object.keys(nextDefaultValues).length > 0) {
+        form.setFieldsValue(nextDefaultValues);
+      }
+      setFormData((prev: any) => {
+        const next = { ...(prev || {}) };
+        previousFieldKeys.forEach((fieldKey) => {
+          delete next[fieldKey];
+        });
+        return { ...next, ...nextDefaultValues };
+      });
+    };
+
+    const previousFieldKeys = getSurveyTemplateValueKeys(surveyTemplateSnapshot);
+    const shouldConfirmReset = !!previousTemplateId
+      && previousTemplateId !== nextTemplateId
+      && hasMeaningfulTemplateValues(previousFieldKeys);
+
+    if (shouldConfirmReset) {
+      if (surveyTemplateConfirmOpenRef.current === nextTemplateId) return;
+      surveyTemplateConfirmOpenRef.current = nextTemplateId;
+      Modal.confirm({
+        title: 'تغییر قالب نظرسنجی',
+        content: 'فیلدهای قالب قبلی پاک می‌شوند و فیلدهای قالب جدید جایگزین خواهند شد. ادامه می‌دهید؟',
+        okText: 'بله، جایگزین کن',
+        cancelText: 'انصراف',
+        onOk: async () => {
+          await commitTemplateChange(true);
+          surveyTemplateConfirmOpenRef.current = null;
+        },
+        onCancel: () => {
+          form.setFieldValue('survey_template_id', previousTemplateId);
+          surveyTemplateConfirmOpenRef.current = null;
+        },
+      });
+      return;
+    }
+
+    void commitTemplateChange(previousTemplateId !== nextTemplateId && !recordId);
+  }, [currentValues?.survey_template_id, form, isSurveyModule, recordId, surveyTemplateSnapshot, visible]);
 
   const fetchAssignees = useCallback(async () => {
     try {
@@ -689,7 +794,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
     };
 
-    for (const field of module.fields) {
+    for (const field of runtimeFields) {
       const relationConfig = field.type === FieldType.MULTI_RELATION
         ? field.multiRelationConfig
         : field.relationConfig;
@@ -725,8 +830,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
     }
 
-    if (module.blocks) {
-      for (const block of module.blocks) {
+    if (runtimeBlocks.length > 0) {
+      for (const block of runtimeBlocks) {
         if (block.tableColumns) {
           for (const col of block.tableColumns) {
             if (col.type === FieldType.RELATION && col.relationConfig) {
@@ -748,20 +853,20 @@ const SmartForm: React.FC<SmartFormProps> = ({
       writeModuleOptionSnapshot(module.id, { relationOptions: mergedOptions });
       return mergedOptions;
     });
-  }, [form, module, processDraftFieldKey]);
+  }, [form, module, processDraftFieldKey, runtimeBlocks]);
 
   // --- 3. دریافت آپشن‌های داینامیک ---
   const loadDynamicOptions = useCallback(async () => {
     const categoriesToFetch = new Set<string>();
 
     // جمع‌آوری دسته‌ها از فیلدها و ستون‌های جدول
-    module.fields.forEach(f => { if (f.dynamicOptionsCategory) categoriesToFetch.add(f.dynamicOptionsCategory); });
-    module.blocks?.forEach(b => {
+    runtimeFields.forEach(f => { if (f.dynamicOptionsCategory) categoriesToFetch.add(f.dynamicOptionsCategory); });
+    runtimeBlocks.forEach(b => {
       b.tableColumns?.forEach((c: any) => { if (c.dynamicOptionsCategory) categoriesToFetch.add(c.dynamicOptionsCategory); });
     });
     if (
       (module.id === 'customers' || module.id === 'marketing_leads')
-      && module.fields.some((field) => field.key === 'customer_interests')
+      && runtimeFields.some((field) => field.key === 'customer_interests')
     ) {
       CUSTOMER_INTEREST_SOURCE_CATEGORIES.forEach((category) => categoriesToFetch.add(category));
       categoriesToFetch.add('customer_interests');
@@ -777,7 +882,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       console.warn('Could not load calculation formulas', err);
     }
     try {
-      if (module.fields.some((field) => field.key === 'preferred_notification_channel')) {
+      if (runtimeFields.some((field) => field.key === 'preferred_notification_channel')) {
         newOptions[ACTIVE_NOTIFICATION_BOTS_CATEGORY] = await listActiveNotificationBotOptions();
       }
     } catch (err) {
@@ -788,7 +893,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       writeModuleOptionSnapshot(module.id, { dynamicOptions: mergedDynamicOptions });
       return mergedDynamicOptions;
     });
-  }, [module.blocks, module.fields, module.id]);
+  }, [module.id, runtimeBlocks, runtimeFields]);
 
   const fetchAllRelationOptionsWrapper = useCallback(async () => {
     setOptionsBootstrapping(true);
@@ -826,7 +931,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   const getFieldValueLabel = (fieldKey: string, value: any) => {
     if (value === undefined || value === null) return '';
-    const field = module.fields.find(f => f.key === fieldKey);
+    const field = runtimeFields.find(f => f.key === fieldKey);
     if (!field) return String(value);
 
     const formatOptionLabel = (val: any) => {
@@ -958,6 +1063,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
       if (error) throw error;
           if (data) {
         let nextValues: any = normalizeModuleFormValues(module.id, data);
+        if (isSurveyModule) {
+          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(data?.template_schema_snapshot || {}));
+          surveyTemplatePreviousIdRef.current = String(data?.survey_template_id || '').trim() || null;
+          nextValues = mergeSurveyTemplateValuesIntoRecord(nextValues) || nextValues;
+        }
         if (module.id === 'process_templates') {
           nextValues = syncProcessTemplateTargetModules(nextValues);
           const { data: templateStages } = await supabase
@@ -1318,13 +1428,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   // --- تابع کمکی: دریافت دیتای خلاصه (Summary) ---
   const getSummaryData = (currentData: any) => {
-      const summaryBlock = module.blocks?.find(b => b.summaryConfig);
+      const summaryBlock = runtimeBlocks.find(b => b.summaryConfig);
       if (summaryBlock) {
-          return calculateSummary(currentData, module.blocks || [], summaryBlock.summaryConfig);
+          return calculateSummary(currentData, runtimeBlocks, summaryBlock.summaryConfig);
       }
       // اگر کانفیگ نبود ولی جدول داشتیم، پیش‌فرض جمع بزن (برای BOM)
-      if (module.blocks?.some(b => b.type === BlockType.TABLE)) {
-          return calculateSummary(currentData, module.blocks || [], {});
+      if (runtimeBlocks.some(b => b.type === BlockType.TABLE)) {
+          return calculateSummary(currentData, runtimeBlocks, {});
       }
       return null;
   };
@@ -1436,7 +1546,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
       }
       if (!isBulkEdit) {
-        module.fields.forEach((field) => {
+        runtimeFields.forEach((field) => {
           const fieldDefault = getImplicitCreateDefaultValue(field);
           if (fieldDefault === undefined) return;
           const currentValue = values?.[field.key];
@@ -1503,7 +1613,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         delete values.__skipBomConfirm;
       }
 
-      if (module.fields.some((field) => field.key === 'auto_name_enabled')) {
+      if (runtimeFields.some((field) => field.key === 'auto_name_enabled')) {
         values.auto_name_enabled = getAutoNameToggleValue(
           normalizeAutoNameEnabled(values.auto_name_enabled, false)
         );
@@ -1521,7 +1631,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           values.name = nextName;
         }
       }
-      module.fields.forEach((field) => {
+      runtimeFields.forEach((field) => {
         if (!Object.prototype.hasOwnProperty.call(values, field.key)) return;
         const currentValue = values[field.key];
 
@@ -1630,7 +1740,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           delete values[field.key];
         });
       }
-      const tagsFieldKey = module.fields.find((field) => field.type === FieldType.TAGS)?.key || null;
+      const tagsFieldKey = runtimeFields.find((field) => field.type === FieldType.TAGS)?.key || null;
       const hasInlineTagsDraft = !!tagsFieldKey && Array.isArray(formData?.[tagsFieldKey]);
       const selectedTags = hasInlineTagsDraft ? (formData?.[tagsFieldKey] || []) : [];
       if (tagsFieldKey && values[tagsFieldKey] !== undefined) {
@@ -1648,7 +1758,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         delete values.run_stages_preview;
       }
       const summaryData = getSummaryData(formData);
-      const summaryBlock = module.blocks?.find(b => b.summaryConfig);
+      const summaryBlock = runtimeBlocks.find(b => b.summaryConfig);
 
       // تزریق مقادیر محاسباتی به دیتای ارسالی
       if (summaryData && summaryBlock?.summaryConfig?.fieldMapping) {
@@ -1869,7 +1979,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             const beforeStr = JSON.stringify(before ?? null);
             const afterStr = JSON.stringify(after ?? null);
             if (beforeStr !== afterStr) {
-              const matchedField = module.fields.find(f => f.key === key);
+              const matchedField = runtimeFields.find(f => f.key === key);
               const fieldLabel = getFieldLabelFa(matchedField, { moduleId: module.id, fallback: key });
               changes.push({
                 module_id: module.id,
@@ -2023,7 +2133,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     let cleanedValues = Object.fromEntries(
       Object.entries(allValues || {}).filter(([, value]) => value !== undefined)
     );
-    const autoNameField = module.fields.find((field) => field.key === 'auto_name_enabled');
+      const autoNameField = runtimeFields.find((field) => field.key === 'auto_name_enabled');
     if (autoNameField) {
       cleanedValues[autoNameField.key] = normalizeAutoNameEnabled(
         form.getFieldValue(autoNameField.key),
@@ -2086,14 +2196,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const formActionButtons = (module.actionButtons || [])
     .filter(b => b.placement === 'form')
     .filter((b) => b.id !== 'auto_name');
-  const autoNameToggleField = module.fields
+  const autoNameToggleField = runtimeFields
     .filter((f) => recordId || f.hideInCreateForm !== true)
     .filter((f) => canViewField(f.key))
     .find((f) => f.key === 'auto_name_enabled');
-  const sortedBlocks = [...(module.blocks || [])]
+  const sortedBlocks = [...runtimeBlocks]
     .filter((block) => recordId || block.hideInCreateForm !== true)
     .sort((a, b) => a.order - b.order);
-  const baseHeaderFields = module.fields
+  const baseHeaderFields = runtimeFields
       .filter(f => f.location === FieldLocation.HEADER)
       .filter((f) => recordId || f.hideInCreateForm !== true)
       .filter(f => canViewField(f.key))
@@ -2103,7 +2213,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       .sort((a, b) => (a.order || 0) - (b.order || 0));
   const productTypeFieldFallback =
     module.id === 'products'
-      ? module.fields.find((f) => f.key === 'product_type')
+      ? runtimeFields.find((f) => f.key === 'product_type')
       : undefined;
   const headerFields = productTypeFieldFallback && !baseHeaderFields.some((f) => f.key === 'product_type')
     ? [...baseHeaderFields, productTypeFieldFallback].sort((a, b) => (a.order || 0) - (b.order || 0))
@@ -2111,7 +2221,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const statusField = headerFields.find((f) => f.key === 'status');
   const runtimeStatusField = statusField ? conditionalFieldRuntime.getRuntimeField(statusField) : null;
   const preferredMediaField = useMemo(() => {
-    const visibleImageFields = (module.fields || [])
+    const visibleImageFields = runtimeFields
       .filter((field) => field.type === FieldType.IMAGE)
       .filter((field) => recordId || field.hideInCreateForm !== true)
       .filter((field) => canViewField(field.key))
@@ -2123,7 +2233,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         || visibleImageFields[0];
     }
     return visibleImageFields[0];
-  }, [canViewField, module.fields, module.id, recordId, visibleSystemFieldKeys]);
+  }, [canViewField, module.id, recordId, runtimeFields, visibleSystemFieldKeys]);
   const showTopMediaBox = module.id === 'cash_bank_operations' && !!recordId && !!preferredMediaField;
   const mediaPreviewValue = useMemo(() => {
     if (!preferredMediaField) return null;
@@ -2254,14 +2364,14 @@ const SmartForm: React.FC<SmartFormProps> = ({
       });
   }, [currentValues, module.id, processDraftFieldKey, shouldHideProcessUiInSmartForm]);
   const currentSummaryData = getSummaryData(currentValues);
-  const summaryConfigObj = module.blocks?.find(b => b.summaryConfig)?.summaryConfig;
+  const summaryConfigObj = runtimeBlocks.find(b => b.summaryConfig)?.summaryConfig;
   useEffect(() => {
     const nextVisibilityMap = Object.fromEntries(
-      (module.fields || []).map((field) => [field.key, conditionalFieldRuntime.isFieldVisible(field)])
+      runtimeFields.map((field) => [field.key, conditionalFieldRuntime.isFieldVisible(field)])
     ) as Record<string, boolean>;
     const patch: Record<string, any> = {};
 
-    (module.fields || []).forEach((field) => {
+    runtimeFields.forEach((field) => {
       const nextValue = conditionalFieldRuntime.getDefaultPatchForReveal(
         field,
         previousConditionalVisibilityRef.current[field.key] === true,
@@ -2277,7 +2387,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (!Object.keys(patch).length) return;
     form.setFieldsValue(patch);
     setFormData((prev: any) => ({ ...prev, ...patch }));
-  }, [conditionalFieldRuntime, currentValues, form, module.fields, recordId]);
+  }, [conditionalFieldRuntime, currentValues, form, recordId, runtimeFields]);
 
   const isFieldRequired = (field?: any) => !isBulkEdit && conditionalFieldRuntime.getFieldRequired(field);
   const renderInlineFieldLabel = (labelText: string, required?: boolean) => (
@@ -2643,7 +2753,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 }
 
                 if (block.type === BlockType.FIELD_GROUP || block.type === BlockType.DEFAULT) {
-                  const blockFields = module.fields
+                  const blockFields = runtimeFields
                     .filter(f => f.blockId === block.id)
                     .filter((f) => recordId || f.hideInCreateForm !== true)
                     .filter((f) => !(!recordId && module.id === 'process_templates' && f.key === 'template_stages_preview'))

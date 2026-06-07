@@ -42,6 +42,7 @@ const nav = [
   ['آموزش‌ها', sitePath('/learn')],
   ['بلاگ', sitePath('/blog')],
   ['تازه‌ها', sitePath('/updates')],
+  ['مستندات API', '/tazesystem/developers'],
 ] as const;
 
 const featureCards = [

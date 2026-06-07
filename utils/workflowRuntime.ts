@@ -4,6 +4,7 @@ import { supabase } from '../supabaseClient';
 import { loadScopedIntegrationSettings } from './integrationSettings';
 import { buildResolvedAssigneeCombo } from './assigneeValue';
 import { buildClientFallbackSystemCode, supportsSystemCode } from './systemCode';
+import { buildWebFormPublicPath } from './webForms';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
 import { getHolidaySummaryForDate } from './holidayCalendar';
 import { formatTemplateValueByField, resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
@@ -37,6 +38,7 @@ import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
+import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 
 type WorkflowEvent = 'create' | 'upsert';
@@ -621,6 +623,38 @@ const getProcessLinkMapFromRecord = (record: Record<string, any> | null | undefi
   );
 };
 
+const resolveWorkflowPublicBaseUrl = async () => {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  try {
+    const { data, error } = await loadScopedIntegrationSettings(supabase as any, {
+      connectionType: 'site',
+      columns: 'settings',
+      isActive: true,
+    });
+    if (error) throw error;
+    const settings = data && typeof (data as any)?.settings === 'object'
+      ? ((data as any).settings as Record<string, any>)
+      : {};
+    const configuredBaseUrl = String(settings.base_url || '').trim();
+    if (configuredBaseUrl) {
+      return configuredBaseUrl.replace(/\/+$/, '');
+    }
+  } catch {
+    // noop
+  }
+  return '';
+};
+
+const buildWorkflowWebFormUrl = async (slug?: string | null, accessToken?: string | null) => {
+  const path = buildWebFormPublicPath(slug, accessToken);
+  const baseUrl = await resolveWorkflowPublicBaseUrl();
+  if (!baseUrl) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
+};
+
 const resolveConditionFieldValue = async (
   fieldKey: string,
   record: Record<string, any> | null | undefined,
@@ -713,6 +747,14 @@ const resolveConditionFieldValue = async (
     }
 
     return relatedRecord?.[relatedFieldMeta.targetFieldKey];
+  }
+
+  const surveyTemplateFieldKey = parseSurveyTemplateFieldKey(fieldKey);
+  if (surveyTemplateFieldKey) {
+    const templateValues = record?.template_field_values && typeof record.template_field_values === 'object'
+      ? record.template_field_values
+      : {};
+    return templateValues?.[surveyTemplateFieldKey];
   }
 
   return record?.[fieldKey];
@@ -2113,6 +2155,84 @@ export const executeWorkflowAction = async (
   currentRecord: Record<string, any>
 ) => {
   const config = action?.config || {};
+
+  if (action.type === 'send_web_form_link') {
+    const webFormId = String(config.web_form_id || '').trim();
+    if (!webFormId) return;
+
+    const { data: webFormRow, error: webFormError } = await supabase
+      .from('web_forms')
+      .select('id, route_slug, access_scope, target_module_id, form_type, is_active')
+      .eq('id', webFormId)
+      .maybeSingle();
+    if (webFormError) throw webFormError;
+    if (!webFormRow || webFormRow.is_active !== true) return;
+
+    const relatedModuleId = String(config.related_module_id || moduleId || '').trim() || moduleId;
+    const processLinks = getProcessLinkMapFromRecord(currentRecord);
+    const relatedRecordId = relatedModuleId === moduleId
+      ? String(currentRecord?.id || '').trim()
+      : String(processLinks?.[relatedModuleId] || '').trim();
+
+    const { data: tokenResult, error: tokenError } = await supabase.rpc('create_web_form_link_token', {
+      p_web_form_id: webFormId,
+      p_target_module_id: String(webFormRow.target_module_id || '').trim() || null,
+      p_related_module_id: relatedModuleId || null,
+      p_related_record_id: relatedRecordId || null,
+    });
+    if (tokenError) throw tokenError;
+
+    const accessToken = String((tokenResult as any)?.token || '').trim();
+    if (!accessToken) return;
+
+    const webFormLink = await buildWorkflowWebFormUrl(String(webFormRow.route_slug || '').trim(), accessToken);
+    const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
+      ? config.channel_configs
+      : {};
+    const deliveryChannels = Array.from(
+      new Set(
+        asArray(config.delivery_channels)
+          .map((item) => String(item || '').trim().toLowerCase())
+          .filter((item) => ['sms', 'email', 'bot', 'note'].includes(item))
+      )
+    );
+    const actionRecord = { ...currentRecord, web_form_link: webFormLink };
+
+    for (const channel of deliveryChannels) {
+      if (channel === 'sms') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_sms',
+          config: { ...(channelConfigs.sms || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'email') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_email',
+          config: { ...(channelConfigs.email || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'bot') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_bot_message',
+          config: { ...(channelConfigs.bot || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'note') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_note',
+          config: { ...(channelConfigs.note || {}) },
+        }, moduleId, actionRecord);
+      }
+    }
+    return;
+  }
 
   if (action.type === 'send_sms') {
     const messageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();

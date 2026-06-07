@@ -26,6 +26,8 @@ import {
   buildWebFormPublicUrl,
   findDuplicateWebFormTargetKeys,
   formatWebFormTargetFieldLabel,
+  formatWebFormOptionsText,
+  getWebFormFieldBindingType,
   getMissingWebFormRequiredFields,
   getSuggestedWebFormTargetFields,
   getWebFormTargetFields,
@@ -41,7 +43,10 @@ import {
   type WebFormAccessScope,
   type WebFormDisplayMode,
   type WebFormDuplicateStrategy,
+  type WebFormFieldType,
+  type WebFormKind,
   type WebFormTargetFieldItem,
+  parseWebFormOptionsText,
 } from "../utils/webForms";
 import { fetchRelationOptionsForField } from "../utils/relationOptions";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
@@ -49,6 +54,9 @@ import { toFaErrorMessage } from "../utils/errorMessageFa";
 const { Paragraph, Text, Title } = Typography;
 
 type BuilderFieldValue = {
+  binding_type?: "record_field" | "template_field";
+  field_key?: string;
+  field_type?: WebFormFieldType;
   label?: string;
   target_field_key?: string;
   default_value?: any;
@@ -57,6 +65,8 @@ type BuilderFieldValue = {
   sort_order?: number;
   is_required?: boolean;
   is_hidden?: boolean;
+  options_text?: string;
+  relation_target_module?: string;
 };
 
 type BuilderFormValues = {
@@ -79,6 +89,34 @@ type BuilderFormValues = {
   duplicate_strategy?: WebFormDuplicateStrategy;
   fields?: BuilderFieldValue[];
 };
+
+const SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS: Array<{ label: string; value: WebFormFieldType }> = [
+  { label: "متن کوتاه", value: "text" },
+  { label: "متن بلند", value: "long_text" },
+  { label: "عدد", value: "number" },
+  { label: "تلفن", value: "phone" },
+  { label: "تاریخ", value: "date" },
+  { label: "زمان", value: "time" },
+  { label: "تاریخ و زمان", value: "datetime" },
+  { label: "چندگزینه‌ای", value: "multi_select" },
+  { label: "تک‌گزینه‌ای", value: "select" },
+  { label: "تیک", value: "checkbox" },
+  { label: "موقعیت", value: "location" },
+  { label: "رابطه", value: "relation" },
+];
+
+const SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES = new Set<WebFormFieldType>(["select", "multi_select"]);
+
+const isSurveyTargetModule = (moduleId?: string | null) => String(moduleId || "").trim() === "surveys";
+
+const normalizeTemplateFieldKey = (value: string, index: number) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^\p{L}\p{N}_-]+/gu, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "") || `template_field_${index + 1}`;
 
 const isMissingSetupError = (error: any) => {
   const text = String(error?.message || error?.details || error || "").toLowerCase();
@@ -111,6 +149,9 @@ const buildBuilderFieldValueFromTarget = (
   index: number,
   targetModuleId?: string | null,
 ): BuilderFieldValue => ({
+  binding_type: "record_field",
+  field_key: item.value,
+  field_type: item.inferredType,
   label: item.label,
   target_field_key: item.value,
   default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
@@ -148,6 +189,7 @@ const mergeManagedFields = (
   const currentFields = Array.isArray(fields) ? fields : [];
   const currentByTargetFieldKey = new Map(
     currentFields
+      .filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
       .map((field, index) => ({ field, index, targetFieldKey: String(field?.target_field_key || "").trim() }))
       .filter((item) => item.targetFieldKey)
       .map((item) => [item.targetFieldKey, item]),
@@ -236,6 +278,7 @@ const WebFormBuilderPage: React.FC = () => {
   const duplicateMatchField = Form.useWatch("duplicate_match_field", form);
   const watchedFields = (Form.useWatch("fields", form) || []) as BuilderFieldValue[];
   const watchedSlug = Form.useWatch("route_slug", form);
+  const isSurveyModuleTarget = useMemo(() => isSurveyTargetModule(targetModuleId), [targetModuleId]);
   const currentPublicUrl = useMemo(() => buildWebFormPublicUrl(watchedSlug), [watchedSlug]);
   const targetFieldItems = useMemo(() => getWebFormTargetFields(targetModuleId, { accessScope }), [accessScope, targetModuleId]);
   const duplicateFieldOptions = useMemo(
@@ -247,7 +290,10 @@ const WebFormBuilderPage: React.FC = () => {
     [targetFieldItems]
   );
   const missingRequiredFields = useMemo(
-    () => getMissingWebFormRequiredFields(targetModuleId, watchedFields),
+    () => getMissingWebFormRequiredFields(
+      targetModuleId,
+      watchedFields.filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
+    ),
     [targetModuleId, watchedFields]
   );
 
@@ -378,6 +424,9 @@ const WebFormBuilderPage: React.FC = () => {
             fields: (fieldRows || []).map((item, index) => {
               const normalized = normalizeWebFormFieldRecord(item, index, { targetModuleId });
               return {
+                binding_type: getWebFormFieldBindingType(normalized),
+                field_key: normalized.field_key,
+                field_type: normalized.field_type,
                 label: normalized.label,
                 target_field_key: normalized.target_field_key || undefined,
                 default_value: normalized.default_value ?? undefined,
@@ -386,6 +435,8 @@ const WebFormBuilderPage: React.FC = () => {
                 sort_order: normalized.sort_order,
                 is_required: normalized.is_required !== false,
                 is_hidden: normalized.is_hidden === true,
+                options_text: formatWebFormOptionsText(normalized.config?.select_options),
+                relation_target_module: String(normalized.config?.relation_target_module || "").trim() || undefined,
               };
             }),
           });
@@ -468,11 +519,25 @@ const WebFormBuilderPage: React.FC = () => {
         form.setFieldValue("duplicate_match_field", undefined);
         form.setFieldValue("duplicate_strategy", "allow");
       }
+      if (!isSurveyTargetModule(nextTargetModuleId)) {
+        const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
+        form.setFieldValue(
+          "fields",
+          currentFields.filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
+        );
+      }
       seededFieldsRef.current = false;
     }
     if (Object.prototype.hasOwnProperty.call(changedValues, "access_scope") && changedValues.access_scope !== "internal") {
       const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
-      form.setFieldValue("fields", currentFields.map((field) => ({ ...field, default_to_current_employee: false })));
+      form.setFieldValue(
+        "fields",
+        currentFields.map((field) => (
+          String(field?.binding_type || "record_field").trim() === "template_field"
+            ? field
+            : { ...field, default_to_current_employee: false }
+        ))
+      );
     }
     if (Object.prototype.hasOwnProperty.call(changedValues, "duplicate_match_field")) {
       const nextDuplicateField = String(changedValues.duplicate_match_field || "").trim();
@@ -551,6 +616,14 @@ const WebFormBuilderPage: React.FC = () => {
   }, [form, message, watchedSlug]);
 
   const renderDefaultValueInput = (fieldIndex: number, listFieldName: number) => {
+    const bindingType = String(watchedFields?.[fieldIndex]?.binding_type || "record_field").trim();
+    if (bindingType === "template_field") {
+      return (
+        <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-3 text-sm text-gray-500">
+          برای فیلدهای قالبی در این فاز فقط ساختار، نوع و گزینه‌ها مدیریت می‌شود.
+        </div>
+      );
+    }
     const targetFieldKey = String(watchedFields?.[fieldIndex]?.target_field_key || "").trim();
     const targetFieldItem = targetFieldMap[targetFieldKey];
     const fieldType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
@@ -726,6 +799,7 @@ const WebFormBuilderPage: React.FC = () => {
         description: String(values.description || "").trim() || null,
         route_slug: cleanedSlug,
         target_module_id: values.target_module_id,
+        form_type: (isSurveyTargetModule(values.target_module_id) ? "survey" : "record_create") as WebFormKind,
         access_scope: values.access_scope || "public",
         is_active: values.is_active !== false,
         config,
@@ -744,7 +818,9 @@ const WebFormBuilderPage: React.FC = () => {
       if (!webFormId) throw new Error("WEB_FORM_SAVE_NO_ID");
 
       const mergedFields = mergeManagedFields(values.fields || [], values.target_module_id, values.access_scope, cleanedDuplicateMatchField);
-      const duplicateTargetKeys = findDuplicateWebFormTargetKeys(mergedFields as any);
+      const recordBoundFields = mergedFields.filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field");
+      const templateFields = mergedFields.filter((field) => String(field?.binding_type || "record_field").trim() === "template_field");
+      const duplicateTargetKeys = findDuplicateWebFormTargetKeys(recordBoundFields as any);
       if (duplicateTargetKeys.length > 0) {
         const duplicateLabels = duplicateTargetKeys
           .map((key) => saveTargetFieldMap.get(key)?.label || key)
@@ -752,13 +828,57 @@ const WebFormBuilderPage: React.FC = () => {
         message.error(`یک فیلد مقصد دوبار در فرم آمده است: ${duplicateLabels}`);
         return;
       }
-      if (cleanedDuplicateMatchField && !mergedFields.some((field) => String(field?.target_field_key || "").trim() === cleanedDuplicateMatchField)) {
+      if (cleanedDuplicateMatchField && !recordBoundFields.some((field) => String(field?.target_field_key || "").trim() === cleanedDuplicateMatchField)) {
         message.error("فیلد تطبیق تکراری باید داخل لیست فیلدهای فرم حضور داشته باشد.");
+        return;
+      }
+      const templateFieldKeyCounts = templateFields.reduce<Map<string, number>>((acc, field, index) => {
+        const key = normalizeTemplateFieldKey(String(field?.field_key || field?.label || ""), index);
+        acc.set(key, (acc.get(key) || 0) + 1);
+        return acc;
+      }, new Map());
+      const duplicateTemplateKeys = Array.from(templateFieldKeyCounts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([key]) => key);
+      if (duplicateTemplateKeys.length > 0) {
+        message.error(`کلید بعضی فیلدهای قالبی تکراری است: ${duplicateTemplateKeys.join("، ")}`);
         return;
       }
 
       const cleanedFields = mergedFields
         .map((item, index) => {
+          const bindingType = String(item?.binding_type || "record_field").trim();
+          if (bindingType === "template_field") {
+            const templateFieldType = (SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS.some((option) => option.value === item?.field_type)
+              ? item?.field_type
+              : "text") as WebFormFieldType;
+            const normalizedFieldKey = normalizeTemplateFieldKey(String(item?.field_key || item?.label || ""), index);
+            const templateLabel = String(item?.label || normalizedFieldKey).trim() || normalizedFieldKey;
+            return {
+              web_form_id: webFormId,
+              field_key: normalizedFieldKey,
+              label: templateLabel,
+              target_field_key: null,
+              field_type: templateFieldType,
+              placeholder: templateLabel,
+              help_text: String(item?.help_text || "").trim() || null,
+              default_value: item?.default_value === "" ? null : (item?.default_value ?? null),
+              config: {
+                binding_type: "template_field",
+                select_options: SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES.has(templateFieldType)
+                  ? parseWebFormOptionsText(String(item?.options_text || ""))
+                  : [],
+                relation_target_module: templateFieldType === "relation"
+                  ? (String(item?.relation_target_module || "").trim() || null)
+                  : null,
+              },
+              sort_order: Number(item?.sort_order || ((index + 1) * 10)),
+              is_required: item?.is_required !== false,
+              is_hidden: item?.is_hidden === true,
+              is_active: true,
+            };
+          }
+
           const targetFieldKey = String(item?.target_field_key || "").trim();
           const targetFieldItem = saveTargetFieldMap.get(targetFieldKey);
           if (!targetFieldKey || !targetFieldItem) return null;
@@ -986,12 +1106,19 @@ const WebFormBuilderPage: React.FC = () => {
                     {fields.length === 0 ? <Empty description="هنوز فیلدی برای این فرم تعریف نشده است." /> : null}
 
                     {fields.map((field, index) => {
+                      const bindingType = String(watchedFields?.[index]?.binding_type || "record_field").trim();
                       const currentTargetFieldKey = String(watchedFields?.[index]?.target_field_key || "").trim();
                       const targetFieldItem = targetFieldMap[currentTargetFieldKey];
-                      const inferredType = targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field);
+                      const configuredTemplateFieldType = (watchedFields?.[index]?.field_type || "text") as WebFormFieldType;
+                      const inferredType = bindingType === "template_field"
+                        ? configuredTemplateFieldType
+                        : (targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field));
                       const optionCount = resolveTargetOptions(currentTargetFieldKey).length;
-                      const isManagedField = targetFieldItem?.isManaged === true;
-                      const isDuplicateDependency = currentTargetFieldKey !== "" && currentTargetFieldKey === String(duplicateMatchField || "").trim();
+                      const isManagedField = bindingType !== "template_field" && targetFieldItem?.isManaged === true;
+                      const isDuplicateDependency = bindingType !== "template_field"
+                        && currentTargetFieldKey !== ""
+                        && currentTargetFieldKey === String(duplicateMatchField || "").trim();
+                      const templateOptionCount = parseWebFormOptionsText(String(watchedFields?.[index]?.options_text || "")).length;
 
                       return (
                         <Card
@@ -1002,42 +1129,110 @@ const WebFormBuilderPage: React.FC = () => {
                           extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField || isDuplicateDependency} onClick={() => remove(field.name)}>حذف</Button>}
                         >
                           <div className="grid gap-4 md:grid-cols-2">
-                            <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
-                              <Select
-                                showSearch
-                                optionFilterProp="label"
-                                options={targetFieldItems.map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }))}
-                                placeholder="انتخاب فیلد"
-                                onChange={(value) => {
-                                  const matched = targetFieldMap[String(value || "").trim()];
-                                  if (!matched) return;
-                                  const currentLabel = String(form.getFieldValue(["fields", field.name, "label"]) || "").trim();
-                                  if (!currentLabel) {
-                                    form.setFieldValue(["fields", field.name, "label"], matched.label);
-                                  }
-                                  form.setFieldValue(["fields", field.name, "default_value"], undefined);
-                                  form.setFieldValue(["fields", field.name, "default_to_current_employee"], false);
-                                }}
-                              />
-                            </Form.Item>
+                            {isSurveyModuleTarget ? (
+                              <Form.Item label="نوع اتصال" name={[field.name, "binding_type"]} rules={[{ required: true, message: "نوع اتصال را انتخاب کنید." }]}>
+                                <Select
+                                  options={[
+                                    { label: "فیلد واقعی رکورد", value: "record_field" },
+                                    { label: "فیلد پویا در قالب", value: "template_field" },
+                                  ]}
+                                  onChange={(nextValue) => {
+                                    if (nextValue === "template_field") {
+                                      form.setFieldsValue({
+                                        fields: watchedFields.map((item, itemIndex) => (
+                                          itemIndex === index
+                                            ? {
+                                                ...item,
+                                                binding_type: "template_field",
+                                                target_field_key: undefined,
+                                                default_to_current_employee: false,
+                                                field_type: item?.field_type || "text",
+                                              }
+                                            : item
+                                        )),
+                                      });
+                                      return;
+                                    }
+                                    form.setFieldsValue({
+                                      fields: watchedFields.map((item, itemIndex) => (
+                                        itemIndex === index
+                                          ? {
+                                              ...item,
+                                              binding_type: "record_field",
+                                              field_key: item?.field_key || item?.target_field_key,
+                                            }
+                                          : item
+                                      )),
+                                    });
+                                  }}
+                                />
+                              </Form.Item>
+                            ) : null}
+
+                            {bindingType === "template_field" ? (
+                              <Form.Item label="کلید فیلد قالب" name={[field.name, "field_key"]} rules={[{ required: true, message: "کلید فیلد را وارد کنید." }]}>
+                                <Input placeholder="مثال: satisfaction_reason" />
+                              </Form.Item>
+                            ) : (
+                              <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
+                                <Select
+                                  showSearch
+                                  optionFilterProp="label"
+                                  options={targetFieldItems.map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }))}
+                                  placeholder="انتخاب فیلد"
+                                  onChange={(value) => {
+                                    const matched = targetFieldMap[String(value || "").trim()];
+                                    if (!matched) return;
+                                    const currentLabel = String(form.getFieldValue(["fields", field.name, "label"]) || "").trim();
+                                    if (!currentLabel) {
+                                      form.setFieldValue(["fields", field.name, "label"], matched.label);
+                                    }
+                                    form.setFieldValue(["fields", field.name, "field_key"], String(value || "").trim() || undefined);
+                                    form.setFieldValue(["fields", field.name, "field_type"], matched.inferredType);
+                                    form.setFieldValue(["fields", field.name, "default_value"], undefined);
+                                    form.setFieldValue(["fields", field.name, "default_to_current_employee"], false);
+                                  }}
+                                />
+                              </Form.Item>
+                            )}
 
                             <Form.Item label="عنوان نمایشی" name={[field.name, "label"]}>
                               <Input placeholder={targetFieldItem?.label || "عنوان فیلد"} />
                             </Form.Item>
 
+                            {bindingType === "template_field" ? (
+                              <Form.Item label="نوع فیلد" name={[field.name, "field_type"]} rules={[{ required: true, message: "نوع فیلد را انتخاب کنید." }]}>
+                                <Select options={SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS} />
+                              </Form.Item>
+                            ) : null}
+
                             <Form.Item label="راهنمای کوتاه" name={[field.name, "help_text"]}>
                               <Input placeholder="متن کمکی زیر فیلد" />
                             </Form.Item>
 
+                            {bindingType === "template_field" && SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES.has(configuredTemplateFieldType) ? (
+                              <Form.Item label="گزینه‌ها" name={[field.name, "options_text"]} className="md:col-span-2">
+                                <Input.TextArea rows={4} placeholder={"هر خط یک گزینه\nمثال:\nعالی|excellent\nخوب|good"} />
+                              </Form.Item>
+                            ) : null}
+
+                            {bindingType === "template_field" && configuredTemplateFieldType === "relation" ? (
+                              <Form.Item label="ماژول رابطه" name={[field.name, "relation_target_module"]} rules={[{ required: true, message: "ماژول رابطه را انتخاب کنید." }]}>
+                                <Select showSearch optionFilterProp="label" options={moduleOptions} placeholder="انتخاب ماژول" />
+                              </Form.Item>
+                            ) : null}
+
                             <div className="rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-500">
                               <div>نوع ورودی: {inferredType || "-"}</div>
-                              {targetFieldItem?.isModuleRequired ? <div className="mt-1 text-red-500">الزامی در ماژول مقصد</div> : null}
-                              {targetFieldItem?.hasModuleDefault ? <div className="mt-1 text-blue-600">پیش‌فرض ماژول: {String(targetFieldItem.moduleDefaultValue)}</div> : null}
+                              {bindingType === "template_field" ? <div className="mt-1 text-blue-600">این فیلد داخل `template_field_values` ذخیره می‌شود.</div> : null}
+                              {bindingType !== "template_field" && targetFieldItem?.isModuleRequired ? <div className="mt-1 text-red-500">الزامی در ماژول مقصد</div> : null}
+                              {bindingType !== "template_field" && targetFieldItem?.hasModuleDefault ? <div className="mt-1 text-blue-600">پیش‌فرض ماژول: {String(targetFieldItem.moduleDefaultValue)}</div> : null}
                               {isManagedField ? <div className="mt-1">این فیلد به‌خاطر تنظیمات ماژول باید در فرم باقی بماند.</div> : null}
                               {isDuplicateDependency ? <div className="mt-1 text-amber-600">این فیلد برای تطبیق رکوردهای تکراری استفاده می‌شود.</div> : null}
-                              {inferredType === "select" || inferredType === "multi_select" ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
-                              {isWebFormVirtualTargetField(currentTargetFieldKey) ? <div className="mt-1">نوع ویژه: پیوست وب‌فرم</div> : null}
-                              <div className="mt-1">Placeholder: {String(watchedFields?.[index]?.label || targetFieldItem?.label || "-")}</div>
+                              {bindingType !== "template_field" && (inferredType === "select" || inferredType === "multi_select") ? <div className="mt-1">تعداد گزینه‌ها: {optionCount}</div> : null}
+                              {bindingType === "template_field" && SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES.has(configuredTemplateFieldType) ? <div className="mt-1">تعداد گزینه‌های تعریف‌شده: {templateOptionCount}</div> : null}
+                              {bindingType !== "template_field" && isWebFormVirtualTargetField(currentTargetFieldKey) ? <div className="mt-1">نوع ویژه: پیوست وب‌فرم</div> : null}
+                              <div className="mt-1">Placeholder: {String(watchedFields?.[index]?.label || targetFieldItem?.label || watchedFields?.[index]?.field_key || "-")}</div>
                             </div>
 
                             <Form.Item label="ترتیب نمایش" name={[field.name, "sort_order"]}>
@@ -1062,7 +1257,18 @@ const WebFormBuilderPage: React.FC = () => {
                       type="dashed"
                       block
                       icon={<PlusOutlined />}
-                      onClick={() => add({ label: "", target_field_key: undefined, default_value: undefined, sort_order: (fields.length + 1) * 10, is_required: false, is_hidden: false })}
+                      onClick={() => add({
+                        binding_type: isSurveyModuleTarget ? "record_field" : "record_field",
+                        field_key: "",
+                        field_type: "text",
+                        label: "",
+                        target_field_key: undefined,
+                        default_value: undefined,
+                        sort_order: (fields.length + 1) * 10,
+                        is_required: false,
+                        is_hidden: false,
+                        options_text: "",
+                      })}
                     >
                       افزودن فیلد
                     </Button>

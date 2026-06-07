@@ -36,6 +36,7 @@ import {
   type ReportScheduleChannel,
   type ReportScheduleUnit,
 } from '../utils/reporting';
+import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { toPersianNumber } from '../utils/persianNumberFormatter';
 import type { PermissionMap } from '../utils/permissions';
@@ -85,6 +86,7 @@ const ReportBuilderPage: React.FC = () => {
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<ReportScheduleUnit>('day');
   const [scheduleRecipientIds, setScheduleRecipientIds] = useState<string[]>([]);
   const [scheduleChannels, setScheduleChannels] = useState<ReportScheduleChannel[]>(['note']);
+  const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
 
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
@@ -93,22 +95,55 @@ const ReportBuilderPage: React.FC = () => {
 
   const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [permissions]);
   const secondaryModuleOptions = useMemo(() => getSecondaryModuleOptions(mainModuleId, permissions), [mainModuleId, permissions]);
+  const scopedSurveyTemplateId = useMemo(
+    () => (
+      mainModuleId === 'surveys'
+        ? getSurveyTemplateScopedIdFromConditions(conditionsAll, conditionsAny)
+        : null
+    ),
+    [conditionsAll, conditionsAny, mainModuleId]
+  );
   const reportableFields = useMemo(
-    () => getReportableFields(mainModuleId, secondaryModuleIds),
-    [mainModuleId, secondaryModuleIds]
+    () => getReportableFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
   );
   const conditionFields = useMemo(
-    () => getReportConditionFields(mainModuleId, secondaryModuleIds),
-    [mainModuleId, secondaryModuleIds]
+    () => getReportConditionFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
   );
   const groupableFields = useMemo(
-    () => getGroupableReportFields(mainModuleId, secondaryModuleIds),
-    [mainModuleId, secondaryModuleIds]
+    () => getGroupableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
   );
   const summableFields = useMemo(
-    () => getSummableReportFields(mainModuleId, secondaryModuleIds),
-    [mainModuleId, secondaryModuleIds]
+    () => getSummableReportFields(mainModuleId, secondaryModuleIds, surveyTemplateSnapshot),
+    [mainModuleId, secondaryModuleIds, surveyTemplateSnapshot]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (mainModuleId !== 'surveys' || !scopedSurveyTemplateId) {
+      setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+      return () => {
+        cancelled = true;
+      };
+    }
+    const run = async () => {
+      try {
+        const definition = await loadSurveyTemplateDefinition(supabase, scopedSurveyTemplateId);
+        if (cancelled) return;
+        setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(definition?.snapshot || {}));
+      } catch {
+        if (!cancelled) {
+          setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [mainModuleId, scopedSurveyTemplateId]);
 
   const resetSecondarySelections = useCallback(() => {
     setSecondaryModuleIds([]);

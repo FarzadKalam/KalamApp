@@ -89,7 +89,10 @@
       "Bash(Get-ChildItem -Path \"D:\\\\Kalamapp\" -Force)",
       "Bash(Select-Object Name, PSIsContainer)",
       "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\\\\components\" -Filter \"NotificationsPopover.tsx\")",
-      "Bash(Select-Object -Property FullName, Length)"
+      "Bash(Select-Object -Property FullName, Length)",
+      "Bash(dir d:\\\\Kalamapp\\\\database_v1_phase23*.sql /b)",
+      "PowerShell(\\(Get-Content \"d:\\\\Kalamapp\\\\pages\\\\Settings\\\\ConnectionsTab.tsx\" | Measure-Object -Line\\).Lines)",
+      "PowerShell(Get-ChildItem d:\\\\Kalamapp -MaxDepth 1 -File | Where-Object { $_.Name -match 'change|version|release|history|\\\\.md$' } | Select-Object Name)"
     ]
   },
   "hooks": {

@@ -92,6 +92,7 @@ const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
+const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadLayout = () => import("./components/Layout");
 
@@ -133,6 +134,7 @@ const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
+const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const Layout = lazy(loadLayout);
 
@@ -178,7 +180,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
   } else if (section === "work_schedules") {
     preloader = loadWorkSchedulesPage;
   } else if (section === "taze-system") {
-    preloader = detail === "plans" ? loadSaasAdminPlans : loadSaasAdminDashboard;
+    preloader = detail === "plans" ? loadSaasAdminPlans : detail === "api-docs" ? loadApiDocsPage : loadSaasAdminDashboard;
   } else {
     preloader = detail === "create" ? loadModuleCreate : detail ? loadModuleShow : loadModuleListRefine;
   }
@@ -243,6 +245,7 @@ const MarketingSiteHostApp: React.FC = () => {
           <PwaInstallPrompt />
           <LazyRouteBoundary>
             <Routes>
+              <Route path="/i/:code" element={<InvoicePublicPage />} />
               <Route path="/*" element={<PublicSite />} />
             </Routes>
           </LazyRouteBoundary>
@@ -619,6 +622,7 @@ function App() {
         }}
       >
         <Routes>
+          <Route path="/tazesystem/developers" element={<LazyRouteBoundary><ApiDocsPage /></LazyRouteBoundary>} />
           <Route path="/tazesystem/*" element={<LazyRouteBoundary><PublicSite /></LazyRouteBoundary>} />
           {saasAppHost ? (
             <>
@@ -702,6 +706,7 @@ function App() {
             <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />
             <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
+            <Route path="/taze-system/api-docs" element={<ApiDocsPage isAdmin />} />
 
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<ErrorComponent />} />

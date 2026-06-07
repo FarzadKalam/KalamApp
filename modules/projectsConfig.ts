@@ -282,6 +282,15 @@ export const projectsModule: ModuleDefinition = {
       targetModule: 'purchase_invoices',
       foreignKey: 'project_id',
     },
+    {
+      id: 'project_surveys',
+      title: 'نظرسنجی‌ها',
+      icon: 'CommentOutlined',
+      relationType: 'fk',
+      targetModule: 'surveys',
+      foreignKey: 'related_record_id',
+      filters: [{ field: 'related_module_id', value: 'projects' }],
+    },
   ],
 };
 

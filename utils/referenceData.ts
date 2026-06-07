@@ -37,11 +37,13 @@ export type AssigneeDirectory = {
 const REFERENCE_TTL_MS = 15 * 60_000;
 
 const assigneeDirectoryCache: {
+  orgId: string | null;
   data: AssigneeDirectory | null;
   expiresAt: number;
   promise: Promise<AssigneeDirectory> | null;
   supportsRoleTreeSchema: boolean | null;
 } = {
+  orgId: null,
   data: null,
   expiresAt: 0,
   promise: null,
@@ -238,6 +240,7 @@ const dedupeRolesForAssigneeSelection = (rows: any[]): any[] => {
 };
 
 export const clearReferenceDataCache = () => {
+  assigneeDirectoryCache.orgId = null;
   assigneeDirectoryCache.data = null;
   assigneeDirectoryCache.expiresAt = 0;
   assigneeDirectoryCache.promise = null;
@@ -576,26 +579,32 @@ export const fetchAssigneeDirectory = async (
   options?: { force?: boolean }
 ): Promise<AssigneeDirectory> => {
   const now = Date.now();
-  if (!options?.force && assigneeDirectoryCache.data && assigneeDirectoryCache.expiresAt > now) {
+  const snapshot = await fetchSessionBootstrap(supabaseClient, options);
+  const orgId = String(snapshot.orgId || '').trim();
+
+  if (!orgId) {
+    return {
+      users: [],
+      roles: [],
+    };
+  }
+
+  if (
+    !options?.force
+    && assigneeDirectoryCache.orgId === orgId
+    && assigneeDirectoryCache.data
+    && assigneeDirectoryCache.expiresAt > now
+  ) {
     return assigneeDirectoryCache.data;
   }
 
-  if (!options?.force && assigneeDirectoryCache.promise) {
+  if (!options?.force && assigneeDirectoryCache.orgId === orgId && assigneeDirectoryCache.promise) {
     return assigneeDirectoryCache.promise;
   }
 
+  assigneeDirectoryCache.orgId = orgId;
   assigneeDirectoryCache.promise = (async () => {
-    const snapshot = await fetchSessionBootstrap(supabaseClient, options);
-    const orgId = String(snapshot.orgId || '').trim();
-
     const preferTreeSchema = assigneeDirectoryCache.supportsRoleTreeSchema !== false;
-
-    if (!orgId) {
-      return {
-        users: [],
-        roles: [],
-      };
-    }
 
     const buildRoleQuery = (mode: 'org' | 'extra', treeSchema: boolean) => {
       if (mode === 'extra') {
@@ -689,12 +698,16 @@ export const fetchAssigneeDirectory = async (
       roles: normalizeRoles(dedupeRolesForAssigneeSelection(roles || [])),
     };
 
-    assigneeDirectoryCache.data = directory;
-    assigneeDirectoryCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
-    assigneeDirectoryCache.promise = null;
+    if (assigneeDirectoryCache.orgId === orgId) {
+      assigneeDirectoryCache.data = directory;
+      assigneeDirectoryCache.expiresAt = Date.now() + REFERENCE_TTL_MS;
+      assigneeDirectoryCache.promise = null;
+    }
     return directory;
   })().catch((error) => {
-    assigneeDirectoryCache.promise = null;
+    if (assigneeDirectoryCache.orgId === orgId) {
+      assigneeDirectoryCache.promise = null;
+    }
     throw error;
   });
 
