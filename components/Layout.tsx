@@ -1,5 +1,5 @@
 import React, { startTransition, useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip } from 'antd';
+import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
   AppstoreOutlined,
@@ -30,6 +30,7 @@ import {
   CloudServerOutlined,
   MessageOutlined,
   OpenAIOutlined,
+  BellOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -70,6 +71,7 @@ import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
+import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 
 const { Header, Sider, Content } = AntLayout;
 const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
@@ -86,6 +88,7 @@ interface LayoutProps {
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
+  const notificationRuntime = useNotificationRuntime();
   const { message: messageApi, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
@@ -111,6 +114,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
+  const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
+  const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const searchRef = useRef<InputRef>(null);
@@ -1399,29 +1404,56 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             <div className="mx-1 hidden h-6 w-[1px] bg-gray-300 dark:bg-gray-700 sm:block"></div>
             {communicationsAccess.canUseWorkspace ? (
               <Tooltip title="پیام‌رسانی" placement="bottom">
-                <Button
-                  type="text"
-                  size={isMobile ? 'small' : 'middle'}
-                  shape="circle"
-                  icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
-                  onPointerEnter={() => preloadRoute?.('/messages')}
-                  onFocus={() => preloadRoute?.('/messages')}
-                  onClick={() => handleSidebarNavigate('/messages')}
-                  aria-label="پیام‌رسانی"
-                  className={headerActionButtonClassName}
-                />
+                <Badge count={notificationRuntime.communicationUnread || 0} size="small" color="#c0392b">
+                  <Button
+                    type="text"
+                    size={isMobile ? 'small' : 'middle'}
+                    shape="circle"
+                    icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
+                    onPointerEnter={() => preloadRoute?.('/messages')}
+                    onFocus={() => preloadRoute?.('/messages')}
+                    onClick={() => handleSidebarNavigate('/messages')}
+                    aria-label="پیام‌رسانی"
+                    className={headerActionButtonClassName}
+                  />
+                </Badge>
               </Tooltip>
             ) : null}
             {communicationsAccess.canUseWorkspace ? (
               <AiAssistantLauncher
-                isMobile={isMobile}
                 buttonSize={isMobile ? 'small' : 'middle'}
                 buttonClassName={headerActionButtonClassName}
               />
             ) : null}
-            <React.Suspense fallback={null}>
-              <NotificationsPopover isMobile={isMobile} variant="alerts" />
-            </React.Suspense>
+            <Tooltip title="اعلان‌ها" placement="bottom">
+              <Badge count={notificationRuntime.alertsUnread || 0} size="small" color="#c0392b">
+                <Button
+                  type="text"
+                  size={isMobile ? 'small' : 'middle'}
+                  shape="circle"
+                  icon={<BellOutlined className="text-gray-500 dark:text-gray-400" />}
+                  onClick={() => {
+                    setAlertsDrawerMounted(true);
+                    setAlertsDrawerOpen(true);
+                  }}
+                  aria-label="اعلان‌ها"
+                  className={headerActionButtonClassName}
+                />
+              </Badge>
+            </Tooltip>
+            {alertsDrawerMounted ? (
+              <React.Suspense fallback={null}>
+                <NotificationsPopover
+                  isMobile={isMobile}
+                  variant="alerts"
+                  managedByRuntime
+                  controlledOpen={alertsDrawerOpen}
+                  renderTrigger={false}
+                  onOpenChange={setAlertsDrawerOpen}
+                  onAfterClose={() => setAlertsDrawerMounted(false)}
+                />
+              </React.Suspense>
+            ) : null}
             <Dropdown menu={userMenu} placement="bottomLeft" trigger={['click']}>
                 <div className="cursor-pointer transition-transform hover:scale-105">
                    <ProfileAvatar

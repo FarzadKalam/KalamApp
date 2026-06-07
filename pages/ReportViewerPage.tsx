@@ -16,6 +16,7 @@ import {
 import {
   createWorkflowEvaluationContext,
   evaluateWorkflowConditions,
+  prefetchWorkflowRecordTags,
   resolveWorkflowFieldValue,
 } from '../utils/workflowRuntime';
 import {
@@ -549,7 +550,10 @@ const ReportViewerPage: React.FC = () => {
       };
 
       const nextRows: ReportRow[] = [];
-      const reportEvaluationContext = createWorkflowEvaluationContext(moduleId);
+      const sharedContext = createWorkflowEvaluationContext(moduleId);
+      if (neededKeys.includes('tags') || conditionFieldKeys.includes('tags')) {
+        await prefetchWorkflowRecordTags({ moduleId, records: scopedRows, context: sharedContext });
+      }
       for (let index = 0; index < scopedRows.length; index += 1) {
         const sourceRow = scopedRows[index];
         const tableSources = selectedTableBlocks.map((block: any) => ({
@@ -559,14 +563,15 @@ const ReportViewerPage: React.FC = () => {
             : [],
         }));
 
-        const tableCombos = tableSources.length === 0
-          ? [{ rowsByBlockId: {}, keyParts: [] as string[] }]
-          : tableSources.flatMap((source) =>
-              source.rows.map((tableRow: any, tableIndex: number) => ({
-                rowsByBlockId: { [source.block.id]: tableRow },
-                keyParts: [`${source.block.id}:${tableIndex}`],
-              }))
-            );
+        const rawTableCombos = tableSources.flatMap((source) =>
+          source.rows.map((tableRow: any, tableIndex: number) => ({
+            rowsByBlockId: { [source.block.id]: tableRow },
+            keyParts: [`${source.block.id}:${tableIndex}`],
+          }))
+        );
+        const tableCombos = tableSources.length === 0 || rawTableCombos.length > 0
+          ? (tableSources.length === 0 ? [{ rowsByBlockId: {}, keyParts: [] as string[] }] : rawTableCombos)
+          : [{ rowsByBlockId: {}, keyParts: [] as string[] }];
 
         for (const tableCombo of tableCombos) {
           const candidateRow: ReportRow = {
@@ -607,11 +612,10 @@ const ReportViewerPage: React.FC = () => {
             conditionsAny: config.conditions_any,
             currentRecord: candidateRow,
             moduleId,
-            context: reportEvaluationContext,
+            context: sharedContext,
           });
           if (!passed) continue;
 
-          const context = createWorkflowEvaluationContext(moduleId);
           const resolvedRow: ReportRow = { ...candidateRow };
 
           for (const fieldKey of neededKeys) {
@@ -623,7 +627,7 @@ const ReportViewerPage: React.FC = () => {
               fieldKey,
               currentRecord: candidateRow,
               moduleId,
-              context,
+              context: sharedContext,
             });
           }
 

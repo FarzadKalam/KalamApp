@@ -8,6 +8,29 @@ const toPosixPath = (value: string) => value.split(path.win32.sep).join('/');
 const includesAny = (value: string, patterns: string[]) =>
   patterns.some((pattern) => value.includes(pattern));
 
+interface VersionChangesRelease {
+  version: string;
+  releasedAt?: string;
+  changes: string[];
+}
+
+const normalizeVersionChangesRelease = (value: unknown): VersionChangesRelease | null => {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<VersionChangesRelease>;
+  const version = String(candidate.version || '').trim();
+  if (!version) return null;
+
+  return {
+    version,
+    releasedAt: typeof candidate.releasedAt === 'string' && candidate.releasedAt.trim()
+      ? candidate.releasedAt.trim()
+      : undefined,
+    changes: Array.isArray(candidate.changes)
+      ? candidate.changes.map((item) => String(item || '').trim()).filter(Boolean)
+      : [],
+  };
+};
+
 const resolveManualChunk = (id: string) => {
     const normalizedId = toPosixPath(id);
 
@@ -85,17 +108,34 @@ const generateVersionJson = () => ({
     const pkgPath = path.resolve(process.cwd(), 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
 
-    let changes = [];
     const changesFile = path.resolve(process.cwd(), '.version-changes.json');
-    if (fs.existsSync(changesFile)) {
-      const changesData = JSON.parse(fs.readFileSync(changesFile, 'utf-8'));
-      changes = changesData.changes || [];
+    if (!fs.existsSync(changesFile)) {
+      throw new Error(`Release changes file is missing: ${changesFile}`);
     }
 
+    const changesData = JSON.parse(fs.readFileSync(changesFile, 'utf-8')) as {
+      releases?: unknown[];
+    };
+    const releases = (Array.isArray(changesData.releases) ? changesData.releases : [])
+      .map(normalizeVersionChangesRelease)
+      .filter((release): release is VersionChangesRelease => Boolean(release));
+    const currentRelease = releases.find((release) => release.version === pkg.version);
+    if (!currentRelease) {
+      throw new Error(
+        `Version ${pkg.version} must have an entry in .version-changes.json. `
+        + 'Use an empty changes array when there are no user-facing changes.'
+      );
+    }
+
+    const releasedAt = new Date().toISOString();
     const versionFile = {
       version: pkg.version,
-      releasedAt: new Date().toISOString().replace('Z', '+03:30'),
-      changes
+      releasedAt,
+      changes: currentRelease.changes,
+      releases: releases.map((release) => ({
+        ...release,
+        releasedAt: release.version === pkg.version ? releasedAt : release.releasedAt,
+      })),
     };
 
     const publicDir = path.resolve(process.cwd(), 'public');

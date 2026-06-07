@@ -61,3 +61,15 @@ export const sumNotificationUnread = (
   summary: NotificationUnreadSummaryMap,
   sections: readonly NotificationUnreadSection[],
 ) => sections.reduce((sum, section) => sum + toSafeCount(summary[section]), 0);
+
+export const areNotificationUnreadSummariesEqual = (
+  left: NotificationUnreadSummaryMap,
+  right: NotificationUnreadSummaryMap,
+) => (
+  left.notes === right.notes
+  && left.bot_messages === right.bot_messages
+  && left.sms_messages === right.sms_messages
+  && left.voip_calls === right.voip_calls
+  && left.tasks === right.tasks
+  && left.responsibilities === right.responsibilities
+);

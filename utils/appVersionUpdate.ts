@@ -1,8 +1,14 @@
-export interface AppVersionManifest {
+export interface AppReleaseNotes {
   version: string;
   releasedAt?: string;
-  changes?: string[];
+  changes: string[];
 }
+
+export interface AppVersionManifest extends AppReleaseNotes {
+  releases: AppReleaseNotes[];
+}
+
+export type AppVersionBannerMode = 'available' | 'completed';
 
 interface RefreshIntent {
   targetVersion: string;
@@ -47,6 +53,22 @@ export const compareAppVersions = (left: string, right: string) => {
 
 export const isNewerAppVersion = (remoteVersion: string, currentVersion = CURRENT_APP_VERSION) =>
   compareAppVersions(remoteVersion, currentVersion) > 0;
+
+export const resolveAppVersionBannerMode = (
+  remoteVersion: string,
+  currentVersion: string,
+  completedVersion?: string | null
+): AppVersionBannerMode | null => {
+  if (isNewerAppVersion(remoteVersion, currentVersion)) return 'available';
+  if (
+    completedVersion
+    && compareAppVersions(currentVersion, completedVersion) >= 0
+    && compareAppVersions(remoteVersion, completedVersion) >= 0
+  ) {
+    return 'completed';
+  }
+  return null;
+};
 
 const readRefreshIntent = (): RefreshIntent | null => {
   if (typeof window === 'undefined') return null;
@@ -110,9 +132,9 @@ export const consumeCompletedAppRefreshIntent = (currentVersion = CURRENT_APP_VE
   return previous.targetVersion;
 };
 
-const validateManifest = (value: unknown): AppVersionManifest | null => {
+const normalizeReleaseNotes = (value: unknown): AppReleaseNotes | null => {
   if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<AppVersionManifest>;
+  const candidate = value as Partial<AppReleaseNotes>;
   const version = normalizeVersion(candidate.version);
   if (!version) return null;
 
@@ -122,6 +144,27 @@ const validateManifest = (value: unknown): AppVersionManifest | null => {
     changes: Array.isArray(candidate.changes)
       ? candidate.changes.map((item) => String(item || '').trim()).filter(Boolean)
       : [],
+  };
+};
+
+export const validateAppVersionManifest = (value: unknown): AppVersionManifest | null => {
+  const currentRelease = normalizeReleaseNotes(value);
+  if (!currentRelease) return null;
+
+  const candidate = value as Partial<AppVersionManifest>;
+  const releases = Array.isArray(candidate.releases)
+    ? candidate.releases.map(normalizeReleaseNotes).filter((release): release is AppReleaseNotes => Boolean(release))
+    : [];
+  const uniqueReleases = new Map<string, AppReleaseNotes>();
+  [currentRelease, ...releases].forEach((release) => {
+    if (!uniqueReleases.has(release.version)) uniqueReleases.set(release.version, release);
+  });
+
+  return {
+    ...currentRelease,
+    releases: Array.from(uniqueReleases.values()).sort(
+      (left, right) => compareAppVersions(right.version, left.version)
+    ),
   };
 };
 
@@ -140,7 +183,7 @@ export const fetchAppVersionManifest = async (signal?: AbortSignal) => {
     throw new Error(`Version manifest request failed with ${response.status}`);
   }
 
-  const manifest = validateManifest(await response.json());
+  const manifest = validateAppVersionManifest(await response.json());
   if (!manifest) {
     throw new Error('Version manifest is invalid');
   }

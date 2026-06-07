@@ -37,6 +37,7 @@ const IMAGE_FILE_EXTENSIONS = new Set([
   'tiff',
   'ico',
 ]);
+const unavailableTransformOrigins = new Set<string>();
 
 const getPathExtension = (path: string): string => {
   const clean = String(path || '').split('?')[0].split('#')[0];
@@ -145,11 +146,25 @@ export const getImagePreviewCandidates = (
 ): string[] => {
   const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return [];
+  const normalizedUrl = resolveUrl(normalized);
+  if (normalizedUrl && unavailableTransformOrigins.has(normalizedUrl.origin)) {
+    return [normalized];
+  }
   const previewUrl = buildImagePreviewUrl(normalized, preset);
   if (!previewUrl || previewUrl === normalized) {
     return [normalized];
   }
   return [previewUrl, normalized];
+};
+
+export const reportImageTransformFailure = (url: string | null | undefined) => {
+  const parsed = resolveUrl(String(url || '').trim());
+  if (!parsed || !parsed.pathname.includes('/storage/v1/render/image/')) return;
+  unavailableTransformOrigins.add(parsed.origin);
+};
+
+export const resetImageTransformFailureCacheForTest = () => {
+  unavailableTransformOrigins.clear();
 };
 
 export const isImageFileLike = (

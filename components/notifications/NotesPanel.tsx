@@ -218,7 +218,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
       return (
         <button
           type="button"
-          onClick={() => { setMobileNoteSearchOpen(false); setSelectedNoteUserId((prev: any) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID)); }}
+          onClick={() => { setMobileNoteSearchOpen(false); setSelectedNoteUserId(SYSTEM_MESSAGES_USER_ID); }}
           className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? activeConversationClass : inactiveConversationClass}`}
         >
           <div className="flex items-center gap-3">
@@ -240,7 +240,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     return (
       <button
         type="button"
-        onClick={() => { setMobileNoteSearchOpen(false); setSelectedNoteUserId((prev: any) => (prev === item.id ? null : item.id)); }}
+        onClick={() => { setMobileNoteSearchOpen(false); setSelectedNoteUserId(item.id); }}
         className={`w-full rounded-xl px-3 py-2 text-right transition-colors ${selectedNoteUserId === item.id ? activeConversationClass : inactiveConversationClass}`}
       >
         <div className="flex items-center gap-3">
@@ -277,7 +277,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
       return (
         <button
           type="button"
-          onClick={() => setSelectedNoteUserId((prev: any) => (prev === SYSTEM_MESSAGES_USER_ID ? null : SYSTEM_MESSAGES_USER_ID))}
+          onClick={() => setSelectedNoteUserId(SYSTEM_MESSAGES_USER_ID)}
           className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === SYSTEM_MESSAGES_USER_ID ? activeRailClass : inactiveRailClass}`}
           title="پیام‌های سیستم"
         >
@@ -296,7 +296,7 @@ const NotesPanel: React.FC<NotesPanelProps> = ({ layout, context }) => {
     return (
       <button
         type="button"
-        onClick={() => setSelectedNoteUserId((prev: any) => (prev === item.id ? null : item.id))}
+        onClick={() => setSelectedNoteUserId(item.id)}
         className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${selectedNoteUserId === item.id ? activeRailClass : inactiveRailClass}`}
         title={item.displayName}
       >

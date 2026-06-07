@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { getImagePreviewCandidates, type ImagePreviewPreset } from '../../utils/imagePreview';
+import {
+  getImagePreviewCandidates,
+  reportImageTransformFailure,
+  type ImagePreviewPreset,
+} from '../../utils/imagePreview';
 
 interface ResilientImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   src: string;
@@ -27,6 +31,7 @@ const ResilientImage: React.FC<ResilientImageProps> = ({
       src={resolvedSrc}
       onError={(event) => {
         if (candidateIndex < candidates.length - 1) {
+          reportImageTransformFailure(resolvedSrc);
           setCandidateIndex((value) => value + 1);
           return;
         }
@@ -37,4 +42,3 @@ const ResilientImage: React.FC<ResilientImageProps> = ({
 };
 
 export default ResilientImage;
-

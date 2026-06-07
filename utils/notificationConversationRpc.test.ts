@@ -35,6 +35,7 @@ describe('notificationConversationRpc', () => {
     expect(isMissingRpcError({ code: 'PGRST202' })).toBe(true);
     expect(isMissingRpcError({ code: '42883' })).toBe(true);
     expect(isMissingRpcError({ message: 'Could not find the function public.get_internal_conversation_timeline' })).toBe(true);
+    expect(isMissingRpcError({ code: '42703', message: 'column reader_profile.display_name does not exist' })).toBe(false);
     expect(isMissingRpcError({ code: '42501' })).toBe(false);
   });
 });

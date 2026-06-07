@@ -10,6 +10,29 @@ export const isChatGroupSelection = (value: string | null | undefined) =>
 export const getChatGroupSelectionId = (value: string | null | undefined) =>
   isChatGroupSelection(value) ? String(value).slice(CHAT_GROUP_PREFIX.length) : null;
 
+export const buildDirectConversationKey = (currentUserId: string, otherUserId: string) => {
+  const left = String(currentUserId || '').trim();
+  const right = String(otherUserId || '').trim();
+  if (!left || !right || left === right) return null;
+  return left <= right ? `direct:${left}:${right}` : `direct:${right}:${left}`;
+};
+
+export const resolveConversationSelection = (
+  conversationKey: string | null | undefined,
+  currentUserId: string | null | undefined,
+) => {
+  const key = String(conversationKey || '').trim();
+  const userId = String(currentUserId || '').trim();
+  if (!key || key === MY_NOTES_CONVERSATION_KEY) return null;
+  if (key === 'system') return SYSTEM_MESSAGES_USER_ID;
+  if (key.startsWith(CHAT_GROUP_PREFIX)) return key;
+  if (!key.startsWith('direct:') || !userId) return undefined;
+
+  const participants = key.slice('direct:'.length).split(':').map((item) => item.trim()).filter(Boolean);
+  if (participants.length !== 2 || !participants.includes(userId)) return undefined;
+  return participants.find((participant) => participant !== userId);
+};
+
 export const isBotGroupForwardSelection = (value: string | null | undefined) =>
   String(value || '').startsWith(BOT_GROUP_FORWARD_PREFIX);
 

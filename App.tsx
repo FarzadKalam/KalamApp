@@ -15,6 +15,8 @@ import { JalaliLocaleListener } from "antd-jalali";
 import { supabase } from "./supabaseClient";
 import { MODULES } from "./moduleRegistry";
 import UploadProgressOverlay from "./components/UploadProgressOverlay";
+import { NotificationRuntimeProvider } from "./components/notifications/NotificationRuntimeProvider";
+import OrganizationAvatarPreloader from "./components/common/OrganizationAvatarPreloader";
 import PwaInstallPrompt from "./components/PwaInstallPrompt";
 import OfflineOverlay from "./components/OfflineOverlay";
 import "./App.css";
@@ -636,16 +638,19 @@ function App() {
                 fallback={<CatchAllNavigate to="/login" />}
               >
                 <LazyRouteBoundary>
-                  <Layout
-                    isDarkMode={isDarkMode}
-                    toggleTheme={handleToggleTheme}
-                    brandShortName={branding.shortName}
-                    preloadRoute={preloadAuthenticatedRouteChunk}
-                  >
-                    <LazyRouteBoundary>
-                      <Outlet />
-                    </LazyRouteBoundary>
-                  </Layout>
+                  <NotificationRuntimeProvider>
+                    <OrganizationAvatarPreloader />
+                    <Layout
+                      isDarkMode={isDarkMode}
+                      toggleTheme={handleToggleTheme}
+                      brandShortName={branding.shortName}
+                      preloadRoute={preloadAuthenticatedRouteChunk}
+                    >
+                      <LazyRouteBoundary>
+                        <Outlet />
+                      </LazyRouteBoundary>
+                    </Layout>
+                  </NotificationRuntimeProvider>
                 </LazyRouteBoundary>
               </Authenticated>
             }

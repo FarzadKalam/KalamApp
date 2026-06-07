@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Badge, Button, Modal } from 'antd';
+import { App, Badge, Button } from 'antd';
 import { CaretRightOutlined, CheckOutlined, ClockCircleOutlined, EyeOutlined, ReadOutlined } from '@ant-design/icons';
-import OverlayEventBoundary from '../OverlayEventBoundary';
-import PersianDatePicker from '../PersianDatePicker';
 import { isTaskDoneStatus } from '../../utils/taskCompletion';
 import { updateTaskDueDateWithAutomation, updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { getTaskStatusSwatchColor } from '../../utils/processTaskStatusOptions';
@@ -11,6 +9,7 @@ import { resolveOverlayPopupContainer, resolveParentOverlayZIndex, resolveStable
 import { getInstructionIdsFromTask, instructionStatusOptions } from '../../utils/instructionSupport';
 import { supabase } from '../../supabaseClient';
 import TaskInstructionsModal from './TaskInstructionsModal';
+import SnoozeScheduleModal from '../notifications/SnoozeScheduleModal';
 
 type TaskActionButtonsProps = {
   task: any;
@@ -225,26 +224,6 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
     }
   };
 
-  const handleSaveReschedule = async () => {
-    if (!task?.id) return;
-    setSavingReschedule(true);
-    try {
-      const updatedTask = await updateTaskDueDateWithAutomation({
-        taskId: String(task.id),
-        nextDueDate: draftDueDate || null,
-        previousTask: task,
-        currentUser: currentUser || null,
-      });
-      await emitTaskUpdate(updatedTask);
-      setRescheduleOpen(false);
-      message.success('موعد انجام بروزرسانی شد');
-    } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'بروزرسانی موعد انجام ناموفق بود'));
-    } finally {
-      setSavingReschedule(false);
-    }
-  };
-
   return (
     <>
       <div ref={overlayAnchorRef} className="flex items-center justify-center gap-1.5">
@@ -327,41 +306,40 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
         onClose={() => setInstructionsModalOpen(false)}
       />
 
-      <Modal
+      <SnoozeScheduleModal
         open={rescheduleOpen}
         title="برنامه‌ریزی مجدد فعالیت"
-        onCancel={(event) => {
-          stopEvent(event as any);
+        initialValue={draftDueDate}
+        onCancel={() => {
           setRescheduleOpen(false);
         }}
-        onOk={handleSaveReschedule}
-        okText="ثبت موعد جدید"
-        cancelText="انصراف"
+        onConfirm={async (value) => {
+          setDraftDueDate(value);
+          if (!task?.id) return;
+          setSavingReschedule(true);
+          try {
+            const updatedTask = await updateTaskDueDateWithAutomation({
+              taskId: String(task.id),
+              nextDueDate: value,
+              previousTask: task,
+              currentUser: currentUser || null,
+            });
+            await emitTaskUpdate(updatedTask);
+            setRescheduleOpen(false);
+            message.success('موعد انجام بروزرسانی شد');
+          } catch (error: any) {
+            message.error(toFaErrorMessage(error, 'بروزرسانی موعد انجام ناموفق بود'));
+          } finally {
+            setSavingReschedule(false);
+          }
+        }}
+        confirmText="ثبت موعد جدید"
         confirmLoading={savingReschedule}
-        destroyOnHidden
         zIndex={effectiveModalZIndex}
         getContainer={getModalContainer}
-        modalRender={(node) => (
-          <OverlayEventBoundary>
-            {node}
-          </OverlayEventBoundary>
-        )}
-      >
-        <div className="space-y-3 pt-1">
-          <div className="text-sm text-gray-700">موعد انجام جدید تعیین کنید:</div>
-          <PersianDatePicker
-            value={draftDueDate}
-            onChange={setDraftDueDate}
-            type="DATETIME"
-            zIndex={effectiveModalZIndex + 20}
-            modalContainer={getModalContainer}
-            overlayZIndexBase={effectiveModalZIndex + 20}
-          />
-        </div>
-      </Modal>
+      />
     </>
   );
 };
 
 export default TaskActionButtons;
-

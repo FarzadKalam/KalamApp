@@ -33,7 +33,7 @@ type TimelineCacheEntry<TItem> = {
 };
 const _internalTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-let _internalUnifiedTimelineRpcAvailable = false;
+let _internalUnifiedTimelineRpcAvailable = true;
 
 const buildCacheKey = (scopeKey: string | null | undefined, conversationKey: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${conversationKey}`;
@@ -91,7 +91,11 @@ export const prefetchInternalConversationTimeline = async <TItem,>({
         });
         return;
       }
-      _internalUnifiedTimelineRpcAvailable = false;
+      if (isMissingRpcError(error)) {
+        _internalUnifiedTimelineRpcAvailable = false;
+      } else {
+        return;
+      }
     }
 
     const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_internal_conversation_timeline', {
@@ -141,7 +145,7 @@ export const useInternalConversationTimeline = <TItem,>({
   // refresh() uses this to skip the loading skeleton for the background fetch.
   const cacheAppliedRef = useRef(false);
   // Deduplicate concurrent refresh() calls — only one in-flight at a time.
-  const refreshInFlightRef = useRef(false);
+  const refreshInFlightKeysRef = useRef(new Set<string>());
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -193,9 +197,6 @@ export const useInternalConversationTimeline = <TItem,>({
     }
     if (loadingInitialKeyRef.current === conversationKey) return;
     loadingInitialKeyRef.current = conversationKey;
-    // Conversation changed — any in-flight request was for the old key, release the guard.
-    refreshInFlightRef.current = false;
-
     // Cache hit → render instantly, background refresh will run without skeleton
     const cached = readCache<TItem>(timelineCacheKey);
     if (cached) {
@@ -239,8 +240,12 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!error) {
         return normalizeTimelinePayload<TItem>(data);
       }
-      _internalUnifiedTimelineRpcAvailable = false;
-      setCommunicationApiAvailable(false);
+      if (isMissingRpcError(error)) {
+        _internalUnifiedTimelineRpcAvailable = false;
+        setCommunicationApiAvailable(false);
+      } else {
+        throw error;
+      }
     }
 
     const { data, error } = await supabase.rpc('get_internal_conversation_timeline', {
@@ -275,10 +280,10 @@ export const useInternalConversationTimeline = <TItem,>({
       }
     }
 
-    if (refreshInFlightRef.current) {
+    if (refreshInFlightKeysRef.current.has(requestConversationKey)) {
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
-    refreshInFlightRef.current = true;
+    refreshInFlightKeysRef.current.add(requestConversationKey);
 
     // Show skeleton only on a true cold start (no data in view yet).
     // Subsequent background refreshes (realtime updates, force-refresh) must
@@ -305,13 +310,6 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
-      if ((payload.items || []).length === 0 && fallbackLoadInitial) {
-        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-        if ((fallbackPayload.items || []).length > 0) {
-          _internalTimelineCache.set(timelineCacheKey, { payload: fallbackPayload, fetchedAt: Date.now() });
-          return fallbackPayload;
-        }
-      }
       const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: !options?.force });
       if (applied) {
         _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
@@ -320,7 +318,7 @@ export const useInternalConversationTimeline = <TItem,>({
     } finally {
       setLoadingInitial(false);
       cacheAppliedRef.current = false;
-      refreshInFlightRef.current = false;
+      refreshInFlightKeysRef.current.delete(requestConversationKey);
     }
   }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
 
@@ -371,7 +369,9 @@ export const useInternalConversationTimeline = <TItem,>({
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return;
     }
-    void refresh();
+    void refresh().catch((error) => {
+      console.warn('Could not refresh internal conversation timeline', error);
+    });
   }, [applyPayload, conversationKey, enabled, refresh]);
 
   // Wrapped setItems: keeps cache in sync when realtime messages are pushed in

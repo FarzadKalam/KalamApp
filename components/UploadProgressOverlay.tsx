@@ -1,6 +1,8 @@
 ﻿import React, { useMemo, useState } from 'react';
+import App from 'antd/es/app';
 import Badge from 'antd/es/badge';
 import Button from 'antd/es/button';
+import Input from 'antd/es/input';
 import Progress from 'antd/es/progress';
 import theme from 'antd/es/theme';
 import BellOutlined from '@ant-design/icons/BellOutlined';
@@ -8,18 +10,32 @@ import CheckCircleFilled from '@ant-design/icons/CheckCircleFilled';
 import CheckOutlined from '@ant-design/icons/CheckOutlined';
 import CloseCircleFilled from '@ant-design/icons/CloseCircleFilled';
 import CloseOutlined from '@ant-design/icons/CloseOutlined';
+import ClockCircleOutlined from '@ant-design/icons/ClockCircleOutlined';
+import DownOutlined from '@ant-design/icons/DownOutlined';
 import LoadingOutlined from '@ant-design/icons/LoadingOutlined';
 import MessageOutlined from '@ant-design/icons/MessageOutlined';
 import MinusOutlined from '@ant-design/icons/MinusOutlined';
 import PhoneOutlined from '@ant-design/icons/PhoneOutlined';
 import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
 import RobotOutlined from '@ant-design/icons/RobotOutlined';
+import RollbackOutlined from '@ant-design/icons/RollbackOutlined';
+import SendOutlined from '@ant-design/icons/SendOutlined';
 import OpenAIOutlined from '@ant-design/icons/OpenAIOutlined';
 import StopFilled from '@ant-design/icons/StopFilled';
 import TeamOutlined from '@ant-design/icons/TeamOutlined';
+import UpOutlined from '@ant-design/icons/UpOutlined';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
-import { dismissUiNotificationOverlayItem, useUiNotificationOverlayItems } from '../utils/uiNotificationOverlayStore';
+import {
+  dismissUiNotificationOverlayItem,
+  removeUiNotificationOverlayItem,
+  snoozeUiNotificationOverlayItem,
+  useUiNotificationOverlayPagination,
+  useUiNotificationOverlayItems,
+} from '../utils/uiNotificationOverlayStore';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
+
+const SnoozeScheduleModal = React.lazy(() => import('./notifications/SnoozeScheduleModal'));
 
 const formatBytes = (value: number) => {
   if (!Number.isFinite(value) || value <= 0) return '0 B';
@@ -120,12 +136,65 @@ const getPresenceClassName = (phase: PresencePhase) => (
       : 'max-h-64 translate-y-0 scale-100 opacity-100'
 );
 
+const ExpandableNotificationText: React.FC<{ text: string }> = ({ text }) => {
+  const contentRef = React.useRef<HTMLDivElement | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+
+  React.useLayoutEffect(() => {
+    const node = contentRef.current;
+    if (!node) return undefined;
+    const measure = () => {
+      if (!expanded) {
+        setOverflowing(node.scrollHeight > node.clientHeight + 1);
+      }
+    };
+    measure();
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    observer?.observe(node);
+    return () => observer?.disconnect();
+  }, [expanded, text]);
+
+  return (
+    <div className="mt-1">
+      <div
+        ref={contentRef}
+        className={`${expanded ? 'whitespace-pre-wrap' : 'line-clamp-2'} break-words text-[12px] leading-5`}
+      >
+        {text}
+      </div>
+      {(overflowing || expanded) ? (
+        <Button
+          size="small"
+          type="text"
+          icon={expanded ? <UpOutlined /> : <DownOutlined />}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpanded((current) => !current);
+          }}
+          className="mt-1 px-0 text-xs text-gray-500 hover:!text-leather-600"
+          aria-expanded={expanded}
+        >
+          {expanded ? 'جمع کردن' : 'مشاهده بیشتر'}
+        </Button>
+      ) : null}
+    </div>
+  );
+};
+
 const UploadProgressOverlay: React.FC = () => {
   const tasks = useUploadTasks();
   const notifications = useUiNotificationOverlayItems();
+  const overlayPagination = useUiNotificationOverlayPagination();
+  const { message } = App.useApp();
   const { token } = theme.useToken();
   const [minimized, setMinimized] = useState(false);
   const [hiddenSignature, setHiddenSignature] = useState<string | null>(null);
+  const [snoozeItemId, setSnoozeItemId] = useState<string | null>(null);
+  const [replyItemId, setReplyItemId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
   const renderedNotifications = usePresenceList(notifications, getNotificationId);
   const renderedTasks = usePresenceList(tasks, getTaskId);
 
@@ -275,6 +344,17 @@ const UploadProgressOverlay: React.FC = () => {
               <div
                 className="max-h-[330px] overflow-y-auto pr-1"
                 style={{ scrollbarGutter: 'stable', overscrollBehavior: 'contain' }}
+                onScroll={(event) => {
+                  const node = event.currentTarget;
+                  if (
+                    !hasDisplayedUploads
+                    && overlayPagination.hasMore
+                    && !overlayPagination.loading
+                    && node.scrollHeight - node.scrollTop - node.clientHeight < 80
+                  ) {
+                    overlayPagination.loadMore?.();
+                  }
+                }}
               >
                 <div className="flex flex-col gap-2.5">
             {renderedNotifications.map((entry) => {
@@ -328,27 +408,25 @@ const UploadProgressOverlay: React.FC = () => {
                       >
                         {icon}
                       </div>
-                      <button
-                        type="button"
-                        onClick={item.onOpen}
-                        className="min-w-0 flex-1 text-right"
-                      >
-                        <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
-                          <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
-                          <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
-                        </div>
-                        <div className="mt-1 line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>
-                          {item.title}
-                        </div>
-                        <div className="mt-1 line-clamp-2 text-[12px] leading-5" style={{ color: token.colorTextSecondary }}>
-                          {item.body}
+                      <div className="min-w-0 flex-1 text-right">
+                        <button type="button" onClick={item.onOpen} className="w-full text-right">
+                          <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
+                            <span>{item.kindLabel || (item.kind === 'note' ? 'پیام' : item.kind === 'task' ? 'فعالیت' : item.kind === 'bot' ? 'پیام بات' : item.kind === 'assistant' ? 'هوش مصنوعی' : item.kind === 'sms' ? 'پیامک' : item.kind === 'voip_call' ? 'تماس ورودی' : 'مسئولیت')}</span>
+                            <span>{safeJalaliFormat(item.createdAt, 'YYYY/MM/DD HH:mm')}</span>
+                          </div>
+                          <div className="mt-1 line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>
+                            {item.title}
+                          </div>
+                        </button>
+                        <div style={{ color: token.colorTextSecondary }}>
+                          <ExpandableNotificationText text={item.body} />
                         </div>
                         {item.hasAttachments ? (
                           <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
                             دارای پیوست
                           </div>
                         ) : null}
-                      </button>
+                      </div>
                       <Button
                         type="text"
                         size="small"
@@ -356,11 +434,87 @@ const UploadProgressOverlay: React.FC = () => {
                         onClick={() => dismissUiNotificationOverlayItem(item.id)}
                       />
                     </div>
+                    {item.onSnooze || item.onReply ? (
+                      <div className="mt-2 flex items-center gap-1 border-t pt-2" style={{ borderColor: token.colorBorderSecondary }}>
+                        {item.onReply ? (
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<RollbackOutlined />}
+                            onClick={() => {
+                              setReplyItemId((current) => current === item.id ? null : item.id);
+                              setReplyText('');
+                            }}
+                          >
+                            پاسخ
+                          </Button>
+                        ) : null}
+                        {item.onSnooze ? (
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<ClockCircleOutlined />}
+                            onClick={() => setSnoozeItemId(item.id)}
+                          >
+                            تعویق
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {replyItemId === item.id && item.onReply ? (
+                      <div className="mt-2 flex items-end gap-2">
+                        <Input.TextArea
+                          autoFocus
+                          value={replyText}
+                          onChange={(event) => setReplyText(event.target.value)}
+                          autoSize={{ minRows: 1, maxRows: 4 }}
+                          placeholder="پاسخ خود را بنویسید..."
+                        />
+                        <Button
+                          type="primary"
+                          shape="circle"
+                          icon={<SendOutlined />}
+                          loading={replySending}
+                          disabled={!replyText.trim()}
+                          aria-label="ارسال پاسخ"
+                          onClick={async () => {
+                            const text = replyText.trim();
+                            if (!text || replySending) return;
+                            setReplySending(true);
+                            try {
+                              await item.onReply?.(text);
+                              removeUiNotificationOverlayItem(item.id);
+                              setReplyItemId(null);
+                              setReplyText('');
+                              message.success('پاسخ ارسال شد.');
+                            } catch (error) {
+                              message.error(toFaErrorMessage(error as any, 'ارسال پاسخ ناموفق بود.'));
+                            } finally {
+                              setReplySending(false);
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               );
             })}
                 </div>
+              </div>
+            ) : null}
+            {overlayPagination.hasMore && !hasDisplayedUploads ? (
+              <div className="flex justify-start">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={overlayPagination.loading ? undefined : <DownOutlined />}
+                  loading={overlayPagination.loading}
+                  onClick={() => overlayPagination.loadMore?.()}
+                  className="px-0 text-xs text-gray-500 hover:!text-leather-600"
+                >
+                  مشاهده پیام‌های بیشتر
+                </Button>
               </div>
             ) : null}
             {renderedTasks.map((entry) => {
@@ -464,6 +618,19 @@ const UploadProgressOverlay: React.FC = () => {
           </div>
         </div>
       </div>
+      <React.Suspense fallback={null}>
+        <SnoozeScheduleModal
+          open={Boolean(snoozeItemId)}
+          title="تعویق نمایش اعلان"
+          confirmText="تعویق اعلان"
+          zIndex={2147483100}
+          onCancel={() => setSnoozeItemId(null)}
+          onConfirm={(until) => {
+            if (snoozeItemId) snoozeUiNotificationOverlayItem(snoozeItemId, until);
+            setSnoozeItemId(null);
+          }}
+        />
+      </React.Suspense>
     </div>
   );
 };

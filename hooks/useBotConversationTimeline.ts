@@ -32,7 +32,7 @@ type TimelineCacheEntry<TItem> = {
 };
 const _botTimelineCache = new Map<string, TimelineCacheEntry<any>>();
 const TIMELINE_CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
-let _botUnifiedTimelineRpcAvailable = false;
+let _botUnifiedTimelineRpcAvailable = true;
 
 const buildCacheKey = (scopeKey: string | null | undefined, botGroupId: string) =>
   `${String(scopeKey || 'default').trim() || 'default'}:${botGroupId}`;
@@ -85,7 +85,11 @@ export const prefetchBotConversationTimeline = async <TItem,>({
         });
         return;
       }
-      _botUnifiedTimelineRpcAvailable = false;
+      if (isMissingRpcError(error)) {
+        _botUnifiedTimelineRpcAvailable = false;
+      } else {
+        return;
+      }
     }
 
     const { data: fallbackData, error: fallbackError } = await supabase.rpc('get_bot_conversation_timeline', {
@@ -135,7 +139,7 @@ export const useBotConversationTimeline = <TItem,>({
   // refresh() uses this to skip the loading skeleton for the background fetch.
   const cacheAppliedRef = useRef(false);
   // Deduplicate concurrent refresh() calls — only one in-flight at a time.
-  const refreshInFlightRef = useRef(false);
+  const refreshInFlightKeysRef = useRef(new Set<string>());
 
   // Recovery: when enabled cycles false→true, reset available so RPC is retried
   useEffect(() => {
@@ -182,9 +186,6 @@ export const useBotConversationTimeline = <TItem,>({
     }
     if (loadingInitialKeyRef.current === botGroupId) return;
     loadingInitialKeyRef.current = botGroupId;
-    // Bot group changed — release in-flight guard for the old group.
-    refreshInFlightRef.current = false;
-
     // Cache hit → render instantly, background refresh will run without skeleton
     const cached = readCache<TItem>(timelineCacheKey);
     if (cached) {
@@ -228,8 +229,12 @@ export const useBotConversationTimeline = <TItem,>({
       if (!error) {
         return normalizeTimelinePayload<TItem>(data);
       }
-      _botUnifiedTimelineRpcAvailable = false;
-      setCommunicationApiAvailable(false);
+      if (isMissingRpcError(error)) {
+        _botUnifiedTimelineRpcAvailable = false;
+        setCommunicationApiAvailable(false);
+      } else {
+        throw error;
+      }
     }
 
     const { data, error } = await supabase.rpc('get_bot_conversation_timeline', {
@@ -264,10 +269,10 @@ export const useBotConversationTimeline = <TItem,>({
       }
     }
 
-    if (refreshInFlightRef.current) {
+    if (refreshInFlightKeysRef.current.has(requestBotGroupId)) {
       return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
     }
-    refreshInFlightRef.current = true;
+    refreshInFlightKeysRef.current.add(requestBotGroupId);
 
     // Show skeleton only on cold start (no items in view). Background refreshes
     // run silently to avoid interrupting the user mid-conversation.
@@ -293,13 +298,6 @@ export const useBotConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
-      if ((payload.items || []).length === 0 && fallbackLoadInitial) {
-        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
-        if ((fallbackPayload.items || []).length > 0) {
-          _botTimelineCache.set(timelineCacheKey, { payload: fallbackPayload, fetchedAt: Date.now() });
-          return fallbackPayload;
-        }
-      }
       const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: !options?.force });
       if (applied) {
         _botTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
@@ -308,7 +306,7 @@ export const useBotConversationTimeline = <TItem,>({
     } finally {
       setLoadingInitial(false);
       cacheAppliedRef.current = false;
-      refreshInFlightRef.current = false;
+      refreshInFlightKeysRef.current.delete(requestBotGroupId);
     }
   }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
 
@@ -359,7 +357,9 @@ export const useBotConversationTimeline = <TItem,>({
       applyPayload(EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>);
       return;
     }
-    void refresh();
+    void refresh().catch((error) => {
+      console.warn('Could not refresh bot conversation timeline', error);
+    });
   }, [applyPayload, botGroupId, enabled, refresh]);
 
   // Wrapped setItems: keeps cache in sync when realtime messages are pushed in

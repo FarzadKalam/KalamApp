@@ -11,26 +11,39 @@ export interface UiNotificationOverlayItem {
   createdAt: string | null;
   hasAttachments?: boolean;
   onOpen: () => void;
-  onDismiss?: () => void;
+  onDismiss?: () => void | Promise<void>;
+  onSnooze?: (until: string) => void;
+  onReply?: (text: string) => Promise<void>;
 }
 
 const listeners = new Set<() => void>();
 let notificationsBySource: Record<string, UiNotificationOverlayItem[]> = {};
 let notifications: UiNotificationOverlayItem[] = [];
 const suppressedSources = new Set<string>();
+const dismissedForSessionIds = new Set<string>();
+const snoozedUntilById = new Map<string, number>();
 const EMPTY_NOTIFICATIONS: UiNotificationOverlayItem[] = [];
+let paginationSnapshot = {
+  hasMore: false,
+  loading: false,
+  loadMore: null as (() => void) | null,
+};
 
 const emit = () => {
   listeners.forEach((listener) => listener());
 };
 
 const snapshot = () => (suppressedSources.size > 0 ? EMPTY_NOTIFICATIONS : notifications);
+export const getUiNotificationOverlayItemsSnapshot = snapshot;
 
 const normalizeItems = (items: UiNotificationOverlayItem[]) => {
   const unique = new Map<string, UiNotificationOverlayItem>();
   (items || []).forEach((item) => {
     const id = String(item?.id || '').trim();
-    if (!id) return;
+    if (!id || dismissedForSessionIds.has(id)) return;
+    const snoozedUntil = snoozedUntilById.get(id) || 0;
+    if (snoozedUntil > Date.now()) return;
+    if (snoozedUntil) snoozedUntilById.delete(id);
     unique.set(id, { ...item, id });
   });
   return Array.from(unique.values());
@@ -98,10 +111,41 @@ export const setUiNotificationOverlaySuppressed = (suppressed: boolean, source =
   emit();
 };
 
+export const setUiNotificationOverlayPagination = (
+  hasMore: boolean,
+  loading: boolean,
+  loadMore: (() => void) | null,
+) => {
+  paginationSnapshot = { hasMore, loading, loadMore };
+  emit();
+};
+
 export const dismissUiNotificationOverlayItem = (id: string) => {
   const target = notifications.find((item) => item.id === id);
   if (!target) return;
+  dismissedForSessionIds.add(id);
   target.onDismiss?.();
+  Object.keys(notificationsBySource).forEach((source) => {
+    notificationsBySource[source] = (notificationsBySource[source] || []).filter((item) => item.id !== id);
+  });
+  recompute();
+  emit();
+};
+
+export const snoozeUiNotificationOverlayItem = (id: string, until: string) => {
+  const target = notifications.find((item) => item.id === id);
+  if (!target?.onSnooze) return;
+  const snoozedUntil = new Date(until).getTime();
+  if (Number.isFinite(snoozedUntil)) snoozedUntilById.set(id, snoozedUntil);
+  target.onSnooze(until);
+  Object.keys(notificationsBySource).forEach((source) => {
+    notificationsBySource[source] = (notificationsBySource[source] || []).filter((item) => item.id !== id);
+  });
+  recompute();
+  emit();
+};
+
+export const removeUiNotificationOverlayItem = (id: string) => {
   Object.keys(notificationsBySource).forEach((source) => {
     notificationsBySource[source] = (notificationsBySource[source] || []).filter((item) => item.id !== id);
   });
@@ -117,4 +161,14 @@ export const useUiNotificationOverlayItems = () =>
     },
     snapshot,
     snapshot,
+  );
+
+export const useUiNotificationOverlayPagination = () =>
+  useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => paginationSnapshot,
+    () => paginationSnapshot,
   );

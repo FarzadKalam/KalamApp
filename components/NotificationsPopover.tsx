@@ -54,6 +54,7 @@ import { useNotificationConversationList } from '../hooks/useNotificationConvers
 import { prefetchInternalConversationTimeline, useInternalConversationTimeline } from '../hooks/useInternalConversationTimeline';
 import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
+import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
 import {
   EMPTY_NOTIFICATION_UNREAD_SUMMARY,
@@ -68,7 +69,9 @@ import {
   CHAT_GROUP_PREFIX,
   MY_NOTES_CONVERSATION_KEY,
   SYSTEM_MESSAGES_USER_ID,
+  buildDirectConversationKey,
   getChatGroupSelectionId,
+  resolveConversationSelection,
 } from '../utils/notificationConversationKeys';
 import ProfileAvatar from './common/ProfileAvatar';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
@@ -76,6 +79,20 @@ import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '.
 import type { BotChannel, BotPlatformState } from './bot/CounterpartyBotStatusModal';
 import { loadScopedCompanySettings } from '../utils/companySettings';
 import { NOTIFICATION_UNREAD_BADGE_COLOR } from './notifications/UnreadCountBadge';
+import {
+  getLikeAt,
+  getLikeUserId,
+  getLikeUserName,
+  getReadReceiptReadAt,
+  getReadReceiptUserId,
+  getReadReceiptUserName,
+  likeReceiptMapFromBox,
+  readReceiptMapFromBox,
+  selectBotReceiptCursorRows,
+  selectInternalReceiptCursorRows,
+  type LikeReceiptEntry,
+  type ReadReceiptEntry,
+} from '../utils/messageReceipts';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 const VoipCallsPanel = React.lazy(() => import('./notifications/VoipCallsPanel'));
@@ -108,14 +125,15 @@ interface NotificationsPopoverProps {
   isMobile: boolean;
   variant?: 'chat' | 'alerts';
   requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
+  requestedConversationKey?: string;
+  requestedBotGroupId?: string;
   /** When true, renders as a full-page component (no drawer/popover wrapper, always open) */
   standalone?: boolean;
-  /** Open on first mount when a lightweight launcher mounts the heavy panel. */
-  initialOpen?: boolean;
-  /** Render only drawer content; the lightweight launcher owns the header button. */
-  triggerless?: boolean;
-  /** Called after the close animation so the launcher can release this component. */
-  onClosed?: () => void;
+  managedByRuntime?: boolean;
+  controlledOpen?: boolean;
+  renderTrigger?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onAfterClose?: () => void;
 }
 
 type MessageActivityDraft = {
@@ -372,18 +390,6 @@ const getBotMessageOverlayDedupeKey = (row: CounterpartyBotMessageRow) => {
   return `bot-row:${String(row?.id || '').trim()}`;
 };
 
-type ReadReceiptEntry = {
-  userId: string;
-  userName: string;
-  readAt: string | null;
-};
-
-type LikeReceiptEntry = {
-  userId: string;
-  userName: string;
-  likedAt: string | null;
-};
-
 type NotificationReadStateRow = {
   section: NotificationStateSectionKey;
   source_type: string;
@@ -545,84 +551,6 @@ const getPhoneMatchLabel = (value: any) => {
 const isPlainRecord = (value: unknown): value is Record<string, any> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const getReadReceiptsSource = (box: any) => {
-  if (!isPlainRecord(box)) return null;
-  return (
-    box.read_receipts
-    || box.readReceipts
-    || box.seen_by
-    || box.seenBy
-    || box.read_by
-    || box.readBy
-    || null
-  );
-};
-
-const getReadReceiptUserId = (value: any, fallback?: string) =>
-  String(value?.user_id || value?.userId || value?.id || fallback || '').trim();
-
-const getReadReceiptReadAt = (value: any) =>
-  String(value?.read_at || value?.readAt || value?.seen_at || value?.seenAt || value?.at || '').trim() || null;
-
-const getReadReceiptUserName = (value: any) =>
-  String(value?.user_name || value?.userName || value?.name || value?.display_name || value?.displayName || '').trim();
-
-const readReceiptMapFromBox = (box: any): Record<string, any> => {
-  const source = getReadReceiptsSource(box);
-  const map: Record<string, any> = {};
-  if (Array.isArray(source)) {
-    source.forEach((item) => {
-      const userId = getReadReceiptUserId(item);
-      if (!userId) return;
-      map[userId] = item;
-    });
-    return map;
-  }
-  if (isPlainRecord(source)) {
-    Object.entries(source).forEach(([key, value]) => {
-      const userId = getReadReceiptUserId(value, key);
-      if (!userId) return;
-      map[userId] = isPlainRecord(value) ? value : { read_at: String(value || '').trim() || null };
-    });
-  }
-  return map;
-};
-
-const getLikesSource = (box: any) => {
-  if (!isPlainRecord(box)) return null;
-  return box.likes || box.liked_by || box.likedBy || null;
-};
-
-const getLikeUserId = (value: any, fallback?: string) =>
-  String(value?.user_id || value?.userId || value?.id || fallback || '').trim();
-
-const getLikeUserName = (value: any) =>
-  String(value?.user_name || value?.userName || value?.name || value?.display_name || value?.displayName || '').trim();
-
-const getLikeAt = (value: any) =>
-  String(value?.liked_at || value?.likedAt || value?.created_at || value?.createdAt || value?.at || '').trim() || null;
-
-const likeReceiptMapFromBox = (box: any): Record<string, any> => {
-  const source = getLikesSource(box);
-  const map: Record<string, any> = {};
-  if (Array.isArray(source)) {
-    source.forEach((item) => {
-      const userId = getLikeUserId(item);
-      if (!userId) return;
-      map[userId] = item;
-    });
-    return map;
-  }
-  if (isPlainRecord(source)) {
-    Object.entries(source).forEach(([key, value]) => {
-      const userId = getLikeUserId(value, key);
-      if (!userId) return;
-      map[userId] = isPlainRecord(value) ? value : { liked_at: String(value || '').trim() || null };
-    });
-  }
-  return map;
-};
-
 const RESPONSIBILITY_REALTIME_TABLES = Array.from(
   new Set(
     Object.values(MODULES)
@@ -649,13 +577,6 @@ const formatRecordLabel = (row: any, moduleId?: string | null) => {
     return row.system_code || 'رکورد';
   }
   return `${label}${code}`.trim();
-};
-
-const buildDirectConversationKey = (currentUserId: string, otherUserId: string) => {
-  const left = String(currentUserId || '').trim();
-  const right = String(otherUserId || '').trim();
-  if (!left || !right) return null;
-  return left <= right ? `direct:${left}:${right}` : `direct:${right}:${left}`;
 };
 
 const normalizeRoleRows = (rows: any[]) =>
@@ -743,16 +664,22 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   isMobile,
   variant = 'alerts',
   requestedTab,
+  requestedConversationKey,
+  requestedBotGroupId,
   standalone = false,
-  initialOpen = false,
-  triggerless = false,
-  onClosed,
+  managedByRuntime = false,
+  controlledOpen,
+  renderTrigger = true,
+  onOpenChange,
+  onAfterClose,
 }) => {
+  const notificationRuntime = useNotificationRuntime();
+  const runtimeRefreshSummary = notificationRuntime.refreshSummary;
   const { message } = App.useApp();
   const navigate = useNavigate();
   const initialTab = normalizeTabForVariant(variant, requestedTab);
-  const [open, setOpen] = useState(standalone || initialOpen);
-  const [drawerContentMounted, setDrawerContentMounted] = useState(standalone || initialOpen);
+  const [open, setOpen] = useState(standalone);
+  const [drawerContentMounted, setDrawerContentMounted] = useState(standalone);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   // tasks and responsibilities are managed by hooks (see below)
@@ -800,15 +727,16 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
 
   // ── Activity & Responsibility hooks (optimized: cache + efficient queries) ──
+  const detailRuntimeEnabled = variant === 'alerts' && (standalone || open);
   const { tasks, setTasks, loading: loadingTasks, refresh: refreshTasks } = useMyActivities({
     userId: profile.id,
     roleId: profile.role_id,
-    enabled: Boolean(profile.id),
+    enabled: Boolean(profile.id) && detailRuntimeEnabled,
   });
   const { responsibilities, loading: loadingResponsibilities, refresh: refreshResponsibilities } = useMyResponsibilities({
     userId: profile.id,
     roleId: profile.role_id,
-    enabled: Boolean(profile.id),
+    enabled: Boolean(profile.id) && detailRuntimeEnabled,
   });
 
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
@@ -975,7 +903,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   } = useNotificationConversationList({
     supabase,
     section: 'bot_messages',
-    enabled: variant === 'chat' && Boolean(profile.id),
+    enabled: variant === 'chat' && activeDrawerSection === 'bot_messages' && Boolean(profile.id),
     cacheScopeKey: communicationCacheScopeKey,
   });
   const {
@@ -986,7 +914,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   } = useNotificationConversationList({
     supabase,
     section: 'notes',
-    enabled: variant === 'chat' && Boolean(profile.id),
+    enabled: variant === 'chat' && activeDrawerSection === 'notes' && Boolean(profile.id),
     cacheScopeKey: communicationCacheScopeKey,
   });
 
@@ -1521,8 +1449,12 @@ useEffect(() => {
   }, [variant]);
 
   const relevantNotificationStateSections = useMemo<NotificationStateSectionKey[]>(
-    () => Array.from(new Set(getSectionsForVariant(variant).map(toNotificationStateSection))),
-    [variant]
+    () => (
+      activeDrawerSection
+        ? [toNotificationStateSection(activeDrawerSection)]
+        : []
+    ),
+    [activeDrawerSection]
   );
 
   const mergeNotificationStateEntries = useCallback((entries: Array<NotificationReadStateRow | NotificationStateEntryInput>) => {
@@ -1680,9 +1612,11 @@ useEffect(() => {
       setUnreadSummaryAvailable(false);
       return;
     }
-    const { data, error } = await supabase.rpc('get_notification_unread_summary_v1', {
-      p_variant: variant,
-    });
+    if (managedByRuntime) {
+      await runtimeRefreshSummary();
+      return;
+    }
+    const { data, error } = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: variant });
     if (error) {
       if (!isMissingRpcError(error)) {
         console.warn('Could not refresh notification unread summary', error);
@@ -1692,14 +1626,27 @@ useEffect(() => {
     }
     setUnreadSummary(normalizeNotificationUnreadSummary(data));
     setUnreadSummaryAvailable(true);
-  }, [profile.id, profile.org_id, variant]);
+  }, [managedByRuntime, profile.id, profile.org_id, runtimeRefreshSummary, variant]);
 
   useEffect(() => {
+    if (controlledOpen === undefined) return;
+    if (controlledOpen) setDrawerContentMounted(true);
+    setOpen(controlledOpen);
+  }, [controlledOpen]);
+
+  useEffect(() => {
+    if (!managedByRuntime || !notificationRuntime.ready) return;
+    setUnreadSummary(notificationRuntime.summary);
+    setUnreadSummaryAvailable(true);
+  }, [managedByRuntime, notificationRuntime.ready, notificationRuntime.summary]);
+
+  useEffect(() => {
+    if (managedByRuntime) return;
     void refreshUnreadSummary();
-  }, [refreshUnreadSummary]);
+  }, [managedByRuntime, refreshUnreadSummary]);
 
   useEffect(() => {
-    if (!profile.id) return;
+    if (!profile.id || variant !== 'chat') return;
     let cancelled = false;
     const loadChatGroups = async () => {
       const { data, error } = await supabase
@@ -1740,7 +1687,7 @@ useEffect(() => {
     return () => {
       cancelled = true;
     };
-  }, [profile.id, profile.role_id]);
+  }, [profile.id, profile.role_id, variant]);
 
   useEffect(() => {
     return;
@@ -1783,7 +1730,7 @@ useEffect(() => {
   }, [mentionOptions.length, open]);
 
   useEffect(() => {
-    if (!profile.id) return;
+    if (!profile.id || variant !== 'chat') return;
     if (!open && !groupModalOpen && !forwardingNote) return;
     let cancelled = false;
     const loadMentionDirectory = async () => {
@@ -1810,7 +1757,7 @@ useEffect(() => {
     return () => {
       cancelled = true;
     };
-  }, [Boolean(forwardingNote), groupModalOpen, open, profile.id]);
+  }, [Boolean(forwardingNote), groupModalOpen, open, profile.id, variant]);
 
   useEffect(() => {
     const loadNoteRecords = async () => {
@@ -2472,6 +2419,7 @@ useEffect(() => {
   };
 
   useEffect(() => {
+    if (managedByRuntime) return undefined;
     if (typeof window === 'undefined') return undefined;
     const unlockAudio = () => {
       audioInteractionUnlockedRef.current = true;
@@ -2484,7 +2432,7 @@ useEffect(() => {
       window.removeEventListener('keydown', unlockAudio);
       window.removeEventListener('touchstart', unlockAudio);
     };
-  }, []);
+  }, [managedByRuntime]);
 
   useEffect(() => {
     if (variant !== 'chat') return;
@@ -3195,6 +3143,12 @@ useEffect(() => {
   useEffect(() => {
     if (!profile.id) return;
     notificationsReadyRef.current = false;
+    if (managedByRuntime) {
+      if (open && activeDrawerSection) {
+        void refreshSectionRef.current?.(activeDrawerSection);
+      }
+      return;
+    }
     if (open) {
       if (activeDrawerSection) {
         void refreshSectionRef.current?.(activeDrawerSection, { force: true });
@@ -3205,7 +3159,7 @@ useEffect(() => {
       return;
     }
     void refreshClosedStateRef.current?.({ force: true });
-  }, [activeDrawerSection, open, profile.id, profile.role_id, scheduleBackgroundSectionRefresh, variant]);
+  }, [activeDrawerSection, managedByRuntime, open, profile.id, profile.role_id, scheduleBackgroundSectionRefresh, variant]);
 
   useEffect(() => {
     setDesktopActiveKey((prev) => normalizeTabForVariant(variant, prev));
@@ -3217,6 +3171,17 @@ useEffect(() => {
     setDesktopActiveKey(nextRequested);
     setMobileActiveKey(nextRequested);
   }, [requestedTab, variant]);
+
+  useEffect(() => {
+    if (variant !== 'chat' || !profile.id || !requestedConversationKey) return;
+    const selection = resolveConversationSelection(requestedConversationKey, profile.id);
+    if (selection !== undefined) setSelectedNoteUserId(selection);
+  }, [profile.id, requestedConversationKey, variant]);
+
+  useEffect(() => {
+    if (variant !== 'chat' || !requestedBotGroupId) return;
+    setSelectedBotGroupId(requestedBotGroupId);
+  }, [requestedBotGroupId, variant]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || variant !== 'chat') return undefined;
@@ -3272,19 +3237,19 @@ useEffect(() => {
   }, [activeDrawerSection, open]);
 
   useEffect(() => {
-    if (!profile.id) return;
+    if (!profile.id || managedByRuntime) return;
     const interval = setInterval(() => {
       if (open) return;
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       void refreshClosedState({ force: true });
     }, 90000);
     return () => clearInterval(interval);
-  }, [open, profile.id, profile.role_id, variant]);
+  }, [managedByRuntime, open, profile.id, profile.role_id, variant]);
 
   // Refresh data when the page becomes visible again (e.g., returning from another app/tab)
   // Also briefly suppresses transitions to prevent flicker on mobile browsers
   useEffect(() => {
-    if (!profile.id) return;
+    if (!profile.id || managedByRuntime) return;
     let visibilityDebounceTimer: number | null = null;
     let resumeClassTimer: number | null = null;
     const handleVisibilityChange = () => {
@@ -3318,7 +3283,7 @@ useEffect(() => {
       if (resumeClassTimer !== null) window.clearTimeout(resumeClassTimer);
       document.body.classList.remove('page-resuming');
     };
-  }, [activeDrawerSection, open, profile.id, profile.role_id, variant]);
+  }, [activeDrawerSection, managedByRuntime, open, profile.id, profile.role_id, variant]);
 
   const currentUserId = String(profile.id || '').trim();
   const currentRoleId = String(profile.role_id || '').trim();
@@ -3417,7 +3382,7 @@ useEffect(() => {
   }, [variant]);
   useNotificationRealtimeSync({
     supabase,
-    enabled: Boolean(profile.id) && !realtimeDisabledRef.current,
+    enabled: Boolean(profile.id) && !managedByRuntime && !realtimeDisabledRef.current,
     variant,
     channelKey: `notifications-live-${variant}-${currentUserId}-${currentRoleId || 'none'}`,
     currentUserId,
@@ -3433,6 +3398,22 @@ useEffect(() => {
       setVoipCalls((prev) => [row, ...prev.filter((item) => String(item?.id || '') !== String(row?.id || ''))].slice(0, 20));
     },
   });
+
+  useEffect(() => {
+    if (!managedByRuntime || !profile.id || !activeDrawerSection) return;
+    const revision = notificationRuntime.revisions[activeDrawerSection];
+    if (revision <= 0) return;
+    if (open) {
+      void refreshSectionRef.current?.(activeDrawerSection, { force: true });
+    }
+  }, [
+    activeDrawerSection,
+    managedByRuntime,
+    notificationRuntime.revisions,
+    open,
+    profile.id,
+    variant,
+  ]);
 
   const notesCount = useMemo(() => {
     if (unreadSummaryAvailable) {
@@ -4273,7 +4254,7 @@ useEffect(() => {
         const directoryUser = directoryUserMap[userId];
         return {
           userId,
-          userName: directoryUser?.display_name || getReadReceiptUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : userId),
+          userName: directoryUser?.display_name || getReadReceiptUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : 'کاربر'),
           readAt: getReadReceiptReadAt(value),
         } as ReadReceiptEntry;
       })
@@ -4290,7 +4271,7 @@ useEffect(() => {
         const directoryUser = directoryUserMap[userId];
         return {
           userId,
-          userName: directoryUser?.display_name || getLikeUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : userId),
+          userName: directoryUser?.display_name || getLikeUserName(value) || (userId === String(profile.id || '') ? currentUserDisplayName : 'کاربر'),
           likedAt: getLikeAt(value),
         } as LikeReceiptEntry;
       })
@@ -4737,16 +4718,29 @@ useEffect(() => {
   const markNotesAsSeen = useCallback((rows: any[]) => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId || !Array.isArray(rows) || rows.length === 0) return;
+    const shouldUseCursor = (
+      selectedConversationReadModel === 'cursor'
+      && Boolean(selectedConversationKey)
+      && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
+    );
+    const receiptCursorRows = shouldUseCursor
+      ? selectInternalReceiptCursorRows(rows, currentUserId, isSystemNote)
+      : [];
     const readableRows = rows.filter((note: any) => {
         const id = String(note?.id || '').trim();
         const authorId = String(note?.author_id || '').trim();
         return (
           id
           && authorId !== currentUserId
-          && !isNotificationRead('notes', 'note', id, seenNoteIds.has(id))
+          && !isNotificationRead('notes', 'note', id, false)
         );
       });
-    if (readableRows.length === 0) return;
+    if (readableRows.length === 0) {
+      if (selectedConversationKey && receiptCursorRows.length > 0) {
+        void markCommunicationReadCursor('internal', selectedConversationKey, receiptCursorRows);
+      }
+      return;
+    }
 
     const readableIds = new Set(readableRows.map((note: any) => String(note.id)));
 
@@ -4776,14 +4770,8 @@ useEffect(() => {
     );
 
     const readEntries = Array.from(readableIds).map((sourceId) => ({ section: 'notes' as const, sourceType: 'note', sourceId }));
-    const shouldUseCursor = (
-      selectedConversationReadModel === 'cursor'
-      && Boolean(selectedConversationKey)
-      && selectedNoteUserId !== SYSTEM_MESSAGES_USER_ID
-      && readableRows.every((note: any) => !isSystemNote(note))
-    );
     if (shouldUseCursor && selectedConversationKey) {
-      void markCommunicationReadCursor('internal', selectedConversationKey, readableRows).then((persisted) => {
+      void markCommunicationReadCursor('internal', selectedConversationKey, receiptCursorRows).then((persisted) => {
         if (!persisted) {
           markNotificationEntriesRead(readEntries);
         }
@@ -4801,18 +4789,27 @@ useEffect(() => {
     if (selectedNoteUserId) {
       patchLocalNoteConversationSummary(selectedNoteUserId, { unreadCount: 0 });
     }
-  }, [debouncedRefreshNoteConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, profile.id, refreshUnreadSummary, seenNoteIds, selectedConversationKey, selectedConversationReadModel, selectedNoteUserId]);
+  }, [debouncedRefreshNoteConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, noteConversationSummaryAvailable, patchLocalNoteConversationSummary, profile.id, refreshUnreadSummary, selectedConversationKey, selectedConversationReadModel, selectedNoteUserId]);
 
   const markBotMessagesAsSeen = useCallback((rows: CounterpartyBotMessageRow[]) => {
+    const receiptCursorRows = botReadModel === 'cursor' && selectedBotGroupId
+      ? selectBotReceiptCursorRows(rows)
+      : [];
     const unreadInboundRows = rows.filter((row) => {
       const id = String(row?.id || '').trim();
       return (
         String(row?.direction || '').trim() === 'inbound'
         && isUuidValue(id)
-        && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))
+        && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, false)
       );
     });
     const unreadInboundIds = unreadInboundRows.map((row) => String(row.id).trim());
+    if (unreadInboundIds.length === 0) {
+      if (selectedBotGroupId && receiptCursorRows.length > 0) {
+        void markCommunicationReadCursor('bot', `bot:${selectedBotGroupId}`, receiptCursorRows);
+      }
+      return;
+    }
     if (unreadInboundIds.length > 0) {
       startTransition(() => {
         setSeenBotMessageIds((prev) => {
@@ -4835,7 +4832,7 @@ useEffect(() => {
       );
       const readEntries = unreadInboundIds.map((sourceId) => ({ section: 'bot_messages' as const, sourceType: 'counterparty_bot_message', sourceId }));
       if (botReadModel === 'cursor' && selectedBotGroupId) {
-        void markCommunicationReadCursor('bot', `bot:${selectedBotGroupId}`, unreadInboundRows).then((persisted) => {
+        void markCommunicationReadCursor('bot', `bot:${selectedBotGroupId}`, receiptCursorRows).then((persisted) => {
           if (!persisted) {
             markNotificationEntriesRead(readEntries);
           }
@@ -4854,7 +4851,7 @@ useEffect(() => {
         patchLocalBotConversationSummary(selectedBotGroupId, { unreadCount: 0 });
       }
     }
-  }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, refreshUnreadSummary, seenBotMessageIds, selectedBotGroupId]);
+  }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, refreshUnreadSummary, selectedBotGroupId]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const visibleTaskIds = (rows || [])
@@ -4940,13 +4937,14 @@ useEffect(() => {
     mobileDrawerHistoryActiveRef.current = false;
     captureDrawerCloseSnapshot();
     setOpen(false);
-  }, [captureDrawerCloseSnapshot]);
+    onOpenChange?.(false);
+  }, [captureDrawerCloseSnapshot, onOpenChange]);
 
   const finalizeDrawerClose = useCallback(() => {
     const snapshot = drawerCloseSnapshotRef.current;
     drawerCloseSnapshotRef.current = null;
     if (!snapshot) {
-      onClosed?.();
+      onAfterClose?.();
       return;
     }
 
@@ -4986,9 +4984,9 @@ useEffect(() => {
           markVoipCallsAsSeen(snapshot.displayedVoipCalls);
         }
       }
-      onClosed?.();
+      onAfterClose?.();
     }, 80);
-  }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, onClosed]);
+  }, [markBotMessagesAsSeen, markNotesAsSeen, markResponsibilitiesAsSeen, markSmsMessagesAsSeen, markTasksAsSeen, markVoipCallsAsSeen, onAfterClose]);
 
   useEffect(() => {
     // Note: do NOT clear selectedConversationNotes here — the hook manages its own state
@@ -5054,16 +5052,6 @@ useEffect(() => {
       .map((item) => ({ section: 'notes' as const, sourceType: 'note_like', sourceId: String(item.source_id || '') }))
       .filter((item) => item.sourceId);
     markNotificationEntriesRead(unreadLikeEntries);
-    // Auto-mark system/workflow notes as read — these are informational and don't require user action
-    const currentUserId = String(profile.id || '').trim();
-    const systemNotes = notes.filter((note: any) => (
-      isSystemNote(note)
-      && String(note?.author_id || '').trim() !== currentUserId
-      && !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
-    ));
-    if (systemNotes.length > 0) {
-      markNotesAsSeen(systemNotes);
-    }
     if (!selectedNoteUserId) return;
     markNotesAsSeen(displayedChatNotes);
   }, [activeDrawerSection, displayedChatNotes, isNotificationRead, markNotificationEntriesRead, markNotesAsSeen, noteLikeNotifications, noteViewportReady, notes, open, profile.id, seenNoteIds, selectedNoteUserId]);
@@ -5390,6 +5378,8 @@ useEffect(() => {
     if (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0) return;
     if (noteSending) return;
 
+    const optimisticId = `pending-${Date.now()}`;
+    let optimisticInserted = false;
     setNoteSending(true);
     try {
       const scope = normalizeNoteScope(noteModuleId, noteRecordId);
@@ -5411,6 +5401,7 @@ useEffect(() => {
       }
 
       const payload = {
+        org_id: profile.org_id,
         module_id: scope.module_id,
         record_id: scope.record_id,
         content: serializeNoteContent(renderedNoteText, mergedAttachments),
@@ -5422,15 +5413,33 @@ useEffect(() => {
         metadata: isSavingToMyNotes ? { saved_message: true } : groupPayload.metadata,
       };
 
+      const optimisticRow = {
+        ...payload,
+        id: optimisticId,
+        created_at: new Date().toISOString(),
+        is_edited: false,
+        edited_at: null,
+        __optimistic: true,
+      };
+      setNotes((prev) => [...prev, optimisticRow]);
+      setSelectedConversationNotes((prev) => mergeRowsByIdCreatedAsc(prev, [optimisticRow]));
+      optimisticInserted = true;
+
       const insertedNotes = await insertNotesWithFallback([payload]);
       if (Array.isArray(insertedNotes) && insertedNotes.length > 0) {
         const nextRows = insertedNotes as any[];
         setNotes((prev) => {
           const seen = new Set(nextRows.map((row) => String(row?.id || '').trim()).filter(Boolean));
-          return [...prev.filter((row: any) => !seen.has(String(row?.id || '').trim())), ...nextRows];
+          return [...prev.filter((row: any) => (
+            String(row?.id || '').trim() !== optimisticId
+            && !seen.has(String(row?.id || '').trim())
+          )), ...nextRows];
         });
         if (selectedConversationKey) {
-          setSelectedConversationNotes((prev) => mergeRowsByIdCreatedAsc(prev, nextRows));
+          setSelectedConversationNotes((prev) => mergeRowsByIdCreatedAsc(
+            prev.filter((row: any) => String(row?.id || '') !== optimisticId),
+            nextRows,
+          ));
         }
       }
       if (noteSmsNotificationEnabled) {
@@ -5452,6 +5461,10 @@ useEffect(() => {
         refreshUnreadSummary(),
       ]);
     } catch (error: any) {
+      if (optimisticInserted) {
+        setNotes((prev) => prev.filter((row: any) => String(row?.id || '') !== optimisticId));
+        setSelectedConversationNotes((prev) => prev.filter((row: any) => String(row?.id || '') !== optimisticId));
+      }
       message.error(toFaErrorMessage(error, 'ثبت یادداشت ناموفق بود.'));
     } finally {
       setNoteSending(false);
@@ -5570,6 +5583,7 @@ useEffect(() => {
   }, [noteLookup, profile.id]);
 
   useEffect(() => {
+    if (managedByRuntime) return;
     const currentNoteIds = new Set(notes.map((note: any) => String(note?.id || '')).filter(Boolean));
     const currentTaskIds = new Set(tasks.map((task: any) => String(task?.id || '')).filter(Boolean));
     const currentResponsibilityIds = new Set(responsibilities.map((item: any) => String(item?.id || '')).filter(Boolean));
@@ -5808,6 +5822,7 @@ useEffect(() => {
     chatGroupMap,
     directoryUserMap,
     dismissedUiNotificationIds,
+    managedByRuntime,
     notes,
     open,
     playNotificationChime,
@@ -5825,6 +5840,7 @@ useEffect(() => {
   ]);
 
   useEffect(() => {
+    if (managedByRuntime) return;
     setUiNotifications((prev) => prev.filter((item) => {
       const rawId = String(item?.id || '');
       const separatorIndex = rawId.indexOf(':');
@@ -5843,7 +5859,7 @@ useEffect(() => {
       if (kind === 'voip_call') return !isNotificationRead('voip_calls', 'voip_call', entityId, seenVoipCallIds.has(entityId));
       return false;
     }));
-  }, [dismissedUiNotificationIds, isNotificationRead, seenBotMessageIds, seenNoteIds, seenResponsibilityIds, seenSmsMessageIds, seenTaskIds, seenVoipCallIds]);
+  }, [dismissedUiNotificationIds, isNotificationRead, managedByRuntime, seenBotMessageIds, seenNoteIds, seenResponsibilityIds, seenSmsMessageIds, seenTaskIds, seenVoipCallIds]);
 
   const handleDismissUiNotification = useCallback((notificationId: string) => {
     setDismissedUiNotificationIds((prev) => new Set(prev).add(notificationId));
@@ -5930,6 +5946,7 @@ useEffect(() => {
   }, [markSmsMessagesAsSeen, markVoipCallsAsSeen, openPreviewRecord, recordTitleMap, resolveDirectConversationTargetUserId]);
 
   useEffect(() => {
+    if (managedByRuntime) return;
     if (open || uiNotifications.length === 0) {
       setUiNotificationOverlayItems([], overlaySource);
       return;
@@ -5954,11 +5971,12 @@ useEffect(() => {
       })),
       overlaySource,
     );
-  }, [handleDismissUiNotification, open, openUiNotification, overlaySource, uiNotifications]);
+  }, [handleDismissUiNotification, managedByRuntime, open, openUiNotification, overlaySource, uiNotifications]);
 
   useEffect(() => () => {
+    if (managedByRuntime) return;
     setUiNotificationOverlayItems([], overlaySource);
-  }, [overlaySource]);
+  }, [managedByRuntime, overlaySource]);
 
   useEffect(() => {
     setUiNotificationOverlaySuppressed(open, overlaySource);
@@ -6635,8 +6653,7 @@ useEffect(() => {
         </div>
       ) : (
         <>
-      {!triggerless ? (
-        <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
+        {renderTrigger ? <Badge count={formatBadgeCount(totalCount)} size="small" color={badgeColor}>
           <Button
             type="text"
             shape="circle"
@@ -6645,10 +6662,10 @@ useEffect(() => {
               setUiNotificationOverlaySuppressed(true, overlaySource);
               setDrawerContentMounted(true);
               setOpen(true);
+              onOpenChange?.(true);
             }}
           />
-        </Badge>
-      ) : null}
+        </Badge> : null}
 
       {isMobile ? (
         <Drawer

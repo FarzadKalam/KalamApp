@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
-import { buildImageBackgroundStyle, buildImagePreviewUrl, getImagePreviewCandidates, toImageTransformUrl } from './imagePreview';
+import { beforeEach, describe, expect, it } from 'vitest';
+import {
+  buildImageBackgroundStyle,
+  buildImagePreviewUrl,
+  getImagePreviewCandidates,
+  reportImageTransformFailure,
+  resetImageTransformFailureCacheForTest,
+  toImageTransformUrl,
+} from './imagePreview';
 
 describe('getImagePreviewCandidates', () => {
+  beforeEach(() => {
+    resetImageTransformFailureCacheForTest();
+  });
+
   it('returns transformed preview first and falls back to the original url when preview is enabled', () => {
     const url = 'https://example.com/storage/v1/object/public/images/record_files/tasks/1/photo.jpg';
     const candidates = getImagePreviewCandidates(url, 'thumb');
@@ -15,6 +26,15 @@ describe('getImagePreviewCandidates', () => {
   it('returns only original for non-transformable urls', () => {
     const url = 'data:image/png;base64,abc';
     expect(getImagePreviewCandidates(url, 'thumb')).toEqual([url]);
+  });
+
+  it('stops retrying transformed urls after the transform endpoint fails', () => {
+    const url = 'https://example.com/storage/v1/object/public/images/avatars/u1/photo.jpg';
+    const preview = getImagePreviewCandidates(url, 'avatar')[0];
+
+    reportImageTransformFailure(preview);
+
+    expect(getImagePreviewCandidates(url, 'avatar')).toEqual([url]);
   });
 
   it('can build a transformed url explicitly for print-safe diagnostics', () => {

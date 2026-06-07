@@ -1,7 +1,7 @@
 {
   "name": "tazesystem",
   "private": true,
-  "version": "2.0.5.3.0",
+  "version": "2.0.5.3.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "test": "vitest run",
     "test:critical-ui": "vitest run components/moduleShow/PrintSection.test.tsx components/SmartForm.test.tsx utils/notificationViewModels.test.ts utils/webForms.test.ts utils/printTemplates/printPerformance.test.ts",
     "test:module-show": "vitest run components/moduleShow/PrintSection.test.tsx",
-    "test:notifications": "vitest run utils/notificationViewModels.test.ts",
+    "test:notifications": "vitest run utils/notification utils/messageReceipts.test.ts utils/uiNotificationOverlayStore.test.ts hooks/useCommunicationTimeline.test.tsx components/notifications/SnoozeScheduleModal.test.ts",
     "test:task-status": "vitest run utils/processTaskStatusOptions.test.ts",
     "test:processes": "vitest run utils/taskRuntimeEvents.test.ts",
     "test:smart-form": "vitest run components/SmartForm.test.tsx utils/webForms.test.ts",

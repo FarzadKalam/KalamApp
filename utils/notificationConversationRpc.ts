@@ -49,8 +49,7 @@ export const isMissingRpcError = (error: any) => {
     || code === 'PGRST202'
     || code === 'PGRST204'
     || message.includes('could not find the function')
-    || message.includes('function public.')
-    || message.includes('does not exist')
+    || (message.includes('function public.') && message.includes('does not exist'))
   );
 };
 
