@@ -38,7 +38,7 @@ import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { syncRecordTags } from "../utils/recordTags";
 import { mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
-import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListVisibleFields } from "../utils/moduleListOptions";
+import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListVisibleFields, hydrateModuleListRelationOptionsForRows } from "../utils/moduleListOptions";
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
@@ -96,6 +96,28 @@ const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
 const getDefaultKanbanPageSize = () => 15;
+
+const getModuleTitleFa = (moduleConfig?: ModuleDefinition | null, options?: { singular?: boolean }) => {
+  if (!moduleConfig) return "ماژول";
+  if (options?.singular) {
+    return (
+      moduleConfig?.titles?.faSingular ||
+      moduleConfig?.titles?.fa ||
+      moduleConfig?.label?.fa ||
+      moduleConfig?.label?.en ||
+      moduleConfig?.id ||
+      "ماژول"
+    );
+  }
+  return (
+    moduleConfig?.titles?.fa ||
+    moduleConfig?.titles?.faSingular ||
+    moduleConfig?.label?.fa ||
+    moduleConfig?.label?.en ||
+    moduleConfig?.id ||
+    "ماژول"
+  );
+};
 
 const getTagViewFilterMeta = (filter: any, moduleConfig?: ModuleDefinition | null) => {
   if (!filter || typeof filter !== "object") return null;
@@ -204,7 +226,12 @@ const normalizeVisibleColumnsForView = (
   columns?: string[] | null,
 ) => {
   const sanitized = sanitizeModuleVisibleColumns(moduleId, moduleConfig, columns);
-  const isDefaultView = !currentView || currentView.is_default || String(currentView.id || '').startsWith('default_');
+  const builtInViewKey = String((currentView?.config as any)?.__built_in_view_key || '').trim();
+  const isDefaultView =
+    !currentView
+    || currentView.is_default
+    || String(currentView.id || '').startsWith('default_')
+    || builtInViewKey.startsWith('default_');
   if (!isDefaultView) return sanitized;
 
   const allFieldKeys = (moduleConfig?.fields || [])
@@ -1773,6 +1800,12 @@ export const ModuleListRefine: React.FC<{
     () => accessibleRecordIds.join("|"),
     [accessibleRecordIds]
   );
+  const visibleRelationFields = useMemo(
+    () => getModuleListVisibleFields(moduleConfig, visibleColumns).filter((field: any) =>
+      field?.type === FieldType.RELATION || field?.type === FieldType.USER
+    ),
+    [moduleConfig, visibleColumns]
+  );
   useEffect(() => {
     if (typeof window === "undefined" || !resolvedModuleId) return;
     const visibleRecordIds = (listVisibleRowKeys || accessibleRecordIds)
@@ -1921,6 +1954,42 @@ export const ModuleListRefine: React.FC<{
       isActive = false;
     };
   }, [resolvedModuleId, taskRelationLabelRequests, taskRelationLabelRequestsSignature]);
+
+  useEffect(() => {
+    if (!resolvedModuleId || !moduleConfig || visibleRelationFields.length === 0 || normalizedAccessibleData.length === 0) {
+      return;
+    }
+
+    let isActive = true;
+
+    const hydrateVisibleRelationLabels = async () => {
+      try {
+        const hydratedOptions = await hydrateModuleListRelationOptionsForRows(
+          supabase,
+          visibleRelationFields as any[],
+          normalizedAccessibleData,
+          { users: allUsers, roles: allRoles }
+        );
+        if (!isActive || Object.keys(hydratedOptions).length === 0) return;
+
+        const snapshot = writeModuleOptionSnapshot(resolvedModuleId, {
+          relationOptions: mergeOptionMaps(readModuleOptionSnapshot(resolvedModuleId)?.relationOptions, hydratedOptions),
+          allUsers,
+          allRoles,
+        });
+        if (!isActive || !snapshot) return;
+        setRelationOptions(snapshot.relationOptions || {});
+      } catch (error) {
+        console.warn("Could not hydrate visible relation labels for module list", error);
+      }
+    };
+
+    void hydrateVisibleRelationLabels();
+
+    return () => {
+      isActive = false;
+    };
+  }, [allRoles, allUsers, moduleConfig, normalizedAccessibleData, resolvedModuleId, visibleRelationFields]);
   const showListSkeleton =
     viewMode === ViewMode.LIST &&
     (
@@ -3928,12 +3997,12 @@ export const ModuleListRefine: React.FC<{
       items.push({
         key: "module_settings",
         icon: <SettingOutlined />,
-        label: `تنظیمات «${moduleConfig?.titles.fa || "ماژول"}»`,
+        label: `تنظیمات «${getModuleTitleFa(moduleConfig)}»`,
       });
     }
 
     return items;
-  }, [canEditModule, canOpenGoals, canOpenModuleSettings, canOpenWorkflows, isSystemManagedModule, resolvedModuleId, moduleConfig?.titles.fa]);
+  }, [canEditModule, canOpenGoals, canOpenModuleSettings, canOpenWorkflows, isSystemManagedModule, resolvedModuleId, moduleConfig]);
   const hasModuleActionItems = Array.isArray(moduleActionItems) && moduleActionItems.length > 0;
 
   const handleModuleActionClick: MenuProps["onClick"] = ({ key }) => {
@@ -3987,7 +4056,7 @@ export const ModuleListRefine: React.FC<{
             <div className="flex items-center gap-2 min-w-0 shrink-0">
                 <h1 className="text-2xl font-black text-gray-800 dark:text-white m-0 flex items-center gap-2 min-w-0">
                 <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
-                <span className="truncate">{moduleConfig.titles.fa}</span>
+                <span className="truncate">{getModuleTitleFa(moduleConfig)}</span>
             </h1>
             <Badge
                 overflowCount={999}
@@ -4123,7 +4192,7 @@ export const ModuleListRefine: React.FC<{
                     type="primary"
                     icon={<PlusOutlined />}
                     onClick={() => navigate(`/${resolvedModuleId}/create`)}
-                    aria-label={`افزودن ${moduleConfig.titles.faSingular || moduleConfig.titles.fa}`}
+                    aria-label={`افزودن ${getModuleTitleFa(moduleConfig, { singular: true })}`}
                     className="rounded-xl bg-leather-600 hover:!bg-leather-500 shadow-lg shadow-leather-500/30 shrink-0"
                   >
                     افزودن

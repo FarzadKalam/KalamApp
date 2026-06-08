@@ -5861,10 +5861,80 @@ useEffect(() => {
     }));
   }, [dismissedUiNotificationIds, isNotificationRead, managedByRuntime, seenBotMessageIds, seenNoteIds, seenResponsibilityIds, seenSmsMessageIds, seenTaskIds, seenVoipCallIds]);
 
-  const handleDismissUiNotification = useCallback((notificationId: string) => {
+  const handleDismissUiNotification = useCallback((item: UiNotificationItem) => {
+    const notificationId = String(item?.id || '').trim();
+    if (!notificationId) return;
+
+    if ((item.kind === 'note' || item.kind === 'assistant') && item.note) {
+      const sourceId = String(item.note?.id || '').trim();
+      if (sourceId && !isNotificationRead('notes', 'note', sourceId, seenNoteIds.has(sourceId))) {
+        startTransition(() => {
+          setSeenNoteIds((prev) => new Set(prev).add(sourceId));
+        });
+        setNotes((prev) => prev.map((note: any) => (
+          String(note?.id || '').trim() === sourceId ? { ...note, is_read: true } : note
+        )));
+        setSelectedConversationNotes((prev) => prev
+          ? prev.map((note: any) => (
+            String(note?.id || '').trim() === sourceId ? { ...note, is_read: true } : note
+          ))
+          : prev
+        );
+        markNotificationEntriesRead([{ section: 'notes', sourceType: 'note', sourceId }]);
+        if (noteConversationSummaryAvailable) {
+          debouncedRefreshNoteConversationSummaries();
+        }
+        void refreshUnreadSummary();
+      }
+    } else if (item.kind === 'task' && item.task) {
+      markTasksAsSeen([item.task]);
+    } else if (item.kind === 'responsibility' && item.responsibility) {
+      markResponsibilitiesAsSeen([item.responsibility]);
+    } else if (item.kind === 'bot' && item.botMessage) {
+      const sourceId = String(item.botMessage?.id || '').trim();
+      if (
+        sourceId
+        && String(item.botMessage?.direction || '').trim() === 'inbound'
+        && !isNotificationRead('bot_messages', 'counterparty_bot_message', sourceId, seenBotMessageIds.has(sourceId))
+      ) {
+        startTransition(() => {
+          setSeenBotMessageIds((prev) => new Set(prev).add(sourceId));
+        });
+        setBotMessages((prev) => prev
+          ? prev.map((row: any) => (
+            String(row?.id || '').trim() === sourceId ? { ...row, is_read: true } : row
+          ))
+          : prev
+        );
+        markNotificationEntriesRead([{ section: 'bot_messages', sourceType: 'counterparty_bot_message', sourceId }]);
+        if (botConversationSummaryAvailable) {
+          debouncedRefreshBotConversationSummaries();
+        }
+        void refreshUnreadSummary();
+      }
+    } else if (item.kind === 'sms' && item.smsMessage) {
+      markSmsMessagesAsSeen([item.smsMessage]);
+    } else if (item.kind === 'voip_call' && item.voipCall) {
+      markVoipCallsAsSeen([item.voipCall]);
+    }
+
     setDismissedUiNotificationIds((prev) => new Set(prev).add(notificationId));
-    setUiNotifications((prev) => prev.filter((item) => item.id !== notificationId));
-  }, []);
+    setUiNotifications((prev) => prev.filter((entry) => entry.id !== notificationId));
+  }, [
+    botConversationSummaryAvailable,
+    debouncedRefreshBotConversationSummaries,
+    debouncedRefreshNoteConversationSummaries,
+    isNotificationRead,
+    markNotificationEntriesRead,
+    markResponsibilitiesAsSeen,
+    markSmsMessagesAsSeen,
+    markTasksAsSeen,
+    markVoipCallsAsSeen,
+    noteConversationSummaryAvailable,
+    refreshUnreadSummary,
+    seenBotMessageIds,
+    seenNoteIds,
+  ]);
 
   const openUiNotification = useCallback((item: UiNotificationItem) => {
     if ((item.kind === 'note' || item.kind === 'assistant') && item.note) {
@@ -5967,7 +6037,7 @@ useEffect(() => {
         createdAt: item.createdAt,
         hasAttachments: item.hasAttachments,
         onOpen: () => openUiNotification(item),
-        onDismiss: () => handleDismissUiNotification(item.id),
+        onDismiss: () => handleDismissUiNotification(item),
       })),
       overlaySource,
     );

@@ -110,6 +110,8 @@ import { resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../ut
 import { fetchAssigneeDirectory } from '../utils/referenceData';
 import { employeesModule } from '../modules/employeesConfig';
 import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, type ModulePermissionConfig } from '../utils/permissions';
+import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
+import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensation } from '../utils/payrollSalaryType';
 
 type TaskRecord = {
   id: string;
@@ -1572,17 +1574,12 @@ const HRPage: React.FC = () => {
           .limit(HR_TASK_FETCH_LIMIT);
       };
 
-      const [employeesResult, initialTasksResult, formulasResult] = await Promise.all([
+      const [employeesResult, initialTasksResult] = await Promise.all([
         supabase.from('employees').select(HR_EMPLOYEE_SELECT).order('full_name', { ascending: true }),
         buildHrTasksQuery(HR_TASK_SELECT),
-        supabase
-          .from('calculation_formulas')
-          .select('id, name')
-          .order('name', { ascending: true }),
       ]);
 
       if (employeesResult.error) throw employeesResult.error;
-      if (formulasResult.error) throw formulasResult.error;
 
       let tasksResult = initialTasksResult;
       if (tasksResult.error && isMissingSelectColumnError(tasksResult.error)) {
@@ -1795,7 +1792,8 @@ const HRPage: React.FC = () => {
       setTasks(normalizedTasks);
       setActivityPerformanceEntries(nextActivityPerformanceEntries);
 
-      const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult, bonusStatsResult, penaltyStatsResult] = await Promise.allSettled([
+      const supportStatsPromise = (async () => {
+        const [attendanceStatsResult, schedulesStatsResult, leaveStatsResult, overtimeStatsResult, missionStatsResult, bonusStatsResult, penaltyStatsResult] = await Promise.allSettled([
         supabase
           .from('attendance_logs')
           .select('id, assignee_id, employee_id, related_profile_id, log_type, occurred_at, attendance_date, check_in_time, check_out_time, source_type, actual_check_in_time, actual_check_out_time, manual_check_in_time, manual_check_out_time, location_text, notes, created_by, updated_by, created_at, updated_at')
@@ -1841,13 +1839,13 @@ const HRPage: React.FC = () => {
           .select('id, employee_id, title, status, effective_date, reason, notes, created_at, updated_at')
           .order('created_at', { ascending: false })
           .limit(HR_STATS_FETCH_LIMIT),
-      ]);
+        ]);
 
-      const nextSupportStats: HrSupportStats = { ...EMPTY_HR_SUPPORT_STATS };
-      let nextAttendanceRows: AttendanceLogRecord[] = [];
-      let nextScheduleRows: WorkScheduleDashboardRow[] = [];
-      const nextRequestRows: HrRequestRecord[] = [];
-      let nextLeaveRequests: ApprovedLeaveRequest[] = [];
+        const nextSupportStats: HrSupportStats = { ...EMPTY_HR_SUPPORT_STATS };
+        let nextAttendanceRows: AttendanceLogRecord[] = [];
+        let nextScheduleRows: WorkScheduleDashboardRow[] = [];
+        const nextRequestRows: HrRequestRecord[] = [];
+        let nextLeaveRequests: ApprovedLeaveRequest[] = [];
 
       if (attendanceStatsResult.status === 'fulfilled' && !attendanceStatsResult.value.error) {
         const rows = attendanceStatsResult.value.data || [];
@@ -2059,6 +2057,7 @@ const HRPage: React.FC = () => {
           return bDate - aDate;
         }),
       );
+      })();
 
       const lineIds = Array.from(
         new Set(
@@ -2124,6 +2123,13 @@ const HRPage: React.FC = () => {
         setSelectedEmployeeIds(defaultSelectedIds);
         setEmployeeFilterInitialized(true);
       }
+
+      if (!silent) {
+        setLoading(false);
+        setRefreshing(true);
+      }
+
+      await supportStatsPromise;
     } catch (err: any) {
       message.error(toFaErrorMessage(err as any, 'خطا در دریافت داده‌های منابع انسانی'));
     } finally {
@@ -3150,6 +3156,38 @@ const HRPage: React.FC = () => {
     selectedEmployeeIds,
   ]);
 
+  const attendancePresenceMinutesByEmployeeId = useMemo(() => {
+    const next = new Map<string, number>();
+    attendanceComputedRows.forEach((row) => {
+      const employeeIdValue = String(row.employeeId || '').trim();
+      if (!employeeIdValue) return;
+      next.set(employeeIdValue, (next.get(employeeIdValue) || 0) + calculateAttendanceRowPresenceMinutes(row));
+    });
+    return next;
+  }, [attendanceComputedRows]);
+
+  const computeRequiredWorkMinutesForProfile = useCallback((profile: ProfileRecord | null | undefined) => {
+    if (!profile?.id) return 0;
+    let total = 0;
+    let cursor = monthStart.startOf('day');
+    const end = monthEnd.startOf('day');
+    while (cursor.valueOf() <= end.valueOf()) {
+      const dateIso = toNativeGregorianDateString(cursor);
+      const schedule = computeScheduleForEmployee(String(profile.id), dateIso);
+      if (schedule.shifts.length > 0) {
+        total += schedule.shifts.reduce((sum, shift) => {
+          const start = timeToMinutes(shift.start);
+          const finish = timeToMinutes(shift.end);
+          return sum + (start !== null && finish !== null && finish > start ? finish - start : 0);
+        }, 0);
+      } else if (cursor.toDate().getDay() !== 5) {
+        total += toNumber(profile.expected_daily_minutes || 480);
+      }
+      cursor = cursor.add(1, 'day');
+    }
+    return total;
+  }, [computeScheduleForEmployee, monthEnd, monthStart]);
+
   const visibleScheduleRows = useMemo(() => {
     return scheduleRows.filter((schedule) => {
       const rawColumns = Array.isArray((schedule.weekly_plan as any)?.columns) ? (schedule.weekly_plan as any).columns : [];
@@ -3178,24 +3216,51 @@ const HRPage: React.FC = () => {
 
   const totals = useMemo(() => {
     return visibleSummaries.reduce(
-      (acc, row) => ({
-        employees: acc.employees + 1,
-        totalTasks: acc.totalTasks + row.totalTasks,
-        done: acc.done + row.doneCount,
-        overdue: acc.overdue + row.overdueOpenCount,
-        payable: acc.payable + row.netPayable,
-      }),
+      (acc, row) => {
+        const employeeIdValue = String(row.profile.source_id || row.profile.id || '').trim();
+        const compensation = resolvePayrollBaseCompensation({
+          salaryType: row.profile.salary_type,
+          baseSalary: row.profile.base_salary,
+          hourlyRate: row.profile.hourly_rate,
+          presenceMinutes: employeeIdValue ? (attendancePresenceMinutesByEmployeeId.get(employeeIdValue) || 0) : 0,
+          requiredMinutes: computeRequiredWorkMinutesForProfile(row.profile),
+        });
+        const netPayable = compensation.amount
+          + row.taskWageTotal
+          + row.activityWageTotal
+          + row.bonusTotal
+          - row.penaltyTotal;
+        return {
+          employees: acc.employees + 1,
+          totalTasks: acc.totalTasks + row.totalTasks,
+          done: acc.done + row.doneCount,
+          overdue: acc.overdue + row.overdueOpenCount,
+          payable: acc.payable + netPayable,
+        };
+      },
       { employees: 0, totalTasks: 0, done: 0, overdue: 0, payable: 0 },
     );
-  }, [visibleSummaries]);
+  }, [attendancePresenceMinutesByEmployeeId, computeRequiredWorkMinutesForProfile, visibleSummaries]);
 
   const insuranceTotals = useMemo(() => {
     return visibleSummaries.reduce(
       (acc, row) => {
         if (row.profile.insurance_subject === false) return acc;
+        const employeeIdValue = String(row.profile.source_id || row.profile.id || '').trim();
+        const compensation = resolvePayrollBaseCompensation({
+          salaryType: row.profile.salary_type,
+          baseSalary: row.profile.base_salary,
+          hourlyRate: row.profile.hourly_rate,
+          presenceMinutes: employeeIdValue ? (attendancePresenceMinutesByEmployeeId.get(employeeIdValue) || 0) : 0,
+          requiredMinutes: computeRequiredWorkMinutesForProfile(row.profile),
+        });
         const employeeRate = toNumber(row.profile.employee_insurance_rate);
         const employerRate = toNumber(row.profile.employer_insurance_rate);
-        const base = toNumber(row.baseSalary);
+        const base = compensation.amount
+          + row.taskWageTotal
+          + row.activityWageTotal
+          + row.bonusTotal
+          - row.penaltyTotal;
         return {
           employee: acc.employee + ((base * employeeRate) / 100),
           employer: acc.employer + ((base * employerRate) / 100),
@@ -3203,7 +3268,7 @@ const HRPage: React.FC = () => {
       },
       { employee: 0, employer: 0 },
     );
-  }, [visibleSummaries]);
+  }, [attendancePresenceMinutesByEmployeeId, computeRequiredWorkMinutesForProfile, visibleSummaries]);
 
   const performanceTotals = useMemo(() => {
     const totalsRow = visibleSummaries.reduce(
@@ -3413,27 +3478,19 @@ const HRPage: React.FC = () => {
     };
   }, [attendanceComputedRows]);
 
-  const computeRequiredWorkMinutesForProfile = useCallback((profile: ProfileRecord | null | undefined) => {
-    if (!profile?.id) return 0;
-    let total = 0;
-    let cursor = monthStart.startOf('day');
-    const end = monthEnd.startOf('day');
-    while (cursor.valueOf() <= end.valueOf()) {
-      const dateIso = toNativeGregorianDateString(cursor);
-      const schedule = computeScheduleForEmployee(String(profile.id), dateIso);
-      if (schedule.shifts.length > 0) {
-        total += schedule.shifts.reduce((sum, shift) => {
-          const start = timeToMinutes(shift.start);
-          const finish = timeToMinutes(shift.end);
-          return sum + (start !== null && finish !== null && finish > start ? finish - start : 0);
-        }, 0);
-      } else if (cursor.toDate().getDay() !== 5) {
-        total += toNumber(profile.expected_daily_minutes || 480);
-      }
-      cursor = cursor.add(1, 'day');
+  const resolveSummaryPayrollBaseCompensation = useCallback((row: EmployeeSummaryRow | null | undefined) => {
+    if (!row?.profile) {
+      return resolvePayrollBaseCompensation({ salaryType: DEFAULT_SALARY_TYPE });
     }
-    return total;
-  }, [computeScheduleForEmployee, monthEnd, monthStart]);
+    const employeeIdValue = String(row.profile.source_id || row.profile.id || '').trim();
+    return resolvePayrollBaseCompensation({
+      salaryType: row.profile.salary_type,
+      baseSalary: row.profile.base_salary,
+      hourlyRate: row.profile.hourly_rate,
+      presenceMinutes: employeeIdValue ? (attendancePresenceMinutesByEmployeeId.get(employeeIdValue) || 0) : 0,
+      requiredMinutes: computeRequiredWorkMinutesForProfile(row.profile),
+    });
+  }, [attendancePresenceMinutesByEmployeeId, computeRequiredWorkMinutesForProfile]);
 
   const payrollWizardSummary = useMemo(() => {
     if (!payrollWizardEmployeeId) return null;
@@ -3475,31 +3532,54 @@ const HRPage: React.FC = () => {
     [computeRequiredWorkMinutesForProfile, payrollWizardSummary?.profile],
   );
 
-  const payrollWizardHourlyRate = useMemo(() => {
-    const profile = payrollWizardSummary?.profile;
-    const explicitRate = toNumber(profile?.hourly_rate);
-    if (explicitRate > 0) return explicitRate;
-    const requiredHours = payrollWizardRequiredMinutes / 60;
-    return requiredHours > 0 ? toNumber(profile?.base_salary) / requiredHours : 0;
-  }, [payrollWizardRequiredMinutes, payrollWizardSummary?.profile]);
+  const payrollWizardBaseCompensation = useMemo(() => {
+    return resolvePayrollBaseCompensation({
+      salaryType: payrollWizardSummary?.profile?.salary_type,
+      baseSalary: payrollWizardSummary?.profile?.base_salary,
+      hourlyRate: payrollWizardSummary?.profile?.hourly_rate,
+      presenceMinutes: calculatePresenceMinutes(payrollWizardAttendanceRows),
+      requiredMinutes: payrollWizardRequiredMinutes,
+    });
+  }, [
+    payrollWizardAttendanceRows,
+    payrollWizardRequiredMinutes,
+    payrollWizardSummary?.profile?.base_salary,
+    payrollWizardSummary?.profile?.hourly_rate,
+    payrollWizardSummary?.profile?.salary_type,
+  ]);
+
+  const payrollWizardHourlyRate = useMemo(
+    () => payrollWizardBaseCompensation.hourlyRate,
+    [payrollWizardBaseCompensation.hourlyRate],
+  );
 
   const payrollWizardLedgerNet = useMemo(
     () => payrollWizardOpenLedger.reduce((sum, entry) => sum + toNumber(entry.amount), 0),
     [payrollWizardOpenLedger],
   );
 
+  const payrollWizardBaseNetPayable = useMemo(() => {
+    const row = payrollWizardSummary;
+    if (!row) return 0;
+    return payrollWizardBaseCompensation.amount
+      + row.taskWageTotal
+      + row.activityWageTotal
+      + row.bonusTotal
+      - row.penaltyTotal;
+  }, [payrollWizardBaseCompensation.amount, payrollWizardSummary]);
+
   const payrollWizardInsurance = useMemo(() => {
     const row = payrollWizardSummary;
     if (!row || row.profile.insurance_subject === false) return { employee: 0, employer: 0 };
     return {
-      employee: (row.netPayable * toNumber(row.profile.employee_insurance_rate)) / 100,
-      employer: (row.netPayable * toNumber(row.profile.employer_insurance_rate)) / 100,
+      employee: (payrollWizardBaseNetPayable * toNumber(row.profile.employee_insurance_rate)) / 100,
+      employer: (payrollWizardBaseNetPayable * toNumber(row.profile.employer_insurance_rate)) / 100,
     };
-  }, [payrollWizardSummary]);
+  }, [payrollWizardBaseNetPayable, payrollWizardSummary]);
 
   const payrollWizardFinalNet = useMemo(
-    () => toNumber(payrollWizardSummary?.netPayable) + payrollWizardLedgerNet - payrollWizardInsurance.employee,
-    [payrollWizardInsurance.employee, payrollWizardLedgerNet, payrollWizardSummary?.netPayable],
+    () => payrollWizardBaseNetPayable + payrollWizardLedgerNet - payrollWizardInsurance.employee,
+    [payrollWizardBaseNetPayable, payrollWizardInsurance.employee, payrollWizardLedgerNet],
   );
 
   const openPayrollWizard = useCallback((employeeIdValue: string) => {
@@ -4675,17 +4755,9 @@ const HRPage: React.FC = () => {
       const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
       const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
 
-      // محاسبه حقوق بر اساس نوع salary_type
-      const salaryType = String(row.profile?.salary_type || 'fixed_only');
-      const isHourly = salaryType.startsWith('hourly');
-      const hasFixed = salaryType.startsWith('fixed') || salaryType === 'fixed_only';
       const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
       const presenceHours = presenceMinutesValue / 60;
-      const hourlyWageTotal = isHourly && payrollWizardHourlyRate > 0
-        ? Math.round(presenceHours * payrollWizardHourlyRate)
-        : 0;
-      // برای انواع ساعتی، حقوق پایه از محاسبه ساعتی می‌آید نه فیلد base_salary
-      const effectiveBaseSalary = isHourly ? hourlyWageTotal : (hasFixed ? row.baseSalary : 0);
+      const effectiveBaseSalary = payrollWizardBaseCompensation.amount;
       const totalEarnings = effectiveBaseSalary + row.taskWageTotal + ledgerBonusTotal;
 
       const employeeInsuranceAmount = row.profile?.insurance_subject === false
@@ -4712,8 +4784,8 @@ const HRPage: React.FC = () => {
         gross_amount: totalEarnings,
         net_amount: totalEarnings - ledgerDeductionTotal - employeeInsuranceAmount,
         lines: [
-          ...(isHourly && hourlyWageTotal > 0 ? [{ line_type: 'earning', title: 'دستمزد ساعتی', amount: hourlyWageTotal, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} تومان/ساعت` }] : []),
-          ...(!isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: 'حقوق پایه', amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
+          ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} تومان/ساعت` }] : []),
+          ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
           ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` }] : []),
           ...ledgerLines,
           ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
@@ -4783,6 +4855,9 @@ const HRPage: React.FC = () => {
     navigate,
     payrollSlipByEmployeeId,
     payrollWizardAttendanceRows,
+    payrollWizardBaseCompensation.amount,
+    payrollWizardBaseCompensation.displayTitle,
+    payrollWizardBaseCompensation.isHourly,
     payrollWizardHourlyRate,
     payrollWizardRequiredMinutes,
     payrollWizardSummary,
@@ -4800,6 +4875,7 @@ const HRPage: React.FC = () => {
       ? payrollWizardDraftValues[fieldKey]
       : baseValue;
     const allValues = { ...profile, ...payrollWizardDraftValues, [fieldKey]: fieldValue };
+    if (!evaluateLegacyVisibilityRule(field.logic, allValues)) return null;
 
     if (isEditing) {
       return (
@@ -4917,6 +4993,7 @@ const HRPage: React.FC = () => {
         </Button>
       </div>
       <div className="flex flex-wrap gap-1 mb-2">
+        <Tag color="gold">{getSalaryTypeLabelFa(row.profile.salary_type)}</Tag>
         <Tag color="blue">کل {toPersianNumber(row.totalTasks)}</Tag>
         <Tag color="green">انجام‌شده {toPersianNumber(row.doneCount)}</Tag>
         <Tag color="orange">به‌موقع/تعجیل {toPersianNumber(row.doneEarlyCount + row.doneOnTimeCount)}</Tag>
@@ -5470,10 +5547,18 @@ const HRPage: React.FC = () => {
       render: (val: string) => <span className="font-bold text-leather-700">{val}</span>,
     },
     {
+      title: 'نوع حقوق',
+      key: 'salaryType',
+      render: (_: unknown, row: EmployeeSummaryRow) => <Tag color="gold">{getSalaryTypeLabelFa(row.profile.salary_type)}</Tag>,
+    },
+    {
       title: 'حقوق پایه',
       dataIndex: 'baseSalary',
       key: 'baseSalary',
-      render: (val: number) => <span className="persian-number">{formatMoney(val)}</span>,
+      render: (_: number, row: EmployeeSummaryRow) => {
+        const compensation = resolveSummaryPayrollBaseCompensation(row);
+        return <span className="persian-number">{formatMoney(compensation.amount)}</span>;
+      },
     },
     {
       title: 'کارکرد',
@@ -5537,11 +5622,17 @@ const HRPage: React.FC = () => {
       title: 'خالص پیشنهادی',
       key: 'netPayable',
       render: (_: unknown, row: EmployeeSummaryRow) => {
+        const compensation = resolveSummaryPayrollBaseCompensation(row);
+        const baseNetPayable = compensation.amount
+          + row.taskWageTotal
+          + row.activityWageTotal
+          + row.bonusTotal
+          - row.penaltyTotal;
         const totals = payrollLedgerTotalsByEmployeeId.get(String(row.profile.source_id || row.profile.id));
         const insurance = row.profile.insurance_subject === false
           ? 0
-          : (row.netPayable * toNumber(row.profile.employee_insurance_rate)) / 100;
-        return <span className="persian-number font-bold">{formatMoney(row.netPayable + (totals?.proposedNet || 0) - insurance)}</span>;
+          : (baseNetPayable * toNumber(row.profile.employee_insurance_rate)) / 100;
+        return <span className="persian-number font-bold">{formatMoney(baseNetPayable + (totals?.proposedNet || 0) - insurance)}</span>;
       },
     },
     {
@@ -5798,6 +5889,7 @@ const HRPage: React.FC = () => {
             <span className="w-2 h-8 bg-leather-500 rounded-full inline-block shrink-0"></span>
             <span className="truncate">جزئیات عملکرد - {selectedEmployeeSummary.name}</span>
           </h1>
+          <Tag color="gold">{getSalaryTypeLabelFa(selectedEmployeeSummary.profile.salary_type)}</Tag>
           <Badge
             count={selectedEmployeeSummary.detailRows.length}
             overflowCount={999}
@@ -6426,7 +6518,14 @@ const HRPage: React.FC = () => {
                 <Col xs={24} md={6}>
                   <Card>
                     <div className="text-xs text-gray-500 mb-1">خالص قابل پرداخت</div>
-                    <div className="text-2xl font-black">{formatMoney(selectedEmployeeSummary.netPayable)}</div>
+                    <div className="text-2xl font-black">{formatMoney((() => {
+                      const compensation = resolveSummaryPayrollBaseCompensation(selectedEmployeeSummary);
+                      return compensation.amount
+                        + selectedEmployeeSummary.taskWageTotal
+                        + selectedEmployeeSummary.activityWageTotal
+                        + selectedEmployeeSummary.bonusTotal
+                        - selectedEmployeeSummary.penaltyTotal;
+                    })())}</div>
                   </Card>
                 </Col>
               </Row>
@@ -6651,11 +6750,12 @@ const HRPage: React.FC = () => {
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حضور موثر</div><div className="persian-number text-2xl font-black">{toPersianNumber((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60).toFixed(1))} ساعت</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ساعات موظف</div><div className="persian-number text-2xl font-black">{toPersianNumber((payrollWizardRequiredMinutes / 60).toFixed(1))} ساعت</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">نرخ ساعتی</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardHourlyRate)}</div></Card></Col>
-                  {String(payrollWizardSummary.profile?.salary_type || '').startsWith('hourly') ? (
-                    <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">دستمزد ساعتی محاسبه‌شده</div><div className="persian-number text-2xl font-black text-blue-700">{formatMoney(Math.round((calculatePresenceMinutes(payrollWizardAttendanceRows) / 60) * payrollWizardHourlyRate))}</div></Card></Col>
-                  ) : (
-                    <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حقوق پایه (ثابت)</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.baseSalary)}</div></Card></Col>
-                  )}
+                  <Col xs={24} md={6}>
+                    <Card>
+                      <div className="text-xs text-gray-500 mb-1">{payrollWizardBaseCompensation.isHourly ? 'دستمزد ساعتی محاسبه‌شده' : 'حقوق پایه (ثابت)'}</div>
+                      <div className={`persian-number text-2xl font-black ${payrollWizardBaseCompensation.isHourly ? 'text-blue-700' : ''}`}>{formatMoney(payrollWizardBaseCompensation.amount)}</div>
+                    </Card>
+                  </Col>
                 </Row>
                 <Row gutter={[12, 12]}>
                   <Col xs={24} md={12}><Card><div className="text-xs text-gray-500 mb-1">اضافه‌کاری آماده فیش</div><div className="persian-number text-2xl font-black text-green-700">{formatMoney(payrollLedgerTotalsByEmployeeId.get(String(payrollWizardSummary.profile.source_id || payrollWizardSummary.profile.id))?.attendance || 0)}</div></Card></Col>
@@ -6820,7 +6920,7 @@ const HRPage: React.FC = () => {
             {payrollWizardStep === 3 ? (
               <div className="space-y-4">
                 <Row gutter={[12, 12]}>
-                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">حقوق پایه</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.baseSalary)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">{payrollWizardBaseCompensation.displayTitle}</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardBaseCompensation.amount)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">کارکرد فعالیت‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.taskWageTotal)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ردیف‌های انتخابی فیش</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardLedgerNet)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">بیمه سهم کارمند</div><div className="persian-number text-2xl font-black text-red-700">{formatMoney(payrollWizardInsurance.employee)}</div></Card></Col>
@@ -6832,7 +6932,7 @@ const HRPage: React.FC = () => {
                     size="small"
                     pagination={false}
                     dataSource={[
-                      { key: 'base', title: 'حقوق پایه', amount: payrollWizardSummary.baseSalary, type: 'earning' },
+                      { key: 'base', title: payrollWizardBaseCompensation.displayTitle, amount: payrollWizardBaseCompensation.amount, type: 'earning' },
                       { key: 'task', title: 'کارکرد فعالیت‌ها', amount: payrollWizardSummary.taskWageTotal, type: 'earning' },
                       ...payrollWizardOpenLedger.map((entry) => ({
                         key: entry.id,
@@ -7421,21 +7521,24 @@ const HRPage: React.FC = () => {
               <div key={block.id} className="mb-5 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
                 <div className="mb-4 text-sm font-black text-gray-800 dark:text-gray-100">{block.titles?.fa || 'تنظیمات'}</div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-                  {blockFields.map((field: any) => (
-                    <Form.Item key={field.key} label={field.labels?.fa || 'فیلد'}>
-                      <SmartFieldRenderer
-                        field={field}
-                        value={configForm.getFieldValue(field.key)}
-                        onChange={(value) => configForm.setFieldValue(String(field.key), value)}
-                        allValues={configForm.getFieldsValue(true)}
-                        moduleId="employees"
-                        forceEditMode
-                        overlayZIndexBase={12000}
-                        popupContainer={resolveOverlayPopupContainer}
-                        preferLocalPopupContainer
-                      />
-                    </Form.Item>
-                  ))}
+                  {blockFields.map((field: any) => {
+                    if (!evaluateLegacyVisibilityRule(field.logic, configForm.getFieldsValue(true))) return null;
+                    return (
+                      <Form.Item key={field.key} label={field.labels?.fa || 'فیلد'}>
+                        <SmartFieldRenderer
+                          field={field}
+                          value={configForm.getFieldValue(field.key)}
+                          onChange={(value) => configForm.setFieldValue(String(field.key), value)}
+                          allValues={configForm.getFieldsValue(true)}
+                          moduleId="employees"
+                          forceEditMode
+                          overlayZIndexBase={12000}
+                          popupContainer={resolveOverlayPopupContainer}
+                          preferLocalPopupContainer
+                        />
+                      </Form.Item>
+                    );
+                  })}
                 </div>
               </div>
             );

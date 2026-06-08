@@ -17,7 +17,7 @@ import {
   workflowOperatorNumericValue,
   workflowOperatorNeedsValue,
 } from '../../utils/filterUtils';
-import { WorkflowCondition, createWorkflowId } from '../../utils/workflowTypes';
+import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition, createWorkflowId } from '../../utils/workflowTypes';
 
 interface WorkflowConditionsGroupProps {
   value: WorkflowCondition[];
@@ -293,7 +293,13 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     }
 
     const options = getFieldOptions(field, dynamicOptions, relationOptions);
-    const expectsListValue = condition.operator === 'in' || condition.operator === 'not_in';
+    const expectsListValue =
+      condition.operator === 'in'
+      || condition.operator === 'not_in'
+      || (
+        field.key === WORKFLOW_ASSIGNEE_FIELD_KEY
+        && (condition.operator === 'contains' || condition.operator === 'not_contains')
+      );
 
     if (field.dynamicOptionsCategory) {
       return (

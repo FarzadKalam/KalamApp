@@ -1,10 +1,12 @@
 import { useSyncExternalStore } from 'react';
 
 export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms';
+export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'sms' | 'voip' | 'generic';
 
 export interface UiNotificationOverlayItem {
   id: string;
   kind: OverlayNotificationKind;
+  channel?: OverlayNotificationChannel;
   kindLabel?: string;
   title: string;
   body: string;
@@ -58,6 +60,7 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
     if (
       leftItem?.id !== rightItem?.id
       || leftItem?.kind !== rightItem?.kind
+      || leftItem?.channel !== rightItem?.channel
       || leftItem?.kindLabel !== rightItem?.kindLabel
       || leftItem?.title !== rightItem?.title
       || leftItem?.body !== rightItem?.body

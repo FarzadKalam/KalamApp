@@ -1,6 +1,6 @@
 # Documentation Index
 
-**Last Updated:** 2026-03-31  
+**Last Updated:** 2026-06-08  
 **Purpose:** مرجع وضعیت اسناد پروژه برای جلوگیری از استفاده از فایل‌های قدیمی
 
 ## 1) Current (Primary Sources)
@@ -16,6 +16,9 @@
 7. `WORKFLOWS_PROCESS_AUTOMATION_FA.md` - مرجع طراحی workflow های عمومی و process automation
 8. `VOIP_TELEFONCHY_IMPLEMENTATION_GUIDE_FA.md` - راهنمای پیاده‌سازی VoIP با Telefonchy
 9. `telefonchy-api-reference-fa.md` - خلاصه مستندات API تلفنچی برای KalamApp
+10. `PERFORMANCE_RUNTIME_GUIDE_FA.md` - قواعد اجباری کارایی برای Dashboard، ModuleList، ModuleShow و lookupهای جنریک
+11. `app-versioning.md` - روال رسمی ثبت نسخه و release notes
+12. `SEO_COMPLETE_GUIDE_FA.md` - راهنمای کامل SEO: راه‌اندازی اولیه، چک‌لیست انتشار محتوا، نگهداری دوره‌ای، AI search
 
 ## 2) Needs Update (Not Fully Aligned With v1)
 

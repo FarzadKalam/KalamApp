@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { HelmetProvider } from "react-helmet-async";
 import { createRoot } from "react-dom/client";
 import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
@@ -6,7 +7,8 @@ import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
-import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams, useLocation } from "react-router-dom";
+import { trackPageView, sendWebVitals } from "./utils/analytics";
 import ConfigProvider from "antd/es/config-provider";
 import AntdApp from "antd/es/app";
 import antdTheme from "antd/es/theme";
@@ -54,6 +56,19 @@ focusManager.setEventListener(() => {
 });
 focusManager.setFocused(true);
 
+const getModuleLabelFa = (moduleId?: string) => {
+  const moduleConfig = moduleId ? MODULES?.[moduleId] : undefined;
+  return (
+    moduleConfig?.titles?.fa ||
+    moduleConfig?.titles?.faSingular ||
+    moduleConfig?.label?.fa ||
+    moduleConfig?.label?.en ||
+    moduleConfig?.id ||
+    moduleId ||
+    ""
+  );
+};
+
 const loadProfilePage = () => import("./pages/ProfilePage");
 const loadSettingsPage = () => import("./pages/Settings/SettingsPage");
 const loadModuleListRefine = () => import("./pages/ModuleList_Refine");
@@ -92,6 +107,7 @@ const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
+const loadCmsPostEditor = () => import("./pages/SaasAdmin/CmsPostEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadLayout = () => import("./components/Layout");
@@ -134,6 +150,7 @@ const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
+const CmsPostEditor = lazy(loadCmsPostEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const Layout = lazy(loadLayout);
@@ -208,6 +225,14 @@ const getInitialBranding = (): BrandingConfig => {
 
 const SilentRouteFallback = () => null;
 
+const RouteTracker: React.FC = () => {
+  const location = useLocation();
+  useEffect(() => {
+    trackPageView(location.pathname + location.search);
+  }, [location.pathname, location.search]);
+  return null;
+};
+
 const isSaasOnboardingPath = (pathname?: string, saasAppHost = false) => {
   if (!saasAppHost) return false;
   const normalized = String(pathname || "").trim();
@@ -230,8 +255,34 @@ const MarketingSiteHostApp: React.FC = () => {
     if (!existing) document.head.appendChild(link);
   }, []);
 
+  useEffect(() => {
+    // GTM فقط برای سایت عمومی
+    const gtmId = import.meta.env.VITE_GTM_ID as string | undefined;
+    if (!gtmId) return;
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = `https://www.googletagmanager.com/gtm.js?id=${gtmId}`;
+    document.head.appendChild(script);
+    const noscript = document.createElement('noscript');
+    const iframe = document.createElement('iframe');
+    iframe.src = `https://www.googletagmanager.com/ns.html?id=${gtmId}`;
+    iframe.height = '0';
+    iframe.width = '0';
+    iframe.style.cssText = 'display:none;visibility:hidden';
+    noscript.appendChild(iframe);
+    document.body.insertBefore(noscript, document.body.firstChild);
+  }, []);
+
+  useEffect(() => {
+    sendWebVitals();
+  }, []);
+
   return (
+    <HelmetProvider>
     <BrowserRouter>
+      <RouteTracker />
       <ConfigProvider
         direction="rtl"
         locale={faIR}
@@ -252,6 +303,7 @@ const MarketingSiteHostApp: React.FC = () => {
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>
+    </HelmetProvider>
   );
 };
 
@@ -472,7 +524,7 @@ function App() {
         create: `/${mod.id}/create`,
         edit: `/${mod.id}/:id`,
         meta: {
-          label: mod.titles.fa,
+          label: getModuleLabelFa(mod.id),
         },
       })),
     [moduleSettingsVersion]
@@ -535,7 +587,7 @@ function App() {
     if (standalone) return `${standalone} | ${branding.appTitle}`;
 
     const resourceLabel =
-      resource?.meta?.label || resource?.label || MODULES?.[resource?.name]?.titles?.fa || resource?.name || "";
+      resource?.meta?.label || resource?.label || getModuleLabelFa(resource?.name) || resource?.name || "";
 
     if (resourceLabel) {
       if (action === "show" || action === "edit") {
@@ -707,6 +759,12 @@ function App() {
             <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
             <Route path="/taze-system/api-docs" element={<ApiDocsPage isAdmin />} />
+            {/* CMS — blog */}
+            <Route path="/taze-system/blog/new" element={<CmsPostEditor />} />
+            <Route path="/taze-system/blog/:id" element={<CmsPostEditor />} />
+            {/* CMS — tutorials */}
+            <Route path="/taze-system/tutorials/new" element={<CmsPostEditor />} />
+            <Route path="/taze-system/tutorials/:id" element={<CmsPostEditor />} />
 
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<ErrorComponent />} />
@@ -730,6 +788,7 @@ function App() {
   }
 
   return (
+    <HelmetProvider>
     <BrowserRouter future={{ v7_startTransition: true }}>
       <ConfigProvider
         direction="rtl"
@@ -756,6 +815,7 @@ function App() {
         </AntdApp>
       </ConfigProvider>
     </BrowserRouter>
+    </HelmetProvider>
   );
 }
 

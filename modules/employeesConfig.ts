@@ -8,6 +8,15 @@ import {
   ModuleNature,
   ViewMode,
 } from '../types';
+import {
+  DEFAULT_SALARY_TYPE,
+  COMMISSION_SALARY_TYPE_VALUES,
+  FIXED_BASE_SALARY_TYPE_VALUES,
+  HOURLY_SALARY_TYPE_VALUES,
+  PERFORMANCE_SALARY_TYPE_VALUES,
+  PROFIT_SHARE_SALARY_TYPE_VALUES,
+  SALARY_TYPE_OPTIONS,
+} from '../utils/payrollSalaryType';
 
 export const employeesModule: ModuleDefinition = {
   id: 'employees',
@@ -162,17 +171,8 @@ export const employeesModule: ModuleDefinition = {
       type: FieldType.SELECT,
       blockId: 'payroll_info',
       order: 6,
-      defaultValue: 'fixed_only',
-      options: [
-        { label: 'فقط حقوق ثابت', value: 'fixed_only' },
-        { label: 'فقط حقوق ساعتی', value: 'hourly_only' },
-        { label: 'ثابت + عملکردی', value: 'fixed_and_performance' },
-        { label: 'ساعتی + عملکردی', value: 'hourly_and_performance' },
-        { label: 'ثابت + عملکردی + پورسانت', value: 'fixed_performance_commission' },
-        { label: 'ساعتی + عملکردی + پورسانت', value: 'hourly_performance_commission' },
-        { label: 'ثابت + درصد از سود', value: 'fixed_and_profit_share' },
-        { label: 'فقط درصد از سود', value: 'profit_share_only' },
-      ],
+      defaultValue: DEFAULT_SALARY_TYPE,
+      options: [...SALARY_TYPE_OPTIONS],
       isTableColumn: true,
     },
     {
@@ -182,7 +182,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 6.1,
       defaultValue: 0,
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_only', 'fixed_and_performance', 'fixed_performance_commission', 'fixed_and_profit_share'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...FIXED_BASE_SALARY_TYPE_VALUES] } },
     },
     {
       key: 'hourly_rate',
@@ -191,7 +191,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 6.2,
       defaultValue: 0,
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['hourly_only', 'hourly_and_performance', 'hourly_performance_commission'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...HOURLY_SALARY_TYPE_VALUES] } },
     },
     { key: 'overtime_rate', labels: { fa: 'نرخ اضافه‌کار', en: 'Overtime Rate' }, type: FieldType.PRICE, blockId: 'payroll_info', order: 6.3, defaultValue: 0 },
     { key: 'late_penalty_rate', labels: { fa: 'نرخ جریمه دیرکرد', en: 'Late Penalty Rate' }, type: FieldType.PRICE, blockId: 'payroll_info', order: 6.4, defaultValue: 0 },
@@ -203,7 +203,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 6.6,
       defaultValue: 0,
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_and_performance', 'hourly_and_performance', 'fixed_performance_commission', 'hourly_performance_commission'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...PERFORMANCE_SALARY_TYPE_VALUES] } },
     },
     {
       key: 'commission_percentage',
@@ -212,7 +212,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 6.7,
       defaultValue: 0,
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_performance_commission', 'hourly_performance_commission'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...COMMISSION_SALARY_TYPE_VALUES] } },
     },
     {
       key: 'profit_share_percentage',
@@ -221,7 +221,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 6.8,
       defaultValue: 0,
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_and_profit_share', 'profit_share_only'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...PROFIT_SHARE_SALARY_TYPE_VALUES] } },
     },
     {
       key: 'profit_share_basis',
@@ -234,7 +234,7 @@ export const employeesModule: ModuleDefinition = {
         { label: 'سود خالص مرکز هزینه', value: 'net_profit' },
         { label: 'سود ناخالص فروش', value: 'gross_profit' },
       ],
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_and_profit_share', 'profit_share_only'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...PROFIT_SHARE_SALARY_TYPE_VALUES] } },
     },
     {
       key: 'profit_share_cost_center_id',
@@ -243,7 +243,7 @@ export const employeesModule: ModuleDefinition = {
       blockId: 'payroll_info',
       order: 7,
       relationConfig: { targetModule: 'cost_centers', targetField: 'name' },
-      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: ['fixed_and_profit_share', 'profit_share_only'] } },
+      logic: { visibleIf: { field: 'salary_type', operator: LogicOperator.IN, value: [...PROFIT_SHARE_SALARY_TYPE_VALUES] } },
     },
     { key: 'monthly_paid_leave_hours', labels: { fa: 'سقف مرخصی با حقوق (ساعت/ماه)', en: 'Monthly Paid Leave Hours' }, type: FieldType.NUMBER, blockId: 'payroll_info', order: 7.05, defaultValue: 0 },
     { key: 'seniority_base_amount', labels: { fa: 'مبلغ پایه سنوات', en: 'Seniority Base Amount' }, type: FieldType.PRICE, blockId: 'payroll_info', order: 7.1, defaultValue: 0 },

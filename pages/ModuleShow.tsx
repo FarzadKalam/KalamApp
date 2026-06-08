@@ -107,6 +107,7 @@ import {
 import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
 import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
+import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
 const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
@@ -374,6 +375,40 @@ const _msIsMissingColumnError = (error: any, columnName: string) => {
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   const needle = String(columnName || '').toLowerCase();
   return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
+};
+
+const getModuleShowBaseColumns = (moduleConfig: any) => {
+  const fieldKeys = Array.from(
+    new Set(
+      (moduleConfig?.fields || [])
+        .map((field: any) => String(field?.key || '').trim())
+        .filter(Boolean)
+    )
+  ) as string[];
+  const blockKeys = Array.from(
+    new Set(
+      (moduleConfig?.blocks || [])
+        .map((block: any) => String(block?.id || '').trim())
+        .filter(Boolean)
+    )
+  ) as string[];
+  return Array.from(new Set<string>([
+    'id',
+    'org_id',
+    'created_at',
+    'updated_at',
+    'created_by',
+    'updated_by',
+    'status',
+    'system_code',
+    'name',
+    'title',
+    'assignee_id',
+    'assignee_role_id',
+    'assignee_type',
+    ...fieldKeys,
+    ...blockKeys,
+  ]));
 };
 
 const ModuleShow: React.FC = () => {
@@ -1314,18 +1349,18 @@ const ModuleShow: React.FC = () => {
     setLoading((prev) => (hasRecordDataRef.current ? prev : true));
     const run = (async () => {
       try {
-        // 👇 تغییر مهم: اضافه کردن صریح فیلدهای سیستمی به select
-        const { data: record, error } = await supabase
-            .from(moduleTable)
-            .select(`
-                *,
-                created_at,
-                updated_at,
-                created_by,
-                updated_by
-            `)
-            .eq('id', id)
-            .maybeSingle();
+        const recordResult = await runSelectWithCompatibleColumns<any | null>({
+          cacheKey: `module-show:${moduleId}`,
+          columns: getModuleShowBaseColumns(moduleConfig),
+          execute: (selectExpr) =>
+            supabase
+              .from(moduleTable)
+              .select(selectExpr)
+              .eq('id', id)
+              .maybeSingle(),
+        });
+        const record = recordResult.data;
+        const error = recordResult.error;
 
         if (error && String(error.code) !== 'PGRST116') throw error;
         if (activeRecordRequestRef.current !== requestId) return;

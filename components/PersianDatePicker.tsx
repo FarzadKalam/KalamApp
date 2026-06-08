@@ -10,6 +10,7 @@ import { safeJalaliFormat, toPersianNumber } from "../utils/persianNumberFormatt
 import { getHolidaySummaryForDate } from "../utils/holidayCalendar";
 import AdaptivePickerSurface from "./AdaptivePickerSurface";
 import { AdaptivePickerMode, buildOverlayZIndexBase } from "../utils/popupContainer";
+import { TODAY_DAY_STYLE } from "./pickerDayAppearance";
 
 type PickerType = "DATE" | "TIME" | "DATETIME";
 
@@ -429,9 +430,7 @@ const PersianDatePicker: React.FC<PersianDatePickerProps> = ({
                     }
                   : isToday
                     ? {
-                        color: "rgb(var(--brand-600-rgb))",
-                        border: "1px solid rgba(var(--brand-500-rgb), 0.55)",
-                        borderRadius: "14px",
+                        ...TODAY_DAY_STYLE,
                       }
                     : undefined,
               title: marker?.titles?.length ? marker.titles.join(" | ") : undefined,

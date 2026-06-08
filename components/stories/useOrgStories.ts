@@ -41,6 +41,7 @@ export const useOrgStories = ({
         supabaseClient: supabase,
         orgId,
         currentUserId,
+        force: hasInitialDataRef.current,
       });
 
       if (isMountedRef.current) {

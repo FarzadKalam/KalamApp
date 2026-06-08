@@ -1,4 +1,5 @@
-﻿import { supabase } from '../supabaseClient';
+import { supabase } from '../supabaseClient';
+import { getAppRuntimeCached } from './appRuntimeCache';
 
 export type AnnouncementSurface = 'public_site' | 'user_panel' | 'login_page';
 
@@ -206,22 +207,40 @@ export const loadActiveUserAnnouncements = async (
     return [];
   }
 
-  const { data, error } = await supabase.rpc('get_active_user_announcements', {
-    p_surface: runtime.surface,
-    p_path: runtime.path || null,
-    p_host: runtime.host || null,
+  const cacheKey = [
+    'active-user-announcements',
+    runtime.surface,
+    normalizeText(runtime.path || '/'),
+    normalizeText(runtime.host || ''),
+    normalizeText(runtime.org_id || 'guest-org'),
+    normalizeText(runtime.user_id || 'guest-user'),
+    normalizeText(runtime.role_id || 'guest-role'),
+    runtime.is_demo_user ? 'demo' : 'normal',
+    runtime.is_authenticated ? 'auth' : 'guest',
+  ].join(':');
+
+  return getAppRuntimeCached({
+    key: cacheKey,
+    ttlMs: 60_000,
+    loader: async () => {
+      const { data, error } = await supabase.rpc('get_active_user_announcements', {
+        p_surface: runtime.surface,
+        p_path: runtime.path || null,
+        p_host: runtime.host || null,
+      });
+
+      if (error) {
+        if (isMissingAnnouncementRpcError(error)) {
+          announcementRpcAvailability.loadUnavailable = true;
+          return [];
+        }
+        throw error;
+      }
+
+      const rows = Array.isArray(data) ? data.map(normalizeAnnouncementRow).filter((row) => row.id) : [];
+      return rows.filter((row) => evaluateAnnouncementConditions(row, runtime));
+    },
   });
-
-  if (error) {
-    if (isMissingAnnouncementRpcError(error)) {
-      announcementRpcAvailability.loadUnavailable = true;
-      return [];
-    }
-    throw error;
-  }
-
-  const rows = Array.isArray(data) ? data.map(normalizeAnnouncementRow).filter((row) => row.id) : [];
-  return rows.filter((row) => evaluateAnnouncementConditions(row, runtime));
 };
 
 const getGuestDismissStorageKey = (surface: AnnouncementSurface, announcementId: string) =>

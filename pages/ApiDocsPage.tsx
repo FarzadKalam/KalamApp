@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -8,7 +8,6 @@ import {
   Table,
   Tabs,
   Typography,
-  Divider,
 } from 'antd';
 import {
   ApiOutlined,
@@ -462,7 +461,7 @@ const ModuleSection: React.FC<{ moduleId: string; plan: string }> = ({ moduleId,
   if (!mod) return <Alert type="error" message={`ماژول ${moduleId} پیدا نشد`} />;
 
   const table = mod.table ?? moduleId;
-  const titleFa = mod.titles?.fa ?? mod.label?.fa ?? moduleId;
+  const titleFa = mod.titles?.fa ?? moduleId;
   const planInfo = PLAN_LABELS[plan];
 
   const fields = (mod.fields ?? []).filter(
@@ -659,10 +658,8 @@ const FIXED_SECTIONS = [
   { key: 'intro',     label: 'مقدمه',             icon: <BookOutlined /> },
   { key: 'auth',      label: 'احراز هویت',         icon: <KeyOutlined /> },
   { key: 'features',  label: 'ویژگی‌های کوئری',   icon: <CodeOutlined /> },
-  { key: 'webhooks',  label: 'Webhooks',            icon: <GlobalOutlined /> },
+  { key: 'webhooks',  label: 'Webhooks',            icon: <ApiOutlined /> },
 ] as const;
-
-const GlobalOutlined = ApiOutlined; // alias
 
 const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ isAdmin: _isAdmin = false }) => {
   const [selectedKey, setSelectedKey] = useState<string>('intro');
@@ -683,7 +680,7 @@ const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ isAdmin: _isAdmin = false }) 
         .filter(mid => !!MODULES[mid])
         .map(mid => ({
           key: `module:${mid}`,
-          label: MODULES[mid]?.titles?.fa ?? MODULES[mid]?.label?.fa ?? mid,
+          label: MODULES[mid]?.titles?.fa ?? mid,
         })),
     })),
   ], []);
@@ -696,7 +693,7 @@ const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ isAdmin: _isAdmin = false }) 
 
     if (selectedKey.startsWith('module:')) {
       const moduleId = selectedKey.slice(7);
-      const cat = MODULE_CATEGORIES.find(c => c.modules.includes(moduleId as any));
+      const cat = MODULE_CATEGORIES.find((c) => c.modules.some((item) => item === moduleId));
       return <ModuleSection moduleId={moduleId} plan={cat?.plan ?? 'basic'} />;
     }
     return null;

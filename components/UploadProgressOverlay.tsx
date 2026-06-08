@@ -23,6 +23,9 @@ import SendOutlined from '@ant-design/icons/SendOutlined';
 import OpenAIOutlined from '@ant-design/icons/OpenAIOutlined';
 import StopFilled from '@ant-design/icons/StopFilled';
 import TeamOutlined from '@ant-design/icons/TeamOutlined';
+import CloudUploadOutlined from '@ant-design/icons/CloudUploadOutlined';
+import NotificationOutlined from '@ant-design/icons/NotificationOutlined';
+import SoundOutlined from '@ant-design/icons/SoundOutlined';
 import UpOutlined from '@ant-design/icons/UpOutlined';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import {
@@ -32,6 +35,7 @@ import {
   useUiNotificationOverlayPagination,
   useUiNotificationOverlayItems,
 } from '../utils/uiNotificationOverlayStore';
+import type { OverlayNotificationChannel, UiNotificationOverlayItem } from '../utils/uiNotificationOverlayStore';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 
@@ -136,6 +140,21 @@ const getPresenceClassName = (phase: PresencePhase) => (
       : 'max-h-64 translate-y-0 scale-100 opacity-100'
 );
 
+type OverlayFilterTab = 'all' | 'internal' | 'activities' | 'responsibilities' | 'system' | 'bot' | 'sms' | 'voip' | 'uploads';
+
+const resolveNotificationTab = (item: UiNotificationOverlayItem): Exclude<OverlayFilterTab, 'uploads' | 'all'> => {
+  const channel = String(item.channel || '').trim() as OverlayNotificationChannel;
+  if (item.kind === 'task') return 'activities';
+  if (item.kind === 'responsibility') return 'responsibilities';
+  if (channel === 'internal' || channel === 'system' || channel === 'bot' || channel === 'sms') return channel;
+  if (channel === 'voip') return 'voip';
+  if (item.kind === 'bot') return 'bot';
+  if (item.kind === 'sms') return 'sms';
+  if (item.kind === 'voip_call') return 'voip';
+  if (item.kind === 'assistant') return 'system';
+  return 'internal';
+};
+
 const ExpandableNotificationText: React.FC<{ text: string }> = ({ text }) => {
   const contentRef = React.useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -190,19 +209,46 @@ const UploadProgressOverlay: React.FC = () => {
   const { message } = App.useApp();
   const { token } = theme.useToken();
   const [minimized, setMinimized] = useState(false);
+  const [activeTab, setActiveTab] = useState<OverlayFilterTab>('all');
   const [hiddenSignature, setHiddenSignature] = useState<string | null>(null);
   const [snoozeItemId, setSnoozeItemId] = useState<string | null>(null);
   const [replyItemId, setReplyItemId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
-  const renderedNotifications = usePresenceList(notifications, getNotificationId);
-  const renderedTasks = usePresenceList(tasks, getTaskId);
 
   const activeCount = useMemo(
     () => tasks.filter((task) => task.status === 'uploading').length,
     [tasks],
   );
 
+  const tabCounts = useMemo(() => {
+    const counts: Record<OverlayFilterTab, number> = {
+      all: tasks.length,
+      internal: 0,
+      activities: 0,
+      responsibilities: 0,
+      system: 0,
+      bot: 0,
+      sms: 0,
+      voip: 0,
+      uploads: tasks.length,
+    };
+    notifications.forEach((item) => {
+      counts.all += 1;
+      counts[resolveNotificationTab(item)] += 1;
+    });
+    return counts;
+  }, [notifications, tasks.length]);
+  const filteredNotifications = useMemo(() => {
+    if (activeTab === 'all' || activeTab === 'uploads') return notifications;
+    return notifications.filter((item) => resolveNotificationTab(item) === activeTab);
+  }, [activeTab, notifications]);
+  const filteredTasks = useMemo(() => {
+    if (activeTab === 'all' || activeTab === 'uploads') return tasks;
+    return [];
+  }, [activeTab, tasks]);
+  const renderedNotifications = usePresenceList(filteredNotifications, getNotificationId);
+  const renderedTasks = usePresenceList(filteredTasks, getTaskId);
   const notificationCount = notifications.length;
   const hasUploads = tasks.length > 0;
   const hasNotifications = notificationCount > 0;
@@ -212,6 +258,17 @@ const UploadProgressOverlay: React.FC = () => {
   const displayNotificationCount = hasNotifications ? notificationCount : renderedNotifications.length;
   const hasDisplayedUploads = hasUploads || hasRenderedUploads;
   const hasDisplayedNotifications = hasNotifications || hasRenderedNotifications;
+  const tabOptions = useMemo(() => ([
+    { key: 'all', label: 'همه', icon: <NotificationOutlined />, count: tabCounts.all },
+    { key: 'internal', label: 'داخلی', icon: <TeamOutlined />, count: tabCounts.internal },
+    { key: 'activities', label: 'فعالیت', icon: <SoundOutlined />, count: tabCounts.activities },
+    { key: 'responsibilities', label: 'مسئولیت', icon: <BellOutlined />, count: tabCounts.responsibilities },
+    { key: 'system', label: 'سیستم', icon: <BellOutlined />, count: tabCounts.system },
+    { key: 'bot', label: 'بات', icon: <RobotOutlined />, count: tabCounts.bot },
+    { key: 'sms', label: 'پیامک', icon: <MessageOutlined />, count: tabCounts.sms },
+    { key: 'voip', label: 'تماس', icon: <PhoneOutlined />, count: tabCounts.voip },
+    { key: 'uploads', label: 'آپلود', icon: <CloudUploadOutlined />, count: tabCounts.uploads },
+  ] as Array<{ key: OverlayFilterTab; label: string; icon: React.ReactNode; count: number }>), [tabCounts]);
   const displaySignature = useMemo(
     () => [
       notifications.map((item) => `n:${item.id}`).join(','),
@@ -231,6 +288,21 @@ const UploadProgressOverlay: React.FC = () => {
       : activeCount > 0
         ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
         : `${toPersianNumber(String(displayUploadCount))} مورد در صف نمایش`;
+  const activeTabMeta = tabOptions.find((item) => item.key === activeTab) || tabOptions[0];
+  const activeTabSubtitle = activeTab === 'uploads'
+    ? (
+      activeCount > 0
+        ? `${toPersianNumber(String(activeCount))} مورد در حال آپلود`
+        : `${toPersianNumber(String(activeTabMeta?.count || 0))} مورد آپلود`
+    )
+    : `${toPersianNumber(String(activeTabMeta?.count || 0))} مورد خوانده‌نشده`;
+
+  React.useEffect(() => {
+    if (tabCounts[activeTab] > 0) return;
+    if (tabCounts.all > 0) {
+      setActiveTab('all');
+    }
+  }, [activeTab, tabCounts]);
 
   React.useEffect(() => {
     if (hiddenSignature && displaySignature && hiddenSignature !== displaySignature) {
@@ -307,10 +379,10 @@ const UploadProgressOverlay: React.FC = () => {
         >
           <div className="min-w-0">
             <div className="text-sm font-semibold" style={{ color: token.colorTextHeading }}>
-              {overlayTitle}
+              {activeTab === 'all' ? overlayTitle : activeTabMeta?.label}
             </div>
             <div className="text-xs" style={{ color: token.colorTextTertiary }}>
-              {overlaySubtitle}
+              {activeTab === 'all' ? overlaySubtitle : activeTabSubtitle}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -336,6 +408,39 @@ const UploadProgressOverlay: React.FC = () => {
         </div>
 
         <div
+          className="overflow-x-auto px-3 py-2"
+          style={{ borderBottom: `1px solid ${token.colorBorderSecondary}` }}
+        >
+          <div className="flex min-w-max items-center gap-2">
+            {tabOptions.map((tab) => {
+              const isActive = tab.key === activeTab;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveTab(tab.key)}
+                  className="flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-all"
+                  style={{
+                    borderColor: isActive ? token.colorPrimary : token.colorBorderSecondary,
+                    background: isActive ? token.colorPrimaryBg : token.colorFillTertiary,
+                    color: isActive ? token.colorPrimary : token.colorTextSecondary,
+                  }}
+                >
+                  <span className="text-sm leading-none">{tab.icon}</span>
+                  <span>{tab.label}</span>
+                  <Badge
+                    count={tab.count > 0 ? toPersianNumber(String(tab.count)) : 0}
+                    size="small"
+                    color={isActive ? token.colorPrimary : token.colorTextTertiary}
+                    styles={{ indicator: { boxShadow: 'none' } }}
+                  />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div
           className="max-h-[55vh] overflow-y-auto px-3 py-3"
           style={{ scrollbarGutter: 'stable both-edges', overscrollBehavior: 'contain' }}
         >
@@ -347,7 +452,7 @@ const UploadProgressOverlay: React.FC = () => {
                 onScroll={(event) => {
                   const node = event.currentTarget;
                   if (
-                    !hasDisplayedUploads
+                    activeTab !== 'uploads'
                     && overlayPagination.hasMore
                     && !overlayPagination.loading
                     && node.scrollHeight - node.scrollTop - node.clientHeight < 80
@@ -427,14 +532,26 @@ const UploadProgressOverlay: React.FC = () => {
                           </div>
                         ) : null}
                       </div>
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<CloseOutlined />}
-                        onClick={() => dismissUiNotificationOverlayItem(item.id)}
-                      />
+                      <div className="flex items-center gap-1">
+                        {item.onSnooze ? (
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<ClockCircleOutlined />}
+                            aria-label="تعویق اعلان"
+                            onClick={() => setSnoozeItemId(item.id)}
+                          />
+                        ) : null}
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CloseOutlined />}
+                          aria-label="بستن اعلان"
+                          onClick={() => dismissUiNotificationOverlayItem(item.id)}
+                        />
+                      </div>
                     </div>
-                    {item.onSnooze || item.onReply ? (
+                    {item.onReply ? (
                       <div className="mt-2 flex items-center gap-1 border-t pt-2" style={{ borderColor: token.colorBorderSecondary }}>
                         {item.onReply ? (
                           <Button
@@ -447,16 +564,6 @@ const UploadProgressOverlay: React.FC = () => {
                             }}
                           >
                             پاسخ
-                          </Button>
-                        ) : null}
-                        {item.onSnooze ? (
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<ClockCircleOutlined />}
-                            onClick={() => setSnoozeItemId(item.id)}
-                          >
-                            تعویق
                           </Button>
                         ) : null}
                       </div>
@@ -503,7 +610,7 @@ const UploadProgressOverlay: React.FC = () => {
                 </div>
               </div>
             ) : null}
-            {overlayPagination.hasMore && !hasDisplayedUploads ? (
+            {overlayPagination.hasMore && activeTab !== 'uploads' ? (
               <div className="flex justify-start">
                 <Button
                   size="small"
@@ -615,6 +722,18 @@ const UploadProgressOverlay: React.FC = () => {
                 </div>
               );
             })}
+            {renderedNotifications.length === 0 && renderedTasks.length === 0 ? (
+              <div
+                className="rounded-[18px] border px-4 py-6 text-center text-xs"
+                style={{
+                  borderColor: token.colorBorderSecondary,
+                  background: token.colorFillTertiary,
+                  color: token.colorTextTertiary,
+                }}
+              >
+                موردی در این بخش وجود ندارد.
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

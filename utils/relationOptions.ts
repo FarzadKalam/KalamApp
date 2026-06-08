@@ -17,6 +17,20 @@ import { fetchSessionBootstrap } from './sessionCache';
 const RELATION_RECENT_LIMIT = 50;
 const relationOptionsCache = new Map<string, any[]>();
 const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
+const RPC_RELATION_MODULES = new Set([
+  'customers',
+  'projects',
+  'products',
+  'suppliers',
+  'invoices',
+  'purchase_invoices',
+  'tasks',
+  'profiles',
+  'org_roles',
+  'roles',
+  'shelves',
+  'process_templates',
+]);
 
 // جداول/ویوهایی که org_id ندارند یا cross-org هستند — نباید فیلتر org_id روی‌شان اعمال شود
 const NO_ORG_SCOPE_TABLES = new Set([
@@ -490,6 +504,62 @@ const runRelationQuery = async (
   return [];
 };
 
+const hasOnlyOrgScopeFilter = (filter?: Record<string, any>) => {
+  const keys = Object.keys(filter || {}).map((key) => String(key || '').trim()).filter(Boolean);
+  return keys.length === 0 || (keys.length === 1 && keys[0] === 'org_id');
+};
+
+const fetchRelationOptionsViaRpc = async (
+  supabaseClient: any,
+  targetModule: string,
+  targetField: string,
+  {
+    search,
+    exactId,
+    limit,
+    filter,
+  }: {
+    search?: string;
+    exactId?: string | number | null;
+    limit: number;
+    filter?: Record<string, any>;
+  }
+) => {
+  if (!RPC_RELATION_MODULES.has(String(targetModule || '').trim())) return null;
+  if (!hasOnlyOrgScopeFilter(filter)) return null;
+
+  const normalizedExactId = exactId === undefined || exactId === null ? null : String(exactId).trim();
+  const { data, error } = await supabaseClient.rpc('search_relation_options_v1', {
+    p_target_module: targetModule,
+    p_target_field: targetField || null,
+    p_search: String(search || '').trim() || null,
+    p_exact_ids: normalizedExactId ? [normalizedExactId] : null,
+    p_limit: limit,
+  });
+  if (error) {
+    const code = String(error?.code || '').toUpperCase();
+    const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+    if (
+      code === '42883'
+      || code === 'PGRST202'
+      || code === 'PGRST204'
+      || message.includes('search_relation_options_v1')
+      || message.includes('could not find the function')
+    ) {
+      return null;
+    }
+    throw error;
+  }
+
+  return (Array.isArray(data) ? data : []).map((item: any) => ({
+    label: String(item?.label || item?.value || '').trim() || 'بدون عنوان',
+    value: item?.value,
+    module: targetModule,
+    name: String(item?.label || item?.value || '').trim(),
+    searchText: String(item?.search_text || item?.label || item?.value || '').trim().toLowerCase(),
+  }));
+};
+
 export const fetchRelationOptionsForField = async (
   supabaseClient: any,
   field: any,
@@ -600,6 +670,21 @@ export const fetchRelationOptionsForField = async (
           ...(scopedFilter || {}),
           org_id: orgId,
         };
+      }
+
+      const rpcOptions = await fetchRelationOptionsViaRpc(supabaseClient, source.moduleName, source.targetField, {
+        search,
+        exactId,
+        limit,
+        filter: scopedFilter,
+      });
+      if (rpcOptions && rpcOptions.length > 0) {
+        allOptions.push(...rpcOptions.map((item: any) => ({
+          ...item,
+          tagLabel: source.tagLabel,
+          tagColor: source.tagColor,
+        })));
+        continue;
       }
 
       let lastMissingColumnError: any = null;

@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { FieldType } from '../types';
 import type { AssigneeDirectory } from './referenceData';
+import { supportsModuleAssignee, supportsModuleAssigneeType, supportsModuleRoleAssignee } from './assigneeSupport';
 import {
   canAccessAssignedRecord,
   GOALS_PERMISSION_KEY,
@@ -10,14 +11,14 @@ import {
   type PermissionMap,
 } from './permissions';
 import {
+  buildGoalBoundsFromIso,
   buildGoalExplicitRange,
-  buildGoalCurrentRange,
+  buildGoalCurrentRangeWithinBounds,
   buildGoalRangeSnapshot,
-  buildGoalRangeSnapshotFromIso,
   calculateRangeRatio,
   clampGoalSubperiodUnit,
-  clampGoalRangeToBounds,
   getAvailableGoalSubperiodUnits,
+  intersectGoalRangeWithBounds,
   type FiscalYearSnapshot,
 } from './goalPeriods';
 import {
@@ -29,7 +30,15 @@ import {
   type GoalRecord,
   type GoalTone,
 } from './goalTypes';
+import { parseProcessLinkedFieldKey } from './processTargets';
+import { parseSurveyTemplateFieldKey } from './surveyTemplates';
+import {
+  parseWorkflowMultiRelationFieldKey,
+  parseWorkflowRelatedFieldKey,
+  WORKFLOW_ASSIGNEE_FIELD_KEY,
+} from './workflowTypes';
 import { createWorkflowEvaluationContext, evaluateWorkflowConditions, prefetchWorkflowRecordTags } from './workflowRuntime';
+import { formatPersianPrice, toPersianNumber } from './persianNumberFormatter';
 
 export const GOAL_ALL_USERS_VALUE = '__all_users__';
 
@@ -289,6 +298,49 @@ const resolveMetricLabel = (goal: GoalRecord) => {
 const resolveGoalModuleLabel = (goal: GoalRecord) =>
   MODULES[goal.module_id]?.titles?.fa || goal.module_id;
 
+export const resolveGoalMetricFieldMeta = (goal?: GoalRecord | null) => {
+  const module = MODULES[String(goal?.module_id || '').trim()];
+  if (!module) return null;
+  const metricFieldKey = String(goal?.metric_field_key || '').trim();
+  if (!metricFieldKey) return null;
+  return module.fields.find((field) => field.key === metricFieldKey) || null;
+};
+
+export const getGoalLifetimeBounds = (goal?: GoalRecord | null) =>
+  buildGoalExplicitRange(goal ? getGoalExplicitRangeInput(goal) : null);
+
+export const getGoalLifetimeRange = (goal?: GoalRecord | null) => {
+  const bounds = getGoalLifetimeBounds(goal);
+  return bounds ? buildGoalRangeSnapshot(bounds.start, bounds.end) : null;
+};
+
+export const formatGoalMetricValue = (
+  goal: GoalRecord,
+  value: number,
+  currencyLabel?: string | null
+) => {
+  const metricField = resolveGoalMetricFieldMeta(goal);
+  if (metricField?.type === FieldType.PRICE) {
+    const formatted = formatPersianPrice(value, true);
+    const suffix = String(currencyLabel || '').trim();
+    return suffix ? `${formatted} ${suffix}` : formatted;
+  }
+
+  const maximumFractionDigits = goal.metric_type === 'avg' ? 2 : 1;
+  const minimumFractionDigits =
+    goal.metric_type === 'avg' && Math.abs(value % 1) > 0 ? 1 : 0;
+  const formatted = toPersianNumber(
+    Number(value || 0).toLocaleString('en-US', {
+      minimumFractionDigits,
+      maximumFractionDigits,
+    })
+  );
+  if (metricField?.type === FieldType.PERCENTAGE) {
+    return `${formatted}٪`;
+  }
+  return formatted;
+};
+
 const resolveGoalTargetValue = (goal: GoalRecord, levels: GoalLevelDefinition[]) => {
   const explicit = normalizeNumber(goal.target_value);
   if (explicit > 0) return explicit;
@@ -323,28 +375,158 @@ const getGoalExplicitRangeInput = (goal: GoalRecord) => ({
   endDate: typeof goal?.config?.goal_end_date === 'string' ? goal.config.goal_end_date : null,
 });
 
+const collectGoalConditionSourceFieldKeys = (goal: GoalRecord) => {
+  const keys = new Set<string>();
+  const conditions = [
+    ...(Array.isArray(goal.conditions_all) ? goal.conditions_all : []),
+    ...(Array.isArray(goal.conditions_any) ? goal.conditions_any : []),
+  ];
+
+  conditions.forEach((condition: any) => {
+    const fieldKey = String(condition?.field || '').trim();
+    if (!fieldKey) return;
+
+    if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+      keys.add('assignee_id');
+      keys.add('assignee_type');
+      keys.add('assignee_role_id');
+      return;
+    }
+
+    const relatedFieldMeta = parseWorkflowRelatedFieldKey(fieldKey);
+    if (relatedFieldMeta?.relationFieldKey) {
+      keys.add(relatedFieldMeta.relationFieldKey);
+      return;
+    }
+
+    const multiRelationMeta = parseWorkflowMultiRelationFieldKey(fieldKey);
+    if (multiRelationMeta?.fieldKey) {
+      keys.add(multiRelationMeta.fieldKey);
+      return;
+    }
+
+    if (parseProcessLinkedFieldKey(fieldKey)) {
+      keys.add('process_links');
+      keys.add('process_link_map');
+      keys.add('recurrence_info');
+      return;
+    }
+
+    if (parseSurveyTemplateFieldKey(fieldKey)) {
+      keys.add('template_field_values');
+      return;
+    }
+
+    keys.add(fieldKey);
+  });
+
+  return keys;
+};
+
+export const buildGoalSelectColumns = (goal: GoalRecord) => {
+  const module = MODULES[goal.module_id];
+  if (!module) return '*';
+
+  const declaredFieldKeys = new Set(
+    (Array.isArray(module.fields) ? module.fields : [])
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+  const requestedKeys = new Set<string>([
+    'id',
+    'org_id',
+    'created_at',
+    'updated_at',
+  ]);
+
+  const dateFieldKey = resolveFilterFieldKey(goal);
+  const metricFieldKey = String(goal.metric_field_key || '').trim();
+  requestedKeys.add(dateFieldKey);
+  if (metricFieldKey) {
+    requestedKeys.add(metricFieldKey);
+  }
+
+  collectGoalConditionSourceFieldKeys(goal).forEach((key) => requestedKeys.add(key));
+
+  if (supportsModuleAssignee(module)) {
+    requestedKeys.add('assignee_id');
+  }
+  if (supportsModuleAssigneeType(module)) {
+    requestedKeys.add('assignee_type');
+  }
+  if (supportsModuleRoleAssignee(module)) {
+    requestedKeys.add('assignee_role_id');
+  }
+
+  const alwaysSafeKeys = new Set([
+    'id',
+    'org_id',
+    'created_at',
+    'updated_at',
+    'template_field_values',
+    'process_links',
+    'process_link_map',
+    'recurrence_info',
+    'assignee_id',
+    'assignee_type',
+    'assignee_role_id',
+  ]);
+
+  const columns = Array.from(requestedKeys).filter((key) => {
+    if (!key) return false;
+    if (alwaysSafeKeys.has(key)) return true;
+    return declaredFieldKeys.has(key);
+  });
+
+  return columns.length > 0 ? columns.join(', ') : '*';
+};
+
 const resolveGoalPeriodBounds = (
   goal: GoalRecord,
   subperiodUnit: GoalPeriodUnit,
-  fiscalYear?: FiscalYearSnapshot | null
+  fiscalYear?: FiscalYearSnapshot | null,
+  overridePeriodRange?: { startIso: string; endIso: string }
 ) => {
-  const explicitBounds = buildGoalExplicitRange(getGoalExplicitRangeInput(goal));
-  if (explicitBounds) {
-    const rawSubBounds = buildGoalCurrentRange(subperiodUnit, fiscalYear);
+  const goalBounds = getGoalLifetimeBounds(goal);
+  if (overridePeriodRange) {
+    const overrideBounds = intersectGoalRangeWithBounds(
+      buildGoalBoundsFromIso(overridePeriodRange.startIso, overridePeriodRange.endIso),
+      goalBounds
+    );
+    if (!overrideBounds) {
+      return null;
+    }
     return {
-      mainBounds: explicitBounds,
-      subBounds: clampGoalRangeToBounds(rawSubBounds, explicitBounds),
+      goalBounds,
+      mainBounds: overrideBounds,
+      subBounds: overrideBounds,
     };
   }
 
+  const mainBounds = buildGoalCurrentRangeWithinBounds(
+    goal.period_unit,
+    fiscalYear,
+    goalBounds
+  );
+  const subBounds = buildGoalCurrentRangeWithinBounds(
+    subperiodUnit,
+    fiscalYear,
+    goalBounds
+  );
+  if (!mainBounds || !subBounds) {
+    return null;
+  }
+
   return {
-    mainBounds: buildGoalCurrentRange(goal.period_unit, fiscalYear),
-    subBounds: buildGoalCurrentRange(subperiodUnit, fiscalYear),
+    goalBounds,
+    mainBounds,
+    subBounds,
   };
 };
 
 const queryRowsByDateRange = async (
   table: string,
+  selectColumns: string,
   dateFieldKey: string,
   startValue: string,
   endValue: string
@@ -352,18 +534,30 @@ const queryRowsByDateRange = async (
   const pageSize = 1000;
   let from = 0;
   let rows: any[] = [];
+  let resolvedSelect = String(selectColumns || '*').trim() || '*';
 
   while (true) {
     let query = supabase
       .from(table)
-      .select('*')
+      .select(resolvedSelect)
       .range(from, from + pageSize - 1);
 
     if (dateFieldKey) {
       query = query.gte(dateFieldKey, startValue).lte(dateFieldKey, endValue);
     }
 
-    const { data, error } = await query;
+    let { data, error } = await query;
+    if (error && resolvedSelect !== '*') {
+      resolvedSelect = '*';
+      query = supabase
+        .from(table)
+        .select(resolvedSelect)
+        .range(from, from + pageSize - 1);
+      if (dateFieldKey) {
+        query = query.gte(dateFieldKey, startValue).lte(dateFieldKey, endValue);
+      }
+      ({ data, error } = await query);
+    }
     if (error) throw error;
     const chunk = data || [];
     rows = rows.concat(chunk);
@@ -392,7 +586,8 @@ const loadScopedRows = async (
 
   const dateFieldKey = resolveFilterFieldKey(goal);
   const fieldMeta = module.fields.find((field) => field.key === dateFieldKey);
-  const cacheKey = `${goal.module_id}:${dateFieldKey}:${range.startIso}:${range.endIso}`;
+  const selectColumns = buildGoalSelectColumns(goal);
+  const cacheKey = `${goal.module_id}:${dateFieldKey}:${range.startIso}:${range.endIso}:${selectColumns}`;
   if (options.cache.has(cacheKey)) {
     return options.cache.get(cacheKey) || [];
   }
@@ -408,14 +603,14 @@ const loadScopedRows = async (
 
   let rows: any[] = [];
   try {
-    rows = await queryRowsByDateRange(module.table, dateFieldKey, startValue, endValue);
+    rows = await queryRowsByDateRange(module.table, selectColumns, dateFieldKey, startValue, endValue);
   } catch {
-    rows = await queryRowsByDateRange(module.table, '', range.startIso, range.endIso);
+    rows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
   }
 
   if (rows.length === 0 && dateFieldKey) {
     try {
-      rows = await queryRowsByDateRange(module.table, '', range.startIso, range.endIso);
+      rows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
     } catch {
       rows = [];
     }
@@ -500,6 +695,7 @@ const filterRowsForGoalSubject = (
 
 const buildGoalProgressSnapshotFromRows = (
   goal: GoalRecord,
+  goalRange: GoalProgressSnapshot['goalRange'],
   mainRange: GoalProgressSnapshot['mainRange'],
   subRange: GoalProgressSnapshot['subRange'],
   subperiodUnit: GoalPeriodUnit,
@@ -521,6 +717,7 @@ const buildGoalProgressSnapshotFromRows = (
     targetValue,
     subAchievedValue,
     subTargetValue,
+    goalRange,
     mainRange,
     subRange,
     tone,
@@ -559,19 +756,20 @@ const prepareGoalProgressRows = async (
 
   let mainRange: ReturnType<typeof buildGoalRangeSnapshot>;
   let subRange: ReturnType<typeof buildGoalRangeSnapshot>;
-
-  if (options.overridePeriodRange) {
-    mainRange = buildGoalRangeSnapshotFromIso(options.overridePeriodRange.startIso, options.overridePeriodRange.endIso);
-    subRange = mainRange;
-  } else {
-    const { mainBounds, subBounds } = resolveGoalPeriodBounds(
-      goal,
-      subperiodUnit,
-      options.fiscalYear
-    );
-    mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
-    subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+  const resolvedBounds = resolveGoalPeriodBounds(
+    goal,
+    subperiodUnit,
+    options.fiscalYear,
+    options.overridePeriodRange
+  );
+  if (!resolvedBounds) {
+    return null;
   }
+  const goalRange = resolvedBounds.goalBounds
+    ? buildGoalRangeSnapshot(resolvedBounds.goalBounds.start, resolvedBounds.goalBounds.end)
+    : null;
+  mainRange = buildGoalRangeSnapshot(resolvedBounds.mainBounds.start, resolvedBounds.mainBounds.end);
+  subRange = buildGoalRangeSnapshot(resolvedBounds.subBounds.start, resolvedBounds.subBounds.end);
 
   const cache = options.cache || new Map<string, any[]>();
   const [mainRows, subRows] = await Promise.all([
@@ -601,6 +799,7 @@ const prepareGoalProgressRows = async (
   ]);
 
   return {
+    goalRange,
     subperiodUnit,
     mainRange,
     subRange,
@@ -621,6 +820,7 @@ export const executeGoalProgressForSubjects = async (
     fiscalYear?: FiscalYearSnapshot | null;
     selectedSubperiodUnit?: GoalPeriodUnit | null;
     cache?: Map<string, any[]>;
+    overridePeriodRange?: { startIso: string; endIso: string };
     subjects: GoalProgressSubject[];
   }
 ): Promise<GoalProgressSnapshot[]> => {
@@ -629,9 +829,11 @@ export const executeGoalProgressForSubjects = async (
   if (!module) return [];
 
   const prepared = await prepareGoalProgressRows(goal, options);
+  if (!prepared) return [];
   return (Array.isArray(options.subjects) ? options.subjects : []).map((subject) =>
     buildGoalProgressSnapshotFromRows(
       goal,
+      prepared.goalRange,
       prepared.mainRange,
       prepared.subRange,
       prepared.subperiodUnit,
@@ -941,13 +1143,19 @@ export const buildGoalFallbackProgressSnapshot = (
   const targetValue = resolveGoalTargetValue(goal, levels);
 
   try {
-    const { mainBounds, subBounds } = resolveGoalPeriodBounds(
+    const resolvedBounds = resolveGoalPeriodBounds(
       goal,
       subperiodUnit,
       options.fiscalYear
     );
-    const mainRange = buildGoalRangeSnapshot(mainBounds.start, mainBounds.end);
-    const subRange = buildGoalRangeSnapshot(subBounds.start, subBounds.end);
+    if (!resolvedBounds) {
+      return null;
+    }
+    const goalRange = resolvedBounds.goalBounds
+      ? buildGoalRangeSnapshot(resolvedBounds.goalBounds.start, resolvedBounds.goalBounds.end)
+      : null;
+    const mainRange = buildGoalRangeSnapshot(resolvedBounds.mainBounds.start, resolvedBounds.mainBounds.end);
+    const subRange = buildGoalRangeSnapshot(resolvedBounds.subBounds.start, resolvedBounds.subBounds.end);
     const ratio = calculateRangeRatio(mainRange, subRange);
     const subTargetValue = targetValue > 0 ? targetValue * ratio : 0;
 
@@ -957,6 +1165,7 @@ export const buildGoalFallbackProgressSnapshot = (
       targetValue,
       subAchievedValue: 0,
       subTargetValue,
+      goalRange,
       mainRange,
       subRange,
       tone: 'base',
@@ -980,6 +1189,7 @@ export const buildGoalFallbackProgressSnapshot = (
       targetValue,
       subAchievedValue: 0,
       subTargetValue: targetValue,
+      goalRange: null,
       mainRange: {
         startIso: now.toISOString(),
         endIso: now.toISOString(),
@@ -1030,12 +1240,14 @@ export const executeGoalProgress = async (
   const module = MODULES[goal.module_id];
   if (!module) return null;
   const prepared = await prepareGoalProgressRows(goal, options);
+  if (!prepared) return null;
 
   const explicitSubjectUserId = String(options.subjectUserId || '').trim();
   const explicitSubjectRoleId = String(options.subjectRoleId || '').trim();
   if (explicitSubjectUserId || explicitSubjectRoleId) {
     return buildGoalProgressSnapshotFromRows(
       goal,
+      prepared.goalRange,
       prepared.mainRange,
       prepared.subRange,
       prepared.subperiodUnit,
@@ -1054,6 +1266,7 @@ export const executeGoalProgress = async (
     if (isGoalVisibleToUser(goal, options.userId, options.roleId)) {
       return buildGoalProgressSnapshotFromRows(
         goal,
+        prepared.goalRange,
         prepared.mainRange,
         prepared.subRange,
         prepared.subperiodUnit,
@@ -1074,6 +1287,7 @@ export const executeGoalProgress = async (
         .map((subject) =>
           buildGoalProgressSnapshotFromRows(
             goal,
+            prepared.goalRange,
             prepared.mainRange,
             prepared.subRange,
             prepared.subperiodUnit,
@@ -1098,6 +1312,7 @@ export const executeGoalProgress = async (
 
   return buildGoalProgressSnapshotFromRows(
     goal,
+    prepared.goalRange,
     prepared.mainRange,
     prepared.subRange,
     prepared.subperiodUnit,

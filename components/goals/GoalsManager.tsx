@@ -5,6 +5,7 @@ import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import {
   ensureDefaultSalesInvoiceGoal,
+  getGoalLifetimeRange,
   getGoalModuleOptions,
   isGoalAssignedToAllUsers,
   normalizeGoalRecord,
@@ -167,6 +168,7 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
     const metricLabel = GOAL_METRIC_TYPE_OPTIONS.find((item) => item.value === record.metric_type)?.label || record.metric_type;
     const periodLabel = GOAL_PERIOD_UNIT_OPTIONS.find((item) => item.value === record.period_unit)?.label || record.period_unit;
     const subperiodLabel = GOAL_PERIOD_UNIT_OPTIONS.find((item) => item.value === record.subperiod_unit)?.label || record.subperiod_unit;
+    const lifetimeRange = getGoalLifetimeRange(record);
     const levelTags = [
       record.bronze_value ? <Tag key="bronze" color="orange">برنز: {record.bronze_value}</Tag> : null,
       record.silver_value ? <Tag key="silver" color="default">نقره: {record.silver_value}</Tag> : null,
@@ -180,20 +182,12 @@ const GoalsManager: React.FC<GoalsManagerProps> = ({
           <div>نوع: <span className="font-semibold text-gray-800 dark:text-gray-100">{record.goal_scope === 'team' ? 'تیمی' : 'فردی'}</span></div>
           <div>بازه اصلی: <span className="font-semibold text-gray-800 dark:text-gray-100">{periodLabel}</span></div>
           <div>بازه فرعی پیش‌فرض: <span className="font-semibold text-gray-800 dark:text-gray-100">{subperiodLabel}</span></div>
+          <div>بازه هدف: <span className="font-semibold text-gray-800 dark:text-gray-100">{lifetimeRange ? `${lifetimeRange.startLabel} تا ${lifetimeRange.endLabel}` : 'دائمی'}</span></div>
           <div>نوع سنجش: <span className="font-semibold text-gray-800 dark:text-gray-100">{metricLabel}</span></div>
           {record.metric_field_key ? (
             <div>فیلد عددی: <span className="font-semibold text-gray-800 dark:text-gray-100">{record.metric_field_key}</span></div>
           ) : null}
           <div>فیلد تاریخ: <span className="font-semibold text-gray-800 dark:text-gray-100">{record.date_field_key || 'created_at'}</span></div>
-          {(record.config?.goal_start_date || record.config?.goal_end_date) ? (
-            <div>
-              بازه دستی:
-              <span className="font-semibold text-gray-800 dark:text-gray-100">
-                {' '}
-                {record.config?.goal_start_date || '...'} تا {record.config?.goal_end_date || '...'}
-              </span>
-            </div>
-          ) : null}
         </div>
 
         <div className="space-y-2 text-sm text-gray-600 dark:text-gray-300">

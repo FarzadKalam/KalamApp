@@ -470,7 +470,7 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
         <div className="mb-4 rounded-2xl border border-gray-200 p-4 dark:border-gray-800">
           <h4 className="mb-3 font-bold">بازه و معیار محاسبه</h4>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <Form.Item label="بازه اصلی" name="period_unit" initialValue="month">
+            <Form.Item label="بازه اصلی نمایش و محاسبه" name="period_unit" initialValue="month">
               <AdaptiveSelectField options={GOAL_PERIOD_UNIT_OPTIONS} getPopupContainer={popupContainer as any} modalContainer={popupContainer} preferLocalPopupContainer overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
             <Form.Item label="بازه فرعی پیش‌فرض" name="subperiod_unit" initialValue="week">
@@ -497,11 +497,14 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
               />
             </Form.Item>
           </div>
+          <div className="mt-2 text-xs leading-6 text-gray-500">
+            اگر تاریخ شروع و پایان هدف را خالی بگذارید، هدف دائمی در نظر گرفته می‌شود. در غیر این صورت، کارت‌ها فقط در بازه عمر هدف و بر اساس بازه اصلی انتخاب‌شده نمایش داده می‌شوند.
+          </div>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Form.Item label="تاریخ شروع بازه اصلی" name="goal_start_date">
+            <Form.Item label="تاریخ شروع هدف" name="goal_start_date">
               <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
-            <Form.Item label="تاریخ پایان بازه اصلی" name="goal_end_date">
+            <Form.Item label="تاریخ پایان هدف" name="goal_end_date">
               <PersianDatePicker type="DATE" placeholder="اختیاری" modalContainer={popupContainer} overlayZIndexBase={overlayZIndexBase} />
             </Form.Item>
           </div>

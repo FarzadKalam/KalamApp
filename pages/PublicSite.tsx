@@ -1,5 +1,5 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import { App } from 'antd';
+import React, { FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { App, Spin } from 'antd';
 import {
   ApiOutlined,
   ArrowLeftOutlined,
@@ -19,8 +19,16 @@ import {
   ThunderboltOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import SeoHead from '../components/cms/SeoHead';
+import { buildHomeSeo } from '../utils/seoHelpers';
+import {
+  BlogIndexPage,
+  BlogPostPage,
+  TutorialIndexPage,
+  TutorialPostPage,
+} from '../components/cms/PublicCmsPages';
 import { getMarketingPanelUrl, getMarketingSiteBasePath } from '../utils/hostRouting';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
@@ -146,7 +154,7 @@ const Footer = () => (
         </div>
       </div>
       <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', 'https://app.tazesystem.ir/demo'], ['ورود به پنل', PANEL_URL]]} />
-      <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['درباره ما', sitePath('/about')]]} />
+      <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['مستندات API', '/tazesystem/developers'], ['درباره ما', sitePath('/about')]]} />
       <div>
         <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
         <div className="mt-4 grid gap-3 text-sm text-zinc-600">
@@ -440,6 +448,7 @@ const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
 
 const HomePage = () => (
   <>
+    <SeoHead {...buildHomeSeo()} />
     <section className="bg-[linear-gradient(180deg,#ffffff_0%,#f4f4f5_100%)] px-5 py-16 md:py-24">
       <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[.95fr_1.05fr]">
         <div>
@@ -594,10 +603,10 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
       {resolvedPage === 'home' && <HomePage />}
       {resolvedPage === 'features' && <FeaturesPage />}
       {resolvedPage === 'pricing' && <PricingSection detailed />}
-      {resolvedPage === 'blog' && <ResourcesPage kind="blog" />}
-      {resolvedPage === 'blog-post' && <SimplePostPage type="blog" />}
-      {resolvedPage === 'learn' && <ResourcesPage kind="learn" />}
-      {resolvedPage === 'learn-post' && <SimplePostPage type="learn" />}
+      {resolvedPage === 'blog' && <BlogIndexPage />}
+      {resolvedPage === 'blog-post' && <BlogPostPage />}
+      {resolvedPage === 'learn' && <TutorialIndexPage />}
+      {resolvedPage === 'learn-post' && <TutorialPostPage />}
       {resolvedPage === 'updates' && <ResourcesPage kind="updates" />}
       {resolvedPage === 'about' && <AboutPage />}
       {(resolvedPage === 'contact' || resolvedPage === 'demo') && <ContactPage />}

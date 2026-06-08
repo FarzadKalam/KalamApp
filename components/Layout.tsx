@@ -31,6 +31,7 @@ import {
   MessageOutlined,
   OpenAIOutlined,
   BellOutlined,
+  ReadOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -694,6 +695,18 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
           { key: '/taze-system/api-docs', label: 'مستندات API' },
+          {
+            key: 'cms_group',
+            icon: <ReadOutlined />,
+            label: 'مدیریت محتوا',
+            children: [
+              { key: '/cms_blog_posts', label: 'پست‌های بلاگ' },
+              { key: '/cms_tutorial_posts', label: 'آموزش‌ها' },
+              { key: '/cms_tutorial_series', label: 'دوره‌های آموزشی' },
+              { key: '/cms_categories', label: 'دسته‌بندی‌ها' },
+              { key: '/cms_tags', label: 'برچسب‌ها' },
+            ],
+          },
         ],
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
@@ -732,6 +745,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/saas_user_announcements':
         case '/taze-system/plans':
         case '/taze-system/api-docs':
+        case '/cms_blog_posts':
+        case '/cms_tutorial_posts':
+        case '/cms_tutorial_series':
+        case '/cms_categories':
+        case '/cms_tags':
           return canViewSaasAdmin;
         case '/accounting/account-review':
           return canViewModule('journal_entries') && canViewModule('chart_of_accounts');

@@ -127,6 +127,18 @@ const getOverlayKind = (row: OverlayFeedRow) => {
   return 'responsibility';
 };
 
+const getOverlayChannel = (row: OverlayFeedRow) => {
+  if (row.section === 'notes') {
+    const category = String(row.payload?.category || '').trim().toLowerCase();
+    return category === 'system' || category === 'assistant' ? 'system' : 'internal';
+  }
+  if (row.section === 'bot_messages') return 'bot';
+  if (row.section === 'sms_messages') return 'sms';
+  if (row.section === 'voip_calls') return 'voip';
+  if (row.section === 'tasks' || row.section === 'responsibilities') return 'system';
+  return 'generic';
+};
+
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
@@ -419,6 +431,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return {
         id: `${row.section}:${row.source_type}:${row.source_id}`,
         kind,
+        channel: getOverlayChannel(row),
         kindLabel: row.section === 'notes' ? 'پیام' : undefined,
         title: String(row.title || '').trim() || 'اعلان جدید',
         body: String(row.body || '').trim() || 'برای مشاهده جزئیات کلیک کنید.',

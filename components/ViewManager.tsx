@@ -49,8 +49,11 @@ const CURRENT_USER_OPTION_VALUE = '__current_user__';
 const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
 const SPECIAL_ASSIGNEE_OPTIONS = [
   { label: 'کاربر در حال مشاهده', value: CURRENT_USER_OPTION_VALUE },
-  { label: 'نقش در حال مشاهده', value: CURRENT_ROLE_OPTION_VALUE },
+  { label: 'نقش کاربر در حال مشاهده', value: CURRENT_ROLE_OPTION_VALUE },
 ];
+const BUILT_IN_VIEW_KEY = '__built_in_view_key';
+const BUILT_IN_VIEW_IDS = ['default_all', 'default_secondary'] as const;
+const SECONDARY_DEFAULT_VIEW_KEY = BUILT_IN_VIEW_IDS[1];
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -204,14 +207,47 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     }),
     [moduleConfig?.titles?.fa, moduleId]
   );
+  const secondaryDefaultView = useMemo<SavedView>(
+    () => ({
+      id: SECONDARY_DEFAULT_VIEW_KEY,
+      module_id: moduleId,
+      name: moduleConfig?.titles?.fa ? `نمای دوم ${moduleConfig.titles.fa}` : 'نمای دوم',
+      is_default: false,
+      config: {
+        columns: [],
+        filters: [],
+        [BUILT_IN_VIEW_KEY]: SECONDARY_DEFAULT_VIEW_KEY,
+      } as ViewConfig & Record<string, any>,
+    }),
+    [moduleConfig?.titles?.fa, moduleId]
+  );
+  const builtInViews = useMemo(() => [defaultView, secondaryDefaultView], [defaultView, secondaryDefaultView]);
+  const getBuiltInViewKey = useCallback((view?: Partial<SavedView> | null) => {
+    const rawConfig = (view?.config as any) || {};
+    const configKey = String(rawConfig?.[BUILT_IN_VIEW_KEY] || '').trim();
+    if (configKey && BUILT_IN_VIEW_IDS.includes(configKey as any)) return configKey;
+    const viewId = String(view?.id || '').trim();
+    if (BUILT_IN_VIEW_IDS.includes(viewId as any)) return viewId;
+    if (view?.is_default) return defaultView.id;
+    return null;
+  }, [defaultView.id]);
   const normalizeViewsList = useCallback(
     (items: SavedView[]) => {
       const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
-      const persistedDefaultView = normalizedItems.find((view) => view.is_default) || null;
-      const otherViews = normalizedItems.filter((view) => !view.is_default && view.id !== defaultView.id);
-      return [persistedDefaultView || defaultView, ...otherViews];
+      const persistedBuiltIns = new Map<string, SavedView>();
+      normalizedItems.forEach((view) => {
+        const builtInKey = getBuiltInViewKey(view);
+        if (builtInKey && !persistedBuiltIns.has(builtInKey)) {
+          persistedBuiltIns.set(builtInKey, view);
+        }
+      });
+      const otherViews = normalizedItems.filter((view) => !getBuiltInViewKey(view));
+      return [
+        ...builtInViews.map((view) => persistedBuiltIns.get(view.id) || view),
+        ...otherViews,
+      ];
     },
-    [defaultView]
+    [builtInViews, getBuiltInViewKey]
   );
 
   const filterViewsByAccess = useCallback(async (allViews: SavedView[]): Promise<SavedView[]> => {
@@ -223,7 +259,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       const me = (directory.users || []).find((u) => String(u?.id || '') === currentUserId);
       const myRoleId = me?.role_id ? String(me.role_id) : null;
       return allViews.filter((view) => {
-        if (view.is_default || view.id.startsWith('default_')) return true;
+        if (getBuiltInViewKey(view) || view.id.startsWith('default_')) return true;
         const access = (view.config as any)?.access;
         if (!access || access.type !== 'specific') return true;
         const userIds: string[] = Array.isArray(access.userIds) ? access.userIds : [];
@@ -366,7 +402,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setConfig(safeConfig);
     setViewName(view.name);
     setEditingViewId(view.id.startsWith('default_') ? null : view.id);
-    setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
+    setEditingDefaultView(Boolean(getBuiltInViewKey(view)));
     setActiveModalTab('columns');
     accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
@@ -410,7 +446,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setConfig(safeConfig);
     setViewName(view.name);
     setEditingViewId(view.id.startsWith('default_') ? null : view.id);
-    setEditingDefaultView(view.is_default || view.id.startsWith('default_'));
+    setEditingDefaultView(Boolean(getBuiltInViewKey(view)));
     setIsMobileSheetOpen(false);
     setActiveModalTab('columns');
     accessDirectoryLoadedRef.current = false;
@@ -434,16 +470,24 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       )
     );
 
-    const cleanConfig: ViewConfig = { ...config, columns: getViewColumnKeys(config.columns), filters: validFilters };
+    const activeBuiltInViewKey = editingDefaultView
+      ? (BUILT_IN_VIEW_IDS.includes(String(currentView?.id || '') as any) ? String(currentView?.id || '') : String((config as any)?.[BUILT_IN_VIEW_KEY] || defaultView.id))
+      : null;
+    const cleanConfig: ViewConfig = {
+      ...config,
+      columns: getViewColumnKeys(config.columns),
+      filters: validFilters,
+      ...(activeBuiltInViewKey ? { [BUILT_IN_VIEW_KEY]: activeBuiltInViewKey } : {}),
+    } as ViewConfig;
     const payload = {
       module_id: moduleId,
       name: viewName,
       config: cleanConfig,
-      is_default: editingDefaultView,
+      is_default: activeBuiltInViewKey === defaultView.id,
     };
 
     try {
-      if (editingDefaultView) {
+      if (activeBuiltInViewKey === defaultView.id) {
         let resetQuery = supabase
           .from('saved_views')
           .update({ is_default: false })
@@ -457,11 +501,17 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       }
 
       let savedData: SavedView | null;
-      if (editingViewId) {
+      let targetEditId = editingViewId;
+      if (!targetEditId && activeBuiltInViewKey) {
+        const existingBuiltInView = views.find((view) => getBuiltInViewKey(view) === activeBuiltInViewKey && !BUILT_IN_VIEW_IDS.includes(String(view.id || '') as any));
+        targetEditId = existingBuiltInView?.id || null;
+      }
+
+      if (targetEditId) {
         const { data, error } = await supabase
           .from('saved_views')
           .update(payload)
-          .eq('id', editingViewId)
+          .eq('id', targetEditId)
           .select()
           .single();
         if (error) throw error;
@@ -469,7 +519,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         if (savedData) {
           setViews((prev) => {
             const nextViews = normalizeViewsList(
-              prev.map((view) => (view.id === editingViewId ? savedData! : view))
+              prev.map((view) => (view.id === targetEditId ? savedData! : view))
             );
             savedViewsCache.set(moduleId, nextViews);
             return nextViews;
@@ -621,7 +671,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                     </span>
                   </Tooltip>
 
-                  {!view.is_default && !view.id.startsWith('default_') && (
+                  {!getBuiltInViewKey(view) && !view.id.startsWith('default_') && (
                     <Popconfirm
                       title="حذف نما؟"
                       onConfirm={async (e) => {
@@ -699,7 +749,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
             ) : (
               views.map((view) => {
                 const isActive = currentView?.id === view.id;
-                const canDelete = !view.is_default && !view.id.startsWith('default_');
+                const canDelete = !getBuiltInViewKey(view) && !view.id.startsWith('default_');
                 return (
                   <div
                     key={view.id}

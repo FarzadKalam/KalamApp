@@ -19,8 +19,6 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
-  EyeInvisibleOutlined,
-  EyeOutlined,
   GlobalOutlined,
   KeyOutlined,
   PlusOutlined,
@@ -123,7 +121,6 @@ const ApiTokensSection: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTokenName, setNewTokenName] = useState('');
-  const [revealedToken, setRevealedToken] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);

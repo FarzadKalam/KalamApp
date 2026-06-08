@@ -66,6 +66,7 @@ interface SharedNoteCardProps {
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
 const HTML_ANCHOR_REGEX = /<a\s+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
 const LINK_CLASS_NAME = 'underline decoration-dotted underline-offset-2 break-all [overflow-wrap:anywhere] text-current';
+const UNREAD_GLOW_CLASS_NAME = 'shadow-[0_0_0_1px_rgba(245,158,11,0.34),0_0_0_4px_rgba(245,158,11,0.12),0_10px_28px_rgba(245,158,11,0.18)] dark:shadow-[0_0_0_1px_rgba(251,191,36,0.32),0_0_0_4px_rgba(251,191,36,0.14),0_12px_30px_rgba(245,158,11,0.14)]';
 
 const getAttachmentLabel = (attachment: NoteAttachment) => {
   const directName = String(attachment?.name || '').trim();
@@ -464,7 +465,7 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
             : isMine
               ? 'opacity-0 translate-x-2 translate-y-1 scale-[0.985]'
               : 'opacity-0 -translate-x-2 translate-y-1 scale-[0.985]'
-        } ${variant === 'ai' ? 'rounded-tl-sm' : isMine ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}
+        } ${variant === 'ai' ? 'rounded-tl-sm' : isMine ? 'rounded-tr-sm' : 'rounded-tl-sm'} ${unreadIndicator ? UNREAD_GLOW_CLASS_NAME : ''}`}
         style={cardStyle}
       >
           <div className="mb-1 flex items-center justify-between gap-2 text-[9px]" style={subtleTextStyle}>

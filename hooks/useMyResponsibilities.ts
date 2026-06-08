@@ -115,8 +115,6 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
         if (!recordId) return;
         itemByRecordId.set(recordId, [...(itemByRecordId.get(recordId) || []), item]);
       });
-      const loadedIds = new Set(rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean));
-
       rows.forEach((row: any) => {
         const recordId = String(row?.id || '').trim();
         const matchedItems = itemByRecordId.get(recordId) || [];
@@ -135,26 +133,6 @@ const fetchResponsibilities = async (userId: string, roleId: string | null): Pro
         });
       });
 
-      // Include inbox items whose rows couldn't be fetched (deleted records, etc.)
-      group.items.forEach((item) => {
-        const recordId = String(item.record_id || item.source_id || '').trim();
-        if (!recordId || loadedIds.has(recordId)) return;
-        const payload = isPlainObject(item.payload) ? item.payload : {};
-        const sourceKey = String(item.module_id || (payload as any)?.module_id || (payload as any)?.table || item.source_type || group.table).trim();
-        const resolvedModuleId = resolveInvoiceModuleIdForRecord(sourceKey, payload);
-        const resolvedModule = MODULES[resolvedModuleId] || moduleBySource.get(sourceKey) || { id: resolvedModuleId, titles: { fa: resolvedModuleId } };
-        results.push({
-          id: recordId,
-          name: item.title,
-          title: item.title,
-          description: item.body,
-          created_at: item.last_event_at || item.created_at,
-          updated_at: item.last_event_at || item.created_at,
-          module_id: resolvedModuleId,
-          module_title: resolvedModule.titles?.fa || resolvedModule.id,
-          __notification_inbox_item: item,
-        });
-      });
     });
 
     return results.sort(

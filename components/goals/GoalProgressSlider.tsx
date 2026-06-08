@@ -10,10 +10,12 @@ import {
   dedupeGoalsForDisplay,
   ensureDefaultSalesInvoiceGoal,
   executeGoalProgress,
+  formatGoalMetricValue,
   normalizeGoalRecord,
   resolveGoalAssignedMembers,
 } from '../../utils/goals';
 import { type FiscalYearSnapshot } from '../../utils/goalPeriods';
+import { useCurrencyConfig } from '../../utils/currency';
 import { fetchCurrentUserRecordAccessContext, resolveModuleGoalAccessPermissions, type PermissionMap } from '../../utils/permissions';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import {
@@ -21,7 +23,6 @@ import {
   type GoalPeriodUnit,
   type GoalProgressSnapshot,
 } from '../../utils/goalTypes';
-import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import GoalEditorModal from './GoalEditorModal';
 import GoalResultsModal from './GoalResultsModal';
 
@@ -152,16 +153,6 @@ const toneClassMap: Record<GoalProgressSnapshot['tone'], { shell: string; bar: s
 
 const clampPercent = (value: number) => Math.max(0, Math.min(100, value));
 
-const formatMetricNumber = (value: number, metricType: GoalProgressSnapshot['goal']['metric_type']) => {
-  if (metricType === 'avg') {
-    return toPersianNumber(value.toFixed(1));
-  }
-  if (Math.abs(value) >= 1000) {
-    return toPersianNumber(Math.round(value).toLocaleString('en-US'));
-  }
-  return toPersianNumber(Number(value || 0).toFixed(value % 1 === 0 ? 0 : 1));
-};
-
 const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   moduleId,
   placement,
@@ -172,6 +163,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   onActiveCardChange,
   periodOverride,
 }) => {
+  const { label: currencyLabel } = useCurrencyConfig();
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -542,12 +534,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
             key={level.key}
             className={`!m-0 rounded-full border px-3 py-1 text-[11px] ${shellClasses.tag}`}
           >
-            {level.label}: {formatMetricNumber(level.value, activeCard.goal.metric_type)}
+            {level.label}: {formatGoalMetricValue(activeCard.goal, level.value, currencyLabel)}
           </Tag>
         ))}
       </div>
     );
-  }, [activeCard, shellClasses.tag]);
+  }, [activeCard, currencyLabel, shellClasses.tag]);
 
   const primaryReward = useMemo(() => {
     const rewardRules = Array.isArray(activeCard?.goal?.config?.goal_reward_rules)
@@ -652,17 +644,17 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <div className="h-1.5 min-w-[72px] flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
-                <div
-                  className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
-                  style={{ width: `${mainPercent}%` }}
-                />
-              </div>
-              <div className="shrink-0 whitespace-nowrap text-[9px] font-semibold text-gray-600 dark:text-gray-300">
-                {formatMetricNumber(activeCard.achievedValue, activeCard.goal.metric_type)} / {formatMetricNumber(activeCard.targetValue, activeCard.goal.metric_type)}
+                <div className="h-1.5 min-w-[72px] flex-1 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
+                  <div
+                    className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
+                    style={{ width: `${mainPercent}%` }}
+                  />
+                </div>
+                <div className="shrink-0 whitespace-nowrap text-[9px] font-semibold text-gray-600 dark:text-gray-300">
+                  {formatGoalMetricValue(activeCard.goal, activeCard.achievedValue, currencyLabel)} / {formatGoalMetricValue(activeCard.goal, activeCard.targetValue, currencyLabel)}
+                </div>
               </div>
             </div>
-          </div>
 
           {cards.length > 1 ? (
             <div className="flex shrink-0 items-center gap-1">
@@ -787,6 +779,9 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       <div className="mt-4 text-[11px] text-gray-500 dark:text-gray-400">
         بازه اصلی: از {activeCard.mainRange.startLabel} تا {activeCard.mainRange.endLabel}
       </div>
+      <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+        بازه هدف: {activeCard.goalRange ? `${activeCard.goalRange.startLabel} تا ${activeCard.goalRange.endLabel}` : 'دائمی'}
+      </div>
       <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/70 dark:bg-black/20">
         <div
           className={`h-full rounded-full bg-gradient-to-r transition-[width] duration-300 ease-out ${shellClasses.bar}`}
@@ -795,10 +790,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       </div>
       <div className="mt-1 flex items-center justify-between text-xs text-gray-600 dark:text-gray-300">
         <span>
-          محقق‌شده: {formatMetricNumber(activeCard.achievedValue, activeCard.goal.metric_type)}
+          محقق‌شده: {formatGoalMetricValue(activeCard.goal, activeCard.achievedValue, currencyLabel)}
         </span>
         <span>
-          هدف: {formatMetricNumber(activeCard.targetValue, activeCard.goal.metric_type)}
+          هدف: {formatGoalMetricValue(activeCard.goal, activeCard.targetValue, currencyLabel)}
         </span>
       </div>
 
@@ -862,10 +857,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-600 dark:text-gray-300">
         <span>
-          بازه فرعی: {formatMetricNumber(activeCard.subAchievedValue, activeCard.goal.metric_type)}
+          بازه فرعی: {formatGoalMetricValue(activeCard.goal, activeCard.subAchievedValue, currencyLabel)}
         </span>
         <span>
-          هدف فرعی: {formatMetricNumber(activeCard.subTargetValue, activeCard.goal.metric_type)}
+          هدف فرعی: {formatGoalMetricValue(activeCard.goal, activeCard.subTargetValue, currencyLabel)}
         </span>
       </div>
 

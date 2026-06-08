@@ -54,6 +54,8 @@ import { runProcessAutomationsForTaskEvent } from '../utils/processAutomationRun
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
+import { fetchSessionBootstrap } from '../utils/sessionCache';
+import { fetchProcessRuntimeBatchForRecord } from '../utils/processRuntimeBatch';
 import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
@@ -2115,20 +2117,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   };
   const fetchTaskTypeOptions = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('dynamic_options')
-        .select('label, value, is_active')
-        .eq('category', 'task_type')
-        .order('label', { ascending: true });
-      if (error) throw error;
-      const options = (data || [])
-        .filter((row: any) => row?.is_active !== false)
-        .map((row: any) => ({
-          label: String(row?.label || row?.value || ''),
-          value: String(row?.value || row?.label || ''),
-        }))
-        .filter((row) => row.label && row.value);
-      setTaskTypeOptions(getMergedTaskTypeOptions(options));
+      const options = await fetchDynamicOptionsByCategory(supabase, 'task_type');
+      setTaskTypeOptions(getMergedTaskTypeOptions(options || []));
     } catch (error) {
       if (String((error as any)?.name || '') === 'AbortError') return;
       setTaskTypeOptions(getMergedTaskTypeOptions([]));
@@ -2138,15 +2128,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const fetchCurrentUser = useCallback(async () => {
     try {
       const roleContext = await fetchCurrentUserRoleContext(supabase);
-      const userId = roleContext?.userId || null;
+      const snapshot = await fetchSessionBootstrap(supabase);
+      const userId = roleContext?.userId || snapshot?.user?.id || null;
       setRolePermissions((roleContext?.permissions || null) as PermissionMap | null);
       if (!userId) return;
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('full_name, role_id')
-        .eq('id', userId)
-        .maybeSingle();
-      setCurrentUser({ id: userId, roleId: profile?.role_id ? String(profile.role_id) : null, fullName: profile?.full_name || 'کاربر' });
+      const profile = snapshot?.profile || null;
+      setCurrentUser({
+        id: String(userId),
+        roleId: profile?.role_id ? String(profile.role_id) : (roleContext?.roleId ? String(roleContext.roleId) : null),
+        fullName: String(profile?.full_name || snapshot?.user?.user_metadata?.full_name || 'کاربر'),
+      });
     } catch (err) {
       if (String((err as any)?.name || '') === 'AbortError') return;
     }
@@ -2197,6 +2188,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const fetchProcessRunStageRowsForRecord = async () => {
     if (!isProcessRecordModule || !recordId || !moduleId || isProcessPreviewModule) {
       return { rows: [] as any[], runs: [] as any[], stages: [] as any[] };
+    }
+
+    if (readOnly && (compact || cardCompact)) {
+      const batchRuntime = await fetchProcessRuntimeBatchForRecord(supabase, moduleId, recordId).catch(() => null);
+      if (batchRuntime) {
+        return {
+          rows: mapProcessRunStageRows(batchRuntime.runs || [], batchRuntime.stages || []),
+          runs: batchRuntime.runs || [],
+          stages: batchRuntime.stages || [],
+        };
+      }
     }
 
     try {
@@ -2396,6 +2398,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       if (isProcessRecordModule) {
+        if (readOnly && (compact || cardCompact)) {
+          const processRuntime = await fetchProcessRunStageRowsForRecord();
+          const next = Array.from(
+            new Map((processRuntime.rows || []).map((row: any) => [String(row?.id || `${row?.name || ''}_${row?.sort_order || ''}`), row])).values()
+          ).map((row: any) => withProcessTaskCustomFieldValues(row));
+          setTasks(next);
+          setProcessRuntimeRuns(processRuntime.runs || []);
+          setProcessRuntimeStages(processRuntime.stages || []);
+          setTasksLoadSucceeded(true);
+          return next;
+        }
+
         const [sourceResult, linkedResult, processRuntime] = await Promise.all([
           applyTaskSourceRecordFilter(query, moduleId, recordId)
             .order('sort_order', { ascending: true }),

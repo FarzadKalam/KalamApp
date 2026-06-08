@@ -2,8 +2,9 @@ import { BlockType, FieldType, ModuleDefinition } from '../types';
 import { MODULES } from '../moduleRegistry';
 import { buildCustomerRelationSearchText } from './customerRelation';
 import { getPreferredRelationTargetField } from './relationTargetField';
-import { supportsSystemCode } from './systemCode';
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from './cashBankLegacyAccountKeys';
+import { fetchRelationOptionsForField } from './relationOptions';
+import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
 
 type ModuleFieldLike = {
   key: string;
@@ -13,6 +14,7 @@ type ModuleFieldLike = {
   relationConfig?: {
     targetModule?: string;
     targetField?: string;
+    dependsOn?: string;
     filter?: Record<string, any>;
     sourceModules?: Array<{
       targetModule?: string;
@@ -31,8 +33,6 @@ export type ModuleListOptionPlan = {
   allRelationFields: ModuleFieldLike[];
 };
 
-const RELATION_BATCH_SIZE = 500;
-const RELATION_MAX_PAGES = 40;
 const RELATION_OPTIONS_TTL_MS = 15 * 60_000;
 const relationTargetOptionsCache = new Map<string, { data: any[]; expiresAt: number }>();
 const relationTargetPromiseCache = new Map<string, Promise<any[]>>();
@@ -263,39 +263,6 @@ const buildRelationOptionsFromRows = (
     };
   });
 
-const fetchRelationRows = async (
-  supabaseClient: any,
-  targetModule: string,
-  fields: string[],
-  filter?: Record<string, any>
-) => {
-  const targetTable = MODULES[targetModule]?.table || targetModule;
-  const rows: any[] = [];
-  for (let page = 0; page < RELATION_MAX_PAGES; page += 1) {
-    const from = page * RELATION_BATCH_SIZE;
-    const to = from + RELATION_BATCH_SIZE - 1;
-    let query = supabaseClient
-      .from(targetTable)
-      .select(fields.join(', '))
-      .range(from, to);
-
-    Object.entries(filter || {}).forEach(([key, value]) => {
-      query = query.eq(key, value);
-    });
-
-    const result = await query;
-    if (result.error) {
-      return { data: null as any, error: result.error };
-    }
-
-    const chunk = result.data || [];
-    rows.push(...chunk);
-    if (chunk.length < RELATION_BATCH_SIZE) break;
-  }
-
-  return { data: rows, error: null as any };
-};
-
 const fetchRelationOptionsByTarget = async (
   supabaseClient: any,
   targetModule: string,
@@ -315,66 +282,20 @@ const fetchRelationOptionsByTarget = async (
   }
 
   const pending = (async () => {
-  const resolvedTargetField = getPreferredRelationTargetField(targetModule, targetField);
-  const includeSystemCode = targetModule !== 'cheques' && supportsSystemCode(targetModule);
-  const customerExtraFields =
-    targetModule === 'customers'
-      ? ['full_name', 'first_name', 'last_name', 'business_name', 'legal_name', 'mobile_1', 'phone']
-      : [];
-  const selectFields = Array.from(
-    new Set(
-      targetModule === 'profiles'
-        ? ['id'].concat(resolvedTargetField ? [resolvedTargetField] : [])
-        : ['id']
-            .concat(includeSystemCode ? ['system_code'] : [])
-            .concat(resolvedTargetField ? [resolvedTargetField] : [])
-            .concat(customerExtraFields)
-    )
-  );
-
-  if (targetModule === 'shelves' && !selectFields.includes('shelf_number')) {
-    selectFields.push('shelf_number');
-  }
-
-  let { data: relationRows, error: relationError } = await fetchRelationRows(
-    supabaseClient,
-    targetModule,
-    selectFields,
-    filter
-  );
-
-  const errorText = String(relationError?.message || relationError?.details || '').toLowerCase();
-  const errorCode = String(relationError?.code || '').toUpperCase();
-  const hasColumnError = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
-
-  if (relationError && hasColumnError) {
-    const fallbackWithoutSystemCode = selectFields.filter((field) => field !== 'system_code');
-    let fallback = await fetchRelationRows(supabaseClient, targetModule, fallbackWithoutSystemCode, filter);
-
-    if (fallback.error && targetField) {
-      const fallbackErrorText = String(fallback.error?.message || fallback.error?.details || '').toLowerCase();
-      const missingTargetField =
-        fallbackErrorText.includes(String(targetField).toLowerCase()) ||
-        String(fallback.error?.code || '').toUpperCase() === '42703' ||
-        String(fallback.error?.code || '').toUpperCase() === 'PGRST204';
-
-      if (missingTargetField) {
-        const byPreferredField = await fetchRelationRows(
-          supabaseClient,
-          targetModule,
-          ['id', resolvedTargetField].filter(Boolean) as string[],
-          filter
-        );
-        fallback = byPreferredField.error
-          ? await fetchRelationRows(supabaseClient, targetModule, ['id'], filter)
-          : byPreferredField;
-      }
-    }
-
-    relationRows = fallback.data;
-  }
-
-    const options = buildRelationOptionsFromRows(targetModule, resolvedTargetField, relationRows || []);
+    const resolvedTargetField = getPreferredRelationTargetField(targetModule, targetField);
+    const field = {
+      key: `module_list_target_${targetModule}_${resolvedTargetField || 'label'}`,
+      type: FieldType.RELATION,
+      relationConfig: {
+        targetModule,
+        targetField: resolvedTargetField,
+        filter,
+      },
+    };
+    const lightweightOptions = await fetchRelationOptionsForField(supabaseClient, field, { limit: 50 }).catch(() => []);
+    const options = Array.isArray(lightweightOptions) && lightweightOptions.length > 0
+      ? lightweightOptions
+      : buildRelationOptionsFromRows(targetModule, resolvedTargetField, []);
     relationTargetOptionsCache.set(cacheKey, {
       data: options,
       expiresAt: Date.now() + RELATION_OPTIONS_TTL_MS,
@@ -388,6 +309,97 @@ const fetchRelationOptionsByTarget = async (
 
   relationTargetPromiseCache.set(cacheKey, pending);
   return pending;
+};
+
+const getRowFieldValues = (row: any, fieldKey: string) => {
+  const rawValue = row?.[fieldKey];
+  if (Array.isArray(rawValue)) {
+    return rawValue.map((item) => normalizeOptionValue(item)).filter(Boolean);
+  }
+  const normalizedValue = normalizeOptionValue(rawValue);
+  return normalizedValue ? [normalizedValue] : [];
+};
+
+export const hydrateModuleListRelationOptionsForRows = async (
+  supabaseClient: any,
+  fields: ModuleFieldLike[],
+  rows: any[],
+  directory: { users: any[]; roles: any[] } | null
+) => {
+  const profileOptions = (directory?.users || []).map((user: any) => ({
+    label: user.display_name || user.full_name || user.id,
+    value: user.id,
+    module: 'profiles',
+  }));
+  const roleOptions = (directory?.roles || []).map((role: any) => ({
+    label: role.title || role.id,
+    value: role.id,
+    module: 'org_roles',
+  }));
+
+  const relationOptions: Record<string, any[]> = {
+    profiles: profileOptions,
+    org_roles: roleOptions,
+    roles: roleOptions,
+  };
+
+  const requestsByModule = new Map<string, Set<string>>();
+  const fieldTargets = new Map<string, Array<{ moduleId: string; recordId: string }>>();
+
+  (fields || []).forEach((field) => {
+    const fieldKey = normalizeOptionValue(field?.key);
+    if (!fieldKey) return;
+
+    if (field.type === FieldType.USER) {
+      relationOptions[fieldKey] = profileOptions;
+      return;
+    }
+
+    const relationConfig = field?.relationConfig;
+    if (!relationConfig) return;
+
+    (rows || []).forEach((row: any) => {
+      const targetModule = relationConfig?.dependsOn
+        ? normalizeOptionValue(row?.[relationConfig.dependsOn])
+        : normalizeOptionValue(relationConfig?.targetModule);
+      if (!targetModule) return;
+
+      getRowFieldValues(row, fieldKey).forEach((recordId) => {
+        if (!requestsByModule.has(targetModule)) requestsByModule.set(targetModule, new Set<string>());
+        requestsByModule.get(targetModule)!.add(recordId);
+        const fieldEntries = fieldTargets.get(fieldKey) || [];
+        fieldEntries.push({ moduleId: targetModule, recordId });
+        fieldTargets.set(fieldKey, fieldEntries);
+      });
+    });
+  });
+
+  const labelMap = await fetchRecordReferenceLabels(
+    supabaseClient,
+    Array.from(requestsByModule.entries()).flatMap(([moduleId, ids]) =>
+      Array.from(ids).map((recordId) => ({ moduleId, recordId }))
+    )
+  ).catch(() => ({} as Record<string, string>));
+
+  fieldTargets.forEach((entries, fieldKey) => {
+    const merged = new Map<string, any>();
+    entries.forEach((entry) => {
+      const referenceKey = buildRecordReferenceKey(entry.moduleId, entry.recordId);
+      const label = String(labelMap[referenceKey] || entry.recordId).trim();
+      const optionKey = `${entry.moduleId}:${entry.recordId}`;
+      if (!merged.has(optionKey)) {
+        merged.set(optionKey, {
+          label,
+          value: entry.recordId,
+          module: entry.moduleId,
+          searchText: `${label} ${String(entry.recordId || '').toLowerCase()}`.trim(),
+        });
+      }
+    });
+    relationOptions[fieldKey] = Array.from(merged.values());
+  });
+
+  return relationOptions;
 };
 
 const mergeRelationOptions = (...lists: Array<any[] | undefined | null>) => {

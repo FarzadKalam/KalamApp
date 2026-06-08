@@ -52,6 +52,7 @@ export type GoalProgressSnapshot = {
   targetValue: number;
   subAchievedValue: number;
   subTargetValue: number;
+  goalRange?: GoalDateRange | null;
   mainRange: GoalDateRange;
   subRange: GoalDateRange;
   tone: GoalTone;

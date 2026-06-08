@@ -9,12 +9,13 @@ import RecordMessageActions from './RecordMessageActions';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { getPrimaryRecordPhone, hasAnyRecordBotTarget } from '../utils/recordMessaging';
-import { fetchRecordTagsMap } from '../utils/referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchRecordTagsMap } from '../utils/referenceData';
 import { fetchCurrentUserRolePermissions, type PermissionMap } from '../utils/permissions';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import ResilientImage from './common/ResilientImage';
+import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -191,6 +192,27 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   };
 
   const audioFieldKey = String(moduleConfig?.quickPreview?.audioField || '').trim();
+  const previewSelectColumns = useMemo(() => {
+    const fieldKeys = Array.from(
+      new Set(
+        [
+          'id',
+          'org_id',
+          'created_at',
+          'updated_at',
+          'created_by',
+          'updated_by',
+          'status',
+          'system_code',
+          'name',
+          'title',
+          ...fields.map((field: any) => String(field?.key || '').trim()).filter(Boolean),
+          ...(audioFieldKey ? [audioFieldKey] : []),
+        ].filter(Boolean)
+      )
+    );
+    return fieldKeys;
+  }, [audioFieldKey, fields]);
   const audioUrl = audioFieldKey ? String(draftRecord?.[audioFieldKey] || record?.[audioFieldKey] || '').trim() : '';
 
   const hasDirtyQuickPreview = useMemo(() => (
@@ -308,14 +330,19 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     const loadData = async () => {
       setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from(moduleConfig.table || moduleId)
-          .select('*')
-          .eq('id', recordId)
-          .single();
-        if (error) throw error;
+        const recordResult = await runSelectWithCompatibleColumns<any | null>({
+          cacheKey: `related-record-popover:${moduleId}`,
+          columns: previewSelectColumns,
+          execute: (selectExpr) =>
+            supabase
+              .from(moduleConfig.table || moduleId)
+              .select(selectExpr)
+              .eq('id', recordId)
+              .maybeSingle(),
+        });
+        if (recordResult.error) throw recordResult.error;
         if (cancelled) return;
-        let nextRecord = data || null;
+        let nextRecord = recordResult.data || null;
         const tagsField = fields.find((field: any) => field.type === FieldType.TAGS);
         if (nextRecord && tagsField) {
           const tagsMap = (await fetchRecordTagsMap(supabase, moduleId, [recordId]).catch(() => ({}))) as Record<string, any[]>;
@@ -333,22 +360,11 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           if (field.dynamicOptionsCategory) categorySet.add(String(field.dynamicOptionsCategory));
         });
 
-        const dynEntries = await Promise.all(
-          Array.from(categorySet).map(async (category) => {
-            const { data: options } = await supabase
-              .from('dynamic_options')
-              .select('label, value')
-              .eq('category', category)
-              .eq('is_active', true)
-              .order('display_order', { ascending: true });
-            return [category, (options || []).map((option: any) => ({
-              label: String(option?.label || ''),
-              value: String(option?.value || ''),
-            }))] as const;
-          })
-        );
+        const dynamicMap = categorySet.size > 0
+          ? await fetchDynamicOptionsMap(supabase, Array.from(categorySet)).catch(() => ({} as Record<string, any[]>))
+          : {};
         if (!cancelled) {
-          setDynamicOptions(Object.fromEntries(dynEntries));
+          setDynamicOptions(dynamicMap);
         }
 
         const relationEntries = await Promise.all(
@@ -369,16 +385,13 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
               if (normalizedValues.length === 0) return [field.key, []] as const;
 
               if (field.type === FieldType.USER) {
-                const { data: relatedRows } = await supabase
-                  .from('profiles')
-                  .select('id, full_name')
-                  .in('id', normalizedValues);
+                const directory = await fetchAssigneeDirectory(supabase).catch(() => ({ users: [], roles: [] }));
                 const byId = new Map<string, { label: string; value: string }>();
-                (relatedRows || []).forEach((row: any) => {
+                (directory.users || []).forEach((row: any) => {
                   const id = String(row?.id || '').trim();
                   if (!id) return;
                   byId.set(id, {
-                    label: String(row?.full_name || row?.id || id).trim(),
+                    label: String(row?.display_name || row?.full_name || row?.id || id).trim(),
                     value: id,
                     module: 'profiles',
                   } as any);

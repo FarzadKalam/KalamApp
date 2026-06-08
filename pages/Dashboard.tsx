@@ -37,7 +37,7 @@ import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { readCurrencyConfig, useCurrencyConfig } from '../utils/currency';
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from '../theme/brandTheme';
 import { readRuntimeBranding } from '../utils/brandingRuntime';
-import { fetchModuleListRelationOptions } from '../utils/moduleListOptions';
+import { fetchModuleListRelationOptions, hydrateModuleListRelationOptionsForRows } from '../utils/moduleListOptions';
 import { getOptionLabel } from '../utils/optionHelpers';
 import PhoneDisplay from '../components/PhoneDisplay';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
@@ -812,8 +812,12 @@ const loadRecentSection = async (
   const recentFields = getRecentFieldKeys(module)
     .map((fieldKey) => getFieldMeta(module, fieldKey))
     .filter(Boolean);
+  const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess).slice(0, RECENT_RECORDS_LIMIT);
   const relationOptions = recentFields.some((field: any) => field?.type === FieldType.RELATION || field?.type === FieldType.USER)
-    ? await fetchModuleListRelationOptions(supabase, recentFields as any[], { users: [], roles: [] })
+    ? {
+        ...(await fetchModuleListRelationOptions(supabase, recentFields as any[], { users: [], roles: [] })),
+        ...(await hydrateModuleListRelationOptionsForRows(supabase, recentFields as any[], scopedRows, { users: [], roles: [] }).catch(() => ({}))),
+      }
     : {};
 
   const columns = getRecentFieldKeys(module).map((fieldKey) => ({
@@ -828,7 +832,7 @@ const loadRecentSection = async (
     moduleId,
     title: module.titles.fa,
     columns,
-    rows: filterRowsByRecordScope(data || [], moduleId, recordAccess).slice(0, RECENT_RECORDS_LIMIT),
+    rows: scopedRows,
   };
   })();
 

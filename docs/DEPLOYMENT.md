@@ -13,13 +13,28 @@ If you want deploy without GitHub, do only these steps:
    - `DEPLOY_USER`
    - `DEPLOY_PATH`
 3. Make sure your app envs like `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are already in `.env.local`
-4. Run:
+4. The `build` script already runs Vite with a larger Node heap to avoid local out-of-memory failures on bigger bundles.
+5. Run:
 
 ```powershell
 npm run deploy:prod
 ```
 
 That is all. You do not need GitHub, GitHub Actions, or GitHub Secrets for this local deploy flow.
+
+## Pre-Deploy Checklist
+
+Before every production deploy, run this checklist for the current release:
+
+1. Confirm `package.json` version and `.version-changes.json` entry are in sync.
+2. Run `npx tsc --noEmit` and make sure there are no type errors.
+3. Make sure the current database migration phase required by the release has already been executed on production.
+4. Smoke-test the critical paths after the final build:
+   - Dashboard open
+   - One heavy module list
+   - One process-enabled module show page
+   - Public site routes such as `/blog`, `/learn`, `/updates`
+5. If the release contains runtime/performance changes, verify that no obvious `select('*')`, per-row process fetch, or full relation scan remains on the main user flow.
 
 ## Local Deploy Without GitHub
 

@@ -18,6 +18,11 @@ export type GoalExplicitRangeInput = {
   endDate?: string | null;
 };
 
+export type GoalPeriodBounds = {
+  start: dayjs.Dayjs;
+  end: dayjs.Dayjs;
+};
+
 const toGoalDate = (value?: any) => {
   const parsed = dayjs(value || new Date());
   return parsed.isValid() ? parsed : dayjs();
@@ -179,6 +184,73 @@ export const clampGoalRangeToBounds = (
   return normalizeGoalRangeOrder(start, end);
 };
 
+export const intersectGoalRangeWithBounds = (
+  range: GoalPeriodBounds,
+  bounds?: GoalPeriodBounds | null
+) => {
+  if (!bounds) return normalizeGoalRangeOrder(range.start, range.end);
+
+  const start = range.start.isBefore(bounds.start) ? bounds.start : range.start;
+  const end = range.end.isAfter(bounds.end) ? bounds.end : range.end;
+  if (end.isBefore(start)) {
+    return null;
+  }
+
+  return normalizeGoalRangeOrder(start, end);
+};
+
+export const buildGoalCurrentRangeWithinBounds = (
+  unit: GoalPeriodUnit,
+  fiscalYear?: FiscalYearSnapshot | null,
+  bounds?: GoalPeriodBounds | null,
+  referenceDate?: string | Date | null
+) => {
+  const currentRange = buildGoalCurrentRange(unit, fiscalYear, referenceDate);
+  return intersectGoalRangeWithBounds(currentRange, bounds);
+};
+
+const shiftGoalReferenceDate = (
+  reference: dayjs.Dayjs,
+  unit: GoalPeriodUnit,
+  offset: number
+) => {
+  if (unit === 'quarter') {
+    return reference.add(offset * 3, 'month');
+  }
+  if (unit === 'half_year') {
+    return reference.add(offset * 6, 'month');
+  }
+  if (unit === 'year') {
+    return reference.add(offset, 'year');
+  }
+  return reference.add(offset, unit);
+};
+
+export const shiftGoalCurrentRangeWithinBounds = (
+  unit: GoalPeriodUnit,
+  currentRange: Pick<GoalDateRange, 'startIso' | 'endIso'>,
+  offset: number,
+  fiscalYear?: FiscalYearSnapshot | null,
+  bounds?: GoalPeriodBounds | null
+) => {
+  if (!offset) {
+    return intersectGoalRangeWithBounds(
+      {
+        start: toGoalDate(currentRange.startIso).startOf('day'),
+        end: toGoalDate(currentRange.endIso).endOf('day'),
+      },
+      bounds
+    );
+  }
+
+  const shiftedReference = shiftGoalReferenceDate(
+    toGoalDate(currentRange.startIso).startOf('day'),
+    unit,
+    offset
+  );
+  return buildGoalCurrentRangeWithinBounds(unit, fiscalYear, bounds, shiftedReference.toISOString());
+};
+
 export const buildGoalRangeSnapshot = (start: dayjs.Dayjs, end: dayjs.Dayjs): GoalDateRange => ({
   startIso: start.toISOString(),
   endIso: end.toISOString(),
@@ -192,6 +264,9 @@ export const buildGoalRangeSnapshotFromIso = (startIso: string, endIso: string):
   startLabel: safeJalaliFormat(startIso, 'YYYY/MM/DD'),
   endLabel: safeJalaliFormat(endIso, 'YYYY/MM/DD'),
 });
+
+export const buildGoalBoundsFromIso = (startIso: string, endIso: string) =>
+  normalizeGoalRangeOrder(toGoalDate(startIso), toGoalDate(endIso));
 
 export const getGoalUnitOrder = (unit: GoalPeriodUnit) =>
   ['day', 'week', 'month', 'quarter', 'half_year', 'year'].indexOf(unit);

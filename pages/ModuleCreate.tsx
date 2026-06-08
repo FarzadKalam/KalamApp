@@ -22,6 +22,7 @@ import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolic
 import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID, normalizeInstructionIdList } from "../utils/instructionSupport";
 import { syncProcessTemplateStageInstructionLinks } from "../utils/processTemplateStageInstructions";
 import { getTaxpayerInvoicePatternForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
+import { fetchAssigneeDirectory } from "../utils/referenceData";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -202,13 +203,10 @@ export const ModuleCreate = () => {
     let active = true;
     const loadInstructionActors = async () => {
       try {
-        const [usersRes, rolesRes] = await Promise.all([
-          supabase.from('profiles').select('id, full_name, email, mobile_1').limit(500),
-          supabase.from('org_roles').select('id, title').limit(300),
-        ]);
+        const directory = await fetchAssigneeDirectory(supabase);
         if (!active) return;
-        setInstructionUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
-        setInstructionRoles(Array.isArray(rolesRes.data) ? rolesRes.data : []);
+        setInstructionUsers(Array.isArray(directory?.users) ? directory.users : []);
+        setInstructionRoles(Array.isArray(directory?.roles) ? directory.roles : []);
       } catch {
         if (!active) return;
         setInstructionUsers([]);

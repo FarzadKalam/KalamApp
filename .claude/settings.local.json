@@ -92,7 +92,12 @@
       "Bash(Select-Object -Property FullName, Length)",
       "Bash(dir d:\\\\Kalamapp\\\\database_v1_phase23*.sql /b)",
       "PowerShell(\\(Get-Content \"d:\\\\Kalamapp\\\\pages\\\\Settings\\\\ConnectionsTab.tsx\" | Measure-Object -Line\\).Lines)",
-      "PowerShell(Get-ChildItem d:\\\\Kalamapp -MaxDepth 1 -File | Where-Object { $_.Name -match 'change|version|release|history|\\\\.md$' } | Select-Object Name)"
+      "PowerShell(Get-ChildItem d:\\\\Kalamapp -MaxDepth 1 -File | Where-Object { $_.Name -match 'change|version|release|history|\\\\.md$' } | Select-Object Name)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Kalamapp\\\\pages\\\\SaasAdmin\\\\\" -Recurse | Select-Object FullName)",
+      "Bash(cd /d)",
+      "Bash(grep -r \"LONG_TEXT\\\\|SUPER_LONG\" --include=\"*.tsx\" --include=\"*.ts\" Kalamapp/components --include-dir=Kalamapp/components)",
+      "Bash(npm install *)",
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('web-vitals:', p.dependencies['web-vitals'] || p.devDependencies['web-vitals']\\)\")"
     ]
   },
   "hooks": {

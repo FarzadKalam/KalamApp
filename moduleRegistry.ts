@@ -59,6 +59,7 @@ import { saasOrgsConfig } from './modules/saasOrgsConfig';
 import { saasDemoRequestsConfig } from './modules/saasDemoRequestsConfig';
 import { saasUsersConfig } from './modules/saasUsersConfig';
 import { saasUserAnnouncementsConfig } from './modules/saasUserAnnouncementsConfig';
+import { CMS_MODULES } from './utils/cmsModules';
 import { withProcessModuleSupport } from './utils/processModuleSupport';
 import { supportsGlobalAssignee } from './utils/assigneeSupport';
 import { getAssigneeLabel } from './utils/assigneeLabel';
@@ -214,9 +215,13 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   saas_user_announcements: saasUserAnnouncementsConfig,
 };
 
-export const MODULES: Record<string, ModuleDefinition> = Object.fromEntries(
-  Object.entries(BASE_MODULES).map(([moduleId, module]) => [
-    moduleId,
-    withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module))),
-  ])
-);
+export const MODULES: Record<string, ModuleDefinition> = {
+  ...Object.fromEntries(
+    Object.entries(BASE_MODULES).map(([moduleId, module]) => [
+      moduleId,
+      withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module))),
+    ])
+  ),
+  // CMS modules — no process/assignee/tags wrappers needed
+  ...Object.fromEntries(CMS_MODULES.map(m => [m.id, m])),
+};

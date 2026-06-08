@@ -11,6 +11,7 @@ import { supportsSystemCode } from '../../utils/systemCode';
 import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../../utils/autoName';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
 
 interface BulkProductsCreateModalProps {
   open: boolean;
@@ -288,22 +289,14 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       });
       setDynamicOptions(dynMap);
 
-      const fetchRoles = async () => {
-        const primary = await supabase.from('org_roles').select('id, title').limit(400);
-        if (!primary.error) return primary.data || [];
-        const fallback = await supabase.from('org_roles').select('*').limit(400);
-        if (!fallback.error) return fallback.data || [];
-        return [] as any[];
-      };
-      const [{ data: users }, roles] = await Promise.all([
-        supabase.from('profiles').select('id, full_name, email, mobile_1').limit(400),
-        fetchRoles(),
-      ]);
+      const directory = await fetchAssigneeDirectory(supabase);
+      const users = Array.isArray(directory?.users) ? directory.users : [];
+      const roles = Array.isArray(directory?.roles) ? directory.roles : [];
       setAssigneeOptions([
         ...((users || []).map((user: any) => ({
           value: `user_${String(user?.id || '')}`,
           label:
-            String(user?.full_name || '').trim() ||
+            String(user?.display_name || user?.full_name || '').trim() ||
             String(user?.email || '').trim() ||
             String(user?.mobile_1 || '').trim() ||
             `کاربر ${String(user?.id || '').slice(0, 8)}`,

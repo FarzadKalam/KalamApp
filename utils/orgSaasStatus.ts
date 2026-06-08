@@ -1,5 +1,7 @@
 import { supabase } from '../supabaseClient';
+import { getAppRuntimeCached } from './appRuntimeCache';
 import { toFaErrorMessage } from './errorMessageFa';
+import { fetchSessionBootstrap } from './sessionCache';
 
 export type OrgSaasStatus = {
   status: string | null;
@@ -12,9 +14,17 @@ export type OrgSaasStatus = {
 
 export const getOrgSaasStatus = async (): Promise<OrgSaasStatus | null> => {
   try {
-    const { data, error } = await supabase.rpc('get_current_org_saas_status');
-    if (error || !data || typeof data !== 'object') return null;
-    return data as OrgSaasStatus;
+    const session = await fetchSessionBootstrap(supabase);
+    const orgId = String(session?.orgId || '').trim() || '__guest__';
+    return getAppRuntimeCached({
+      key: `org-saas-status:${orgId}`,
+      ttlMs: 60_000,
+      loader: async () => {
+        const { data, error } = await supabase.rpc('get_current_org_saas_status');
+        if (error || !data || typeof data !== 'object') return null;
+        return data as OrgSaasStatus;
+      },
+    });
   } catch {
     return null;
   }

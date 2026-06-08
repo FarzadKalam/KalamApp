@@ -28,6 +28,7 @@ import { loadWorkflowConditionEditorOptions } from '../../utils/workflowConditio
 import { formatListCellValue } from '../../utils/listPrintExport';
 import { formatPersianPrice, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { readCurrencyConfig } from '../../utils/currency';
+import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 
 type RenderMode = 'table' | 'bar' | 'pie';
 
@@ -134,6 +135,29 @@ const isGroupingFieldAvailableForRow = (fieldKey: string, row: Record<string, an
   const blockId = tableFieldMeta?.blockId || tableRelationMeta?.blockId || '';
   if (!blockId) return true;
   return !!row?.__report_table_rows?.[blockId];
+};
+
+const buildCompactReportBaseColumns = (
+  moduleConfig: any,
+  keys: string[],
+  selectedTableBlocks: any[],
+) => {
+  const moduleFieldKeys = new Set(
+    (moduleConfig?.fields || [])
+      .map((field: any) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+  const tableBlockIds = new Set((selectedTableBlocks || []).map((block: any) => String(block?.id || '').trim()).filter(Boolean));
+  return Array.from(new Set([
+    'id',
+    'org_id',
+    'created_at',
+    'updated_at',
+    'assignee_id',
+    'assignee_role_id',
+    'assignee_type',
+    ...keys.filter((key) => moduleFieldKeys.has(String(key || '').trim()) || tableBlockIds.has(String(key || '').trim())),
+  ]));
 };
 
 const buildFlatGroupedRows = (
@@ -316,20 +340,6 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
       const loadedOptions = await loadWorkflowConditionEditorOptions(moduleId, optionFields);
       setRelationOptions(loadedOptions.relationOptions);
 
-      const { data, error } = await supabase
-        .from(moduleConfig.table || moduleId)
-        .select('*')
-        .limit(config.row_limit);
-      if (error) throw error;
-
-      const scopedRows = (data || []).filter((row: any) =>
-        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
-          currentOrgId: roleContext.orgId,
-          allowedRoleIds: roleContext.allowedRoleIds,
-          allowedUserIds: roleContext.allowedUserIds,
-        })
-      );
-
       const neededKeys = Array.from(
         new Set([...config.columns, ...config.group_bys.map((item) => item.field), chartDimensionField, ...config.metric_fields].filter((item): item is string => !!item))
       );
@@ -337,16 +347,44 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
+      const baseColumns = buildCompactReportBaseColumns(
+        moduleConfig,
+        [...neededKeys, ...conditionFieldKeys],
+        selectedTableBlocks,
+      );
+
+      const baseResult = await runSelectWithCompatibleColumns<any[]>({
+        cacheKey: `report-compact:${moduleId}`,
+        columns: baseColumns,
+        execute: (selectExpr) =>
+          supabase
+            .from(moduleConfig.table || moduleId)
+            .select(selectExpr)
+            .limit(config.row_limit),
+      });
+      if (baseResult.error) throw baseResult.error;
+
+      const scopedRows = (baseResult.data || []).filter((row: any) =>
+        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
+          currentOrgId: roleContext.orgId,
+          allowedRoleIds: roleContext.allowedRoleIds,
+          allowedUserIds: roleContext.allowedUserIds,
+        })
+      );
       const tableRelationFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
       ].filter((fieldKey) => !!parseReportTableRelationFieldKey(fieldKey))));
       const tableRelationRecordCache = new Map<string, Record<string, any> | null>();
       const relationIdsByModule = new Map<string, Set<string>>();
+      const relationTargetFieldsByModule = new Map<string, Set<string>>();
 
       tableRelationFieldKeys.forEach((fieldKey) => {
         const relationMeta = parseReportTableRelationFieldKey(fieldKey);
         if (!relationMeta) return;
+        const targetFields = relationTargetFieldsByModule.get(relationMeta.targetModuleId) || new Set<string>();
+        if (relationMeta.targetFieldKey) targetFields.add(relationMeta.targetFieldKey);
+        relationTargetFieldsByModule.set(relationMeta.targetModuleId, targetFields);
         scopedRows.forEach((sourceRow: any) => {
           const blockRows = Array.isArray(sourceRow?.[relationMeta.blockId]) ? sourceRow[relationMeta.blockId] : [];
           blockRows.forEach((tableRow: any) => {
@@ -363,13 +401,23 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         const targetModule = MODULES[targetModuleId];
         const ids = Array.from(idSet);
         if (!targetModule || ids.length === 0) return;
+        const relationColumns = Array.from(new Set([
+          ...buildRecordTitleSelectColumns(targetModuleId),
+          ...(Array.from(relationTargetFieldsByModule.get(targetModuleId) || [])),
+        ]));
         for (let offset = 0; offset < ids.length; offset += 50) {
           const chunk = ids.slice(offset, offset + 50);
-          const { data: relatedRows, error: relatedRowsError } = await supabase
-            .from(targetModule.table || targetModuleId)
-            .select('*')
-            .in('id', chunk);
-          if (relatedRowsError) throw relatedRowsError;
+          const relatedRowsResult = await runSelectWithCompatibleColumns<any[]>({
+            cacheKey: `report-compact:relation:${targetModuleId}`,
+            columns: relationColumns,
+            execute: (selectExpr) =>
+              supabase
+                .from(targetModule.table || targetModuleId)
+                .select(selectExpr)
+                .in('id', chunk),
+          });
+          if (relatedRowsResult.error) throw relatedRowsResult.error;
+          const relatedRows = relatedRowsResult.data || [];
           (relatedRows || []).forEach((relatedRow: any) => {
             const relatedId = String(relatedRow?.id || '').trim();
             if (relatedId) tableRelationRecordCache.set(`${targetModuleId}:${relatedId}`, isDeletedReportRecord(relatedRow) ? null : relatedRow);
@@ -389,12 +437,22 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         if (tableRelationRecordCache.has(cacheKey)) {
           return tableRelationRecordCache.get(cacheKey) || null;
         }
-        const { data: relatedRecord, error: relatedError } = await supabase
-          .from(targetModule.table || targetModuleId)
-          .select('*')
-          .eq('id', normalizedRecordId)
-          .maybeSingle();
-        if (relatedError) throw relatedError;
+        const relationColumns = Array.from(new Set([
+          ...buildRecordTitleSelectColumns(targetModuleId),
+          ...(Array.from(relationTargetFieldsByModule.get(targetModuleId) || [])),
+        ]));
+        const relatedRecordResult = await runSelectWithCompatibleColumns<any | null>({
+          cacheKey: `report-compact:relation:${targetModuleId}`,
+          columns: relationColumns,
+          execute: (selectExpr) =>
+            supabase
+              .from(targetModule.table || targetModuleId)
+              .select(selectExpr)
+              .eq('id', normalizedRecordId)
+              .maybeSingle(),
+        });
+        if (relatedRecordResult.error) throw relatedRecordResult.error;
+        const relatedRecord = relatedRecordResult.data;
         const normalizedRelatedRecord = relatedRecord && !isDeletedReportRecord(relatedRecord)
           ? relatedRecord as Record<string, any>
           : null;
