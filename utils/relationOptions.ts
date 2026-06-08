@@ -19,12 +19,7 @@ const relationOptionsCache = new Map<string, any[]>();
 const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
 const RPC_RELATION_MODULES = new Set([
   'customers',
-  'projects',
-  'products',
   'suppliers',
-  'invoices',
-  'purchase_invoices',
-  'tasks',
   'profiles',
   'org_roles',
   'roles',
@@ -543,6 +538,7 @@ const fetchRelationOptionsViaRpc = async (
       code === '42883'
       || code === 'PGRST202'
       || code === 'PGRST204'
+      || isMissingColumnError(error)
       || message.includes('search_relation_options_v1')
       || message.includes('could not find the function')
     ) {

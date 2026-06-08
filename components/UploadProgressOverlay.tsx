@@ -38,6 +38,7 @@ import {
 import type { OverlayNotificationChannel, UiNotificationOverlayItem } from '../utils/uiNotificationOverlayStore';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import ProfileAvatar from './common/ProfileAvatar';
 
 const SnoozeScheduleModal = React.lazy(() => import('./notifications/SnoozeScheduleModal'));
 
@@ -504,15 +505,19 @@ const UploadProgressOverlay: React.FC = () => {
                     }}
                   >
                     <div className="flex items-start gap-2">
-                      <div
-                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm"
+                      <ProfileAvatar
+                        size={32}
+                        src={item.avatarUrl || null}
+                        name={item.avatarName || item.title}
+                        fallback={icon}
+                        preset="avatar"
+                        preload={Boolean(item.avatarUrl)}
+                        className="mt-0.5 shrink-0"
                         style={{
                           color: accentColor,
                           background: token.colorBgElevated,
                         }}
-                      >
-                        {icon}
-                      </div>
+                      />
                       <div className="min-w-0 flex-1 text-right">
                         <button type="button" onClick={item.onOpen} className="w-full text-right">
                           <div className="flex flex-wrap items-center gap-2 text-[11px]" style={{ color: token.colorTextSecondary }}>
@@ -522,6 +527,11 @@ const UploadProgressOverlay: React.FC = () => {
                           <div className="mt-1 line-clamp-2 break-words text-sm font-medium leading-5" style={{ color: token.colorTextHeading }}>
                             {item.title}
                           </div>
+                          {item.subtitle ? (
+                            <div className="mt-0.5 line-clamp-1 break-words text-[11px] leading-4" style={{ color: token.colorTextTertiary }}>
+                              {item.subtitle}
+                            </div>
+                          ) : null}
                         </button>
                         <div style={{ color: token.colorTextSecondary }}>
                           <ExpandableNotificationText text={item.body} />
@@ -553,19 +563,17 @@ const UploadProgressOverlay: React.FC = () => {
                     </div>
                     {item.onReply ? (
                       <div className="mt-2 flex items-center gap-1 border-t pt-2" style={{ borderColor: token.colorBorderSecondary }}>
-                        {item.onReply ? (
-                          <Button
-                            type="text"
-                            size="small"
-                            icon={<RollbackOutlined />}
-                            onClick={() => {
-                              setReplyItemId((current) => current === item.id ? null : item.id);
-                              setReplyText('');
-                            }}
-                          >
-                            پاسخ
-                          </Button>
-                        ) : null}
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<RollbackOutlined />}
+                          onClick={() => {
+                            setReplyItemId((current) => current === item.id ? null : item.id);
+                            setReplyText('');
+                          }}
+                        >
+                          پاسخ
+                        </Button>
                       </div>
                     ) : null}
                     {replyItemId === item.id && item.onReply ? (

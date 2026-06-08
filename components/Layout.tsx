@@ -1,4 +1,4 @@
-import React, { startTransition, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Layout as AntLayout, Menu, Button, Dropdown, App, Input, Spin, Popconfirm, Tooltip, Badge } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import { 
@@ -127,6 +127,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   const wasMobileViewportRef = useRef(initialIsMobile);
   const previousPathnameRef = useRef(location.pathname);
+  const sidebarNavigationRef = useRef('');
 
   const applySessionBootstrapSnapshot = useCallback((snapshot: any, isMounted = true) => {
     if (!isMounted) return;
@@ -164,12 +165,33 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     };
   }, []);
 
+  const scheduleRoutePreload = useCallback((href: string) => {
+    if (!href || !preloadRoute) return;
+    const requestIdle = (window as any).requestIdleCallback as ((callback: () => void, options?: { timeout?: number }) => number) | undefined;
+    if (requestIdle) {
+      requestIdle(() => preloadRoute(href), { timeout: 800 });
+      return;
+    }
+    window.setTimeout(() => preloadRoute(href), 80);
+  }, [preloadRoute]);
+
   const handleSidebarNavigate = useCallback((href: string) => {
     if (!href) return;
-    preloadRoute?.(href);
+    const targetPath = String(href).split(/[?#]/)[0] || href;
+    if (location.pathname === targetPath && `${location.search || ''}` === (href.includes('?') ? `?${href.split('?')[1].split('#')[0]}` : '')) {
+      if (isMobile) setCollapsed(true);
+      return;
+    }
+    if (sidebarNavigationRef.current === href) return;
+    sidebarNavigationRef.current = href;
     if (isMobile) setCollapsed(true);
-    startTransition(() => navigate(href));
-  }, [isMobile, navigate, preloadRoute]);
+    navigate(href);
+    window.setTimeout(() => {
+      if (sidebarNavigationRef.current === href) {
+        sidebarNavigationRef.current = '';
+      }
+    }, 350);
+  }, [isMobile, location.pathname, location.search, navigate]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -208,9 +230,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         href={disabled ? undefined : href}
         aria-disabled={disabled || undefined}
         className={`sidebar-menu-link ${disabled ? 'is-disabled' : ''}`}
-        onPointerEnter={() => !disabled && preloadRoute?.(href)}
-        onFocus={() => !disabled && preloadRoute?.(href)}
-        onTouchStart={() => !disabled && preloadRoute?.(href)}
+        onPointerEnter={(event) => {
+          if (!disabled && event.pointerType !== 'touch') scheduleRoutePreload(href);
+        }}
+        onFocus={() => !disabled && scheduleRoutePreload(href)}
         onClick={(event) => handleSidebarLinkClick(event, href, disabled)}
         onAuxClick={(event) => event.stopPropagation()}
         onContextMenu={(event) => event.stopPropagation()}
@@ -1430,8 +1453,10 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                     size={isMobile ? 'small' : 'middle'}
                     shape="circle"
                     icon={<MessageOutlined className="text-gray-500 dark:text-gray-400" />}
-                    onPointerEnter={() => preloadRoute?.('/messages')}
-                    onFocus={() => preloadRoute?.('/messages')}
+                    onPointerEnter={(event) => {
+                      if (event.pointerType !== 'touch') scheduleRoutePreload('/messages');
+                    }}
+                    onFocus={() => scheduleRoutePreload('/messages')}
                     onClick={() => handleSidebarNavigate('/messages')}
                     aria-label="پیام‌رسانی"
                     className={headerActionButtonClassName}
@@ -1513,12 +1538,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         {breadcrumb && breadcrumb.moduleTitle && (
           <div className="sticky top-16 z-[900] bg-white/90 dark:bg-dark-surface/90 backdrop-blur border-b border-gray-200 dark:border-dark-border px-2 md:px-4 py-2 mb-3">
             <div className="flex items-center gap-1 text-xs md:text-sm text-gray-500 whitespace-nowrap overflow-x-auto no-scrollbar">
-              <button onPointerEnter={() => preloadRoute?.('/')} onClick={() => handleSidebarNavigate('/')} className="flex items-center gap-1 hover:text-leather-600">
+              <button onPointerEnter={(event) => event.pointerType !== 'touch' && scheduleRoutePreload('/')} onClick={() => handleSidebarNavigate('/')} className="flex items-center gap-1 hover:text-leather-600">
                 <HomeOutlined /> خانه
               </button>
               <span className="px-1 text-gray-300">/</span>
               {breadcrumb.moduleId ? (
-                <button onPointerEnter={() => preloadRoute?.(`/${breadcrumb.moduleId}`)} onClick={() => handleSidebarNavigate(`/${breadcrumb.moduleId}`)} className="hover:text-leather-600">
+                <button onPointerEnter={(event) => event.pointerType !== 'touch' && scheduleRoutePreload(`/${breadcrumb.moduleId}`)} onClick={() => handleSidebarNavigate(`/${breadcrumb.moduleId}`)} className="hover:text-leather-600">
                   {breadcrumb.moduleTitle}
                 </button>
               ) : (
@@ -1578,7 +1603,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                const isActive = location.pathname === item.key;
                if (item.isCenter) {
                  return (
-                   <div key={item.key} onTouchStart={() => preloadRoute?.(item.key)} onClick={() => handleSidebarNavigate(item.key)} className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all">
+                   <div key={item.key} onClick={() => handleSidebarNavigate(item.key)} className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all">
                       <HomeOutlined className="text-white text-2xl" />
                    </div>
                  );
@@ -1586,7 +1611,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                return (
                  <div 
                    key={item.key} 
-                   onTouchStart={() => !item.isMenu && preloadRoute?.(item.key)}
                    onClick={() => item.isMenu ? toggleSidebar() : handleSidebarNavigate(item.key)}
                    className={`flex flex-col items-center gap-1 w-12 cursor-pointer ${isActive ? 'text-leather-500' : 'text-gray-400 dark:text-gray-500'}`}
                  >

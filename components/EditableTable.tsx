@@ -39,6 +39,13 @@ import {
 import PersianDatePicker from './PersianDatePicker';
 import { getImplicitCreateDefaultValue, getTodayLocalDateValue } from '../utils/defaultValues';
 import ResilientImage from './common/ResilientImage';
+import InvoicePaymentAllocationModal from './invoices/InvoicePaymentAllocationModal';
+import {
+  buildInvoicePaymentOverflowPlan,
+  InvoiceAllocationAmount,
+  InvoicePaymentOverflowPlan,
+} from '../utils/invoicePaymentAllocation';
+import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 
 const { Text } = Typography;
 
@@ -160,6 +167,12 @@ interface EditableTableProps {
   onInvoiceGlobalDiscountChange?: (value: { type: 'percent' | 'amount'; amount: number }) => void;
 }
 
+type PendingInvoicePaymentAllocation = {
+  plan: InvoicePaymentOverflowPlan;
+  allocationGroupKey: string;
+  partyId: string;
+};
+
 const EditableTable: React.FC<EditableTableProps> = ({
   block,
   initialData,
@@ -240,6 +253,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [currentProductUnits, setCurrentProductUnits] = useState<{ mainUnit: string | null; subUnit: string | null }>({ mainUnit: null, subUnit: null });
   const [currentProductStock, setCurrentProductStock] = useState<number>(0);
   const [highlightedFocusRowKey, setHighlightedFocusRowKey] = useState<string | null>(null);
+  const [pendingInvoicePaymentAllocation, setPendingInvoicePaymentAllocation] =
+    useState<PendingInvoicePaymentAllocation | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(() => {
     const empty = !Array.isArray(initialData) || initialData.length === 0;
     if (isAnyInvoiceItems || isShelfInventoryBlock || isProductStockMovements) return false;
@@ -3183,7 +3198,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return normalizePaymentRows(nextRows);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (confirmedAllocations?: InvoiceAllocationAmount[]) => {
     if (mode === 'local' || mode === 'external_view') return;
     setSaving(true);
     try {
@@ -3460,10 +3475,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         });
       }
 
-      if (isOperationalPayments) {
-        dataToSave = await syncPaymentRowsWithCheques(dataToSave, data);
-      }
-
       const updatePayload: any = { [block.id]: dataToSave };
       let currentInvoiceRow: Record<string, any> | null = null;
       if (
@@ -3477,6 +3488,32 @@ const EditableTable: React.FC<EditableTableProps> = ({
           .maybeSingle();
         if (summarySourceError) throw summarySourceError;
         currentInvoiceRow = fetchedInvoiceRow as Record<string, any> | null;
+
+        if (block?.id === 'payments' && isAnyInvoicePayments && !confirmedAllocations) {
+          const allocationGroupKey = createLocalRowKey();
+          const overflowPlan = buildInvoicePaymentOverflowPlan({
+            totalAmount: toSafeNumber(currentInvoiceRow?.total_invoice_amount),
+            previousPayments: Array.isArray(currentInvoiceRow?.payments) ? currentInvoiceRow.payments : [],
+            nextPayments: dataToSave,
+            allocationGroupKey,
+          });
+          if (overflowPlan) {
+            const partyId = String(
+              isInvoicePayments ? currentInvoiceRow?.customer_id : currentInvoiceRow?.supplier_id
+            ).trim();
+            if (!partyId) throw new Error('طرف حساب فاکتور برای تخصیص اضافه‌مبلغ مشخص نیست.');
+            setPendingInvoicePaymentAllocation({
+              plan: overflowPlan,
+              allocationGroupKey,
+              partyId,
+            });
+            return;
+          }
+        }
+
+        if (block?.id === 'payments' && pendingInvoicePaymentAllocation && confirmedAllocations) {
+          dataToSave = pendingInvoicePaymentAllocation.plan.sourcePayments;
+        }
 
         const currentInvoiceItems = Array.isArray(currentInvoiceRow?.invoiceItems) ? currentInvoiceRow.invoiceItems : [];
         const currentPayments = Array.isArray(currentInvoiceRow?.payments) ? currentInvoiceRow.payments : [];
@@ -3501,6 +3538,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
             nextGlobalDiscountValue
           )
         );
+      }
+      if (isOperationalPayments) {
+        dataToSave = await syncPaymentRowsWithCheques(dataToSave, data);
+        updatePayload[block.id] = dataToSave;
       }
       if ((isExpenseItems || isExpensePayments) && recordId) {
         const { data: fetchedExpenseRow, error: summarySourceError } = await supabase
@@ -3533,8 +3574,50 @@ const EditableTable: React.FC<EditableTableProps> = ({
           remaining_amount: Math.max(0, roundMoney(totalAmount - paidAmount)),
         });
       }
-      const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
-      if (error) throw error;
+      let allocatedInvoiceIds: string[] = [];
+      if (
+        block?.id === 'payments'
+        && isAnyInvoicePayments
+        && pendingInvoicePaymentAllocation
+        && confirmedAllocations
+        && recordId
+      ) {
+        const syncedRowsByKey = new Map(
+          dataToSave.map((row: any, index: number) => [
+            String(row?.row_key || row?.id || row?.key || `legacy_${index}`),
+            row,
+          ])
+        );
+        const runtimePlan: InvoicePaymentOverflowPlan = {
+          ...pendingInvoicePaymentAllocation.plan,
+          sourcePayments: dataToSave,
+          segments: pendingInvoicePaymentAllocation.plan.segments.map((segment) => ({
+            ...segment,
+            paymentRow: {
+              ...(syncedRowsByKey.get(segment.sourceRowKey) || segment.paymentRow),
+              amount: segment.amount,
+              _cash_bank_operation_id: null,
+              allocation_group_key: pendingInvoicePaymentAllocation.allocationGroupKey,
+            },
+          })),
+        };
+        const changedRows = await applyInvoicePaymentAllocation({
+          supabase: supabase as any,
+          moduleId: moduleId as 'invoices' | 'purchase_invoices',
+          sourceInvoiceId: recordId,
+          sourceRowKey: runtimePlan.segments[0]?.sourceRowKey || '',
+          sourcePayments: dataToSave,
+          allocationGroupKey: pendingInvoicePaymentAllocation.allocationGroupKey,
+          allocations: confirmedAllocations,
+          plan: runtimePlan,
+        });
+        allocatedInvoiceIds = changedRows
+          .map((row: any) => String(row?.invoice_id || '').trim())
+          .filter(Boolean);
+      } else {
+        const { error } = await supabase.from(moduleId).update(updatePayload).eq('id', recordId);
+        if (error) throw error;
+      }
 
       if (isPriceListItems) {
         const { data: priceListRow, error: priceListError } = await supabase
@@ -3562,23 +3645,30 @@ const EditableTable: React.FC<EditableTableProps> = ({
           ...updatePayload,
           id: recordId,
         } as Record<string, any>;
-        if (shouldAutoSyncInvoiceAccounting(moduleId)) {
-          const accountingSync = await syncInvoiceAccountingEntries({
-          supabase: supabase as any,
-          moduleId,
-          recordId,
-          includePayments: block?.id === 'payments',
-        });
-          if (accountingSync.errors.length > 0) {
-          console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+        const invoiceIdsToSync = allocatedInvoiceIds.length > 0
+          ? Array.from(new Set(allocatedInvoiceIds))
+          : [recordId];
+        for (const invoiceIdToSync of invoiceIdsToSync) {
+          if (shouldAutoSyncInvoiceAccounting(moduleId)) {
+            const accountingSync = await syncInvoiceAccountingEntries({
+              supabase: supabase as any,
+              moduleId,
+              recordId: invoiceIdToSync,
+              includePayments: block?.id === 'payments',
+            });
+            if (accountingSync.errors.length > 0) {
+              console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+            }
+          }
+          if (invoiceIdToSync === recordId) {
+            await runWorkflowsForEvent({
+              moduleId,
+              event: 'upsert',
+              currentRecord: nextInvoiceRecord,
+              previousRecord: previousInvoiceRecord,
+            });
           }
         }
-        await runWorkflowsForEvent({
-          moduleId,
-          event: 'upsert',
-          currentRecord: nextInvoiceRecord,
-          previousRecord: previousInvoiceRecord,
-        });
       }
 
       const oldValue = data.map(({ key, ...rest }) => rest);
@@ -3587,6 +3677,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       msg.success('ذخیره شد');
       const normalizedSavedRows = normalizePaymentRows(dataToSave);
       setData(normalizedSavedRows);
+      setPendingInvoicePaymentAllocation(null);
       if (onSaveSuccess) onSaveSuccess(normalizedSavedRows);
       try {
         await syncInvoiceCustomerStats();
@@ -4966,6 +5057,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   if (loadingData) return <div className="p-10 text-center"><Spin /></div>;
 
   return (
+    <>
     <div className={`bg-white dark:bg-[#1a1a1a] p-6 rounded-[2rem] shadow-sm border ${isEditing ? 'border-leather-500' : 'border-gray-200 dark:border-gray-800'} transition-all font-medium`}>
       <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-800 pb-4">
         <div className="flex items-center gap-2 flex-row-reverse">
@@ -5263,7 +5355,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       )}
       {isEditing && mode !== 'local' && !isCollapsed && (
         <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-4 dark:border-gray-800">
-          <Button type="primary" onClick={handleSave} loading={saving} icon={<SaveOutlined />}>ذخیره</Button>
+          <Button type="primary" onClick={() => { void handleSave(); }} loading={saving} icon={<SaveOutlined />}>ذخیره</Button>
           <Button onClick={cancelEdit} disabled={saving} icon={<CloseOutlined />}>انصراف</Button>
         </div>
       )}
@@ -5417,8 +5509,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
         }
       `}</style>
     </div>
+    {pendingInvoicePaymentAllocation && isAnyInvoicePayments ? (
+      <InvoicePaymentAllocationModal
+        open
+        moduleId={moduleId as 'invoices' | 'purchase_invoices'}
+        sourceInvoiceId={recordId}
+        partyId={pendingInvoicePaymentAllocation.partyId}
+        excessAmount={pendingInvoicePaymentAllocation.plan.excessAmount}
+        onCancel={() => setPendingInvoicePaymentAllocation(null)}
+        onConfirm={(allocations) => { void handleSave(allocations); }}
+      />
+    ) : null}
+    </>
   );
 };
 
 export default EditableTable;
-

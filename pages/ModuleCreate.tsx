@@ -23,6 +23,7 @@ import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIO
 import { syncProcessTemplateStageInstructionLinks } from "../utils/processTemplateStageInstructions";
 import { getTaxpayerInvoicePatternForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
 import { fetchAssigneeDirectory } from "../utils/referenceData";
+import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
 
 const isUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
@@ -364,6 +365,26 @@ export const ModuleCreate = () => {
                 const inserted = insertResult.data;
                 if (!inserted?.id) throw new Error("ثبت فاکتور ناموفق بود");
 
+                let allocatedInvoiceIds: string[] = [String(inserted.id)];
+                if (meta?.invoicePaymentAllocation && !isReturnInvoiceModule) {
+                  const allocation = meta.invoicePaymentAllocation;
+                  const changedRows = await applyInvoicePaymentAllocation({
+                    supabase: supabase as any,
+                    moduleId: moduleId as "invoices" | "purchase_invoices",
+                    sourceInvoiceId: String(inserted.id),
+                    sourceRowKey: allocation.plan.segments[0]?.sourceRowKey || "",
+                    sourcePayments: allocation.plan.sourcePayments,
+                    allocationGroupKey: allocation.allocationGroupKey,
+                    allocations: allocation.allocations,
+                    plan: allocation.plan,
+                  });
+                  allocatedInvoiceIds = Array.from(new Set(
+                    changedRows
+                      .map((row: any) => String(row?.invoice_id || "").trim())
+                      .filter(Boolean)
+                  ));
+                }
+
                 if (moduleId && selectedTags.length > 0) {
                   await syncRecordTags(supabase, moduleId, String(inserted.id), selectedTags);
                 }
@@ -380,15 +401,17 @@ export const ModuleCreate = () => {
                   });
                 }
                 if (shouldAutoSyncInvoiceAccounting(moduleId)) {
-                  const accountingSync = await syncInvoiceAccountingEntries({
-                  supabase: supabase as any,
-                  moduleId: moduleId as any,
-                  recordId: inserted.id,
-                  recordData: inserted,
-                  includePayments: true,
-                });
-                  if (accountingSync.errors.length > 0) {
-                  console.warn("هشدارهای همگام‌سازی سند حسابداری فاکتور:", accountingSync.errors);
+                  for (const invoiceId of allocatedInvoiceIds) {
+                    const accountingSync = await syncInvoiceAccountingEntries({
+                      supabase: supabase as any,
+                      moduleId: moduleId as any,
+                      recordId: invoiceId,
+                      recordData: invoiceId === String(inserted.id) ? inserted : undefined,
+                      includePayments: true,
+                    });
+                    if (accountingSync.errors.length > 0) {
+                      console.warn("هشدارهای همگام‌سازی سند حسابداری فاکتور:", accountingSync.errors);
+                    }
                   }
                 }
                 if (moduleId === "invoices" || moduleId === "sales_return_invoices") {

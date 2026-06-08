@@ -1,4 +1,3 @@
-import React from 'react';
 import { Helmet } from 'react-helmet-async';
 import type { SeoProps, JsonLdObject } from '../../utils/seoHelpers';
 import { SITE_NAME, TWITTER_HANDLE } from '../../utils/seoHelpers';

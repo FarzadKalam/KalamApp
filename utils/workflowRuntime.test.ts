@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   sendSmsViaGateway: vi.fn(),
   sendBotMessageViaGateway: vi.fn(),
   sendCounterpartyBotGroupMessage: vi.fn(),
+  authUser: null as any,
 }));
 
 vi.mock('../supabaseClient', () => ({
@@ -19,7 +20,7 @@ vi.mock('../supabaseClient', () => ({
     from: mocks.from,
     rpc: mocks.rpc,
     auth: {
-      getUser: vi.fn(async () => ({ data: { user: null } })),
+      getUser: vi.fn(async () => ({ data: { user: mocks.authUser } })),
     },
   },
   supabaseSignUpClient: {
@@ -159,6 +160,7 @@ describe('workflow action recipients', () => {
     mocks.sendSmsViaGateway.mockResolvedValue({ success: true, sent: 0 });
     mocks.sendBotMessageViaGateway.mockResolvedValue({ ok: true });
     mocks.sendCounterpartyBotGroupMessage.mockResolvedValue({ ok: true });
+    mocks.authUser = null;
     vi.clearAllMocks();
   });
 
@@ -354,6 +356,35 @@ describe('workflow action recipients', () => {
       mentionUserIds: [DIRECT_USER_ID],
       mentionRoleIds: [ROLE_ID],
     }));
+  });
+
+  it('adds org and actor identity to workflow note rows for strict tenant RLS', async () => {
+    mocks.authUser = { id: DIRECT_USER_ID };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-note-identity',
+        type: 'send_note',
+        config: {
+          note_text: 'یادداشت سازمانی',
+          recipient_assignees: [`user:${USER_ID}`],
+          recipient_fields: [],
+        },
+      },
+      'customers',
+      {
+        id: 'customer-identity',
+        org_id: 'org-identity',
+      }
+    );
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        org_id: 'org-identity',
+        author_id: DIRECT_USER_ID,
+        mention_user_ids: [USER_ID],
+      }),
+    ]);
   });
 
   it('sends telegram bot messages to multi relation chat ids', async () => {

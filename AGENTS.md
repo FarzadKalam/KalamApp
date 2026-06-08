@@ -12,6 +12,8 @@
 
 قبل از هر تسک جدیدی که قرار است تغییری در کد ایجاد کند، حتماً از کاربر بپرس آیا می‌خواهد برای همان تغییر `package.json` و `.version-changes.json` هم به‌روزرسانی شوند یا نه. بدون این هماهنگی، bump نسخه و ثبت release note را فرض نکن.
 
+متن تغییرات نسخه در `.version-changes.json` باید برای کاربر عمومی و غیرتوسعه‌دهنده نوشته شود: نتیجه و اثر قابل مشاهده تغییر را با زبان ساده فارسی بیان کن و از اصطلاحات فنی، نام فایل، نام تابع، جزئیات دیتابیس و واژه‌های داخلی توسعه تا حد ممکن پرهیز کن.
+
 این موارد checklist فیچرهای محصولی هستند، نه الزام کورکورانه برای هر bugfix/hotfix:
 - رفتار دقیق موردنظر، اگر از متن تسک یا کد موجود مشخص نیست
 - role/access، اگر تغییر سطح دسترسی یا policy داریم
@@ -94,7 +96,7 @@ const title = getRecordTitle(record, moduleConfig);
 - آیا `search_path` برای functions تعریف شده؟
 
 #### Production Drift
-قبل از ادامه feature work، drift بین migration repo و Supabase production را بررسی کن — هر object (policy، view، function) که خارج از repo وجود دارد باید شناسایی و مستند شود.
+بررسی drift بین migration repo و Supabase production فقط دستی انجام می‌شود. Agent نباید دستورهای remote migration/drift مثل `npm run db:migrate:server:list` یا اسکریپت‌های نیازمند پسورد SSH/سرور را اجرا کند. اگر تغییر دیتابیس یا migration داریم، فقط به کاربر یادآوری کن که بررسی drift production باید دستی انجام شود و نتیجه‌اش در صورت نیاز به agent اعلام شود.
 
 ---
 

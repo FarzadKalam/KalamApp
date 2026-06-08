@@ -111,13 +111,21 @@ import {
   PROCESS_TASK_STATUS_OPTIONS_KEY,
   PROCESS_TASK_STATUS_START_ANCHOR,
 } from '../utils/processTaskStatusOptions';
-import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
+import {
+  buildAssigneeSelectValue,
+  buildResolvedAssigneeCombo,
+  isAssigneeOrgBoundaryError,
+  normalizeTaskAssigneeRowsForDirectory,
+  parseAssigneeValue,
+  stripTaskAssignee,
+} from '../utils/assigneeValue';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
+import { assignProcessTemplateModuleAliases, resolveProcessTemplateTokenValue } from '../utils/processTemplateContext';
 import {
   createProcessGroupId,
   ensureProcessRunForDraftStageGroup,
@@ -154,6 +162,7 @@ interface ProductionStagesFieldProps {
   automationContextModuleIds?: string[] | null;
   autoOpenTaskId?: string | null;
   autoOpenTask?: any | null;
+  onAutoOpenTaskClose?: (() => void) | null;
   readOnly?: boolean;
   compact?: boolean;
   cardCompact?: boolean;
@@ -374,6 +383,7 @@ const assignProcessLinkedRecordFields = (
   Object.entries(record).forEach(([fieldKey, value]) => {
     target[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
   });
+  assignProcessTemplateModuleAliases(target, normalizedModuleId, record);
   target[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = buildResolvedAssigneeCombo(record);
 };
 
@@ -428,11 +438,11 @@ const renderTemplateValueFromRecord = (
   const exactMatch = rawValue.match(EXACT_TEMPLATE_TOKEN_REGEX);
   if (exactMatch) {
     const tokenKey = String(exactMatch[1] || '').trim();
-    return coerceResolvedTemplateValue(record?.[tokenKey], fieldType);
+    return coerceResolvedTemplateValue(resolveProcessTemplateTokenValue(record, tokenKey), fieldType);
   }
   return String(rawValue || '').replace(TEMPLATE_TOKEN_REGEX, (_token, key: string) => {
     const tokenKey = String(key || '').trim();
-    return stringifyTemplateValue(record?.[tokenKey]);
+    return stringifyTemplateValue(resolveProcessTemplateTokenValue(record, tokenKey));
   });
 };
 
@@ -521,7 +531,7 @@ const PROCESS_BAR_BREAKPOINTS = {
 const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
 const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, onRuntimeSnapshot }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, onAutoOpenTaskClose = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, onRuntimeSnapshot }) => {
   const screens = Grid.useBreakpoint();
   const isMobileProcessViewport = !screens.md;
   const [lines, setLines] = useState<any[]>([]);
@@ -660,18 +670,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setActiveHandoverFormId(null);
   }, []);
   const closeTaskQuickModal = useCallback((syncHistory = true) => {
+    const shouldNotifyAutoOpenClose = !!autoOpenTaskId
+      && !!openTaskPopoverId
+      && String(openTaskPopoverId) === String(autoOpenTaskId);
     if (syncHistory && typeof window !== 'undefined') {
       const marker = taskQuickModalHistoryRef.current;
       if (marker && window.history.state?.kalamappTaskQuickModal === marker) {
         setOpenTaskPopoverId(null);
         taskQuickModalHistoryRef.current = null;
+        if (shouldNotifyAutoOpenClose) {
+          onAutoOpenTaskClose?.();
+        }
         window.history.back();
         return;
       }
     }
     taskQuickModalHistoryRef.current = null;
     setOpenTaskPopoverId(null);
-  }, []);
+    if (shouldNotifyAutoOpenClose) {
+      onAutoOpenTaskClose?.();
+    }
+  }, [autoOpenTaskId, onAutoOpenTaskClose, openTaskPopoverId]);
   const openTaskLayerConfirm = useCallback((config: Parameters<typeof Modal.confirm>[0]) => (
     Modal.confirm({
       zIndex: resolveParentOverlayZIndex(taskQuickModalBoundaryRef.current, 15080) + 60,
@@ -1801,20 +1820,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
   }, [normalizeHandoverDeliveryRow, sumDeliveredRows, toNumber]);
 
-  const parseAssigneeComboValue = useCallback((raw: any) => {
-    const rawValue = String(raw || '').trim();
-    if (!rawValue) {
-      return { assigneeType: null as 'user' | 'role' | null, assigneeId: null as string | null };
-    }
-    if (rawValue.includes(':')) {
-      const [type, id] = rawValue.split(':');
-      return {
-        assigneeType: type === 'role' ? 'role' : 'user',
-        assigneeId: id ? String(id) : null,
-      };
-    }
-    return { assigneeType: 'user' as const, assigneeId: rawValue };
-  }, []);
+  const parseAssigneeComboValue = useCallback((raw: any) => parseAssigneeValue(raw), []);
   const normalizeDueDateValue = useCallback((value: any) => {
     if (!value) return null;
     if (typeof value === 'string') return value;
@@ -1895,9 +1901,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return next;
     });
   }, []);
+  const resolveCurrentAssigneeDirectory = useCallback(async () => {
+    if (assignees.users.length > 0 || assignees.roles.length > 0) {
+      return assignees;
+    }
+    const directory = await fetchAssigneeDirectory(supabase);
+    setAssignees({ users: directory.users, roles: directory.roles });
+    return { users: directory.users, roles: directory.roles };
+  }, [assignees]);
+  const normalizeTaskAssigneeRowsForCurrentOrg = useCallback(async (rows: any[]) => {
+    const directory = await resolveCurrentAssigneeDirectory().catch(() => assignees);
+    return normalizeTaskAssigneeRowsForDirectory((Array.isArray(rows) ? rows : []).map((row) => ({ ...(row || {}) })), directory);
+  }, [assignees, resolveCurrentAssigneeDirectory]);
   const insertTasksWithFallback = useCallback(async (rows: any[]) => {
     if (!Array.isArray(rows) || rows.length === 0) return;
-    let payload = rows.map((row) => ({ ...row }));
+    let payload = await normalizeTaskAssigneeRowsForCurrentOrg(rows.map((row) => ({ ...row })));
     const optionalColumns = [
       'assignee_id',
       'assignee_type',
@@ -1983,6 +2001,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .map((item) => item.column)
         .filter((columnName) => payloadColumns.includes(columnName));
       let merged = Array.from(new Set([...removable, ...missingColumns, ...fkRemovable]));
+      if (!merged.length && isAssigneeOrgBoundaryError(error)) {
+        payload = payload.map((row) => stripTaskAssignee(row));
+        continue;
+      }
       if (!merged.length && (errorText.includes('column') || errorText.includes('schema cache'))) {
         const fallbackColumn = optionalColumns.find((columnName) => payloadColumns.includes(columnName));
         if (fallbackColumn) merged = [fallbackColumn];
@@ -1991,7 +2013,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       payload = removeColumnsFromRows(payload, merged);
     }
     return [];
-  }, [extractMissingColumnNames, isMissingColumnError, removeColumnsFromRows]);
+  }, [
+    extractMissingColumnNames,
+    isMissingColumnError,
+    normalizeTaskAssigneeRowsForCurrentOrg,
+    removeColumnsFromRows,
+  ]);
   const updateTaskWithFallback = useCallback(async (
     taskId: string,
     patch: Record<string, any>,
@@ -2190,7 +2217,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return { rows: [] as any[], runs: [] as any[], stages: [] as any[] };
     }
 
-    if (readOnly && (compact || cardCompact)) {
+    if (readOnly && (compact || cardCompact) && !autoOpenTaskId) {
       const batchRuntime = await fetchProcessRuntimeBatchForRecord(supabase, moduleId, recordId).catch(() => null);
       if (batchRuntime) {
         return {
@@ -2398,11 +2425,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       if (isProcessRecordModule) {
-        if (readOnly && (compact || cardCompact)) {
+        if (readOnly && (compact || cardCompact) && !autoOpenTaskId) {
           const processRuntime = await fetchProcessRunStageRowsForRecord();
-          const next = Array.from(
+          const rawRows = Array.from(
             new Map((processRuntime.rows || []).map((row: any) => [String(row?.id || `${row?.name || ''}_${row?.sort_order || ''}`), row])).values()
           ).map((row: any) => withProcessTaskCustomFieldValues(row));
+          const needsNameResolution = rawRows.some((row: any) => String(row?.name || '').includes('{{'));
+          let next: any[] = rawRows;
+          if (needsNameResolution) {
+            const firstProcessLinks = rawRows
+              .map((row: any) => row?.recurrence_info?.process_links)
+              .find((links: any) => links && typeof links === 'object') || {};
+            const templateContext = await buildTaskTemplateContextRecord({ processLinkMap: firstProcessLinks }).catch(() => ({}));
+            next = rawRows.map((row: any) => {
+              const rawName = String(row?.name || '').trim();
+              if (!rawName.includes('{{')) return row;
+              const resolvedName = String(
+                renderTemplateValueFromRecord(rawName, templateContext, FieldType.TEXT) ?? rawName
+              ).trim() || rawName;
+              return resolvedName !== rawName ? { ...row, name: resolvedName, title: resolvedName } : row;
+            });
+          }
           setTasks(next);
           setProcessRuntimeRuns(processRuntime.runs || []);
           setProcessRuntimeStages(processRuntime.stages || []);
@@ -3788,11 +3831,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
     const openModal = async () => {
       await ensureAssigneesLoaded();
-      const defaultRoleId = draftStage?.default_assignee_role_id ? String(draftStage.default_assignee_role_id) : null;
-      const defaultUserId = draftStage?.default_assignee_id ? String(draftStage.default_assignee_id) : null;
-      const assigneeCombo = defaultRoleId
-        ? `role:${defaultRoleId}`
-        : (defaultUserId ? `user:${defaultUserId}` : undefined);
+      const assigneeCombo = draftStage?.default_assignee_role_id
+        ? buildAssigneeSelectValue(draftStage.default_assignee_role_id, 'role')
+        : buildAssigneeSelectValue(draftStage?.default_assignee_id, 'user');
       const initial = {
         name: draftStage?.name || '',
         sort_order: draftStage?.sort_order || ((tasks.length + 1) * 10),
@@ -3947,12 +3988,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           moduleId,
           recordId,
           stages: Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
+          stageScope: 'target',
           targetStage: {
             ...draftToCreate,
             process_group_id: effectiveProcessGroupMeta.id,
             process_group_name: effectiveProcessGroupMeta.label,
             source_template_id: effectiveProcessGroupMeta.templateId,
             source_template_name: effectiveProcessGroupMeta.templateName,
+            default_assignee_id: assigneeType === 'user' ? assigneeId : null,
+            default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+            assignee_id: assigneeType === 'user' ? assigneeId : null,
+            assignee_role_id: assigneeType === 'role' ? assigneeId : null,
           },
           currentUserId: user?.id || null,
         })
@@ -5982,13 +6028,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [draftLocal, getConnectedTaskCountForProcessGroup, getStageProcessGroupMeta, saveDraftStages]);
 
   const parseStageAssignee = useCallback((stage: any) => {
-    const defaultRoleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
-    const defaultUserId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
-    if (defaultRoleId) {
-      return { assigneeType: 'role', assigneeId: defaultRoleId };
+    const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
+    if (roleValue.assigneeType === 'role' && roleValue.assigneeId) {
+      return { assigneeType: 'role', assigneeId: roleValue.assigneeId };
     }
-    if (defaultUserId) {
-      return { assigneeType: 'user', assigneeId: defaultUserId };
+    const userValue = parseAssigneeValue(stage?.default_assignee_id || stage?.assignee_id, 'user');
+    if (userValue.assigneeType && userValue.assigneeId) {
+      return { assigneeType: userValue.assigneeType, assigneeId: userValue.assigneeId };
     }
     return { assigneeType: null, assigneeId: null };
   }, []);
@@ -6278,9 +6324,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       : {};
     const firstText = (...inputValues: any[]) =>
       inputValues.map((value) => String(value ?? '').trim()).find(Boolean) || '';
-    const assigneeRaw = String(values?.default_assignee_combo || '');
-    const assigneeType = assigneeRaw.startsWith('role:') ? 'role' : (assigneeRaw.startsWith('user:') ? 'user' : null);
-    const assigneeId = assigneeType ? assigneeRaw.split(':')[1] : null;
+    const { assigneeType, assigneeId } = parseAssigneeComboValue(values?.default_assignee_combo);
     const hasDescriptionValue = Object.prototype.hasOwnProperty.call(values || {}, 'description');
     const hasTaskTypeValue = Object.prototype.hasOwnProperty.call(values || {}, 'task_type');
     const currentDraftCount = Array.isArray(draftLocalRef.current) ? draftLocalRef.current.length : draftLocal.length;
@@ -6906,8 +6950,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (editingDraft) {
       const draftForEditor = normalizeDraftStageForEditor(editingDraft, 0);
       const assigneeCombo = draftForEditor?.default_assignee_role_id
-        ? `role:${String(draftForEditor.default_assignee_role_id)}`
-        : (draftForEditor?.default_assignee_id ? `user:${String(draftForEditor.default_assignee_id)}` : undefined);
+        ? buildAssigneeSelectValue(draftForEditor.default_assignee_role_id, 'role')
+        : buildAssigneeSelectValue(draftForEditor?.default_assignee_id, 'user');
       draftForm.setFieldsValue({
         name: draftForEditor.name,
         description: draftForEditor.description || '',

@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { Input, Collapse, Tag, Progress, Divider } from 'antd';
+import { useMemo } from 'react';
+import { Input, Collapse, Progress, Divider } from 'antd';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { SITE_URL } from '../../utils/seoHelpers';
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useParams, useLocation } from 'react-router-dom';
 import { Spin, Tag, Empty } from 'antd';
 import {
@@ -13,7 +13,6 @@ import SeoHead from './SeoHead';
 import {
   buildBlogPostSeo, buildTutorialPostSeo,
   buildBlogIndexSeo, buildTutorialIndexSeo,
-  SITE_URL,
 } from '../../utils/seoHelpers';
 
 dayjs.extend(relativeTime);
@@ -354,19 +353,28 @@ export function BlogPostPage() {
 
   useEffect(() => {
     if (!slug) return;
-    setLoading(true);
-    supabase.rpc('get_cms_blog_post_by_slug', { p_slug: slug })
-      .then(({ data }) => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const { data } = await supabase.rpc('get_cms_blog_post_by_slug', { p_slug: slug });
+        if (cancelled) return;
         setPost(data);
         if (data?.categories?.[0]) {
-          supabase.rpc('get_cms_blog_posts', {
+          const { data: rel } = await supabase.rpc('get_cms_blog_posts', {
             p_limit: 3, p_offset: 0, p_category: data.categories[0].slug,
-          }).then(({ data: rel }) => {
-            setRelated((rel ?? []).filter((r: PostCard) => r.slug !== slug));
           });
+          if (cancelled) return;
+          setRelated((rel ?? []).filter((r: PostCard) => r.slug !== slug));
         }
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
 
   if (loading) return <div className="flex justify-center py-32"><Spin size="large" /></div>;
@@ -604,10 +612,20 @@ export function TutorialPostPage() {
 
   useEffect(() => {
     if (!slug) return;
-    setLoading(true);
-    supabase.rpc('get_cms_tutorial_post_by_slug', { p_slug: slug })
-      .then(({ data }) => setPost(data))
-      .finally(() => setLoading(false));
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const { data } = await supabase.rpc('get_cms_tutorial_post_by_slug', { p_slug: slug });
+        if (!cancelled) setPost(data);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
 
   if (loading) return <div className="flex justify-center py-32"><Spin size="large" /></div>;

@@ -1,6 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import { buildClientFallbackSystemCode } from './systemCode';
-
+import { parseAssigneeValue } from './assigneeValue';
 export type ProcessGroupMeta = {
   groupId: string;
   groupLabel: string | null;
@@ -25,6 +24,7 @@ type EnsureProcessRunArgs = {
   stages: Record<string, any>[];
   targetStage?: Record<string, any> | null;
   currentUserId?: string | null;
+  stageScope?: 'group' | 'target';
 };
 
 export type EnsuredProcessRunContext = {
@@ -38,9 +38,6 @@ type SyncProcessRunStageArgs = {
   task: Record<string, any>;
 };
 
-const PROCESS_RUN_STAGE_SELECT =
-  'id, process_run_id, template_stage_id, stage_name, sort_order, status, task_id, metadata';
-
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 const toUuidOrNull = (value: unknown) => {
@@ -48,6 +45,35 @@ const toUuidOrNull = (value: unknown) => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)
     ? normalized
     : null;
+};
+
+const normalizeStageAssigneeFields = (stage: Record<string, any>) => {
+  const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
+  if (roleValue.assigneeType === 'role' && toUuidOrNull(roleValue.assigneeId)) {
+    return {
+      defaultAssigneeId: null,
+      defaultAssigneeRoleId: toUuidOrNull(roleValue.assigneeId),
+    };
+  }
+
+  const userValue = parseAssigneeValue(stage?.default_assignee_id || stage?.assignee_id, 'user');
+  if (userValue.assigneeType === 'role' && toUuidOrNull(userValue.assigneeId)) {
+    return {
+      defaultAssigneeId: null,
+      defaultAssigneeRoleId: toUuidOrNull(userValue.assigneeId),
+    };
+  }
+  if (userValue.assigneeType === 'user' && toUuidOrNull(userValue.assigneeId)) {
+    return {
+      defaultAssigneeId: toUuidOrNull(userValue.assigneeId),
+      defaultAssigneeRoleId: null,
+    };
+  }
+
+  return {
+    defaultAssigneeId: null,
+    defaultAssigneeRoleId: null,
+  };
 };
 
 export const createProcessGroupId = () =>
@@ -103,6 +129,7 @@ export const mapProcessTemplateStagesToDraft = (
     const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
     if (!cursor) cursor = Number(stage?.sort_order || ((index + 1) * sortStep));
     const stageName = normalizeText(stage?.stage_name || metadata?.stage_name) || `مرحله ${index + 1}`;
+    const assignee = normalizeStageAssigneeFields(stage);
     const row = {
       ...(metadata || {}),
       id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
@@ -117,8 +144,8 @@ export const mapProcessTemplateStagesToDraft = (
       duration_value: Number(metadata?.duration_value || 0),
       duration_unit: normalizeText(metadata?.duration_unit) || 'day',
       duration_from: normalizeText(metadata?.duration_from) || 'project_start',
-      default_assignee_id: stage?.default_assignee_id || null,
-      default_assignee_role_id: stage?.default_assignee_role_id || null,
+      default_assignee_id: assignee.defaultAssigneeId,
+      default_assignee_role_id: assignee.defaultAssigneeRoleId,
       template_stage_id: stage?.id || null,
       source_template_id: normalizeText(templateId) || null,
       source_template_name: normalizeText(options.templateName) || null,
@@ -155,6 +182,23 @@ const isMissingColumnLikeError = (error: any, columnName?: string) => {
   return text.includes(needle) && (text.includes('column') || text.includes('schema cache') || text.includes('does not exist'));
 };
 
+const isMissingProcessRuntimeRpcError = (error: any, functionName: string) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  if (['PGRST202', '42883'].includes(code)) return true;
+  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return text.includes(functionName.toLowerCase())
+    && (text.includes('function') || text.includes('schema cache'));
+};
+
+const isPermissionDeniedLikeError = (error: any) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  if (code === '42501') return true;
+  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return text.includes('permission denied')
+    || text.includes('row-level security')
+    || text.includes('دسترسی');
+};
+
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 
 const resolveOrgId = async (
@@ -189,124 +233,6 @@ const resolveOrgId = async (
   }
 };
 
-const findExistingProcessRun = async (
-  supabaseClient: any,
-  orgId: string | null,
-  moduleId: string,
-  recordId: string,
-  groupId: string
-) => {
-  if (!groupId) return null;
-  try {
-    let query = supabaseClient
-      .from('process_runs')
-      .select('id, system_code, process_name, process_group_id')
-      .eq('module_id', moduleId)
-      .eq('record_id', recordId)
-      .eq('process_group_id', groupId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (orgId) query = query.eq('org_id', orgId);
-    const { data, error } = await query.maybeSingle();
-    if (error && !isMissingColumnLikeError(error, 'process_group_id')) throw error;
-    if (data?.id) return data;
-  } catch (error) {
-    if (!isMissingColumnLikeError(error, 'process_group_id')) throw error;
-  }
-
-  return null;
-};
-
-const insertProcessRun = async ({
-  supabaseClient,
-  orgId,
-  moduleId,
-  recordId,
-  meta,
-  currentUserId,
-}: {
-  supabaseClient: any;
-  orgId: string;
-  moduleId: string;
-  recordId: string;
-  meta: ProcessGroupMeta;
-  currentUserId?: string | null;
-}) => {
-  const processName = normalizeText(meta.groupLabel || meta.templateName) || 'فرآیند';
-  let payload: Record<string, any> = {
-    org_id: orgId,
-    template_id: toUuidOrNull(meta.templateId),
-    module_id: moduleId,
-    record_id: recordId,
-    process_name: processName,
-    status: 'active',
-    copied_mode: 'manual',
-    started_at: new Date().toISOString(),
-    process_group_id: meta.groupId,
-    system_code: await buildClientFallbackSystemCode(supabaseClient, 'process_runs', 'process_runs', { orgId }),
-    created_by: currentUserId || null,
-    updated_by: currentUserId || null,
-  };
-
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const { data, error } = await supabaseClient
-      .from('process_runs')
-      .insert(payload)
-      .select('id, system_code, process_name, process_group_id')
-      .maybeSingle();
-    if (!error) return data;
-    if (String(error?.code || '').toUpperCase() === '23505' && normalizeText(error?.message).includes('system_code')) {
-      payload = {
-        ...payload,
-        system_code: await buildClientFallbackSystemCode(supabaseClient, 'process_runs', 'process_runs', { orgId }),
-      };
-      continue;
-    }
-    throw error;
-  }
-
-  throw new Error('ایجاد اجرای فرآیند ناموفق بود.');
-};
-
-const ensureProcessRunLinks = async (
-  supabaseClient: any,
-  processRunId: string,
-  orgId: string,
-  moduleId: string,
-  recordId: string,
-  stages: Record<string, any>[]
-) => {
-  const links = new Map<string, { moduleId: string; recordId: string; isPrimary: boolean }>();
-  links.set(`${moduleId}:${recordId}`, { moduleId, recordId, isPrimary: true });
-  stages.forEach((stage) => {
-    const rawMap = stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {};
-    Object.entries(rawMap).forEach(([linkedModuleId, linkedRecordId]) => {
-      const normalizedModuleId = normalizeText(linkedModuleId);
-      const normalizedRecordId = normalizeText(linkedRecordId);
-      if (!normalizedModuleId || !normalizedRecordId) return;
-      const key = `${normalizedModuleId}:${normalizedRecordId}`;
-      if (!links.has(key)) links.set(key, { moduleId: normalizedModuleId, recordId: normalizedRecordId, isPrimary: false });
-    });
-  });
-
-  const payload = Array.from(links.values()).map((link) => ({
-    org_id: orgId,
-    process_run_id: processRunId,
-    module_id: link.moduleId,
-    record_id: link.recordId,
-    is_primary: link.isPrimary,
-  }));
-  if (payload.length === 0) return;
-
-  try {
-    await supabaseClient
-      .from('process_run_links')
-      .upsert(payload, { onConflict: 'process_run_id,module_id,record_id' });
-  } catch (error) {
-    console.warn('Could not upsert process run links', error);
-  }
-};
-
 const normalizeStageStatusForRun = (status: unknown) => {
   const normalized = normalizeText(status).toLowerCase();
   if (['in_progress', 'done', 'blocked', 'canceled'].includes(normalized)) return normalized;
@@ -314,13 +240,11 @@ const normalizeStageStatusForRun = (status: unknown) => {
   return 'todo';
 };
 
-const isSameDraftStage = (left: Record<string, any>, right: Record<string, any>) => {
+const isSameDraftStage = (left: Record<string, any> | null | undefined, right: Record<string, any> | null | undefined) => {
+  if (!left || !right) return false;
   const leftId = normalizeText(left?.id || left?.template_stage_id || left?.process_run_stage_id);
   const rightId = normalizeText(right?.id || right?.template_stage_id || right?.process_run_stage_id);
   if (leftId && rightId && leftId === rightId) return true;
-  const leftTemplateStageId = normalizeText(left?.template_stage_id);
-  const rightTemplateStageId = normalizeText(right?.template_stage_id);
-  if (leftTemplateStageId && rightTemplateStageId && leftTemplateStageId === rightTemplateStageId) return true;
   return Number(left?.sort_order || 0) === Number(right?.sort_order || 0)
     && normalizeText(left?.name || left?.stage_name || left?.title).toLowerCase()
       === normalizeText(right?.name || right?.stage_name || right?.title).toLowerCase();
@@ -359,137 +283,13 @@ export const ensureProcessRunContextsForStageGroups = async (
   return contexts;
 };
 
-const upsertProcessRunStages = async (
-  supabaseClient: any,
-  processRunId: string,
-  stages: Record<string, any>[],
-  targetStage?: Record<string, any> | null
-) => {
-  const { data: existingRows, error } = await supabaseClient
-    .from('process_run_stages')
-    .select(PROCESS_RUN_STAGE_SELECT)
-    .eq('process_run_id', processRunId)
-    .order('sort_order', { ascending: true });
-  if (error) throw error;
-
-  const rows = Array.isArray(existingRows) ? existingRows : [];
-  const byKey = new Map<string, Record<string, any>>();
-  rows.forEach((row) => {
-    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    [
-      normalizeText(row?.template_stage_id),
-      normalizeText(metadata?.draft_stage_id),
-      `${Number(row?.sort_order || 0)}:${normalizeText(row?.stage_name).toLowerCase()}`,
-    ].filter(Boolean).forEach((key) => byKey.set(key, row));
-  });
-
-  const stageMap = new Map<string, string>();
-  for (const stage of stages) {
-    const stageName = normalizeText(stage?.name || stage?.stage_name || stage?.title) || 'مرحله';
-    const templateStageId = toUuidOrNull(stage?.template_stage_id);
-    const metadata = {
-      ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-      draft_stage_id: normalizeText(stage?.id) || null,
-      process_group_id: normalizeText(stage?.process_group_id) || null,
-      process_group_name: normalizeText(stage?.process_group_name) || null,
-      process_target_module_ids: Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : [],
-      process_link_map: stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
-      source_template_id: normalizeText(stage?.source_template_id) || null,
-      source_template_name: normalizeText(stage?.source_template_name) || null,
-      task_type: normalizeText(stage?.task_type) || null,
-    };
-    const lookupKeys = buildProcessRunStageLookupKeys({
-      ...stage,
-      template_stage_id: templateStageId,
-      name: stageName,
-    });
-    const existing = lookupKeys.map((key) => byKey.get(key)).find(Boolean);
-    let processRunStageId = normalizeText(existing?.id);
-    const payload = {
-      process_run_id: processRunId,
-      template_stage_id: templateStageId,
-      stage_name: stageName,
-      sort_order: Number(stage?.sort_order || 10),
-      status: normalizeStageStatusForRun(stage?.status),
-      assignee_user_id: stage?.default_assignee_id || stage?.assignee_id || null,
-      assignee_role_id: stage?.default_assignee_role_id || stage?.assignee_role_id || null,
-      wage: Number(stage?.wage || 0),
-      metadata,
-    };
-
-    if (processRunStageId) {
-      const { error: updateError } = await supabaseClient
-        .from('process_run_stages')
-        .update(payload)
-        .eq('id', processRunStageId);
-      if (updateError) throw updateError;
-    } else {
-      const { data, error: insertError } = await supabaseClient
-        .from('process_run_stages')
-        .insert(payload)
-        .select('id')
-        .maybeSingle();
-      if (insertError) throw insertError;
-      processRunStageId = normalizeText(data?.id);
-    }
-
-    if (processRunStageId) {
-      lookupKeys.forEach((key) => stageMap.set(key, processRunStageId));
-      if (targetStage && isSameDraftStage(stage, targetStage)) {
-        stageMap.set('__target__', processRunStageId);
-      }
-    }
-  }
-
-  return {
-    processRunStageId: stageMap.get('__target__') || null,
-    stageMap,
-  };
-};
-
-const backfillExistingTasksForRun = async (
-  supabaseClient: any,
-  processRunId: string,
-  groupId: string,
-  orgId: string,
-  moduleId: string,
-  recordId: string
-) => {
-  if (!processRunId || !groupId || !orgId || !moduleId || !recordId) return;
-  try {
-    const { data } = await supabaseClient
-      .from('tasks')
-      .select('id, name, sort_order, process_run_id, process_run_stage_id')
-      .eq('org_id', orgId)
-      .eq('process_group_id', groupId)
-      .eq('source_module_id', moduleId)
-      .eq('source_record_id', recordId)
-      .is('process_run_id', null)
-      .limit(500);
-    const rows = Array.isArray(data) ? data : [];
-    if (rows.length === 0) return;
-    await supabaseClient
-      .from('tasks')
-      .update({ process_run_id: processRunId })
-      .eq('org_id', orgId)
-      .eq('process_group_id', groupId)
-      .eq('source_module_id', moduleId)
-      .eq('source_record_id', recordId)
-      .is('process_run_id', null);
-  } catch (error) {
-    if (!isMissingColumnLikeError(error)) {
-      console.warn('Could not backfill process run id on existing tasks', error);
-    }
-  }
-};
-
 export const ensureProcessRunForDraftStageGroup = async ({
   supabaseClient,
   moduleId,
   recordId,
   stages,
   targetStage = null,
-  currentUserId = null,
+  stageScope = 'group',
 }: EnsureProcessRunArgs): Promise<EnsuredProcessRunContext> => {
   const targetMeta = getDraftStageProcessGroupMeta(targetStage || stages[0]);
   const groupId = normalizeText(targetMeta.groupId);
@@ -501,54 +301,80 @@ export const ensureProcessRunForDraftStageGroup = async ({
     .filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === groupId)
     .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
   if (groupStages.length === 0) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+  const scopedStages = stageScope === 'target' && targetStage
+    ? (groupStages.filter((stage) => isSameDraftStage(stage, targetStage)).slice(0, 1))
+    : groupStages;
+  const stagesForRuntime = scopedStages.length > 0 ? scopedStages : groupStages;
 
   const orgId = await resolveOrgId(supabaseClient, moduleId, recordId);
   if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
 
-  let run: Record<string, any> | null = null;
   try {
-    run = await findExistingProcessRun(supabaseClient, orgId, moduleId, recordId, groupId);
-    if (!run?.id) {
-      run = await insertProcessRun({
-        supabaseClient,
-        orgId,
-        moduleId,
-        recordId,
-        meta: targetMeta,
-        currentUserId,
-      });
+    const rpcStages = stagesForRuntime.map((stage) => {
+      const stageForRuntime = targetStage && isSameDraftStage(stage, targetStage)
+        ? { ...stage, ...targetStage }
+        : stage;
+      const stageName = normalizeText(stage?.name || stage?.stage_name || stage?.title) || 'مرحله';
+      const assignee = normalizeStageAssigneeFields(stageForRuntime);
+      return {
+        draft_stage_id: normalizeText(stage?.id) || null,
+        template_stage_id: toUuidOrNull(stage?.template_stage_id),
+        stage_name: stageName,
+        sort_order: Number(stage?.sort_order || 10),
+        status: normalizeStageStatusForRun(stage?.status),
+        assignee_user_id: assignee.defaultAssigneeId,
+        assignee_role_id: assignee.defaultAssigneeRoleId,
+        wage: Number(stage?.wage || 0),
+        metadata: {
+          ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
+          draft_stage_id: normalizeText(stage?.id) || null,
+          process_group_id: normalizeText(stage?.process_group_id) || null,
+          process_group_name: normalizeText(stage?.process_group_name) || null,
+          process_target_module_ids: Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : [],
+          process_link_map: stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
+          source_template_id: normalizeText(stage?.source_template_id) || null,
+          source_template_name: normalizeText(stage?.source_template_name) || null,
+          task_type: normalizeText(stage?.task_type) || null,
+        },
+      };
+    });
+    const { data, error } = await supabaseClient.rpc('ensure_process_run_for_draft_group', {
+      p_org_id: orgId,
+      p_module_id: moduleId,
+      p_record_id: recordId,
+      p_process_group_id: groupId,
+      p_process_name: normalizeText(targetMeta.groupLabel || targetMeta.templateName) || 'فرآیند',
+      p_template_id: toUuidOrNull(targetMeta.templateId),
+      p_stages: rpcStages,
+    });
+    if (error) throw error;
+
+    const payload = data && typeof data === 'object' ? data : {};
+    const processRunId = normalizeText(payload?.process_run_id);
+    const stageMap = new Map<string, string>();
+    const returnedStages = Array.isArray(payload?.stages) ? payload.stages : [];
+    returnedStages.forEach((row: any) => {
+      const stageId = normalizeText(row?.id);
+      if (!stageId) return;
+      buildProcessRunStageLookupKeys({
+        id: row?.draft_stage_id,
+        template_stage_id: row?.template_stage_id,
+        name: row?.stage_name,
+        sort_order: row?.sort_order,
+      }).forEach((key) => stageMap.set(key, stageId));
+    });
+    const processRunStageId = targetStage ? resolveProcessRunStageId(stageMap, targetStage) : null;
+    return { processRunId: processRunId || null, processRunStageId, stageMap };
+  } catch (error) {
+    if (
+      !isMissingProcessRuntimeRpcError(error, 'ensure_process_run_for_draft_group')
+      && !isMissingColumnLikeError(error)
+      && !isPermissionDeniedLikeError(error)
+    ) {
+      throw error;
     }
-  } catch (error) {
-    if (!isMissingColumnLikeError(error)) throw error;
-    console.warn('Process run schema is not ready; task will be created without process_run_id', error);
+    console.warn('Process runtime RPC is not available for this request; task will be created without runtime links');
     return { processRunId: null, processRunStageId: null, stageMap: new Map() };
-  }
-
-  const processRunId = normalizeText(run?.id);
-  if (!processRunId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
-
-  try {
-    await ensureProcessRunLinks(supabaseClient, processRunId, orgId, moduleId, recordId, groupStages);
-    const { processRunStageId, stageMap } = await upsertProcessRunStages(
-      supabaseClient,
-      processRunId,
-      groupStages,
-      targetStage
-    );
-    await backfillExistingTasksForRun(
-      supabaseClient,
-      processRunId,
-      groupId,
-      orgId,
-      moduleId,
-      recordId
-    );
-
-    return { processRunId, processRunStageId, stageMap };
-  } catch (error) {
-    if (!isMissingColumnLikeError(error)) throw error;
-    console.warn('Process run stages schema is not ready; task will be created without process_run_stage_id', error);
-    return { processRunId, processRunStageId: null, stageMap: new Map() };
   }
 };
 
@@ -571,10 +397,19 @@ export const syncProcessRunStageFromTask = async ({
   };
 
   try {
-    await supabaseClient
-      .from('process_run_stages')
-      .update(patch)
-      .eq('id', processRunStageId);
+    const { error } = await supabaseClient.rpc('sync_process_run_stage_from_task', {
+      p_process_run_stage_id: processRunStageId,
+      p_task_id: patch.task_id,
+      p_status: patch.status,
+      p_assignee_user_id: patch.assignee_user_id,
+      p_assignee_role_id: patch.assignee_role_id,
+      p_planned_due_at: patch.planned_due_at,
+      p_started_at: patch.started_at,
+      p_completed_at: patch.completed_at,
+    });
+    if (error && !isMissingProcessRuntimeRpcError(error, 'sync_process_run_stage_from_task')) {
+      throw error;
+    }
   } catch (error) {
     if (!isMissingColumnLikeError(error)) {
       console.warn('Could not sync process run stage from task', error);

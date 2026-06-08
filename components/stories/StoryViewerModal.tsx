@@ -11,10 +11,10 @@ import {
   PauseOutlined,
   PushpinFilled,
   PushpinOutlined,
-  ReloadOutlined,
   RightOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
-import { Button, Dropdown, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
+import { Button, Dropdown, Input, message, Modal, Popover, Space, Spin, Tooltip, Typography } from 'antd';
 import { LinkOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import type { OrgStoryWithMeta, StorySlide } from './storyTypes';
@@ -24,12 +24,16 @@ import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import ProfileAvatar from '../common/ProfileAvatar';
 import { buildImageBackgroundStyle } from '../../utils/imagePreview';
+import { sendStoryReply } from '../../utils/storyReplies';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 interface StoryViewerModalProps {
   open: boolean;
   stories: OrgStoryWithMeta[];
   initialIndex: number;
+  currentOrgId: string;
   currentUserId: string;
+  currentUserName: string;
   canEditOwn: boolean;
   canDeleteOwn: boolean;
   canEditOthers: boolean;
@@ -69,7 +73,9 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   open,
   stories,
   initialIndex,
+  currentOrgId,
   currentUserId,
+  currentUserName,
   canEditOwn,
   canDeleteOwn,
   canEditOthers,
@@ -91,6 +97,8 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const [viewersOpen, setViewersOpen] = useState(false);
   const [viewersList, setViewersList] = useState<ViewerEntry[]>([]);
   const [viewersLoading, setViewersLoading] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
   const [localMyReaction, setLocalMyReaction] = useState<string | null>(
     () => stories[initialIndex]?.myReaction?.emoji ?? null
   );
@@ -102,10 +110,11 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   const currentSlide: StorySlide | null = currentStory?.slides?.[slideIndex] ?? null;
   const slideDuration = currentSlide?.duration_ms ?? 5000;
   const totalSlides = currentStory?.slides?.length ?? 0;
-  const currentSlideText = (currentSlide?.text_layers || [])
-    .map((layer) => String(layer?.content || '').trim())
-    .filter(Boolean)
-    .join('\n');
+  const canReplyToCurrentStory = Boolean(
+    currentStory?.creator_id
+    && currentStory.creator_id !== currentUserId
+    && currentStory.org_id === currentOrgId
+  );
 
   // reset وقتی استوری عوض می‌شود
   useEffect(() => {
@@ -114,8 +123,13 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     progressRef.current = 0;
     setViewersOpen(false);
     setViewersList([]);
+    setReplyText('');
     setLocalMyReaction(stories[storyIndex]?.myReaction?.emoji ?? null);
   }, [storyIndex]);
+
+  useEffect(() => {
+    setReplyText('');
+  }, [currentSlide?.id, open]);
 
   // ثبت بازدید هنگام نمایش
   useEffect(() => {
@@ -167,15 +181,17 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
     }
   }, [slideIndex, storyIndex]);
 
-  const replayCurrentSlideText = useCallback(() => {
-    progressRef.current = 0;
-    setProgress(0);
-    setPaused(false);
-  }, []);
-
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.tagName === 'INPUT'
+        || target?.tagName === 'TEXTAREA'
+        || target?.isContentEditable
+      ) {
+        return;
+      }
       if (e.key === 'ArrowRight' || e.key === 'ArrowUp') goPrevSlide();
       if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') goNextSlide();
       if (e.key === 'Escape') onClose();
@@ -244,6 +260,30 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
   };
   const canEdit = isOwnStory ? canEditOwn : canEditOthers;
   const canDelete = isOwnStory ? canDeleteOwn : canDeleteOthers;
+
+  const submitReply = async () => {
+    const text = replyText.trim();
+    if (!text || replySending || !canReplyToCurrentStory || !currentStory.creator_id) return;
+
+    setReplySending(true);
+    try {
+      await sendStoryReply({
+        orgId: currentOrgId,
+        storyId: currentStory.id,
+        slideId: currentSlide.id,
+        creatorId: currentStory.creator_id,
+        currentUserId,
+        currentUserName,
+        text,
+      });
+      setReplyText('');
+      message.success('پاسخ ارسال شد.');
+    } catch (error) {
+      message.error(toFaErrorMessage(error as any, 'ارسال پاسخ ناموفق بود.'));
+    } finally {
+      setReplySending(false);
+    }
+  };
 
   // پس‌زمینه اسلاید
   const slideBackground: React.CSSProperties = (() => {
@@ -524,7 +564,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           <div
             style={{
               position: 'absolute',
-              bottom: currentSlideText ? 124 : 80,
+              bottom: canReplyToCurrentStory ? 124 : 80,
               left: '50%',
               transform: 'translateX(-50%)',
               zIndex: 20,
@@ -558,7 +598,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
           </div>
         )}
 
-        {currentSlideText && (
+        {canReplyToCurrentStory && (
           <div
             style={{
               position: 'absolute',
@@ -567,32 +607,50 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
               bottom: 64,
               zIndex: 20,
               display: 'flex',
-              alignItems: 'flex-end',
-              justifyContent: 'space-between',
-              gap: 10,
-              padding: '10px 12px',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 8px',
               borderRadius: 16,
               background: 'rgba(0,0,0,0.3)',
               backdropFilter: 'blur(8px)',
               border: '1px solid rgba(255,255,255,0.16)',
             }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
           >
-            <div
+            <Input
+              value={replyText}
+              onChange={(event) => setReplyText(event.target.value)}
+              onFocus={() => setPaused(true)}
+              onBlur={() => {
+                if (!replySending) setPaused(false);
+              }}
+              onPressEnter={(event) => {
+                event.preventDefault();
+                void submitReply();
+              }}
+              placeholder="پاسخ خود را بنویسید..."
+              aria-label="متن پاسخ به استوری"
+              maxLength={2000}
+              readOnly={replySending}
               style={{
                 flex: 1,
                 color: '#fff',
-                fontSize: 12,
-                lineHeight: 1.7,
-                whiteSpace: 'pre-wrap',
-                textShadow: '0 1px 4px rgba(0,0,0,0.45)',
+                background: 'transparent',
+                border: 0,
+                boxShadow: 'none',
+                direction: 'rtl',
               }}
-            >
-              {currentSlideText}
-            </div>
-            <Tooltip title="بازپخش متن">
+            />
+            <Tooltip title="ارسال پاسخ">
               <Button
                 type="text"
-                icon={<ReloadOutlined />}
+                icon={<SendOutlined />}
+                loading={replySending}
+                disabled={!replyText.trim()}
+                aria-label="ارسال پاسخ"
                 style={{
                   color: '#fff',
                   background: 'rgba(255,255,255,0.12)',
@@ -602,7 +660,7 @@ const StoryViewerModal: React.FC<StoryViewerModalProps> = ({
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  replayCurrentSlideText();
+                  void submitReply();
                 }}
               />
             </Tooltip>

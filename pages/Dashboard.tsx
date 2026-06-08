@@ -1373,7 +1373,9 @@ const Dashboard: React.FC = () => {
           open={storyViewerOpen}
           stories={storyViewerList}
           initialIndex={storyViewerIndex}
+          currentOrgId={orgId || ''}
           currentUserId={currentUserId}
+          currentUserName={currentUserName}
           canEditOwn={storiesPermissions?.canEditOwn ?? false}
           canDeleteOwn={storiesPermissions?.canDeleteOwn ?? false}
           canEditOthers={storiesPermissions?.canEditOthers ?? false}

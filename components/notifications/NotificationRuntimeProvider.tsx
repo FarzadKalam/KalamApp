@@ -139,6 +139,39 @@ const getOverlayChannel = (row: OverlayFeedRow) => {
   return 'generic';
 };
 
+const getPayloadText = (payload: Record<string, any> | null | undefined, keys: string[]) => {
+  for (const key of keys) {
+    const value = String(payload?.[key] || '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const resolveInternalOverlayConversationTitle = (row: OverlayFeedRow) => {
+  const payload = row.payload || {};
+  const category = String(payload.category || '').trim().toLowerCase();
+  if (category === 'system' || category === 'assistant') {
+    return String(row.title || '').trim() || 'پیام سیستم';
+  }
+  return getPayloadText(payload, [
+    'conversation_title',
+    'group_title',
+    'chat_group_name',
+    'sender_display_name',
+    'author_name',
+    'display_name',
+  ]) || String(row.title || '').trim() || 'پیام داخلی';
+};
+
+const resolveBotOverlaySenderName = (row: OverlayFeedRow) => {
+  const payload = row.payload || {};
+  const username = String(payload.username || '').trim().replace(/^@+/, '');
+  return getPayloadText(payload, ['sender_display_name', 'sender_name'])
+    || (username ? `@${username}` : '')
+    || String(payload.sender_id || payload.user_id || payload.object_guid || '').trim()
+    || '';
+};
+
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
@@ -432,9 +465,18 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         id: `${row.section}:${row.source_type}:${row.source_id}`,
         kind,
         channel: getOverlayChannel(row),
-        kindLabel: row.section === 'notes' ? 'پیام' : undefined,
-        title: String(row.title || '').trim() || 'اعلان جدید',
+        kindLabel: row.section === 'notes' ? resolveInternalOverlayConversationTitle(row) : undefined,
+        title: row.section === 'bot_messages'
+          ? getPayloadText(row.payload, ['group_title', 'conversation_title']) || String(row.title || '').trim() || 'پیام جدید بات'
+          : String(row.title || '').trim() || 'اعلان جدید',
+        subtitle: row.section === 'bot_messages' ? resolveBotOverlaySenderName(row) : undefined,
         body: String(row.body || '').trim() || 'برای مشاهده جزئیات کلیک کنید.',
+        avatarUrl: getPayloadText(row.payload, row.section === 'bot_messages'
+          ? ['group_avatar_url', 'counterparty_image_url', 'avatar_url']
+          : ['conversation_avatar_url', 'sender_avatar_url', 'author_avatar_url', 'avatar_url']) || null,
+        avatarName: row.section === 'bot_messages'
+          ? getPayloadText(row.payload, ['group_title', 'conversation_title']) || String(row.title || '').trim() || null
+          : resolveInternalOverlayConversationTitle(row),
         createdAt: row.created_at,
         onOpen: () => openOverlayRow(row),
         onDismiss: () => markOverlayRowRead(row),
@@ -563,28 +605,38 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       'notification_read_states',
       'communication_read_cursors',
     ];
-    let channel = supabase.channel(`notification-runtime-${identity.orgId}-${identity.userId}`);
-    tables.forEach((table) => {
-      channel = channel.on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table, filter: `org_id=eq.${identity.orgId}` },
-        (payload: any) => {
-          const row = payload?.new || payload?.old || {};
-          if (
-            (table === 'notification_read_states' || table === 'communication_read_cursors')
-            && String(row?.user_id || '').trim() !== identity.userId
-          ) return;
-          const section = mapRealtimeSection(table, row);
-          if (section) scheduleRefresh(section);
-        },
-      );
-    });
-    channel.subscribe((status) => {
-      realtimeConnectedRef.current = status === 'SUBSCRIBED';
-    });
+    let disposed = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const subscribeTimer = window.setTimeout(() => {
+      if (disposed) return;
+      channel = supabase.channel(`notification-runtime-${identity.orgId}-${identity.userId}`);
+      tables.forEach((table) => {
+        channel = channel!.on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table, filter: `org_id=eq.${identity.orgId}` },
+          (payload: any) => {
+            const row = payload?.new || payload?.old || {};
+            if (
+              (table === 'notification_read_states' || table === 'communication_read_cursors')
+              && String(row?.user_id || '').trim() !== identity.userId
+            ) return;
+            const section = mapRealtimeSection(table, row);
+            if (section) scheduleRefresh(section);
+          },
+        );
+      });
+      channel.subscribe((status) => {
+        realtimeConnectedRef.current = status === 'SUBSCRIBED';
+      });
+    }, 0);
+
     return () => {
+      disposed = true;
+      window.clearTimeout(subscribeTimer);
       realtimeConnectedRef.current = false;
-      void supabase.removeChannel(channel);
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
     };
   }, [identity.orgId, identity.userId, scheduleRefresh]);
 

@@ -9,7 +9,10 @@ export interface UiNotificationOverlayItem {
   channel?: OverlayNotificationChannel;
   kindLabel?: string;
   title: string;
+  subtitle?: string | null;
   body: string;
+  avatarUrl?: string | null;
+  avatarName?: string | null;
   createdAt: string | null;
   hasAttachments?: boolean;
   onOpen: () => void;
@@ -63,7 +66,10 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
       || leftItem?.channel !== rightItem?.channel
       || leftItem?.kindLabel !== rightItem?.kindLabel
       || leftItem?.title !== rightItem?.title
+      || leftItem?.subtitle !== rightItem?.subtitle
       || leftItem?.body !== rightItem?.body
+      || leftItem?.avatarUrl !== rightItem?.avatarUrl
+      || leftItem?.avatarName !== rightItem?.avatarName
       || leftItem?.createdAt !== rightItem?.createdAt
       || Boolean(leftItem?.hasAttachments) !== Boolean(rightItem?.hasAttachments)
     ) {

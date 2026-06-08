@@ -1,5 +1,5 @@
-import React, { FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
-import { App, Spin } from 'antd';
+import React, { FormEvent, useEffect, useMemo, useState } from 'react';
+import { App } from 'antd';
 import {
   ApiOutlined,
   ArrowLeftOutlined,
@@ -19,7 +19,7 @@ import {
   ThunderboltOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import SeoHead from '../components/cms/SeoHead';
 import { buildHomeSeo } from '../utils/seoHelpers';
@@ -564,8 +564,6 @@ const ResourcesPage = ({ kind }: { kind: 'blog' | 'learn' | 'updates' }) => {
 const AboutPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.85fr_1.15fr]"><div><div className="text-sm font-black text-teal-700">درباره تازه سیستم</div><h1 className="mt-3 text-4xl font-black leading-tight text-zinc-950">نرم‌افزاری برای یکپارچه کردن کار واقعی شرکت‌ها</h1></div><div className="rounded-lg border border-zinc-200 bg-white p-7 text-base leading-9 text-zinc-600">تازه سیستم برای سازمان‌هایی ساخته می‌شود که بین CRM، حسابداری، فایل، پیام‌رسان، اکسل و پیگیری‌های دستی پراکنده شده‌اند. هدف ما ساخت محیطی است که مدیر، تیم فروش، پروژه، مالی و منابع انسانی تصویر مشترک و قابل اتکا داشته باشند.</div></div></main>;
 
 const ContactPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.8fr_1.2fr]"><div><div className="text-sm font-black text-teal-700">تماس با ما</div><h1 className="mt-3 text-4xl font-black text-zinc-950">برای دمو، همکاری یا پشتیبانی پیام بدهید</h1><div className="mt-8 grid gap-3 text-sm text-zinc-600"><a className="flex items-center gap-3" href="tel:+982100000000"><PhoneOutlined /> ۰۲۱-۰۰۰۰۰۰۰۰</a><a className="flex items-center gap-3" href="mailto:hello@tazesystem.ir"><MailOutlined /> hello@tazesystem.ir</a></div></div><DemoForm /></div></main>;
-
-const SimplePostPage = ({ type }: { type: 'blog' | 'learn' }) => <main className="px-5 py-20"><article className="mx-auto max-w-3xl rounded-lg border border-zinc-200 bg-white p-7"><div className="text-xs font-black text-teal-700">{type === 'blog' ? 'بلاگ' : 'آموزش'}</div><h1 className="mt-3 text-3xl font-black leading-tight text-zinc-950">{type === 'blog' ? 'چرا CRM به‌تنهایی برای شرکت‌های خدماتی کافی نیست؟' : 'شروع سریع با تازه سیستم'}</h1><p className="mt-5 text-base leading-9 text-zinc-600">این صفحه برای زیرساخت محتوایی سایت آماده شده است. محتوای کامل پس از نهایی شدن استراتژی انتشار و تصاویر محصول تکمیل می‌شود.</p></article></main>;
 
 const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
   const location = useLocation();

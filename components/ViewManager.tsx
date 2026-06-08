@@ -44,16 +44,20 @@ import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { getModuleListVisibleFields, normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { fetchAssigneeDirectory } from '../utils/referenceData';
+import {
+  BUILT_IN_VIEW_IDS,
+  BUILT_IN_VIEW_KEY,
+  CURRENT_USER_ASSIGNEE_VALUE,
+  SECONDARY_DEFAULT_VIEW_KEY,
+  buildSecondaryDefaultView,
+  upgradeLegacySecondaryDefaultView,
+} from '../utils/moduleBuiltInViews';
 
-const CURRENT_USER_OPTION_VALUE = '__current_user__';
 const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
 const SPECIAL_ASSIGNEE_OPTIONS = [
-  { label: 'کاربر در حال مشاهده', value: CURRENT_USER_OPTION_VALUE },
+  { label: 'کاربر در حال مشاهده', value: CURRENT_USER_ASSIGNEE_VALUE },
   { label: 'نقش کاربر در حال مشاهده', value: CURRENT_ROLE_OPTION_VALUE },
 ];
-const BUILT_IN_VIEW_KEY = '__built_in_view_key';
-const BUILT_IN_VIEW_IDS = ['default_all', 'default_secondary'] as const;
-const SECONDARY_DEFAULT_VIEW_KEY = BUILT_IN_VIEW_IDS[1];
 
 type ViewManagerRenderMode = 'inline' | 'mobile-sheet';
 
@@ -208,17 +212,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     [moduleConfig?.titles?.fa, moduleId]
   );
   const secondaryDefaultView = useMemo<SavedView>(
-    () => ({
-      id: SECONDARY_DEFAULT_VIEW_KEY,
-      module_id: moduleId,
-      name: moduleConfig?.titles?.fa ? `نمای دوم ${moduleConfig.titles.fa}` : 'نمای دوم',
-      is_default: false,
-      config: {
-        columns: [],
-        filters: [],
-        [BUILT_IN_VIEW_KEY]: SECONDARY_DEFAULT_VIEW_KEY,
-      } as ViewConfig & Record<string, any>,
-    }),
+    () => buildSecondaryDefaultView(moduleId, moduleConfig?.titles?.fa),
     [moduleConfig?.titles?.fa, moduleId]
   );
   const builtInViews = useMemo(() => [defaultView, secondaryDefaultView], [defaultView, secondaryDefaultView]);
@@ -243,11 +237,20 @@ const ViewManager: React.FC<ViewManagerProps> = ({
       });
       const otherViews = normalizedItems.filter((view) => !getBuiltInViewKey(view));
       return [
-        ...builtInViews.map((view) => persistedBuiltIns.get(view.id) || view),
+        ...builtInViews.map((view) => {
+          const persistedView = persistedBuiltIns.get(view.id);
+          if (!persistedView) return view;
+          if (view.id !== SECONDARY_DEFAULT_VIEW_KEY) return persistedView;
+          return upgradeLegacySecondaryDefaultView(
+            persistedView,
+            view,
+            moduleConfig?.titles?.fa
+          );
+        }),
         ...otherViews,
       ];
     },
-    [builtInViews, getBuiltInViewKey]
+    [builtInViews, getBuiltInViewKey, moduleConfig?.titles?.fa]
   );
 
   const filterViewsByAccess = useCallback(async (allViews: SavedView[]): Promise<SavedView[]> => {

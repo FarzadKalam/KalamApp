@@ -2297,6 +2297,13 @@ export const executeWorkflowAction = async (
       workflow_action_type: action.type,
       workflow_action_id: (action as any)?.id || null,
     };
+    const [orgId, user] = await Promise.all([
+      resolveWorkflowOrgId(currentRecord),
+      getCurrentAuthUser(),
+    ]);
+    const noteIdentity: Record<string, any> = {};
+    if (orgId) noteIdentity.org_id = orgId;
+    if (user?.id) noteIdentity.author_id = user.id;
     const noteRows: Record<string, any>[] = [];
     const hasDirectRecipients = recipients.mentionUserIds.length > 0 || recipients.mentionRoleIds.length > 0;
     if (!hasDirectRecipients && recipients.groupTargets.length === 0) {
@@ -2309,6 +2316,7 @@ export const executeWorkflowAction = async (
     }
     if (hasDirectRecipients || recipients.groupTargets.length === 0) {
       noteRows.push({
+        ...noteIdentity,
         module_id: scope.module_id,
         record_id: scope.record_id,
         content: serializeNoteContent(noteText, attachments),
@@ -2320,6 +2328,7 @@ export const executeWorkflowAction = async (
     }
     recipients.groupTargets.forEach((group) => {
       noteRows.push({
+        ...noteIdentity,
         module_id: scope.module_id,
         record_id: scope.record_id,
         content: serializeNoteContent(noteText, attachments),

@@ -13,6 +13,11 @@ type TaskProcessTarget = {
   lineId: string | null;
 };
 
+type ModalSession = {
+  key: number;
+  task: any;
+};
+
 const isProcessRunStagePreviewTask = (task: any) => {
   if (!task || typeof task !== 'object') return false;
   if (task?.isProcessRunStagePreview && !task?.task_id) return true;
@@ -64,11 +69,25 @@ const TASK_MODAL_SELECT_COLUMNS = [
 const GlobalTaskProcessModalHost: React.FC = () => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
-  const [task, setTask] = useState<any | null>(null);
-  const [hostKey, setHostKey] = useState(0);
+  const [session, setSession] = useState<ModalSession | null>(null);
   const mountedRef = useRef(true);
+  const sessionKeyRef = useRef(0);
 
+  const task = session?.task || null;
   const target = useMemo(() => resolveTaskProcessTarget(task), [task]);
+
+  const openSession = (nextTask: any) => {
+    sessionKeyRef.current += 1;
+    setSession({
+      key: sessionKeyRef.current,
+      task: nextTask,
+    });
+  };
+
+  const closeSession = () => {
+    if (!mountedRef.current) return;
+    setSession(null);
+  };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -83,8 +102,7 @@ const GlobalTaskProcessModalHost: React.FC = () => {
         return;
       }
       if (providedTask) {
-        setTask(providedTask);
-        setHostKey((prev) => prev + 1);
+        openSession(providedTask);
         return;
       }
       setLoading(true);
@@ -107,8 +125,7 @@ const GlobalTaskProcessModalHost: React.FC = () => {
           return;
         }
         if (!mountedRef.current) return;
-        setTask(nextTask);
-        setHostKey((prev) => prev + 1);
+        openSession(nextTask);
       } catch {
         if (!providedTask) {
           message.error('باز کردن جزئیات فعالیت ناموفق بود.');
@@ -129,10 +146,21 @@ const GlobalTaskProcessModalHost: React.FC = () => {
     <>
       {loading ? null : (
         target && task?.id ? (
-          <div style={{ display: 'none' }} aria-hidden="true">
+          <div
+            style={{
+              position: 'fixed',
+              width: 0,
+              height: 0,
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              opacity: 0,
+            }}
+            aria-hidden="true"
+          >
             <React.Suspense fallback={null}>
               <ProductionStagesField
-                key={`${hostKey}-${String(task.id)}`}
+                key={`${session?.key || 0}-${String(task.id)}`}
+                onAutoOpenTaskClose={closeSession}
                 recordId={target.recordId}
                 moduleId={target.moduleId}
                 autoOpenTaskId={String(task.id)}

@@ -5251,7 +5251,7 @@ useEffect(() => {
   }, [handleClose, isMobile, open]);
 
   useEffect(() => {
-    if (!isMobile || !open || typeof window === 'undefined') return;
+    if (standalone || !isMobile || !open || typeof window === 'undefined') return;
     if (!mobileDrawerHistoryActiveRef.current) {
       window.history.pushState({ notificationsDrawer: true }, '', window.location.href);
       mobileDrawerHistoryActiveRef.current = true;
@@ -5274,7 +5274,7 @@ useEffect(() => {
         mobileDrawerHistoryActiveRef.current = false;
       }
     };
-  }, [handleClose, isMobile, open]);
+  }, [handleClose, isMobile, open, standalone]);
 
   const handleNoteTextChange = useCallback((nextValue: string) => {
     setNoteText(nextValue);

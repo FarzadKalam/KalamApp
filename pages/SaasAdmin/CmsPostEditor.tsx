@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Button, Form, Input, Select, Switch, DatePicker, message,
-  Spin, Space, Tag, Row, Col, Card, Breadcrumb, Divider, Upload,
+  Spin, Space, Tag, Row, Col, Card, Breadcrumb,
 } from 'antd';
 import {
   SaveOutlined, EyeOutlined, ArrowRightOutlined,
-  GlobalOutlined, EditOutlined, FileImageOutlined,
+  GlobalOutlined, FileImageOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { supabase } from '../../supabaseClient';
@@ -70,14 +70,27 @@ export default function CmsPostEditor() {
   // load existing post
   useEffect(() => {
     if (!id || id === 'new') return;
-    setLoading(true);
-    supabase.from(tableName).select('*').eq('id', id).single()
-      .then(({ data, error }) => {
-        if (error || !data) { message.error('خطا در بارگذاری'); navigate(listPath); return; }
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await supabase.from(tableName).select('*').eq('id', id).single();
+        if (cancelled) return;
+        if (error || !data) {
+          message.error('خطا در بارگذاری');
+          navigate(listPath);
+          return;
+        }
         setPost({ ...emptyPost, ...data, content_blocks: data.content_blocks ?? [] });
         setSlugEdited(true);
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
   }, [id, tableName]);
 
   // load series list for tutorials

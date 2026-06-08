@@ -88,6 +88,8 @@ import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime'
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 import { enrichAttendancePresenceRows } from '../utils/attendancePresence';
+import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
+import type { SmartFormSaveMeta } from '../components/SmartForm';
 import { normalizeNoteScope } from '../utils/noteScope';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
@@ -107,7 +109,6 @@ import {
 import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
 import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
-import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
 const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
@@ -375,40 +376,6 @@ const _msIsMissingColumnError = (error: any, columnName: string) => {
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   const needle = String(columnName || '').toLowerCase();
   return !!text && !!needle && text.includes(needle) && (text.includes('column') || text.includes('schema cache'));
-};
-
-const getModuleShowBaseColumns = (moduleConfig: any) => {
-  const fieldKeys = Array.from(
-    new Set(
-      (moduleConfig?.fields || [])
-        .map((field: any) => String(field?.key || '').trim())
-        .filter(Boolean)
-    )
-  ) as string[];
-  const blockKeys = Array.from(
-    new Set(
-      (moduleConfig?.blocks || [])
-        .map((block: any) => String(block?.id || '').trim())
-        .filter(Boolean)
-    )
-  ) as string[];
-  return Array.from(new Set<string>([
-    'id',
-    'org_id',
-    'created_at',
-    'updated_at',
-    'created_by',
-    'updated_by',
-    'status',
-    'system_code',
-    'name',
-    'title',
-    'assignee_id',
-    'assignee_role_id',
-    'assignee_type',
-    ...fieldKeys,
-    ...blockKeys,
-  ]));
 };
 
 const ModuleShow: React.FC = () => {
@@ -1349,18 +1316,11 @@ const ModuleShow: React.FC = () => {
     setLoading((prev) => (hasRecordDataRef.current ? prev : true));
     const run = (async () => {
       try {
-        const recordResult = await runSelectWithCompatibleColumns<any | null>({
-          cacheKey: `module-show:${moduleId}`,
-          columns: getModuleShowBaseColumns(moduleConfig),
-          execute: (selectExpr) =>
-            supabase
-              .from(moduleTable)
-              .select(selectExpr)
-              .eq('id', id)
-              .maybeSingle(),
-        });
-        const record = recordResult.data;
-        const error = recordResult.error;
+        const { data: record, error } = await supabase
+          .from(moduleTable)
+          .select('*')
+          .eq('id', id)
+          .maybeSingle();
 
         if (error && String(error.code) !== 'PGRST116') throw error;
         if (activeRecordRequestRef.current !== requestId) return;
@@ -4494,7 +4454,7 @@ const ModuleShow: React.FC = () => {
 
   const handleSmartFormSave = useCallback(async (
     values: any,
-    meta?: { templateStagesPreview?: any[] }
+    meta?: SmartFormSaveMeta
   ) => {
     try {
       if (!id) return;
@@ -4549,6 +4509,28 @@ const ModuleShow: React.FC = () => {
         updateResult = await supabase.from(moduleTable).update(values).eq('id', id);
       }
       if (updateResult.error) throw updateResult.error;
+      let allocatedInvoiceIds: string[] = [String(id)];
+      if (
+        (moduleId === 'invoices' || moduleId === 'purchase_invoices')
+        && meta?.invoicePaymentAllocation
+      ) {
+        const allocation = meta.invoicePaymentAllocation;
+        const changedRows = await applyInvoicePaymentAllocation({
+          supabase: supabase as any,
+          moduleId,
+          sourceInvoiceId: String(id),
+          sourceRowKey: allocation.plan.segments[0]?.sourceRowKey || '',
+          sourcePayments: allocation.plan.sourcePayments,
+          allocationGroupKey: allocation.allocationGroupKey,
+          allocations: allocation.allocations,
+          plan: allocation.plan,
+        });
+        allocatedInvoiceIds = Array.from(new Set(
+          changedRows
+            .map((row: any) => String(row?.invoice_id || '').trim())
+            .filter(Boolean)
+        ));
+      }
       if (moduleId === 'process_templates') {
         await syncProcessTemplateStages(String(id), meta?.templateStagesPreview || []);
       }
@@ -4564,19 +4546,21 @@ const ModuleShow: React.FC = () => {
           userId: authUserId,
         });
         if (shouldAutoSyncInvoiceAccounting(moduleId)) {
-          const accountingSync = await syncInvoiceAccountingEntries({
-          supabase: supabase as any,
-          moduleId,
-          recordId: id,
-          recordData: {
-            ...previous,
-            ...persistedValues,
-          },
-          includePayments: true,
-        });
-          if (accountingSync.errors.length > 0) {
-          console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
-          msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
+          for (const invoiceId of allocatedInvoiceIds) {
+            const accountingSync = await syncInvoiceAccountingEntries({
+              supabase: supabase as any,
+              moduleId,
+              recordId: invoiceId,
+              recordData: invoiceId === String(id) ? {
+                ...previous,
+                ...persistedValues,
+              } : undefined,
+              includePayments: true,
+            });
+            if (accountingSync.errors.length > 0) {
+              console.warn('هشدارهای همگام‌سازی سند حسابداری فاکتور:', accountingSync.errors);
+              msg.warning(`هشدار صدور سند: ${toFaAccountingSyncError(accountingSync.errors[0])}`);
+            }
           }
         }
       }

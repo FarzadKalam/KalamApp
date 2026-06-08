@@ -64,6 +64,13 @@ import {
   mergeSurveyTemplateValuesIntoRecord,
   normalizeSurveyTemplateSnapshot,
 } from '../utils/surveyTemplates';
+import InvoicePaymentAllocationModal from './invoices/InvoicePaymentAllocationModal';
+import {
+  buildInvoicePaymentOverflowPlan,
+  InvoiceAllocationAmount,
+  InvoicePaymentOverflowPlan,
+} from '../utils/invoicePaymentAllocation';
+import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -87,11 +94,22 @@ const SAAS_ANNOUNCEMENT_CONDITION_FIELDS: ModuleDefinition['fields'] = [
   { key: 'is_authenticated', type: FieldType.CHECKBOX, labels: { fa: 'کاربر لاگین باشد', en: 'Is Authenticated' } } as any,
 ];
 
+export interface SmartFormSaveMeta {
+  productInventory?: any[];
+  templateStagesPreview?: any[];
+  selectedTags?: any[];
+  invoicePaymentAllocation?: {
+    plan: InvoicePaymentOverflowPlan;
+    allocations: InvoiceAllocationAmount[];
+    allocationGroupKey: string;
+  };
+}
+
 interface SmartFormProps {
   module: ModuleDefinition;
   visible: boolean;
   onCancel: () => void;
-  onSave?: (values: any, meta?: { productInventory?: any[]; templateStagesPreview?: any[]; selectedTags?: any[] }) => void;
+  onSave?: (values: any, meta?: SmartFormSaveMeta) => void;
   onPersisted?: (record: { id?: string | number | null; values?: Record<string, any> }) => void;
   recordId?: string;
   title?: string;
@@ -100,6 +118,13 @@ interface SmartFormProps {
   displayMode?: 'modal' | 'embedded';
   overlayZIndex?: number;
 }
+
+type PendingSmartFormInvoiceAllocation = {
+  values: Record<string, any>;
+  plan: InvoicePaymentOverflowPlan;
+  allocationGroupKey: string;
+  partyId: string;
+};
 
 const isAbortLikeError = (error: unknown) =>
   String((error as any)?.name || '').toLowerCase() === 'aborterror'
@@ -284,6 +309,13 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState<any>({});
   const [initialRecord, setInitialRecord] = useState<any>(null);
+  const [pendingInvoicePaymentAllocation, setPendingInvoicePaymentAllocation] =
+    useState<PendingSmartFormInvoiceAllocation | null>(null);
+  const confirmedInvoicePaymentAllocationRef = useRef<{
+    plan: InvoicePaymentOverflowPlan;
+    allocations: InvoiceAllocationAmount[];
+    allocationGroupKey: string;
+  } | null>(null);
   const draftKeyInitializedRef = useRef<string | null>(null);
   const formDirtyRef = useRef(false);
   const baselineFormDataSignatureRef = useRef<string | null>(null);
@@ -1797,12 +1829,45 @@ const SmartForm: React.FC<SmartFormProps> = ({
       }
       values = transformModulePayloadForSave(module.id, values, relationOptions);
 
+      if (module.id === 'invoices' || module.id === 'purchase_invoices') {
+        const confirmedAllocation = confirmedInvoicePaymentAllocationRef.current;
+        if (confirmedAllocation) {
+          values.payments = confirmedAllocation.plan.sourcePayments;
+        } else {
+          const allocationGroupKey =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `allocation_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+          const overflowPlan = buildInvoicePaymentOverflowPlan({
+            totalAmount: Number(summaryData?.total ?? values?.total_invoice_amount ?? 0),
+            previousPayments: Array.isArray(initialRecord?.payments) ? initialRecord.payments : [],
+            nextPayments: Array.isArray(values?.payments) ? values.payments : [],
+            allocationGroupKey,
+          });
+          if (overflowPlan) {
+            const partyId = String(
+              module.id === 'invoices' ? values?.customer_id : values?.supplier_id
+            ).trim();
+            if (!partyId) throw new Error('طرف حساب فاکتور برای تخصیص اضافه‌مبلغ مشخص نیست.');
+            setPendingInvoicePaymentAllocation({
+              values: { ...values },
+              plan: overflowPlan,
+              allocationGroupKey,
+              partyId,
+            });
+            return;
+          }
+        }
+      }
+
       if (onSave) {
         await onSave(values, {
           productInventory: productInventoryRows,
           templateStagesPreview,
           selectedTags,
+          invoicePaymentAllocation: confirmedInvoicePaymentAllocationRef.current || undefined,
         });
+        confirmedInvoicePaymentAllocationRef.current = null;
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;
       } else {
@@ -1954,6 +2019,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }
 
           if (module.id === 'invoices' || module.id === 'purchase_invoices') {
+            const confirmedAllocation = confirmedInvoicePaymentAllocationRef.current;
+            if (confirmedAllocation) {
+              await applyInvoicePaymentAllocation({
+                supabase: supabase as any,
+                moduleId: module.id,
+                sourceInvoiceId: recordId,
+                sourceRowKey: confirmedAllocation.plan.segments[0]?.sourceRowKey || '',
+                sourcePayments: confirmedAllocation.plan.sourcePayments,
+                allocationGroupKey: confirmedAllocation.allocationGroupKey,
+                allocations: confirmedAllocation.allocations,
+                plan: confirmedAllocation.plan,
+              });
+            }
             await applyInvoiceFinalizationInventory({
               supabase: supabase as any,
               moduleId: module.id,
@@ -2034,6 +2112,19 @@ const SmartForm: React.FC<SmartFormProps> = ({
               });
             }
             if (module.id === 'invoices' || module.id === 'purchase_invoices') {
+              const confirmedAllocation = confirmedInvoicePaymentAllocationRef.current;
+              if (confirmedAllocation) {
+                await applyInvoicePaymentAllocation({
+                  supabase: supabase as any,
+                  moduleId: module.id,
+                  sourceInvoiceId: String(inserted.id),
+                  sourceRowKey: confirmedAllocation.plan.segments[0]?.sourceRowKey || '',
+                  sourcePayments: confirmedAllocation.plan.sourcePayments,
+                  allocationGroupKey: confirmedAllocation.allocationGroupKey,
+                  allocations: confirmedAllocation.allocations,
+                  plan: confirmedAllocation.plan,
+                });
+              }
               await applyInvoiceFinalizationInventory({
                 supabase: supabase as any,
                 moduleId: module.id,
@@ -2076,6 +2167,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
 
         messageApi.success('ثبت شد');
+        confirmedInvoicePaymentAllocationRef.current = null;
         clearSmartFormDraft(draftKey);
         formDirtyRef.current = false;
         onCancel();
@@ -2488,6 +2580,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   if (!visible) return null;
 
   return (
+    <>
     <div
       className={
         displayMode === 'modal'
@@ -3068,6 +3161,27 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
       </div>
     </div>
+    {pendingInvoicePaymentAllocation && (module.id === 'invoices' || module.id === 'purchase_invoices') ? (
+      <InvoicePaymentAllocationModal
+        open
+        moduleId={module.id}
+        sourceInvoiceId={recordId}
+        partyId={pendingInvoicePaymentAllocation.partyId}
+        excessAmount={pendingInvoicePaymentAllocation.plan.excessAmount}
+        onCancel={() => setPendingInvoicePaymentAllocation(null)}
+        onConfirm={(allocations) => {
+          confirmedInvoicePaymentAllocationRef.current = {
+            plan: pendingInvoicePaymentAllocation.plan,
+            allocations,
+            allocationGroupKey: pendingInvoicePaymentAllocation.allocationGroupKey,
+          };
+          const nextValues = pendingInvoicePaymentAllocation.values;
+          setPendingInvoicePaymentAllocation(null);
+          void handleFinish(nextValues);
+        }}
+      />
+    ) : null}
+    </>
   );
 };
 

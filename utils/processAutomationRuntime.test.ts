@@ -6,11 +6,16 @@ const mocks = vi.hoisted(() => ({
   insertNotesWithFallback: vi.fn(),
   sendNoteSmsNotifications: vi.fn(),
   rowsByTable: {} as Record<string, any[]>,
+  workflowLogRows: [] as any[],
+  authUser: null as any,
 }));
 
 vi.mock('../supabaseClient', () => ({
   supabase: {
     from: mocks.from,
+    auth: {
+      getUser: vi.fn(async () => ({ data: { user: mocks.authUser } })),
+    },
   },
   supabaseSignUpClient: {
     from: mocks.from,
@@ -28,6 +33,7 @@ import { runProcessAutomationsForTaskEvent } from './processAutomationRuntime';
 
 const createSelectQuery = (rows: any[]) => {
   const filters: Array<{ type: 'eq' | 'neq'; field: string; value: any }> = [];
+  let limitCount: number | null = null;
 
   const applyFilters = () =>
     rows.filter((row) =>
@@ -36,7 +42,7 @@ const createSelectQuery = (rows: any[]) => {
         if (filter.type === 'neq') return row?.[filter.field] !== filter.value;
         return true;
       })
-    );
+    ).slice(0, limitCount ?? undefined);
 
   const chain: any = {
     eq: (field: string, value: any) => {
@@ -47,14 +53,20 @@ const createSelectQuery = (rows: any[]) => {
       filters.push({ type: 'neq', field, value });
       return chain;
     },
-    order: async (_field: string, _options?: { ascending?: boolean }) => ({
-      data: applyFilters(),
-      error: null,
-    }),
+    contains: (_field: string, _value: any) => chain,
+    order: (_field: string, _options?: { ascending?: boolean }) => chain,
+    limit: (count: number) => {
+      limitCount = count;
+      return chain;
+    },
     maybeSingle: async () => ({
       data: applyFilters()[0] ?? null,
       error: null,
     }),
+    then: (resolve: any, reject: any) => Promise.resolve({
+      data: applyFilters(),
+      error: null,
+    }).then(resolve, reject),
   };
 
   return chain;
@@ -66,10 +78,16 @@ describe('processAutomationRuntime', () => {
     mocks.insertNotesWithFallback.mockResolvedValue(undefined);
     mocks.sendNoteSmsNotifications.mockResolvedValue({ recipients: [] });
     mocks.rowsByTable = {};
+    mocks.workflowLogRows = [];
+    mocks.authUser = null;
     mocks.from.mockImplementation((table: string) => {
       if (table === 'workflow_logs') {
         return {
-          insert: vi.fn(async () => ({ data: null, error: null })),
+          select: vi.fn(() => createSelectQuery(mocks.rowsByTable[table] || [])),
+          insert: vi.fn(async (payload: any) => {
+            mocks.workflowLogRows.push(payload);
+            return { data: null, error: null };
+          }),
         };
       }
       return {
@@ -230,6 +248,114 @@ describe('processAutomationRuntime', () => {
     expect(mocks.sendNoteSmsNotifications).toHaveBeenCalledWith(expect.objectContaining({
       mentionUserIds: ['profile-9'],
       mentionRoleIds: ['role-9'],
+    }));
+  });
+
+  it('carries org and actor identity into process automation notes and logs', async () => {
+    mocks.authUser = { id: 'actor-1' };
+
+    await runProcessAutomationsForTaskEvent({
+      event: 'create',
+      currentUser: { id: 'actor-1' },
+      task: {
+        id: 'task-identity',
+        name: 'فعالیت سازمانی',
+        org_id: 'org-identity',
+        recurrence_info: {
+          process_automation_rules: [
+            {
+              id: 'rule-note-identity',
+              is_active: true,
+              trigger_type: 'on_create',
+              execution_mode: 'every_match',
+              target_type: 'specific_user',
+              target_user_id: 'profile-identity',
+              actions: [
+                {
+                  id: 'action-note-identity',
+                  type: 'send_note',
+                  config: {
+                    note_text: 'یادداشت سازمانی',
+                    recipient_fields: [],
+                    attachment_fields: [],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        org_id: 'org-identity',
+        author_id: 'actor-1',
+        mention_user_ids: ['profile-identity'],
+      }),
+    ]);
+    expect(mocks.workflowLogRows).toContainEqual(expect.objectContaining({
+      org_id: 'org-identity',
+      status: 'success',
+      module_id: 'tasks',
+      record_id: 'task-identity',
+      details: expect.objectContaining({
+        actor_id: 'actor-1',
+      }),
+    }));
+  });
+
+  it('keeps interval process automation notes org-scoped', async () => {
+    mocks.authUser = { id: 'actor-interval' };
+
+    await runProcessAutomationsForTaskEvent({
+      event: 'interval',
+      currentUser: { id: 'actor-interval' },
+      task: {
+        id: 'task-interval',
+        name: 'فعالیت زمان‌بندی‌شده',
+        org_id: 'org-interval',
+        recurrence_info: {
+          process_automation_rules: [
+            {
+              id: 'rule-interval-note',
+              is_active: true,
+              trigger_type: 'interval',
+              execution_mode: 'every_match',
+              interval_value: 1,
+              interval_unit: 'day',
+              target_type: 'specific_user',
+              target_user_id: 'profile-interval',
+              actions: [
+                {
+                  id: 'action-interval-note',
+                  type: 'send_note',
+                  config: {
+                    note_text: 'یادآوری زمان‌بندی‌شده',
+                    recipient_fields: [],
+                    attachment_fields: [],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(mocks.insertNotesWithFallback).toHaveBeenCalledWith([
+      expect.objectContaining({
+        org_id: 'org-interval',
+        author_id: 'actor-interval',
+        mention_user_ids: ['profile-interval'],
+      }),
+    ]);
+    expect(mocks.workflowLogRows).toContainEqual(expect.objectContaining({
+      org_id: 'org-interval',
+      status: 'success',
+      details: expect.objectContaining({
+        process_automation_event: 'interval',
+      }),
     }));
   });
 });

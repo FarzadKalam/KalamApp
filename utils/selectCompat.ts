@@ -3,7 +3,14 @@ import { FieldType, ModuleDefinition } from '../types';
 import { getRelationDisplayFields, getRelationSearchFields } from './relationDisplay';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from './relationTargetField';
 
-const selectColumnCache = new Map<string, string[]>();
+const INCOMPATIBLE_COLUMN_CACHE_TTL_MS = 5 * 60 * 1000;
+
+type IncompatibleColumnCacheEntry = {
+  columns: Set<string>;
+  expiresAt: number;
+};
+
+const incompatibleColumnCache = new Map<string, IncompatibleColumnCacheEntry>();
 
 const TEXTUAL_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
@@ -169,6 +176,15 @@ const collectPatternMatches = (text: string, pattern: RegExp) => {
   return values;
 };
 
+const normalizeMissingColumnName = (value: string) =>
+  String(value || '')
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .split('.')
+    .pop()
+    ?.trim()
+    .toLowerCase() || '';
+
 const extractMissingColumnNames = (error: any): string[] => {
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   if (!text) return [];
@@ -179,8 +195,10 @@ const extractMissingColumnNames = (error: any): string[] => {
         ...collectPatternMatches(text, /column\s+"([^"]+)"/gi),
         ...collectPatternMatches(text, /column\s+'([^']+)'/gi),
         ...collectPatternMatches(text, /could not find the\s+'([^']+)'\s+column/gi),
-        ...collectPatternMatches(text, /([a-z0-9_]+)\s+does not exist/gi),
-      ].filter(Boolean)
+        ...collectPatternMatches(text, /column\s+([a-z0-9_.]+)\s+does not exist/gi),
+      ]
+        .map(normalizeMissingColumnName)
+        .filter(Boolean)
     )
   );
 };
@@ -202,12 +220,34 @@ const pruneColumns = (columns: string[], error: any) => {
       if (column === 'id') return true;
       return !missingColumns.includes(column.toLowerCase());
     });
-    return next.length > 0 ? next : ['id'];
+    if (next.length > 0 && next.length < columns.length) {
+      return next;
+    }
   }
 
   const fallback = buildFallbackColumnSet(columns);
   if (fallback.join(',') === columns.join(',')) return null;
   return fallback;
+};
+
+const getCachedIncompatibleColumns = (cacheKey: string) => {
+  const cached = incompatibleColumnCache.get(cacheKey);
+  if (!cached) return new Set<string>();
+  if (cached.expiresAt <= Date.now()) {
+    incompatibleColumnCache.delete(cacheKey);
+    return new Set<string>();
+  }
+  return new Set(cached.columns);
+};
+
+const rememberIncompatibleColumns = (cacheKey: string, columns: string[]) => {
+  if (columns.length === 0) return;
+  const cached = getCachedIncompatibleColumns(cacheKey);
+  columns.forEach((column) => cached.add(column.toLowerCase()));
+  incompatibleColumnCache.set(cacheKey, {
+    columns: cached,
+    expiresAt: Date.now() + INCOMPATIBLE_COLUMN_CACHE_TTL_MS,
+  });
 };
 
 type CompatResult<T> = {
@@ -242,19 +282,15 @@ export const runSelectWithCompatibleColumns = async <T>({
   execute: (selectExpr: string) => PromiseLike<{ data: T | null; error: any }>;
 }): Promise<CompatResult<T>> => {
   const normalizedColumns = applyCacheKeyColumnExclusions(cacheKey, normalizeColumns(columns));
-  const cachedColumns = normalizeColumns(selectColumnCache.get(cacheKey) || []).filter((column) =>
-    normalizedColumns.includes(column)
+  const cachedIncompatibleColumns = getCachedIncompatibleColumns(cacheKey);
+  const initialColumns = normalizedColumns.filter(
+    (column) => column === 'id' || !cachedIncompatibleColumns.has(column.toLowerCase())
   );
-
-  const candidateSets: string[][] = [];
-  if (cachedColumns.length > 0) {
-    candidateSets.push(cachedColumns);
-  }
-  candidateSets.push(normalizedColumns);
-  candidateSets.push(buildFallbackColumnSet(normalizedColumns));
+  const candidateSets: string[][] = [initialColumns.length > 0 ? initialColumns : ['id']];
 
   let lastData: T | null = null;
   let lastError: any = null;
+  let lastSelectedColumns = initialColumns;
   const attempted = new Set<string>();
 
   while (candidateSets.length > 0) {
@@ -266,13 +302,13 @@ export const runSelectWithCompatibleColumns = async <T>({
     const signature = activeColumns.join(',');
     if (attempted.has(signature)) continue;
     attempted.add(signature);
+    lastSelectedColumns = activeColumns;
 
     const result = await execute(signature);
     lastData = result.data;
     lastError = result.error;
 
     if (!result.error) {
-      selectColumnCache.set(cacheKey, activeColumns);
       return {
         data: result.data,
         error: null,
@@ -284,9 +320,14 @@ export const runSelectWithCompatibleColumns = async <T>({
       break;
     }
 
+    const missingColumns = extractMissingColumnNames(result.error);
     const nextColumns = pruneColumns(activeColumns, result.error);
     if (!nextColumns || nextColumns.length === 0) {
       break;
+    }
+    const removedColumns = activeColumns.filter((column) => !nextColumns.includes(column));
+    if (missingColumns.length > 0 && removedColumns.length > 0) {
+      rememberIncompatibleColumns(cacheKey, removedColumns);
     }
     candidateSets.unshift(nextColumns);
   }
@@ -294,7 +335,7 @@ export const runSelectWithCompatibleColumns = async <T>({
   return {
     data: lastData,
     error: lastError,
-    selectedColumns: cachedColumns.length > 0 ? cachedColumns : normalizedColumns,
+    selectedColumns: lastSelectedColumns,
   };
 };
 

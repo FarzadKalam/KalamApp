@@ -77,8 +77,9 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
   const [sendPublicToCustomer, setSendPublicToCustomer] = useState(false);
-  const [currentUser, setCurrentUser] = useState<{ id: string | null; full_name: string | null }>({ id: null, full_name: null });
+  const [currentUser, setCurrentUser] = useState<{ id: string | null; full_name: string | null; avatar_url?: string | null }>({ id: null, full_name: null, avatar_url: null });
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
+  const [authorAvatarMap, setAuthorAvatarMap] = useState<Record<string, string | null>>({});
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [quickTaskLoading, setQuickTaskLoading] = useState(false);
   const [quickTaskDynamicOptions, setQuickTaskDynamicOptions] = useState<Record<string, any[]>>({});
@@ -219,6 +220,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         setCurrentUser({
           id: snapshot.user?.id ? String(snapshot.user.id) : null,
           full_name: snapshot.profile?.full_name || null,
+          avatar_url: snapshot.profile?.avatar_url || null,
         });
       } catch (err) {
         console.error(err);
@@ -230,20 +232,21 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   useEffect(() => {
     const buildMentions = (profiles: any[], roles: any[]) => {
       const profileOptions = (profiles || []).map((profile: any) => ({
-        label: `عضو: ${profile.full_name || profile.id}`,
+        label: `عضو: ${profile.full_name || profile.display_name || 'بدون نام'}`,
         value: `user:${profile.id}`,
+        avatarUrl: profile.avatar_url || null,
       }));
       const roleOptions = (roles || []).map((role: any) => ({
-        label: `تیم: ${role.title || role.id}`,
+        label: `تیم: ${role.title || role.name || 'بدون نام'}`,
         value: `role:${role.id}`,
       }));
 
       const nextMap: Record<string, { label: string; type: 'user' | 'team' }> = {};
       (profiles || []).forEach((profile: any) => {
-        nextMap[profile.id] = { label: profile.full_name || profile.id, type: 'user' };
+        nextMap[profile.id] = { label: profile.full_name || profile.display_name || 'بدون نام', type: 'user' };
       });
       (roles || []).forEach((role: any) => {
-        nextMap[role.id] = { label: role.title || role.id, type: 'team' };
+        nextMap[role.id] = { label: role.title || role.name || 'بدون نام', type: 'team' };
       });
 
       setMentionMap(nextMap);
@@ -285,7 +288,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setMentionsLoading(true);
       try {
         const [{ data: profiles, error: profilesError }, roles] = await Promise.all([
-          supabase.from('profiles').select('id, full_name').order('full_name', { ascending: true }).limit(200),
+          supabase.from('profiles').select('id, full_name, avatar_url').order('full_name', { ascending: true }).limit(200),
           fetchRoles(),
         ]);
 
@@ -463,13 +466,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         if (userIds.length > 0) {
           const directory = await fetchAssigneeDirectory(supabase);
           const nextMap: Record<string, string> = {};
+          const nextAvatarMap: Record<string, string | null> = {};
           directory.users.forEach((row) => {
             if (!userIds.includes(row.id)) return;
-            nextMap[row.id] = row.display_name || row.full_name || row.id;
+            nextMap[row.id] = row.display_name || row.full_name || 'کاربر سیستم';
+            nextAvatarMap[row.id] = row.avatar_url || null;
           });
           setAuthorNameMap(nextMap);
+          setAuthorAvatarMap(nextAvatarMap);
         } else {
           setAuthorNameMap({});
+          setAuthorAvatarMap({});
         }
         return;
       }
@@ -491,13 +498,17 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         if (authorIds.length > 0) {
           const directory = await fetchAssigneeDirectory(supabase);
           const nextMap: Record<string, string> = {};
+          const nextAvatarMap: Record<string, string | null> = {};
           directory.users.forEach((row) => {
             if (!authorIds.includes(row.id)) return;
-            nextMap[row.id] = row.display_name || row.full_name || row.id;
+            nextMap[row.id] = row.display_name || row.full_name || 'کاربر سیستم';
+            nextAvatarMap[row.id] = row.avatar_url || null;
           });
           setAuthorNameMap(nextMap);
+          setAuthorAvatarMap(nextAvatarMap);
         } else {
           setAuthorNameMap({});
+          setAuthorAvatarMap({});
         }
         return;
       }
@@ -827,6 +838,11 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                     ? (moduleId === 'purchase_invoices' ? 'پیام تامین‌کننده' : 'پیام مشتری')
                     : undefined;
                   const authorName = isAi ? 'دستیار هوشمند' : (item.author_name || authorNameMap[item.author_id] || 'کاربر سیستم');
+                  const authorAvatarUrl = isAi
+                    ? null
+                    : (String(item.author_id || '') === String(currentUser.id || '')
+                      ? currentUser.avatar_url || authorAvatarMap[item.author_id] || null
+                      : authorAvatarMap[item.author_id] || null);
                   const replyTarget = items.find((note) => note.id === item.reply_to);
                   const replyAuthorName = replyTarget
                     ? (isAiNote(replyTarget) ? 'دستیار هوشمند' : (replyTarget.author_name || authorNameMap[replyTarget.author_id] || 'کاربر سیستم'))
@@ -841,6 +857,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                         createdAtLabel={formatPersianDate(item.created_at, 'YYYY/MM/DD HH:mm')}
                         text={parsedContent.text}
                         attachments={parsedContent.attachments}
+                        avatarUrl={authorAvatarUrl}
                         mentionUsers={mentionUsers}
                         mentionRoles={mentionRoles}
                         variant={isAi ? 'ai' : 'default'}

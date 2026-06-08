@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Checkbox, Input, Modal, Select, Tag } from 'antd';
+import { Button, Checkbox, Input, Modal, Tag } from 'antd';
 import {
   AudioOutlined,
   CaretRightOutlined,
@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
 import FileManagerPickerModal from '../files/FileManagerPickerModal';
+import AdaptiveSelectField from '../AdaptiveSelectField';
 
 interface SharedNoteComposerProps {
   header?: React.ReactNode;
@@ -429,7 +430,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
           {allowMentions && mentionPickerOpen ? (
             <div className="mt-2">
-              <Select
+              <AdaptiveSelectField
                 mode="multiple"
                 allowClear
                 showSearch
@@ -440,8 +441,11 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                 loading={mentionsLoading}
                 optionFilterProp="label"
                 className="w-full"
-                getPopupContainer={(node) => node.parentElement || document.body}
-                styles={{ popup: { root: { zIndex: 1100, minWidth: 240 } } }}
+                overlayZIndexBase={2400}
+                pickerTitle="منشن عضو یا تیم"
+                sheetSubtitle="اعضا یا تیم‌هایی را که باید از این یادداشت مطلع شوند انتخاب کنید."
+                popupMatchSelectWidth={false}
+                placement="topRight"
               />
             </div>
           ) : null}

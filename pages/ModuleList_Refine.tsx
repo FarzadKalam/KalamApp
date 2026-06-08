@@ -103,8 +103,6 @@ const getModuleTitleFa = (moduleConfig?: ModuleDefinition | null, options?: { si
     return (
       moduleConfig?.titles?.faSingular ||
       moduleConfig?.titles?.fa ||
-      moduleConfig?.label?.fa ||
-      moduleConfig?.label?.en ||
       moduleConfig?.id ||
       "ماژول"
     );
@@ -112,8 +110,6 @@ const getModuleTitleFa = (moduleConfig?: ModuleDefinition | null, options?: { si
   return (
     moduleConfig?.titles?.fa ||
     moduleConfig?.titles?.faSingular ||
-    moduleConfig?.label?.fa ||
-    moduleConfig?.label?.en ||
     moduleConfig?.id ||
     "ماژول"
   );

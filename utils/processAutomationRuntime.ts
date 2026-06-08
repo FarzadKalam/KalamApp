@@ -30,6 +30,7 @@ import { serializeNoteContent } from './noteContent';
 import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
 import { fetchAssigneeDirectory } from './referenceData';
 import { resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
+import { assignProcessTemplateModuleAliases } from './processTemplateContext';
 
 type AutomationActor = {
   id?: string | null;
@@ -145,6 +146,9 @@ const buildAutomationActionRecord = (
   if (merged.id === undefined || merged.id === null || String(merged.id).trim() === '') {
     merged.id = task?.id ?? '';
   }
+  if (!String(merged.org_id || '').trim() && String(task?.org_id || '').trim()) {
+    merged.org_id = task.org_id;
+  }
   return merged;
 };
 
@@ -158,6 +162,7 @@ const assignProcessLinkedRecordFields = (
   Object.entries(record).forEach(([fieldKey, value]) => {
     target[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
   });
+  assignProcessTemplateModuleAliases(target, normalizedModuleId, record);
   const linkedAssignee = record
     ? `${String(record?.assignee_role_id ? 'role' : 'user')}_${String(record?.assignee_role_id || record?.assignee_id || '').trim()}`
     : '';
@@ -366,6 +371,44 @@ const resolveCommunicationTargets = async (
     baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
     rubikaChatIds: Array.from(new Set(allUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
   };
+};
+
+const getCurrentAuthUser = async () => {
+  try {
+    const { data } = await (supabase as any)?.auth?.getUser?.();
+    return data?.user || null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveProcessAutomationActorId = async (currentUser?: AutomationActor | null) => {
+  const fromActor = String(currentUser?.id || '').trim();
+  if (fromActor) return fromActor;
+  const user = await getCurrentAuthUser();
+  return String(user?.id || '').trim() || null;
+};
+
+const resolveProcessAutomationOrgId = async (
+  task: Record<string, any>,
+  actionRecord?: Record<string, any> | null,
+  actorId?: string | null,
+) => {
+  const fromActionRecord = String(actionRecord?.org_id || '').trim();
+  if (fromActionRecord) return fromActionRecord;
+  const fromTask = String(task?.org_id || '').trim();
+  if (fromTask) return fromTask;
+  const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+  const fromProcessGroup = String(recurrence?.process_group?.org_id || '').trim();
+  if (fromProcessGroup) return fromProcessGroup;
+  const normalizedActorId = String(actorId || '').trim();
+  if (!normalizedActorId) return null;
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('org_id')
+    .eq('id', normalizedActorId)
+    .maybeSingle();
+  return String((profile as any)?.org_id || '').trim() || null;
 };
 
 const resolveCounterpartyBotChatIdsFromSource = async (
@@ -668,7 +711,7 @@ const insertAutomationNote = async (
   rule: ProcessAutomationRule,
   target: MentionTarget,
   actionRecord: Record<string, any>,
-  _currentUser?: AutomationActor | null,
+  currentUser?: AutomationActor | null,
   sendSmsNotice = false
 ) => {
   const ruleNoteAction = (rule?.actions || []).find((action) => {
@@ -710,8 +753,14 @@ const insertAutomationNote = async (
     });
     return;
   }
+  const actorId = await resolveProcessAutomationActorId(currentUser);
+  const orgId = await resolveProcessAutomationOrgId(task, actionRecord, actorId);
+  const noteIdentity: Record<string, any> = {};
+  if (orgId) noteIdentity.org_id = orgId;
+  if (actorId) noteIdentity.author_id = actorId;
 
   const payload: Record<string, any> = {
+    ...noteIdentity,
     module_id: scope.module_id,
     record_id: scope.record_id,
     content: serializeNoteContent(noteText, attachments),
@@ -1073,7 +1122,10 @@ const logProcessAutomationRun = async ({
   errorMessage?: string;
 }) => {
   const taskId = String(task?.id || '').trim() || null;
+  const actorId = await resolveProcessAutomationActorId(currentUser);
+  const orgId = await resolveProcessAutomationOrgId(task, task, actorId);
   await supabase.from('workflow_logs').insert({
+    org_id: orgId,
     run_type: PROCESS_AUTOMATION_LOG_RUN_TYPE,
     status,
     module_id: 'tasks',
@@ -1088,7 +1140,7 @@ const logProcessAutomationRun = async ({
       process_group_id: String(task?.process_group_id || parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id || '').trim() || null,
       process_run_stage_id: String(task?.process_run_stage_id || parseRecurrenceInfo(task?.recurrence_info)?.process_run_stage_id || '').trim() || null,
       action_count: Array.isArray(rule?.actions) ? rule.actions.length : 0,
-      actor_id: String(currentUser?.id || '').trim() || null,
+      actor_id: actorId,
     },
   });
 };

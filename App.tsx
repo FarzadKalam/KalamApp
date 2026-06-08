@@ -49,6 +49,12 @@ import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 import { signOutLocalSession } from "./utils/authSession";
 
+declare global {
+  interface Window {
+    dataLayer?: Array<Record<string, unknown>>;
+  }
+}
+
 // تمام ایمپورت‌ها و تنظیمات dayjs از index.tsx و initDayjs.ts مدیریت می‌شوند.
 
 focusManager.setEventListener(() => {
@@ -61,8 +67,6 @@ const getModuleLabelFa = (moduleId?: string) => {
   return (
     moduleConfig?.titles?.fa ||
     moduleConfig?.titles?.faSingular ||
-    moduleConfig?.label?.fa ||
-    moduleConfig?.label?.en ||
     moduleConfig?.id ||
     moduleId ||
     ""
