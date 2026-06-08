@@ -128,6 +128,16 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const wasMobileViewportRef = useRef(initialIsMobile);
   const previousPathnameRef = useRef(location.pathname);
   const sidebarNavigationRef = useRef('');
+  const latestNavigationStateRef = useRef({
+    pathname: location.pathname,
+    search: location.search || '',
+    isMobile: initialIsMobile,
+  });
+  latestNavigationStateRef.current = {
+    pathname: location.pathname,
+    search: location.search || '',
+    isMobile,
+  };
 
   const applySessionBootstrapSnapshot = useCallback((snapshot: any, isMounted = true) => {
     if (!isMounted) return;
@@ -177,21 +187,22 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const handleSidebarNavigate = useCallback((href: string) => {
     if (!href) return;
+    const latestNavigationState = latestNavigationStateRef.current;
     const targetPath = String(href).split(/[?#]/)[0] || href;
-    if (location.pathname === targetPath && `${location.search || ''}` === (href.includes('?') ? `?${href.split('?')[1].split('#')[0]}` : '')) {
-      if (isMobile) setCollapsed(true);
+    if (latestNavigationState.pathname === targetPath && latestNavigationState.search === (href.includes('?') ? `?${href.split('?')[1].split('#')[0]}` : '')) {
+      if (latestNavigationState.isMobile) setCollapsed(true);
       return;
     }
     if (sidebarNavigationRef.current === href) return;
     sidebarNavigationRef.current = href;
-    if (isMobile) setCollapsed(true);
+    if (latestNavigationState.isMobile) setCollapsed(true);
     navigate(href);
     window.setTimeout(() => {
       if (sidebarNavigationRef.current === href) {
         sidebarNavigationRef.current = '';
       }
     }, 350);
-  }, [isMobile, location.pathname, location.search, navigate]);
+  }, [navigate]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -243,6 +254,27 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     );
   };
 
+  const buildSidebarIcon = (icon: React.ReactNode, href?: string, disabled?: boolean) => {
+    if (!href || !icon) return icon;
+
+    return (
+      <a
+        href={disabled ? undefined : href}
+        aria-disabled={disabled || undefined}
+        className={`sidebar-menu-icon-link ${disabled ? 'is-disabled' : ''}`}
+        onPointerEnter={(event) => {
+          if (!disabled && event.pointerType !== 'touch') scheduleRoutePreload(href);
+        }}
+        onFocus={() => !disabled && scheduleRoutePreload(href)}
+        onClick={(event) => handleSidebarLinkClick(event, href, disabled)}
+        onAuxClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => event.stopPropagation()}
+      >
+        {icon}
+      </a>
+    );
+  };
+
   const mapSidebarMenuItems = (items: NonNullable<MenuProps['items']>): MenuProps['items'] =>
     items.map((item) => {
       if (!item || typeof item !== 'object' || !('key' in item)) return item;
@@ -252,6 +284,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       const nextItem: any = {
         ...item,
         label: buildSidebarLabel(label, href, Boolean((item as any).disabled)),
+        icon: buildSidebarIcon((item as any).icon, href, Boolean((item as any).disabled)),
       };
 
       if ('children' in item && Array.isArray(item.children) && item.children.length > 0) {

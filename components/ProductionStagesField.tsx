@@ -1242,6 +1242,26 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!normalizedName) return '';
     return `${normalizedGroupId}::${normalizedName}::${normalizedSort}`;
   }, [normalizeStageName]);
+  const getProcessStageSortOrder = useCallback((item: any) => {
+    const value = Number(item?.source_stage_sort_order ?? item?.sort_order ?? 0);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }, []);
+  const buildProcessStageIdentityKeys = useCallback((item: any, fallbackGroupId?: any) => {
+    const taskMeta = getTaskProcessGroupMeta(item);
+    const stageMeta = getStageProcessGroupMeta(item);
+    const groupId = String(fallbackGroupId || taskMeta.groupId || stageMeta.groupId || 'default_process_group').trim() || 'default_process_group';
+    const keys: string[] = [];
+    const processRunStageId = String(item?.process_run_stage_id || '').trim();
+    const templateStageId = String(item?.template_stage_id || item?.source_template_stage_id || '').trim();
+    const sortOrder = getProcessStageSortOrder(item);
+    const name = item?.name || item?.title || item?.label || item?.stage_name || '';
+    if (processRunStageId) keys.push(`${groupId}::run-stage::${processRunStageId}`);
+    if (templateStageId) keys.push(`${groupId}::template-stage::${templateStageId}`);
+    if (sortOrder > 0) keys.push(`${groupId}::sort::${sortOrder}`);
+    const nameKey = buildProcessStageTaskKey(groupId, name, sortOrder || item?.sort_order);
+    if (nameKey) keys.push(`${groupId}::name::${nameKey}`);
+    return Array.from(new Set(keys));
+  }, [buildProcessStageTaskKey, getProcessStageSortOrder, getStageProcessGroupMeta, getTaskProcessGroupMeta]);
   const removeSingleMatchingDraftStage = useCallback((stages: any[], targetStage: any) => {
     if (!Array.isArray(stages)) return [];
     if (!targetStage) return stages;
@@ -2384,6 +2404,59 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       });
   };
 
+  const resolveTemplateNamesForProcessRows = async (rows: any[]) => {
+    const rawRows = (Array.isArray(rows) ? rows : []).map((row: any) => withProcessTaskCustomFieldValues(row));
+    const needsNameResolution = rawRows.some((row: any) => String(row?.name || '').includes('{{'));
+    if (!needsNameResolution) return rawRows;
+
+    const firstProcessLinks = rawRows
+      .map((row: any) => row?.recurrence_info?.process_links)
+      .find((links: any) => links && typeof links === 'object') || {};
+    const templateContext = await buildTaskTemplateContextRecord({ processLinkMap: firstProcessLinks }).catch(() => ({}));
+    return rawRows.map((row: any) => {
+      const rawName = String(row?.name || '').trim();
+      if (!rawName.includes('{{')) return row;
+      const resolvedName = String(
+        renderTemplateValueFromRecord(rawName, templateContext, FieldType.TEXT) ?? rawName
+      ).trim() || rawName;
+      return resolvedName !== rawName ? { ...row, name: resolvedName, title: resolvedName } : row;
+    });
+  };
+
+  const dedupeProcessRowsByStageIdentity = (rows: any[]) => {
+    const result: any[] = [];
+    const indexByKey = new Map<string, number>();
+    const isPreviewRow = (row: any) =>
+      Boolean(row?.isProcessRunStagePreview)
+      || String(row?.id || '').startsWith('process_run_stage:');
+    const preferRow = (current: any, next: any) => {
+      const currentPreview = isPreviewRow(current);
+      const nextPreview = isPreviewRow(next);
+      if (currentPreview && !nextPreview) return next;
+      if (!currentPreview && nextPreview) return current;
+      return next;
+    };
+
+    (Array.isArray(rows) ? rows : []).forEach((row: any) => {
+      const identityKeys = buildProcessStageIdentityKeys(row);
+      const fallbackKey = String(row?.id || `${row?.name || ''}_${row?.sort_order || result.length}`).trim();
+      const keys = identityKeys.length > 0 ? identityKeys : [fallbackKey];
+      const existingIndex = keys.map((key) => indexByKey.get(key)).find((index) => index !== undefined);
+      if (existingIndex === undefined) {
+        const nextIndex = result.length;
+        result.push(row);
+        keys.forEach((key) => indexByKey.set(key, nextIndex));
+        return;
+      }
+
+      const preferred = preferRow(result[existingIndex], row);
+      result[existingIndex] = preferred;
+      buildProcessStageIdentityKeys(preferred).concat(keys).forEach((key) => indexByKey.set(key, existingIndex));
+    });
+
+    return result;
+  };
+
   const fetchTasks = async (attempt = 0): Promise<any[]> => {
     if (isDraftOnlyModule) return [] as any[];
     if (!recordId) {
@@ -2427,25 +2500,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       if (isProcessRecordModule) {
         if (readOnly && (compact || cardCompact) && !autoOpenTaskId) {
           const processRuntime = await fetchProcessRunStageRowsForRecord();
-          const rawRows = Array.from(
-            new Map((processRuntime.rows || []).map((row: any) => [String(row?.id || `${row?.name || ''}_${row?.sort_order || ''}`), row])).values()
-          ).map((row: any) => withProcessTaskCustomFieldValues(row));
-          const needsNameResolution = rawRows.some((row: any) => String(row?.name || '').includes('{{'));
-          let next: any[] = rawRows;
-          if (needsNameResolution) {
-            const firstProcessLinks = rawRows
-              .map((row: any) => row?.recurrence_info?.process_links)
-              .find((links: any) => links && typeof links === 'object') || {};
-            const templateContext = await buildTaskTemplateContextRecord({ processLinkMap: firstProcessLinks }).catch(() => ({}));
-            next = rawRows.map((row: any) => {
-              const rawName = String(row?.name || '').trim();
-              if (!rawName.includes('{{')) return row;
-              const resolvedName = String(
-                renderTemplateValueFromRecord(rawName, templateContext, FieldType.TEXT) ?? rawName
-              ).trim() || rawName;
-              return resolvedName !== rawName ? { ...row, name: resolvedName, title: resolvedName } : row;
-            });
-          }
+          const [sourceResult, linkedResult] = await Promise.all([
+            applyTaskSourceRecordFilter(query, moduleId, recordId)
+              .order('sort_order', { ascending: true }),
+            supabase
+              .from('tasks')
+              .select(PROCESS_TASK_SELECT)
+              .contains('recurrence_info', { process_links: { [String(moduleId || '')]: String(recordId || '') } })
+              .order('sort_order', { ascending: true }),
+          ]);
+
+          if (sourceResult.error) throw sourceResult.error;
+          if (linkedResult.error) throw linkedResult.error;
+
+          const mergedRows = [
+            ...(processRuntime.rows || []),
+            ...(sourceResult.data || []),
+            ...((linkedResult.data || []).filter((row: any) => {
+              const processLinks = parseProcessLinkMap(parseRecurrenceInfo(row?.recurrence_info)?.process_links);
+              return String(processLinks[String(moduleId || '')] || '').trim() === String(recordId || '').trim();
+            })),
+          ];
+          const next = await resolveTemplateNamesForProcessRows(dedupeProcessRowsByStageIdentity(mergedRows));
           setTasks(next);
           setProcessRuntimeRuns(processRuntime.runs || []);
           setProcessRuntimeStages(processRuntime.stages || []);
@@ -2475,14 +2551,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             return String(processLinks[String(moduleId || '')] || '').trim() === String(recordId || '').trim();
           })),
         ];
-        const next = Array.from(
-          new Map(mergedRows.map((row: any) => [String(row?.id || `${row?.name || ''}_${row?.sort_order || ''}`), row])).values()
-        ).map((row: any) => withProcessTaskCustomFieldValues(row));
-        setTasks(next);
+        const next = dedupeProcessRowsByStageIdentity(mergedRows);
+        const resolvedNext = await resolveTemplateNamesForProcessRows(next);
+        setTasks(resolvedNext);
         setProcessRuntimeRuns(processRuntime.runs || []);
         setProcessRuntimeStages(processRuntime.stages || []);
         setTasksLoadSucceeded(true);
-        return next;
+        return resolvedNext;
       } else {
         query = applyTaskSourceRecordFilter(query, 'production_orders', recordId);
       }
@@ -6126,15 +6201,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       const existingByStageKey = new Set(
         (Array.isArray(tasks) ? tasks : [])
-          .map((task: any) => {
-            const taskMeta = getTaskProcessGroupMeta(task);
-            return buildProcessStageTaskKey(
-              taskMeta.groupId || 'default_process_group',
-              task?.name || task?.title || '',
-              task?.sort_order
-            );
-          })
-          .filter(Boolean)
+          .flatMap((task: any) => buildProcessStageIdentityKeys(task))
       );
 
       const payload: any[] = [];
@@ -6143,10 +6210,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const creatableStages = stageRows
         .filter((stage: any) => {
           const stageName = String(stage?.name || stage?.title || '').trim();
-          const stageMeta = getStageProcessGroupMeta(stage);
-          const stageKey = buildProcessStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
-          if (!stageName || existingByStageKey.has(stageKey)) return false;
-          existingByStageKey.add(stageKey);
+          const stageKeys = buildProcessStageIdentityKeys(stage);
+          if (!stageName || stageKeys.some((key) => existingByStageKey.has(key))) return false;
+          stageKeys.forEach((key) => existingByStageKey.add(key));
           return true;
         })
         .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
@@ -6296,6 +6362,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [
     buildTaskTemplateContextRecord,
     buildProcessStageTaskKey,
+    buildProcessStageIdentityKeys,
     computeStageDueAt,
     draftLocal,
     fetchTasks,
@@ -7080,20 +7147,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
   }, [processDraftGroups.length, tasks.length]);
 
-  const getLineSegments = (lineTasks: any[], activeDraftSegments: any[] = draftSegments) => {
+  const getLineSegments = (lineTasks: any[], activeDraftSegments: any[] = draftSegments, fallbackGroupId?: any) => {
     const normalizedTasks = (lineTasks || []).map((task: any) => ({
       ...task,
       type: 'task',
       _normalizedName: normalizeStageName(task.name || task.title),
       _normalizedKey: `${normalizeStageName(task.name || task.title)}::${Number(task?.sort_order || 0)}`,
     }));
+    const taskIdentityKeys = new Set(
+      normalizedTasks.flatMap((task: any) => buildProcessStageIdentityKeys(task, fallbackGroupId))
+    );
 
     const lineDrafts = activeDraftSegments.filter((draft: any) => {
       const normalizedDraft = normalizeStageName(draft.label);
       const normalizedDraftKey = `${normalizedDraft}::${Number(draft?.sort_order || 0)}`;
+      const draftIdentityKeys = buildProcessStageIdentityKeys(draft, fallbackGroupId);
       const matched = normalizedTasks.some((t: any) =>
-        (t._normalizedName && t._normalizedName === normalizedDraft)
-        && (t._normalizedKey === normalizedDraftKey || Number(draft?.sort_order || 0) <= 0)
+        draftIdentityKeys.some((key) => taskIdentityKeys.has(key))
+        || (
+          (t._normalizedName && t._normalizedName === normalizedDraft)
+          && (t._normalizedKey === normalizedDraftKey || Number(draft?.sort_order || 0) <= 0)
+        )
       );
       return !matched;
     });
@@ -7183,7 +7257,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       .filter((group) => (Array.isArray(group?.stages) && group.stages.length > 0) || (Array.isArray(group?.tasks) && group.tasks.length > 0))
       .map((group) => ({
       ...group,
-      lineSegments: getLineSegments(group.tasks, group.stages),
+      lineSegments: getLineSegments(group.tasks, group.stages, group.id),
     }));
   };
   const canAutoAssignProcessGroup = useCallback((group: any) => {
@@ -7191,25 +7265,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (stages.length === 0) return false;
     const existingKeys = new Set(
       (Array.isArray(group?.tasks) ? group.tasks : [])
-        .map((task: any) => {
-          const taskMeta = getTaskProcessGroupMeta(task);
-          return buildProcessStageTaskKey(
-            taskMeta.groupId || group?.id || 'default_process_group',
-            task?.name || task?.title || '',
-            task?.sort_order
-          );
-        })
-        .filter(Boolean)
+        .flatMap((task: any) => buildProcessStageIdentityKeys(task, group?.id))
     );
 
     return stages.some((stage: any) => {
       const stageName = String(stage?.name || stage?.title || '').trim();
       if (!stageName) return false;
-      const stageMeta = getStageProcessGroupMeta(stage);
-      const stageKey = buildProcessStageTaskKey(stageMeta.groupId, stageName, stage?.sort_order);
-      return !!stageKey && !existingKeys.has(stageKey);
+      const stageKeys = buildProcessStageIdentityKeys(stage, group?.id);
+      return stageKeys.length > 0 && !stageKeys.some((key) => existingKeys.has(key));
     });
-  }, [buildProcessStageTaskKey, getStageProcessGroupMeta, getTaskProcessGroupMeta]);
+  }, [buildProcessStageIdentityKeys]);
   const hasProcessGroupStarted = useCallback((group: any) =>
     (Array.isArray(group?.tasks) ? group.tasks : []).some((task: any) => {
       const normalizedStatus = String(task?.status || '').trim().toLowerCase();
