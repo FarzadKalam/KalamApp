@@ -529,10 +529,6 @@ const LEGACY_INVOICE_HEADER_ALIASES: Record<string, { scope: MappingTargetScope;
   [normalizeKey("دپارتمان  های اجرایی")]: { scope: "header", key: "execution_departments" },
   [normalizeKey("دپارتمان های اجرایی")]: { scope: "header", key: "execution_departments" },
   [normalizeKey("مجموع قبل از مالیات")]: { scope: "header", key: "subtotal_before_tax" },
-  [normalizeKey("استان")]: { scope: "header", key: "province" },
-  [normalizeKey("شهر")]: { scope: "header", key: "city" },
-  [normalizeKey("کد پستی")]: { scope: "header", key: "postal_code" },
-  [normalizeKey("آدرس")]: { scope: "header", key: "address" },
   [normalizeKey("نوع فاکتور حسابداری")]: { scope: "header", key: "legacy_accounting_type" },
   [normalizeKey("کد حسابداری بازاریاب")]: { scope: "header", key: "marketer_accounting_code" },
   [normalizeKey("درصد تخفیف")]: { scope: "header", key: "invoice_discount_percent" },
@@ -570,12 +566,8 @@ const INVOICE_LEGACY_IMPORT_FALLBACK_FIELDS: ImportFieldDescriptor[] = [
   { key: "legacy_invoice_type", labels: { fa: "نوع فاکتور سیستم قبلی", en: "Legacy Invoice Type" }, type: FieldType.TEXT, scope: "header" },
   { key: "legacy_organization_name", labels: { fa: "نام سازمان در فایل قبلی", en: "Legacy Organization Name" }, type: FieldType.TEXT, scope: "header" },
   { key: "legacy_items_total_amount", labels: { fa: "مجموع آیتم‌های فاکتور در فایل قبلی", en: "Legacy Items Total" }, type: FieldType.PRICE, scope: "header" },
-  { key: "execution_departments", labels: { fa: "دپارتمان‌های اجرایی", en: "Execution Departments" }, type: FieldType.TAGS, scope: "header" },
+  { key: "execution_departments", labels: { fa: "دپارتمان‌های اجرایی", en: "Execution Departments" }, type: FieldType.MULTI_SELECT, scope: "header" },
   { key: "subtotal_before_tax", labels: { fa: "مجموع قبل از مالیات", en: "Subtotal Before Tax" }, type: FieldType.PRICE, scope: "header" },
-  { key: "province", labels: { fa: "استان", en: "Province" }, type: FieldType.TEXT, scope: "header" },
-  { key: "city", labels: { fa: "شهر", en: "City" }, type: FieldType.TEXT, scope: "header" },
-  { key: "postal_code", labels: { fa: "کد پستی", en: "Postal Code" }, type: FieldType.TEXT, scope: "header" },
-  { key: "address", labels: { fa: "آدرس", en: "Address" }, type: FieldType.LONG_TEXT, scope: "header" },
   { key: "legacy_accounting_type", labels: { fa: "نوع فاکتور حسابداری سیستم قبلی", en: "Legacy Accounting Type" }, type: FieldType.TEXT, scope: "header" },
   { key: "marketer_accounting_code", labels: { fa: "کد حسابداری بازاریاب", en: "Marketer Accounting Code" }, type: FieldType.TEXT, scope: "header" },
   { key: "invoice_discount_percent", labels: { fa: "درصد تخفیف فاکتور", en: "Invoice Discount Percent" }, type: FieldType.PERCENTAGE, scope: "header" },
@@ -966,10 +958,6 @@ const applyLegacyInvoiceSourceColumns = (
   setPayloadTextIfEmpty(next, "legacy_accounting_type", getImportedRowValue(row, ["نوع فاکتور حسابداری"]));
   setPayloadTextIfEmpty(next, "legacy_accounting_status", getImportedRowValue(row, ["وضعیت فاکتور حسابداری"]));
   setPayloadTextIfEmpty(next, "marketer_accounting_code", getImportedRowValue(row, ["کد حسابداری بازاریاب"]));
-  setPayloadTextIfEmpty(next, "province", getImportedRowValue(row, ["استان"]));
-  setPayloadTextIfEmpty(next, "city", getImportedRowValue(row, ["شهر"]));
-  setPayloadTextIfEmpty(next, "postal_code", getImportedRowValue(row, ["کد پستی"]));
-  setPayloadTextIfEmpty(next, "address", getImportedRowValue(row, ["آدرس"]));
 
   setPayloadNumberIfEmpty(next, "legacy_items_total_amount", getImportedRowValue(row, ["مجموع آیتم های فاکتور"]));
   setPayloadNumberIfEmpty(next, "subtotal_before_tax", getImportedRowValue(row, ["مجموع قبل از مالیات"]));

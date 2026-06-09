@@ -2156,6 +2156,49 @@ export const executeWorkflowAction = async (
 ) => {
   const config = action?.config || {};
 
+  if (action.type === 'run_ai_prompt') {
+    const prompt = (await renderWorkflowTemplate(String(config.prompt_template || config.prompt || ''), currentRecord, moduleId)).trim();
+    if (!prompt) return;
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body: {
+        action: 'chat',
+        capability: 'workflow_ai_prompt',
+        forceNewThread: true,
+        message: prompt,
+        context: {
+          mode: 'workflow',
+          moduleId,
+          recordId: currentRecord?.id ? String(currentRecord.id) : null,
+          workflowActionId: (action as any)?.id || null,
+        },
+      },
+    });
+    if (error) throw error;
+    if ((data as any)?.error) throw new Error(String((data as any).error));
+    const answer = String((data as any)?.answer || (data as any)?.message?.content || (data as any)?.content || '').trim();
+    if (!orgId || !answer) return;
+    await supabase.from('ai_action_logs').insert([{
+      org_id: orgId,
+      thread_id: (data as any)?.thread?.id || (data as any)?.threadId || null,
+      module_id: moduleId,
+      record_id: currentRecord?.id ? String(currentRecord.id) : null,
+      action_type: 'workflow_ai_prompt',
+      status: 'proposed',
+      proposed_payload: {
+        prompt,
+        answer,
+        workflow_action_id: (action as any)?.id || null,
+        require_human_approval: true,
+      },
+      result_payload: {
+        source: 'workflow_runtime',
+        model: (data as any)?.model || null,
+      },
+    }]);
+    return;
+  }
+
   if (action.type === 'send_web_form_link') {
     const webFormId = String(config.web_form_id || '').trim();
     if (!webFormId) return;

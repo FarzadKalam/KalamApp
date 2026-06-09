@@ -153,6 +153,13 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         variable_field: '',
         variable_target: 'body',
       };
+    case 'run_ai_prompt':
+      return {
+        capability: 'workflow_ai_prompt',
+        prompt_template: '',
+        output_mode: 'text',
+        require_human_approval: true,
+      };
     case 'send_bot_message':
     case 'send_telegram_bot':
     case 'send_bale_bot':
@@ -1639,6 +1646,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
             </div>
           ) : null}
+        </div>
+      );
+    }
+    if (actionType === 'run_ai_prompt') {
+      return (
+        <div className="space-y-2">
+          <Alert
+            type="info"
+            showIcon
+            message="خروجی هوش مصنوعی فقط به‌صورت پیشنهاد ثبت می‌شود و اقدام واقعی نیازمند تایید انسانی است."
+          />
+          <Input.TextArea
+            rows={5}
+            value={config.prompt_template}
+            disabled={disabled}
+            onChange={(e) => updateActionConfig(action.id, { prompt_template: e.target.value })}
+            placeholder="پرامپت هوش مصنوعی؛ می‌توانید از متغیرهایی مثل {{name}} استفاده کنید"
+          />
+          {renderVariableTools(action, [{ key: 'prompt_template', label: 'پرامپت هوش مصنوعی' }])}
         </div>
       );
     }

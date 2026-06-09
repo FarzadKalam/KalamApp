@@ -11,6 +11,9 @@ const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
+const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
+const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
+const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
 const CALENDAR_PUBLIC_BASE_URL = String(
   Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
   || Deno.env.get('PUBLIC_APP_URL')
@@ -1200,6 +1203,105 @@ async function createRecord(url: string, key: string, moduleId: string, orgId: s
   return await dbInsert(url, key, table, { org_id: orgId, ...payload });
 }
 
+async function loadWorkflowAiModel(url: string, key: string, orgId: string): Promise<string> {
+  const rows = await dbGet(url, key, `org_ai_settings?org_id=eq.${orgId}&select=selected_models&limit=1`).catch(() => []);
+  const selected = rows?.[0]?.selected_models && typeof rows[0].selected_models === 'object'
+    ? rows[0].selected_models
+    : {};
+  return String(selected.workflow_ai_prompt || Deno.env.get('AI_MODEL') || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
+}
+
+function normalizeAiBaseUrl(value: string): string {
+  const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
+  if (!raw) return DEFAULT_AI_BASE_URL;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function workflowAiBaseUrls(): string[] {
+  const primary = Deno.env.get('AVALAI_BASE_URL') || Deno.env.get('AI_BASE_URL') || DEFAULT_AI_BASE_URL;
+  const fallbackRaw = Deno.env.get('AVALAI_FALLBACK_BASE_URLS')
+    || Deno.env.get('AI_FALLBACK_BASE_URLS')
+    || Deno.env.get('AVALAI_FALLBACK_BASE_URL')
+    || DEFAULT_AI_FALLBACK_BASE_URL;
+  const seen = new Set<string>();
+  return [primary, ...String(fallbackRaw).split(',')]
+    .map((item) => normalizeAiBaseUrl(item))
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!item || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function isRetryableAiStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+async function callWorkflowAiPrompt(url: string, key: string, orgId: string, prompt: string): Promise<Record<string, any>> {
+  const apiKey = String(
+    Deno.env.get('AVALAI_API_KEY')
+    || Deno.env.get('AI_API_KEY')
+    || Deno.env.get('OPENAI_API_KEY')
+    || ''
+  ).trim();
+  if (!apiKey) throw new Error('کلید مرکزی AI برای workflow interval تنظیم نشده است.');
+  const model = await loadWorkflowAiModel(url, key, orgId);
+  const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
+  const requestBody: Record<string, any> = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: 'شما دستیار هوش مصنوعی تازه سیستم هستید. خروجی این گردش کار فقط پیشنهاد است و هیچ اقدام واقعی را تایید یا اجرا نکنید.',
+      },
+      { role: 'user', content: prompt },
+    ],
+  };
+  if (isReasoningModel) {
+    requestBody.max_completion_tokens = 8000;
+  } else {
+    requestBody.temperature = 0.2;
+    requestBody.max_tokens = 2000;
+  }
+  let response: Response | null = null;
+  let usedBaseUrl = '';
+  const baseUrls = workflowAiBaseUrls();
+  for (const baseUrl of baseUrls) {
+    try {
+      const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(45000),
+      });
+      response = nextResponse;
+      usedBaseUrl = baseUrl;
+      if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;
+    } catch (error) {
+      if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
+    }
+  }
+  if (!response) throw new Error('اتصال به AvalAI برقرار نشد.');
+  const raw = await response.text();
+  let parsed: any = {};
+  try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = { raw }; }
+  if (!response.ok) {
+    throw new Error(String(parsed?.error?.message || parsed?.message || raw || `AI request failed: ${response.status}`));
+  }
+  return {
+    provider: 'avalai',
+    model,
+    requestId: response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null,
+    baseUrl: usedBaseUrl,
+    answer: String(parsed?.choices?.[0]?.message?.content || '').trim(),
+    usage: parsed?.usage || null,
+  };
+}
+
 // ── Action execution ───────────────────────────────────────────────────────────
 
 function actionResult(
@@ -1237,6 +1339,40 @@ async function executeAction(
 ): Promise<ActionExecutionResult> {
   const config = action.config || {};
   const recordId = String(record?.id || '').trim();
+
+  // ── run_ai_prompt ─────────────────────────────────────────────────────
+  if (action.type === 'run_ai_prompt') {
+    const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key)).trim();
+    if (!prompt) return actionResult(action, 'skipped', 'پرامپت هوش مصنوعی خالی است.');
+    if (!recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای پیشنهاد AI مشخص نیست.');
+    const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt);
+    if (!aiResult.answer) return actionResult(action, 'skipped', 'پاسخ هوش مصنوعی خالی بود.');
+    await dbInsert(url, key, 'ai_action_logs', {
+      org_id: orgId,
+      module_id: moduleId,
+      record_id: recordId,
+      action_type: 'workflow_ai_prompt',
+      status: 'proposed',
+      proposed_payload: {
+        prompt,
+        answer: aiResult.answer,
+        workflow_action_id: action.id || null,
+        require_human_approval: true,
+      },
+      result_payload: {
+        source: 'workflow_interval_runner',
+        provider: aiResult.provider,
+        model: aiResult.model,
+        usage: aiResult.usage,
+        avalai_request_id: aiResult.requestId,
+      },
+      avalai_request_id: aiResult.requestId,
+    });
+    return actionResult(action, 'success', undefined, {
+      affected_count: 1,
+      details: { model: aiResult.model, avalai_request_id: aiResult.requestId },
+    });
+  }
 
   // ── send_sms ──────────────────────────────────────────────────────────
   if (action.type === 'send_sms') {

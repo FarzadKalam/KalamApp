@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Col, Empty, Grid, Row, Spin, Statistic, Table, Tag, message } from 'antd';
+import { Button, Card, Col, Empty, Grid, Input, Row, Spin, Statistic, Table, Tag, message } from 'antd';
 import {
   AppstoreOutlined,
   BankOutlined,
@@ -9,6 +9,8 @@ import {
   NodeIndexOutlined,
   PlusOutlined,
   ProjectOutlined,
+  RobotOutlined,
+  SendOutlined,
   SkinOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
@@ -972,6 +974,7 @@ const Dashboard: React.FC = () => {
   const [cards, setCards] = useState<DashboardCardItem[]>([]);
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
   const [prefetchedTasks, setPrefetchedTasks] = useState<any[]>([]);
+  const [dashboardAiQuestion, setDashboardAiQuestion] = useState('');
 
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -1081,6 +1084,13 @@ const Dashboard: React.FC = () => {
   const showReportsWidget = canShowWidget('reports_slider');
   const showOurProcessesWidget = canShowWidget('our_processes');
   const showActivityCalendarWidget = canShowWidget('activity_calendar');
+
+  const handleSubmitDashboardAiQuestion = useCallback(() => {
+    const question = dashboardAiQuestion.trim();
+    if (!question) return;
+    setDashboardAiQuestion('');
+    navigate(`/ai?new=1&prompt=${encodeURIComponent(question)}`);
+  }, [dashboardAiQuestion, navigate]);
 
   // ─── handler‌های استوری ───────────────────────
   const handleOpenStory = useCallback((story: OrgStoryWithMeta, allStories: OrgStoryWithMeta[]) => {
@@ -1209,6 +1219,31 @@ const Dashboard: React.FC = () => {
                 <span className="text-sm">{getTodayPersianDate()}</span>
               </div>
               <OccasionsWidget />
+              <div
+                className="mt-4 rounded-lg p-[2px]"
+                style={{
+                  background: 'linear-gradient(120deg, #14b8a6, #6366f1, #ec4899, #f59e0b)',
+                  boxShadow: '0 0 22px rgba(99, 102, 241, 0.28), 0 0 28px rgba(20, 184, 166, 0.18)',
+                }}
+              >
+                <div className="flex items-center gap-2 rounded-lg bg-white p-2 dark:bg-dark-surface">
+                  <RobotOutlined className="shrink-0 text-lg text-leather-500" />
+                  <Input
+                    bordered={false}
+                    value={dashboardAiQuestion}
+                    onChange={(event) => setDashboardAiQuestion(event.target.value)}
+                    onPressEnter={handleSubmitDashboardAiQuestion}
+                    placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
+                  />
+                  <Button
+                    type="primary"
+                    shape="circle"
+                    icon={<SendOutlined />}
+                    disabled={!dashboardAiQuestion.trim()}
+                    onClick={handleSubmitDashboardAiQuestion}
+                  />
+                </div>
+              </div>
             </div>
             <div className="w-full xl:max-w-[430px]">
               <GoalProgressSlider placement="dashboard" hideWhenEmpty={isMobile} />

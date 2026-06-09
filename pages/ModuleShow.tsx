@@ -6041,6 +6041,10 @@ const ModuleShow: React.FC = () => {
         label: action.label,
         variant: action.variant,
         onClick: async () => {
+          if (action.navigateTo) {
+            navigate(action.navigateTo(data ?? {}));
+            return;
+          }
           if (action.confirmTitle) {
             modal.confirm({
               title: action.confirmTitle,

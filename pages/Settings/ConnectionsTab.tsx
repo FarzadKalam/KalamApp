@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   App as AntdApp,
   Alert,
-  AutoComplete,
   Button,
   Collapse,
   Form,
@@ -19,7 +18,6 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { OFFICIAL_BOT_API_BASE_URL, type BotChannel } from '../../utils/botGateway';
 import { formatIranMobileForInput } from '../../utils/phoneNumber';
 import PhoneActionsPopover from '../../components/PhoneActionsPopover';
-import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import {
   TAXPAYER_DEFAULT_BASE_URL,
   TAXPAYER_INTEGRATION_MODE_OPTIONS,
@@ -145,14 +143,6 @@ type FormValues = {
     allow_ticketing?: boolean;
     is_active?: boolean;
   };
-  ai_provider: {
-    provider?: string;
-    base_url?: string;
-    model?: string;
-    api_key?: string;
-    has_api_key?: boolean;
-    is_active?: boolean;
-  };
   taxpayer_system: {
     integration_mode?: TaxpayerIntegrationMode;
     fiscal_id?: string;
@@ -182,7 +172,6 @@ const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
   email: 'ایمیل smtp mail',
   site: 'سایت api webhook',
   voip: 'تلفن voip تلفنچی telefonchy تماس داخلی اپراتور smartcall',
-  ai_provider: 'هوش مصنوعی ai openai avalai مدل',
   taxpayer_system: 'سامانه مودیان شناسه حافظه مالیاتی کلید خصوصی گواهی امضا سریال صورتحساب cer crt',
   telegram_bot: 'بات تلگرام telegram chat id',
   bale_bot: 'بات بله bale chat id',
@@ -274,14 +263,6 @@ const DEFAULT_VALUES: FormValues = {
     allow_ticketing: false,
     is_active: false,
   },
-  ai_provider: {
-    provider: 'avalai',
-    base_url: 'https://api.avalai.ir/v1',
-    model: 'gpt-4o-mini',
-    api_key: '',
-    has_api_key: false,
-    is_active: true,
-  },
   taxpayer_system: {
     integration_mode: 'certificate_v2',
     fiscal_id: '',
@@ -358,11 +339,6 @@ const ConnectionsTab: React.FC = () => {
   const [voipSyncing, setVoipSyncing] = useState(false);
   const [voipSyncInfo, setVoipSyncInfo] = useState<Record<string, any> | null>(null);
   const [taxpayerTesting, setTaxpayerTesting] = useState(false);
-  const [aiTesting, setAiTesting] = useState(false);
-  const [aiModelsLoading, setAiModelsLoading] = useState(false);
-  const [aiCreditLoading, setAiCreditLoading] = useState(false);
-  const [aiModelOptions, setAiModelOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [aiCreditInfo, setAiCreditInfo] = useState<Record<string, any> | null>(null);
   const [tableMissing, setTableMissing] = useState(false);
   const [rowIds, setRowIds] = useState<Partial<Record<ConnectionType, string>>>({});
   const [connectionSearch, setConnectionSearch] = useState('');
@@ -467,15 +443,6 @@ const ConnectionsTab: React.FC = () => {
 
   const portalProviderOptions = useMemo(
     () => [{ label: 'Customer Portal', value: 'customer_portal' }],
-    []
-  );
-
-  const aiProviderOptions = useMemo(
-    () => [
-      { label: 'AvalAI', value: 'avalai' },
-      { label: 'OpenAI', value: 'openai' },
-      { label: 'ArvanCloud / Custom', value: 'custom' },
-    ],
     []
   );
 
@@ -672,39 +639,8 @@ const ConnectionsTab: React.FC = () => {
           ...(byType.portal?.settings || {}),
           is_active: byType.portal?.is_active ?? DEFAULT_VALUES.portal.is_active,
         },
-        ai_provider: DEFAULT_VALUES.ai_provider,
         taxpayer_system: DEFAULT_VALUES.taxpayer_system,
       };
-
-      try {
-        const { data: aiData, error: aiError } = await supabase.functions.invoke('ai-assistant', {
-          body: { action: 'get_provider_settings' },
-        });
-        if (aiError) throw aiError;
-        if (aiData?.success && aiData?.settings) {
-          nextValues.ai_provider = {
-            ...DEFAULT_VALUES.ai_provider,
-            provider: String(aiData.settings.provider || DEFAULT_VALUES.ai_provider.provider),
-            base_url: String(aiData.settings.base_url || DEFAULT_VALUES.ai_provider.base_url),
-            model: String(aiData.settings.model || DEFAULT_VALUES.ai_provider.model),
-            api_key: '',
-            has_api_key: aiData.settings.has_api_key === true,
-            is_active: aiData.settings.is_active !== false,
-          };
-          if (nextValues.ai_provider.model) {
-            setAiModelOptions((prev) => {
-              const map = new Map(prev.map((item) => [item.value, item]));
-              map.set(String(nextValues.ai_provider.model), {
-                label: String(nextValues.ai_provider.model),
-                value: String(nextValues.ai_provider.model),
-              });
-              return Array.from(map.values());
-            });
-          }
-        }
-      } catch (aiError) {
-        console.warn('Could not load AI provider settings', aiError);
-      }
 
       try {
         const { data: taxpayerData, error: taxpayerError } = await supabase.functions.invoke('taxpayer_system', {
@@ -734,7 +670,6 @@ const ConnectionsTab: React.FC = () => {
 
       form.setFieldsValue(nextValues);
       setSmsBalance(null);
-      setAiCreditInfo(null);
       setTableMissing(false);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'خطا در دریافت تنظیمات اتصالات'));
@@ -758,10 +693,6 @@ const ConnectionsTab: React.FC = () => {
       const currentVoipValues = {
         ...(form.getFieldValue('voip') || {}),
         ...(values.voip || {}),
-      };
-      const currentAiProviderValues = {
-        ...(form.getFieldValue('ai_provider') || {}),
-        ...(values.ai_provider || {}),
       };
       const currentTaxpayerSystemValues = {
         ...(form.getFieldValue('taxpayer_system') || {}),
@@ -918,31 +849,6 @@ const ConnectionsTab: React.FC = () => {
       });
       setRowIds(nextIds);
 
-      const { data: aiSaveData, error: aiSaveError } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          action: 'save_provider_settings',
-          settings: {
-            provider: currentAiProviderValues.provider || 'avalai',
-            base_url: currentAiProviderValues.base_url || 'https://api.avalai.ir/v1',
-            model: currentAiProviderValues.model || 'gpt-4o-mini',
-            api_key: currentAiProviderValues.api_key || '',
-            is_active: currentAiProviderValues.is_active !== false,
-          },
-        },
-      });
-      if (aiSaveError) throw aiSaveError;
-      if (!aiSaveData?.success) {
-        throw new Error(String(aiSaveData?.message || 'ذخیره تنظیمات AI ناموفق بود.'));
-      }
-      if (aiSaveData?.settings) {
-        form.setFieldsValue({
-          ai_provider: {
-            ...currentAiProviderValues,
-            api_key: '',
-            has_api_key: aiSaveData.settings.has_api_key === true,
-          },
-        });
-      }
       if (hasTaxpayerSystemInput(currentTaxpayerSystemValues)) {
         const { data: taxpayerSaveData, error: taxpayerSaveError } = await supabase.functions.invoke('taxpayer_system', {
           body: {
@@ -998,79 +904,6 @@ const ConnectionsTab: React.FC = () => {
     }
   };
 
-  const getAiProviderValues = () => form.getFieldValue('ai_provider') || {};
-
-  const buildAiProviderRequestSettings = () => {
-    const values = getAiProviderValues();
-    return {
-      provider: values.provider || 'avalai',
-      base_url: values.base_url || 'https://api.avalai.ir/v1',
-      model: values.model || 'gpt-4o-mini',
-      api_key: values.api_key || '',
-      is_active: values.is_active !== false,
-    };
-  };
-
-  const handleFetchAiModels = async (options?: { silent?: boolean }) => {
-    setAiModelsLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          action: 'list_models',
-          settings: buildAiProviderRequestSettings(),
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(String(data?.message || 'دریافت مدل‌ها ناموفق بود.'));
-      const models = Array.isArray(data.models) ? data.models : [];
-      const currentModel = String(getAiProviderValues()?.model || '').trim();
-      const optionsMap = new Map<string, { label: string; value: string }>();
-      models.forEach((item: any) => {
-        const value = String(item?.id || item?.value || '').trim();
-        if (!value) return;
-        optionsMap.set(value, { label: String(item?.label || value), value });
-      });
-      if (currentModel && !optionsMap.has(currentModel)) {
-        optionsMap.set(currentModel, { label: currentModel, value: currentModel });
-      }
-      const nextOptions = Array.from(optionsMap.values());
-      setAiModelOptions(nextOptions);
-      if (nextOptions.length && !currentModel) {
-        form.setFieldValue(['ai_provider', 'model'], nextOptions[0].value);
-      }
-      if (!options?.silent) {
-        if (data.warning) message.warning(String(data.warning));
-        message.success('لیست مدل‌ها به‌روزرسانی شد.');
-      }
-      return nextOptions;
-    } catch (err: any) {
-      if (!options?.silent) message.error(toFaErrorMessage(err, 'خطا در دریافت مدل‌ها'));
-      return [];
-    } finally {
-      setAiModelsLoading(false);
-    }
-  };
-
-  const handleTestAiProvider = async () => {
-    setAiTesting(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          action: 'test_provider',
-          settings: buildAiProviderRequestSettings(),
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(String(data?.message || 'تست اتصال AI ناموفق بود.'));
-      message.success(data.message || 'اتصال AI برقرار است.');
-      await handleFetchAiModels({ silent: true });
-    } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در تست اتصال AI'));
-    } finally {
-      setAiTesting(false);
-    }
-  };
-
   const handleTestTaxpayerSystem = async () => {
     setTaxpayerTesting(true);
     try {
@@ -1122,62 +955,6 @@ const ConnectionsTab: React.FC = () => {
     } finally {
       setTaxpayerTesting(false);
     }
-  };
-
-  const handleFetchAiCredit = async () => {
-    setAiCreditLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          action: 'get_credit',
-          settings: buildAiProviderRequestSettings(),
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(String(data?.message || 'دریافت اعتبار AI ناموفق بود.'));
-      setAiCreditInfo(data);
-      if (data.available === false) {
-        message.warning(String(data.message || 'مسیر مشاهده اعتبار برای این provider پشتیبانی نشد.'));
-      } else {
-        message.success('اعتبار AI دریافت شد.');
-      }
-    } catch (err: any) {
-      setAiCreditInfo(null);
-      message.error(toFaErrorMessage(err, 'خطا در مشاهده اعتبار AI'));
-    } finally {
-      setAiCreditLoading(false);
-    }
-  };
-
-  const renderAiCreditSummary = () => {
-    if (!aiCreditInfo) return null;
-    if (aiCreditInfo.available === false) {
-      return (
-        <Alert
-          type="warning"
-          showIcon
-          className="mt-3"
-          message="مشاهده اعتبار برای این provider از مسیر عمومی پشتیبانی نشد."
-          description={aiCreditInfo.message}
-        />
-      );
-    }
-    const credit = aiCreditInfo.credit || {};
-    const parts = [
-      credit.value !== null && credit.value !== undefined ? `اعتبار: ${String(credit.value)} ${credit.currency || ''}`.trim() : '',
-      credit.toman ? `تومان: ${Number(credit.toman).toLocaleString('fa-IR')}` : '',
-      credit.rial ? `ریال: ${Number(credit.rial).toLocaleString('fa-IR')}` : '',
-      credit.token ? `توکن: ${Number(credit.token).toLocaleString('fa-IR')}` : '',
-    ].filter(Boolean);
-    return (
-      <Alert
-        type="success"
-        showIcon
-        className="mt-3"
-        message="اعتبار سرویس AI"
-        description={parts.length ? parts.join(' · ') : 'پاسخ provider دریافت شد، اما مقدار استانداردی برای اعتبار پیدا نشد.'}
-      />
-    );
   };
 
   const handleSendTestSms = async () => {
@@ -1952,90 +1729,6 @@ const ConnectionsTab: React.FC = () => {
                       ) : null}
                     </div>
                   </div>
-                </>
-              ),
-            },
-            {
-              key: 'ai_provider',
-              label: (
-                <span className="inline-flex items-center gap-2">
-                  <AiSparkleIcon className="h-4 w-4" />
-                  سرویس‌دهنده AI
-                </span>
-              ),
-              children: (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <Form.Item label="سرویس‌دهنده" name={['ai_provider', 'provider']}>
-                      <Select options={aiProviderOptions} />
-                    </Form.Item>
-                    <Form.Item label="فعال" name={['ai_provider', 'is_active']} valuePropName="checked">
-                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
-                    </Form.Item>
-                    <Form.Item noStyle shouldUpdate={(prev, next) => prev.ai_provider?.has_api_key !== next.ai_provider?.has_api_key}>
-                      {({ getFieldValue }) => (
-                        <div className="flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700">
-                          {getFieldValue(['ai_provider', 'has_api_key'])
-                            ? 'کلید API برای این سازمان ذخیره شده است.'
-                            : 'هنوز کلید API ذخیره نشده است.'}
-                        </div>
-                      )}
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Base URL"
-                      name={['ai_provider', 'base_url']}
-                      className="md:col-span-2"
-                      rules={[{ required: true, message: 'Base URL را وارد کنید.' }]}
-                    >
-                      <Input placeholder="https://api.avalai.ir/v1" />
-                    </Form.Item>
-                    <Form.Item
-                      label="Model"
-                      name={['ai_provider', 'model']}
-                      rules={[{ required: true, message: 'مدل را وارد کنید.' }]}
-                    >
-                      <AutoComplete
-                        showSearch
-                        placeholder="gpt-4o-mini"
-                        options={aiModelOptions}
-                        filterOption={(inputValue, option) =>
-                          String(option?.label || option?.value || '').toLowerCase().includes(inputValue.toLowerCase())
-                        }
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      label="API Key"
-                      name={['ai_provider', 'api_key']}
-                      className="md:col-span-3"
-                      extra="اگر قبلا کلید ذخیره شده، این فیلد را خالی بگذارید. فقط برای تغییر کلید مقدار جدید وارد کنید."
-                    >
-                      <Input.Password placeholder="کلید API سرویس‌دهنده AI" autoComplete="new-password" />
-                    </Form.Item>
-                  </div>
-                  <Space wrap>
-                    <Button
-                      icon={<SendOutlined />}
-                      loading={aiTesting}
-                      onClick={handleTestAiProvider}
-                    >
-                      تست اتصال
-                    </Button>
-                    <Button
-                      icon={<ReloadOutlined />}
-                      loading={aiModelsLoading}
-                      onClick={() => void handleFetchAiModels()}
-                    >
-                      دریافت مدل‌ها
-                    </Button>
-                    <Button
-                      loading={aiCreditLoading}
-                      onClick={handleFetchAiCredit}
-                    >
-                      مشاهده اعتبار
-                    </Button>
-                  </Space>
-                  {renderAiCreditSummary()}
                 </>
               ),
             },

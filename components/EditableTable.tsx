@@ -429,11 +429,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }));
 
     if (
+      normalizedProductId &&
       normalizedSelectedId &&
       !options.some((item) => String(item?.value || '').trim() === normalizedSelectedId)
     ) {
       const selectedList = invoicePriceLists.find((item) => String(item?.id || '').trim() === normalizedSelectedId);
-      if (selectedList) {
+      if (selectedList && findPriceListItemByProduct(selectedList.items, normalizedProductId)) {
         options.push({ value: selectedList.id, label: selectedList.name || selectedList.id });
       }
     }
@@ -4325,6 +4326,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       isInvoiceItems &&
       col.key === 'price_list_id' &&
       !!record?.product_id &&
+      !record?.price_list_id &&
       !isPackageInvoiceRow(record) &&
       options.length === 0;
     if (fieldConfig.readonly) {

@@ -49,6 +49,7 @@ export type WorkflowActionType =
   | 'send_web_form_link'
   | 'send_sms'
   | 'send_email'
+  | 'run_ai_prompt'
   | 'send_bot_message'
   | 'send_telegram_bot'
   | 'send_bale_bot'
@@ -161,6 +162,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال لینک وب‌فرم', value: 'send_web_form_link' },
   { label: 'ارسال پیامک', value: 'send_sms' },
   { label: 'ارسال ایمیل', value: 'send_email' },
+  { label: 'اجرای پرامپت هوش مصنوعی', value: 'run_ai_prompt' },
   { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },

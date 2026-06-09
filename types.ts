@@ -363,6 +363,8 @@ export interface ModuleRecordAction {
   confirmTitle?: string;
   confirmDescription?: string;
   visible?: (record: Record<string, any> | null | undefined) => boolean;
+  /** اگر تعریف شود، به جای RPC مستقیم به این مسیر navigate می‌کند */
+  navigateTo?: (record: Record<string, any>) => string;
 }
 
 export interface ModuleDefinition {

@@ -48,7 +48,17 @@ export const cmsBlogPostsConfig: ModuleDefinition = buildModule('cms_blog_posts'
   { key: 'seo_title', type: FieldType.TEXT, labels: { fa: 'عنوان SEO' }, location: FieldLocation.BLOCK },
   { key: 'seo_description', type: FieldType.LONG_TEXT, labels: { fa: 'توضیح SEO' }, location: FieldLocation.BLOCK },
   { key: 'focus_keyword', type: FieldType.TEXT, labels: { fa: 'کلمه کلیدی' }, location: FieldLocation.BLOCK },
-]);
+], {
+  recordActions: [
+    {
+      id: 'open_editor',
+      label: 'ویرایشگر محتوا',
+      variant: 'primary',
+      placement: 'header',
+      navigateTo: (record) => `/taze-system/blog/${record.id}`,
+    },
+  ],
+});
 
 export const cmsTutorialPostsConfig: ModuleDefinition = buildModule('cms_tutorial_posts', 'آموزش‌ها', [
   { key: 'title', type: FieldType.TEXT, labels: { fa: 'عنوان' }, isKey: true, location: FieldLocation.HEADER },
@@ -84,7 +94,17 @@ export const cmsTutorialPostsConfig: ModuleDefinition = buildModule('cms_tutoria
   { key: 'cover_image_url', type: FieldType.TEXT, labels: { fa: 'تصویر کاور' }, location: FieldLocation.BLOCK },
   { key: 'seo_title', type: FieldType.TEXT, labels: { fa: 'عنوان SEO' }, location: FieldLocation.BLOCK },
   { key: 'focus_keyword', type: FieldType.TEXT, labels: { fa: 'کلمه کلیدی' }, location: FieldLocation.BLOCK },
-]);
+], {
+  recordActions: [
+    {
+      id: 'open_editor',
+      label: 'ویرایشگر محتوا',
+      variant: 'primary',
+      placement: 'header',
+      navigateTo: (record) => `/taze-system/tutorials/${record.id}`,
+    },
+  ],
+});
 
 export const cmsTutorialSeriesConfig: ModuleDefinition = buildModule('cms_tutorial_series', 'دوره‌های آموزشی', [
   { key: 'title', type: FieldType.TEXT, labels: { fa: 'نام دوره' }, isKey: true, location: FieldLocation.HEADER },

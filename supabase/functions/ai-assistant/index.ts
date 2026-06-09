@@ -7,11 +7,18 @@ type AssistantAction =
   | 'propose_note'
   | 'confirm_action'
   | 'suggest_reply'
-  | 'get_provider_settings'
-  | 'save_provider_settings'
+  | 'get_ai_settings'
+  | 'save_ai_settings'
+  | 'get_ai_overview'
   | 'test_provider'
   | 'list_models'
-  | 'get_credit';
+  | 'get_credit'
+  | 'list_threads'
+  | 'rename_thread'
+  | 'archive_thread'
+  | 'share_thread'
+  | 'embed_document_chunks'
+  | 'saas_ai';
 
 type RequestContext = {
   route?: string;
@@ -42,10 +49,39 @@ const corsHeaders = {
 
 const FUNCTION_BUILD = 'ai-assistant-2026-04-08-02';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
-const DEFAULT_AI_MODEL = 'gpt-4o-mini';
+const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
+const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
+const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+const DEFAULT_AI_MARGIN_PERCENT = 30;
+const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
 const AI_AUTHOR_NAME = 'دستیار هوشمند';
 const MAX_PAGE_CONTEXT_RECORDS = 10;
 const MAX_RETRIEVED_CONTEXTS = 4;
+
+// Default models per capability — chosen for Persian B2B context.
+// gpt-4.1-mini : free on AvalAI, 400K ctx, best general value
+// gpt-4o       : richer reasoning for document/analysis ($2.50/$10 per 1M)
+// serper-search: cheapest Google-based web search ($0.001/query via /v1/search)
+// Admins can override per-capability in org_ai_settings.selected_models
+const DEFAULT_CAPABILITY_MODELS: Record<string, string> = {
+  // ── Chat / reasoning ───────────────────────────────────────────────────
+  dashboard_chat: 'gpt-4.1-mini',            // free, strong Persian, 400K ctx
+  record_chat: 'gpt-4.1-mini',               // free, good record analysis
+  customer_reply_suggestion: 'gpt-4.1-mini', // free, fluent Persian writing
+  document_analysis: 'gpt-4o',               // better long-doc comprehension
+  workflow_ai_prompt: 'gpt-4.1-mini',        // free, reliable structured output
+  voip_auto_reply: 'gpt-4.1-mini',           // free, fast response generation
+  // ── Web search ─────────────────────────────────────────────────────────
+  web_search: 'serper-search',               // $0.001/query — cheapest Google
+  // ── Embeddings ─────────────────────────────────────────────────────────
+  embedding: DEFAULT_EMBEDDING_MODEL,        // text-embedding-3-small (pgvector compat)
+  // ── Voice ──────────────────────────────────────────────────────────────
+  voice_input: 'gpt-4o-transcribe',          // higher accuracy than mini
+  voice_output: 'eleven-multilingual-v2',    // ElevenLabs — best Persian TTS
+  // ── Media generation ───────────────────────────────────────────────────
+  image_generation: 'gpt-image-1',           // reliable OpenAI image gen
+  video_generation: 'sora-2',               // OpenAI video gen
+};
 
 const ALLOWED_MODULES = new Set([
   'products',
@@ -86,26 +122,59 @@ const ALLOWED_MODULES = new Set([
   'mission_requests',
   'price_lists',
   'web_forms',
+  'warehouses',
+  'shelves',
+  'stock_transfers',
+  'cost_centers',
+  'cash_boxes',
+  'bank_accounts',
+  'fiscal_years',
 ]);
 
 const MODULE_ALIASES: Record<string, string[]> = {
-  customers: ['مشتری', 'مشتریان', 'customer', 'customers', 'خریدار', 'کارفرما'],
-  suppliers: ['تامین کننده', 'تامین‌کننده', 'تامین کنندگان', 'supplier', 'suppliers', 'فروشنده'],
-  invoices: ['فاکتور فروش', 'فاکتور', 'صورتحساب', 'invoice', 'invoices', 'دریافت', 'دریافتی'],
-  purchase_invoices: ['فاکتور خرید', 'خرید', 'purchase invoice', 'purchase'],
-  price_lists: ['لیست قیمت', 'لیست قیمت‌ها', 'قیمت', 'price list', 'price lists', 'pricing'],
+  customers: ['مشتری', 'مشتریان', 'customer', 'customers', 'خریدار', 'کارفرما', 'مشتریم', 'خریداران', 'طرف حساب'],
+  suppliers: ['تامین کننده', 'تامین‌کننده', 'تامین کنندگان', 'supplier', 'suppliers', 'فروشنده', 'تأمین', 'پیمانکار'],
+  invoices: [
+    'فاکتور فروش', 'فاکتور', 'صورتحساب', 'invoice', 'invoices',
+    'فروش', 'فروشم', 'فروش‌ها', 'درآمد', 'درآمدم', 'revenue', 'sales',
+    'فروخته', 'فروختیم', 'ثبت فروش',
+  ],
+  purchase_invoices: [
+    'فاکتور خرید', 'خرید', 'purchase invoice', 'purchase',
+    'هزینه خرید', 'خریدها', 'خریدم', 'مخارج', 'cost of purchase',
+  ],
+  price_lists: ['لیست قیمت', 'لیست قیمت‌ها', 'قیمت', 'price list', 'price lists', 'pricing', 'نرخ'],
   product_bundles: ['پکیج', 'پکیج‌ها', 'باندل', 'bundle', 'bundles', 'package', 'packages'],
-  cash_bank_operations: ['پرداخت', 'پرداختی', 'دریافت', 'دریافتی', 'نقد', 'بانک', 'cash', 'bank', 'payment', 'receipt'],
+  cash_bank_operations: [
+    'پرداخت', 'پرداختی', 'دریافت', 'دریافتی', 'نقد', 'بانک', 'cash', 'bank', 'payment', 'receipt',
+    'موجودی', 'حساب بانکی', 'تراکنش', 'واریز', 'برداشت',
+  ],
   petty_funds: ['تنخواه', 'تنخواه گردان', 'petty', 'petty fund'],
-  products: ['محصول', 'محصولات', 'کالا', 'product', 'products', 'اقلام'],
-  projects: ['پروژه', 'پروژه‌ها', 'project', 'projects'],
-  tasks: ['فعالیت', 'کار', 'وظیفه', 'task', 'tasks', 'یادآوری'],
-  process_runs: ['فرآیند', 'فرایند', 'مراحل', 'مرحله', 'process', 'workflow'],
-  marketing_leads: ['سرنخ', 'لید', 'lead', 'leads', 'بازاریابی'],
-  cheques: ['چک', 'cheque', 'check'],
+  products: ['محصول', 'محصولات', 'کالا', 'product', 'products', 'اقلام', 'کالاها', 'جنس', 'موجودی کالا'],
+  projects: ['پروژه', 'پروژه‌ها', 'project', 'projects', 'پروژه‌ام', 'پروژه‌هام'],
+  tasks: ['فعالیت', 'کار', 'وظیفه', 'task', 'tasks', 'یادآوری', 'کارها', 'فعالیت‌ها', 'تسک'],
+  process_runs: ['فرآیند', 'فرایند', 'مراحل', 'مرحله', 'process', 'workflow', 'گردش کار'],
+  marketing_leads: ['سرنخ', 'لید', 'lead', 'leads', 'بازاریابی', 'فرصت فروش', 'مشتری بالقوه'],
+  cheques: ['چک', 'cheque', 'check', 'چک‌ها', 'اسناد'],
   barters: ['تهاتر', 'barter'],
-  employees: ['کارمند', 'کارکنان', 'منابع انسانی', 'employee', 'employees'],
-  journal_entries: ['سند حسابداری', 'journal', 'journal entry'],
+  employees: ['کارمند', 'کارکنان', 'منابع انسانی', 'employee', 'employees', 'پرسنل', 'نیروی انسانی', 'نیرو', 'کارمندم'],
+  journal_entries: ['سند حسابداری', 'journal', 'journal entry', 'اسناد حسابداری', 'سند مالی'],
+  // Warehouse / inventory
+  warehouses: ['انبار', 'انبارها', 'warehouse', 'warehouses', 'موجودی انبار', 'انبارم'],
+  stock_transfers: ['انتقال انبار', 'حواله انبار', 'انتقال کالا', 'stock transfer', 'حواله'],
+  // Accounting
+  cost_centers: ['مرکز هزینه', 'مراکز هزینه', 'cost center', 'سرفصل هزینه'],
+  cash_boxes: ['صندوق', 'صندوق نقد', 'cash box', 'cashbox'],
+  bank_accounts: ['حساب بانکی', 'حساب‌های بانکی', 'bank account', 'بانک‌ها', 'شماره حساب'],
+  fiscal_years: ['سال مالی', 'سال‌های مالی', 'fiscal year', 'دوره مالی'],
+  // HR
+  attendance_logs: ['حضور غیاب', 'کارکرد', 'ورود خروج', 'حضور', 'غیاب', 'attendance'],
+  leave_requests: ['مرخصی', 'درخواست مرخصی', 'leave', 'مرخصی‌ها'],
+  work_schedules: ['شیفت کاری', 'برنامه کاری', 'ساعت کاری', 'work schedule', 'شیفت'],
+  overtime_requests: ['اضافه‌کاری', 'اضافه کاری', 'overtime', 'اضافه وقت'],
+  mission_requests: ['مأموریت', 'ماموریت', 'mission', 'مأموریت‌ها'],
+  // Recruitment
+  recruitmentApplicants: ['متقاضی', 'استخدام', 'recruit', 'applicant', 'جذب نیرو', 'کاریابی'],
 };
 
 const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
@@ -124,47 +193,40 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   employees: ['full_name', 'name', 'mobile_1', 'mobile', 'employee_code'],
   price_lists: ['name', 'title', 'description', 'system_code'],
   product_bundles: ['name', 'title', 'description', 'system_code'],
+  warehouses: ['name', 'title', 'system_code', 'description'],
+  shelves: ['name', 'title', 'system_code'],
+  stock_transfers: ['name', 'system_code', 'description'],
+  cost_centers: ['name', 'title', 'system_code', 'description'],
+  cash_boxes: ['name', 'title', 'system_code'],
+  bank_accounts: ['name', 'title', 'account_number', 'system_code'],
+  fiscal_years: ['name', 'title', 'system_code'],
+  leave_requests: ['name', 'system_code', 'description'],
+  work_schedules: ['name', 'title', 'system_code'],
+  overtime_requests: ['name', 'system_code', 'description'],
+  mission_requests: ['name', 'system_code', 'description'],
 };
 
 const QUERY_STOP_WORDS = new Set([
-  'این',
-  'اون',
-  'برای',
-  'درباره',
-  'راجع',
-  'راجب',
-  'چی',
-  'چیه',
-  'کدام',
-  'کدوم',
-  'مورد',
-  'های',
-  'ها',
-  'من',
-  'تو',
-  'شما',
-  'the',
-  'and',
-  'with',
-  'about',
-  'what',
-  'who',
-  'customer',
-  'customers',
-  'invoice',
-  'invoices',
-  'product',
-  'products',
-  'project',
-  'projects',
-  'مشتری',
-  'مشتریان',
-  'فاکتور',
-  'محصول',
-  'محصولات',
-  'پروژه',
-  'پرداخت',
-  'دریافت',
+  // Persian question / filler words
+  'این', 'اون', 'اینا', 'اونا', 'برای', 'درباره', 'راجع', 'راجب',
+  'چی', 'چیه', 'چطور', 'چگونه', 'چرا', 'چه', 'چند', 'چقدر',
+  'کدام', 'کدوم', 'مورد', 'های', 'ها', 'من', 'تو', 'شما', 'ما',
+  'هست', 'است', 'بود', 'بوده', 'بودیم', 'شده', 'شد', 'هستند',
+  'داری', 'دارم', 'داریم', 'داره', 'دارند',
+  'کن', 'کرد', 'کردیم', 'کنید', 'کنم',
+  'بده', 'بگو', 'نشون', 'بیار', 'بریم',
+  // Time words (common in analytical questions)
+  'ماه', 'هفته', 'روز', 'سال', 'امروز', 'دیروز', 'امسال', 'پارسال',
+  'جاری', 'گذشته', 'فعلی', 'اخیر', 'آخرین', 'اخیراً',
+  'اول', 'آخر', 'شروع', 'پایان',
+  // English fillers
+  'the', 'and', 'with', 'about', 'what', 'who', 'how', 'when', 'where',
+  'is', 'are', 'was', 'were', 'have', 'has', 'had',
+  // Module names (already covered by alias filter, belt-and-suspenders)
+  'customer', 'customers', 'invoice', 'invoices',
+  'product', 'products', 'project', 'projects',
+  'مشتری', 'مشتریان', 'فاکتور', 'محصول', 'محصولات', 'پروژه',
+  'پرداخت', 'دریافت',
 ]);
 
 const MANAGEMENT_DIRECTORY_KEYWORDS = [
@@ -230,14 +292,72 @@ const normalizeBaseUrl = (value: string) => {
   return `https://${raw}`;
 };
 
+const normalizeBaseUrlList = (value: string, fallback = '') =>
+  String(value || fallback || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map(normalizeBaseUrl);
+
+const uniqueBaseUrls = (...groups: string[][]) => {
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  groups.flat().forEach((url) => {
+    const normalized = normalizeBaseUrl(url);
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) return;
+    seen.add(key);
+    urls.push(normalized);
+  });
+  return urls;
+};
+
 const getEnvProviderConfig = () => ({
   provider: String(Deno.env.get('AI_PROVIDER') || Deno.env.get('AVALAI_PROVIDER') || 'avalai').trim() || 'avalai',
   baseUrl: normalizeBaseUrl(Deno.env.get('AI_BASE_URL') || Deno.env.get('AVALAI_BASE_URL') || DEFAULT_AI_BASE_URL),
+  fallbackBaseUrls: normalizeBaseUrlList(
+    Deno.env.get('AI_FALLBACK_BASE_URLS') || Deno.env.get('AVALAI_FALLBACK_BASE_URLS') || Deno.env.get('AVALAI_FALLBACK_BASE_URL'),
+    DEFAULT_AI_FALLBACK_BASE_URL,
+  ),
   model: String(Deno.env.get('AI_MODEL') || Deno.env.get('AVALAI_MODEL') || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
   apiKey: String(Deno.env.get('AI_API_KEY') || Deno.env.get('AVALAI_API_KEY') || Deno.env.get('OPENAI_API_KEY') || '').trim(),
   isActive: true,
   source: 'env',
 });
+
+const isRetryableProviderStatus = (status: number) => status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+
+const requestAvalaiWithFallback = async (
+  providerConfig: any,
+  path: string,
+  init: RequestInit,
+  options?: { stripVersionForPath?: boolean },
+) => {
+  const baseUrls = uniqueBaseUrls(
+    [providerConfig?.baseUrl || DEFAULT_AI_BASE_URL],
+    Array.isArray(providerConfig?.fallbackBaseUrls) ? providerConfig.fallbackBaseUrls : [],
+  );
+  let lastError: any = null;
+
+  for (const baseUrl of baseUrls) {
+    const base = options?.stripVersionForPath
+      ? normalizeBaseUrl(baseUrl).replace(/\/v\d+$/i, '')
+      : normalizeBaseUrl(baseUrl);
+    const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+    try {
+      const response = await fetch(url, init);
+      if (response.ok || !isRetryableProviderStatus(response.status) || baseUrl === baseUrls[baseUrls.length - 1]) {
+        return { response, baseUrl };
+      }
+      lastError = new Error(`AvalAI retryable status ${response.status} from ${baseUrl}`);
+    } catch (error) {
+      lastError = error;
+      if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
+    }
+  }
+
+  throw lastError || new Error('اتصال به AvalAI برقرار نشد.');
+};
 
 const getServiceHeaders = (serviceRoleKey: string, preferRepresentation = false) => ({
   apikey: serviceRoleKey,
@@ -338,6 +458,25 @@ const restPatch = async (
     method: 'PATCH',
     headers: getServiceHeaders(serviceRoleKey, true),
     body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  const parsed = parseJsonSafe(raw);
+  if (!response.ok) {
+    throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed || {}));
+  }
+  return Array.isArray(parsed) ? parsed : [];
+};
+
+const restRpc = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  fnName: string,
+  payload: Record<string, any>,
+) => {
+  const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/rpc/${fnName}`, {
+    method: 'POST',
+    headers: getServiceHeaders(serviceRoleKey),
+    body: JSON.stringify(payload || {}),
   });
   const raw = await response.text();
   const parsed = parseJsonSafe(raw);
@@ -489,18 +628,28 @@ const isMissingRelationError = (error: any) => {
   );
 };
 
-const canManageAiProviderSettings = (authContext: any) => {
+const canManageAiSettings = (authContext: any) => {
   const permissions = authContext?.permissions;
   if (!permissions || typeof permissions !== 'object') return true;
   const settingsPerm = permissions?.__settings_tabs || {};
   const fields = settingsPerm?.fields || {};
-  return settingsPerm?.view !== false && settingsPerm?.edit !== false && fields?.connections !== false;
+  return settingsPerm?.view !== false
+    && settingsPerm?.edit !== false
+    && fields?.ai !== false
+    && fields?.ai_settings !== false;
 };
 
-const loadOrgProviderSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+const canViewSaasAdmin = (authContext: any) => {
+  const permissions = authContext?.permissions;
+  if (!permissions || typeof permissions !== 'object') return false;
+  const perm = permissions?.__saas_admin || {};
+  return perm?.view === true || perm?.edit === true || perm?.demo_override === true;
+};
+
+const loadOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
   if (!authContext?.orgId) return null;
   try {
-    const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_provider_settings', {
+    const rows = await restSelect(supabaseUrl, serviceRoleKey, 'org_ai_settings', {
       org_id: `eq.${authContext.orgId}`,
       select: '*',
       limit: 1,
@@ -512,44 +661,41 @@ const loadOrgProviderSettings = async (supabaseUrl: string, serviceRoleKey: stri
   }
 };
 
-const resolveProviderConfig = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+const getCapabilityModel = (settings: any, capability: string, fallback = DEFAULT_AI_MODEL) => {
+  const selected = settings?.selected_models && typeof settings.selected_models === 'object'
+    ? settings.selected_models
+    : {};
+  return String(selected?.[capability] || DEFAULT_CAPABILITY_MODELS[capability] || fallback || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
+};
+
+const getCentralProviderConfig = () => {
   const envConfig = getEnvProviderConfig();
-  const settings = await loadOrgProviderSettings(supabaseUrl, serviceRoleKey, authContext);
-  if (!settings) return envConfig;
   return {
-    provider: String(settings.provider || envConfig.provider).trim() || envConfig.provider,
-    baseUrl: normalizeBaseUrl(settings.base_url || envConfig.baseUrl),
-    model: String(settings.model || envConfig.model).trim() || envConfig.model,
-    apiKey: String(settings.api_key || envConfig.apiKey || '').trim(),
-    isActive: settings.is_active !== false,
-    source: 'org',
+    provider: String(envConfig.provider || 'avalai').trim() || 'avalai',
+    baseUrl: normalizeBaseUrl(envConfig.baseUrl || DEFAULT_AI_BASE_URL),
+    fallbackBaseUrls: Array.isArray(envConfig.fallbackBaseUrls) ? envConfig.fallbackBaseUrls : [DEFAULT_AI_FALLBACK_BASE_URL],
+    model: String(envConfig.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
+    apiKey: String(envConfig.apiKey || '').trim(),
+    isActive: true,
+    source: 'central',
   };
 };
 
-const resolveProviderConfigFromBody = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  const envConfig = getEnvProviderConfig();
-  const existing = await loadOrgProviderSettings(supabaseUrl, serviceRoleKey, authContext);
-  const incoming = body?.settings || {};
-  const hasIncomingIsActive = Object.prototype.hasOwnProperty.call(incoming, 'is_active') || Object.prototype.hasOwnProperty.call(incoming, 'isActive');
+const resolveProviderConfig = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  capability = 'dashboard_chat',
+) => {
+  const centralConfig = getCentralProviderConfig();
+  const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
   return {
-    provider: String(incoming.provider || existing?.provider || envConfig.provider || 'avalai').trim() || 'avalai',
-    baseUrl: normalizeBaseUrl(incoming.base_url || incoming.baseUrl || existing?.base_url || envConfig.baseUrl),
-    model: String(incoming.model || existing?.model || envConfig.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
-    apiKey: String(incoming.api_key || incoming.apiKey || existing?.api_key || envConfig.apiKey || '').trim(),
-    isActive: hasIncomingIsActive ? incoming.is_active !== false && incoming.isActive !== false : existing?.is_active !== false,
-    source: existing ? 'org' : 'env',
+    ...centralConfig,
+    model: getCapabilityModel(settings, capability, centralConfig.model),
+    capability,
+    orgAiSettings: settings,
   };
 };
-
-const maskProviderSettings = (settings: any | null, envConfig = getEnvProviderConfig()) => ({
-  provider: String(settings?.provider || envConfig.provider || 'avalai').trim(),
-  base_url: String(settings?.base_url || envConfig.baseUrl || DEFAULT_AI_BASE_URL).trim(),
-  model: String(settings?.model || envConfig.model || DEFAULT_AI_MODEL).trim(),
-  api_key: '',
-  has_api_key: Boolean(String(settings?.api_key || envConfig.apiKey || '').trim()),
-  is_active: settings?.is_active !== false,
-  source: settings ? 'org' : 'env',
-});
 
 const getModulePermission = (permissions: any, moduleId: string) => {
   if (!permissions || typeof permissions !== 'object') return {};
@@ -1054,6 +1200,10 @@ const fetchRelevantModuleContexts = async (
 
 const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, query: string) => {
   if (!authContext.orgId) return [];
+  const instructionRowsFor = (rows: any[]) => rows.filter((row: any) =>
+    String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
+    || String(row?.metadata?.document_type || '').trim() === 'ai_instructions'
+  );
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
     org_id: `eq.${authContext.orgId}`,
     status: 'eq.active',
@@ -1073,10 +1223,40 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
     const roleId = normalizeId(authContext?.roleId);
     return (!!userId && allowedUserIds.includes(userId)) || (!!roleId && allowedRoleIds.includes(roleId));
   });
-  const instructionRows = visibleRows.filter((row: any) =>
-    String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
-    || String(row?.metadata?.document_type || '').trim() === 'ai_instructions'
-  );
+  const instructionRows = instructionRowsFor(visibleRows);
+  const queryText = String(query || '').trim();
+  if (queryText) {
+    try {
+      const providerConfig = getCentralProviderConfig();
+      if (providerConfig.apiKey) {
+        const embeddingResult = await callEmbeddings(providerConfig, queryText.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+        const vectorRows = await restRpc(supabaseUrl, serviceRoleKey, 'match_ai_document_chunks', {
+          p_org_id: authContext.orgId,
+          p_user_id: authContext.userId || null,
+          p_role_id: authContext.roleId || null,
+          p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
+          p_match_count: 6,
+        });
+        const filteredVectorRows = (vectorRows || [])
+          .filter((row: any) => !instructionRows.some((item: any) => String(item.id) === String(row.id)))
+          .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
+        if (filteredVectorRows.length > 0) {
+          await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+            capability: 'embedding',
+            provider: providerConfig.provider,
+            model: DEFAULT_EMBEDDING_MODEL,
+            requestId: embeddingResult.requestId,
+            usageMetadata: embeddingResult.usageMetadata,
+            status: 'finalized',
+            metadata: { source: 'knowledge_retrieval' },
+          });
+          return [...instructionRows.slice(0, 2), ...filteredVectorRows];
+        }
+      }
+    } catch (error) {
+      console.warn('Embedding retrieval fallback used', error);
+    }
+  }
   const otherRows = visibleRows.filter((row: any) => !instructionRows.includes(row));
   const tokens = tokenize(query);
   if (!tokens.length) return [...instructionRows.slice(0, 2), ...otherRows.slice(0, Math.max(0, 4 - instructionRows.slice(0, 2).length))];
@@ -1278,6 +1458,7 @@ const buildPromptMessages = (
   authContext: any,
   retrievedContexts: any[],
   historyRows: any[] = [],
+  webSearchResults: any[] = [],
 ) => {
   const knowledge = knowledgeChunks.map((chunk, index) => ({
     index: index + 1,
@@ -1317,6 +1498,7 @@ const buildPromptMessages = (
         }
       : null,
     retrieved_permitted_contexts: retrievedContexts,
+    web_search_results: webSearchResults.length ? webSearchResults : undefined,
     ai_instructions: aiInstructions,
     organization_knowledge: otherKnowledge,
     user_question: message,
@@ -1324,7 +1506,7 @@ const buildPromptMessages = (
 
   const systemContent = pageContext.intent === 'process_guide'
     ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : 'شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.';
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''} اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -1349,7 +1531,7 @@ const buildPromptMessages = (
 
 const extractUsageMetadata = (parsed: any, providerConfig: any) => {
   const usage = parsed?.usage || parsed?.choices?.[0]?.usage || parsed?.usage_info || null;
-  const billing = parsed?.billing || parsed?.cost || parsed?.usage_cost || parsed?.charge || parsed?.choices?.[0]?.billing || null;
+  const billing = parsed?.estimated_cost || parsed?.billing || parsed?.cost || parsed?.usage_cost || parsed?.charge || parsed?.choices?.[0]?.billing || null;
   const cost: Record<string, any> = {};
   if (billing && typeof billing === 'object') Object.assign(cost, billing);
   if (typeof billing === 'number') cost.amount = billing;
@@ -1360,37 +1542,162 @@ const extractUsageMetadata = (parsed: any, providerConfig: any) => {
   return {
     provider: providerConfig.provider,
     model: providerConfig.model,
+    capability: providerConfig.capability || null,
     usage,
     cost: Object.keys(cost).length ? cost : null,
   };
 };
 
+const loadModelPricing = async (supabaseUrl: string, serviceRoleKey: string, model: string) => {
+  const modelId = String(model || '').trim();
+  if (!modelId) return null;
+  try {
+    const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      id: `eq.${modelId}`,
+      select: '*',
+      limit: 1,
+    });
+    return rows[0] || null;
+  } catch {
+    return null;
+  }
+};
+
+const numberFrom = (value: any, fallback = 0) => {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+};
+
+const estimateAiCharge = (usageMetadata: any, pricing: any, fallbackMargin = DEFAULT_AI_MARGIN_PERCENT) => {
+  const usage = usageMetadata?.usage || {};
+  const cost = usageMetadata?.cost || {};
+  const promptTokens = numberFrom(usage.prompt_tokens ?? usage.prompt ?? usage.input_tokens ?? usage.input, 0);
+  const completionTokens = numberFrom(usage.completion_tokens ?? usage.completion ?? usage.output_tokens ?? usage.output, 0);
+  const rawUnitFromProvider = numberFrom(cost.unit ?? cost.usd ?? cost.cost_usd ?? cost.amount_usd, NaN);
+  const rawIrtFromProvider = numberFrom(cost.irt ?? cost.rial ?? cost.rials ?? cost.amount_rial, NaN);
+  const exchangeRate = numberFrom(cost.exchange_rate ?? pricing?.exchange_rate_irt, DEFAULT_AI_EXCHANGE_RATE_IRT);
+  const marginPercent = numberFrom(pricing?.margin_percent, fallbackMargin);
+  const inputRate = numberFrom(pricing?.input_usd_per_1m, 0);
+  const outputRate = numberFrom(pricing?.output_usd_per_1m, 0);
+  const estimatedUnit = Number.isFinite(rawUnitFromProvider)
+    ? rawUnitFromProvider
+    : (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000;
+  const rawCostIrt = Number.isFinite(rawIrtFromProvider)
+    ? rawIrtFromProvider
+    : estimatedUnit * exchangeRate;
+  const billedAmountIrt = Math.ceil(Math.max(0, rawCostIrt) * (1 + Math.max(0, marginPercent) / 100));
+  return {
+    rawCostUnit: Number(estimatedUnit.toFixed(10)),
+    rawCostIrt: Math.ceil(rawCostIrt),
+    billedAmountIrt,
+    marginPercent,
+    exchangeRate,
+  };
+};
+
+const recordAiUsageLedger = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  args: {
+    threadId?: string | null;
+    messageId?: string | null;
+    requestId?: string | null;
+    capability: string;
+    provider: string;
+    model: string;
+    usageMetadata: any;
+    status?: string;
+    metadata?: Record<string, any>;
+  },
+) => {
+  if (!authContext?.orgId) return null;
+  try {
+    const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+    const pricing = await loadModelPricing(supabaseUrl, serviceRoleKey, args.model);
+    const charge = estimateAiCharge(args.usageMetadata, pricing, numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT));
+    const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', [{
+      org_id: authContext.orgId,
+      user_id: authContext.userId || null,
+      thread_id: args.threadId || null,
+      message_id: args.messageId || null,
+      avalai_request_id: args.requestId || null,
+      capability: args.capability || 'dashboard_chat',
+      provider: args.provider || 'avalai',
+      model: args.model || '',
+      status: args.status || 'finalized',
+      raw_cost_unit: charge.rawCostUnit,
+      raw_cost_irt: charge.rawCostIrt,
+      billed_amount_irt: charge.billedAmountIrt,
+      margin_percent: charge.marginPercent,
+      exchange_rate_irt: charge.exchangeRate,
+      usage: args.usageMetadata || {},
+      metadata: args.metadata || {},
+      finalized_at: new Date().toISOString(),
+    }]);
+    return rows[0] || null;
+  } catch (error) {
+    console.warn('AI usage ledger insert skipped', error);
+    return null;
+  }
+};
+
+// Reasoning models use internal chain-of-thought tokens before producing output.
+// They require max_completion_tokens (not max_tokens) and do NOT support temperature.
+// Covers: OpenAI o-series, GPT-5 family, DeepSeek R1, Grok reasoning variants,
+//         Kimi Thinking, QwQ, and any model explicitly named "reasoning".
+const REASONING_MODEL_PATTERNS = [
+  /^o\d/i,              // OpenAI: o1, o3, o4
+  /\bo[34][-_]/i,       // OpenAI: o3-mini, o4-mini
+  /^gpt-5/i,            // OpenAI: gpt-5, gpt-5-mini, gpt-5.4 family
+  /deepseek-r\d/i,      // DeepSeek: deepseek-r1, deepseek-r2
+  /\breasonin/i,        // any model with "reasoning" in name
+  /\bqwq\b/i,           // Alibaba QwQ
+  /kimi.thinking/i,     // Moonshot Kimi Thinking
+  /grok.*\breason/i,    // Grok reasoning variants
+];
+const isReasoningModel = (model: string) =>
+  REASONING_MODEL_PATTERNS.some((p) => p.test(String(model || '').trim()));
+
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: string }>,
-  options?: { temperature?: number; maxTokens?: number }
+  options?: { temperature?: number; maxTokens?: number; safetyIdentifier?: string }
 ) => {
   if (providerConfig?.isActive === false) {
     throw new Error('اتصال AI برای این سازمان غیرفعال است.');
   }
   if (!providerConfig.apiKey) {
-    throw new Error('کلید AI تنظیم نشده است. در تب اتصالات، بخش سرویس‌دهنده AI را تکمیل کنید یا مقدار AI_API_KEY/AVALAI_API_KEY را در Edge Function secrets ثبت کنید.');
+    throw new Error('کلید مرکزی AI تنظیم نشده است. مقدار AI_API_KEY یا AVALAI_API_KEY را در Edge Function secrets ثبت کنید.');
   }
 
-  const response = await fetch(`${providerConfig.baseUrl}/chat/completions`, {
+  const model = String(providerConfig.model || '').trim();
+  const reasoning = isReasoningModel(model);
+
+  // Reasoning models: large max_completion_tokens budget (thinking + output),
+  // no temperature. Regular models: standard max_tokens + temperature.
+  const requestBody: Record<string, any> = {
+    model,
+    messages,
+    safety_identifier: options?.safetyIdentifier || undefined,
+  };
+  if (reasoning) {
+    requestBody.max_completion_tokens = 8000;
+  } else {
+    requestBody.temperature = options?.temperature ?? 0.2;
+    requestBody.max_tokens = options?.maxTokens ?? 2000;
+  }
+
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${providerConfig.apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: providerConfig.model,
-      messages,
-      temperature: options?.temperature ?? 0.2,
-      max_tokens: options?.maxTokens ?? 900,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const raw = await response.text();
   const parsed = parseJsonSafe(raw);
   if (!response.ok) {
@@ -1403,9 +1710,92 @@ const callChatCompletions = async (
     content: String(content || '').trim(),
     provider: providerConfig.provider,
     model: providerConfig.model,
+    requestId,
+    baseUrl,
     raw: parsed,
     usageMetadata: extractUsageMetadata(parsed, providerConfig),
   };
+};
+
+const callEmbeddings = async (providerConfig: any, input: string, model = DEFAULT_EMBEDDING_MODEL) => {
+  if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/embeddings', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${providerConfig.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      input,
+      encoding_format: 'float',
+    }),
+  });
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+  const raw = await response.text();
+  const parsed = parseJsonSafe(raw);
+  if (!response.ok) {
+    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+    throw new Error(`خطای embedding هوش مصنوعی: ${message}`);
+  }
+  const embedding = parsed?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) throw new Error('پاسخ embedding معتبر نیست.');
+  return {
+    embedding,
+    requestId,
+    baseUrl,
+    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'embedding' }),
+  };
+};
+
+// Web search keywords that suggest the user needs real-time/external information
+const WEB_SEARCH_TRIGGER_PATTERNS = [
+  /امروز|دیروز|این هفته|این ماه|الان|فعلی|اخیر/,
+  /آخرین|جدیدترین|تازه‌ترین|جدید/,
+  /اخبار|خبر|رویداد/,
+  /قیمت.*(دلار|ارز|طلا|بیتکوین|سهام)/,
+  /نرخ.*(ارز|دلار|یورو)/,
+  /today|latest|current|news|price/i,
+];
+
+const shouldTriggerWebSearch = (message: string) =>
+  WEB_SEARCH_TRIGGER_PATTERNS.some((p) => p.test(message));
+
+const callWebSearch = async (
+  providerConfig: any,
+  query: string,
+  model = 'serper-search',
+  numResults = 5,
+): Promise<{ results: any[]; requestId: string | null }> => {
+  if (!providerConfig.apiKey) return { results: [], requestId: null };
+  const base = normalizeBaseUrl(providerConfig.baseUrl || DEFAULT_AI_BASE_URL).replace(/\/v\d+$/i, '');
+  const url = `${base}/v1/search`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${providerConfig.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model, query, num_results: numResults }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+    if (!response.ok) return { results: [], requestId };
+    const parsed = parseJsonSafe(await response.text());
+    const rawResults = Array.isArray(parsed?.results) ? parsed.results
+      : Array.isArray(parsed?.organic) ? parsed.organic
+      : Array.isArray(parsed) ? parsed
+      : [];
+    const results = rawResults.slice(0, numResults).map((item: any) => ({
+      title: String(item?.title || item?.name || '').trim(),
+      url: String(item?.url || item?.link || '').trim(),
+      snippet: String(item?.snippet || item?.description || item?.content || '').slice(0, 400).trim(),
+    })).filter((item: any) => item.title || item.snippet);
+    return { results, requestId };
+  } catch {
+    return { results: [], requestId: null };
+  }
 };
 
 const fetchThreadMessages = async (
@@ -1443,11 +1833,38 @@ const findThreadByContextKey = async (
   return rows[0] || null;
 };
 
+const canAccessThreadRow = (thread: any, authContext: any) => {
+  if (!thread) return false;
+  if (normalizeId(thread?.org_id) !== normalizeId(authContext?.orgId)) return false;
+  if (normalizeId(thread?.user_id) === normalizeId(authContext?.userId)) return true;
+  const sharedUserIds = Array.isArray(thread?.shared_user_ids) ? thread.shared_user_ids.map(normalizeId) : [];
+  const sharedRoleIds = Array.isArray(thread?.shared_role_ids) ? thread.shared_role_ids.map(normalizeId) : [];
+  return sharedUserIds.includes(normalizeId(authContext?.userId)) || sharedRoleIds.includes(normalizeId(authContext?.roleId));
+};
+
+const fetchThreadForRead = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  threadId: string,
+) => {
+  if (!isUuid(threadId)) return null;
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    status: 'eq.active',
+    select: '*',
+    limit: 1,
+  });
+  const thread = rows[0] || null;
+  return canAccessThreadRow(thread, authContext) ? thread : null;
+};
+
 const ensureThread = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   authContext: any,
-  payload: { threadId?: string | null; title?: string; pageContext?: any; contextKey?: string; provider?: string; model?: string },
+  payload: { threadId?: string | null; title?: string; pageContext?: any; contextKey?: string; provider?: string; model?: string; forceNew?: boolean },
 ) => {
   const requestedThreadId = normalizeId(payload.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -1463,12 +1880,15 @@ const ensureThread = async (
   }
 
   const contextKey = payload.contextKey || buildContextKey(payload.pageContext?.context || {});
-  const existing = await findThreadByContextKey(supabaseUrl, serviceRoleKey, authContext, contextKey);
-  if (existing) return existing;
+  if (!payload.forceNew) {
+    const existing = await findThreadByContextKey(supabaseUrl, serviceRoleKey, authContext, contextKey);
+    if (existing) return existing;
+  }
 
   const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'ai_threads', [{
     org_id: authContext.orgId,
     user_id: authContext.userId,
+    status: 'active',
     title: String(payload.title || '').trim().slice(0, 120),
     context_type: payload.pageContext?.context?.mode || 'page',
     context_key: contextKey,
@@ -1497,56 +1917,162 @@ const insertAiMessage = async (
   return rows[0] || null;
 };
 
-const handleGetProviderSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
-  if (!canManageAiProviderSettings(authContext)) {
-    return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
-  }
-  const settings = await loadOrgProviderSettings(supabaseUrl, serviceRoleKey, authContext);
-  return json(200, {
-    success: true,
-    settings: maskProviderSettings(settings),
-  });
+const ensureOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const existing = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  if (existing) return existing;
+  const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_settings', [{
+    org_id: authContext.orgId,
+    selected_models: DEFAULT_CAPABILITY_MODELS,
+    feature_flags: {
+      dashboard_chat: true,
+      record_chat: true,
+      customer_reply_suggestion: true,
+      document_analysis: true,
+      workflow_ai_prompt: true,
+      web_search: false,       // off by default — admin enables when API key is set
+      voice_input: false,
+      voice_output: false,
+      image_generation: false,
+      video_generation: false,
+      voip_auto_reply: false,
+    },
+    require_human_approval: true,
+    default_margin_percent: DEFAULT_AI_MARGIN_PERCENT,
+    created_by: authContext.userId,
+    updated_by: authContext.userId,
+  }]);
+  return rows[0] || null;
 };
 
-const handleSaveProviderSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  if (!canManageAiProviderSettings(authContext)) {
-    return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
-  }
-  if (!authContext.orgId) {
-    return json(400, { success: false, message: 'سازمان کاربر مشخص نیست.' });
-  }
-
-  const incoming = body?.settings || {};
-  const existing = await loadOrgProviderSettings(supabaseUrl, serviceRoleKey, authContext);
-  const provider = String(incoming.provider || 'avalai').trim() || 'avalai';
-  const baseUrl = normalizeBaseUrl(incoming.base_url || incoming.baseUrl || DEFAULT_AI_BASE_URL);
-  const model = String(incoming.model || '').trim() || DEFAULT_AI_MODEL;
-  const rawApiKey = String(incoming.api_key || incoming.apiKey || '').trim();
-  const apiKey = rawApiKey ? rawApiKey : String(existing?.api_key || '').trim();
-  const isActive = incoming.is_active !== false;
-
-  const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'ai_provider_settings', [{
-    org_id: authContext.orgId,
-    provider,
-    base_url: baseUrl,
-    model,
-    api_key: apiKey,
-    is_active: isActive,
-    updated_by: authContext.userId,
-    created_by: existing?.created_by || authContext.userId,
-    metadata: {
-      last_saved_via: 'connections_tab',
-      key_updated: Boolean(rawApiKey),
+const fetchAvalaiCredit = async (providerConfig: any) => {
+  if (!providerConfig.apiKey) return { available: false, message: 'کلید مرکزی AvalAI تنظیم نشده است.' };
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/user/v1/credit', {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${providerConfig.apiKey}`,
+      'Content-Type': 'application/json',
     },
-  }], 'org_id');
+  }, { stripVersionForPath: true });
+  const raw = await response.text();
+  const parsed = parseJsonSafe(raw);
+  if (!response.ok) {
+    return { available: false, status: response.status, message: typeof parsed === 'string' ? parsed : parsed?.message || 'اعتبار AvalAI دریافت نشد.', raw: parsed };
+  }
+  return { available: true, credit: parsed, baseUrl };
+};
 
+const handleGetAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  if (!canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'دسترسی مدیریت تنظیمات هوش مصنوعی را ندارید.' });
+  }
+  const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  return json(200, { success: true, settings });
+};
+
+const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'دسترسی مدیریت تنظیمات هوش مصنوعی را ندارید.' });
+  }
+  if (!authContext.orgId) return json(400, { success: false, message: 'سازمان کاربر مشخص نیست.' });
+  const incoming = body?.settings || {};
+  const existing = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  const selectedModels = incoming.selected_models && typeof incoming.selected_models === 'object'
+    ? incoming.selected_models
+    : incoming.selectedModels && typeof incoming.selectedModels === 'object'
+    ? incoming.selectedModels
+    : existing?.selected_models || DEFAULT_CAPABILITY_MODELS;
+  const featureFlags = incoming.feature_flags && typeof incoming.feature_flags === 'object'
+    ? incoming.feature_flags
+    : incoming.featureFlags && typeof incoming.featureFlags === 'object'
+    ? incoming.featureFlags
+    : existing?.feature_flags || {};
+  const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_settings', [{
+    org_id: authContext.orgId,
+    selected_models: { ...DEFAULT_CAPABILITY_MODELS, ...selectedModels },
+    feature_flags: featureFlags,
+    daily_limit_irt: incoming.daily_limit_irt ?? incoming.dailyLimitIrt ?? existing?.daily_limit_irt ?? null,
+    monthly_limit_irt: incoming.monthly_limit_irt ?? incoming.monthlyLimitIrt ?? existing?.monthly_limit_irt ?? null,
+    require_human_approval: incoming.require_human_approval !== false && incoming.requireHumanApproval !== false,
+    default_margin_percent: numberFrom(incoming.default_margin_percent ?? incoming.defaultMarginPercent, numberFrom(existing?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT)),
+    metadata: { ...(existing?.metadata || {}), last_saved_via: 'ai_settings_tab' },
+    created_by: existing?.created_by || authContext.userId,
+    updated_by: authContext.userId,
+  }], 'org_id');
+  return json(200, { success: true, settings: rows[0] || existing });
+};
+
+const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  if (!canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'دسترسی مشاهده تنظیمات هوش مصنوعی را ندارید.' });
+  }
+  const [settings, models, wallets, ledgerRows] = await Promise.all([
+    ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      is_active: 'eq.true',
+      select: '*',
+      order: 'id.asc',
+      limit: 200,
+    }),
+    authContext.orgId
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+          org_id: `eq.${authContext.orgId}`,
+          select: '*',
+          limit: 1,
+        })
+      : Promise.resolve([]),
+    authContext.orgId
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+          org_id: `eq.${authContext.orgId}`,
+          select: 'id,capability,model,status,raw_cost_irt,billed_amount_irt,usage,created_at',
+          order: 'created_at.desc',
+          limit: 200,
+        })
+      : Promise.resolve([]),
+  ]);
+  const totals = (ledgerRows || []).reduce((acc: any, row: any) => {
+    if (String(row?.status || '') !== 'finalized') return acc;
+    acc.billed_amount_irt += numberFrom(row?.billed_amount_irt, 0);
+    acc.raw_cost_irt += numberFrom(row?.raw_cost_irt, 0);
+    acc.requests += 1;
+    const model = String(row?.model || 'unknown');
+    acc.by_model[model] = (acc.by_model[model] || 0) + numberFrom(row?.billed_amount_irt, 0);
+    const capability = String(row?.capability || 'unknown');
+    acc.by_capability[capability] = (acc.by_capability[capability] || 0) + numberFrom(row?.billed_amount_irt, 0);
+    return acc;
+  }, { billed_amount_irt: 0, raw_cost_irt: 0, requests: 0, by_model: {}, by_capability: {} });
+  const [providerCredit, companyContext] = await Promise.all([
+    fetchAvalaiCredit(getCentralProviderConfig()).catch((error: any) => ({
+      available: false,
+      message: String(error?.message || error || 'اعتبار AvalAI دریافت نشد.'),
+    })),
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+  ]);
   return json(200, {
     success: true,
-    settings: maskProviderSettings(rows[0] || existing),
+    settings,
+    models,
+    wallet: wallets[0] || null,
+    usage: {
+      totals,
+      recent: ledgerRows || [],
+    },
+    providerCredit,
+    company: companyContext,
   });
 };
 
 const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const requestedThreadId = normalizeId(body?.threadId);
+  if (requestedThreadId && isUuid(requestedThreadId)) {
+    const thread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, requestedThreadId);
+    const messages = thread ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 200) : [];
+    return json(200, {
+      success: true,
+      thread,
+      threadId: thread?.id || null,
+      messages,
+    });
+  }
   const context = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(context);
   const thread = await findThreadByContextKey(supabaseUrl, serviceRoleKey, authContext, contextKey);
@@ -1568,6 +2094,146 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
   });
 };
 
+const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const search = String(body?.search || '').trim();
+  const baseSelect = 'id,title,context_type,context_key,module_id,record_id,provider,model,metadata,created_at,updated_at,pinned_at,is_shared,shared_user_ids,shared_role_ids,user_id';
+  const limit = Math.max(10, Math.min(100, Number(body?.limit || 50)));
+  const ownParams: Record<string, any> = {
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    status: 'eq.active',
+    select: baseSelect,
+    order: 'updated_at.desc',
+    limit,
+  };
+  if (search) ownParams.title = `ilike.*${search}*`;
+  const sharedUserParams: Record<string, any> = {
+    org_id: `eq.${authContext.orgId}`,
+    status: 'eq.active',
+    shared_user_ids: `cs.{${authContext.userId}}`,
+    select: baseSelect,
+    order: 'updated_at.desc',
+    limit,
+  };
+  const sharedRoleParams: Record<string, any> = authContext.roleId ? {
+    org_id: `eq.${authContext.orgId}`,
+    status: 'eq.active',
+    shared_role_ids: `cs.{${authContext.roleId}}`,
+    select: baseSelect,
+    order: 'updated_at.desc',
+    limit,
+  } : {};
+  if (search) {
+    sharedUserParams.title = `ilike.*${search}*`;
+    if (authContext.roleId) sharedRoleParams.title = `ilike.*${search}*`;
+  }
+  const [ownRows, sharedUserRows, sharedRoleRows] = await Promise.all([
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', ownParams),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', sharedUserParams),
+    authContext.roleId ? safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_threads', sharedRoleParams) : Promise.resolve([]),
+  ]);
+  const rows = Array.from(new Map([...ownRows, ...sharedUserRows, ...sharedRoleRows]
+    .filter((row: any) => canAccessThreadRow(row, authContext))
+    .map((row: any) => [String(row.id), {
+      ...row,
+      is_owner: normalizeId(row.user_id) === normalizeId(authContext.userId),
+    }])).values())
+    .sort((a: any, b: any) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .slice(0, limit);
+  return json(200, { success: true, threads: rows });
+};
+
+const handleRenameThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  const title = String(body?.title || '').trim().slice(0, 120);
+  if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه گفتگو معتبر نیست.' });
+  if (!title) return json(400, { success: false, message: 'عنوان گفتگو خالی است.' });
+  const rows = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+  }, {
+    title,
+    updated_at: new Date().toISOString(),
+  });
+  return json(200, { success: true, thread: rows[0] || null });
+};
+
+const handleArchiveThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه گفتگو معتبر نیست.' });
+  const rows = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+  }, {
+    status: 'archived',
+    archived_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  return json(200, { success: true, archived: rows.length > 0 });
+};
+
+const normalizeUuidArray = (value: any) =>
+  Array.from(new Set((Array.isArray(value) ? value : [])
+    .map((item) => normalizeId(item))
+    .filter(isUuid)));
+
+const handleShareThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه گفتگو معتبر نیست.' });
+  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    status: 'eq.active',
+    select: '*',
+    limit: 1,
+  });
+  const thread = rows[0] || null;
+  if (!thread) return json(404, { success: false, message: 'گفتگو برای اشتراک‌گذاری پیدا نشد یا مالک آن نیستید.' });
+
+  const requestedUserIds = normalizeUuidArray(body?.sharedUserIds || body?.shared_user_ids);
+  const requestedRoleIds = normalizeUuidArray(body?.sharedRoleIds || body?.shared_role_ids);
+
+  const [validUsers, validRoles] = await Promise.all([
+    requestedUserIds.length
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+          org_id: `eq.${authContext.orgId}`,
+          id: `in.(${requestedUserIds.join(',')})`,
+          select: 'id',
+          limit: 500,
+        })
+      : Promise.resolve([]),
+    requestedRoleIds.length
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', {
+          org_id: `eq.${authContext.orgId}`,
+          id: `in.(${requestedRoleIds.join(',')})`,
+          select: 'id',
+          limit: 300,
+        })
+      : Promise.resolve([]),
+  ]);
+  const sharedUserIds = validUsers.map((row: any) => normalizeId(row?.id)).filter(isUuid);
+  const sharedRoleIds = validRoles.map((row: any) => normalizeId(row?.id)).filter(isUuid);
+  const patched = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+  }, {
+    shared_user_ids: sharedUserIds,
+    shared_role_ids: sharedRoleIds,
+    is_shared: sharedUserIds.length > 0 || sharedRoleIds.length > 0,
+    updated_at: new Date().toISOString(),
+    metadata: {
+      ...(thread?.metadata || {}),
+      shared_at: new Date().toISOString(),
+      shared_by: authContext.userId,
+    },
+  });
+  return json(200, { success: true, thread: patched[0] || null });
+};
+
 const handleDeleteThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const threadId = normalizeId(body?.threadId);
   if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه چت معتبر نیست.' });
@@ -1587,15 +2253,27 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   if (!message) return json(400, { success: false, message: 'متن سوال خالی است.' });
 
   const rawContext = normalizeContext(body?.context || {});
+  const requestedCapability = String(body?.capability || '').trim();
+  const capability = requestedCapability
+    || (rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat');
   const contextKey = buildContextKey(rawContext);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const [knowledgeChunks, providerConfig, companyContext, orgPeopleContext] = await Promise.all([
     fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message),
-    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext),
+    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
   ]);
   const retrievedContexts = await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext);
+
+  // Web search: call only when feature is enabled and query looks like it needs external/current info
+  const orgAiSettings = providerConfig.orgAiSettings;
+  const webSearchEnabled = orgAiSettings?.feature_flags?.web_search === true;
+  const webSearchModel = getCapabilityModel(orgAiSettings, 'web_search', 'serper-search');
+  const webSearchResults = webSearchEnabled && shouldTriggerWebSearch(message)
+    ? await callWebSearch(providerConfig, message, webSearchModel, 5).then((r) => r.results).catch(() => [])
+    : [];
+
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: message.slice(0, 90),
@@ -1603,6 +2281,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     contextKey,
     provider: providerConfig.provider,
     model: providerConfig.model,
+    forceNew: body?.forceNewThread === true,
   });
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
 
@@ -1624,7 +2303,10 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     authContext,
     retrievedContexts,
     previousMessages,
-  ));
+    webSearchResults,
+  ), {
+    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+  });
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
@@ -1637,7 +2319,25 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       company_currency_label: companyContext?.currency_label || null,
       knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
       retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
+      web_search_used: webSearchResults.length > 0,
       usage: aiResult.usageMetadata,
+      avalai_request_id: aiResult.requestId || null,
+      capability,
+    },
+  });
+
+  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: thread.id,
+    messageId: assistantMessage?.id || null,
+    requestId: aiResult.requestId,
+    capability,
+    provider: aiResult.provider,
+    model: aiResult.model,
+    usageMetadata: aiResult.usageMetadata,
+    metadata: {
+      source: 'chat',
+      context_key: contextKey,
+      knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
     },
   });
 
@@ -1656,6 +2356,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     provider: aiResult.provider,
     model: aiResult.model,
     usage: aiResult.usageMetadata,
+    ledger,
     contextSummary: pageContext.summary,
     retrievedContextModules: retrievedContexts.map((ctx) => ctx.moduleId),
     knowledgeSources: knowledgeChunks.map((chunk) => ({
@@ -1914,7 +2615,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
 
   const contextKey = buildContextKey(contextForReply);
   const [providerConfig, companyContext] = await Promise.all([
-    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext),
+    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'customer_reply_suggestion'),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
@@ -2090,7 +2791,11 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
       role: 'user',
       content: JSON.stringify(payload),
     },
-  ], { temperature: 0.22, maxTokens: 460 });
+  ], {
+    temperature: 0.22,
+    maxTokens: 460,
+    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_customer_reply_suggestion`,
+  });
 
   const suggestedReply = String(aiResult.content || '').replace(/^["'`]+|["'`]+$/g, '').trim();
   if (!suggestedReply) {
@@ -2124,6 +2829,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
       source: 'reply_suggestion',
       channel,
       usage: aiResult.usageMetadata,
+      avalai_request_id: aiResult.requestId || null,
       context_key: `reply:${channel}:${contextKey}`,
       counterparty_module_id: counterparty?.moduleId || null,
       counterparty_record_id: counterparty?.recordId || null,
@@ -2157,6 +2863,17 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     },
   });
 
+  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: thread.id,
+    messageId: assistantMessage?.id || null,
+    requestId: aiResult.requestId,
+    capability: 'customer_reply_suggestion',
+    provider: aiResult.provider,
+    model: aiResult.model,
+    usageMetadata: aiResult.usageMetadata,
+    metadata: { source: 'reply_suggestion', channel, context_key: `reply:${channel}:${contextKey}` },
+  });
+
   return json(200, {
     success: true,
     threadId: thread.id,
@@ -2166,6 +2883,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     provider: aiResult.provider,
     model: aiResult.model,
     usage: aiResult.usageMetadata,
+    ledger,
     context: {
       channel,
       counterpartyModuleId: counterparty?.moduleId || null,
@@ -2205,27 +2923,45 @@ const parseModelsResponse = (parsed: any) => {
 };
 
 const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  if (!canManageAiProviderSettings(authContext)) {
-    return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
+  if (!canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'دسترسی مشاهده مدل‌های AI را ندارید.' });
   }
-  const providerConfig = await resolveProviderConfigFromBody(supabaseUrl, serviceRoleKey, authContext, body);
-  if (!providerConfig.apiKey) return json(400, { success: false, message: 'برای دریافت مدل‌ها کلید API لازم است.' });
-  const response = await fetch(`${providerConfig.baseUrl}/models`, {
+  const catalogRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+    is_active: 'eq.true',
+    select: '*',
+    order: 'id.asc',
+    limit: 200,
+  });
+  if (catalogRows.length > 0) {
+    return json(200, {
+      success: true,
+      models: catalogRows.map((row: any) => ({
+        id: row.id,
+        label: row.display_name_fa || row.id,
+        capability_tags: row.capability_tags || [],
+        pricing: row,
+      })),
+      raw: { source: 'ai_model_catalog' },
+    });
+  }
+  const providerConfig = getCentralProviderConfig();
+  if (!providerConfig.apiKey) {
+    return json(200, {
+      success: true,
+      models: Object.values(DEFAULT_CAPABILITY_MODELS).map((id) => ({ id, label: id })),
+      warning: 'کلید مرکزی AI تنظیم نشده است؛ لیست پیش‌فرض نمایش داده شد.',
+    });
+  }
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/models', {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
   });
   const raw = await response.text();
   const parsed = parseJsonSafe(raw);
   if (!response.ok) {
-    const providerDefaults = providerConfig.provider === 'openai'
-      ? ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1']
-      : ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini', 'gpt-4.1', 'gemini-2.0-flash', 'claude-3-5-sonnet'];
     return json(200, {
       success: true,
-      models: providerDefaults.map((id) => ({ id, label: id })),
+      models: Object.values(DEFAULT_CAPABILITY_MODELS).map((id) => ({ id, label: id })),
       warning: 'Provider لیست مدل‌ها را از مسیر OpenAI-compatible /models برنگرداند؛ لیست پیشنهادی نمایش داده شد.',
       raw: parsed,
     });
@@ -2233,19 +2969,27 @@ const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, aut
   return json(200, {
     success: true,
     models: parseModelsResponse(parsed),
-    raw: parsed,
+    raw: { ...parsed, baseUrl },
   });
 };
 
 const handleTestProvider = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  if (!canManageAiProviderSettings(authContext)) {
+  if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
   }
-  const providerConfig = await resolveProviderConfigFromBody(supabaseUrl, serviceRoleKey, authContext, body);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'dashboard_chat');
   const result = await callChatCompletions(providerConfig, [
     { role: 'system', content: 'فقط عبارت «اتصال برقرار است» را برگردان.' },
     { role: 'user', content: 'تست اتصال' },
-  ], { temperature: 0, maxTokens: 30 });
+  ], { temperature: 0, maxTokens: 30, safetyIdentifier: `org_${authContext.orgId}_test_provider` });
+  await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    capability: 'dashboard_chat',
+    provider: result.provider,
+    model: result.model,
+    requestId: result.requestId,
+    usageMetadata: result.usageMetadata,
+    metadata: { source: 'test_provider' },
+  });
   return json(200, {
     success: true,
     message: result.content || 'اتصال برقرار است',
@@ -2279,61 +3023,95 @@ const normalizeCreditPayload = (payload: any) => {
 };
 
 const handleGetCredit = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
-  if (!canManageAiProviderSettings(authContext)) {
+  if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مدیریت اتصالات AI را ندارید.' });
   }
-  const providerConfig = await resolveProviderConfigFromBody(supabaseUrl, serviceRoleKey, authContext, body);
-  if (!providerConfig.apiKey) return json(400, { success: false, message: 'برای مشاهده اعتبار کلید API لازم است.' });
-
-  const base = providerConfig.baseUrl.replace(/\/+$/, '');
-  const root = base.replace(/\/v\d+$/i, '');
-  const paths = [
-    `${base}/credits`,
-    `${base}/credit`,
-    `${base}/balance`,
-    `${base}/billing/credit_grants`,
-    `${root}/credits`,
-    `${root}/credit`,
-    `${root}/balance`,
-    `${root}/api/credits`,
-    `${root}/api/balance`,
-    `${root}/dashboard/billing/credit_grants`,
-    `${root}/user/balance`,
-    `${root}/account/balance`,
-  ];
-
-  const errors: any[] = [];
-  for (const url of Array.from(new Set(paths))) {
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${providerConfig.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      const raw = await response.text();
-      const parsed = parseJsonSafe(raw);
-      if (response.ok) {
-        return json(200, {
-          success: true,
-          available: true,
-          endpoint: url,
-          credit: normalizeCreditPayload(parsed),
-        });
-      }
-      errors.push({ url, status: response.status, body: parsed });
-    } catch (error: any) {
-      errors.push({ url, message: String(error?.message || error) });
-    }
-  }
-
+  const providerCredit = await fetchAvalaiCredit(getCentralProviderConfig());
   return json(200, {
     success: true,
-    available: false,
-    message: 'این provider مسیر عمومی سازگار برای مشاهده اعتبار برنگرداند. اگر مسیر اختصاصی دارد، باید adapter جدا برای آن اضافه شود.',
-    errors: errors.slice(0, 4),
+    ...providerCredit,
+    credit: providerCredit.available ? normalizeCreditPayload(providerCredit.credit) : null,
   });
+};
+
+const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canManageAiSettings(authContext)) {
+    return json(403, { success: false, message: 'دسترسی بازسازی embedding اسناد را ندارید.' });
+  }
+  const documentId = normalizeId(body?.documentId || body?.document_id);
+  if (!isUuid(documentId)) return json(400, { success: false, message: 'شناسه سند معتبر نیست.' });
+  const chunks = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
+    org_id: `eq.${authContext.orgId}`,
+    document_id: `eq.${documentId}`,
+    status: 'eq.active',
+    select: 'id,content,embedding_status',
+    order: 'chunk_index.asc',
+    limit: 80,
+  });
+  if (chunks.length === 0) {
+    return json(200, { success: true, processed: 0, failed: 0, message: 'بخشی برای embedding پیدا نشد.' });
+  }
+  const providerConfig = getCentralProviderConfig();
+  const jobRows = await restInsert(supabaseUrl, serviceRoleKey, 'ai_document_ingestion_jobs', [{
+    org_id: authContext.orgId,
+    document_id: documentId,
+    status: 'running',
+    job_type: 'embedding',
+    created_by: authContext.userId,
+  }]).catch(() => []);
+  const job = jobRows[0] || null;
+  let processed = 0;
+  let failed = 0;
+  for (const chunk of chunks.slice(0, 40)) {
+    const chunkId = normalizeId(chunk?.id);
+    const content = String(chunk?.content || '').trim();
+    if (!chunkId || !content) continue;
+    try {
+      const embeddingResult = await callEmbeddings(providerConfig, content.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      await restPatch(supabaseUrl, serviceRoleKey, 'document_chunks', {
+        id: `eq.${chunkId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        embedding: `[${embeddingResult.embedding.join(',')}]`,
+        embedding_model: DEFAULT_EMBEDDING_MODEL,
+        embedding_dimension: 1536,
+        embedding_status: 'ready',
+        embedding_updated_at: new Date().toISOString(),
+        embedding_error: null,
+      });
+      processed += 1;
+      await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        capability: 'embedding',
+        provider: providerConfig.provider,
+        model: DEFAULT_EMBEDDING_MODEL,
+        requestId: embeddingResult.requestId,
+        usageMetadata: embeddingResult.usageMetadata,
+        metadata: { source: 'document_embedding', document_id: documentId, chunk_id: chunkId },
+      });
+    } catch (error: any) {
+      failed += 1;
+      await restPatch(supabaseUrl, serviceRoleKey, 'document_chunks', {
+        id: `eq.${chunkId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        embedding_status: 'failed',
+        embedding_error: String(error?.message || error).slice(0, 500),
+        embedding_updated_at: new Date().toISOString(),
+      }).catch(() => []);
+    }
+  }
+  if (job?.id) {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_document_ingestion_jobs', {
+      id: `eq.${job.id}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      status: failed > 0 && processed === 0 ? 'failed' : 'completed',
+      processed_chunks: processed,
+      failed_chunks: failed,
+      updated_at: new Date().toISOString(),
+    }).catch(() => []);
+  }
+  return json(200, { success: true, processed, failed });
 };
 
 const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -2419,6 +3197,127 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
       status: 'proposed',
     },
   });
+};
+
+const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canViewSaasAdmin(authContext)) {
+    return json(403, { success: false, message: 'دسترسی پنل مدیریت تازه سیستم لازم است.' });
+  }
+  const subAction = String(body?.sub || '').trim();
+
+  if (subAction === 'overview') {
+    const [allUsage, models, providerCredit] = await Promise.all([
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+        select: 'id,org_id,capability,model,provider,status,raw_cost_irt,billed_amount_irt,margin_percent,created_at',
+        order: 'created_at.desc',
+        limit: 600,
+      }),
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+        select: '*',
+        order: 'id.asc',
+        limit: 300,
+      }),
+      fetchAvalaiCredit(getCentralProviderConfig()).catch(() => ({ available: false, message: 'اعتبار دریافت نشد.' })),
+    ]);
+
+    const byOrg = new Map<string, { org_id: string; requests: number; billed_irt: number; raw_irt: number; models: Set<string> }>();
+    for (const row of allUsage) {
+      const orgId = normalizeId(row.org_id);
+      if (!orgId) continue;
+      const entry = byOrg.get(orgId) || { org_id: orgId, requests: 0, billed_irt: 0, raw_irt: 0, models: new Set() };
+      entry.requests++;
+      entry.billed_irt += numberFrom(row.billed_amount_irt, 0);
+      entry.raw_irt += numberFrom(row.raw_cost_irt, 0);
+      if (row.model) entry.models.add(String(row.model));
+      byOrg.set(orgId, entry);
+    }
+    const orgSummaries = Array.from(byOrg.values()).map((item) => ({
+      ...item,
+      models: Array.from(item.models),
+    })).sort((a, b) => b.billed_irt - a.billed_irt);
+
+    const finalized = allUsage.filter((row) => String(row.status) === 'finalized');
+    const totals = finalized.reduce(
+      (acc, row) => {
+        acc.billed_irt += numberFrom(row.billed_amount_irt, 0);
+        acc.raw_irt += numberFrom(row.raw_cost_irt, 0);
+        acc.requests++;
+        const model = String(row.model || 'unknown');
+        acc.by_model[model] = (acc.by_model[model] || 0) + numberFrom(row.billed_amount_irt, 0);
+        const cap = String(row.capability || 'unknown');
+        acc.by_capability[cap] = (acc.by_capability[cap] || 0) + numberFrom(row.billed_amount_irt, 0);
+        return acc;
+      },
+      { billed_irt: 0, raw_irt: 0, requests: 0, by_model: {} as Record<string, number>, by_capability: {} as Record<string, number> }
+    );
+
+    return json(200, {
+      success: true,
+      models,
+      allUsage: allUsage.slice(0, 200),
+      orgSummaries,
+      totals,
+      providerCredit: {
+        ...providerCredit,
+        credit: (providerCredit as any).available ? normalizeCreditPayload((providerCredit as any).credit) : null,
+      },
+    });
+  }
+
+  if (subAction === 'sync_models') {
+    const providerConfig = getCentralProviderConfig();
+    if (!providerConfig.apiKey) {
+      return json(200, { success: true, models: [], warning: 'کلید مرکزی AI تنظیم نشده است.' });
+    }
+    const { response } = await requestAvalaiWithFallback(providerConfig, '/models', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
+    });
+    const raw = await response.text();
+    const parsed = parseJsonSafe(raw);
+    if (!response.ok) {
+      return json(200, { success: false, models: [], message: 'دریافت لیست مدل‌ها از AvalAI ناموفق بود.', raw: parsed });
+    }
+    return json(200, { success: true, models: parseModelsResponse(parsed), raw: parsed });
+  }
+
+  if (subAction === 'upsert_model') {
+    const row = body?.model || {};
+    const modelId = String(row?.id || '').trim();
+    if (!modelId) return json(400, { success: false, message: 'شناسه مدل الزامی است.' });
+    const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'ai_model_catalog', [{
+      id: modelId,
+      provider: String(row.provider || 'avalai').trim(),
+      display_name_fa: String(row.display_name_fa || modelId).trim(),
+      capability_tags: Array.isArray(row.capability_tags) ? row.capability_tags : [],
+      input_usd_per_1m: numberFrom(row.input_usd_per_1m, 0),
+      cached_input_usd_per_1m: row.cached_input_usd_per_1m !== undefined ? numberFrom(row.cached_input_usd_per_1m, 0) : null,
+      output_usd_per_1m: numberFrom(row.output_usd_per_1m, 0),
+      specific_cost_usd: row.specific_cost_usd !== undefined ? numberFrom(row.specific_cost_usd, 0) : null,
+      specific_cost_unit: row.specific_cost_unit ? String(row.specific_cost_unit) : null,
+      margin_percent: numberFrom(row.margin_percent, 30),
+      exchange_rate_irt: numberFrom(row.exchange_rate_irt, DEFAULT_AI_EXCHANGE_RATE_IRT),
+      is_active: row.is_active !== false,
+      is_coming_soon: row.is_coming_soon === true,
+      pricing_source: String(row.pricing_source || 'manual').trim(),
+      metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+      updated_at: new Date().toISOString(),
+    }], 'id');
+    return json(200, { success: true, model: rows[0] || null });
+  }
+
+  if (subAction === 'toggle_model') {
+    const modelId = String(body?.modelId || '').trim();
+    const isActive = body?.is_active !== false;
+    if (!modelId) return json(400, { success: false, message: 'شناسه مدل الزامی است.' });
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_model_catalog', { id: `eq.${modelId}` }, {
+      is_active: isActive,
+      updated_at: new Date().toISOString(),
+    });
+    return json(200, { success: true, modelId, is_active: isActive });
+  }
+
+  return json(400, { success: false, message: 'عملیات SaaS AI پشتیبانی نمی‌شود.' });
 };
 
 const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -2516,17 +3415,24 @@ Deno.serve(async (req: Request) => {
     const body = await readJsonBody(req);
     const action: AssistantAction = String(body?.action || 'chat') as AssistantAction;
 
-    if (action === 'get_provider_settings') return await handleGetProviderSettings(supabaseUrl, serviceRoleKey, authContext);
-    if (action === 'save_provider_settings') return await handleSaveProviderSettings(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'get_ai_overview') return await handleGetAiOverview(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_models') return await handleListModels(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_credit') return await handleGetCredit(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'list_threads') return await handleListThreads(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'rename_thread') return await handleRenameThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'archive_thread') return await handleArchiveThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'share_thread') return await handleShareThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'chat') return await handleChat(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'suggest_reply') return await handleSuggestReply(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'propose_note') return await handleProposeNote(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'confirm_action') return await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'saas_ai') return await handleSaasAi(supabaseUrl, serviceRoleKey, authContext, body);
 
     return json(400, { success: false, message: 'اقدام درخواستی پشتیبانی نمی‌شود.' });
   } catch (error: any) {

@@ -80,6 +80,7 @@ const loadModuleShow = () => import("./pages/ModuleShow");
 const loadModuleCreate = () => import("./pages/ModuleCreate").then((module) => ({ default: module.ModuleCreate }));
 const loadLogin = () => import("./pages/Login");
 const loadDashboard = () => import("./pages/Dashboard");
+const loadAiChatPage = () => import("./pages/AiChatPage");
 const loadAccountingPage = () => import("./pages/AccountingPage");
 const loadAccountingAccountReviewPage = () => import("./pages/AccountingAccountReviewPage");
 const loadAccountingReportsPage = () => import("./pages/AccountingReportsPage");
@@ -111,6 +112,7 @@ const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
+const loadSaasAdminAiSettings = () => import("./pages/SaasAdmin/SaasAdminAiSettings");
 const loadCmsPostEditor = () => import("./pages/SaasAdmin/CmsPostEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
@@ -123,6 +125,7 @@ const ModuleShow = lazy(loadModuleShow);
 const ModuleCreate = lazy(loadModuleCreate);
 const Login = lazy(loadLogin);
 const Dashboard = lazy(loadDashboard);
+const AiChatPage = lazy(loadAiChatPage);
 const AccountingPage = lazy(loadAccountingPage);
 const AccountingAccountReviewPage = lazy(loadAccountingAccountReviewPage);
 const AccountingReportsPage = lazy(loadAccountingReportsPage);
@@ -154,6 +157,7 @@ const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
+const SaasAdminAiSettings = lazy(loadSaasAdminAiSettings);
 const CmsPostEditor = lazy(loadCmsPostEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
@@ -168,6 +172,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
   let preloader: (() => Promise<unknown>) | null = null;
 
   if (!section || section === "dashboard") preloader = loadDashboard;
+  else if (section === "ai") preloader = loadAiChatPage;
   else if (section === "profile") preloader = loadProfilePage;
   else if (section === "settings") preloader = loadSettingsPage;
   else if (section === "messages") preloader = loadMessagesPage;
@@ -201,7 +206,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
   } else if (section === "work_schedules") {
     preloader = loadWorkSchedulesPage;
   } else if (section === "taze-system") {
-    preloader = detail === "plans" ? loadSaasAdminPlans : detail === "api-docs" ? loadApiDocsPage : loadSaasAdminDashboard;
+    preloader = detail === "plans" ? loadSaasAdminPlans : detail === "api-docs" ? loadApiDocsPage : detail === "ai-settings" ? loadSaasAdminAiSettings : loadSaasAdminDashboard;
   } else {
     preloader = detail === "create" ? loadModuleCreate : detail ? loadModuleShow : loadModuleListRefine;
   }
@@ -246,6 +251,15 @@ const isSaasOnboardingPath = (pathname?: string, saasAppHost = false) => {
 const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
 );
+
+const AuthenticatedOutletBoundary: React.FC = () => {
+  const location = useLocation();
+  return (
+    <Suspense key={location.pathname} fallback={<SilentRouteFallback />}>
+      <Outlet />
+    </Suspense>
+  );
+};
 
 const MarketingSiteHostApp: React.FC = () => {
   useEffect(() => {
@@ -706,9 +720,7 @@ function App() {
                       brandShortName={branding.shortName}
                       preloadRoute={preloadAuthenticatedRouteChunk}
                     >
-                      <LazyRouteBoundary>
-                        <Outlet />
-                      </LazyRouteBoundary>
+                      <AuthenticatedOutletBoundary />
                     </Layout>
                   </NotificationRuntimeProvider>
                 </LazyRouteBoundary>
@@ -717,6 +729,7 @@ function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/ai" element={<AiChatPage />} />
             <Route path="/profile" element={<ProfilePage />} />
             <Route path="/profile/:id" element={<ProfilePage />} />
             <Route path="/production_group_orders" element={<ProductionGroupOrdersList />} />
@@ -763,6 +776,7 @@ function App() {
             <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
             <Route path="/taze-system/api-docs" element={<ApiDocsPage isAdmin />} />
+            <Route path="/taze-system/ai-settings" element={<SaasAdminAiSettings />} />
             {/* CMS — blog */}
             <Route path="/taze-system/blog/new" element={<CmsPostEditor />} />
             <Route path="/taze-system/blog/:id" element={<CmsPostEditor />} />

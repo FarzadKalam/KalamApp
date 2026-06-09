@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined, RobotOutlined } from '@ant-design/icons';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
@@ -12,6 +12,7 @@ import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, fetchCurrentUserRole
 import WorkflowsManager from '../../components/workflows/WorkflowsManager';
 import ModuleSettingsTab from './ModuleSettingsTab';
 import PrintTemplatesTab from './PrintTemplatesTab';
+import AiSettingsTab from './AiSettingsTab';
 import { useSearchParams } from 'react-router-dom';
 
 const SettingsPage: React.FC = () => {
@@ -47,6 +48,7 @@ const SettingsPage: React.FC = () => {
               module_settings: false,
               formulas: false,
               connections: false,
+              ai: false,
               customer_leveling: false,
               workflows: false,
               print_templates: false,
@@ -59,6 +61,7 @@ const SettingsPage: React.FC = () => {
               module_settings: fields.module_settings !== false,
               formulas: fields.formulas !== false,
               connections: fields.connections !== false,
+              ai: fields.ai !== false && fields.ai_settings !== false,
               customer_leveling: fields.customer_leveling !== false,
               print_templates: fields.print_templates !== false,
               workflows:
@@ -117,6 +120,11 @@ const SettingsPage: React.FC = () => {
         key: 'connections',
         label: <span className="flex items-center gap-2 text-base"><ApiOutlined /> اتصالات</span>,
         children: <ConnectionsTab />,
+      },
+      {
+        key: 'ai',
+        label: <span className="flex items-center gap-2 text-base"><RobotOutlined /> هوش مصنوعی</span>,
+        children: <AiSettingsTab />,
       },
       {
         key: 'customer_leveling',

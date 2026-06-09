@@ -751,6 +751,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/saas_user_announcements', label: 'اعلانات کاربران' },
           { key: '/taze-system/plans', label: 'پلن‌ها' },
           { key: '/taze-system/api-docs', label: 'مستندات API' },
+          { key: '/taze-system/ai-settings', label: 'تنظیمات هوش مصنوعی' },
           {
             key: 'cms_group',
             icon: <ReadOutlined />,
@@ -801,6 +802,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/saas_user_announcements':
         case '/taze-system/plans':
         case '/taze-system/api-docs':
+        case '/taze-system/ai-settings':
         case '/cms_blog_posts':
         case '/cms_tutorial_posts':
         case '/cms_tutorial_series':

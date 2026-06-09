@@ -319,6 +319,25 @@ const AiKnowledgeTab: React.FC = () => {
     if (insertError) throw insertError;
   };
 
+  const embedDocumentChunks = async (doc: OrgDocument | OrgDocumentForEditor, showFeedback = false) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-assistant', {
+        body: { action: 'embed_document_chunks', documentId: doc.id },
+      });
+      if (error) throw error;
+      if ((data as any)?.error) throw new Error(String((data as any).error));
+      if (showFeedback && Number((data as any)?.processed || 0) > 0) {
+        message.success(`${Number((data as any).processed || 0).toLocaleString('fa-IR')} بخش برای جستجوی هوشمند آماده شد.`);
+      }
+    } catch (error: any) {
+      if (showFeedback) {
+        message.warning(toFaErrorMessage(error, 'سند ذخیره شد، اما آماده‌سازی جستجوی هوشمند کامل نشد.'));
+      } else {
+        console.warn('AI document embedding failed', error);
+      }
+    }
+  };
+
   const openCreateModal = () => {
     setEditingDocument(null);
     form.setFieldsValue(DEFAULT_FORM_VALUES);
@@ -386,6 +405,7 @@ const AiKnowledgeTab: React.FC = () => {
 
       if (nextDocument) {
         await rebuildChunks(nextDocument);
+        await embedDocumentChunks(nextDocument);
       }
       message.success('دانش سازمان ذخیره شد.');
       setModalOpen(false);
@@ -419,6 +439,7 @@ const AiKnowledgeTab: React.FC = () => {
     try {
       setRebuildingId(doc.id);
       await rebuildChunks(doc);
+      await embedDocumentChunks(doc, true);
 
       // نمایش اطلاعات chunk ها
       const { data: chunkData } = await supabase
