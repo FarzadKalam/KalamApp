@@ -37,6 +37,8 @@ interface SmartTableRendererProps {
   visibleColumns?: string[];  // ✅ ستون‌های انتخاب‌شده از View
   rowSelection?: any;
   onRow?: (record: any) => any;
+  getRowHref?: (record: any) => string | undefined;
+  onRowLinkClick?: (record: any, event: React.MouseEvent<HTMLAnchorElement>) => void;
   onChange?: (pagination: any, filters: any, sorter: any, extra: any) => void;
   pagination?: any;
   scrollX?: string | number;
@@ -171,6 +173,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
   visibleColumns,  // ✅ اضافه شد
   rowSelection, 
   onRow,
+  getRowHref,
+  onRowLinkClick,
   onChange,
   pagination,
   scrollX,
@@ -303,6 +307,38 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     if (!rawTags) return [];
     return Array.isArray(rawTags) ? rawTags : [rawTags];
   }, [tagsMap]);
+  const handleRowLinkClick = useCallback((event: React.MouseEvent<HTMLAnchorElement>, record: any) => {
+    if (!onRowLinkClick) return;
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onRowLinkClick(record, event);
+  }, [onRowLinkClick]);
+  const renderRowLink = useCallback(
+    (record: any, content: React.ReactNode, className = "block min-w-0 max-w-full text-inherit no-underline hover:text-inherit") => {
+      const href = String(getRowHref?.(record) || '').trim();
+      if (!href) return content;
+      return (
+        <a
+          href={href}
+          className={`smarttable-row-link ${className}`}
+          onClick={(event) => handleRowLinkClick(event, record)}
+        >
+          {content}
+        </a>
+      );
+    },
+    [getRowHref, handleRowLinkClick]
+  );
   const renderStableTextCell = useCallback(
     (label: string, className: string) => (
       <div className="flex min-h-[22px] w-full items-center overflow-hidden">
@@ -994,7 +1030,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
-            return (
+            return renderRowLink(record, (
               <Avatar
                 src={value ? <ResilientImage src={String(value)} preset="avatar" alt="image" className="h-full w-full object-cover" /> : undefined}
                 icon={<AppstoreOutlined />}
@@ -1002,7 +1038,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                 size={36}
                 className="bg-gray-100 border border-gray-200"
               />
-            );
+            ), "inline-flex min-w-0 max-w-full items-center justify-center text-inherit no-underline hover:text-inherit");
         }
         if (shouldDeferFieldValue) {
           if (field.type === FieldType.TAGS || field.type === FieldType.MULTI_SELECT) {
@@ -1019,41 +1055,41 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (field.type === FieldType.DATE && value) {
           const formatted = formatPersianDate(value, 'DATE');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
+          return renderRowLink(record, <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>);
         }
         if (field.type === FieldType.TIME && value) {
           const formatted = formatPersianDate(value, 'TIME');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
+          return renderRowLink(record, <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>);
         }
         if (field.type === FieldType.DATETIME && value) {
           const formatted = formatPersianDate(value, 'DATETIME');
           if (!formatted) return emptyDateCell;
-          return <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>;
+          return renderRowLink(record, <span className="dir-ltr text-gray-500 font-medium text-[10px] md:text-[11px]">{formatted}</span>);
         }
         if (field.type === FieldType.CHECKBOX) {
-            return (
+            return renderRowLink(record, (
               <Tag
                 color={value ? 'green' : 'default'}
                 style={{ fontSize: '10px', marginRight: 0 }}
               >
                 {value ? 'بله' : 'خیر'}
               </Tag>
-            );
+            ), "inline-flex min-w-0 max-w-full text-inherit no-underline hover:text-inherit");
         }
         if (field.type === FieldType.STATUS) {
             const opt = moduleConfig?.id === 'tasks' && String(field?.key || '') === 'status'
               ? getTaskStatusOption(value, record, field.options || [])
               : field.options?.find((o: any) => o.value === value);
             const label = formatDisplayText(opt?.label ?? value);
-            return <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>;
+            return renderRowLink(record, <Tag color={opt?.color || 'default'} style={{fontSize: '10px', marginRight: 0}}>{label}</Tag>, "inline-flex min-w-0 max-w-full text-inherit no-underline hover:text-inherit");
         }
         if (field.type === FieldType.SELECT) {
             const label = getSingleOptionLabel(effectiveField, value, dynamicOptions, relationOptions);
-            return renderStableTextCell(
+            return renderRowLink(record, renderStableTextCell(
               formatDisplayText(label),
               "block w-full truncate text-xs text-gray-600 dark:text-gray-300"
-            );
+            ));
         }
         if (field.type === FieldType.RELATION) {
             const label = getSingleOptionLabel(field, value, dynamicOptions, relationOptions);
@@ -1194,21 +1230,21 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         if (field.type === FieldType.PRICE) {
             if (value === null || value === undefined || value === '') return '-';
             const persianPrice = formatPersianPrice(value, true);
-            return (
+            return renderRowLink(record, (
               <div className="inline-flex max-w-full items-baseline gap-1 whitespace-nowrap leading-tight">
                 <span className="font-bold text-gray-700 dark:text-gray-300 text-[11px] md:text-xs persian-number">{persianPrice}</span>
                 {currencyLabel ? (
                   <span className="truncate text-[9px] md:text-[10px] text-gray-400 dark:text-gray-500">{currencyLabel}</span>
                 ) : null}
               </div>
-            );
+            ), "inline-flex min-w-0 max-w-full text-inherit no-underline hover:text-inherit");
         }
         if (field.type === FieldType.STOCK || field.type === FieldType.NUMBER) {
              const persianNum = toPersianNumber(value);
              if (field.type === FieldType.STOCK) {
                const reorderPoint = record.reorder_point || 10;
                const color = value <= 0 ? 'red' : value <= reorderPoint ? 'orange' : 'green';
-               return <span style={{ color }} className="font-bold text-xs persian-number">{persianNum}</span>;
+               return renderRowLink(record, <span style={{ color }} className="font-bold text-xs persian-number">{persianNum}</span>);
              }
              if (String(field?.key || '') === 'schedule_variance_hours') {
                const numericValue = Number(value || 0);
@@ -1217,13 +1253,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                  : numericValue < 0
                    ? 'text-red-700 dark:text-red-400'
                    : 'text-gray-600 dark:text-gray-300';
-               return <span className={`text-xs font-semibold persian-number ${varianceClass}`}>{persianNum}</span>;
+               return renderRowLink(record, <span className={`text-xs font-semibold persian-number ${varianceClass}`}>{persianNum}</span>);
              }
-             return <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianNum}</span>;
+             return renderRowLink(record, <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianNum}</span>);
         }
         if (field.type === FieldType.PERCENTAGE) {
              const persianPercent = toPersianNumber(Number(value).toFixed(1)) + '%';
-             return <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianPercent}</span>;
+             return renderRowLink(record, <span className="text-xs text-gray-600 dark:text-gray-300 persian-number">{persianPercent}</span>);
          }
         if (field.type === FieldType.PHONE) {
              return (
@@ -1241,25 +1277,27 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
                ? getRecordTags(record, tagsField.key)
                : [];
                 if (!Array.isArray(inlineTags) || inlineTags.length === 0) {
-                  return renderStableTextCell(
+                  return renderRowLink(record, renderStableTextCell(
                     formatDisplayText(value),
                   "block w-full truncate text-[13px] md:text-sm font-bold text-gray-700 dark:text-gray-200"
-                );
+                ));
               }
               return (
                 <div className="flex min-h-[28px] w-full flex-col justify-center overflow-hidden">
-                  <OverflowTooltipText
-                    label={formatDisplayText(value)}
-                    className="block w-full truncate text-[13px] leading-4 font-bold text-gray-700 dark:text-gray-200"
-                  />
+                  {renderRowLink(record, (
+                    <OverflowTooltipText
+                      label={formatDisplayText(value)}
+                      className="block w-full truncate text-[13px] leading-4 font-bold text-gray-700 dark:text-gray-200"
+                    />
+                  ))}
                   {renderCompactTags(inlineTags)}
                 </div>
               );
         }
-        return renderStableTextCell(
+        return renderRowLink(record, renderStableTextCell(
           formatDisplayText(value),
           "block w-full truncate text-xs text-gray-600 dark:text-gray-300"
-        );
+        ));
       }
     };
   });
@@ -1343,6 +1381,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     getFieldLabel,
     isFieldVisibleForRecord,
     getRecordTags,
+    renderRowLink,
     renderStableTextCell,
     formatDisplayText,
     renderDeferredTagPlaceholder,

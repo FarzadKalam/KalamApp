@@ -83,6 +83,10 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'workflows', label: 'گردش کارها' },
 ];
 
+export const PRINT_SIGNATURE_PERMISSION_FIELDS = [
+  { key: 'ceo_signature', label: 'استفاده از امضای مدیرعامل در چاپ' },
+] as const;
+
 export const DASHBOARD_WIDGET_PERMISSIONS = [
   { key: 'quick_add', label: 'افزودن سریع' },
   { key: 'activity_calendar', label: 'تقویم فعالیت‌ها' },
@@ -307,7 +311,11 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     edit: true,
     delete: true,
     record_scope: 'all',
-    fields: createFieldsMap(SETTINGS_TAB_PERMISSIONS),
+    fields: {
+      ...createFieldsMap(SETTINGS_TAB_PERMISSIONS),
+      ...createFieldsMap([...PRINT_SIGNATURE_PERMISSION_FIELDS]),
+      ceo_signature: false,
+    },
   };
 
   defaults[DASHBOARD_PERMISSION_KEY] = {

@@ -1,4 +1,5 @@
 import { FieldType, ModuleDefinition, ModuleField } from '../types';
+import { MODULES } from '../moduleRegistry';
 
 const SYSTEM_FIELD_KEYS = new Set([
   'id',
@@ -69,6 +70,51 @@ export const buildDefaultMergeSelections = (
   });
 
   return selections;
+};
+
+export type ModuleRelationReference = {
+  table: string;
+  column: string;
+  isArray: boolean;
+};
+
+/**
+ * تمام فیلدهای RELATION/MULTI_RELATION در همه ماژول‌ها را پیدا می‌کند که به ماژول
+ * هدف اشاره دارند. خروجی برای ادغام رکوردها استفاده می‌شود تا بعد از merge،
+ * ارجاع‌های duplicate ها در سراسر پروژه به survivor تغییر کنند.
+ */
+export const findModuleRelationReferences = (
+  targetModuleId: string,
+): ModuleRelationReference[] => {
+  const target = String(targetModuleId || '').trim();
+  if (!target) return [];
+
+  const seen = new Set<string>();
+  const references: ModuleRelationReference[] = [];
+
+  Object.values(MODULES).forEach((moduleConfig) => {
+    const table = String(moduleConfig?.table || '').trim();
+    if (!table) return;
+
+    (moduleConfig.fields || []).forEach((field) => {
+      const column = String(field?.key || '').trim();
+      if (!column) return;
+
+      const isMultiRelation =
+        field.type === FieldType.MULTI_RELATION && field.multiRelationConfig?.targetModule === target;
+      const isRelation =
+        field.type === FieldType.RELATION && field.relationConfig?.targetModule === target;
+
+      if (!isMultiRelation && !isRelation) return;
+
+      const refKey = `${table}.${column}`;
+      if (seen.has(refKey)) return;
+      seen.add(refKey);
+      references.push({ table, column, isArray: isMultiRelation });
+    });
+  });
+
+  return references;
 };
 
 export const buildMergePayload = (

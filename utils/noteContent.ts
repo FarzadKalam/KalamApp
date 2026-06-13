@@ -46,14 +46,12 @@ export const resolveNoteAttachmentFileType = (value: any): NoteAttachment['fileT
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'video';
   if (mimeType.startsWith('audio/')) {
-    if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3') return 'voice';
     return 'audio';
   }
 
   if (IMAGE_EXTENSIONS.test(joinedNames)) return 'image';
   if (VIDEO_EXTENSIONS.test(joinedNames)) return 'video';
   if (AUDIO_EXTENSIONS.test(joinedNames)) {
-    if (/\.mp3$/i.test(joinedNames)) return 'voice';
     return 'audio';
   }
 

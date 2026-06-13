@@ -65,10 +65,25 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       onTogglePrintField={printManager.handleTogglePrintField}
       onTogglePrintFieldGroup={printManager.handleTogglePrintFieldGroup}
       onMovePrintField={printManager.handleMovePrintField}
+      imageDisplayMode={printManager.imageDisplayMode}
+      onChangeImageDisplayMode={printManager.handleChangeImageDisplayMode}
       onSavePrintFields={printManager.handleSavePrintFields}
       savingPrintFields={printManager.savingPrintFields}
+      printSignatureRows={printManager.printSignatureStates}
+      printSignatureQuickAddOptions={printManager.printSignatureQuickAddOptions}
+      signatureOptionsByRow={printManager.signatureOptionsByRow}
+      onAddPrintSignatureRow={printManager.handleAddPrintSignatureRow}
+      onRemovePrintSignatureRow={printManager.handleRemovePrintSignatureRow}
+      onMovePrintSignatureRow={printManager.handleMovePrintSignatureRow}
+      onTogglePrintSignatureAutomatic={printManager.handleTogglePrintSignatureAutomatic}
+      onChangePrintSignatureName={printManager.handleChangePrintSignatureName}
+      onChangePrintSignatureSubtitle={printManager.handleChangePrintSignatureSubtitle}
+      onChangePrintSignatureSignerModule={printManager.handleChangePrintSignatureSignerModule}
+      onChangePrintSignatureSignerId={printManager.handleChangePrintSignatureSignerId}
+      onSearchPrintSignatureOptions={printManager.loadSignatureSignerOptions}
       onRefreshPreview={printManager.refreshTemplates}
       allowFieldSelectionTab={printManager.allowFieldSelectionTab}
+      showImageDisplayModeControl={printManager.showImageDisplayModeControl}
       previewMeta={printManager.previewMeta}
     />
   );

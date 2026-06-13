@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType, ModuleDefinition } from '../types';
-import { buildDefaultMergeSelections, buildMergePayload, getMergeableModuleFields } from './moduleListMerge';
+import {
+  buildDefaultMergeSelections,
+  buildMergePayload,
+  findModuleRelationReferences,
+  getMergeableModuleFields,
+} from './moduleListMerge';
 
 const moduleConfig: ModuleDefinition = {
   id: 'customers',
@@ -53,6 +58,40 @@ describe('moduleListMerge', () => {
       mobile_1: '09120000000',
       rank: 2,
     });
+  });
+});
+
+describe('findModuleRelationReferences', () => {
+  it('finds single RELATION fields across modules pointing at the target module', () => {
+    const refs = findModuleRelationReferences('customers');
+    expect(refs).toEqual(
+      expect.arrayContaining([
+        { table: 'tasks', column: 'related_customer', isArray: false },
+      ])
+    );
+  });
+
+  it('finds MULTI_RELATION (array) fields pointing at the target module', () => {
+    const refs = findModuleRelationReferences('customers');
+    expect(refs).toEqual(
+      expect.arrayContaining([
+        { table: 'tasks', column: 'meeting_customer_ids', isArray: true },
+      ])
+    );
+  });
+
+  it('returns no references for an unrelated/unknown module id', () => {
+    expect(findModuleRelationReferences('does_not_exist_module')).toEqual([]);
+  });
+
+  it('returns an empty array for an empty target module id', () => {
+    expect(findModuleRelationReferences('')).toEqual([]);
+  });
+
+  it('does not return duplicate table/column entries', () => {
+    const refs = findModuleRelationReferences('customers');
+    const keys = refs.map((ref) => `${ref.table}.${ref.column}`);
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });
 

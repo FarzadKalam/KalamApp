@@ -6,6 +6,7 @@ import { invalidateFileManagerFolderCaches, invalidateFileManagerQueryCache } fr
 import { MODULES } from '../moduleRegistry';
 import { getRecordDisplayLabel } from './recordLabel';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from './selectCompat';
+import { fetchSessionBootstrap } from './sessionCache';
 import type { FileAssetRow, FileEntryRow, FileFolderRow, FileVisibility } from './fileManagerTypes';
 
 const FILE_MANAGER_TABLES_KEY = 'erp_file_manager_tables_available';
@@ -52,6 +53,10 @@ const slugify = (value: string) =>
 
 const buildSourceKey = (...parts: Array<string | null | undefined>) =>
   parts.map((part) => String(part || '').trim()).filter(Boolean).join(':');
+
+export const AI_FILES_FOLDER_NAME = 'فایل‌های هوش مصنوعی';
+export const AI_WORKSPACE_FILES_SOURCE_SCOPE = 'ai_workspace_files';
+export const AI_RECORD_FILES_SOURCE_SCOPE = 'ai_record_files';
 
 const invalidateFileManagerFolderScope = (moduleId?: string | null, recordId?: string | null) => {
   invalidateFileManagerFolderCaches(moduleId, recordId);
@@ -129,6 +134,47 @@ export const buildRecordFolderDraft = (moduleId: string, recordId: string, recor
     },
   };
 };
+
+export const buildWorkspaceAiFilesFolderDraft = (orgId: string): Partial<FileFolderRow> => ({
+  name: AI_FILES_FOLDER_NAME,
+  slug: slugify(AI_FILES_FOLDER_NAME),
+  folder_type: 'manual',
+  module_id: null,
+  record_id: null,
+  source_scope: AI_WORKSPACE_FILES_SOURCE_SCOPE,
+  source_key: buildSourceKey(AI_WORKSPACE_FILES_SOURCE_SCOPE, orgId),
+  visibility: 'private',
+  is_system: true,
+  color_token: 'system-ai',
+  icon_token: 'sparkles',
+  sort_order: 900,
+  metadata: {
+    auto_created: true,
+    source: 'ai_file_picker',
+    scope: 'workspace',
+  },
+});
+
+export const buildRecordAiFilesFolderDraft = (moduleId: string, recordId: string): Partial<FileFolderRow> => ({
+  name: AI_FILES_FOLDER_NAME,
+  slug: slugify(AI_FILES_FOLDER_NAME),
+  folder_type: 'manual',
+  module_id: moduleId,
+  record_id: recordId,
+  source_scope: AI_RECORD_FILES_SOURCE_SCOPE,
+  source_key: buildSourceKey(AI_RECORD_FILES_SOURCE_SCOPE, moduleId, recordId),
+  visibility: 'private',
+  is_system: true,
+  color_token: 'system-ai',
+  icon_token: 'sparkles',
+  sort_order: 900,
+  metadata: {
+    auto_created: true,
+    source: 'ai_file_picker',
+    module_id: moduleId,
+    record_id: recordId,
+  },
+});
 
 const normalizeRecordFolderLabel = (row: any, moduleId: string) => {
   const display = String(getRecordDisplayLabel(row, moduleId, { fallback: '' }) || '').trim();
@@ -237,6 +283,44 @@ export const ensureSystemFoldersForRecord = async (
   const moduleFolder = await ensureFolder(buildModuleRootFolderDraft(moduleId));
   const recordFolder = await ensureFolder(buildRecordFolderDraft(moduleId, recordId, nextRecordTitle), moduleFolder?.id || null);
   return { moduleFolder, recordFolder, subfolders: [] };
+};
+
+export const ensureWorkspaceAiFilesFolder = async (): Promise<FileFolderRow | null> => {
+  const hasTables = await detectFileManagerTables(supabase, false);
+  if (!hasTables) return null;
+
+  const session = await fetchSessionBootstrap(supabase);
+  const orgId = String(session?.orgId || session?.profile?.org_id || '').trim();
+  if (!orgId) throw new Error('ai_workspace_org_not_found');
+
+  const folder = await ensureFolder(buildWorkspaceAiFilesFolderDraft(orgId));
+  invalidateFileManagerQueryCache();
+  return folder;
+};
+
+export const ensureRecordAiFilesFolder = async (
+  moduleId: string,
+  recordId: string,
+  recordTitle?: string | null,
+): Promise<FileFolderRow | null> => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!normalizedModuleId || !normalizedRecordId) return null;
+
+  const hasTables = await detectFileManagerTables(supabase, false);
+  if (!hasTables) return null;
+
+  const bundle = await ensureSystemFoldersForRecord(
+    normalizedModuleId,
+    normalizedRecordId,
+    String(recordTitle || '').trim() || 'رکورد بدون عنوان',
+  );
+  const folder = await ensureFolder(
+    buildRecordAiFilesFolderDraft(normalizedModuleId, normalizedRecordId),
+    bundle.recordFolder?.id || null,
+  );
+  invalidateFileManagerRecordScope(normalizedModuleId, normalizedRecordId);
+  return folder;
 };
 
 export const createManualFileFolder = async (input: {
@@ -665,6 +749,96 @@ export const createFileManagerOriginForUpload = async (input: {
 
   invalidateFileManagerRecordScope(moduleId, recordId);
   return { asset, entry, recordFileId };
+};
+
+export const createWorkspaceAiFileManagerOriginForUpload = async (input: {
+  fileUrl: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fileType?: string | null;
+  folderId?: string | null;
+  visibility?: FileVisibility;
+}) => {
+  const hasTables = await detectFileManagerTables(supabase, false);
+  if (!hasTables) return null;
+
+  const fileUrl = String(input.fileUrl || '').trim();
+  if (!fileUrl) throw new Error('create_workspace_ai_file_manager_origin_invalid_input');
+
+  const targetFolder = String(input.folderId || '').trim()
+    ? null
+    : await ensureWorkspaceAiFilesFolder();
+  const targetFolderId = String(input.folderId || '').trim() || targetFolder?.id || null;
+  const storagePath = extractStoragePathFromPublicUrl(fileUrl, FILE_STORAGE_BUCKET) || fileUrl;
+  const displayName = String(input.fileName || '').trim() || String(storagePath.split('/').pop() || 'file').trim() || 'file';
+
+  let asset: FileAssetRow | null = null;
+  const { data: existingAsset } = await supabase
+    .from('file_assets')
+    .select('*')
+    .eq('storage_bucket', FILE_STORAGE_BUCKET)
+    .eq('storage_path', storagePath)
+    .maybeSingle();
+  if (existingAsset) {
+    asset = existingAsset as FileAssetRow;
+  } else {
+    const { data: insertedAsset, error: assetError } = await supabase
+      .from('file_assets')
+      .insert({
+        ...buildAssetDraftFromLegacyUrl(fileUrl, {
+          displayName,
+          mimeType: input.mimeType || null,
+          moduleId: null,
+          recordId: null,
+          visibility: input.visibility || 'private',
+          fileType: normalizeFileAssetType(input.fileType),
+        }),
+        origin_folder_id: targetFolderId,
+        metadata: {
+          source: 'ai_file_picker',
+        },
+      })
+      .select('*')
+      .single();
+    if (assetError) throw assetError;
+    asset = insertedAsset as FileAssetRow;
+  }
+
+  const { data: existingEntry } = await supabase
+    .from('file_entries')
+    .select('*')
+    .eq('asset_id', asset.id)
+    .is('module_id', null)
+    .is('record_id', null)
+    .eq('entry_type', 'origin')
+    .eq('is_deleted', false)
+    .maybeSingle();
+
+  const entry = existingEntry
+    ? (existingEntry as FileEntryRow)
+    : await (async () => {
+      const { data: insertedEntry, error: entryError } = await supabase
+        .from('file_entries')
+        .insert({
+          asset_id: asset.id,
+          folder_id: targetFolderId,
+          entry_type: 'origin',
+          entry_name: displayName,
+          module_id: null,
+          record_id: null,
+          sort_order: 0,
+          metadata: {
+            source: 'ai_file_picker',
+          },
+        })
+        .select('*')
+        .single();
+      if (entryError) throw entryError;
+      return insertedEntry as FileEntryRow;
+    })();
+
+  invalidateFileManagerQueryCache();
+  return { asset, entry };
 };
 
 export const createFileManagerShortcut = async (input: {

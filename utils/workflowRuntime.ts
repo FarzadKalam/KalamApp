@@ -38,8 +38,11 @@ import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
+import { activateProcessStageAction } from './processStageActivation';
+import { loadProcessTemplateStages as loadProcessTemplateStagesShared } from './processTemplateStages';
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
+import { buildAiRecordCreationSchema } from './aiRecordCreation';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -2018,6 +2021,20 @@ const resolveNextStageTargetTask = async (
   return sorted[currentIndex + offset] || null;
 };
 
+const resolveSpecificStageTargetTask = async (
+  moduleId: string,
+  currentRecord: Record<string, any>,
+  targetNodeKey: string,
+) => {
+  const normalizedNodeKey = String(targetNodeKey || '').trim();
+  if (!normalizedNodeKey) return null;
+  const rows = await fetchProcessTransferTasks(moduleId, currentRecord);
+  return rows.find((row) => {
+    const recurrence = parseWorkflowObject(row?.recurrence_info);
+    return String(recurrence?.process_node_key || '').trim() === normalizedNodeKey;
+  }) || null;
+};
+
 const buildAssigneePatch = (value: any) => {
   const raw = Array.isArray(value) ? String(value[0] || '').trim() : String(value || '').trim();
   const match = raw.match(/^(user|role)[:_](.+)$/i);
@@ -2127,13 +2144,7 @@ const resolveWorkflowStoryPublisher = async (
 };
 
 const loadProcessTemplateStages = async (templateId: string) => {
-  const { data, error } = await supabase
-    .from('process_template_stages')
-    .select('id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
-    .eq('template_id', templateId)
-    .order('sort_order', { ascending: true });
-  if (error) throw error;
-  return data || [];
+  return loadProcessTemplateStagesShared(supabase, templateId);
 };
 
 const loadProcessTemplateName = async (templateId: string) => {
@@ -2156,16 +2167,43 @@ export const executeWorkflowAction = async (
 ) => {
   const config = action?.config || {};
 
+  if (
+    action.type === 'activate_next_process_stage'
+    || action.type === 'activate_specific_process_stage'
+  ) {
+    await activateProcessStageAction({
+      actionType: action.type,
+      config,
+      record: currentRecord,
+      moduleId,
+    });
+    return;
+  }
+
   if (action.type === 'run_ai_prompt') {
     const prompt = (await renderWorkflowTemplate(String(config.prompt_template || config.prompt || ''), currentRecord, moduleId)).trim();
     if (!prompt) return;
     const orgId = await resolveWorkflowOrgId(currentRecord);
+    const outputMode = String(config.output_mode || 'text').trim();
+    const targetModuleId = String(config.target_module_id || '').trim();
+    const allowedFieldKeys = asArray(config.allowed_field_keys).map((item) => String(item || '').trim()).filter(Boolean);
+    const recordCreationSchema = outputMode === 'create_record' && targetModuleId
+      ? (config.record_creation_schema || buildAiRecordCreationSchema(targetModuleId, allowedFieldKeys))
+      : null;
     const { data, error } = await supabase.functions.invoke('ai-assistant', {
       body: {
-        action: 'chat',
+        action: outputMode === 'create_record'
+          ? 'create_record_from_prompt'
+          : outputMode === 'process_operation'
+            ? 'process_operation_from_prompt'
+            : 'workflow_ai_prompt',
         capability: 'workflow_ai_prompt',
+        outputMode,
+        autoExecute: true,
         forceNewThread: true,
         message: prompt,
+        recordCreation: recordCreationSchema,
+        relationFieldKey: config.relation_field_key || null,
         context: {
           mode: 'workflow',
           moduleId,
@@ -2184,18 +2222,71 @@ export const executeWorkflowAction = async (
       module_id: moduleId,
       record_id: currentRecord?.id ? String(currentRecord.id) : null,
       action_type: 'workflow_ai_prompt',
-      status: 'proposed',
+      status: 'executed',
       proposed_payload: {
         prompt,
         answer,
         workflow_action_id: (action as any)?.id || null,
-        require_human_approval: true,
+        require_human_approval: false,
+        output_mode: outputMode,
+        target_module_id: targetModuleId || null,
       },
       result_payload: {
         source: 'workflow_runtime',
         model: (data as any)?.model || null,
+        created_records: Array.isArray((data as any)?.createdRecords) ? (data as any).createdRecords : [],
       },
+      executed_at: new Date().toISOString(),
     }]);
+
+    const actionRecord = {
+      ...currentRecord,
+      ai_answer: answer,
+      ai_created_record_title: Array.isArray((data as any)?.createdRecords) && (data as any).createdRecords[0]?.title
+        ? String((data as any).createdRecords[0].title)
+        : '',
+    };
+    const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
+      ? config.channel_configs
+      : {};
+    const deliveryChannels = Array.from(new Set(
+      asArray(config.delivery_channels)
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter((item) => ['sms', 'email', 'bot', 'note'].includes(item))
+    ));
+    for (const channel of deliveryChannels) {
+      if (channel === 'sms') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_sms',
+          config: { message: '{{ai_answer}}', ...(channelConfigs.sms || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'email') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_email',
+          config: { subject: 'پیام هوش مصنوعی', body: '{{ai_answer}}', ...(channelConfigs.email || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'bot') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_bot_message',
+          config: { message: '{{ai_answer}}', ...(channelConfigs.bot || {}) },
+        }, moduleId, actionRecord);
+        continue;
+      }
+      if (channel === 'note') {
+        await executeWorkflowAction({
+          ...action,
+          type: 'send_note',
+          config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) },
+        }, moduleId, actionRecord);
+      }
+    }
     return;
   }
 
@@ -2622,6 +2713,20 @@ export const executeWorkflowAction = async (
     return;
   }
 
+  if (action.type === 'send_to_specific_stage') {
+    const fieldMeta = parseProcessNextStageFieldKey(String(config.field || '').trim());
+    const fieldKey = fieldMeta?.fieldKey || String(config.field || '').trim();
+    const targetTask = await resolveSpecificStageTargetTask(
+      moduleId,
+      currentRecord,
+      String(config.stage_node_key || '').trim(),
+    );
+    if (!fieldKey || !targetTask) return;
+    const nextValue = await resolveConfiguredActionValue(moduleId, config, currentRecord);
+    await updateNextStageTaskField(targetTask, fieldKey, nextValue);
+    return;
+  }
+
   if (action.type === 'update_record') {
     const fieldKey = String(config.field || '').trim();
     if (!fieldKey || !currentRecord?.id) return;
@@ -2635,7 +2740,9 @@ export const executeWorkflowAction = async (
       : String(currentRecord.id || '').trim();
     if (!targetRecordId) return;
 
+    const user = await getCurrentAuthUser();
     const patch = { [patchFieldKey]: nextValue, updated_at: new Date().toISOString() } as Record<string, any>;
+    if (user?.id) patch.updated_by = user.id;
     const { error } = await supabase
       .from(getModuleTable(targetModuleId))
       .update(patch)
@@ -2773,10 +2880,12 @@ export const executeWorkflowAction = async (
       loadProcessTemplateStages(templateId),
       loadProcessTemplateName(templateId),
     ]);
+    const user = await getCurrentAuthUser();
     const patch = {
       process_template_id: templateId,
       [draftFieldKey]: mapTemplateStagesToDraft(templateId, stages, templateName),
     } as Record<string, any>;
+    if (user?.id) patch.updated_by = user.id;
 
     const { error } = await supabase
       .from(getModuleTable(moduleId))
@@ -3007,10 +3116,13 @@ export const runWorkflowsForEvent = async ({
   const hydratedCurrentRecord = await hydrateWorkflowCurrentRecord(moduleId, currentRecord);
   const triggerTypes = event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
 
-  const { data, error } = await supabase
+  let workflowQuery = supabase
     .from('workflows')
-    .select('*')
-    .eq('module_id', moduleId)
+    .select('*');
+  workflowQuery = typeof workflowQuery.or === 'function'
+    ? workflowQuery.or(`module_id.eq.${moduleId},module_ids.cs.{${moduleId}}`)
+    : workflowQuery.eq('module_id', moduleId);
+  const { data, error } = await workflowQuery
     .eq('is_active', true)
     .in('trigger_type', triggerTypes);
 
@@ -3019,7 +3131,12 @@ export const runWorkflowsForEvent = async ({
     return;
   }
 
-  const workflows = (data || []) as WorkflowRecord[];
+  const workflows = ((data || []) as WorkflowRecord[]).filter((workflow) => {
+    if (workflow?.scope_type !== 'process_activator') return true;
+    const sourceNodeKey = String(workflow?.process_source_node_key || '').trim();
+    if (sourceNodeKey) return moduleId === 'tasks';
+    return (Array.isArray(workflow?.module_ids) ? workflow.module_ids : []).includes(moduleId);
+  });
   for (const workflow of workflows) {
     try {
       const result = await executeWorkflowForRecord({

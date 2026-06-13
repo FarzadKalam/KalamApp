@@ -44,8 +44,9 @@ import {
 } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
-import { normalizeProcessTaskCustomFields, PROCESS_TASK_CUSTOM_FIELDS_KEY } from '../utils/processTaskCustomFields';
-import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
+import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { insertRecordActivity } from '../utils/recordActivity';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
 import {
@@ -1264,22 +1265,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }, {})
         );
 
-        const mappedDraft = (stages || []).map((stage: any, index: number) => ({
-          ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-          id: stage.id || `${processTemplateId}_${index + 1}`,
-          name: stage.stage_name || `مرحله ${index + 1}`,
-          sort_order: stage.sort_order || ((index + 1) * 10),
-          wage: stage.wage || 0,
-            weight: Number(stage?.metadata?.weight || 0),
-            duration_value: Number(stage?.metadata?.duration_value || 0),
-            duration_unit: stage?.metadata?.duration_unit || 'day',
-            duration_from: stage?.metadata?.duration_from || 'project_start',
-            default_assignee_id: stage.default_assignee_id || null,
-          default_assignee_role_id: stage.default_assignee_role_id || null,
-          template_stage_id: stage.id || null,
-          process_target_module_ids: targetModuleIds,
-          process_link_map: inferredProcessLinks,
-        }));
+        const mappedDraft = mapProcessTemplateStagesToDraft(processTemplateId, stages || [], {
+          targetModuleIds,
+          processLinkMap: inferredProcessLinks,
+        });
 
         const payload: Record<string, any> = {
           [processDraftFieldKey]: mappedDraft,
@@ -1471,90 +1460,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
       return null;
   };
 
-  const isUuid = (value: any) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
-
-  const syncProcessTemplateStages = async (templateId: string, rawStages: any[]) => {
-    const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
-      id: isUuid(stage?.id) ? String(stage.id) : null,
-      stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
-      sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-      wage: Number(stage?.wage || 0),
-      metadata: {
-        ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-        description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
-        task_type: String(stage?.task_type || stage?.metadata?.task_type || '').trim() || null,
-        automation_rules: Array.isArray(stage?.automation_rules)
-          ? stage.automation_rules
-          : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
-        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
-          stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
-        ),
-        [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
-          stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
-        ),
-        weight: Number(stage?.weight || stage?.metadata?.weight || 0),
-        duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
-        duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-        duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end'
-          ? 'previous_stage_end'
-          : 'project_start',
-      },
-      default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
-      default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
-    }));
-
-    const { data: existingRows, error: existingError } = await supabase
-      .from('process_template_stages')
-      .select('id')
-      .eq('template_id', templateId);
-    if (existingError) throw existingError;
-
-    const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
-    const keptExistingIds = new Set(
-      nextStages
-        .map((stage) => stage.id)
-        .filter((id): id is string => Boolean(id && existingIds.has(id)))
-    );
-    const removeIds = Array.from(existingIds).filter((id) => !keptExistingIds.has(id));
-    if (removeIds.length > 0) {
-      const { error: deleteError } = await supabase
-        .from('process_template_stages')
-        .delete()
-        .in('id', removeIds);
-      if (deleteError) throw deleteError;
-    }
-
-    for (const stage of nextStages) {
-      if (stage.id && existingIds.has(stage.id)) {
-        const { error: updateError } = await supabase
-          .from('process_template_stages')
-          .update({
-            stage_name: stage.stage_name,
-            sort_order: stage.sort_order,
-            wage: stage.wage,
-            metadata: stage.metadata,
-            default_assignee_id: stage.default_assignee_id,
-            default_assignee_role_id: stage.default_assignee_role_id,
-          })
-          .eq('id', stage.id);
-        if (updateError) throw updateError;
-      } else {
-        const { error: insertError } = await supabase
-          .from('process_template_stages')
-          .insert({
-            template_id: templateId,
-            stage_name: stage.stage_name,
-            sort_order: stage.sort_order,
-            wage: stage.wage,
-            metadata: stage.metadata,
-            default_assignee_id: stage.default_assignee_id,
-            default_assignee_role_id: stage.default_assignee_role_id,
-          });
-        if (insertError) throw insertError;
-      }
-    }
-  };
+  const syncProcessTemplateStages = (templateId: string, rawStages: any[]) =>
+    syncProcessTemplateStagesShared(supabase, templateId, rawStages);
 
   // --- ذخیره نهایی ---
   const handleFinish = async (values: any) => {

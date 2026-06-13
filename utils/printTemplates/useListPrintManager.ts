@@ -27,8 +27,34 @@ import { normalizeRenderedImages } from './normalizeRenderedImages';
 import { printInIframe } from './printInIframe';
 import { sanitizeSelectedPrintFieldKeys } from './fieldAccess';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
-import { getCachedAuthUser } from '../sessionCache';
+import { hasRenderablePrintFooterHtml } from './footerLayout';
+import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
+import {
+  buildPrintLetterheadOverlayHtml,
+  buildPrintLetterheadPageCounterHtml,
+  getPrintLetterheadBodyItem,
+  getPrintLetterheadSignaturesItem,
+} from './letterheadRender';
+import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
+import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
+import { SETTINGS_PERMISSION_KEY } from '../permissions';
+import { fetchAssigneeDirectory } from '../referenceData';
+import { fetchRelationOptionsForField } from '../relationOptions';
+import {
+  buildDefaultPrintSignatureConfigs,
+  buildPrintSignatureBandHtml,
+  createPrintSignatureRowId,
+  getPrintSignatureQuickAddOptions,
+  getSignerModuleLabel,
+  materializePrintSignatureStates,
+  sanitizePrintSignatureConfigs,
+  stripLegacyPrintSignatureTokens,
+  type PrintSignatureConfig,
+  type PrintSignatureKind,
+  type PrintSignatureSignerModule,
+} from './signatures';
+import { buildPrintLetterheadVariants, getPrintLetterheadById, toPercentStyle } from './letterheads';
 
 const PAGE_MARGINS = { top: 8, right: 8, bottom: 8, left: 8 } as const;
 
@@ -71,8 +97,16 @@ export const useListPrintManager = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [printMode, setPrintMode] = useState(false);
   const [selectedPrintFields, setSelectedPrintFields] = useState<Record<string, string[]>>({});
+  const [imageDisplayModes, setImageDisplayModes] = useState<Record<string, PrintImageDisplayMode>>({});
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState<any>(null);
+  const [currentUserRoleTitle, setCurrentUserRoleTitle] = useState('');
+  const [currentUserPermissions, setCurrentUserPermissions] = useState<Record<string, any> | null>(null);
   const [userPreferencesReady, setUserPreferencesReady] = useState(false);
+  const [assigneeDirectory, setAssigneeDirectory] = useState<any>(null);
+  const [printSignatureConfigs, setPrintSignatureConfigs] = useState<Record<string, PrintSignatureConfig[]>>({});
+  const [signatureOptionsByRow, setSignatureOptionsByRow] = useState<Record<string, any[]>>({});
+  const [signatureLabelByKey, setSignatureLabelByKey] = useState<Record<string, string>>({});
   const [storedTemplates, setStoredTemplates] = useState<StoredPrintTemplate[]>([]);
   const [templatesByModuleStore, setTemplatesByModuleStore] = useState<Record<string, StoredPrintTemplate[]>>({});
   const [, setTemplatesStoreMeta] = useState<{ rowId: string | null; provider: string }>({
@@ -89,15 +123,35 @@ export const useListPrintManager = ({
 
   useEffect(() => {
     let mounted = true;
-    getCachedAuthUser(supabase)
-      .then((user) => {
+    fetchSessionBootstrap(supabase)
+      .then((snapshot) => {
         if (!mounted) return;
-        setCurrentUserId(String(user?.id || '').trim() || null);
+        setCurrentUserId(String(snapshot?.user?.id || '').trim() || null);
+        setCurrentUserProfile(snapshot?.profile || null);
+        setCurrentUserPermissions((snapshot?.permissions || null) as Record<string, any> | null);
         setUserPreferencesReady(true);
+        const roleId = String(snapshot?.profile?.role_id || '').trim();
+        if (roleId) {
+          fetchAssigneeDirectory(supabase)
+            .then((directory) => {
+              if (!mounted) return;
+              setAssigneeDirectory(directory || null);
+              const matchedRole = (directory?.roles || []).find((role: any) => String(role?.id || '').trim() === roleId);
+              setCurrentUserRoleTitle(String(matchedRole?.title || '').trim());
+            })
+            .catch(() => {
+              if (!mounted) return;
+              setCurrentUserRoleTitle('');
+            });
+        } else {
+          setCurrentUserRoleTitle('');
+        }
       })
       .catch(() => {
         if (!mounted) return;
         setCurrentUserId(null);
+        setCurrentUserProfile(null);
+        setCurrentUserPermissions(null);
         setUserPreferencesReady(true);
       });
     return () => {
@@ -144,9 +198,13 @@ export const useListPrintManager = ({
     let mounted = true;
     const loadCompany = async () => {
       try {
-        const { data } = await loadScopedCompanySettings(supabase);
+        const [{ data }, directory] = await Promise.all([
+          loadScopedCompanySettings(supabase),
+          fetchAssigneeDirectory(supabase).catch(() => null),
+        ]);
         if (mounted) {
           setCompanyInfo(data || null);
+          if (directory) setAssigneeDirectory(directory);
           companyLoadedRef.current = true;
         }
       } catch (error) {
@@ -166,9 +224,12 @@ export const useListPrintManager = ({
       tpl.isActive !== false &&
       isPrintTemplateAvailableForModule(moduleId, tpl)
     );
-    if (scopedTemplates.length > 0) return scopedTemplates;
-    return buildDefaultTemplatesForModule(moduleId, 'list').filter((tpl) => tpl.isActive !== false);
-  }, [moduleId, storedTemplates, templatesByModuleStore]);
+    const baseTemplates =
+      scopedTemplates.length > 0
+        ? scopedTemplates
+        : buildDefaultTemplatesForModule(moduleId, 'list').filter((tpl) => tpl.isActive !== false);
+    return buildPrintLetterheadVariants(baseTemplates, companyInfo?.print_letterheads || []);
+  }, [companyInfo?.print_letterheads, moduleId, storedTemplates, templatesByModuleStore]);
 
   const printTemplates = useMemo<PrintTemplate[]>(
     () =>
@@ -195,12 +256,22 @@ export const useListPrintManager = ({
     const id = selectedTemplateId.replace('custom:', '');
     return availableTemplates.find((tpl) => tpl.id === id) || null;
   }, [availableTemplates, selectedTemplateId]);
+  const selectedOrgLetterhead = useMemo(
+    () => getPrintLetterheadById(companyInfo?.print_letterheads || [], selectedStoredTemplate?.letterheadId),
+    [companyInfo?.print_letterheads, selectedStoredTemplate?.letterheadId],
+  );
 
   const printableFieldsForTemplate = useMemo(() => printableFields || [], [printableFields]);
   const isCatalogTemplate = useMemo(
     () => String(selectedStoredTemplate?.id || '').includes('_catalog_a4_portrait'),
     [selectedStoredTemplate?.id]
   );
+  const showImageDisplayModeControl = useMemo(() => {
+    const templateId = String(selectedStoredTemplate?.id || '').trim();
+    const contentHtml = String(selectedStoredTemplate?.contentHtml || '');
+    const hasImageField = printableFieldsForTemplate.some((field) => String(field?.type || '').toLowerCase() === 'image');
+    return hasImageField || templateId.includes('_catalog_') || contentHtml.includes('system.list_catalog_');
+  }, [printableFieldsForTemplate, selectedStoredTemplate?.contentHtml, selectedStoredTemplate?.id]);
 
   useEffect(() => {
     if (!selectedTemplateId || !userPreferencesReady) return;
@@ -259,6 +330,232 @@ export const useListPrintManager = ({
     userPreferencesReady,
   ]);
 
+  const canUseCeoSignature = useMemo(
+    () => currentUserPermissions?.[SETTINGS_PERMISSION_KEY]?.fields?.ceo_signature === true,
+    [currentUserPermissions]
+  );
+
+  useEffect(() => {
+    if (!selectedTemplateId || !userPreferencesReady) return;
+    const preference = loadPrintRenderPreference({
+      userId: currentUserId,
+      moduleId,
+      templateId: selectedStoredTemplate?.id || selectedTemplateId,
+      scope: 'list',
+    });
+    setImageDisplayModes((prev) => {
+      if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
+      return {
+        ...prev,
+        [selectedTemplateId]: sanitizePrintImageDisplayMode(preference.imageDisplayMode),
+      };
+    });
+    const defaultSignatureConfigs = buildDefaultPrintSignatureConfigs({
+      scope: 'list',
+      moduleConfig,
+      rows,
+      currentUserId,
+      companyInfo,
+      canUseCeoSignature,
+    });
+    setPrintSignatureConfigs((prev) => {
+      if (Object.prototype.hasOwnProperty.call(prev, selectedTemplateId)) return prev;
+      const nextConfigs = sanitizePrintSignatureConfigs(preference.signatureConfigs || []);
+      return {
+        ...prev,
+        [selectedTemplateId]: nextConfigs.length > 0 ? nextConfigs : defaultSignatureConfigs,
+      };
+    });
+  }, [
+    canUseCeoSignature,
+    companyInfo,
+    currentUserId,
+    moduleConfig,
+    moduleId,
+    relationOptions,
+    rows,
+    selectedStoredTemplate?.id,
+    selectedTemplateId,
+    userPreferencesReady,
+  ]);
+
+  const imageDisplayMode = sanitizePrintImageDisplayMode(
+    imageDisplayModes[selectedTemplateId] || DEFAULT_PRINT_IMAGE_DISPLAY_MODE
+  );
+  const selectedPrintSignatureConfigs = useMemo(
+    () => sanitizePrintSignatureConfigs(printSignatureConfigs[selectedTemplateId] || []),
+    [printSignatureConfigs, selectedTemplateId]
+  );
+  const printSignatureStates = useMemo(
+    () =>
+      materializePrintSignatureStates({
+        configs: selectedPrintSignatureConfigs,
+        scope: 'list',
+        moduleConfig,
+        rows,
+        relationOptions,
+        signerLabelByKey: signatureLabelByKey,
+        companyInfo,
+        currentUser: currentUserProfile,
+        currentUserRoleTitle,
+        assigneeDirectory,
+        canUseCeoSignature,
+      }),
+    [
+      assigneeDirectory,
+      canUseCeoSignature,
+      companyInfo,
+      currentUserProfile,
+      currentUserRoleTitle,
+      moduleConfig,
+      relationOptions,
+      rows,
+      selectedPrintSignatureConfigs,
+      signatureLabelByKey,
+    ]
+  );
+  const printSignatureBandHtml = useMemo(
+    () => buildPrintSignatureBandHtml(printSignatureStates),
+    [printSignatureStates]
+  );
+
+  useEffect(() => {
+    if (currentUserRoleTitle) return;
+    const roleId = String(currentUserProfile?.role_id || '').trim();
+    if (!roleId) return;
+    const matchedRole = (assigneeDirectory?.roles || []).find((role: any) => String(role?.id || '').trim() === roleId);
+    const nextTitle = String(matchedRole?.title || '').trim();
+    if (nextTitle) setCurrentUserRoleTitle(nextTitle);
+  }, [assigneeDirectory, currentUserProfile?.role_id, currentUserRoleTitle]);
+
+  const loadSignatureSignerOptions = useCallback(
+    async (
+      rowId: string,
+      signerModule: PrintSignatureSignerModule,
+      search = '',
+      exactId?: string | null
+    ) => {
+      const normalizedModule = String(signerModule || '').trim() as PrintSignatureSignerModule;
+      if (!normalizedModule) return;
+      const options = await fetchRelationOptionsForField(
+        supabase,
+        { relationConfig: { targetModule: normalizedModule } },
+        { search, exactId: exactId || null, limit: search ? 50 : 30 }
+      ).catch(() => []);
+
+      if (Array.isArray(options) && options.length > 0) {
+        setSignatureOptionsByRow((prev) => ({ ...prev, [rowId]: options }));
+        setSignatureLabelByKey((prev) => {
+          const next = { ...prev };
+          options.forEach((option: any) => {
+            const optionKey = `${normalizedModule}:${String(option?.value || '').trim()}`;
+            const label = String(option?.label || option?.name || '').trim();
+            if (optionKey && label) next[optionKey] = label;
+          });
+          return next;
+        });
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    printSignatureStates.forEach((row) => {
+      const signerModule = row.signerModule as PrintSignatureSignerModule | null;
+      const signerId = String(row.signerId || '').trim();
+      if (!signerModule || !signerId) return;
+      const signerKey = `${signerModule}:${signerId}`;
+      if (signatureLabelByKey[signerKey]) return;
+      void loadSignatureSignerOptions(row.id, signerModule, '', signerId);
+    });
+  }, [loadSignatureSignerOptions, printSignatureStates, signatureLabelByKey]);
+
+  const updatePrintSignatureConfig = useCallback((rowId: string, updater: (row: PrintSignatureConfig) => PrintSignatureConfig) => {
+    setPrintSignatureConfigs((prev) => {
+      const current = sanitizePrintSignatureConfigs(prev[selectedTemplateId] || []);
+      return {
+        ...prev,
+        [selectedTemplateId]: current.map((row) => (row.id === rowId ? updater(row) : row)),
+      };
+    });
+  }, [selectedTemplateId]);
+
+  const handleAddPrintSignatureRow = useCallback((kind: PrintSignatureKind) => {
+    setPrintSignatureConfigs((prev) => {
+      const current = sanitizePrintSignatureConfigs(prev[selectedTemplateId] || []);
+      const nextRow: PrintSignatureConfig =
+        kind === 'manual'
+          ? { id: createPrintSignatureRowId(), kind: 'manual', automatic: false, nameOverride: '', subtitleOverride: '' }
+          : kind === 'selected_signer'
+            ? {
+                id: createPrintSignatureRowId(),
+                kind: 'selected_signer',
+                automatic: true,
+                signerModule: 'customers',
+                signerId: null,
+                sourceFieldLabel: 'مشتری',
+              }
+            : { id: createPrintSignatureRowId(), kind, automatic: true };
+      return {
+        ...prev,
+        [selectedTemplateId]: [...current, nextRow],
+      };
+    });
+  }, [selectedTemplateId]);
+
+  const handleRemovePrintSignatureRow = useCallback((rowId: string) => {
+    setPrintSignatureConfigs((prev) => {
+      const current = sanitizePrintSignatureConfigs(prev[selectedTemplateId] || []);
+      return {
+        ...prev,
+        [selectedTemplateId]: current.filter((row) => row.id !== rowId),
+      };
+    });
+  }, [selectedTemplateId]);
+
+  const handleMovePrintSignatureRow = useCallback((rowId: string, direction: 'up' | 'down') => {
+    setPrintSignatureConfigs((prev) => {
+      const current = [...sanitizePrintSignatureConfigs(prev[selectedTemplateId] || [])];
+      const index = current.findIndex((row) => row.id === rowId);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) return prev;
+      [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
+      return {
+        ...prev,
+        [selectedTemplateId]: current,
+      };
+    });
+  }, [selectedTemplateId]);
+
+  const handleTogglePrintSignatureAutomatic = useCallback((rowId: string, automatic: boolean) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, automatic }));
+  }, [updatePrintSignatureConfig]);
+
+  const handleChangePrintSignatureName = useCallback((rowId: string, value: string) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, nameOverride: value }));
+  }, [updatePrintSignatureConfig]);
+
+  const handleChangePrintSignatureSubtitle = useCallback((rowId: string, value: string) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, subtitleOverride: value }));
+  }, [updatePrintSignatureConfig]);
+
+  const handleChangePrintSignatureSignerModule = useCallback((rowId: string, signerModule: PrintSignatureSignerModule) => {
+    updatePrintSignatureConfig(rowId, (row) => ({
+      ...row,
+      kind: 'selected_signer',
+      automatic: true,
+      signerModule,
+      signerId: null,
+      sourceFieldLabel: getSignerModuleLabel(signerModule),
+    }));
+    void loadSignatureSignerOptions(rowId, signerModule);
+  }, [loadSignatureSignerOptions, updatePrintSignatureConfig]);
+
+  const handleChangePrintSignatureSignerId = useCallback((rowId: string, signerId: string | null) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, signerId }));
+  }, [updatePrintSignatureConfig]);
+
   const selectedColumns = useMemo(() => {
     const selected = selectedPrintFields[selectedTemplateId] || [];
     if (selected.length === 0) return printableFieldsForTemplate;
@@ -298,8 +595,8 @@ export const useListPrintManager = ({
   }, [rows, rowsPerPage]);
 
   const renderedSummaryTable = useMemo(
-    () => buildListSummaryTableHtml(summary, relationOptions, currencyLabel),
-    [currencyLabel, relationOptions, summary]
+    () => buildListSummaryTableHtml(summary, relationOptions, currencyLabel, imageDisplayMode),
+    [currencyLabel, imageDisplayMode, relationOptions, summary]
   );
 
   const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
@@ -309,15 +606,16 @@ export const useListPrintManager = ({
     if (path === 'system.page_index') return toPersianNumber(pageIndex + 1);
     if (path === 'system.page_count') return toPersianNumber(pageCount);
     if (path === 'system.list_table') {
-      return buildListTableHtml(selectedColumns, pageRows, relationOptions, currencyLabel, rowOffset);
+      return buildListTableHtml(selectedColumns, pageRows, relationOptions, currencyLabel, rowOffset, imageDisplayMode);
     }
     if (path === 'system.list_catalog_a4') {
-      return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel);
+      return buildListCatalogHtml(selectedColumns, pageRows, relationOptions, currencyLabel, imageDisplayMode);
     }
     if (path === 'system.list_catalog_fullpage') {
       return buildListCatalogFullPageHtml(
         selectedColumns, pageRows, relationOptions, currencyLabel, companyInfo,
         getModuleTitle(moduleId) || 'فهرست',
+        imageDisplayMode,
       );
     }
     if (path === 'system.list_summary_table') {
@@ -346,10 +644,10 @@ export const useListPrintManager = ({
       return String(companyInfo?.[key] || '');
     }
     return '';
-  }, [companyInfo, currencyLabel, extraSystemValues, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
+  }, [companyInfo, currencyLabel, extraSystemValues, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
 
   const renderTemplateSection = useCallback((html: string | undefined, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
-    const filled = String(html || '').replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
+    const filled = stripLegacyPrintSignatureTokens(String(html || '')).replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
       return resolveValue(key, pageIndex, pageCount, pageRows, rowOffset);
     });
     return normalizeRenderedImages(DOMPurify.sanitize(filled, {
@@ -434,6 +732,13 @@ export const useListPrintManager = ({
     });
   }, []);
 
+  const handleChangeImageDisplayMode = useCallback((templateId: string, mode: PrintImageDisplayMode) => {
+    setImageDisplayModes((prev) => ({
+      ...prev,
+      [templateId]: sanitizePrintImageDisplayMode(mode),
+    }));
+  }, []);
+
   const handleSavePrintFields = useCallback(async () => {
     setSavingPrintFields(true);
     try {
@@ -453,6 +758,25 @@ export const useListPrintManager = ({
         scope: 'list',
         selectedFieldKeys: selectedKeys,
       });
+      if (showImageDisplayModeControl) {
+        savePrintRenderPreference({
+          userId: currentUserId,
+          moduleId,
+          templateId: selectedStoredTemplate?.id || selectedTemplateId,
+          scope: 'list',
+          imageDisplayMode,
+          signatureConfigs: selectedPrintSignatureConfigs,
+        });
+      } else {
+        savePrintRenderPreference({
+          userId: currentUserId,
+          moduleId,
+          templateId: selectedStoredTemplate?.id || selectedTemplateId,
+          scope: 'list',
+          imageDisplayMode,
+          signatureConfigs: selectedPrintSignatureConfigs,
+        });
+      }
       return true;
     } catch (error) {
       console.error('Save list print fields failed', error);
@@ -460,7 +784,7 @@ export const useListPrintManager = ({
     } finally {
       setSavingPrintFields(false);
     }
-  }, [currentUserId, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedStoredTemplate?.id, selectedTemplateId]);
+  }, [currentUserId, imageDisplayMode, moduleId, printableFieldsForTemplate, selectedPrintFields, selectedPrintSignatureConfigs, selectedStoredTemplate?.id, selectedTemplateId, showImageDisplayModeControl]);
 
   const getPrintOutputName = useCallback(
     () =>
@@ -526,6 +850,104 @@ export const useListPrintManager = ({
       bottom: Number(selectedStoredTemplate.pageMarginBottom ?? PAGE_MARGINS.bottom),
       left: Number(selectedStoredTemplate.pageMarginLeft ?? PAGE_MARGINS.left),
     };
+    const backgroundImageUrl = String(selectedStoredTemplate.backgroundImageUrl || '').trim();
+    const isOrgLetterheadTemplate =
+      selectedStoredTemplate.renderMode === 'org_letterhead' && Boolean(selectedOrgLetterhead?.imageUrl);
+
+    if (isOrgLetterheadTemplate && selectedOrgLetterhead) {
+      const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+      const signaturesItem = getPrintLetterheadSignaturesItem(selectedOrgLetterhead);
+      if (!bodyItem) return null;
+      const overlayHtml = buildPrintLetterheadOverlayHtml(selectedOrgLetterhead, {
+        title: moduleConfig?.titles?.fa || getModuleTitle(moduleId) || selectedStoredTemplate.title,
+        date: `تاریخ چاپ: ${toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD HH:mm'))}`,
+        number: '',
+        attachment: '',
+        qrValue: '',
+      });
+
+      return React.createElement(
+        'div',
+        {
+          className: 'list-print-shell',
+          style: {
+            width: `${metrics.widthMm}mm`,
+            minHeight: `${metrics.heightMm}mm`,
+            background: '#fff',
+            color: '#111827',
+          },
+        },
+        ...pagedRows.map((pageRows, pageIndex) => {
+          const rowOffset = pageIndex * rowsPerPage;
+          const contentHtml = renderTemplateSection(selectedStoredTemplate.contentHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
+          return React.createElement(
+            'div',
+            {
+              key: `list-print-letterhead-page-${pageIndex + 1}`,
+              className: 'list-print-page',
+              style: {
+                position: 'relative',
+                width: `${metrics.widthMm}mm`,
+                minHeight: `${metrics.heightMm}mm`,
+                height: `${metrics.heightMm}mm`,
+                background: '#fff',
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+                pageBreakAfter: pageIndex < pagedRows.length - 1 ? 'always' : 'auto',
+                breakAfter: pageIndex < pagedRows.length - 1 ? 'page' : 'auto',
+              },
+            },
+            React.createElement('img', {
+              src: selectedOrgLetterhead.imageUrl || '',
+              alt: selectedOrgLetterhead.title,
+              style: {
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'fill',
+                zIndex: 0,
+                pointerEvents: 'none',
+                userSelect: 'none',
+              },
+            }),
+            overlayHtml
+              ? React.createElement('div', {
+                  style: { position: 'absolute', inset: 0, zIndex: 2 },
+                  dangerouslySetInnerHTML: { __html: overlayHtml },
+                })
+              : null,
+            React.createElement('div', {
+              style: {
+                ...toPercentStyle(bodyItem),
+                zIndex: 4,
+                overflow: 'hidden',
+                boxSizing: 'border-box',
+                direction: 'rtl',
+              },
+              dangerouslySetInnerHTML: { __html: contentHtml },
+            }),
+            signaturesItem && printSignatureBandHtml
+              ? React.createElement('div', {
+                  style: {
+                    ...toPercentStyle(signaturesItem),
+                    zIndex: 5,
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  },
+                  dangerouslySetInnerHTML: { __html: printSignatureBandHtml },
+                })
+              : null,
+            React.createElement('div', {
+              style: { position: 'absolute', inset: 0, zIndex: 6, pointerEvents: 'none' },
+              dangerouslySetInnerHTML: { __html: buildPrintLetterheadPageCounterHtml(pageIndex, pagedRows.length) },
+            }),
+          );
+        }),
+      );
+    }
 
     return React.createElement(
       'div',
@@ -543,6 +965,9 @@ export const useListPrintManager = ({
         const headerHtml = renderTemplateSection(selectedStoredTemplate.headerHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
         const contentHtml = renderTemplateSection(selectedStoredTemplate.contentHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
         const footerHtml = renderTemplateSection(selectedStoredTemplate.footerHtml, pageIndex, pagedRows.length, pageRows, rowOffset);
+        const showFooter =
+          selectedStoredTemplate.showFooter !== false &&
+          hasRenderablePrintFooterHtml(footerHtml);
 
         return React.createElement(
           'div',
@@ -558,6 +983,10 @@ export const useListPrintManager = ({
               flexDirection: 'column',
               gap: '8px',
               background: '#fff',
+              backgroundImage: backgroundImageUrl ? `url(${backgroundImageUrl})` : undefined,
+              backgroundPosition: 'center',
+              backgroundRepeat: 'no-repeat',
+              backgroundSize: backgroundImageUrl ? 'contain' : undefined,
               pageBreakAfter: pageIndex < pagedRows.length - 1 ? 'always' : 'auto',
               breakAfter: pageIndex < pagedRows.length - 1 ? 'page' : 'auto',
             },
@@ -571,7 +1000,12 @@ export const useListPrintManager = ({
             style: { flex: '1 1 auto' },
             dangerouslySetInnerHTML: { __html: contentHtml },
           }),
-          selectedStoredTemplate.showFooter === false
+          printSignatureBandHtml
+            ? React.createElement('div', {
+                dangerouslySetInnerHTML: { __html: printSignatureBandHtml },
+              })
+            : null,
+          !showFooter
             ? null
             : React.createElement('div', {
                 dangerouslySetInnerHTML: { __html: footerHtml },
@@ -579,7 +1013,7 @@ export const useListPrintManager = ({
         );
       }),
     );
-  }, [pagedRows, renderTemplateSection, rowsPerPage, selectedStoredTemplate]);
+  }, [companyInfo?.print_letterheads, moduleConfig?.titles?.fa, moduleId, pagedRows, printSignatureBandHtml, renderTemplateSection, rowsPerPage, selectedOrgLetterhead, selectedStoredTemplate]);
   renderPrintCardRef.current = renderPrintCard;
 
   const refreshTemplates = useCallback(async () => {
@@ -593,6 +1027,10 @@ export const useListPrintManager = ({
     }),
     [selectedStoredTemplate?.orientation, selectedStoredTemplate?.paperSize]
   );
+  const printSignatureQuickAddOptions = useMemo(
+    () => getPrintSignatureQuickAddOptions({ canUseCeoSignature }),
+    [canUseCeoSignature]
+  );
 
   return {
     isPrintModalOpen,
@@ -601,12 +1039,26 @@ export const useListPrintManager = ({
     setIsPrintModalOpen,
     printMode,
     selectedPrintFields,
+    imageDisplayMode,
     printTemplates,
     printableFieldsForTemplate,
     handleTogglePrintField,
     handleTogglePrintFieldGroup,
     handleMovePrintField,
+    handleChangeImageDisplayMode,
     handleSavePrintFields,
+    printSignatureStates,
+    printSignatureQuickAddOptions,
+    signatureOptionsByRow,
+    handleAddPrintSignatureRow,
+    handleRemovePrintSignatureRow,
+    handleMovePrintSignatureRow,
+    handleTogglePrintSignatureAutomatic,
+    handleChangePrintSignatureName,
+    handleChangePrintSignatureSubtitle,
+    handleChangePrintSignatureSignerModule,
+    handleChangePrintSignatureSignerId,
+    loadSignatureSignerOptions,
     savingPrintFields,
     handlePrint,
     preparePrint,
@@ -614,5 +1066,6 @@ export const useListPrintManager = ({
     renderPrintCard,
     previewMeta,
     allowFieldSelectionTab: true,
+    showImageDisplayModeControl,
   };
 };

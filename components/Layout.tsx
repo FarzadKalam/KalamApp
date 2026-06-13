@@ -29,7 +29,6 @@ import {
   ArrowLeftOutlined,
   CloudServerOutlined,
   MessageOutlined,
-  OpenAIOutlined,
   BellOutlined,
   ReadOutlined,
 } from '@ant-design/icons';
@@ -54,6 +53,7 @@ import {
   buildGlobalSearchModules,
   isGlobalSearchQueryReady,
   searchGlobalRecords,
+  splitGlobalSearchModulesByPriority,
   type GlobalSearchGroup,
 } from '../utils/globalSearch';
 import {
@@ -72,6 +72,7 @@ import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
+import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 
 const { Header, Sider, Content } = AntLayout;
@@ -85,7 +86,7 @@ interface LayoutProps {
   isDarkMode: boolean;
   toggleTheme: () => void;
   brandShortName: string;
-  preloadRoute?: (href: string) => void;
+  preloadRoute?: (href: string) => Promise<unknown> | void;
 }
 
 const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, brandShortName, preloadRoute }) => {
@@ -175,17 +176,22 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     };
   }, []);
 
+  const preloadRouteNow = useCallback((href: string) => {
+    if (!href || !preloadRoute) return Promise.resolve();
+    return Promise.resolve(preloadRoute(href)).catch(() => undefined);
+  }, [preloadRoute]);
+
   const scheduleRoutePreload = useCallback((href: string) => {
     if (!href || !preloadRoute) return;
     const requestIdle = (window as any).requestIdleCallback as ((callback: () => void, options?: { timeout?: number }) => number) | undefined;
     if (requestIdle) {
-      requestIdle(() => preloadRoute(href), { timeout: 800 });
+      requestIdle(() => { void preloadRouteNow(href); }, { timeout: 800 });
       return;
     }
-    window.setTimeout(() => preloadRoute(href), 80);
-  }, [preloadRoute]);
+    window.setTimeout(() => { void preloadRouteNow(href); }, 80);
+  }, [preloadRoute, preloadRouteNow]);
 
-  const handleSidebarNavigate = useCallback((href: string) => {
+  const handleSidebarNavigate = useCallback(async (href: string) => {
     if (!href) return;
     const latestNavigationState = latestNavigationStateRef.current;
     const targetPath = String(href).split(/[?#]/)[0] || href;
@@ -196,13 +202,20 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     if (sidebarNavigationRef.current === href) return;
     sidebarNavigationRef.current = href;
     if (latestNavigationState.isMobile) setCollapsed(true);
+    if (latestNavigationState.isMobile && preloadRoute) {
+      await Promise.race([
+        preloadRouteNow(href),
+        new Promise((resolve) => window.setTimeout(resolve, 700)),
+      ]);
+      if (sidebarNavigationRef.current !== href) return;
+    }
     navigate(href);
     window.setTimeout(() => {
       if (sidebarNavigationRef.current === href) {
         sidebarNavigationRef.current = '';
       }
     }, 350);
-  }, [navigate]);
+  }, [navigate, preloadRoute, preloadRouteNow]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -733,7 +746,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/web_forms', label: 'وب فرم‌ها', disabled: !canViewModule('web_forms') },
           { key: '/surveys', label: 'نظرسنجی‌ها', disabled: !canViewModule('surveys') },
           { key: '/instructions', label: 'دستورالعمل‌ها', disabled: !canViewModule('instructions') },
-          { key: '/org-knowledge', icon: <OpenAIOutlined />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
+          { key: '/org-knowledge', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دانش سازمان', disabled: !canViewOrgKnowledge },
           { key: '/production_orders', label: 'سفارشات تولید' },
           { key: '/gallery', label: 'مدیریت فایل‌ها' },
           { key: RECYCLE_BIN_ROUTE, icon: <DeleteOutlined />, label: 'سطل بازیافت' },
@@ -910,6 +923,31 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     () => `${String(currentUser?.id || '')}:${JSON.stringify(rolePermissions)}`,
     [currentUser?.id, rolePermissions]
   );
+  const prioritizedGlobalSearchModules = useMemo(
+    () => splitGlobalSearchModulesByPriority(searchableGlobalSearchModules),
+    [searchableGlobalSearchModules]
+  );
+
+  const mergeGlobalSearchGroups = useCallback((groups: GlobalSearchGroup[]) => {
+    const grouped = new Map<string, GlobalSearchGroup>();
+    groups.forEach((group) => {
+      const current = grouped.get(group.moduleId);
+      if (!current) {
+        grouped.set(group.moduleId, group);
+        return;
+      }
+      const existingIds = new Set(current.items.map((item) => item.recordId));
+      grouped.set(group.moduleId, {
+        ...current,
+        items: [
+          ...current.items,
+          ...group.items.filter((item) => !existingIds.has(item.recordId)),
+        ],
+        hasMore: current.hasMore || group.hasMore,
+      });
+    });
+    return Array.from(grouped.values());
+  }, []);
 
   useEffect(() => {
     const matchedPath = findMenuPath(rawMenuItems, location.pathname);
@@ -942,15 +980,31 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     const handle = setTimeout(async () => {
       try {
         setSearchLoading(true);
-        const results = await searchGlobalRecords(supabase, MODULES, searchableGlobalSearchModules, {
+        const fastModules = prioritizedGlobalSearchModules.fastModules.length
+          ? prioritizedGlobalSearchModules.fastModules
+          : searchableGlobalSearchModules;
+        const remainingModules = prioritizedGlobalSearchModules.fastModules.length
+          ? prioritizedGlobalSearchModules.remainingModules
+          : [];
+        const fastResults = await searchGlobalRecords(supabase, MODULES, fastModules, {
           query: term,
           limitPerModule: 5,
-          cacheNamespace: globalSearchCacheNamespace,
+          cacheNamespace: `${globalSearchCacheNamespace}:fast`,
           signal: controller.signal,
         });
         if (searchRequestRef.current !== requestId) return;
-        setSearchResults(results);
+        setSearchResults(fastResults);
         setSearchTouched(true);
+
+        if (!remainingModules.length || controller.signal.aborted) return;
+        const remainingResults = await searchGlobalRecords(supabase, MODULES, remainingModules, {
+          query: term,
+          limitPerModule: 3,
+          cacheNamespace: `${globalSearchCacheNamespace}:remaining`,
+          signal: controller.signal,
+        });
+        if (searchRequestRef.current !== requestId) return;
+        setSearchResults(mergeGlobalSearchGroups([...fastResults, ...remainingResults]));
       } catch (err) {
         if (String((err as any)?.name || '') === 'AbortError') return;
         console.warn('Global search failed', err);
@@ -967,7 +1021,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       clearTimeout(handle);
       controller.abort();
     };
-  }, [globalSearch, globalSearchCacheNamespace, rolePermissionsReady, searchableGlobalSearchModules]);
+  }, [globalSearch, globalSearchCacheNamespace, mergeGlobalSearchGroups, prioritizedGlobalSearchModules, rolePermissionsReady, searchableGlobalSearchModules]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -1638,7 +1692,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                const isActive = location.pathname === item.key;
                if (item.isCenter) {
                  return (
-                   <div key={item.key} onClick={() => handleSidebarNavigate(item.key)} className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all">
+                   <div
+                     key={item.key}
+                     onPointerDown={() => scheduleRoutePreload(item.key)}
+                     onClick={() => { void handleSidebarNavigate(item.key); }}
+                     className="relative -top-5 bg-leather-500 w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl border-4 border-gray-100 dark:border-dark-bg active:scale-90 transition-all"
+                   >
                       <HomeOutlined className="text-white text-2xl" />
                    </div>
                  );
@@ -1646,7 +1705,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
                return (
                  <div 
                    key={item.key} 
-                   onClick={() => item.isMenu ? toggleSidebar() : handleSidebarNavigate(item.key)}
+                   onPointerDown={() => !item.isMenu && scheduleRoutePreload(item.key)}
+                   onClick={() => { item.isMenu ? toggleSidebar() : void handleSidebarNavigate(item.key); }}
                    className={`flex flex-col items-center gap-1 w-12 cursor-pointer ${isActive ? 'text-leather-500' : 'text-gray-400 dark:text-gray-500'}`}
                  >
                     <div className="text-xl">{item.icon}</div>

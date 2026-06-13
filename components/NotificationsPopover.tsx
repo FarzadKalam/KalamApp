@@ -21,7 +21,7 @@ import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../utils/n
 import { normalizeNoteScope } from '../utils/noteScope';
 import { buildTaskSourceInitialValues, normalizeTaskSourceValues, resolveTaskSourceLink } from '../utils/taskMeta';
 import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
-import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, NOTES_UPDATED_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
+import { NOTES_UPDATED_EVENT } from '../utils/aiAssistantEvents';
 import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
@@ -55,7 +55,9 @@ import { prefetchInternalConversationTimeline, useInternalConversationTimeline }
 import { prefetchBotConversationTimeline, useBotConversationTimeline } from '../hooks/useBotConversationTimeline';
 import { useNotificationRealtimeSync } from '../hooks/useNotificationRealtimeSync';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
-import { isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
+import { compareIsoAsc, isMissingRpcError, type NotificationConversationSummary } from '../utils/notificationConversationRpc';
+import { botMessageInsertBus, noteInsertBus } from '../utils/communicationRealtimeBus';
+import { loadMessagesLastState, saveMessagesLastState } from '../utils/messagesLastState';
 import {
   EMPTY_NOTIFICATION_UNREAD_SUMMARY,
   normalizeNotificationUnreadSummary,
@@ -103,7 +105,6 @@ const BotMessagesPanel = React.lazy(() => import('./notifications/BotMessagesPan
 const NotesPanel = React.lazy(() => import('./notifications/NotesPanel'));
 const ForwardMessageModalRuntime = React.lazy(() => import('./notifications/ForwardMessageModalRuntime'));
 const RelatedRecordPopover = React.lazy(() => import('./RelatedRecordPopover'));
-const AssistantPanel = React.lazy(() => import('./ai/AssistantPanel'));
 const MessageComposerModal = React.lazy(() => import('./MessageComposerModal'));
 const CounterpartyBotStatusModal = React.lazy(() => import('./bot/CounterpartyBotStatusModal'));
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
@@ -124,7 +125,7 @@ const renderNotificationTemplate = async (
 interface NotificationsPopoverProps {
   isMobile: boolean;
   variant?: 'chat' | 'alerts';
-  requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
+  requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
   requestedConversationKey?: string;
   requestedBotGroupId?: string;
   /** When true, renders as a full-page component (no drawer/popover wrapper, always open) */
@@ -169,9 +170,9 @@ const _notifDirectoryCache: {
 } = { orgId: null, users: [], roles: [] };
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
 type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms' | 'voip_calls';
-type DrawerTabKey = NotificationSectionKey | 'assistant';
+type DrawerTabKey = NotificationSectionKey;
 type CreatedSortDirection = 'desc' | 'asc';
-const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'sms_messages', 'voip_calls', 'assistant'];
+const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'];
 const ALERT_TAB_KEYS: DrawerTabKey[] = ['tasks', 'responsibilities'];
 const CHAT_SECTION_KEYS: NotificationSectionKey[] = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'];
 const ALERT_SECTION_KEYS: NotificationSectionKey[] = ['tasks', 'responsibilities'];
@@ -494,6 +495,7 @@ const formatBadgeCount = (count: number) => (count ? toPersianNumber(count) : 0)
 const ENTRY_ANIMATION_WINDOW_MS = 12_000;
 const LIKES_KEY = 'likes';
 const EMPTY_READ_FALLBACK_SET = new Set<string>();
+const EMPTY_STABLE_ARRAY: any[] = [];
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
@@ -651,6 +653,16 @@ const buildDirectoryMaps = async () => {
   };
 };
 
+// Returns a referentially stable callback that always invokes the latest fn.
+// Used to keep the memoized panel contexts stable while passing handlers that
+// close over fresh state on every render.
+const useStableCallback = <T extends (...args: any[]) => any>(fn: T): T => {
+  const ref = useRef(fn);
+  ref.current = fn;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useCallback(((...args: any[]) => ref.current(...args)) as T, []);
+};
+
 const shouldPauseNotesPolling = (error: any) => {
   if (!error) return false;
   const status = Number(error?.status || 0);
@@ -677,14 +689,26 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const runtimeRefreshSummary = notificationRuntime.refreshSummary;
   const { message } = App.useApp();
   const navigate = useNavigate();
-  const initialTab = normalizeTabForVariant(variant, requestedTab);
+  // Last opened tab/conversation (per device). Only the standalone chat page
+  // restores it, and only when the URL did not request a specific target.
+  const storedLastStateRef = useRef(
+    variant === 'chat' && standalone && !requestedTab && !requestedConversationKey && !requestedBotGroupId
+      ? loadMessagesLastState()
+      : null,
+  );
+  const initialTab = normalizeTabForVariant(
+    variant,
+    requestedTab || (storedLastStateRef.current?.tab as DrawerTabKey | undefined),
+  );
   const [open, setOpen] = useState(standalone);
   const [drawerContentMounted, setDrawerContentMounted] = useState(standalone);
   const [notes, setNotes] = useState<any[]>([]);
   const [noteLikeNotifications, setNoteLikeNotifications] = useState<NotificationInboxItemRow[]>([]);
   // tasks and responsibilities are managed by hooks (see below)
   const [botGroups, setBotGroups] = useState<CounterpartyBotGroupRow[]>([]);
-  const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(null);
+  const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(
+    () => String(storedLastStateRef.current?.botGroupId || '').trim() || null,
+  );
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
   const [botSuggesting, setBotSuggesting] = useState(false);
@@ -760,9 +784,14 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [noteAttachments, setNoteAttachments] = useState<File[]>([]);
   const [noteLinkedAttachments, setNoteLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [noteSmsNotificationEnabled, setNoteSmsNotificationEnabled] = useState(false);
-  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(
-    () => (variant === 'chat' ? SYSTEM_MESSAGES_USER_ID : null),
-  );
+  const [selectedNoteUserId, setSelectedNoteUserId] = useState<string | null>(() => {
+    if (variant !== 'chat') return null;
+    // Return to the last opened conversation; only the very first visit (no
+    // stored state on this device) lands on system messages.
+    const stored = storedLastStateRef.current;
+    if (stored && 'noteConversationId' in stored) return stored.noteConversationId ?? null;
+    return SYSTEM_MESSAGES_USER_ID;
+  });
   const [noteUserSearch, setNoteUserSearch] = useState('');
   const [noteMessageSearch, setNoteMessageSearch] = useState('');
   const [noteMentionPickerOpen, setNoteMentionPickerOpen] = useState(false);
@@ -892,9 +921,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     if (!Number.isFinite(time)) return false;
     return Date.now() - time <= ENTRY_ANIMATION_WINDOW_MS;
   }, []);
-  const moduleOptions = Object.values(MODULES)
+  const moduleOptions = useMemo(() => Object.values(MODULES)
     .filter((mod: any) => mod?.id && (mod?.table || mod?.id))
-    .map((mod: any) => ({ label: mod.titles?.fa || mod.id, value: mod.id }));
+    .map((mod: any) => ({ label: mod.titles?.fa || mod.id, value: mod.id })), []);
   const {
     items: rpcBotConversationSummaries,
     available: botConversationSummaryAvailable,
@@ -1118,16 +1147,28 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     }
 
     // ذخیره تنظیمات پیش‌فرض در counterparty_bot_config
-    const configPayload = { default_channel: botStatusDefaultChannel, fallback_to_active: botStatusFallbackToActive, customer_id: targetType === 'customers' ? counterpartyId : null, supplier_id: targetType === 'suppliers' ? counterpartyId : null };
+    const resolvedOrgId = String(profile.org_id || '').trim();
+    if (!resolvedOrgId) {
+      throw new Error('شناسه سازمان برای ذخیره تنظیمات بات در دسترس نیست.');
+    }
+    const configPayload = {
+      org_id: resolvedOrgId,
+      default_channel: botStatusDefaultChannel,
+      fallback_to_active: botStatusFallbackToActive,
+      customer_id: targetType === 'customers' ? counterpartyId : null,
+      supplier_id: targetType === 'suppliers' ? counterpartyId : null,
+    };
     let existingConfigQuery = supabase.from('counterparty_bot_config').select('id').limit(1);
     existingConfigQuery = targetType === 'customers' ? existingConfigQuery.eq('customer_id', counterpartyId) : existingConfigQuery.eq('supplier_id', counterpartyId);
     const { data: existingConfigRow } = await existingConfigQuery.maybeSingle();
     if (existingConfigRow?.id) {
-      await supabase.from('counterparty_bot_config').update(configPayload).eq('id', String(existingConfigRow.id));
+      const { error } = await supabase.from('counterparty_bot_config').update(configPayload).eq('id', String(existingConfigRow.id));
+      if (error) throw error;
     } else {
-      await supabase.from('counterparty_bot_config').insert([configPayload]);
+      const { error } = await supabase.from('counterparty_bot_config').insert([configPayload]);
+      if (error) throw error;
     }
-  }, [botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusPlatformData, selectedBotGroup]);
+  }, [botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusPlatformData, profile.org_id, selectedBotGroup]);
 
   const handleOpenBotStatusModal = useCallback(async () => {
     if (!selectedBotGroup) return;
@@ -2161,7 +2202,7 @@ useEffect(() => {
       );
       if (shouldUseConversationScopedNotes) {
         await Promise.all([
-          safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any),
+          safeSectionFetch(() => refreshSelectedConversationTimeline({ force: Boolean(options?.force) }), 'notes', null as any),
           safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any),
           safeSectionFetch(() => refreshUnreadSummary(), 'notes', null as any),
         ]);
@@ -2182,7 +2223,7 @@ useEffect(() => {
       const notesData = await safeSectionFetch(() => fetchNotes(), 'notes', [] as any[]);
       setNotes(notesData);
       if (selectedConversationKey) {
-        await safeSectionFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any);
+        await safeSectionFetch(() => refreshSelectedConversationTimeline({ force: Boolean(options?.force) }), 'notes', null as any);
       }
       if (noteConversationSummaryAvailable) {
         await safeSectionFetch(() => refreshNoteConversationSummaries(), 'notes', null as any);
@@ -2507,7 +2548,7 @@ useEffect(() => {
     if (shouldFetchGlobalNotes) setNotes(notesData);
     await Promise.all([
       shouldUseConversationScopedNotes
-        ? safeFetch(() => refreshSelectedConversationTimeline(), 'notes', null as any)
+        ? safeFetch(() => refreshSelectedConversationTimeline({ force: Boolean(options?.force) }), 'notes', null as any)
         : Promise.resolve(null),
       shouldLoadNotes && noteConversationSummaryAvailable
         ? safeFetch(() => refreshNoteConversationSummaries(), 'notes', null as any)
@@ -3019,6 +3060,7 @@ useEffect(() => {
           || providerResult?.data?.message_id
           || providerResult?.data?.message_update?.message_id
           || providerResult?.data?.messageUpdate?.messageId
+          || providerItem?.provider_message_id
           || ''
         ) || null,
         content_text: String(providerItem?.content_text ?? text ?? '').trim() || null,
@@ -3109,6 +3151,10 @@ useEffect(() => {
     try {
       notesPollingPausedRef.current = false;
       notesPollingPauseLoggedRef.current = false;
+      if (standalone && variant === 'chat') {
+        await refreshAll(false, { force: true });
+        return;
+      }
       const currentTab = isMobile ? mobileActiveKey : desktopActiveKey;
       const activeSection = isSectionTabKey(currentTab) ? currentTab : null;
       if (activeSection) {
@@ -3167,7 +3213,11 @@ useEffect(() => {
   }, [variant]);
 
   useEffect(() => {
-    const nextRequested = normalizeTabForVariant(variant, requestedTab);
+    // Without an explicit ?tab= the restored last tab (initialTab) stays active.
+    const nextRequested = normalizeTabForVariant(
+      variant,
+      requestedTab || (storedLastStateRef.current?.tab as DrawerTabKey | undefined),
+    );
     setDesktopActiveKey(nextRequested);
     setMobileActiveKey(nextRequested);
   }, [requestedTab, variant]);
@@ -3183,23 +3233,36 @@ useEffect(() => {
     setSelectedBotGroupId(requestedBotGroupId);
   }, [requestedBotGroupId, variant]);
 
+  // Restored last-state belongs to a specific user on this device — if a
+  // different user signs in, fall back to the default selection.
+  const lastStateValidatedRef = useRef(false);
   useEffect(() => {
-    if (typeof window === 'undefined' || variant !== 'chat') return undefined;
-    const handleAiOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{ requestedTab?: DrawerTabKey; context?: AssistantContext }>).detail || {};
-      const requested = normalizeTabForVariant('chat', detail.requestedTab || 'assistant');
-      setDesktopActiveKey(requested);
-      setMobileActiveKey(requested);
-      setOpen(true);
-      if (detail.context) {
-        window.requestAnimationFrame(() => {
-          window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail: detail.context }));
-        });
-      }
-    };
-    window.addEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
-    return () => window.removeEventListener(AI_OPEN_EVENT, handleAiOpen as EventListener);
-  }, [variant]);
+    if (variant !== 'chat' || !standalone || lastStateValidatedRef.current) return;
+    const userId = String(profile.id || '').trim();
+    if (!userId) return;
+    lastStateValidatedRef.current = true;
+    const stored = storedLastStateRef.current;
+    if (stored && stored.userId !== userId) {
+      storedLastStateRef.current = null;
+      setSelectedNoteUserId(SYSTEM_MESSAGES_USER_ID);
+      setSelectedBotGroupId(null);
+      setDesktopActiveKey(normalizeTabForVariant(variant, requestedTab));
+      setMobileActiveKey(normalizeTabForVariant(variant, requestedTab));
+    }
+  }, [profile.id, requestedTab, standalone, variant]);
+
+  // Persist the active tab + conversation so the next visit restores it.
+  useEffect(() => {
+    if (variant !== 'chat' || !standalone) return;
+    const userId = String(profile.id || '').trim();
+    if (!userId || !lastStateValidatedRef.current) return;
+    saveMessagesLastState({
+      userId,
+      tab: isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null,
+      noteConversationId: selectedNoteUserId,
+      botGroupId: selectedBotGroupId,
+    });
+  }, [activeDrawerTab, profile.id, selectedBotGroupId, selectedNoteUserId, standalone, variant]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes' || selectedNoteUserId) return;
@@ -3404,7 +3467,14 @@ useEffect(() => {
     const revision = notificationRuntime.revisions[activeDrawerSection];
     if (revision <= 0) return;
     if (open) {
-      void refreshSectionRef.current?.(activeDrawerSection, { force: true });
+      // Route through scheduleLiveRefresh (coalescing + 5s cooldown) instead of
+      // forcing a refresh per revision bump. Revisions bump on every org
+      // realtime event; unthrottled forced refreshes (3 RPCs + state churn
+      // each) keep the page busy enough to starve React Router's
+      // v7_startTransition navigation — the URL changes but the new page never
+      // commits. Instant message display is handled by the realtime
+      // direct-append bus, so this refresh is only a reconciliation pass.
+      scheduleLiveRefresh(activeDrawerSection);
     }
   }, [
     activeDrawerSection,
@@ -3412,6 +3482,7 @@ useEffect(() => {
     notificationRuntime.revisions,
     open,
     profile.id,
+    scheduleLiveRefresh,
     variant,
   ]);
 
@@ -3495,7 +3566,7 @@ useEffect(() => {
     () => smsThreads.find((thread) => thread.id === selectedSmsThreadKey) || smsThreads[0] || null,
     [selectedSmsThreadKey, smsThreads]
   );
-  const displayedSmsMessages = selectedSmsThread?.messages || [];
+  const displayedSmsMessages = selectedSmsThread?.messages || EMPTY_STABLE_ARRAY;
   const voipThreads = useMemo<VoipThreadItem[]>(
     () => buildVoipThreads({
       calls: voipCalls,
@@ -3509,7 +3580,7 @@ useEffect(() => {
     () => voipThreads.find((thread) => thread.id === selectedVoipThreadKey) || voipThreads[0] || null,
     [selectedVoipThreadKey, voipThreads]
   );
-  const displayedVoipCalls = selectedVoipThread?.calls || [];
+  const displayedVoipCalls = selectedVoipThread?.calls || EMPTY_STABLE_ARRAY;
   useEffect(() => {
     if (smsThreads.length === 0) {
       setSelectedSmsThreadKey(null);
@@ -3749,6 +3820,33 @@ useEffect(() => {
     pageSize: 10,
     cacheScopeKey: communicationCacheScopeKey,
   });
+  useEffect(() => {
+    const missingReferences = (selectedConversationNotes || [])
+      .map((note: any) => ({
+        module_id: String(note?.module_id || '').trim(),
+        record_id: String(note?.record_id || '').trim(),
+      }))
+      .filter((item) => (
+        item.module_id
+        && item.record_id
+        && !recordTitleMap[buildRecordReferenceKey(item.module_id, item.record_id)]
+      ));
+    if (missingReferences.length === 0) return;
+
+    let cancelled = false;
+    void fetchRecordReferenceLabels(supabase, missingReferences)
+      .then((map) => {
+        if (cancelled || !Object.keys(map).length) return;
+        setRecordTitleMap((prev) => ({ ...prev, ...map }));
+      })
+      .catch((error) => {
+        console.warn('Could not load internal message related record titles', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recordTitleMap, selectedConversationNotes]);
   const loadOlderNotesWithPreserve = useCallback(async () => {
     const container = notesScrollContainerRef.current;
     if (container) pendingNoteScrollRestoreRef.current = container.scrollHeight;
@@ -3767,6 +3865,72 @@ useEffect(() => {
     if (container) pendingBotScrollRestoreRef.current = container.scrollHeight;
     await loadOlderBotMessages();
   }, [loadOlderBotMessages]);
+  // ── Realtime direct-append ─────────────────────────────────────────────────
+  // The realtime INSERT payload already contains the full message row, so the
+  // open conversation appends it instantly. The forced timeline refresh that
+  // follows (revision/scheduleLiveRefresh) stays as the consistency backstop.
+  const realtimeAppendCtxRef = useRef({
+    open,
+    variant,
+    activeDrawerSection,
+    selectedNoteUserId,
+    selectedChatGroupId,
+    selectedBotGroupId,
+    currentUserId: String(profile.id || '').trim(),
+    orgId: String(profile.org_id || '').trim(),
+  });
+  realtimeAppendCtxRef.current = {
+    open,
+    variant,
+    activeDrawerSection,
+    selectedNoteUserId,
+    selectedChatGroupId,
+    selectedBotGroupId,
+    currentUserId: String(profile.id || '').trim(),
+    orgId: String(profile.org_id || '').trim(),
+  };
+  useEffect(() => {
+    const matchesOpenNoteConversation = (row: any) => {
+      const ctx = realtimeAppendCtxRef.current;
+      if (ctx.variant !== 'chat' || !ctx.open || ctx.activeDrawerSection !== 'notes') return false;
+      const rowOrgId = String(row?.org_id || '').trim();
+      if (ctx.orgId && rowOrgId && rowOrgId !== ctx.orgId) return false;
+      const rowGroupId = String(row?.metadata?.chat_group_id || '').trim();
+      if (ctx.selectedChatGroupId) return rowGroupId === ctx.selectedChatGroupId;
+      if (rowGroupId) return false;
+      if (ctx.selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return isSystemNote(row);
+      if (!ctx.selectedNoteUserId) {
+        return Boolean(ctx.currentUserId)
+          && String(row?.author_id || '').trim() === ctx.currentUserId
+          && !isSystemNote(row);
+      }
+      return isDirectConversationNote(row, ctx.currentUserId, String(ctx.selectedNoteUserId));
+    };
+    const unsubscribeNotes = noteInsertBus.subscribe((row) => {
+      if (!matchesOpenNoteConversation(row)) return;
+      setSelectedConversationNotes((prev: any[]) => {
+        const id = String(row?.id || '').trim();
+        if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
+        return [...prev, row].sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
+      });
+    });
+    const unsubscribeBot = botMessageInsertBus.subscribe((row) => {
+      const ctx = realtimeAppendCtxRef.current;
+      if (ctx.variant !== 'chat' || !ctx.open || ctx.activeDrawerSection !== 'bot_messages') return;
+      if (!ctx.selectedBotGroupId || String(row?.bot_group_id || '').trim() !== ctx.selectedBotGroupId) return;
+      const rowOrgId = String(row?.org_id || '').trim();
+      if (ctx.orgId && rowOrgId && rowOrgId !== ctx.orgId) return;
+      setBotMessages((prev) => {
+        const id = String(row?.id || '').trim();
+        if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
+        return [...prev, row as CounterpartyBotMessageRow].sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
+      });
+    });
+    return () => {
+      unsubscribeNotes();
+      unsubscribeBot();
+    };
+  }, [setBotMessages, setSelectedConversationNotes]);
   const isUnreadNoteRow = useCallback((note: any) => {
     const noteId = String(note?.id || '').trim();
     if (!noteId) return false;
@@ -4636,16 +4800,16 @@ useEffect(() => {
   const drawerContentStyle = useMemo<React.CSSProperties>(() => ({
     overflow: 'hidden',
   }), []);
-  function scrollNotesToBottom(behavior: ScrollBehavior = 'auto') {
+  const scrollNotesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = notesScrollContainerRef.current;
     if (!node) return;
     node.scrollTo({ top: node.scrollHeight, behavior });
-  }
-  function scrollBotMessagesToBottom(behavior: ScrollBehavior = 'auto') {
+  }, []);
+  const scrollBotMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
     const node = botMessagesScrollContainerRef.current;
     if (!node) return;
     node.scrollTo({ top: node.scrollHeight, behavior });
-  }
+  }, []);
   const scrollMessageIntoView = useCallback((domId: string) => {
     if (typeof document === 'undefined') return;
     const normalizedId = String(domId || '').trim();
@@ -5018,8 +5182,8 @@ useEffect(() => {
   useLayoutEffect(() => {
     if (!open || activeDrawerSection !== 'notes') return;
     if (!isSelectedConversationLoaded) return;
-    // Initial anchor scroll is handled inside NotesPanel via msgVirtualizer.scrollToIndex.
-    // NotesPanel calls setNoteViewportReady(true) when done.
+    // Initial anchor scroll is handled inside NotesPanel (scroll-to-bottom on
+    // first load); NotesPanel calls setNoteViewportReady(true) when done.
     if (!noteViewportReady) return;
     // Preserve scroll position after loading older messages.
     // Only consume the saved height when the container actually grew — if a
@@ -5365,14 +5529,14 @@ useEffect(() => {
     setNoteSmsNotificationEnabled(false);
   };
 
-  const handleNoteScopeModuleChange = (value: string | null) => {
+  const handleNoteScopeModuleChange = useCallback((value: string | null) => {
     setNoteModuleId(value);
     setNoteRecordId(null);
-  };
+  }, []);
 
-  const handleNoteScopeRecordChange = (value: string | null) => {
+  const handleNoteScopeRecordChange = useCallback((value: string | null) => {
     setNoteRecordId(value);
-  };
+  }, []);
 
   const submitNote = async () => {
     if (!noteText.trim() && noteAttachments.length === 0 && noteLinkedAttachments.length === 0) return;
@@ -6061,11 +6225,14 @@ useEffect(() => {
     }
   }, [open, standalone]);
 
-  const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
-    <NotesPanel
-      layout={layout}
-      context={{
-        displayedChatNotes,
+  // Stable identity for submitNote so the memoized context below doesn't
+  // change on every render (submitNote closes over most composer state).
+  const submitNoteStable = useStableCallback(submitNote);
+  // Memoized context: NotesPanel is React.memo'd, so keeping this object
+  // referentially stable bails out re-renders caused by unrelated popover
+  // state (bot/sms/tasks churn, runtime revisions, overlay updates).
+  const notesPanelContext = useMemo(() => ({
+    displayedChatNotes,
         notes,
         loadingNotes,
         isSelectedConversationLoaded,
@@ -6147,7 +6314,7 @@ useEffect(() => {
         handleNoteScopeRecordChange,
         noteText,
         handleNoteTextChange,
-        submitNote,
+        submitNote: submitNoteStable,
         noteSending,
         mentionOptions,
         mentionValues,
@@ -6167,9 +6334,83 @@ useEffect(() => {
         openCreateActivityFromMessage,
         setNoteViewportReady,
         noteInitialAnchorDoneRef,
-      }}
-    />
+  }), [
+    activeConversationRoleLabel,
+    authorNameMap,
+    directoryUserMap,
+    displayedChatNotes,
+    editingNoteId,
+    editingNoteValue,
+    effectiveSystemNoteStats,
+    handleClose,
+    handleNoteScopeModuleChange,
+    handleNoteScopeRecordChange,
+    handleNoteTextChange,
+    handleNotesScroll,
+    isSelectedConversationLoaded,
+    isUnreadNoteRow,
+    loadOlderMyNotesWithPreserve,
+    loadOlderNotesWithPreserve,
+    loadingNotes,
+    loadingOlderSelectedConversationNotes,
+    mentionOptions,
+    mentionValues,
+    message,
+    mobileNoteSearchOpen,
+    moduleOptions,
+    myNoteStats,
+    myNotesHasMoreBefore,
+    normalizeLikeReceipts,
+    normalizeReadReceipts,
+    normalizedNoteMessageSearch,
+    noteAttachments,
+    noteLinkedAttachments,
+    noteMentionPickerOpen,
+    noteMessageSearch,
+    noteMessageSearchOpen,
+    noteModuleId,
+    noteNewIncomingCount,
+    noteRecordId,
+    noteRecordOptions,
+    noteReplyTo,
+    noteSending,
+    noteSmsNotificationEnabled,
+    noteText,
+    noteUserSearch,
+    noteViewportReady,
+    notes,
+    openCreateActivityFromMessage,
+    openForwardModal,
+    openReadyTextsModal,
+    profile,
+    recordTitleMap,
+    refreshNoteConversationSummaries,
+    refreshUnreadSummary,
+    renderReadReceiptStatus,
+    resolveNoteBubbleAvatar,
+    roleLookup,
+    scrollMessageIntoView,
+    scrollNotesToBottom,
+    selectedChatGroup,
+    selectedConversationHasMoreBefore,
+    selectedNoteConversationAvatar,
+    selectedNoteConversationListItem,
+    selectedNoteUser,
+    selectedNoteUserId,
+    setSelectedConversationNotes,
+    shouldAnimateChatEntry,
+    submitNoteStable,
+    systemAvatarSrc,
+    systemConversationAvatar,
+    toggleNoteLike,
+    visibleNoteConversations,
+  ]);
+  const renderNotesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
+    <NotesPanel layout={layout} context={notesPanelContext} />
   );
+  // Plain-function props get stable identities so the memoized panels bail out.
+  const getCentralRecordLabelStable = useStableCallback(getCentralRecordLabel);
+  const refreshSectionStable = useStableCallback(refreshSection);
   const renderSmsMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => (
     <SmsMessagesPanel
       layout={layout}
@@ -6184,11 +6425,11 @@ useEffect(() => {
       setSelectedSmsThreadKey={setSelectedSmsThreadKey}
       setSmsMessages={setSmsMessages}
       openPreviewRecord={openPreviewRecord}
-      getCentralRecordLabel={getCentralRecordLabel}
+      getCentralRecordLabel={getCentralRecordLabelStable}
       getPhoneMatchLabel={getPhoneMatchLabel}
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
       requestReplySuggestion={requestReplySuggestion}
-      refreshSection={refreshSection}
+      refreshSection={refreshSectionStable}
       openCreateActivityFromMessage={openCreateActivityFromMessage}
     />
   );
@@ -6202,20 +6443,21 @@ useEffect(() => {
       assigneeNameMap={assigneeNameMap}
       setSelectedVoipThreadKey={setSelectedVoipThreadKey}
       openPreviewRecord={openPreviewRecord}
-      getCentralRecordLabel={getCentralRecordLabel}
+      getCentralRecordLabel={getCentralRecordLabelStable}
       getPhoneMatchLabel={getPhoneMatchLabel}
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
       openCreateActivityFromMessage={openCreateActivityFromMessage}
     />
   );
 
-  const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
-    const selectedGroup = selectedBotGroup;
-    const botMessageMap = new Map(botMessages.map((row) => [String(row.id), row]));
-    const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
-    const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
-    const sidebarBotGroups = effectiveBotGroups;
-    const botUnreadByGroup = botConversationSummaryAvailable && rpcBotConversationSummaries
+  // Bot panel derived data — memoized at component level so the React.memo'd
+  // BotMessagesPanel actually bails out when unrelated popover state changes.
+  const botMessageMap = useMemo(
+    () => new Map(botMessages.map((row) => [String(row.id), row])),
+    [botMessages],
+  );
+  const botUnreadByGroup = useMemo(() => (
+    botConversationSummaryAvailable && rpcBotConversationSummaries
       ? (rpcBotConversationSummaries || []).reduce<Record<string, number>>((acc, item) => {
           const groupId = String(item?.bot_group_id || '').trim();
           if (!groupId || !visibleBotGroupIds.has(groupId)) return acc;
@@ -6229,23 +6471,28 @@ useEffect(() => {
           if (isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id))) return acc;
           acc[groupId] = (acc[groupId] || 0) + 1;
           return acc;
-        }, {});
-    const showBotTimelineSkeleton = loadingBotMessages;
-    const hideBotTimelineUntilSettled = !showBotTimelineSkeleton && !botViewportReady && Boolean(selectedGroup);
-    const filteredBotGroups = sidebarBotGroups.filter((row) => {
+        }, {})
+  ), [botConversationSummaryAvailable, botNotificationMessages, isNotificationRead, rpcBotConversationSummaries, seenBotMessageIds, visibleBotGroupIds]);
+  const filteredBotGroups = useMemo(() => {
+    const normalizedGroupSearch = String(botGroupSearch || '').trim().toLowerCase();
+    return effectiveBotGroups.filter((row) => {
       if (!normalizedGroupSearch) return true;
       const title = String(row.group_title || '').trim().toLowerCase();
       const link = String(row.group_join_link || '').trim().toLowerCase();
       const channel = String(row.channel_type || '').trim().toLowerCase();
       return `${title} ${link} ${channel}`.includes(normalizedGroupSearch);
     });
-    const filteredBotMessages = botMessages.filter((row) => {
+  }, [botGroupSearch, effectiveBotGroups]);
+  const filteredBotMessages = useMemo(() => {
+    const normalizedMessageSearch = String(botMessageSearch || '').trim().toLowerCase();
+    return botMessages.filter((row) => {
       if (!normalizedMessageSearch) return true;
       const text = String(row.content_text || '').trim().toLowerCase();
       const fileName = String(row.file_name || '').trim().toLowerCase();
       return `${text} ${fileName}`.includes(normalizedMessageSearch);
     });
-    const resolveOutboundBotAuthor = (row: CounterpartyBotMessageRow | null | undefined) => {
+  }, [botMessageSearch, botMessages]);
+  const resolveOutboundBotAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const userId = String(
         (payload as any)?.sender_user_id
@@ -6266,8 +6513,8 @@ useEffect(() => {
         avatarUrl,
         fallback: String(name || 'ک').trim().slice(0, 1) || 'ک',
       };
-    };
-    const resolveInboundBotAuthor = (row: CounterpartyBotMessageRow | null | undefined) => {
+  }, [directoryUserMap]);
+  const resolveInboundBotAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const senderDisplayName = String((payload as any)?.sender_display_name || '').trim();
       const usernameRaw = String((payload as any)?.username || '').trim().replace(/^@+/, '');
@@ -6288,15 +6535,16 @@ useEffect(() => {
         avatarUrl: null as string | null,
         fallback: String(name || 'ب').trim().slice(0, 1) || 'ب',
       };
-    };
-    const resolveBotMessageAuthor = (row: CounterpartyBotMessageRow | null | undefined) => (
-      String(row?.direction || '') === 'outbound'
-        ? resolveOutboundBotAuthor(row)
-        : resolveInboundBotAuthor(row)
-    );
+  }, []);
+  const resolveBotMessageAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => (
+    String(row?.direction || '') === 'outbound'
+      ? resolveOutboundBotAuthor(row)
+      : resolveInboundBotAuthor(row)
+  ), [resolveInboundBotAuthor, resolveOutboundBotAuthor]);
 
-    const sendBotMessage = async () => {
+  const sendBotMessage = useStableCallback(async () => {
       const text = String(botMessageText || '').trim();
+      const selectedGroup = selectedBotGroup;
       if (!selectedGroup) {
         message.warning('ابتدا یک گروه بات انتخاب کنید.');
         return;
@@ -6335,15 +6583,11 @@ useEffect(() => {
               },
             })
           : [];
-        const attachmentText = outboundAttachments
-          .map((item) => `${String(item?.name || 'فایل').trim()}: ${String(item?.url || '').trim()}`)
-          .filter(Boolean)
-          .join('\n');
         const attachmentNameText = buildAttachmentNameText(outboundAttachments);
-        const isRubikaGroup = String(selectedGroup.channel_type || '').trim() === 'rubika';
-        const finalText = isRubikaGroup && attachments.length > 0
+        const isBotMediaMessage = attachments.length > 0;
+        const finalText = isBotMediaMessage
           ? String(renderedText || '').trim()
-          : [renderedText, attachmentText].filter(Boolean).join('\n');
+          : String(renderedText || '').trim();
         if (!String(finalText || '').trim() && attachments.length === 0) {
           message.warning('پیام خالی است.');
           return;
@@ -6351,10 +6595,10 @@ useEffect(() => {
         botShouldStickToBottomRef.current = true;
         botForceScrollToBottomRef.current = true;
         const sendResult = await sendTextToBotGroup(selectedGroup, finalText, {
-          fallbackText: isRubikaGroup && attachments.length > 0
+          fallbackText: isBotMediaMessage
             ? [String(renderedText || '').trim(), attachmentNameText].filter(Boolean).join('\n')
             : undefined,
-          attachments: isRubikaGroup ? attachments : undefined,
+          attachments: isBotMediaMessage ? attachments : undefined,
           payload: {
             attachments,
             reply_to_message_id: botReplyToId || null,
@@ -6386,9 +6630,10 @@ useEffect(() => {
       } finally {
         setBotSending(false);
       }
-    };
+  });
 
-    const suggestBotReply = async (instruction = '') => {
+  const suggestBotReply = useStableCallback(async (instruction = '') => {
+      const selectedGroup = selectedBotGroup;
       if (!selectedGroup) {
         message.warning('ابتدا یک گروه بات انتخاب کنید.');
         return;
@@ -6438,8 +6683,14 @@ useEffect(() => {
       } finally {
         setBotSuggesting(false);
       }
-    };
+  });
 
+  // fetchBotMessages is a plain async function recreated per render — give the
+  // memoized panel a stable reference.
+  const fetchBotMessagesStable = useStableCallback(fetchBotMessages);
+  const renderBotMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
+    const selectedGroup = selectedBotGroup;
+    const hideBotTimelineUntilSettled = !loadingBotMessages && !botViewportReady && Boolean(selectedGroup);
     return (
       <BotMessagesPanel
         layout={layout}
@@ -6485,7 +6736,7 @@ useEffect(() => {
         refreshBotConversationSummaries={refreshBotConversationSummaries}
         refreshBotTimeline={refreshBotTimeline}
         refreshUnreadSummary={refreshUnreadSummary}
-        fetchBotMessages={fetchBotMessages}
+        fetchBotMessages={fetchBotMessagesStable}
         openForwardModal={openForwardModal}
         openCreateActivityFromMessage={openCreateActivityFromMessage}
         botNewIncomingCount={botNewIncomingCount}
@@ -6613,13 +6864,6 @@ useEffect(() => {
         label: <Badge count={formatBadgeCount(effectiveVoipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
         children: renderLazyDrawerPane('voip_calls', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderVoipCallsPanel('desktop')),
       },
-      {
-        key: 'assistant',
-        label: <span className="px-1">هوش مصنوعی</span>,
-        children: renderLazyDrawerPane('assistant', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => (
-          <AssistantPanel active={open && desktopActiveKey === 'assistant'} openCreateActivityFromMessage={openCreateActivityFromMessage} />
-        )),
-      },
     ]
     : [
       {
@@ -6644,6 +6888,20 @@ useEffect(() => {
         activeKey={desktopActiveKey}
         onChange={(key) => setDesktopActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
         className="h-full [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-3 [&_.ant-tabs-tab]:!py-3 [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content]:h-full [&_.ant-tabs-tabpane]:h-full"
+        tabBarExtraContent={standalone ? {
+          left: (
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              title="دریافت پیام‌های جدید"
+              aria-label="دریافت پیام‌های جدید"
+              icon={<ReloadOutlined spin={refreshing} />}
+              onClick={() => void handleManualRefresh()}
+              className="ml-1"
+            />
+          ),
+        } : undefined}
         items={desktopModernItems}
       />
     </div>
@@ -6677,13 +6935,6 @@ useEffect(() => {
         label: <Badge count={formatBadgeCount(effectiveVoipCallsCount)} color={badgeColor}>تماس‌ها</Badge>,
         children: renderLazyDrawerPane('voip_calls', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderVoipCallsPanel('mobile')),
       },
-      {
-        key: 'assistant',
-        label: <span className="px-1">هوش مصنوعی</span>,
-        children: renderLazyDrawerPane('assistant', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => (
-          <AssistantPanel active={open && mobileActiveKey === 'assistant'} openCreateActivityFromMessage={openCreateActivityFromMessage} />
-        )),
-      },
     ]
     : [
       {
@@ -6704,6 +6955,20 @@ useEffect(() => {
         activeKey={mobileActiveKey}
         onChange={(key) => setMobileActiveKey(normalizeTabForVariant(variant, key as DrawerTabKey))}
         className="h-full min-h-0 [&_.ant-tabs-nav]:!mb-0 [&_.ant-tabs-nav]:!px-1 [&_.ant-tabs-nav]:!shrink-0 [&_.ant-tabs-nav-wrap]:!overflow-x-auto [&_.ant-tabs-nav-list]:!min-w-max [&_.ant-tabs-tab]:!px-2 [&_.ant-tabs-tab]:!py-2 [&_.ant-tabs-tab]:!text-xs [&_.ant-tabs-content-holder]:h-full [&_.ant-tabs-content-holder]:min-h-0 [&_.ant-tabs-content]:h-full [&_.ant-tabs-content]:min-h-0 [&_.ant-tabs-tabpane]:h-full [&_.ant-tabs-tabpane]:min-h-0"
+        tabBarExtraContent={standalone ? {
+          left: (
+            <Button
+              type="text"
+              size="small"
+              shape="circle"
+              title="دریافت پیام‌های جدید"
+              aria-label="دریافت پیام‌های جدید"
+              icon={<ReloadOutlined spin={refreshing} />}
+              onClick={() => void handleManualRefresh()}
+              className="ml-1"
+            />
+          ),
+        } : undefined}
         items={mobileModernItems}
       />
     </div>

@@ -19,6 +19,7 @@ export type ProcessAutomationTargetType =
   | 'current_task_assignee'
   | 'previous_stage_assignee'
   | 'next_stage_assignee'
+  | 'specific_stage_assignee'
   | 'task_type_assignee'
   | 'specific_user'
   | 'specific_role';
@@ -32,7 +33,8 @@ export type ProcessAutomationActionType =
   | 'send_bale_bot'
   | 'send_rubika_bot'
   | 'update_record'
-  | 'send_to_next_stages';
+  | 'send_to_next_stages'
+  | 'send_to_specific_stage';
 
 export type ProcessAutomationRule = {
   id: string;
@@ -49,6 +51,7 @@ export type ProcessAutomationRule = {
   conditions_any?: WorkflowCondition[] | null;
   target_type: ProcessAutomationTargetType;
   target_task_type?: string | null;
+  target_stage_node_key?: string | null;
   target_user_id?: string | null;
   target_role_id?: string | null;
   note_text?: string | null;
@@ -59,6 +62,7 @@ export const PROCESS_AUTOMATION_TARGET_OPTIONS: Array<{ label: string; value: Pr
   { label: 'مسئول همین فعالیت', value: 'current_task_assignee' },
   { label: 'مسئول مرحله قبل', value: 'previous_stage_assignee' },
   { label: 'مسئول مرحله بعد', value: 'next_stage_assignee' },
+  { label: 'مسئول مرحله خاص', value: 'specific_stage_assignee' },
   { label: 'مسئول فعالیتی از این نوع', value: 'task_type_assignee' },
   { label: 'کاربر مشخص', value: 'specific_user' },
   { label: 'تیم مشخص', value: 'specific_role' },
@@ -69,7 +73,12 @@ export const PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION = {
   value: 'previous_stage_completed' as const,
 };
 
-const PROCESS_AUTOMATION_TRIGGER_LABELS: Record<ProcessAutomationTriggerType, string> = {
+export const PROCESS_STAGE_RECIPIENT_FIELD_PREFIX = '__comm_recipient__specific_process_stage__';
+
+export const createProcessStageRecipientFieldKey = (nodeKey: string) =>
+  `${PROCESS_STAGE_RECIPIENT_FIELD_PREFIX}${String(nodeKey || '').trim()}`;
+
+export const PROCESS_AUTOMATION_TRIGGER_LABELS: Record<ProcessAutomationTriggerType, string> = {
   on_create: 'وقتی فعالیت جدید ایجاد شد',
   on_upsert: 'وقتی فعالیت ایجاد یا به روز شد',
   interval: 'بر اساس بازه زمانی',
@@ -82,6 +91,25 @@ const isNoteActionType = (value: any) => {
   const actionType = String(value || '').trim();
   return actionType === 'send_note' || actionType === 'send_note_sms';
 };
+
+export const PROCESS_AUTOMATION_LOCKED_TASK_TYPE_FIELD = '__task__task_type';
+
+// شرط قفل‌شده «نوع فعالیت» توسط سیستم تزریق می‌شود و نباید در ادیتور نمایش/ویرایش شود
+export const filterEditableAutomationConditions = (
+  conditions: WorkflowCondition[] | null | undefined
+): WorkflowCondition[] =>
+  (Array.isArray(conditions) ? conditions : []).filter(
+    (condition) => String(condition?.field || '').trim() !== PROCESS_AUTOMATION_LOCKED_TASK_TYPE_FIELD
+  );
+
+// note_text قانون باید همیشه با متن اولین اقدام یادداشت هم‌گام بماند (سازگاری با runtime قدیمی)
+export const extractRuleNoteTextFromActions = (
+  actions: WorkflowAction[] | null | undefined
+): string | null =>
+  String(
+    (Array.isArray(actions) ? actions : []).find((action) => isNoteActionType(action?.type))?.config?.note_text
+    || ''
+  ) || null;
 
 const isWorkflowTriggerType = (value: string): value is WorkflowTriggerType =>
   ['on_create', 'on_upsert', 'interval'].includes(value);
@@ -189,6 +217,7 @@ export const createDefaultProcessAutomationRule = (): ProcessAutomationRule => (
   conditions_any: [],
   target_type: 'current_task_assignee',
   target_task_type: null,
+  target_stage_node_key: null,
   target_user_id: null,
   target_role_id: null,
   note_text: DEFAULT_NOTE_TEMPLATE,
@@ -245,6 +274,7 @@ export const normalizeProcessAutomationRule = (value: any): ProcessAutomationRul
     conditions_any: baseConditionsAny,
     target_type: targetType,
     target_task_type: String(value?.target_task_type || '').trim() || null,
+    target_stage_node_key: String(value?.target_stage_node_key || '').trim() || null,
     target_user_id: String(value?.target_user_id || '').trim() || null,
     target_role_id: String(value?.target_role_id || '').trim() || null,
     note_text: String(

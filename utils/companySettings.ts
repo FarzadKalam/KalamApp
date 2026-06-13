@@ -1,17 +1,23 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePublicAssetUrl } from './assetUrl';
 import { fetchSessionBootstrap } from './sessionCache';
+import { normalizePrintLetterheads } from './printTemplates/letterheads';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 export const normalizeCompanyAssetFields = (row: any) => {
   if (!row || typeof row !== 'object') return row;
+  const letterheads = normalizePrintLetterheads(row.print_letterheads).map((item) => ({
+    ...item,
+    imageUrl: normalizePublicAssetUrl(item.imageUrl) || null,
+  }));
   return {
     ...row,
     logo_url: normalizePublicAssetUrl(row.logo_url) || null,
     icon_url: normalizePublicAssetUrl(row.icon_url) || null,
     signature_image_url: normalizePublicAssetUrl(row.signature_image_url) || null,
     stamp_image_url: normalizePublicAssetUrl(row.stamp_image_url) || null,
+    print_letterheads: letterheads,
   };
 };
 

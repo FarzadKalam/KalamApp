@@ -9,6 +9,15 @@ import AiSparkleIcon from './AiSparkleIcon';
 import { AI_INSTRUCTIONS_DOCUMENT_TYPE, isAiInstructionsConfigured } from '../../utils/aiKnowledge';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { narrowProcessGuideContext } from '../../utils/processGuideContext';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
+import { fetchRecordReferenceLabels } from '../../utils/recordReference';
+import ProfileAvatar from '../common/ProfileAvatar';
+import type { RecordedVoice } from './AiVoiceRecorder';
+import type { AiUploadedFilePrompt } from './AiFileUploadButton';
+import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapabilityComposerActions';
+import AiMessageAttachmentPreview from './AiMessageAttachmentPreview';
+import { blobToBase64 } from '../../utils/blobBase64';
+import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 
 type ChatMessage = {
   id: string;
@@ -18,6 +27,19 @@ type ChatMessage = {
   created_at?: string | null;
   provider?: string | null;
   model?: string | null;
+};
+
+const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حال فکر کردن...') => {
+  const set = new Set((capabilities || []).map((item) => String(item || '').trim()));
+  if (set.has('voice_output')) return 'در حال تولید صدا...';
+  if (set.has('image_generation')) return 'در حال ساخت تصویر...';
+  if (set.has('document_analysis')) return 'در حال تحلیل فایل...';
+  if (set.has('legal_assistant')) return 'در حال جستجو و بررسی حقوقی...';
+  if (set.has('web_search')) return 'در حال جستجو...';
+  if (set.has('deep_reasoning')) return 'در حال فکر کردن...';
+  if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
+  if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
+  return fallback;
 };
 
 interface AssistantPanelProps {
@@ -99,7 +121,6 @@ const toFaDateTime = (value?: string | null) => {
 const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
   const usageBox = metadata?.usage || metadata;
   const usage = usageBox?.usage || usageBox;
-  const cost = usageBox?.cost || {};
   const parts: string[] = [];
   const totalTokens = usage?.total_tokens ?? usage?.totalTokens ?? usage?.total;
   const promptTokens = usage?.prompt_tokens ?? usage?.input_tokens ?? usage?.promptTokens;
@@ -109,15 +130,11 @@ const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
     parts.push(`${Number(promptTokens || 0).toLocaleString('fa-IR')} ورودی / ${Number(completionTokens || 0).toLocaleString('fa-IR')} خروجی`);
   }
 
-  const rial = cost?.rial ?? cost?.rials ?? cost?.amount_rial;
-  const toman = cost?.toman ?? cost?.tomans ?? cost?.amount_toman;
-  const usd = cost?.usd ?? cost?.cost_usd ?? cost?.amount_usd;
-  const amount = cost?.amount ?? cost?.cost;
-  const currency = cost?.currency;
-  if (toman) parts.push(`${Number(toman).toLocaleString('fa-IR')} تومان`);
-  if (rial) parts.push(`${Number(rial).toLocaleString('fa-IR')} ریال`);
-  if (usd) parts.push(`$${Number(usd).toLocaleString('en-US', { maximumFractionDigits: 6 })}`);
-  if (!rial && !toman && !usd && amount) parts.push(`${Number(amount).toLocaleString('fa-IR')} ${currency || ''}`.trim());
+  const billed = usageBox?.customer_billing?.amount_irt
+    ?? usageBox?.billing?.billed_amount_irt
+    ?? metadata?.customer_billing?.amount_irt
+    ?? null;
+  if (billed && Number(billed) > 0) parts.push(`${Math.round(Number(billed)).toLocaleString('fa-IR')} تومان`);
   return parts.join(' · ');
 };
 
@@ -132,8 +149,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const [deletingThread, setDeletingThread] = useState(false);
   const [aiKnowledgeConfigured, setAiKnowledgeConfigured] = useState(true);
   const [checkingAiKnowledge, setCheckingAiKnowledge] = useState(false);
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [fileSending, setFileSending] = useState(false);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [generatingVoiceOutput, setGeneratingVoiceOutput] = useState(false);
+  const [currentUserView, setCurrentUserView] = useState({ name: 'شما', avatarUrl: null as string | null });
+  const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
+  const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
+  const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [pendingProcessSelectionId, setPendingProcessSelectionId] = useState<string | null>(null);
+  const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
+  const [processOperationMode, setProcessOperationMode] = useState(false);
+  const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
+  const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAutoPromptSignatureRef = useRef<string>('');
 
@@ -198,10 +227,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
 
   const contextKey = useMemo(() => buildClientContextKey(context), [context]);
 
+  useEffect(() => {
+    let active = true;
+    const moduleId = String(context.moduleId || '').trim();
+    const recordId = String(context.recordId || '').trim();
+    if (context.mode !== 'record' || !moduleId || !recordId) {
+      setContextRecordLabel(null);
+      return () => { active = false; };
+    }
+    fetchRecordReferenceLabels(supabase, [{ moduleId, recordId }])
+      .then((labels) => {
+        if (!active) return;
+        setContextRecordLabel(String(labels[`${moduleId}:${recordId}`] || '').trim() || null);
+      })
+      .catch(() => {
+        if (active) setContextRecordLabel(null);
+      });
+    return () => { active = false; };
+  }, [context.mode, context.moduleId, context.recordId]);
+
   const contextLabel = useMemo(() => {
     if (!context.moduleId) return 'صفحه فعلی';
     const moduleTitle = MODULES[context.moduleId]?.titles?.fa || context.moduleId;
-    if (context.mode === 'record' && context.recordId) return `${moduleTitle} / رکورد فعلی`;
+    if (context.mode === 'record' && context.recordId) return contextRecordLabel || `${moduleTitle} / رکورد فعلی`;
     if (context.mode === 'list') {
       const selectedCount = context.selectedRecordIds?.length || 0;
       const visibleCount = context.visibleRecordIds?.length || 0;
@@ -209,7 +257,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       return visibleCount > 0 ? `${moduleTitle} / ${Math.min(visibleCount, 10)} رکورد صفحه` : `${moduleTitle} / لیست`;
     }
     return moduleTitle;
-  }, [context]);
+  }, [context, contextRecordLabel]);
 
   const processGuideAvailableProcesses = useMemo(
     () => Array.isArray(context.availableProcesses) ? context.availableProcesses : [],
@@ -241,6 +289,26 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     };
   }, [context, resolvedProcessGuideContext, selectedProcessId]);
 
+  const fileRecordScope = useMemo(() => ({
+    moduleId: contextWithSelection.mode === 'record' ? String(contextWithSelection.moduleId || '').trim() || null : null,
+    recordId: contextWithSelection.mode === 'record' ? String(contextWithSelection.recordId || '').trim() || null : null,
+  }), [contextWithSelection]);
+  const imageMode = selectedCapabilities.includes('image_generation');
+  const voiceOutputMode = selectedCapabilities.includes('voice_output');
+  const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
+    setSelectedCapabilities(next);
+    const wantsProcessOperation = next.includes('process_operation');
+    setProcessOperationMode(wantsProcessOperation);
+    if (wantsProcessOperation || !next.includes('record_creation')) {
+      setRecordCreationTargetModuleId(null);
+    }
+  }, []);
+  const recordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
+  const recordCreationSchema = useMemo(
+    () => recordCreationTargetModuleId ? buildAiRecordCreationSchema(recordCreationTargetModuleId) : null,
+    [recordCreationTargetModuleId],
+  );
+
   const callAssistant = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
     if (error) throw error;
@@ -250,11 +318,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
 
   const loadThread = useCallback(async () => {
     if (!active) return;
+    if (!threadId) {
+      setMessages([]);
+      return;
+    }
     setLoadingThread(true);
     try {
       const data = await callAssistant({
         action: 'get_thread',
-        context,
+        threadId,
       });
       setThreadId(data.threadId ? String(data.threadId) : null);
       const nextMessages = (Array.isArray(data.messages) ? data.messages : [])
@@ -274,7 +346,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     } finally {
       setLoadingThread(false);
     }
-  }, [active, callAssistant, context, message]);
+  }, [active, callAssistant, message, threadId]);
 
   const loadAiKnowledgeStatus = useCallback(async () => {
     setCheckingAiKnowledge(true);
@@ -298,8 +370,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
 
   useEffect(() => {
     if (!active) return;
-    void loadThread();
-  }, [active, contextKey, loadThread]);
+    setThreadId(null);
+    setMessages([]);
+    setPendingAiAction(null);
+  }, [active, contextKey]);
 
   useEffect(() => {
     if (context.intent !== 'process_guide') {
@@ -322,6 +396,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     if (!active) return;
     void loadAiKnowledgeStatus();
   }, [active, loadAiKnowledgeStatus]);
+
+  useEffect(() => {
+    if (!active) return;
+    let mounted = true;
+    const loadUserAndAiOverview = async () => {
+      try {
+        const bootstrap = await fetchSessionBootstrap(supabase);
+        if (!mounted) return;
+        setCurrentUserView({
+          name: String(bootstrap?.profile?.full_name || bootstrap?.user?.email || bootstrap?.profile?.mobile_1 || 'شما').trim() || 'شما',
+          avatarUrl: bootstrap?.profile?.avatar_url || null,
+        });
+        const overview = await callAssistant({ action: 'get_ai_overview' });
+        if (mounted) setCapabilityAvailability(overview?.capabilityAvailability || {});
+      } catch {
+        // Sending requests will surface capability errors.
+      }
+    };
+    void loadUserAndAiOverview();
+    return () => {
+      mounted = false;
+    };
+  }, [active, callAssistant]);
 
   useEffect(() => {
     if (!active) return;
@@ -349,23 +446,63 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     setInput((current) => String(current || '').trim() ? current : prompt);
   }, [active, context.intent, contextKey, contextWithSelection, loadingThread, processGuideAvailableProcesses.length, selectedProcessId, submitting]);
 
-  const submitChat = useCallback(async () => {
-    const text = input.trim();
+  const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
+    const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
-    setInput('');
-    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: text };
-    setMessages((prev) => [...prev, userMessage]);
+    if (rawText === undefined) setInput('');
+    setPendingAiAction(null);
+    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: inputKind } };
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-pending-${Date.now()}`,
+      role: 'assistant',
+      content: buildAiPendingStatusText(selectedCapabilities),
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: selectedCapabilities },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setSubmitting(true);
     try {
-      const data = await callAssistant({
-        action: 'chat',
+      const data = await callAssistant(processOperationMode ? {
+        action: 'process_operation_from_prompt',
+        capability: 'record_chat',
+        capabilities: selectedCapabilities,
         message: text,
+        inputKind,
+        threadId,
+        context: contextWithSelection,
+        previewOnly: true,
+      } : recordCreationSchema ? {
+        action: 'create_record_from_prompt',
+        capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
+        capabilities: selectedCapabilities,
+        message: text,
+        inputKind,
+        threadId,
+        context: contextWithSelection,
+        recordCreation: recordCreationSchema,
+        previewOnly: true,
+      } : {
+        action: 'chat',
+        capability: selectedCapabilities.includes('legal_assistant')
+          ? 'legal_assistant'
+          : selectedCapabilities.includes('deep_reasoning')
+          ? 'deep_reasoning'
+          : contextWithSelection.mode === 'record'
+          ? 'record_chat'
+          : 'dashboard_chat',
+        capabilities: selectedCapabilities,
+        message: text,
+        inputKind,
         threadId,
         context: contextWithSelection,
       });
+      if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
+      }
+      if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
         {
           id: data.messageId || `assistant-${Date.now()}`,
           role: 'assistant',
@@ -379,7 +516,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.'));
       setMessages((prev) => [
-        ...prev,
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
         {
           id: `assistant-error-${Date.now()}`,
           role: 'assistant',
@@ -389,7 +526,243 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     } finally {
       setSubmitting(false);
     }
-  }, [callAssistant, contextWithSelection, input, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, input, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+
+  const submitVoice = useCallback(async (voice: RecordedVoice) => {
+    if (voiceSending || submitting) return;
+    setVoiceSending(true);
+    try {
+      const data = await callAssistant({
+        action: 'transcribe_voice',
+        audio: {
+          data: await blobToBase64(voice.blob),
+          mimeType: voice.mimeType,
+          durationMs: voice.durationMs,
+          filename: voice.filename,
+        },
+      });
+      const transcript = String(data?.transcript || '').trim();
+      if (!transcript) throw new Error('متنی از ویس دریافت نشد.');
+      await submitChat(transcript, 'voice');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ارسال ویس ناموفق بود.'));
+    } finally {
+      setVoiceSending(false);
+    }
+  }, [callAssistant, message, submitChat, submitting, voiceSending]);
+
+  const submitImagePrompt = useCallback(async () => {
+    const text = input.trim();
+    if (!text || generatingImage || submitting) return;
+    setInput('');
+    const userMessage: ChatMessage = { id: `user-image-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'image_prompt' } };
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-image-pending-${Date.now()}`,
+      role: 'assistant',
+      content: 'در حال ساخت تصویر...',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['image_generation'] },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
+    setGeneratingImage(true);
+    try {
+      const data = await callAssistant({
+        action: 'generate_image',
+        prompt: text,
+        threadId,
+        context: contextWithSelection,
+      });
+      if (data.threadId) setThreadId(String(data.threadId));
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
+        {
+          id: data.messageId || `assistant-image-${Date.now()}`,
+          role: 'assistant',
+          content: String(data.answer || '').trim() || 'تصویر آماده شد.',
+          metadata: { usage: data.usage, image: data.image, capability: 'image_generation' },
+          provider: data.provider || null,
+          model: data.model || null,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (error: any) {
+      setInput(text);
+      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+      message.error(toFaErrorMessage(error, 'تولید تصویر ناموفق بود.'));
+    } finally {
+      setGeneratingImage(false);
+    }
+  }, [callAssistant, contextWithSelection, generatingImage, input, message, submitting, threadId]);
+
+  const submitVoiceOutputPrompt = useCallback(async () => {
+    const text = input.trim();
+    if (!text || generatingVoiceOutput || submitting) return;
+    setInput('');
+    const userMessage: ChatMessage = { id: `user-voice-output-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'voice_output_prompt' } };
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-voice-output-pending-${Date.now()}`,
+      role: 'assistant',
+      content: 'در حال تولید صدا...',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['voice_output'] },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
+    setGeneratingVoiceOutput(true);
+    try {
+      const data = await callAssistant({
+        action: 'generate_voice_output',
+        text,
+        threadId,
+        context: contextWithSelection,
+      });
+      if (data.threadId) setThreadId(String(data.threadId));
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
+        {
+          id: data.messageId || `assistant-voice-output-${Date.now()}`,
+          role: 'assistant',
+          content: String(data.answer || '').trim() || 'فایل صوتی آماده شد.',
+          metadata: { usage: data.usage, file: data.file, capability: 'voice_output' },
+          provider: data.provider || null,
+          model: data.model || null,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (error: any) {
+      setInput(text);
+      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+      message.error(toFaErrorMessage(error, 'تولید صدا ناموفق بود.'));
+    } finally {
+      setGeneratingVoiceOutput(false);
+    }
+  }, [callAssistant, contextWithSelection, generatingVoiceOutput, input, message, submitting, threadId]);
+
+  const submitUploadedFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
+    if (fileSending || submitting) return;
+    const prompt = input.trim() || 'این فایل را تحلیل کن و خلاصه، نکات مهم و اقدام‌های پیشنهادی را بگو.';
+    setInput('');
+    setPendingAiAction(null);
+    const userMessage: ChatMessage = {
+      id: `user-file-${Date.now()}`,
+      role: 'user',
+      content: `فایل پیوست: ${filePrompt.fileName}`,
+      created_at: new Date().toISOString(),
+      metadata: { input_kind: 'file' },
+    };
+    const fileCapabilities = selectedCapabilities.includes('document_analysis') ? selectedCapabilities : [...selectedCapabilities, 'document_analysis'];
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-file-pending-${Date.now()}`,
+      role: 'assistant',
+      content: buildAiPendingStatusText(fileCapabilities, 'در حال تحلیل فایل...'),
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: fileCapabilities },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
+    setFileSending(true);
+    try {
+      const data = await callAssistant(processOperationMode ? {
+        action: 'process_operation_from_prompt',
+        capability: 'record_chat',
+        capabilities: selectedCapabilities,
+        message: input.trim() || 'با توجه به این فایل، اقدام فرآیندی لازم را پیشنهاد بده.',
+        inputKind: filePrompt.inputKind || 'file',
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.inputKind === 'text' ? filePrompt.prompt : '',
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId,
+        context: contextWithSelection,
+        previewOnly: true,
+      } : recordCreationSchema ? {
+        action: 'create_record_from_prompt',
+        capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
+        capabilities: selectedCapabilities,
+        message: input.trim() || 'از اطلاعات این فایل یک رکورد جدید بساز.',
+        inputKind: filePrompt.inputKind || 'file',
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.inputKind === 'text' ? filePrompt.prompt : '',
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId,
+        context: contextWithSelection,
+        recordCreation: recordCreationSchema,
+        previewOnly: true,
+      } : {
+        action: 'chat_with_file',
+        capabilities: selectedCapabilities,
+        message: prompt,
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.prompt,
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId,
+        context: contextWithSelection,
+      });
+      if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
+      }
+      if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
+      if (data.threadId) setThreadId(String(data.threadId));
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
+        {
+          id: data.messageId || `assistant-file-${Date.now()}`,
+          role: 'assistant',
+          content: String(data.answer || '').trim() || 'تحلیل فایل آماده شد.',
+          metadata: { usage: data.usage, capability: 'document_analysis' },
+          provider: data.provider || null,
+          model: data.model || null,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (error: any) {
+      setInput(prompt);
+      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+      message.error(toFaErrorMessage(error, 'ارسال فایل ناموفق بود.'));
+    } finally {
+      setFileSending(false);
+    }
+  }, [callAssistant, contextWithSelection, fileSending, input, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+
+  const confirmPendingAiAction = useCallback(async () => {
+    const actionId = String(pendingAiAction?.id || '').trim();
+    if (!actionId) return;
+    setConfirmingAiAction(true);
+    try {
+      await callAssistant({ action: 'confirm_action', actionLogId: actionId });
+      message.success('اقدام تایید و اجرا شد.');
+      setPendingAiAction(null);
+      await loadThread();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
+    } finally {
+      setConfirmingAiAction(false);
+    }
+  }, [callAssistant, loadThread, message, pendingAiAction]);
 
   const clearThread = useCallback(async () => {
     if (!threadId) {
@@ -415,13 +788,18 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const renderMessage = (item: ChatMessage) => {
     const isUser = item.role === 'user';
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata) : '';
+    const aiAttachment = item.metadata?.image || item.metadata?.file || (item.metadata?.image_url ? { url: item.metadata.image_url } : null);
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-        <Avatar
-          size={28}
-          className={isUser ? '' : '!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]'}
-          icon={isUser ? <UserOutlined /> : <AiSparkleIcon className="h-4 w-4" />}
-        />
+        {isUser ? (
+          <ProfileAvatar size={28} src={currentUserView.avatarUrl} name={currentUserView.name} icon={<UserOutlined />} />
+        ) : (
+          <Avatar
+            size={28}
+            className="!bg-[#fdf2f8] !text-[#be185d] dark:!bg-[#3b1022] dark:!text-[#f9a8d4]"
+            icon={<AiSparkleIcon className="h-4 w-4" />}
+          />
+        )}
         <div className={`min-w-0 max-w-[82%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
           <div
             className={`whitespace-pre-wrap rounded-[1.1rem] px-2.5 py-2 text-[12px] leading-5 shadow-[0_3px_10px_rgba(15,23,42,0.08)] dark:shadow-[0_3px_10px_rgba(0,0,0,0.22)] ${
@@ -431,8 +809,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             }`}
           >
             {item.content}
+            <AiMessageAttachmentPreview attachment={aiAttachment} fallbackName={isUser ? 'فایل پیوست' : 'خروجی هوش مصنوعی'} />
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 text-gray-400">
+            {isUser ? <span>{currentUserView.name}</span> : null}
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
@@ -468,7 +848,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[13px] font-bold">دستیار هوشمند</div>
-            <div className="truncate text-[10px] font-normal text-gray-500 dark:text-gray-400">{contextLabel}</div>
+            <div className="truncate text-[10px] font-normal text-gray-500 dark:text-gray-400">
+              گفتگو در خصوص{' '}
+              {context.moduleId ? (
+                <Link
+                  to={context.mode === 'record' && context.recordId ? `/${context.moduleId}/${context.recordId}` : `/${context.moduleId}`}
+                  className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted underline-offset-2"
+                >
+                  {contextLabel}
+                </Link>
+              ) : (
+                <span className="font-semibold">{contextLabel}</span>
+              )}
+            </div>
           </div>
           <Space size={4}>
             {!checkingAiKnowledge && !aiKnowledgeConfigured ? (
@@ -561,13 +953,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             ) : null}
           </div>
         ) : null}
+        {pendingAiAction ? (
+          <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs leading-5 text-amber-900">
+            <div className="font-medium">هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.</div>
+            <div className="mt-1">تایید کنید یا در کادر پیام توضیح بیشتری بنویسید.</div>
+            <Space size={6} className="mt-2">
+              <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
+                تایید و اجرا
+              </Button>
+              <Button size="small" onClick={() => setPendingAiAction(null)} disabled={confirmingAiAction}>
+                فعلا نه
+              </Button>
+            </Space>
+          </div>
+        ) : null}
         <Input.TextArea
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onPressEnter={(event) => {
             if (!event.shiftKey) {
               event.preventDefault();
-              void submitChat();
+              void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
             }
           }}
           placeholder="سوال خود را بنویسید..."
@@ -576,15 +982,31 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
           disabled={context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId}
         />
         <div className="mt-2 flex items-center justify-end gap-2">
+          <AiCapabilityComposerActions
+            selected={selectedCapabilities}
+            onChange={handleComposerCapabilitiesChange}
+            capabilityAvailability={capabilityAvailability}
+            loading={submitting || generatingImage || generatingVoiceOutput}
+            moduleId={fileRecordScope.moduleId}
+            recordId={fileRecordScope.recordId}
+            onVoiceSend={submitVoice}
+            onFilePrepared={submitUploadedFile}
+            voiceLoading={voiceSending}
+            fileLoading={fileSending}
+            size="small"
+            recordCreationModuleOptions={recordCreationModuleOptions}
+            recordCreationTargetModuleId={recordCreationTargetModuleId}
+            onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+          />
           <Button
             type="primary"
             icon={<SendOutlined />}
-            loading={submitting}
+            loading={voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
             disabled={!input.trim() || (context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId)}
-            onClick={submitChat}
+            onClick={() => void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
-            ارسال
+            {voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
           </Button>
         </div>
       </div>

@@ -28,6 +28,13 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
 
   if (hasPersianText(raw) && !contains(raw, '???')) return raw;
 
+  if (
+    contains(normalized, 'aborterror')
+    || contains(normalized, 'signal is aborted')
+    || contains(normalized, 'request was aborted')
+  ) {
+    return 'درخواست پیش از دریافت پاسخ متوقف شد. دوباره تلاش کنید.';
+  }
   if (status === 401 || contains(normalized, 'unauthorized') || contains(normalized, 'missing bearer token') || contains(normalized, 'invalid token')) {
     return 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.';
   }

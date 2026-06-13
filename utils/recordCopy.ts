@@ -1,4 +1,14 @@
 import type { ModuleDefinition } from '../types';
+import {
+  PROCESS_GRAPH_METADATA_KEY,
+  attachProcessGraphToStages,
+  createEmptyProcessGraph,
+  materializeLegacyProcessGraph,
+} from './processGraph';
+import {
+  cloneProcessActivatorWorkflowsForTemplate,
+  cloneProcessGraphInto,
+} from './processGraphCopy';
 
 const DEFAULT_OMIT_KEYS = new Set([
   'id',
@@ -86,12 +96,6 @@ const LINE_OMIT_KEYS = new Set([
   'updated_at',
 ]);
 
-const PROCESS_TEMPLATE_STAGE_OMIT_KEYS = new Set([
-  'id',
-  'created_at',
-  'updated_at',
-]);
-
 export const copyProductionOrderRelations = async (
   supabaseClient: any,
   sourceOrderId: string,
@@ -173,16 +177,35 @@ export const copyProcessTemplateStagesRelations = async (
   const stageRows = sourceStages || [];
   if (!stageRows.length) return;
 
-  const payloads = stageRows.map((sourceStage: Record<string, any>) => {
-    const payload: Record<string, any> = {};
-    Object.entries(sourceStage || {}).forEach(([key, value]) => {
-      if (!key || PROCESS_TEMPLATE_STAGE_OMIT_KEYS.has(key) || key.startsWith('__')) return;
-      if (value === undefined) return;
-      payload[key] = cloneCopyValue(value);
-    });
-    payload.template_id = targetTemplateId;
-    return payload;
+  const sourceGraph = materializeLegacyProcessGraph(stageRows);
+  const cloneResult = cloneProcessGraphInto({
+    sourceStages: sourceGraph.stages,
+    targetStages: [],
+    targetGraph: createEmptyProcessGraph(),
+    includeTriggers: true,
   });
+  const graphWithWorkflows = await cloneProcessActivatorWorkflowsForTemplate({
+    supabaseClient,
+    sourceTemplateId,
+    targetTemplateId,
+    sourceGraph: sourceGraph.graph,
+    cloneResult,
+  });
+  const clonedStages = attachProcessGraphToStages(cloneResult.stages, graphWithWorkflows);
+  const payloads = clonedStages.map((stage: Record<string, any>) => ({
+    template_id: targetTemplateId,
+    stage_name: String(stage?.stage_name || stage?.name || 'مرحله').trim() || 'مرحله',
+    sort_order: Number(stage?.sort_order || 10),
+    default_status: stage?.default_status || 'todo',
+    default_assignee_id: stage?.default_assignee_id || null,
+    default_assignee_role_id: stage?.default_assignee_role_id || null,
+    auto_create_task: stage?.auto_create_task !== false,
+    wage: Number(stage?.wage || 0),
+    metadata: {
+      ...(cloneCopyValue(stage?.metadata) || {}),
+      [PROCESS_GRAPH_METADATA_KEY]: graphWithWorkflows,
+    },
+  }));
 
   const { error: insertError } = await supabaseClient.from('process_template_stages').insert(payloads);
   if (insertError) throw insertError;

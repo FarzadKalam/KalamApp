@@ -56,10 +56,13 @@ export type WorkflowActionType =
   | 'send_rubika_bot'
   | 'update_record'
   | 'send_to_next_stages'
+  | 'send_to_specific_stage'
   | 'create_standalone_record'
   | 'create_related_record'
   | 'copy_process_template'
   | 'execute_process'
+  | 'activate_next_process_stage'
+  | 'activate_specific_process_stage'
   | 'publish_story';
 
 // Config اقدام انتشار استوری
@@ -101,6 +104,13 @@ export type WorkflowAction = {
 export type WorkflowRecord = {
   id: string;
   module_id: string;
+  module_ids?: string[] | null;
+  scope_type?: 'standard' | 'process_activator' | string | null;
+  process_template_id?: string | null;
+  process_trigger_key?: string | null;
+  process_source_node_key?: string | null;
+  process_target_lane_keys?: string[] | null;
+  manual_enabled?: boolean | null;
   name: string;
   description?: string | null;
   trigger_type: WorkflowTriggerType;
@@ -166,10 +176,13 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'ارسال پیام توسط بات', value: 'send_bot_message' },
   { label: 'به‌روزرسانی رکورد', value: 'update_record' },
   { label: 'ارسال اطلاعات به مراحل بعد', value: 'send_to_next_stages' },
+  { label: 'ارسال اطلاعات به مرحله خاص', value: 'send_to_specific_stage' },
   { label: 'ایجاد رکورد مستقل', value: 'create_standalone_record' },
   { label: 'ایجاد رکورد مرتبط', value: 'create_related_record' },
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
+  { label: 'فعال کردن مرحله بعدی', value: 'activate_next_process_stage' },
+  { label: 'فعال کردن مرحله خاص', value: 'activate_specific_process_stage' },
   { label: 'انتشار استوری', value: 'publish_story' },
 ];
 

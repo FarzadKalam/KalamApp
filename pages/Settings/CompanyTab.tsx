@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { App, Form, Input, Button, Upload, Select, Checkbox } from 'antd';
-import { SaveOutlined, UploadOutlined, CloudUploadOutlined, GlobalOutlined } from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { App, Form, Input, Button, Upload, Select, Checkbox, Switch, Typography } from 'antd';
+import { SaveOutlined, UploadOutlined, CloudUploadOutlined, GlobalOutlined, FileImageOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from '../../theme/brandTheme';
 import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
@@ -8,6 +8,14 @@ import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploa
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 import { getResolvedCurrentOrgId, loadScopedCompanySettings } from '../../utils/companySettings';
 import ResilientImage from '../../components/common/ResilientImage';
+import PrintLetterheadDesignerModal from '../../components/settings/PrintLetterheadDesignerModal';
+import {
+  getPrintLetterheadBySlotId,
+  getPrintLetterheadSlotLabel,
+  normalizePrintLetterheads,
+  type PrintLetterheadConfig,
+  type PrintLetterheadSlotId,
+} from '../../utils/printTemplates/letterheads';
 
 const CompanyTab: React.FC = () => {
   const { message } = App.useApp();
@@ -18,10 +26,23 @@ const CompanyTab: React.FC = () => {
   const [iconUrl, setIconUrl] = useState<string | null>(null);
   const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
   const [stampUrl, setStampUrl] = useState<string | null>(null);
+  const [printLetterheads, setPrintLetterheads] = useState<PrintLetterheadConfig[]>(normalizePrintLetterheads([]));
+  const [editingLetterheadSlotId, setEditingLetterheadSlotId] = useState<PrintLetterheadSlotId | null>(null);
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  const activeLetterhead = useMemo(
+    () => (editingLetterheadSlotId ? getPrintLetterheadBySlotId(printLetterheads, editingLetterheadSlotId) : null),
+    [editingLetterheadSlotId, printLetterheads],
+  );
+
+  const updateLetterhead = (slotId: PrintLetterheadSlotId, updater: (item: PrintLetterheadConfig) => PrintLetterheadConfig) => {
+    setPrintLetterheads((prev) =>
+      normalizePrintLetterheads(prev).map((item) => (item.slotId === slotId ? updater(item) : item)),
+    );
+  };
 
   const fetchData = async () => {
     const { data } = await loadScopedCompanySettings(supabase);
@@ -48,6 +69,7 @@ const CompanyTab: React.FC = () => {
       setIconUrl(data.icon_url || null);
       setSignatureUrl(data.signature_image_url || null);
       setStampUrl(data.stamp_image_url || null);
+      setPrintLetterheads(normalizePrintLetterheads(data.print_letterheads));
       return;
     }
 
@@ -59,10 +81,11 @@ const CompanyTab: React.FC = () => {
       qr_scan_enabled: false,
       currency_code: DEFAULT_CURRENCY.code,
     });
+    setPrintLetterheads(normalizePrintLetterheads([]));
     persistCurrencyConfig(DEFAULT_CURRENCY);
   };
 
-  const handleUpload = async (file: File, type: 'logo' | 'icon' | 'signature' | 'stamp') => {
+  const handleAssetUpload = async (file: File, type: 'logo' | 'icon' | 'signature' | 'stamp') => {
     try {
       const fileName = `company-${type}-${Date.now()}.${file.name.split('.').pop()}`;
       await uploadFileWithProgress({
@@ -104,6 +127,31 @@ const CompanyTab: React.FC = () => {
     return false;
   };
 
+  const handleLetterheadUpload = async (file: File, slotId: PrintLetterheadSlotId) => {
+    try {
+      const fileName = `company-letterhead-${slotId}-${Date.now()}.${file.name.split('.').pop()}`;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: fileName,
+        file,
+        upsert: true,
+        label: file.name || slotId,
+        detail: getPrintLetterheadSlotLabel(slotId),
+      });
+      const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
+      updateLetterhead(slotId, (item) => ({
+        ...item,
+        imageUrl: data.publicUrl,
+      }));
+      message.success('سربرگ آپلود شد');
+    } catch (error) {
+      if (isUploadCanceledError(error)) return false;
+      message.error('خطا در آپلود سربرگ');
+    }
+    return false;
+  };
+
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
@@ -124,7 +172,7 @@ const CompanyTab: React.FC = () => {
       const currency = normalizeCurrencyConfig({ code: currency_code });
       const payload = {
         ...rest,
-        company_name: fullName, // backward compatibility for existing parts
+        company_name: fullName,
         company_full_name: fullName,
         trade_name: tradeName,
         company_name_en: englishName || null,
@@ -136,6 +184,16 @@ const CompanyTab: React.FC = () => {
         icon_url: form.getFieldValue('icon_url') || iconUrl,
         signature_image_url: form.getFieldValue('signature_image_url') || signatureUrl,
         stamp_image_url: form.getFieldValue('stamp_image_url') || stampUrl,
+        print_letterheads: normalizePrintLetterheads(printLetterheads).map((item) => ({
+          id: item.id,
+          slotId: item.slotId,
+          orientation: item.orientation,
+          title: item.title,
+          imageUrl: item.imageUrl,
+          isActive: item.isActive,
+          layout: item.layout,
+          sortOrder: item.sortOrder,
+        })),
       };
 
       if (recordId) {
@@ -146,9 +204,7 @@ const CompanyTab: React.FC = () => {
           .select('id')
           .maybeSingle();
         if (error) throw error;
-        if (!updated?.id) {
-          throw new Error('UPDATE_NO_ROW');
-        }
+        if (!updated?.id) throw new Error('UPDATE_NO_ROW');
       } else {
         const currentOrgId = await getResolvedCurrentOrgId(supabase);
         const insertPayload = currentOrgId
@@ -175,56 +231,100 @@ const CompanyTab: React.FC = () => {
     <div className="max-w-5xl mx-auto py-6">
       <Form form={form} layout="vertical" onFinish={onFinish} className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6 mb-2">
-          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
-            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {logoUrl ? <ResilientImage src={logoUrl} preset="gallery" alt="Logo" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
+          {[
+            {
+              key: 'logo',
+              title: 'لوگوی اصلی',
+              description: 'نمایش در هدر و فاکتورها',
+              image: logoUrl,
+              icon: <CloudUploadOutlined className="text-2xl text-gray-300" />,
+              onUpload: (file: File) => handleAssetUpload(file, 'logo'),
+            },
+            {
+              key: 'icon',
+              title: 'آیکون سایت (Favicon)',
+              description: 'نمایش در تب مرورگر',
+              image: iconUrl,
+              icon: <GlobalOutlined className="text-2xl text-gray-300" />,
+              onUpload: (file: File) => handleAssetUpload(file, 'icon'),
+            },
+            {
+              key: 'signature',
+              title: 'امضای سازمانی',
+              description: 'نمایش کنار امضای مدیرعامل در چاپ',
+              image: signatureUrl,
+              icon: <CloudUploadOutlined className="text-2xl text-gray-300" />,
+              onUpload: (file: File) => handleAssetUpload(file, 'signature'),
+            },
+            {
+              key: 'stamp',
+              title: 'مهر سازمانی',
+              description: 'نمایش کنار امضای مدیرعامل در چاپ',
+              image: stampUrl,
+              icon: <CloudUploadOutlined className="text-2xl text-gray-300" />,
+              onUpload: (file: File) => handleAssetUpload(file, 'stamp'),
+            },
+          ].map((asset) => (
+            <div key={asset.key} className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
+              <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
+                {asset.image ? <ResilientImage src={asset.image} preset="gallery" alt={asset.title} className="w-full h-full object-contain" loading="lazy" decoding="async" /> : asset.icon}
+              </div>
+              <div className="flex-1">
+                <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">{asset.title}</div>
+                <div className="text-xs text-gray-400 mb-2">{asset.description}</div>
+                <Upload showUploadList={false} beforeUpload={asset.onUpload}>
+                  <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر</Button>
+                </Upload>
+              </div>
             </div>
-            <div className="flex-1">
-              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">لوگوی اصلی</div>
-              <div className="text-xs text-gray-400 mb-2">نمایش در هدر و فاکتورها</div>
-              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'logo')}>
-                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر لوگو</Button>
-              </Upload>
-            </div>
+          ))}
+        </div>
+
+        <div className="md:col-span-2 rounded-3xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950/30 p-5">
+          <div className="mb-4">
+            <div className="text-base font-bold text-slate-800 dark:text-slate-100">سربرگ‌های چاپ</div>
+            <Typography.Text type="secondary" className="text-[11px]">
+              برای هر جهت صفحه می‌توانید تا دو سربرگ فعال داشته باشید. بهتر است فایل‌ها با فرمت PNG یا JPG یا WEBP، در فضای رنگی RGB یا sRGB و با نسبت نزدیک به A4 چاپی آماده شوند؛ PDF در این بخش پشتیبانی نمی‌شود و برای چیدمان راحت‌تر، بهتر است در بالای صفحه فضای کافی برای اطلاعات سربرگ و در پایین صفحه فضای امن برای امضاها و ناحیه پایانی باقی بگذارید.
+            </Typography.Text>
           </div>
 
-          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
-            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {iconUrl ? <ResilientImage src={iconUrl} preset="gallery" alt="Icon" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <GlobalOutlined className="text-2xl text-gray-300" />}
-            </div>
-            <div className="flex-1">
-              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">آیکون سایت (Favicon)</div>
-              <div className="text-xs text-gray-400 mb-2">نمایش در تب مرورگر</div>
-              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'icon')}>
-                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر آیکون</Button>
-              </Upload>
-            </div>
-          </div>
-
-          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
-            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {signatureUrl ? <ResilientImage src={signatureUrl} preset="gallery" alt="Signature" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
-            </div>
-            <div className="flex-1">
-              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">امضای سازمانی</div>
-              <div className="text-xs text-gray-400 mb-2">نمایش در نامه‌ها و امضاهای چاپی</div>
-              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'signature')}>
-                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر امضا</Button>
-              </Upload>
-            </div>
-          </div>
-
-          <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-xl border border-dashed border-gray-300 dark:border-gray-700 flex items-center gap-4 group hover:border-leather-500 transition-colors">
-            <div className="w-16 h-16 flex items-center justify-center bg-white rounded-lg shadow-sm overflow-hidden">
-              {stampUrl ? <ResilientImage src={stampUrl} preset="gallery" alt="Stamp" className="w-full h-full object-contain" loading="lazy" decoding="async" /> : <CloudUploadOutlined className="text-2xl text-gray-300" />}
-            </div>
-            <div className="flex-1">
-              <div className="mb-1 text-sm font-bold text-gray-700 dark:text-gray-300">مهر سازمانی</div>
-              <div className="text-xs text-gray-400 mb-2">نمایش در نامه‌ها، فاکتورها و فرم‌ها</div>
-              <Upload showUploadList={false} beforeUpload={(f) => handleUpload(f, 'stamp')}>
-                <Button icon={<UploadOutlined />} size="small" className="text-xs">تغییر مهر</Button>
-              </Upload>
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {normalizePrintLetterheads(printLetterheads).map((letterhead) => (
+              <div key={letterhead.slotId} className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/30 p-4">
+                <div className="flex items-start gap-4">
+                  <div className="w-24 h-28 rounded-xl overflow-hidden bg-white border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+                    {letterhead.imageUrl ? (
+                      <ResilientImage src={letterhead.imageUrl} preset="gallery" alt={letterhead.title} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                    ) : (
+                      <FileImageOutlined className="text-3xl text-slate-300" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <div className="text-sm font-bold text-slate-800 dark:text-slate-100">{getPrintLetterheadSlotLabel(letterhead.slotId)}</div>
+                      <Switch
+                        checked={letterhead.isActive}
+                        onChange={(checked) => updateLetterhead(letterhead.slotId, (item) => ({ ...item, isActive: checked }))}
+                      />
+                    </div>
+                    <Input
+                      value={letterhead.title}
+                      onChange={(event) => updateLetterhead(letterhead.slotId, (item) => ({ ...item, title: event.target.value }))}
+                      placeholder={getPrintLetterheadSlotLabel(letterhead.slotId)}
+                      className="mb-3"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <Upload showUploadList={false} beforeUpload={(file) => handleLetterheadUpload(file, letterhead.slotId)}>
+                        <Button size="small" icon={<UploadOutlined />}>آپلود سربرگ</Button>
+                      </Upload>
+                      <Button size="small" disabled={!letterhead.imageUrl} onClick={() => setEditingLetterheadSlotId(letterhead.slotId)}>
+                        شخصی‌سازی سربرگ
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -250,29 +350,14 @@ const CompanyTab: React.FC = () => {
           />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">واحد پولی</span>} name="currency_code" rules={[{ required: true }]}>
-          <Select
-            className="dark:bg-white/5 dark:border-gray-700 dark:text-white"
-            options={CURRENCY_OPTIONS}
-          />
+          <Select className="dark:bg-white/5 dark:border-gray-700 dark:text-white" options={CURRENCY_OPTIONS} />
         </Form.Item>
-        <Form.Item
-          name="qr_scan_enabled"
-          valuePropName="checked"
-          className="md:col-span-2"
-        >
-          <Checkbox className="dark:text-gray-300">
-            اسکن qr فعال باشد
-          </Checkbox>
+        <Form.Item name="qr_scan_enabled" valuePropName="checked" className="md:col-span-2">
+          <Checkbox className="dark:text-gray-300">اسکن qr فعال باشد</Checkbox>
         </Form.Item>
 
         <Form.Item label={<span className="dark:text-gray-300">نام مدیرعامل</span>} name="ceo_name">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
-        </Form.Item>
-        <Form.Item label={<span className="dark:text-gray-300">نام امضاکننده رسمی</span>} name="official_signatory_name">
-          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="اگر خالی باشد از نام مدیرعامل استفاده می‌شود" />
-        </Form.Item>
-        <Form.Item label={<span className="dark:text-gray-300">سمت امضاکننده رسمی</span>} name="official_signatory_title">
-          <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" placeholder="مثل مدیرعامل، مدیر اداری، مدیر فروش" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">شناسه ملی / کد اقتصادی</span>} name="national_id">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
@@ -280,11 +365,7 @@ const CompanyTab: React.FC = () => {
         <Form.Item label={<span className="dark:text-gray-300">شماره ثبت</span>} name="registration_number">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
-        <Form.Item
-          label={<span className="dark:text-gray-300">کد اقتصادی</span>}
-          name="economic_code"
-          extra="برای ارسال فاکتور به سامانه مودیان از همین مقدار استفاده می‌شود."
-        >
+        <Form.Item label={<span className="dark:text-gray-300">کد اقتصادی</span>} name="economic_code" extra="برای ارسال فاکتور به سامانه مودیان از همین مقدار استفاده می‌شود.">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">کد پستی</span>} name="postal_code">
@@ -351,6 +432,17 @@ const CompanyTab: React.FC = () => {
           </Button>
         </div>
       </Form>
+
+      <PrintLetterheadDesignerModal
+        open={Boolean(editingLetterheadSlotId && activeLetterhead?.imageUrl)}
+        letterhead={activeLetterhead}
+        onClose={() => setEditingLetterheadSlotId(null)}
+        onSave={(layout) => {
+          if (!editingLetterheadSlotId) return;
+          updateLetterhead(editingLetterheadSlotId, (item) => ({ ...item, layout }));
+          setEditingLetterheadSlotId(null);
+        }}
+      />
     </div>
   );
 };

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { botMessageInsertBus, noteInsertBus } from '../utils/communicationRealtimeBus';
 
 type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
 
@@ -129,6 +130,7 @@ export const useNotificationRealtimeSync = ({
       if (variant === 'chat') {
         channel
           .on('postgres_changes', buildOrgScopedChange('notes', 'INSERT'), (payload: any) => {
+            if (payload?.new) noteInsertBus.emit(payload.new);
             if (hasNoteMatchRef.current(payload?.new)) scheduleLiveRefreshRef.current('notes');
           })
           .on('postgres_changes', buildOrgScopedChange('notes', 'UPDATE'), (payload: any) => {
@@ -137,7 +139,8 @@ export const useNotificationRealtimeSync = ({
           .on('postgres_changes', buildOrgScopedChange('counterparty_bot_groups', '*'), () => {
             scheduleLiveRefreshRef.current('bot_messages');
           })
-          .on('postgres_changes', buildOrgScopedChange('counterparty_bot_messages', '*'), () => {
+          .on('postgres_changes', buildOrgScopedChange('counterparty_bot_messages', '*'), (payload: any) => {
+            if (payload?.eventType === 'INSERT' && payload?.new) botMessageInsertBus.emit(payload.new);
             scheduleLiveRefreshRef.current('bot_messages');
           })
           .on('postgres_changes', buildOrgScopedChange('outbound_messages', '*'), (payload: any) => {

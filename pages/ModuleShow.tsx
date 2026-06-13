@@ -21,6 +21,7 @@ import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow }
 import { printStyles } from '../utils/printTemplates';
 import { usePrintManager } from '../utils/printTemplates/usePrintManager';
 import { createPrintPerformanceTracker, waitForNextPaint } from '../utils/printTemplates/printPerformance';
+import { resolvePrintAssigneeLabel, resolvePrintOptionLabel } from '../utils/printTemplates/assigneeDisplay';
 import { formatPersianPrice, toPersianNumber } from '../utils/persianNumberFormatter';
 import { convertArea } from '../utils/unitConversions';
 import QrScanPopover from '../components/QrScanPopover';
@@ -74,12 +75,11 @@ import {
   getProcessTaskCustomFieldsFromRecurrence,
   getProcessTaskCustomFieldValuesFromRecurrence,
   mergeProcessTaskCustomFieldValues,
-  normalizeProcessTaskCustomFields,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
-import { normalizeProcessTaskStatusOptions, PROCESS_TASK_STATUS_OPTIONS_KEY, getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
 import { loadScopedCompanySettings } from '../utils/companySettings';
@@ -104,9 +104,8 @@ import {
   buildInstructionModuleConfig,
   buildInstructionModuleOptions,
   INSTRUCTIONS_MODULE_ID,
-  normalizeInstructionIdList,
 } from '../utils/instructionSupport';
-import { syncProcessTemplateStageInstructionLinks } from '../utils/processTemplateStageInstructions';
+import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
 import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
 
@@ -3119,33 +3118,15 @@ const ModuleShow: React.FC = () => {
         if (stagesError) throw stagesError;
         const groupId = `process_group_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         const groupLabel = String(selectedTemplateLabel || 'فرآیند ۱').trim() || 'فرآیند ۱';
-        executionDraft = (stages || []).map((stage: any, index: number) => {
-          const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
-          return {
-            ...(metadata || {}),
-            id: stage.id || `${selectedTemplateId}_${index + 1}`,
-            name: stage.stage_name || `مرحله ${index + 1}`,
-            sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-            wage: Number(stage?.wage || 0),
-            weight: Number(metadata?.weight || 0),
-            duration_value: Number(metadata?.duration_value || 0),
-            duration_unit: String(metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-            duration_from: String(metadata?.duration_from || 'project_start') === 'previous_stage_end' ? 'previous_stage_end' : 'project_start',
-            description: String(metadata?.description || '').trim() || null,
-            task_type: String(metadata?.task_type || '').trim() || null,
-            default_assignee_id: stage?.default_assignee_id || null,
-            default_assignee_role_id: stage?.default_assignee_role_id || null,
-            source_template_id: selectedTemplateId,
-            source_template_name: selectedTemplateLabel,
-            process_group_id: groupId,
-            process_group_name: groupLabel,
-            template_stage_id: stage.id || null,
-            process_target_module_ids: targetModuleIds,
-            process_link_map: {
-              ...quickProjectLinkedRecords,
-              ...(moduleId && id ? { [moduleId]: String(id) } : {}),
-            },
-          };
+        executionDraft = mapProcessTemplateStagesToDraft(selectedTemplateId, stages || [], {
+          groupId,
+          groupName: groupLabel,
+          templateName: selectedTemplateLabel,
+          targetModuleIds,
+          processLinkMap: {
+            ...quickProjectLinkedRecords,
+            ...(moduleId && id ? { [moduleId]: String(id) } : {}),
+          },
         });
       }
 
@@ -4361,96 +4342,11 @@ const ModuleShow: React.FC = () => {
     return a === b;
   };
 
-  const isUuid = useCallback((value: any) => (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-      .test(String(value || ''))
-  ), []);
-
-  const syncProcessTemplateStages = useCallback(async (templateId: string, rawStages: any[]) => {
-    const nextStages = (Array.isArray(rawStages) ? rawStages : []).map((stage: any, index: number) => ({
-      id: isUuid(stage?.id) ? String(stage.id) : null,
-      stage_name: String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`),
-      sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
-      wage: Number(stage?.wage || 0),
-      metadata: {
-        ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
-        description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
-        task_type: String(stage?.task_type || stage?.metadata?.task_type || '').trim() || null,
-        automation_rules: Array.isArray(stage?.automation_rules)
-          ? stage.automation_rules
-          : (Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : []),
-        [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(
-          stage?.process_task_custom_fields || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]
-        ),
-        [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(
-          stage?.process_task_status_options || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]
-        ),
-        instruction_ids: normalizeInstructionIdList(
-          stage?.instruction_ids || stage?.metadata?.instruction_ids
-        ),
-        weight: Number(stage?.weight || stage?.metadata?.weight || 0),
-        duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
-        duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-        duration_from: String(stage?.duration_from || stage?.metadata?.duration_from || 'project_start') === 'previous_stage_end'
-          ? 'previous_stage_end'
-          : 'project_start',
-      },
-      default_assignee_id: isUuid(stage?.default_assignee_id) ? String(stage.default_assignee_id) : null,
-      default_assignee_role_id: isUuid(stage?.default_assignee_role_id) ? String(stage.default_assignee_role_id) : null,
-    }));
-
-    const { data: existingRows, error: existingError } = await supabase
-      .from('process_template_stages')
-      .select('id')
-      .eq('template_id', templateId);
-    if (existingError) throw existingError;
-
-    const existingIds = new Set((existingRows || []).map((row: any) => String(row.id)));
-    const keptExistingIds = new Set(
-      nextStages
-        .map((stage) => stage.id)
-        .filter((stageId): stageId is string => Boolean(stageId && existingIds.has(stageId)))
-    );
-    const removeIds = Array.from(existingIds).filter((stageId) => !keptExistingIds.has(stageId));
-    if (removeIds.length > 0) {
-      const { error: deleteError } = await supabase
-        .from('process_template_stages')
-        .delete()
-        .in('id', removeIds);
-      if (deleteError) throw deleteError;
-    }
-
-    for (const stage of nextStages) {
-      if (stage.id && existingIds.has(stage.id)) {
-        const { error: updateError } = await supabase
-          .from('process_template_stages')
-          .update({
-            stage_name: stage.stage_name,
-            sort_order: stage.sort_order,
-            wage: stage.wage,
-            metadata: stage.metadata,
-            default_assignee_id: stage.default_assignee_id,
-            default_assignee_role_id: stage.default_assignee_role_id,
-          })
-          .eq('id', stage.id);
-        if (updateError) throw updateError;
-      } else {
-        const { error: insertError } = await supabase
-          .from('process_template_stages')
-          .insert({
-            template_id: templateId,
-            stage_name: stage.stage_name,
-            sort_order: stage.sort_order,
-            wage: stage.wage,
-            metadata: stage.metadata,
-            default_assignee_id: stage.default_assignee_id,
-            default_assignee_role_id: stage.default_assignee_role_id,
-          });
-        if (insertError) throw insertError;
-      }
-    }
-    await syncProcessTemplateStageInstructionLinks(supabase, templateId, nextStages);
-  }, [isUuid]);
+  const syncProcessTemplateStages = useCallback(
+    (templateId: string, rawStages: any[]) =>
+      syncProcessTemplateStagesShared(supabase, templateId, rawStages),
+    [],
+  );
 
   const handleSmartFormSave = useCallback(async (
     values: any,
@@ -4692,6 +4588,15 @@ const ModuleShow: React.FC = () => {
 
     const getOptionLabel = (field: any, value: any) => {
       if (!field) return getSafeOptionFallback(value);
+      if (String(field?.key || '').trim() === 'assignee_id') {
+        return resolvePrintAssigneeLabel(
+          {
+            ...data,
+            assignee_id: value,
+          },
+          relationOptions,
+        ) || getSafeOptionFallback(value);
+      }
       const effectiveOptions =
         (
           (moduleId === 'process_templates' && (field.key === 'module_id' || field.key === 'module_ids'))
@@ -4726,10 +4631,12 @@ const ModuleShow: React.FC = () => {
           opt = dynamicOptions[cat]?.find((o: any) => o.value === value);
           if (opt) return opt.label;
       }
-      if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION) {
+      if (field.type === FieldType.RELATION || field.type === FieldType.MULTI_RELATION || field.type === FieldType.USER) {
+          const scopedLabel = resolvePrintOptionLabel(relationOptions[field.key] || [], value);
+          if (scopedLabel) return scopedLabel;
           for (const key in relationOptions) {
-              const found = relationOptions[key]?.find((o: any) => String(o?.value) === String(value));
-              if (found) return found.label;
+              const found = resolvePrintOptionLabel(relationOptions[key] || [], value);
+              if (found) return found;
           }
       }
       return getSafeOptionFallback(value);
@@ -4867,6 +4774,15 @@ const ModuleShow: React.FC = () => {
   const formatPrintValue = (field: any, value: any) => {
     if (value === null || value === undefined) return '';
     if (Array.isArray(value)) return value.join('، ');
+    if (String(field?.key || '').trim() === 'assignee_id') {
+      return resolvePrintAssigneeLabel(
+        {
+          ...data,
+          assignee_id: value,
+        },
+        relationOptions,
+      ) || '';
+    }
     if (field.type === FieldType.CHECKBOX) return value ? 'بله' : 'خیر';
     if (field.type === FieldType.PRICE) return `${formatPersianPrice(value)} ${currencyLabel}`;
     if (field.type === FieldType.PERCENTAGE) return `${value}%`;
@@ -6651,10 +6567,25 @@ const ModuleShow: React.FC = () => {
             onTogglePrintField={printManager.handleTogglePrintField}
             onTogglePrintFieldGroup={printManager.handleTogglePrintFieldGroup}
             onMovePrintField={printManager.handleMovePrintField}
+            imageDisplayMode={printManager.imageDisplayMode}
+            onChangeImageDisplayMode={printManager.handleChangeImageDisplayMode}
             onSavePrintFields={printManager.handleSavePrintFields}
             savingPrintFields={printManager.savingPrintFields}
+            printSignatureRows={printManager.printSignatureStates}
+            printSignatureQuickAddOptions={printManager.printSignatureQuickAddOptions}
+            signatureOptionsByRow={printManager.signatureOptionsByRow}
+            onAddPrintSignatureRow={printManager.handleAddPrintSignatureRow}
+            onRemovePrintSignatureRow={printManager.handleRemovePrintSignatureRow}
+            onMovePrintSignatureRow={printManager.handleMovePrintSignatureRow}
+            onTogglePrintSignatureAutomatic={printManager.handleTogglePrintSignatureAutomatic}
+            onChangePrintSignatureName={printManager.handleChangePrintSignatureName}
+            onChangePrintSignatureSubtitle={printManager.handleChangePrintSignatureSubtitle}
+            onChangePrintSignatureSignerModule={printManager.handleChangePrintSignatureSignerModule}
+            onChangePrintSignatureSignerId={printManager.handleChangePrintSignatureSignerId}
+            onSearchPrintSignatureOptions={printManager.loadSignatureSignerOptions}
             onRefreshPreview={printManager.refreshTemplates}
             allowFieldSelectionTab={printManager.allowFieldSelectionTab}
+            showImageDisplayModeControl={printManager.showImageDisplayModeControl}
             previewMeta={printManager.previewMeta}
           />
         </React.Suspense>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractBotMessageAttachments } from './messageAttachments';
+import { resolveNoteAttachmentFileType } from './noteContent';
 
 describe('extractBotMessageAttachments', () => {
   it('reads multiple bot attachments from payload.attachments', () => {
@@ -46,5 +47,18 @@ describe('extractBotMessageAttachments', () => {
 
     expect(attachments).toHaveLength(1);
     expect(attachments[0]?.url).toContain('img-1.jpg');
+  });
+
+  it('keeps regular mp3 attachments as audio unless voice is explicit', () => {
+    expect(resolveNoteAttachmentFileType({
+      name: 'track.mp3',
+      mimeType: 'audio/mpeg',
+    })).toBe('audio');
+
+    expect(resolveNoteAttachmentFileType({
+      name: 'voice.mp3',
+      mimeType: 'audio/mpeg',
+      fileType: 'voice',
+    })).toBe('voice');
   });
 });

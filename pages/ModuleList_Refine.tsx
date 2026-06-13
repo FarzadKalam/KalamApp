@@ -42,6 +42,7 @@ import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleLis
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
+import { findModuleRelationReferences } from "../utils/moduleListMerge";
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
@@ -2543,6 +2544,19 @@ export const ModuleListRefine: React.FC<{
     navigate(`/${resolvedModuleId}/${recordId}`);
   }, [navigate, resolvedModuleId, useQuickPreviewModal, useSaasUserDrawer]);
 
+  const getRecordListHref = useCallback((record: any) => {
+    if (selectedRowKeys.length > 0) return undefined;
+    const recordId = String(record?.id || "").trim();
+    if (!resolvedModuleId || !recordId) return undefined;
+    if (resolvedModuleId === "cash_bank_operations") {
+      const sourceNavigation = resolveCashBankSourceNavigation(record);
+      if (sourceNavigation) {
+        return `/${sourceNavigation.moduleId}/${sourceNavigation.recordId}`;
+      }
+    }
+    return `/${resolvedModuleId}/${recordId}`;
+  }, [resolvedModuleId, selectedRowKeys.length]);
+
   const handleTableRowProps = useCallback((record: any) => ({
     onClick: (event: React.MouseEvent<HTMLElement>) => {
       if (selectedRowKeys.length > 0) return;
@@ -3451,6 +3465,15 @@ export const ModuleListRefine: React.FC<{
     setMergeSubmitting(true);
     const hide = showListMessage("loading", "در حال ادغام رکوردها...", 0);
     try {
+      const relationReferences = findModuleRelationReferences(resolvedModuleId);
+      const { error: relationError } = await supabase.rpc("merge_module_record_references", {
+        p_module_id: resolvedModuleId,
+        p_survivor_id: meta.survivorId,
+        p_duplicate_ids: meta.duplicateIds,
+        p_relation_fields: relationReferences,
+      });
+      if (relationError) throw relationError;
+
       const { error: updateError } = await supabase
         .from(moduleConfig.table)
         .update(payload)
@@ -4394,6 +4417,8 @@ export const ModuleListRefine: React.FC<{
                      rowSelection={{ selectedRowKeys, onChange: handleRowSelectionChange, preserveSelectedRowKeys: true }}
                     onVisibleDataChange={handleVisibleDataChange}
                     onRow={handleTableRowProps}
+                    getRowHref={getRecordListHref}
+                    onRowLinkClick={openRecordFromList}
                     dynamicOptions={dynamicOptions}
                      relationOptions={effectiveRelationOptions}
                      tagsMap={tagsMap}

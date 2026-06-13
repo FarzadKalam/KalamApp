@@ -32,6 +32,8 @@ import { transformModulePayloadForSave } from '../utils/moduleFormRuntime';
 import { resolveOperationalPaymentRowKey } from '../utils/operationalCashBankSources';
 import {
   buildSalesPackageDescription,
+  calculateSalesPackageDiscountTotal,
+  calculateSalesPackageGrossTotal,
   calculateSalesPackageTotal,
   findPriceListItemByProduct,
   normalizeSalesPackageItems,
@@ -343,6 +345,25 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (String(row?.item_kind || '').trim().toLowerCase() === 'package') return true;
     if (normalizeSalesPackageItems(row?.package_items).length > 0) return true;
     return Boolean(row?.package_id);
+  };
+  const applyPackageInvoicePricing = (row: any, packageItems: any, packageQuantity: any) => {
+    const quantity = Math.max(0, toSafeNumber(packageQuantity));
+    const grossUnitPrice = roundMoney(calculateSalesPackageGrossTotal(packageItems));
+    const netUnitPrice = roundMoney(calculateSalesPackageTotal(packageItems));
+    const discountPerPackage = roundMoney(calculateSalesPackageDiscountTotal(packageItems));
+
+    row.unit_price = grossUnitPrice > 0 ? grossUnitPrice : netUnitPrice;
+    row.discount = roundMoney(discountPerPackage * quantity);
+    row.discount_type = 'amount';
+    row.discount_percent = grossUnitPrice > 0
+      ? roundMoney((discountPerPackage / grossUnitPrice) * 100)
+      : 0;
+  };
+  const clearPackageInvoicePricing = (row: any) => {
+    if (!isPackageInvoiceRow(row)) return;
+    row.discount = 0;
+    row.discount_type = 'amount';
+    row.discount_percent = 0;
   };
   const getBillboardDisplayName = (record: any) =>
     String(record?.address || record?.name || record?.title || record?.system_code || record?.id || '').trim();
@@ -1121,6 +1142,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       syncInvoiceSubQuantity(current);
       if (isPackageInvoiceRow(current)) {
         current.sub_quantity = roundToThree(toSafeNumber(current?.quantity));
+        applyPackageInvoicePricing(current, current?.package_items, current?.quantity);
         current.description = buildSalesPackageDescription(current?.package_items, current?.quantity) || current.description || '';
       }
     }
@@ -1248,6 +1270,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const currentRow = { ...(nextRows[index] || {}), product_id: null };
       const rowKey = String(currentRow?.key || currentRow?.id || index);
       delete shelfAutoLoadRef.current[rowKey];
+      clearPackageInvoicePricing(currentRow);
       currentRow.package_id = null;
       currentRow.package_name = null;
       currentRow.package_items = [];
@@ -1304,6 +1327,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const currentRow = { ...(nextRows[index] || {}), [key]: value || null };
       const rowKey = String(currentRow?.key || currentRow?.id || index);
       if (!value) {
+        clearPackageInvoicePricing(currentRow);
         currentRow.package_id = null;
         currentRow.package_items = [];
         currentRow.package_name = null;
@@ -1334,7 +1358,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         currentRow.sub_unit = 'عدد';
         currentRow.quantity = packageQuantity;
         currentRow.sub_quantity = packageQuantity;
-        currentRow.unit_price = packageSnapshot.totalPrice;
+        applyPackageInvoicePricing(currentRow, packageSnapshot.items, packageQuantity);
         currentRow.length = null;
         currentRow.width = null;
         currentRow.start_date = null;
@@ -1506,7 +1530,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.sub_unit = 'عدد';
               currentRow.quantity = packageQuantity;
               currentRow.sub_quantity = packageQuantity;
-              currentRow.unit_price = record.totalPrice;
+              applyPackageInvoicePricing(currentRow, record.items, packageQuantity);
               currentRow.delivery_time = null;
               currentRow.length = null;
               currentRow.width = null;
@@ -1523,6 +1547,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             if (targetModule === 'billboards') {
               currentRow.product_type = 'service';
               currentRow.item_kind = 'product';
+              clearPackageInvoicePricing(currentRow);
               currentRow.package_id = null;
               currentRow.package_name = null;
               currentRow.package_items = [];
@@ -1550,6 +1575,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
               currentRow.main_unit = record?.main_unit || currentRow.main_unit || null;
               currentRow.sub_unit = record?.sub_unit || currentRow.sub_unit || null;
               currentRow.item_kind = 'product';
+              clearPackageInvoicePricing(currentRow);
               currentRow.package_id = null;
               currentRow.package_name = null;
               currentRow.package_items = [];
@@ -3794,7 +3820,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       nextRow.sub_unit = 'عدد';
       nextRow.quantity = packageQuantity;
       nextRow.sub_quantity = packageQuantity;
-      nextRow.unit_price = packageSnapshot.totalPrice;
+      applyPackageInvoicePricing(nextRow, packageSnapshot.items, packageQuantity);
       nextRow.delivery_time = null;
       nextRow.length = null;
       nextRow.width = null;
@@ -3847,6 +3873,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     if (isAnyInvoiceItems) {
       nextRow.item_kind = 'product';
+      clearPackageInvoicePricing(nextRow);
       nextRow.package_id = null;
       nextRow.package_name = null;
       nextRow.package_items = [];

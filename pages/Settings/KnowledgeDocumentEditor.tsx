@@ -4,7 +4,6 @@ import {
   ArrowRightOutlined,
   PaperClipOutlined,
   PrinterOutlined,
-  RobotOutlined,
   SaveOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons';
@@ -26,6 +25,7 @@ import {
   KnowledgeVisibilityOption,
   normalizeKnowledgeVisibilityIds,
 } from '../../utils/knowledgeVisibility';
+import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 
 const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 
@@ -449,7 +449,7 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
           {/* استفاده برای هوش مصنوعی */}
           <Tooltip title={useForAi ? 'هوش مصنوعی از این سند استفاده می‌کند' : 'هوش مصنوعی از این سند استفاده نمی‌کند'}>
             <div className="flex items-center gap-1 cursor-pointer" onClick={() => setUseForAi((v) => !v)}>
-              <RobotOutlined className={useForAi ? 'text-blue-500' : 'text-gray-400'} />
+              <AiSparkleIcon className={`h-4 w-4 ${useForAi ? 'text-blue-500' : 'text-gray-400'}`} />
               <span className={`text-xs ${useForAi ? 'text-blue-600' : 'text-gray-400'}`}>
                 هوش مصنوعی
               </span>

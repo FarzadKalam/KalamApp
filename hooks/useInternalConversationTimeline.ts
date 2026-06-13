@@ -310,7 +310,11 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
-      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: !options?.force });
+      // Always merge with existing items: a force refresh fires while the user is
+      // reading (realtime updates), and replacing would trim loaded history back
+      // to the latest page and break the scroll position. Duplicates resolve to
+      // the freshly fetched row (read receipts / edits win).
+      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
       if (applied) {
         _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }

@@ -374,6 +374,7 @@ export const sendCounterpartyBotGroupMessage = async ({
         || itemProviderResult?.data?.message_id
         || itemProviderResult?.data?.message_update?.message_id
         || itemProviderResult?.data?.messageUpdate?.messageId
+        || providerItem?.provider_message_id
         || providerMessageId
         || ''
       ) || null,

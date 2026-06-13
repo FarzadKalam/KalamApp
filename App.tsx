@@ -163,7 +163,7 @@ const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const Layout = lazy(loadLayout);
 
-const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
+const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> => {
   const pathname = String(targetPath || "").split(/[?#]/)[0] || "/";
   const segments = pathname.split("/").filter(Boolean);
   const section = segments[0] || "";
@@ -211,7 +211,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string) => {
     preloader = detail === "create" ? loadModuleCreate : detail ? loadModuleShow : loadModuleListRefine;
   }
 
-  void preloader().catch(() => undefined);
+  return preloader().catch(() => undefined);
 };
 
 const preloadAuthenticatedShell = (pathname?: string) => {

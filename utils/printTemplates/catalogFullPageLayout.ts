@@ -19,6 +19,8 @@
  *  └──────────────────────────────────────────────────────────────────┘
  */
 
+import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, getPrintFullAreaImageStyle, type PrintImageDisplayMode } from './imageDisplay';
+
 export interface CatalogFullPageLayoutOptions {
   /** Full URL of the main image, or {{system.record_image_url}} */
   imageUrl: string;
@@ -56,6 +58,8 @@ export interface CatalogFullPageLayoutOptions {
    * or a token like {{system.catalog_map_section}}, or '' to hide.
    */
   mapSectionHtml: string;
+  /** تصویر رکورد در کاتالوگ با چه حالتی نمایش داده شود */
+  imageDisplayMode?: PrintImageDisplayMode;
   /** page-break-before:always for all but first page */
   isFirstPage?: boolean;
 }
@@ -77,6 +81,7 @@ export const buildCatalogFullPageLayout = (opts: CatalogFullPageLayoutOptions): 
     todayDate,
     qrSectionHtml,
     mapSectionHtml,
+    imageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
     isFirstPage = true,
   } = opts;
 
@@ -96,7 +101,7 @@ const watermarkLayer = watermarkText ? `
 
   // ── Background image (full-cover via background-image for reliable print rendering) ─
   const bgLayer = imageUrl
-    ? `<img src="${imageUrl}" alt="تصویر کاتالوگ" loading="eager" decoding="sync" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center center; display:block; z-index:1;" />`
+    ? `<img src="${imageUrl}" alt="تصویر کاتالوگ" loading="eager" decoding="sync" style="${getPrintFullAreaImageStyle(imageDisplayMode)}z-index:1;" />`
     : `<div style="position:absolute; inset:0; background:linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%); z-index:1;"></div>`;
 
   // ── Code fields below title ────────────────────────────────────────────────

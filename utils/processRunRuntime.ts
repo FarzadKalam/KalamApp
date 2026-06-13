@@ -1,5 +1,14 @@
 import { MODULES } from '../moduleRegistry';
 import { parseAssigneeValue } from './assigneeValue';
+import {
+  PROCESS_GRAPH_METADATA_KEY,
+  PROCESS_LANE_KEY,
+  PROCESS_NODE_KEY,
+  attachProcessGraphToStages,
+  getProcessStageLaneKey,
+  getProcessStageNodeKey,
+  materializeLegacyProcessGraph,
+} from './processGraph';
 export type ProcessGroupMeta = {
   groupId: string;
   groupLabel: string | null;
@@ -122,14 +131,19 @@ export const mapProcessTemplateStagesToDraft = (
   const groupName = normalizeText(options.groupName || options.templateName) || buildProcessGroupName({
     templateName: options.templateName,
   });
+  const materialized = materializeLegacyProcessGraph(Array.isArray(stages) ? stages : []);
+  const sourceStages = attachProcessGraphToStages(materialized.stages, materialized.graph);
   let cursor = Number(options.startSortOrder || 0);
   const sortStep = Math.max(1, Number(options.sortStep || 10));
 
-  return (Array.isArray(stages) ? stages : []).map((stage: any, index: number) => {
+  return sourceStages.map((stage: any, index: number) => {
     const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
-    if (!cursor) cursor = Number(stage?.sort_order || ((index + 1) * sortStep));
+    const sourceSortOrder = Number(stage?.sort_order || ((index + 1) * sortStep));
+    if (!cursor) cursor = sourceSortOrder;
     const stageName = normalizeText(stage?.stage_name || metadata?.stage_name) || `مرحله ${index + 1}`;
     const assignee = normalizeStageAssigneeFields(stage);
+    const processNodeKey = getProcessStageNodeKey(stage, index);
+    const processLaneKey = getProcessStageLaneKey(stage);
     const row = {
       ...(metadata || {}),
       id: `draft_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
@@ -138,7 +152,7 @@ export const mapProcessTemplateStagesToDraft = (
       description: normalizeText(metadata?.description) || null,
       task_type: normalizeText(metadata?.task_type) || null,
       automation_rules: Array.isArray(metadata?.automation_rules) ? metadata.automation_rules : [],
-      sort_order: cursor,
+      sort_order: options.startSortOrder ? cursor : sourceSortOrder,
       wage: Number(stage?.wage || 0),
       weight: Number(metadata?.weight || 0),
       duration_value: Number(metadata?.duration_value || 0),
@@ -155,6 +169,15 @@ export const mapProcessTemplateStagesToDraft = (
       process_link_map: options.processLinkMap && typeof options.processLinkMap === 'object'
         ? options.processLinkMap
         : {},
+      [PROCESS_NODE_KEY]: processNodeKey,
+      [PROCESS_LANE_KEY]: processLaneKey,
+      [PROCESS_GRAPH_METADATA_KEY]: materialized.graph,
+      metadata: {
+        ...metadata,
+        [PROCESS_NODE_KEY]: processNodeKey,
+        [PROCESS_LANE_KEY]: processLaneKey,
+        [PROCESS_GRAPH_METADATA_KEY]: materialized.graph,
+      },
     };
     cursor += sortStep;
     return row;
@@ -242,6 +265,9 @@ const normalizeStageStatusForRun = (status: unknown) => {
 
 const isSameDraftStage = (left: Record<string, any> | null | undefined, right: Record<string, any> | null | undefined) => {
   if (!left || !right) return false;
+  const leftNodeKey = normalizeText(left?.[PROCESS_NODE_KEY] || left?.metadata?.[PROCESS_NODE_KEY]);
+  const rightNodeKey = normalizeText(right?.[PROCESS_NODE_KEY] || right?.metadata?.[PROCESS_NODE_KEY]);
+  if (leftNodeKey && rightNodeKey && leftNodeKey === rightNodeKey) return true;
   const leftId = normalizeText(left?.id || left?.template_stage_id || left?.process_run_stage_id);
   const rightId = normalizeText(right?.id || right?.template_stage_id || right?.process_run_stage_id);
   if (leftId && rightId && leftId === rightId) return true;
@@ -253,6 +279,7 @@ const isSameDraftStage = (left: Record<string, any> | null | undefined, right: R
 export const buildProcessRunStageLookupKeys = (stage: Record<string, any>) => {
   const stageName = normalizeText(stage?.name || stage?.stage_name || stage?.title) || 'مرحله';
   return [
+    normalizeText(stage?.[PROCESS_NODE_KEY] || stage?.metadata?.[PROCESS_NODE_KEY]),
     normalizeText(toUuidOrNull(stage?.template_stage_id)),
     normalizeText(stage?.id),
     `${Number(stage?.sort_order || 0)}:${stageName.toLowerCase()}`,
@@ -283,6 +310,21 @@ export const ensureProcessRunContextsForStageGroups = async (
   return contexts;
 };
 
+export const removeDraftStagesForProcessGroups = (
+  stages: Record<string, any>[],
+  groupIds: Array<string | null | undefined>
+) => {
+  if (!Array.isArray(stages) || stages.length === 0) return [];
+  const normalizedGroupIds = new Set(
+    (Array.isArray(groupIds) ? groupIds : [])
+      .map((groupId) => normalizeText(groupId))
+      .filter(Boolean)
+  );
+  if (normalizedGroupIds.size === 0) return stages;
+
+  return stages.filter((stage) => !normalizedGroupIds.has(getDraftStageProcessGroupMeta(stage).groupId));
+};
+
 export const ensureProcessRunForDraftStageGroup = async ({
   supabaseClient,
   moduleId,
@@ -300,11 +342,15 @@ export const ensureProcessRunForDraftStageGroup = async ({
   const groupStages = (Array.isArray(stages) ? stages : [])
     .filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === groupId)
     .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
-  if (groupStages.length === 0) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+  if (groupStages.length === 0 && !targetStage) {
+    return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+  }
   const scopedStages = stageScope === 'target' && targetStage
-    ? (groupStages.filter((stage) => isSameDraftStage(stage, targetStage)).slice(0, 1))
+    ? groupStages.filter((stage) => isSameDraftStage(stage, targetStage)).slice(0, 1)
     : groupStages;
-  const stagesForRuntime = scopedStages.length > 0 ? scopedStages : groupStages;
+  const stagesForRuntime = stageScope === 'target' && targetStage
+    ? (scopedStages.length > 0 ? scopedStages : [targetStage])
+    : groupStages;
 
   const orgId = await resolveOrgId(supabaseClient, moduleId, recordId);
   if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
@@ -325,6 +371,8 @@ export const ensureProcessRunForDraftStageGroup = async ({
         assignee_user_id: assignee.defaultAssigneeId,
         assignee_role_id: assignee.defaultAssigneeRoleId,
         wage: Number(stage?.wage || 0),
+        process_node_key: getProcessStageNodeKey(stage),
+        process_lane_key: getProcessStageLaneKey(stage),
         metadata: {
           ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
           draft_stage_id: normalizeText(stage?.id) || null,
@@ -335,6 +383,11 @@ export const ensureProcessRunForDraftStageGroup = async ({
           source_template_id: normalizeText(stage?.source_template_id) || null,
           source_template_name: normalizeText(stage?.source_template_name) || null,
           task_type: normalizeText(stage?.task_type) || null,
+          [PROCESS_NODE_KEY]: getProcessStageNodeKey(stage),
+          [PROCESS_LANE_KEY]: getProcessStageLaneKey(stage),
+          [PROCESS_GRAPH_METADATA_KEY]: stage?.[PROCESS_GRAPH_METADATA_KEY]
+            || stage?.metadata?.[PROCESS_GRAPH_METADATA_KEY]
+            || null,
         },
       };
     });
@@ -361,6 +414,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
         template_stage_id: row?.template_stage_id,
         name: row?.stage_name,
         sort_order: row?.sort_order,
+        [PROCESS_NODE_KEY]: row?.process_node_key,
       }).forEach((key) => stageMap.set(key, stageId));
     });
     const processRunStageId = targetStage ? resolveProcessRunStageId(stageMap, targetStage) : null;

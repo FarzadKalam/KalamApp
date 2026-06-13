@@ -1,15 +1,16 @@
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
-import { AI_CONTEXT_EVENT, type AssistantContext } from '../utils/aiAssistantEvents';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import type { AssistantContext } from '../utils/aiAssistantEvents';
 
 const NotificationsPopover = React.lazy(() => import('../components/NotificationsPopover'));
 
-type MessagesTab = 'notes' | 'bot_messages' | 'sms_messages' | 'voip_calls' | 'assistant';
-const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'sms_messages', 'voip_calls', 'assistant']);
+type MessagesTab = 'notes' | 'bot_messages' | 'sms_messages' | 'voip_calls';
+const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'sms_messages', 'voip_calls']);
 
 const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const requestedTab = useMemo(() => {
     const tab = String(searchParams.get('tab') || '').trim();
@@ -27,12 +28,12 @@ const MessagesPage: React.FC = () => {
 
   useEffect(() => {
     const context = (location.state as { assistantContext?: AssistantContext } | null)?.assistantContext;
-    if (!context || requestedTab !== 'assistant') return;
-    const frame = window.requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail: context }));
+    if (String(searchParams.get('tab') || '').trim() !== 'assistant') return;
+    navigate('/ai', {
+      replace: true,
+      state: context ? { assistantContext: context } : undefined,
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [location.state, requestedTab]);
+  }, [location.state, navigate, searchParams]);
 
   // Let the chat panels manage their own scroll while keeping Layout's mobile footer inset.
   useEffect(() => {

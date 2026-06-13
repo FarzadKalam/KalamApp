@@ -429,6 +429,17 @@ export const formatTemplateValueByField = ({
     return out ? toPersianNumber(out) : String(value);
   }
 
+  if (fieldType === FieldType.LINK) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    // Online invoice public_link is stored as a relative path (/i/{code}) — prepend the org origin.
+    if (raw.startsWith('/i/')) {
+      const origin = typeof window !== 'undefined' ? window.location.origin : '';
+      return origin ? `${origin}${raw}` : raw;
+    }
+    return raw;
+  }
+
   if (typeof value === 'object') {
     const namedObject = value as Record<string, any>;
     const preferredKeys = ['label', 'title', 'name', 'full_name', 'business_name', 'system_code'];

@@ -133,11 +133,22 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
 ];
 
 const FEATURE_OPTIONS = [
+  { id: 'ai_chat', label: 'گفتگو با هوش مصنوعی' },
   { id: 'ai_knowledge', label: 'دانش سازمانی AI' },
   { id: 'ai_knowledge_limited', label: 'دانش سازمانی AI (محدود)' },
+  { id: 'ai_document_analysis', label: 'تحلیل اسناد با AI' },
+  { id: 'ai_web_search', label: 'جستجوی وب AI' },
+  { id: 'ai_voice_input', label: 'ورودی صوتی AI' },
+  { id: 'ai_voice_output', label: 'خروجی صوتی AI' },
+  { id: 'ai_image_generation', label: 'تولید تصویر AI' },
+  { id: 'ai_video_generation', label: 'تولید ویدیو AI' },
+  { id: 'ai_deep_reasoning', label: 'تفکر عمیق AI' },
+  { id: 'ai_legal_assistant', label: 'دستیار حقوقی AI' },
+  { id: 'ai_voip_auto_reply', label: 'پاسخگویی خودکار VOIP با AI' },
   { id: 'taxpayer_system', label: 'سامانه مودیان' },
   { id: 'api_access', label: 'دسترسی API' },
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
+  { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
   { id: 'white_label', label: 'White Label' },
 ];
 

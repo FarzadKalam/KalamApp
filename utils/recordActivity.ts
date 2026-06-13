@@ -57,11 +57,57 @@ const serializeActivityValue = (value: any): string | null => {
   }
 };
 
+const isSameSerializedActivityValue = (left: any, right: any): boolean =>
+  serializeActivityValue(left) === serializeActivityValue(right);
+
+const CAN_DEDUPE_BY_TRIGGER_ACTION = new Set([
+  'create',
+  'delete',
+  'task_created',
+  'process_template_applied',
+  'process_updated',
+]);
+
 const isMissingColumnLikeError = (error: any, columnNames: string[]) => {
   const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   if (code === '42703' || code === 'PGRST204' || code === 'PGRST200') return true;
   return columnNames.some((column) => text.includes(String(column || '').toLowerCase()));
+};
+
+const hasRecentTriggerActivity = async (
+  supabase: any,
+  payload: Record<string, any>,
+  oldValue: any,
+  newValue: any
+): Promise<boolean> => {
+  const action = String(payload.action || '').trim();
+  const fieldName = payload.field_name || null;
+  if (!supabase || !payload.module_id || !payload.record_id || !action) return false;
+
+  const since = new Date(Date.now() - 10000).toISOString();
+  let query = supabase
+    .from('changelogs')
+    .select('action,field_name,old_value,new_value,metadata,created_at')
+    .eq('module_id', payload.module_id)
+    .eq('record_id', payload.record_id)
+    .eq('action', action)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  query = fieldName ? query.eq('field_name', fieldName) : query.is('field_name', null);
+  const { data, error } = await query;
+  if (error || !Array.isArray(data)) return false;
+
+  return data.some((row: any) => {
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    if (metadata.source !== 'db_trigger') return false;
+    if (CAN_DEDUPE_BY_TRIGGER_ACTION.has(action)) return true;
+    if (row.old_value === null && row.new_value === null) return true;
+    return isSameSerializedActivityValue(row.old_value, oldValue)
+      && isSameSerializedActivityValue(row.new_value, newValue);
+  });
 };
 
 export const sanitizeActivityText = (value: unknown, fallback = 'مقدار ثبت‌شده'): string => {
@@ -213,6 +259,10 @@ export const insertRecordActivity = async ({
     record_title: recordTitle || null,
     metadata: metadata || null,
   };
+
+  if (await hasRecentTriggerActivity(supabase, payload, oldValue, newValue).catch(() => false)) {
+    return;
+  }
 
   let result = await supabase.from('changelogs').insert([payload]);
   if (!result.error) return;

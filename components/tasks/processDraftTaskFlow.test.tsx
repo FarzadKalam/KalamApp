@@ -6,6 +6,7 @@ import {
   ensureProcessRunContextsForStageGroups,
   ensureProcessRunForDraftStageGroup,
   mapProcessTemplateStagesToDraft,
+  removeDraftStagesForProcessGroups,
   resolveProcessRunStageId,
   syncProcessRunStageFromTask,
 } from '../../utils/processRunRuntime';
@@ -274,6 +275,31 @@ describe('process draft task flow', () => {
       assignee_type: null,
     });
     expect(deriveProjectStatusFromProcessState([], autoAssignedTasks)).toBe('planning');
+  });
+
+  it('removes the converted draft process group after auto-assigning real tasks', async () => {
+    const draftStages = [
+      ...createMultiStageTemplateDraft(),
+      ...mapProcessTemplateStagesToDraft(TEMPLATE_ID, [
+        {
+          id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1',
+          stage_name: 'پیگیری بعدی',
+          sort_order: 40,
+        },
+      ], {
+        groupId: 'process_group_followup',
+        groupName: 'فرآیند پیگیری',
+        templateName: 'فرآیند پیگیری',
+      }),
+    ];
+
+    const nextDraftStages = removeDraftStagesForProcessGroups(draftStages, ['process_group_main']);
+
+    expect(nextDraftStages).toHaveLength(1);
+    expect(nextDraftStages[0]).toMatchObject({
+      process_group_id: 'process_group_followup',
+      name: 'پیگیری بعدی',
+    });
   });
 
   it('syncs stage changes from tasks and marks the process completed when all tasks are done', async () => {

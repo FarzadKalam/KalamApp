@@ -17,6 +17,7 @@ import {
   Modal,
   Tooltip,
   Typography,
+  Upload,
 } from 'antd';
 import {
   CopyOutlined,
@@ -36,22 +37,23 @@ import {
   buildDefaultFooterTemplateForModule,
   buildDefaultHeaderTemplateForModule,
   buildDefaultTemplateForModule,
-  getModuleTitle,
   getSystemTemplateFieldOptions,
   getPrintTemplateVariables,
-  getDefaultFooterSignatures,
   isPrintTemplateAvailableForModule,
   loadPrintTemplatesStore,
   materializeSystemTemplateForCopy,
   mergeTemplatesWithDefaults,
   normalizeDynamicBlockTablesHtml,
   savePrintTemplatesStore,
-  type PrintFooterSignature,
+  getModuleTitle,
   type PrintTemplateVariableOption,
   type StoredPrintTemplate,
 } from '../../utils/printTemplates/store';
 import { buildListPrintableFields } from '../../utils/listPrintExport';
 import { supabase } from '../../supabaseClient';
+import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
+import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
+import ResilientImage from '../../components/common/ResilientImage';
 
 const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 import { fetchCurrentUserRolePermissions, isSaasAdminModuleId } from '../../utils/permissions';
@@ -164,7 +166,6 @@ const PrintTemplatesTab: React.FC = () => {
   const [systemFieldsEditingTemplate, setSystemFieldsEditingTemplate] = useState<StoredPrintTemplate | null>(null);
   const [systemFieldsSearch, setSystemFieldsSearch] = useState('');
   const [systemFieldKeysDraft, setSystemFieldKeysDraft] = useState<string[]>([]);
-  const [footerSignaturesDraft, setFooterSignaturesDraft] = useState<PrintFooterSignature[]>([]);
   const [activeSection, setActiveSection] = useState<'header' | 'body' | 'footer'>('body');
   const [headerEditor, setHeaderEditor] = useState<any | null>(null);
   const [bodyEditor, setBodyEditor] = useState<any | null>(null);
@@ -456,13 +457,8 @@ const PrintTemplatesTab: React.FC = () => {
       Array.isArray(template.selectedFieldKeys) && template.selectedFieldKeys.length > 0
         ? sanitizeSelectedPrintFieldKeys(template.selectedFieldKeys, allKeys)
         : allKeys;
-    const signatures =
-      Array.isArray(template.footerSignatures) && template.footerSignatures.length > 0
-        ? template.footerSignatures
-        : getDefaultFooterSignatures(template.moduleId);
     setSystemFieldsEditingTemplate(template);
     setSystemFieldKeysDraft(selectedKeys);
-    setFooterSignaturesDraft(signatures.map((s) => ({ ...s })));
     setSystemFieldsSearch('');
     setSystemFieldsModalOpen(true);
   };
@@ -470,14 +466,12 @@ const PrintTemplatesTab: React.FC = () => {
   const saveSystemFieldsEditor = async () => {
     if (!systemFieldsEditingTemplate) return;
     const allowedKeys = systemFieldOptions.map((item) => item.key);
-    const validSignatures = footerSignaturesDraft.filter((s) => s.title.trim());
     const current = templatesByModule[selectedModuleId] || [];
     const nextModuleTemplates = current.map((template) =>
       template.id === systemFieldsEditingTemplate.id
         ? {
             ...template,
             selectedFieldKeys: sanitizeSelectedPrintFieldKeys(systemFieldKeysDraft, allowedKeys),
-            footerSignatures: validSignatures,
             updatedAt: nowIso(),
           }
         : template
@@ -492,7 +486,6 @@ const PrintTemplatesTab: React.FC = () => {
       setSystemFieldsEditingTemplate(null);
       setSystemFieldsSearch('');
       setSystemFieldKeysDraft([]);
-      setFooterSignaturesDraft([]);
     }
   };
 
@@ -613,6 +606,8 @@ const PrintTemplatesTab: React.FC = () => {
       pageMarginRight: Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right),
       pageMarginBottom: Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom),
       pageMarginLeft: Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left),
+      backgroundImageUrl: editingTemplate.backgroundImageUrl || null,
+      backgroundSizing: editingTemplate.backgroundImageUrl ? 'fit' : undefined,
     };
 
     const nextModuleTemplates = exists
@@ -629,6 +624,37 @@ const PrintTemplatesTab: React.FC = () => {
       setEditorOpen(false);
       setEditingTemplate(null);
     }
+  };
+
+  const handleTemplateBackgroundUpload = async (file: File) => {
+    if (!editingTemplate || editingTemplate.isSystem) return false;
+    try {
+      const fileName = `print-template-bg-${editingTemplate.id}-${Date.now()}.${file.name.split('.').pop()}`;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: fileName,
+        file,
+        upsert: true,
+        label: file.name || editingTemplate.title || 'print-template-background',
+        detail: 'پس‌زمینه قالب چاپ',
+      });
+      const { data } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(fileName);
+      setEditingTemplate((prev) =>
+        prev
+          ? {
+              ...prev,
+              backgroundImageUrl: data.publicUrl,
+              backgroundSizing: 'fit',
+            }
+          : prev,
+      );
+      message.success('پس‌زمینه قالب آماده شد');
+    } catch (error) {
+      if (isUploadCanceledError(error)) return false;
+      message.error('آپلود پس‌زمینه انجام نشد');
+    }
+    return false;
   };
 
   return (
@@ -896,6 +922,38 @@ const PrintTemplatesTab: React.FC = () => {
               placeholder="توضیح کوتاه قالب"
             />
 
+            <div className="mb-4 rounded-2xl border border-slate-200 dark:border-slate-700 px-4 py-3 bg-white/60 dark:bg-white/[0.03]">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-bold text-slate-700 dark:text-slate-200">تغییر پس‌زمینه</div>
+                  <Typography.Text type="secondary" className="text-xs">
+                    این تصویر فقط برای قالب‌های سفارشی روی کل برگه فیت می‌شود و از منطق سربرگ سازمانی جدا است.
+                  </Typography.Text>
+                </div>
+                {editingTemplate.backgroundImageUrl ? (
+                  <div className="w-16 h-16 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white">
+                    <ResilientImage src={editingTemplate.backgroundImageUrl} preset="gallery" alt="Background" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Upload showUploadList={false} beforeUpload={handleTemplateBackgroundUpload} disabled={editingTemplate.isSystem === true}>
+                  <Button disabled={editingTemplate.isSystem === true}>انتخاب تصویر پس‌زمینه</Button>
+                </Upload>
+                <Button
+                  disabled={!editingTemplate.backgroundImageUrl}
+                  onClick={() => setEditingTemplate((prev) => (prev ? { ...prev, backgroundImageUrl: null, backgroundSizing: undefined } : prev))}
+                >
+                  حذف پس‌زمینه
+                </Button>
+              </div>
+              {editingTemplate.isSystem === true ? (
+                <Typography.Text type="secondary" className="mt-2 block text-[11px]">
+                  برای استفاده از پس‌زمینه صفحه، ابتدا از قالب سیستمی یک کپی بگیرید و همان نسخه را ویرایش کنید.
+                </Typography.Text>
+              ) : null}
+            </div>
+
             <div className="sticky top-0 z-[90] mb-4 pb-2">
               <div className="mb-2 flex justify-end">
                 <Button
@@ -946,6 +1004,10 @@ const PrintTemplatesTab: React.FC = () => {
                   paddingRight: `${Number(editingTemplate.pageMarginRight ?? DEFAULT_PAGE_MARGINS.right)}mm`,
                   paddingBottom: `${Number(editingTemplate.pageMarginBottom ?? DEFAULT_PAGE_MARGINS.bottom)}mm`,
                   paddingLeft: `${Number(editingTemplate.pageMarginLeft ?? DEFAULT_PAGE_MARGINS.left)}mm`,
+                  backgroundImage: editingTemplate.backgroundImageUrl ? `url(${editingTemplate.backgroundImageUrl})` : undefined,
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                  backgroundSize: editingTemplate.backgroundImageUrl ? 'contain' : undefined,
                 }}
               >
                 {editingTemplate.showHeader !== false ? (
@@ -1051,7 +1113,6 @@ const PrintTemplatesTab: React.FC = () => {
           setSystemFieldsEditingTemplate(null);
           setSystemFieldsSearch('');
           setSystemFieldKeysDraft([]);
-          setFooterSignaturesDraft([]);
         }}
         onOk={saveSystemFieldsEditor}
         okText="ذخیره"
@@ -1149,62 +1210,6 @@ const PrintTemplatesTab: React.FC = () => {
             )}
           </div>
 
-          <div className="border border-slate-200 dark:border-slate-700 rounded-2xl p-4 bg-slate-50/60 dark:bg-slate-900/30">
-            <div className="flex items-center justify-between mb-3">
-              <Typography.Text strong>امضاهای پاورقی</Typography.Text>
-              {footerSignaturesDraft.length < 5 && (
-                <Button
-                  size="small"
-                  icon={<PlusOutlined />}
-                  onClick={() => setFooterSignaturesDraft((prev) => [...prev, { title: '', name: '' }])}
-                >
-                  افزودن امضا
-                </Button>
-              )}
-            </div>
-            {footerSignaturesDraft.length === 0 ? (
-              <Typography.Text type="secondary" className="text-[12px]">
-                هیچ امضایی تعریف نشده — پاورقی بدون بخش امضا نمایش داده می‌شود.
-              </Typography.Text>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {footerSignaturesDraft.map((sig, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <Input
-                      placeholder="عنوان (مثلاً خریدار)"
-                      value={sig.title}
-                      onChange={(e) =>
-                        setFooterSignaturesDraft((prev) =>
-                          prev.map((s, i) => (i === idx ? { ...s, title: e.target.value } : s))
-                        )
-                      }
-                      style={{ flex: 1 }}
-                      size="small"
-                    />
-                    <Input
-                      placeholder="نام (اختیاری)"
-                      value={sig.name}
-                      onChange={(e) =>
-                        setFooterSignaturesDraft((prev) =>
-                          prev.map((s, i) => (i === idx ? { ...s, name: e.target.value } : s))
-                        )
-                      }
-                      style={{ flex: 1 }}
-                      size="small"
-                    />
-                    <Button
-                      size="small"
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() =>
-                        setFooterSignaturesDraft((prev) => prev.filter((_, i) => i !== idx))
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </Modal>
     </div>

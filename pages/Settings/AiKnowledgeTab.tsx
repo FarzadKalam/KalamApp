@@ -18,7 +18,6 @@ import {
   DeleteOutlined,
   EditOutlined,
   ReloadOutlined,
-  RobotOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
@@ -38,6 +37,7 @@ import {
   isAiInstructionsConfigured,
 } from '../../utils/aiKnowledge';
 import KnowledgeDocumentEditor, { OrgDocumentForEditor } from './KnowledgeDocumentEditor';
+import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 
 type OrgDocument = {
   id: string;
@@ -143,6 +143,7 @@ const AiKnowledgeTab: React.FC = () => {
   const [editingDocument, setEditingDocument] = useState<OrgDocument | null>(null);
   const [editorDocument, setEditorDocument] = useState<OrgDocument | null>(null);
   const [rebuildingId, setRebuildingId] = useState<string | null>(null);
+  const [embeddingSummaryByDocument, setEmbeddingSummaryByDocument] = useState<Record<string, { total: number; ready: number; failed: number; pending: number }>>({});
   const [visibilityUserOptions, setVisibilityUserOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [visibilityRoleOptions, setVisibilityRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
 
@@ -272,7 +273,30 @@ const AiKnowledgeTab: React.FC = () => {
         .select(DOCUMENT_SELECT_FIELDS)
         .order('updated_at', { ascending: false });
       if (error) throw error;
-      setDocuments((data || []) as OrgDocument[]);
+      const nextDocuments = (data || []) as OrgDocument[];
+      setDocuments(nextDocuments);
+      const ids = nextDocuments.map((item) => item.id).filter(Boolean);
+      if (ids.length > 0) {
+        const { data: chunkRows } = await supabase
+          .from('document_chunks')
+          .select('document_id, embedding_status')
+          .in('document_id', ids);
+        const summary: Record<string, { total: number; ready: number; failed: number; pending: number }> = {};
+        (chunkRows || []).forEach((row: any) => {
+          const documentId = String(row?.document_id || '');
+          if (!documentId) return;
+          const current = summary[documentId] || { total: 0, ready: 0, failed: 0, pending: 0 };
+          current.total += 1;
+          const status = String(row?.embedding_status || 'pending');
+          if (status === 'ready') current.ready += 1;
+          else if (status === 'failed') current.failed += 1;
+          else current.pending += 1;
+          summary[documentId] = current;
+        });
+        setEmbeddingSummaryByDocument(summary);
+      } else {
+        setEmbeddingSummaryByDocument({});
+      }
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'خطا در دریافت دانش سازمان'));
     } finally {
@@ -547,13 +571,27 @@ const AiKnowledgeTab: React.FC = () => {
           {
             title: 'هوش مصنوعی',
             dataIndex: 'use_for_ai',
-            width: 90,
+            width: 160,
             render: (value: boolean | undefined, row: OrgDocument) => {
               const active = value !== false && row.status === 'active';
+              const summary = embeddingSummaryByDocument[row.id];
+              const label = !active
+                ? 'غیرفعال'
+                : !summary || summary.total === 0
+                ? 'بدون بخش'
+                : summary.failed > 0
+                ? 'خطا'
+                : summary.pending > 0
+                ? 'در حال آماده‌سازی'
+                : 'آماده';
+              const color = label === 'آماده' ? 'green' : label === 'خطا' ? 'red' : label === 'در حال آماده‌سازی' ? 'gold' : 'default';
               return (
-                <Tooltip title={active ? 'دستیار از این سند استفاده می‌کند' : 'غیرفعال برای دستیار'}>
-                  <RobotOutlined className={active ? 'text-blue-500 text-base' : 'text-gray-300 text-base'} />
-                </Tooltip>
+                <Space size={4}>
+                  <Tooltip title={active ? 'دستیار از این سند استفاده می‌کند' : 'غیرفعال برای دستیار'}>
+                    <AiSparkleIcon className={`h-4 w-4 ${active ? 'text-blue-500' : 'text-gray-300'}`} />
+                  </Tooltip>
+                  <Tag color={color} className="!m-0 text-[10px]">{label}</Tag>
+                </Space>
               );
             },
           },

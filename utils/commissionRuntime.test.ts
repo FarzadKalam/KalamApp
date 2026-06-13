@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildCommissionDraftRows, recomputeCommissionDraftRow, type CommissionPersistedDraft } from './commissionRuntime';
+import {
+  buildCommissionDraftRows,
+  getCommissionLineReviewBucket,
+  recomputeCommissionDraftRow,
+  type CommissionPersistedDraft,
+} from './commissionRuntime';
 
 describe('commissionRuntime', () => {
   it('builds approved-invoice draft rows for the current period', () => {
@@ -114,6 +119,49 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.mode).toBe('fixed');
     expect(rows[0]?.is_from_previous_period).toBe(true);
     expect(rows[0]?.selected_amount).toBe(0);
+  });
+
+  it('moves an included deferred line into the calculable bucket', () => {
+    const existingDrafts: CommissionPersistedDraft[] = [{
+      source_key: 'commission_draft:employee-1:prepaid_and_settled_invoices:product_default:inv-1:item-1:2026-04-01:2026-04-30',
+      employee_id: 'employee-1',
+      assignee_id: 'profile-1',
+      period_start: '2026-04-01',
+      period_end: '2026-04-30',
+      source_basis: 'prepaid_and_settled_invoices',
+      percent_mode: 'product_default',
+      invoice_id: 'inv-1',
+      invoice_item_key: 'item-1',
+      entitled_amount: 50000,
+      posted_amount: 0,
+      remaining_amount: 50000,
+      decision_status: 'defer_to_next_period',
+      details: {
+        invoice_name: 'فاکتور ۱',
+        product_label: 'سرویس A',
+        commission_percent: 10,
+        net_amount: 500000,
+      },
+    }];
+    const [row] = buildCommissionDraftRows({
+      invoices: [],
+      employeeIdByAssigneeId: {},
+      employeeDefaultCommissionByEmployeeId: {},
+      basis: 'prepaid_and_settled_invoices',
+      percentMode: 'product_default',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      existingDrafts,
+      includeNotCalculated: true,
+    });
+
+    const includedRow = recomputeCommissionDraftRow({
+      ...row,
+      lines: row.lines.map((line) => ({ ...line, decision_status: 'include' })),
+    });
+
+    expect(includedRow.selected_amount).toBe(50000);
+    expect(getCommissionLineReviewBucket(includedRow, includedRow.lines[0])).toBe('current_period');
   });
 
   it('reallocates current-period pool amounts after excluding a line', () => {

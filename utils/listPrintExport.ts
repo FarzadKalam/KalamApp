@@ -4,8 +4,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { FieldType } from '../types';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { getAssigneeLabel } from './assigneeLabel';
-import { getResolvedAssigneeId } from './assigneeValue';
 import { buildCatalogFullPageLayout } from './printTemplates/catalogFullPageLayout';
+import { resolvePrintAssigneeComboLabel, resolvePrintAssigneeLabel, resolvePrintOptionLabel } from './printTemplates/assigneeDisplay';
+import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode, getPrintFramedImageStyle, sanitizePrintImageDisplayMode } from './printTemplates/imageDisplay';
 import { buildImagePreviewUrl, buildPrintImageUrl } from './imagePreview';
 
 export interface ListFieldDefinition {
@@ -42,13 +43,6 @@ const getPrintImageUrl = (value: any, preset: 'card' | 'hero' = 'card') =>
 
 const getCatalogPrintImageUrl = (value: any): string => buildPrintImageUrl(String(value || '').trim(), 'printHero');
 
-const resolveOptionLabel = (options: any[] = [], value: any) => {
-  const normalized = String(value ?? '').trim();
-  if (!normalized) return '';
-  const match = options.find((item: any) => String(item?.value ?? '').trim() === normalized);
-  return String(match?.label || match?.name || match?.title || '').trim();
-};
-
 const toEnglishDigits = (value: any): string =>
   String(value ?? '')
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
@@ -83,64 +77,9 @@ const resolveMergedOptionLabel = (
   relationOptions: Record<string, any[]>,
   value: any,
 ) =>
-  resolveOptionLabel(field?.options, value) ||
-  resolveOptionLabel(relationOptions[key] || [], value) ||
-  resolveOptionLabel(Object.values(relationOptions).flat(), value);
-
-const resolveAssigneeComboLabel = (
-  rawValue: string,
-  relationOptions: Record<string, any[]>,
-): string => {
-  const match = String(rawValue || '').trim().match(/^(user|role)_(.+)$/i);
-  if (!match) return '';
-  const assigneeType = String(match[1] || '').toLowerCase();
-  const assigneeId = String(match[2] || '').trim();
-  if (!assigneeId) return '';
-
-  const roleOptions = [
-    ...(relationOptions.org_roles || []),
-    ...(relationOptions.roles || []),
-  ];
-  const userOptions = [
-    ...(relationOptions.assignee_id || []),
-    ...(relationOptions.profiles || []),
-  ];
-  const exact = resolveOptionLabel(Object.values(relationOptions).flat(), rawValue);
-  if (exact) return exact;
-
-  return assigneeType === 'role'
-    ? (resolveOptionLabel(roleOptions, assigneeId) || resolveOptionLabel(Object.values(relationOptions).flat(), assigneeId))
-    : (resolveOptionLabel(userOptions, assigneeId) || resolveOptionLabel(Object.values(relationOptions).flat(), assigneeId));
-};
-
-const resolveAssigneeRecordLabel = (
-  row: Record<string, any>,
-  relationOptions: Record<string, any[]>,
-): string => {
-  const assigneeType = String(row?.assignee_type || '').trim().toLowerCase() === 'role' ? 'role' : 'user';
-  const resolvedAssigneeId = getResolvedAssigneeId(row);
-  if (!resolvedAssigneeId) {
-    return String(row?.assignee_name || row?.responsible_name || row?.created_by_name || '-');
-  }
-
-  const roleOptions = [
-    ...(relationOptions.org_roles || []),
-    ...(relationOptions.roles || []),
-    ...(relationOptions.assignee_role_id || []),
-  ];
-  const userOptions = [
-    ...(relationOptions.assignee_id || []),
-    ...(relationOptions.profiles || []),
-  ];
-  const comboLabel = resolveAssigneeComboLabel(`${assigneeType}_${resolvedAssigneeId}`, relationOptions);
-  const directLabel = assigneeType === 'role'
-    ? resolveOptionLabel(roleOptions, resolvedAssigneeId)
-    : resolveOptionLabel(userOptions, resolvedAssigneeId);
-
-  return directLabel
-    || comboLabel
-    || String(row?.assignee_name || row?.responsible_name || row?.created_by_name || resolvedAssigneeId);
-};
+  resolvePrintOptionLabel(field?.options, value) ||
+  resolvePrintOptionLabel(relationOptions[key] || [], value) ||
+  resolvePrintOptionLabel(Object.values(relationOptions).flat(), value);
 
 const formatArrayItemLabel = (
   item: any,
@@ -254,20 +193,20 @@ export const formatListCellValue = (
 ): string => {
   const key = String(field?.key || '').trim();
   if (key === ASSIGNEE_DISPLAY_FIELD_KEY) {
-    return formatDigitsForLocale(resolveAssigneeRecordLabel(row, relationOptions), digitLocale);
+    return formatDigitsForLocale(resolvePrintAssigneeLabel(row, relationOptions) || '-', digitLocale);
   }
 
   const rawValue = row?.[key];
   const parsedArrayValue = parseArrayLikeValue(rawValue);
 
   if (key === 'assignee_id' && (row?.assignee_type || row?.assignee_role_id)) {
-    return formatDigitsForLocale(resolveAssigneeRecordLabel(row, relationOptions), digitLocale);
+    return formatDigitsForLocale(resolvePrintAssigneeLabel(row, relationOptions) || '-', digitLocale);
   }
 
   if (rawValue === null || rawValue === undefined || rawValue === '') return '-';
 
   if (typeof rawValue === 'string') {
-    const assigneeComboLabel = resolveAssigneeComboLabel(rawValue, relationOptions);
+    const assigneeComboLabel = resolvePrintAssigneeComboLabel(rawValue, relationOptions);
     if (assigneeComboLabel) return formatDigitsForLocale(assigneeComboLabel, digitLocale);
   }
 
@@ -340,14 +279,16 @@ export const formatListCellHtml = (
   row: Record<string, any>,
   relationOptions: Record<string, any[]> = {},
   currencyLabel: string = '',
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ): string => {
   const key = String(field?.key || '').trim();
   const rawValue = row?.[key];
+  const normalizedImageDisplayMode = sanitizePrintImageDisplayMode(imageDisplayMode);
 
   if (field?.type === FieldType.IMAGE) {
     const imageUrl = getPrintImageUrl(rawValue, 'card');
     if (!imageUrl) return '-';
-    return `<div style="display:flex;justify-content:center;align-items:center;"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(field.label || key)}" style="display:block;width:52px;height:52px;max-width:52px;max-height:52px;border-radius:10px;object-fit:cover;border:1px solid rgba(148,163,184,0.35);background:#fff;" /></div>`;
+    return `<div style="display:flex;justify-content:center;align-items:center;width:52px;height:52px;overflow:hidden;border-radius:10px;border:1px solid rgba(148,163,184,0.35);background:#fff;margin:0 auto;"><img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(field.label || key)}" style="${getPrintFramedImageStyle(normalizedImageDisplayMode)}border-radius:10px;" /></div>`;
   }
 
   return escapeHtml(formatListCellValue(field, row, relationOptions, currencyLabel));
@@ -359,6 +300,7 @@ export const buildListTableHtml = (
   relationOptions: Record<string, any[]> = {},
   currencyLabel: string = '',
   startIndex: number = 0,
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ) => {
   const headerHtml = fields
     .map((field) => `<th style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; background:rgba(var(--brand-500-rgb),0.08); font-weight:800;">${escapeHtml(field.label)}</th>`)
@@ -368,7 +310,7 @@ export const buildListTableHtml = (
     ? rows.map((row, index) => {
         const cells = fields
           .map((field) => {
-            const valueHtml = formatListCellHtml(field, row, relationOptions, currencyLabel);
+            const valueHtml = formatListCellHtml(field, row, relationOptions, currencyLabel, imageDisplayMode);
             return `<td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; vertical-align:top; word-break:break-word;">${valueHtml}</td>`;
           })
           .join('');
@@ -395,13 +337,14 @@ export const buildListSummaryTableHtml = (
   summary: ListPrintSummaryDefinition | null | undefined,
   relationOptions: Record<string, any[]> = {},
   currencyLabel: string = '',
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ) => {
   if (!summary || !Array.isArray(summary.fields) || summary.fields.length === 0) return '';
   const values = summary.values || {};
   const title = String(summary.title || '').trim();
   const rowsHtml = summary.fields
     .map((field) => {
-      const valueHtml = formatListCellHtml(field, values, relationOptions, currencyLabel);
+      const valueHtml = formatListCellHtml(field, values, relationOptions, currencyLabel, imageDisplayMode);
       return `
 <tr>
   <td style="width:34%; border:1px solid var(--table-border-color, #d1d5db); padding:7px 8px; background:rgba(var(--brand-50-rgb),0.32); font-weight:800;">${escapeHtml(field.label)}</td>
@@ -425,7 +368,9 @@ export const buildListCatalogHtml = (
   rows: Array<Record<string, any>>,
   relationOptions: Record<string, any[]> = {},
   currencyLabel: string = '',
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ) => {
+  const normalizedImageDisplayMode = sanitizePrintImageDisplayMode(imageDisplayMode);
   const imageField = fields.find((field) => String(field?.type || '').toLowerCase() === String(FieldType.IMAGE).toLowerCase()) || null;
   const contentFields = fields.filter((field) => field.key !== imageField?.key);
   const titleField =
@@ -447,7 +392,7 @@ export const buildListCatalogHtml = (
               }
               return `
 <div style="height:118px; border:1px solid rgba(148,163,184,0.28); border-radius:14px; background:#fff; overflow:hidden; display:flex; align-items:center; justify-content:center;">
-  <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageField.label || '')}" style="display:block; width:100%; height:100%; object-fit:cover;" />
+  <img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(imageField.label || '')}" style="${getPrintFramedImageStyle(normalizedImageDisplayMode)}" />
 </div>`.trim();
             })()
           : '';
@@ -506,7 +451,9 @@ export const buildListCatalogFullPageHtml = (
   currencyLabel: string = '',
   companyInfo?: CatalogFullPageCompanyInfo | null,
   _moduleLabel: string = '',
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
 ): string => {
+  const normalizedImageDisplayMode = sanitizePrintImageDisplayMode(imageDisplayMode);
   const today = toPersianNumber(safeJalaliFormat(new Date().toISOString(), 'YYYY/MM/DD'));
   const imageField = fields.find((f) => String(f?.type || '').toLowerCase() === 'image') || null;
   const titleField =
@@ -588,7 +535,7 @@ export const buildListCatalogFullPageHtml = (
           googleUrl = `https://www.google.com/maps?q=${parsedLocation.lat},${parsedLocation.lng}`;
           locationText = `${parsedLocation.lat.toFixed(4)}, ${parsedLocation.lng.toFixed(4)}`;
         }
-          mapSectionHtml = `<a href="${escapeHtml(googleUrl)}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><img src="${escapeHtml(mapImageUrl)}" alt="نقشه موقعیت" loading="eager" decoding="sync" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;" /><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${escapeHtml(locationText)}</div>` : ''}</div></a>`;
+          mapSectionHtml = `<a href="${escapeHtml(googleUrl)}" target="_blank" style="display:block; width:100%; height:100%; position:relative; overflow:hidden; text-decoration:none;"><img src="${escapeHtml(mapImageUrl)}" alt="نقشه موقعیت" loading="eager" decoding="sync" style="position:absolute; ${normalizedImageDisplayMode === 'actual' ? 'top:50%;left:50%;transform:translate(-50%,-50%);width:auto;height:auto;max-width:none;max-height:none;object-fit:none;object-position:center center;' : 'inset:0;width:100%;height:100%;object-fit:contain;object-position:center center;'} display:block;" /><div style="position:absolute; inset:0; background:linear-gradient(to top,rgba(0,0,0,0.65) 0%,transparent 55%);"></div><div style="position:absolute; bottom:0; left:0; right:0; padding:1.5mm 2mm;"><div style="color:#fff; font-size:6px; font-weight:800; text-align:center; text-shadow:0 1px 4px rgba(0,0,0,0.8);">📍 موقعیت مکانی</div>${locationText ? `<div style="color:rgba(255,255,255,0.75); font-size:5px; direction:ltr; font-family:monospace; text-align:center; margin-top:0.5mm;">${escapeHtml(locationText)}</div>` : ''}</div></a>`;
       }
 
       return buildCatalogFullPageLayout({
@@ -608,6 +555,7 @@ export const buildListCatalogFullPageHtml = (
         qrSectionHtml,
         mapSectionHtml,
         isFirstPage: index === 0,
+        imageDisplayMode: normalizedImageDisplayMode,
       });
     })
     .join('\n');

@@ -97,7 +97,16 @@
       "Bash(cd /d)",
       "Bash(grep -r \"LONG_TEXT\\\\|SUPER_LONG\" --include=\"*.tsx\" --include=\"*.ts\" Kalamapp/components --include-dir=Kalamapp/components)",
       "Bash(npm install *)",
-      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('web-vitals:', p.dependencies['web-vitals'] || p.devDependencies['web-vitals']\\)\")"
+      "Bash(node -e \"const p = require\\('./package.json'\\); console.log\\('web-vitals:', p.dependencies['web-vitals'] || p.devDependencies['web-vitals']\\)\")",
+      "Bash(grep -E \"\\\\.\\(ts|sql\\)$\")",
+      "WebFetch(domain:blog.finto.ir)",
+      "PowerShell(npm install @xyflow/react)",
+      "PowerShell(npx vitest run components/workflows/flow/flowGraph.test.ts utils/workflowActionSummary.test.ts components/workflows/flow/flowAdapters.test.ts components/workflows/WorkflowConditionsGroup.test.tsx 2>&1)",
+      "PowerShell(npm run build 2>&1)",
+      "PowerShell(npx vitest run components/tasks/processDraftTaskFlow.test.tsx utils/processAutomationRuntime.test.ts 2>&1)",
+      "Bash(python -)",
+      "Bash(git stash *)",
+      "Bash(node -e \"console.log\\(require\\('@tanstack/react-virtual/package.json'\\).version\\)\")"
     ]
   },
   "hooks": {

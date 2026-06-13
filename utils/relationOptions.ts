@@ -524,6 +524,7 @@ const fetchRelationOptionsViaRpc = async (
   if (!hasOnlyOrgScopeFilter(filter)) return null;
 
   const normalizedExactId = exactId === undefined || exactId === null ? null : String(exactId).trim();
+  if (normalizedExactId && !isUuidLikeValue(normalizedExactId)) return null;
   const { data, error } = await supabaseClient.rpc('search_relation_options_v1', {
     p_target_module: targetModule,
     p_target_field: targetField || null,
@@ -536,9 +537,12 @@ const fetchRelationOptionsViaRpc = async (
     const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
     if (
       code === '42883'
+      || code === '22P02'
       || code === 'PGRST202'
       || code === 'PGRST204'
       || isMissingColumnError(error)
+      || message.includes('bad request')
+      || message.includes('invalid input syntax for type uuid')
       || message.includes('search_relation_options_v1')
       || message.includes('could not find the function')
     ) {

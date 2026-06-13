@@ -1,7 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid, Segmented } from 'antd';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined } from '@ant-design/icons';
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
@@ -44,12 +55,20 @@ import {
 import { TASK_AUTOMATION_SELECT, updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { syncProjectStatusWithProcessState } from '../utils/projectProcessStatus';
 import {
+  createProcessStageRecipientFieldKey,
   createDefaultProcessAutomationRule,
+  extractRuleNoteTextFromActions,
+  filterEditableAutomationConditions,
   getProcessAutomationRuleSummary,
   normalizeProcessAutomationRules,
   PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION,
   type ProcessAutomationRule,
 } from '../utils/processAutomationTypes';
+import {
+  persistWorkflowViewMode,
+  readStoredWorkflowViewMode,
+  type WorkflowEditorViewMode,
+} from './workflows/flow/viewModePreference';
 import { runProcessAutomationsForTaskEvent } from '../utils/processAutomationRuntime';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -59,6 +78,7 @@ import { fetchProcessRuntimeBatchForRecord } from '../utils/processRuntimeBatch'
 import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  createWorkflowId,
   createProcessNextStageFieldKey,
   intervalUnitOptions,
   parseWorkflowRelatedFieldKey,
@@ -66,6 +86,7 @@ import {
   type WorkflowActionType,
   type WorkflowCondition,
   type WorkflowExecutionMode,
+  type WorkflowRecord,
   workflowExecutionModeOptions,
 } from '../utils/workflowTypes';
 import HelpHint from './HelpHint';
@@ -125,6 +146,7 @@ import { createFileManagerOriginForUpload, detectFileManagerTables } from '../ut
 import { getRecordTitle } from '../utils/recordTitle';
 import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
+import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { assignProcessTemplateModuleAliases, resolveProcessTemplateTokenValue } from '../utils/processTemplateContext';
 import {
   createProcessGroupId,
@@ -132,6 +154,7 @@ import {
   ensureProcessRunContextsForStageGroups,
   getDraftStageProcessGroupMeta,
   mapProcessTemplateStagesToDraft,
+  removeDraftStagesForProcessGroups,
   resolveProcessRunStageId,
   syncProcessRunStageFromTask,
 } from '../utils/processRunRuntime';
@@ -148,12 +171,44 @@ import {
   PROCESS_STAGE_INSTRUCTION_IDS_KEY,
   instructionStatusOptions as INSTRUCTION_STATUS_OPTIONS,
 } from '../utils/instructionSupport';
+import {
+  PROCESS_GRAPH_METADATA_KEY,
+  PROCESS_LANE_KEY,
+  PROCESS_NODE_KEY,
+  attachProcessGraphToStages,
+  createProcessLaneKey,
+  createProcessNodeKey,
+  createProcessTriggerKey,
+  getProcessStageLaneKey,
+  getProcessStageNodeKey,
+  getProcessStagesByLane,
+  isProcessGraphConnectionCyclic,
+  materializeLegacyProcessGraph,
+  moveProcessStageToPosition,
+  normalizeProcessGraph,
+  type ProcessGraphDefinition,
+  type ProcessTriggerDefinition,
+} from '../utils/processGraph';
+import {
+  computeProcessStageDueDate,
+  getProcessDueAnchorLabel,
+  normalizeProcessDueAnchor,
+  type ProcessDueAnchorType,
+} from '../utils/processSchedule';
+import { activateProcessRunNodes, activateProcessStageAction } from '../utils/processStageActivation';
+import { hasMultiLaneProcessesFeature } from '../utils/saasPlanFeatures';
+import {
+  cloneProcessActivatorWorkflowsForTemplate,
+  cloneProcessGraphInto,
+  type ProcessGraphCloneResult,
+} from '../utils/processGraphCopy';
 
 const InstructionQuickCreateModal = React.lazy(() => import('./instructions/InstructionQuickCreateModal'));
 const TaskHandoverModal = React.lazy(() => import('./production/TaskHandoverModal'));
 const TaskHandoverFormsModal = React.lazy(() => import('./production/TaskHandoverFormsModal'));
 const WorkflowConditionsGroup = React.lazy(() => import('./workflows/WorkflowConditionsGroup'));
 const WorkflowActionsBuilder = React.lazy(() => import('./workflows/WorkflowActionsBuilder'));
+const ProcessAutomationFlowModal = React.lazy(() => import('./workflows/flow/ProcessAutomationFlowModal'));
 
 interface ProductionStagesFieldProps {
   recordId?: string;
@@ -178,6 +233,203 @@ interface ProductionStagesFieldProps {
   forceProcessRecordMode?: boolean;
   onRuntimeSnapshot?: (snapshot: ProcessRuntimeSnapshot) => void;
 }
+
+const PROCESS_STAGE_TIP_WIDTH = 18;
+const PROCESS_STAGE_NOTCH_WIDTH = 14;
+
+const DraftProcessStageOutline: React.FC<{ hasRightNotch: boolean }> = ({ hasRightNotch }) => {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [size, setSize] = useState({ width: 1, height: 1 });
+
+  useEffect(() => {
+    const element = svgRef.current;
+    if (!element) return;
+
+    const updateSize = () => {
+      const bounds = element.getBoundingClientRect();
+      setSize({
+        width: Math.max(1, bounds.width),
+        height: Math.max(1, bounds.height),
+      });
+    };
+
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const { width, height } = size;
+  const rightNotchX = Math.max(PROCESS_STAGE_TIP_WIDTH, width - PROCESS_STAGE_NOTCH_WIDTH);
+  const path = [
+    `M ${width} 0`,
+    `L ${PROCESS_STAGE_TIP_WIDTH} 0`,
+    `L 0 ${height / 2}`,
+    `L ${PROCESS_STAGE_TIP_WIDTH} ${height}`,
+    `L ${width} ${height}`,
+    ...(hasRightNotch ? [`L ${rightNotchX} ${height / 2}`] : []),
+    'Z',
+  ].join(' ');
+
+  return (
+    <svg
+      ref={svgRef}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 z-20 h-full w-full overflow-visible text-gray-400 dark:text-gray-500"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeDasharray="5 4"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+};
+
+type ProcessStageDragData = {
+  scopeKey: string;
+  laneKey: string;
+  index: number;
+  stage: any;
+};
+
+type ProcessStageDragSurfaceProps = {
+  id: string;
+  data: ProcessStageDragData;
+  disabled?: boolean;
+  children: (props: {
+    ref: (node: HTMLElement | null) => void;
+    attributes: Record<string, any>;
+    listeners: Record<string, any> | undefined;
+    style: React.CSSProperties;
+    isDragging: boolean;
+    isOver: boolean;
+  }) => React.ReactNode;
+};
+
+const ProcessStageDragHandleContext = React.createContext<{
+  attributes: Record<string, any>;
+  listeners: Record<string, any> | undefined;
+} | null>(null);
+
+const ProcessStageMoveHandle = React.forwardRef<HTMLSpanElement, {
+  onClick: (event: React.MouseEvent<HTMLElement>) => void;
+  inverse?: boolean;
+}>(({ onClick, inverse = false }, ref) => {
+  const dragHandle = React.useContext(ProcessStageDragHandleContext);
+  return (
+    <span
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      {...(dragHandle?.attributes || {})}
+      {...(dragHandle?.listeners || {})}
+      className={`inline-flex h-6 w-6 touch-none cursor-grab items-center justify-center rounded shadow-sm active:cursor-grabbing ${
+        inverse
+          ? 'bg-black/15 text-white hover:bg-black/25'
+          : 'bg-white/80 text-gray-600 dark:bg-black/25 dark:text-gray-200'
+      }`}
+      onClick={onClick}
+    >
+      <DragOutlined />
+    </span>
+  );
+});
+ProcessStageMoveHandle.displayName = 'ProcessStageMoveHandle';
+
+const ProcessStageDragSurface: React.FC<ProcessStageDragSurfaceProps> = ({
+  id,
+  data,
+  disabled = false,
+  children,
+}) => {
+  const draggable = useDraggable({ id, data, disabled });
+  const droppable = useDroppable({ id, data: { ...data, dropIndex: data.index }, disabled });
+  const setNodeRef = useCallback((node: HTMLElement | null) => {
+    draggable.setNodeRef(node);
+    droppable.setNodeRef(node);
+  }, [draggable.setNodeRef, droppable.setNodeRef]);
+  const style: React.CSSProperties = {
+    transform: CSS.Translate.toString(draggable.transform),
+    opacity: draggable.isDragging ? 0.45 : 1,
+    zIndex: draggable.isDragging ? 2000 : undefined,
+  };
+
+  return children({
+    ref: setNodeRef,
+    attributes: draggable.attributes as Record<string, any>,
+    listeners: draggable.listeners as Record<string, any> | undefined,
+    style,
+    isDragging: draggable.isDragging,
+    isOver: droppable.isOver,
+  });
+};
+
+const ProcessLaneDropZone: React.FC<{
+  id: string;
+  scopeKey: string;
+  laneKey: string;
+  index: number;
+  disabled?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ id, scopeKey, laneKey, index, disabled = false, className = '', children }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    data: { scopeKey, laneKey, dropIndex: index },
+    disabled,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${className} ${isOver ? 'ring-2 ring-[rgba(var(--brand-400-rgb),0.65)] ring-offset-1' : ''}`.trim()}
+    >
+      {children}
+    </div>
+  );
+};
+
+const ProcessStageInsertionDropZone: React.FC<{
+  id: string;
+  scopeKey: string;
+  laneKey: string;
+  index: number;
+  vertical?: boolean;
+  disabled?: boolean;
+}> = ({ id, scopeKey, laneKey, index, vertical = false, disabled = false }) => {
+  const { setNodeRef, isOver } = useDroppable({
+    id,
+    data: { scopeKey, laneKey, dropIndex: index },
+    disabled,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      aria-hidden="true"
+      className={
+        vertical
+          ? `relative -my-1 h-2 w-full shrink-0 ${isOver ? 'z-30' : 'z-10'}`
+          : `relative -mx-1 h-full w-2 shrink-0 ${isOver ? 'z-30' : 'z-10'}`
+      }
+    >
+      <span
+        className={
+          vertical
+            ? `absolute inset-x-1 top-1/2 h-0.5 -translate-y-1/2 rounded-full transition-colors ${isOver ? 'bg-[rgba(var(--brand-500-rgb),1)]' : 'bg-transparent'}`
+            : `absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full transition-colors ${isOver ? 'bg-[rgba(var(--brand-500-rgb),1)]' : 'bg-transparent'}`
+        }
+      />
+    </div>
+  );
+};
 
 type StageHandoverSide = 'giver' | 'receiver';
 
@@ -530,10 +782,14 @@ const PROCESS_BAR_BREAKPOINTS = {
 
 const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
 const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
+const PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID = '__process_activator_source_node__';
 
 const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, onAutoOpenTaskClose = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, onRuntimeSnapshot }) => {
   const screens = Grid.useBreakpoint();
   const isMobileProcessViewport = !screens.md;
+  const processDragSensors = useSensors(useSensor(PointerSensor, {
+    activationConstraint: { distance: 8 },
+  }));
   const [lines, setLines] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
@@ -548,12 +804,31 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [lineForm] = Form.useForm();
   const [taskForm] = Form.useForm();
   const [draftLocal, setDraftLocal] = useState<any[]>(() => (Array.isArray(draftStages) ? draftStages : []));
+  const [activeDraftLaneKey, setActiveDraftLaneKey] = useState<string | null>(null);
+  const [processGraphOverride, setProcessGraphOverride] = useState<ProcessGraphDefinition | null>(null);
+  const [multiLaneFeatureEnabled, setMultiLaneFeatureEnabled] = useState(true);
+  const [stageMoveTarget, setStageMoveTarget] = useState<any | null>(null);
+  const [stageMoveForm] = Form.useForm();
+  const [processTriggerEditor, setProcessTriggerEditor] = useState<{
+    trigger: ProcessTriggerDefinition;
+    sourceStage: any | null;
+  } | null>(null);
+  const [processTriggerForm] = Form.useForm();
+  const watchedProcessActivatorTriggerType = Form.useWatch('workflow_trigger_type', processTriggerForm);
+  const [processActivatorWorkflowRecord, setProcessActivatorWorkflowRecord] = useState<WorkflowRecord | null>(null);
+  const [processActivatorConditionsAll, setProcessActivatorConditionsAll] = useState<WorkflowCondition[]>([]);
+  const [processActivatorConditionsAny, setProcessActivatorConditionsAny] = useState<WorkflowCondition[]>([]);
+  const [processActivatorWorkflowLoading, setProcessActivatorWorkflowLoading] = useState(false);
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [draftForm] = Form.useForm();
+  const watchedTaskDurationFrom = Form.useWatch('duration_from', taskForm);
+  const watchedDraftDurationFrom = Form.useWatch('duration_from', draftForm);
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
   const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
   const [expandedDraftAutomationRuleIds, setExpandedDraftAutomationRuleIds] = useState<string[]>([]);
+  const [automationViewMode, setAutomationViewMode] = useState<WorkflowEditorViewMode>(() => readStoredWorkflowViewMode());
+  const [diagramAutomationRuleId, setDiagramAutomationRuleId] = useState<string | null>(null);
   const [isSavingDraftStage, setIsSavingDraftStage] = useState(false);
   const [isReadyToLoad, setIsReadyToLoad] = useState(!lazyLoad);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -1024,10 +1299,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const weight = readNumber(stage?.weight ?? metadata?.weight, 0);
     const durationValue = readNumber(stage?.duration_value ?? metadata?.duration_value, 0);
     const durationUnit = String(stage?.duration_unit ?? metadata?.duration_unit ?? 'day') === 'hour' ? 'hour' : 'day';
-    const durationFrom = String(stage?.duration_from ?? metadata?.duration_from ?? 'project_start') === 'previous_stage_end'
-      ? 'previous_stage_end'
-      : 'project_start';
+    const dueAnchor = normalizeProcessDueAnchor(stage);
+    const durationFrom = dueAnchor.type === 'process_start'
+      ? 'project_start'
+      : (dueAnchor.type === 'previous_stage_due' ? 'previous_stage_end' : dueAnchor.type);
     const id = stage?.id || stage?.template_stage_id || stage?.process_run_stage_id || `draft_${index + 1}_${sortOrder}`;
+    const processNodeKey = getProcessStageNodeKey({ ...stage, metadata }, index);
+    const processLaneKey = getProcessStageLaneKey({ ...stage, metadata });
 
     const instructionIds = getInstructionIdsFromStage(stage);
 
@@ -1050,6 +1328,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       duration_value: durationValue,
       duration_unit: durationUnit,
       duration_from: durationFrom,
+      due_anchor_type: dueAnchor.type,
+      due_anchor_stage_node_key: dueAnchor.stageNodeKey,
+      [PROCESS_NODE_KEY]: processNodeKey,
+      [PROCESS_LANE_KEY]: processLaneKey,
       [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
       metadata: {
         ...metadata,
@@ -1062,6 +1344,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
+        due_anchor_type: dueAnchor.type,
+        due_anchor_stage_node_key: dueAnchor.stageNodeKey,
+        [PROCESS_NODE_KEY]: processNodeKey,
+        [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: instructionIds,
       },
     };
@@ -1072,8 +1358,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [draftStages, normalizeDraftStageForEditor]
   );
+  const configuredProcessDraftFieldKeys = new Set([
+    'execution_process_draft',
+    'marketing_process_draft',
+    'process_draft',
+    'sub_process_draft',
+  ]);
+  const moduleHasConfiguredProcessDraft = Boolean(
+    moduleId
+    && MODULES[moduleId]?.fields?.some((field: any) => configuredProcessDraftFieldKeys.has(String(field?.key || '')))
+  );
   const isProcessRecordModule = (
     forceProcessRecordMode
+    || moduleHasConfiguredProcessDraft
     || moduleId === 'projects'
     || moduleId === 'marketing_leads'
     || moduleId === 'customers'
@@ -1084,6 +1381,29 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const isProcessModule = isProcessRecordModule || isProcessPreviewModule;
   const isProductionOrder = moduleId === 'production_orders';
   const supportsHandover = isProductionOrder;
+  const canManageProcessGraph = (
+    rolePermissions?.process_templates?.edit !== false
+    && rolePermissions?.__workflows?.edit !== false
+  );
+
+  useEffect(() => {
+    if (!isProcessTemplateModule || !Array.isArray(draftStages)) return;
+    const materialized = materializeLegacyProcessGraph(draftStages);
+    if (!materialized.isLegacy) {
+      setProcessGraphOverride(materialized.graph);
+    }
+  }, [draftStages, isProcessTemplateModule]);
+
+  useEffect(() => {
+    if (!isProcessModule) return;
+    let cancelled = false;
+    void hasMultiLaneProcessesFeature().then((enabled) => {
+      if (!cancelled) setMultiLaneFeatureEnabled(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isProcessModule]);
 
   const processLineId = useMemo(
     () => `process-line:${String(moduleId || 'unknown')}:${String(recordId || 'draft')}`,
@@ -1963,6 +2283,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'process_group_id',
       'process_run_id',
       'process_run_stage_id',
+      'process_node_key',
+      'process_lane_key',
       'blocked_reason',
       'waiting_for_task_type',
       'escalation_level',
@@ -2078,6 +2400,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       'process_group_id',
       'process_run_id',
       'process_run_stage_id',
+      'process_node_key',
+      'process_lane_key',
       'blocked_reason',
       'waiting_for_task_type',
       'escalation_level',
@@ -2354,7 +2678,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const mapProcessRunStageRows = (runRows: any[], stageRows: any[]) => {
       const runById = new Map((runRows || []).map((run: any) => [String(run?.id || ''), run]));
-      return (stageRows || []).map((stage: any, index: number) => {
+      return (stageRows || [])
+        .map((stage: any, index: number) => {
         const run = runById.get(String(stage?.process_run_id || '')) || {};
         const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
         const groupId = String(
@@ -2368,11 +2693,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const effectiveStatus = fallbackStatus === 'done' && (!normalizedStatus || normalizedStatus === 'todo')
           ? 'done'
           : (normalizedStatus || fallbackStatus);
+        const processNodeKey = String(
+          stage?.process_node_key
+          || metadata?.[PROCESS_NODE_KEY]
+          || metadata?.recurrence_info?.[PROCESS_NODE_KEY]
+          || ''
+        ).trim() || null;
+        const processLaneKey = String(
+          stage?.process_lane_key
+          || metadata?.[PROCESS_LANE_KEY]
+          || metadata?.recurrence_info?.[PROCESS_LANE_KEY]
+          || 'lane_1'
+        ).trim() || 'lane_1';
+        const processGraph = metadata?.[PROCESS_GRAPH_METADATA_KEY]
+          || metadata?.recurrence_info?.[PROCESS_GRAPH_METADATA_KEY]
+          || null;
 
         return withProcessTaskCustomFieldValues({
           id: stage?.task_id ? String(stage.task_id) : `process_run_stage:${String(stage?.id || index)}`,
           name: stage?.stage_name || `مرحله ${index + 1}`,
           title: stage?.stage_name || `مرحله ${index + 1}`,
+          label: stage?.stage_name || `مرحله ${index + 1}`,
           status: effectiveStatus,
           sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
           wage: Number(stage?.wage || 0),
@@ -2385,10 +2726,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_group_id: groupId,
           process_run_id: run?.id || stage?.process_run_id || null,
           process_run_stage_id: stage?.id || null,
+          [PROCESS_NODE_KEY]: processNodeKey,
+          [PROCESS_LANE_KEY]: processLaneKey,
           process_run_info: run,
           isProcessRunStagePreview: !stage?.task_id,
           recurrence_info: {
             ...(metadata?.recurrence_info && typeof metadata.recurrence_info === 'object' ? metadata.recurrence_info : {}),
+            [PROCESS_NODE_KEY]: processNodeKey,
+            [PROCESS_LANE_KEY]: processLaneKey,
+            [PROCESS_GRAPH_METADATA_KEY]: processGraph,
             process_group: {
               id: groupId,
               name: groupName,
@@ -3917,6 +4263,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         description: draftStage?.description || '',
         task_type: draftStage?.task_type || undefined,
         duration_from: draftStage?.duration_from || 'project_start',
+        due_anchor_stage_node_key: draftStage?.due_anchor_stage_node_key || undefined,
         duration_value: Number(draftStage?.duration_value || 0),
         duration_unit: draftStage?.duration_unit || 'day',
         assignee_combo: assigneeCombo,
@@ -3926,6 +4273,35 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
     void openModal();
   };
+
+  const handleCopyActualTask = useCallback((task: any) => {
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    const copiedNodeKey = createProcessNodeKey();
+    const copiedDraft = {
+      ...task,
+      id: `draft_copy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      name: `${String(task?.name || task?.title || 'فعالیت').trim()} - کپی`,
+      stage_name: `${String(task?.name || task?.title || 'فعالیت').trim()} - کپی`,
+      status: 'todo',
+      completed_at: null,
+      actual_start_at: null,
+      actual_end_at: null,
+      task_report: null,
+      process_run_stage_id: null,
+      [PROCESS_NODE_KEY]: copiedNodeKey,
+      [PROCESS_LANE_KEY]: task?.[PROCESS_LANE_KEY] || recurrence?.[PROCESS_LANE_KEY] || 'lane_1',
+      sort_order: Number(task?.sort_order || 0) + 1,
+      automation_rules: recurrence?.process_automation_rules || [],
+      process_task_custom_fields: recurrence?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || [],
+      process_task_status_options: recurrence?.[PROCESS_TASK_STATUS_OPTIONS_KEY] || [],
+      metadata: {
+        ...recurrence,
+        [PROCESS_NODE_KEY]: copiedNodeKey,
+        [PROCESS_LANE_KEY]: task?.[PROCESS_LANE_KEY] || recurrence?.[PROCESS_LANE_KEY] || 'lane_1',
+      },
+    };
+    openTaskModal(processLineId, copiedDraft);
+  }, [processLineId]);
 
   const handleAddTask = async (values: any) => {
     if (!recordId || !activeLineId) return;
@@ -3964,33 +4340,38 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         .sort((a: any, b: any) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0] || null;
       const durationValue = Math.max(0, Number(values?.duration_value || 0));
       const durationUnit = String(values?.duration_unit || 'day') === 'hour' ? 'hour' : 'day';
-      const durationFrom = String(values?.duration_from || 'project_start') === 'previous_stage_end'
-        ? 'previous_stage_end'
-        : 'project_start';
+      const durationFrom = String(values?.duration_from || 'project_start');
+      const dueAnchorType: ProcessDueAnchorType = durationFrom === 'project_start'
+        ? 'process_start'
+        : (durationFrom === 'previous_stage_end' ? 'previous_stage_due' : durationFrom as ProcessDueAnchorType);
+      const dueAnchorStageNodeKey = ['specific_stage_due', 'specific_stage_completed'].includes(dueAnchorType)
+        ? String(values?.due_anchor_stage_node_key || '').trim() || null
+        : null;
 
-      if (!dueDate && durationValue > 0) {
-        let previousDueAt: Date | null = null;
-        if (durationFrom === 'previous_stage_end') {
-          const currentSort = Number(values?.sort_order || draftToCreate?.sort_order || 0);
-          const sortedChain = getLineTaskChain(activeLineId)
-            .filter((task: any) => Number(task?.sort_order || 0) < currentSort && !!task?.due_date)
-            .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
-          const previousTask = sortedChain.length > 0 ? sortedChain[sortedChain.length - 1] : null;
-          if (previousTask?.due_date) {
-            const parsedPrevious = new Date(previousTask.due_date);
-            if (!Number.isNaN(parsedPrevious.getTime())) previousDueAt = parsedPrevious;
-          }
-        }
+      if (!dueDate) {
         const baseDate = isProcessRecordModule ? await getProcessBaseDate() : new Date();
-        const computedDueAt = computeStageDueAt(
-          {
+        const processStagesForDue = [
+          ...(Array.isArray(draftLocalRef.current) ? draftLocalRef.current : []),
+          ...getLineTaskChain(activeLineId).map((task: any) => ({
+            ...task,
+            process_node_key: task?.process_node_key || parseRecurrenceInfo(task?.recurrence_info)?.process_node_key,
+            process_lane_key: task?.process_lane_key || parseRecurrenceInfo(task?.recurrence_info)?.process_lane_key,
+            metadata: parseRecurrenceInfo(task?.recurrence_info),
+          })),
+        ];
+        const computedDueAt = computeProcessStageDueDate({
+          stage: {
+            ...(draftToCreate || {}),
+            sort_order: Number(values?.sort_order || draftToCreate?.sort_order || 10),
             duration_value: durationValue,
             duration_unit: durationUnit,
-            duration_from: durationFrom,
+            due_anchor_type: dueAnchorType,
+            due_anchor_stage_node_key: dueAnchorStageNodeKey,
           },
-          baseDate,
-          previousDueAt
-        );
+          stages: processStagesForDue,
+          processStartedAt: baseDate,
+          graph: materializeLegacyProcessGraph(processStagesForDue).graph,
+        });
         dueDate = computedDueAt ? computedDueAt.toISOString() : null;
       }
 
@@ -4057,8 +4438,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         templateId: activeProcessGroupMeta?.templateId || draftStageMeta?.templateId || null,
         templateName: activeProcessGroupMeta?.templateName || draftStageMeta?.templateName || null,
       };
-      const processRunContext = draftToCreate && isProcessRecordModule && moduleId
-        ? await ensureProcessRunForDraftStageGroup({
+      const existingProcessRunStageId = String(draftToCreate?.process_run_stage_id || '').trim();
+      const existingProcessRunId = String(
+        draftToCreate?.process_run_id
+        || draftToCreate?.recurrence_info?.process_run_id
+        || ''
+      ).trim();
+      const processRunContext = existingProcessRunStageId && existingProcessRunId
+        ? {
+            processRunId: existingProcessRunId,
+            processRunStageId: existingProcessRunStageId,
+          }
+        : (draftToCreate && isProcessRecordModule && moduleId
+          ? await ensureProcessRunForDraftStageGroup({
           supabaseClient: supabase,
           moduleId,
           recordId,
@@ -4077,7 +4469,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           },
           currentUserId: user?.id || null,
         })
-        : { processRunId: null, processRunStageId: null };
+          : { processRunId: null, processRunStageId: null });
 
       const payload: any = {
         name: resolvedTaskName || values.name,
@@ -4097,6 +4489,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         process_group_id: effectiveProcessGroupMeta.id || null,
         process_run_id: processRunContext.processRunId || null,
         process_run_stage_id: processRunContext.processRunStageId || null,
+        process_node_key: draftToCreate ? getProcessStageNodeKey(draftToCreate) : createProcessNodeKey(),
+        process_lane_key: draftToCreate ? getProcessStageLaneKey(draftToCreate) : (activeDraftLaneKey || 'lane_1'),
         ...buildTaskSourceInitialValues(isProductionOrder ? 'production_orders' : moduleId, recordId),
       };
       const currentRecurrence = values?.recurrence_info && typeof values.recurrence_info === 'object'
@@ -4129,6 +4523,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_links: effectiveStageProcessLinkMap,
           process_run_id: processRunContext.processRunId || null,
           process_run_stage_id: processRunContext.processRunStageId || null,
+          process_node_key: draftToCreate ? getProcessStageNodeKey(draftToCreate) : payload.process_node_key,
+          process_lane_key: draftToCreate ? getProcessStageLaneKey(draftToCreate) : payload.process_lane_key,
+          process_graph: draftToCreate?.[PROCESS_GRAPH_METADATA_KEY]
+            || draftToCreate?.metadata?.[PROCESS_GRAPH_METADATA_KEY]
+            || processGraphOverride
+            || null,
+          due_anchor_type: dueAnchorType,
+          due_anchor_stage_node_key: dueAnchorStageNodeKey,
+          duration_value: durationValue,
+          duration_unit: durationUnit,
           [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
           [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
@@ -4153,6 +4557,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         : null;
 
       if (insertedTask) {
+        if (processRunContext.processRunStageId) {
+          await syncProcessRunStageFromTask({
+            supabaseClient: supabase,
+            task: {
+              ...insertedTask,
+              process_run_id: processRunContext.processRunId,
+              process_run_stage_id: processRunContext.processRunStageId,
+            },
+          });
+        }
         setTasks((prev) => (
           [...prev, insertedTask]
             .filter((task, index, source) => (
@@ -4162,7 +4576,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         ));
       }
 
-      const nextDrafts = draftToCreate && isProcessRecordModule
+      const nextDrafts = draftToCreate && isProcessRecordModule && !draftToCreate?.isProcessRunStagePreview
         ? removeSingleMatchingDraftStage(
           Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
           draftToCreate
@@ -4522,16 +4936,33 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!task?.id) return;
     const taskId = String(task.id);
     try {
-      const { error } = await supabase
-        .from('tasks')
-        .delete()
-        .eq('id', taskId);
-      if (error) throw error;
+      if (task?.process_run_stage_id) {
+        await syncProcessRunStageFromTask({
+          supabaseClient: supabase,
+          task: {
+            ...task,
+            id: null,
+            status: 'todo',
+            assignee_id: null,
+            assignee_role_id: null,
+            due_date: null,
+            start_date: null,
+            actual_start_at: null,
+            completed_at: null,
+          },
+        });
+      }
+      await moveModuleRecordsToRecycleBin('tasks', [taskId]);
       setTasks((prev) => prev.filter((row: any) => String(row?.id) !== taskId));
+      setProcessRuntimeStages((prev) => prev.map((stage: any) => (
+        String(stage?.task_id || '') === taskId
+          ? { ...stage, task_id: null }
+          : stage
+      )));
       closeTaskQuickModal(false);
-      message.success('وظیفه حذف شد');
+      message.success('فعالیت به سطل بازیافت منتقل شد');
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'حذف وظیفه ناموفق بود'));
+      message.error(toFaErrorMessage(error, 'انتقال فعالیت به سطل بازیافت ناموفق بود'));
     }
   }, [closeTaskQuickModal]);
 
@@ -4608,12 +5039,36 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const formatDraftDuration = useCallback((stage: any) => {
     const durationValue = Number(stage?.duration_value || 0);
     const durationUnit = String(stage?.duration_unit || 'day') === 'hour' ? 'ساعت' : 'روز';
-    const durationFrom = String(stage?.duration_from || 'project_start') === 'previous_stage_end'
-      ? 'اتمام مرحله قبلی'
-      : 'شروع پروژه';
+    const durationFrom = getProcessDueAnchorLabel(stage);
     if (!durationValue) return `از ${durationFrom}`;
     return `${toPersianNumber(durationValue)} ${durationUnit} بعد از ${durationFrom}`;
   }, []);
+
+  const getProcessStageShapeStyle = useCallback((
+    index: number,
+    options?: { summary?: boolean },
+  ): React.CSSProperties => {
+    if (!isProcessModule) return {};
+    const clipPath = index === 0
+      ? `polygon(100% 0, ${PROCESS_STAGE_TIP_WIDTH}px 0, 0 50%, ${PROCESS_STAGE_TIP_WIDTH}px 100%, 100% 100%)`
+      : `polygon(100% 0, ${PROCESS_STAGE_TIP_WIDTH}px 0, 0 50%, ${PROCESS_STAGE_TIP_WIDTH}px 100%, 100% 100%, calc(100% - ${PROCESS_STAGE_NOTCH_WIDTH}px) 50%)`;
+    return {
+      clipPath,
+      WebkitClipPath: clipPath,
+      borderRadius: 0,
+      ...(options?.summary
+        ? {}
+        : {
+            paddingLeft: 20,
+            paddingRight: index === 0 ? 10 : 18,
+          }),
+    };
+  }, [isProcessModule]);
+
+  const renderDraftProcessStageOutline = useCallback((index: number) => {
+    if (!isProcessModule) return null;
+    return <DraftProcessStageOutline hasRightNotch={index !== 0} />;
+  }, [isProcessModule]);
 
   const getProcessBarDisplayMode = useCallback((segments: any[]): ProcessBarDisplayMode => {
     if (!compact && !cardCompact) return 'full';
@@ -5455,20 +5910,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return lines.filter((line: any) => String(line?.id || '') === String(onlyLineId));
   }, [lines, onlyLineId]);
 
-  const saveDraftStages = useCallback(async (nextStages: any[]) => {
-    draftLocalRef.current = nextStages;
-    setDraftLocal(nextStages);
-    if (onDraftStagesChange) await onDraftStagesChange(nextStages);
+  const saveDraftStages = useCallback(async (
+    nextStages: any[],
+    explicitProcessGraph?: ProcessGraphDefinition | null,
+  ) => {
+    const persistedStages = isProcessModule
+      ? (() => {
+          const materialized = materializeLegacyProcessGraph(nextStages);
+          return attachProcessGraphToStages(
+            materialized.stages,
+            explicitProcessGraph || processGraphOverride || materialized.graph,
+          );
+        })()
+      : nextStages;
+    draftLocalRef.current = persistedStages;
+    setDraftLocal(persistedStages);
+    if (onDraftStagesChange) await onDraftStagesChange(persistedStages);
     if (moduleId === 'production_boms' && recordId) {
-      await supabase.from('production_boms').update({ production_stages_draft: nextStages }).eq('id', recordId);
+      await supabase.from('production_boms').update({ production_stages_draft: persistedStages }).eq('id', recordId);
     }
     if (moduleId === 'projects' && recordId) {
       await syncProjectStatusWithProcessState(recordId, {
-        draftStages: nextStages,
+        draftStages: persistedStages,
         tasks,
       });
     }
-  }, [moduleId, onDraftStagesChange, recordId, tasks]);
+  }, [isProcessModule, moduleId, onDraftStagesChange, processGraphOverride, recordId, tasks]);
 
   const loadProcessTemplateOptions = useCallback(async () => {
     if (!moduleId || !isProcessRecordModule) {
@@ -5846,9 +6313,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
         process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
         duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-        duration_from: String(stage?.duration_from || 'project_start') === 'previous_stage_end'
-          ? 'previous_stage_end'
-          : 'project_start',
+        duration_from: String(stage?.duration_from || 'project_start'),
       }));
 
       const nextStages = [...existing, ...appendedStages].sort(
@@ -6013,9 +6478,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
         process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
         duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-        duration_from: String(stage?.duration_from || 'project_start') === 'previous_stage_end'
-          ? 'previous_stage_end'
-          : 'project_start',
+        duration_from: String(stage?.duration_from || 'project_start'),
       }));
 
       const nextStages = [...otherStages, ...replacedStages].sort(
@@ -6137,30 +6600,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   }, [moduleId, recordId]);
 
-  const computeStageDueAt = useCallback((
-    stage: any,
-    baseDate: Date,
-    previousDueAt: Date | null
-  ) => {
-    const rawValue = Number(stage?.duration_value ?? stage?.lead_time_value ?? 0);
-    const durationValue = Number.isFinite(rawValue) ? Math.max(0, rawValue) : 0;
-    const durationUnit = String(stage?.duration_unit || stage?.lead_time_unit || 'day') === 'hour' ? 'hour' : 'day';
-    const durationFrom = String(stage?.duration_from || stage?.due_anchor || 'project_start') === 'previous_stage_end'
-      ? 'previous_stage_end'
-      : 'project_start';
-    const anchorDate = (durationFrom === 'previous_stage_end' && previousDueAt)
-      ? previousDueAt
-      : baseDate;
-    if (durationValue <= 0) {
-      return previousDueAt && durationFrom === 'previous_stage_end' ? previousDueAt : null;
-    }
-    const offsetMs = durationUnit === 'hour'
-      ? durationValue * 60 * 60 * 1000
-      : durationValue * 24 * 60 * 60 * 1000;
-    const dueAt = new Date(anchorDate.getTime() + offsetMs);
-    return Number.isNaN(dueAt.getTime()) ? null : dueAt;
-  }, []);
-
   const handleAutoAssignProcess = useCallback(async (targetGroupId?: string | null) => {
     if (!isProcessRecordModule || !recordId || !moduleId) return;
     const normalizedTargetGroupId = String(targetGroupId || '').trim();
@@ -6168,16 +6607,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (autoAssignLockRef.current.has(autoAssignKey)) return;
     autoAssignLockRef.current.add(autoAssignKey);
     setAutoAssigningProcessIds((prev) => ({ ...prev, [autoAssignKey]: true }));
-    const stageRows = (Array.isArray(draftLocal) ? draftLocal : [])
+    const sourceDraftRows = Array.isArray(draftLocal) ? draftLocal : [];
+    const sourceDraftGraph = materializeLegacyProcessGraph(sourceDraftRows);
+    const rootLaneKeys = new Set(
+      sourceDraftGraph.graph.lanes
+        .filter((lane) => !lane.parentTriggerKey)
+        .map((lane) => lane.key),
+    );
+    const stageRows = sourceDraftGraph.stages
       .filter((stage: any) => {
         const hasName = String(stage?.name || stage?.title || '').trim() !== '';
         if (!hasName) return false;
+        if (!rootLaneKeys.has(getProcessStageLaneKey(stage))) return false;
         if (!normalizedTargetGroupId) return true;
         return getStageProcessGroupMeta(stage).groupId === normalizedTargetGroupId;
       })
       .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
     if (!stageRows.length) {
       message.warning('مرحله‌ای برای ارجاع وجود ندارد');
+      autoAssignLockRef.current.delete(autoAssignKey);
+      setAutoAssigningProcessIds((prev) => {
+        const next = { ...prev };
+        delete next[autoAssignKey];
+        return next;
+      });
       return;
     }
     try {
@@ -6186,13 +6639,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const userId = authData?.user?.id || null;
       const baseDate = await getProcessBaseDate();
       const dueByStageKey = new Map<string, string | null>();
-      let previousDueAt: Date | null = null;
       stageRows.forEach((stage: any) => {
         const normalizedName = normalizeStageName(stage?.name || stage?.title);
         if (!normalizedName) return;
         const { groupId } = getStageProcessGroupMeta(stage);
-        const dueAt = computeStageDueAt(stage, baseDate, previousDueAt);
-        if (dueAt) previousDueAt = dueAt;
+        const dueAt = computeProcessStageDueDate({
+          stage,
+          stages: sourceDraftGraph.stages,
+          processStartedAt: baseDate,
+          graph: sourceDraftGraph.graph,
+        });
         dueByStageKey.set(
           buildProcessStageTaskKey(groupId, normalizedName, stage?.sort_order),
           dueAt ? dueAt.toISOString() : null
@@ -6295,6 +6751,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           process_group_id: stageMeta.groupId,
           process_run_id: processRunContext.processRunId || null,
           process_run_stage_id: processRunStageId || null,
+          process_node_key: getProcessStageNodeKey(stage),
+          process_lane_key: getProcessStageLaneKey(stage),
           production_line_id: null,
           production_shelf_id: null,
           produced_qty: 0,
@@ -6316,6 +6774,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             process_links: effectiveProcessLinkMap,
             process_run_id: processRunContext.processRunId || null,
             process_run_stage_id: processRunStageId || null,
+            process_node_key: getProcessStageNodeKey(stage),
+            process_lane_key: getProcessStageLaneKey(stage),
+            process_graph: sourceDraftGraph.graph,
+            due_anchor_type: normalizeProcessDueAnchor(stage).type,
+            due_anchor_stage_node_key: normalizeProcessDueAnchor(stage).stageNodeKey,
+            duration_value: Number(stage?.duration_value || stage?.metadata?.duration_value || 0),
+            duration_unit: String(stage?.duration_unit || stage?.metadata?.duration_unit || 'day'),
             [PROCESS_TASK_CUSTOM_FIELDS_KEY]: resolvedStageCustomFields,
             [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageCustomStatusOptions,
             [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
@@ -6335,14 +6800,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         payload.push(taskRow);
       }
 
+      const autoAssignedGroupIds = Array.from(new Set(stageRows.map((stage: any) => getStageProcessGroupMeta(stage).groupId)));
       if (!payload.length) {
+        const nextDrafts = removeDraftStagesForProcessGroups(
+          Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
+          autoAssignedGroupIds
+        );
+        if (nextDrafts.length !== (Array.isArray(draftLocalRef.current) ? draftLocalRef.current.length : 0)) {
+          draftLocalRef.current = nextDrafts;
+          setDraftLocal(nextDrafts);
+          await saveDraftStages(nextDrafts);
+        }
         message.info('برای همه مراحل فعالیت ثبت شده است');
         return;
       }
       await insertTasksWithFallback(payload);
-      const nextDrafts = creatableStages.reduce((currentDrafts: any[], stage: any) => (
-        removeSingleMatchingDraftStage(currentDrafts, stage)
-      ), Array.isArray(draftLocalRef.current) ? draftLocalRef.current : []);
+      const nextDrafts = removeDraftStagesForProcessGroups(
+        Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
+        autoAssignedGroupIds
+      );
       draftLocalRef.current = nextDrafts;
       setDraftLocal(nextDrafts);
       await saveDraftStages(nextDrafts);
@@ -6363,7 +6839,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     buildTaskTemplateContextRecord,
     buildProcessStageTaskKey,
     buildProcessStageIdentityKeys,
-    computeStageDueAt,
     draftLocal,
     fetchTasks,
     getStageProcessGroupMeta,
@@ -6417,6 +6892,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const durationValue = Number(values?.duration_value || 0);
     const durationUnit = values?.duration_unit || 'day';
     const durationFrom = values?.duration_from || 'project_start';
+    const dueAnchorType: ProcessDueAnchorType = durationFrom === 'project_start'
+      ? 'process_start'
+      : (durationFrom === 'previous_stage_end' ? 'previous_stage_due' : durationFrom);
+    const dueAnchorStageNodeKey = ['specific_stage_due', 'specific_stage_completed'].includes(dueAnchorType)
+      ? String(values?.due_anchor_stage_node_key || existingStage?.due_anchor_stage_node_key || '').trim() || null
+      : null;
+    const processNodeKey = String(
+      existingStage?.[PROCESS_NODE_KEY]
+      || existingMetadata?.[PROCESS_NODE_KEY]
+      || createProcessNodeKey()
+    );
+    const processLaneKey = String(
+      existingStage?.[PROCESS_LANE_KEY]
+      || existingMetadata?.[PROCESS_LANE_KEY]
+      || activeDraftLaneKey
+      || 'lane_1'
+    );
     const automationRules = normalizeProcessAutomationRules(draftAutomationRules.map((rule) => ({
       ...rule,
       conditions_all: [
@@ -6452,6 +6944,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       duration_value: durationValue,
       duration_unit: durationUnit,
       duration_from: durationFrom,
+      due_anchor_type: dueAnchorType,
+      due_anchor_stage_node_key: dueAnchorStageNodeKey,
+      [PROCESS_NODE_KEY]: processNodeKey,
+      [PROCESS_LANE_KEY]: processLaneKey,
       automation_rules: automationRules,
       process_task_custom_fields: processTaskCustomFields,
       process_task_status_options: stageStatusOptions,
@@ -6467,10 +6963,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
+        due_anchor_type: dueAnchorType,
+        due_anchor_stage_node_key: dueAnchorStageNodeKey,
+        [PROCESS_NODE_KEY]: processNodeKey,
+        [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds,
       },
     };
-  }, [draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions]);
+  }, [activeDraftLaneKey, draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions]);
 
   const saveDraftStageFromEditor = useCallback(async (rawValues?: any) => {
     if (draftStageSavePromiseRef.current) {
@@ -6589,6 +7089,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
   const closeDraftStageModal = useCallback(() => {
     setIsDraftModalOpen(false);
+    setActiveDraftLaneKey(null);
     resetDraftStageEditorState();
   }, [resetDraftStageEditorState]);
 
@@ -6621,6 +7122,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setOpenDraftSegmentPopoverKey(null);
     setDraftTemplatePickerOpenKey(null);
     const nextEditingDraft = stage ? normalizeDraftStageForEditor(stage, 0) : null;
+    if (nextEditingDraft) {
+      setActiveDraftLaneKey(getProcessStageLaneKey(nextEditingDraft));
+    }
     draftEditorStageIdRef.current = nextEditingDraft?.id ?? null;
     setEditingDraft(nextEditingDraft);
     setDraftStageInstructionIds(stage ? getInstructionIdsFromStage(stage) : []);
@@ -6704,6 +7208,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftStageChooserOpen(false);
     openDraftStageModal(copiedStage, 'stage');
   }, [draftLocal.length, normalizeDraftStageForEditor, openDraftStageModal]);
+
+  const cloneProcessActivatorWorkflows = useCallback(async (
+    sourceTemplateId: string,
+    sourceGraph: ProcessGraphDefinition,
+    cloneResult: ProcessGraphCloneResult,
+  ) => {
+    if (!recordId) return cloneResult.graph;
+    return cloneProcessActivatorWorkflowsForTemplate({
+      supabaseClient: supabase,
+      sourceTemplateId,
+      targetTemplateId: recordId,
+      sourceGraph,
+      cloneResult,
+    });
+  }, [recordId]);
 
   const guardDraftAutomationConditionAdd = useCallback(() => {
     if (draftStageTaskType) return true;
@@ -7030,6 +7549,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: draftForEditor.duration_value || 0,
         duration_unit: draftForEditor.duration_unit || 'day',
         duration_from: draftForEditor.duration_from || 'project_start',
+        due_anchor_stage_node_key: draftForEditor.due_anchor_stage_node_key || undefined,
         stage_status_options_editor: getProcessTaskStatusOptionsFromStage(draftForEditor).map((option) => ({
           label: String(option?.label || ''),
           value: String(option?.value || ''),
@@ -7057,6 +7577,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_value: 0,
         duration_unit: 'day',
         duration_from: 'project_start',
+        due_anchor_stage_node_key: undefined,
         stage_status_options_editor: [],
       });
       setDraftAutomationRules([]);
@@ -7074,9 +7595,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [isDraftModalOpen, watchedDraftStageStatusOptions]);
 
   useEffect(() => {
-    if (!isDraftModalOpen || !isProcessModule) return;
+    if ((!isDraftModalOpen && !processTriggerEditor) || !isProcessModule) return;
     void loadAutomationOptions();
-  }, [automationScopeModuleId, isDraftModalOpen, isProcessModule, loadAutomationOptions]);
+  }, [
+    automationScopeModuleId,
+    isDraftModalOpen,
+    isProcessModule,
+    loadAutomationOptions,
+    processTriggerEditor,
+  ]);
 
   useEffect(() => {
     if (!isDraftModalOpen || taskTypeOptions.length === 0) return;
@@ -7104,6 +7631,723 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     type: 'draft',
     label: stage.name || stage.title || 'مرحله',
   }));
+  const draftGraphSnapshot = useMemo(() => {
+    const materialized = materializeLegacyProcessGraph(draftSegments);
+    const graph = normalizeProcessGraph(processGraphOverride || materialized.graph, materialized.stages);
+    return {
+      graph,
+      stages: attachProcessGraphToStages(materialized.stages, graph),
+    };
+  }, [draftSegments, processGraphOverride]);
+  const draftProcessLanes = useMemo(
+    () => getProcessStagesByLane(draftGraphSnapshot.stages, draftGraphSnapshot.graph),
+    [draftGraphSnapshot],
+  );
+  const draftSourceGraphSnapshot = useMemo(
+    () => materializeLegacyProcessGraph(draftSourceTemplateStages),
+    [draftSourceTemplateStages],
+  );
+  const draftSourceProcessLanes = useMemo(
+    () => getProcessStagesByLane(draftSourceGraphSnapshot.stages, draftSourceGraphSnapshot.graph),
+    [draftSourceGraphSnapshot],
+  );
+  const processStageNodeOptions = useMemo(
+    () => draftProcessLanes.flatMap((lane) => lane.stages.map((stage: any, index: number) => ({
+      value: getProcessStageNodeKey(stage, index),
+      label: `${lane.name || 'ردیف بدون نام'} - ${stage?.name || stage?.stage_name || `مرحله ${index + 1}`}`,
+    }))),
+    [draftProcessLanes],
+  );
+  const processSpecificStageRecipientOptions = useMemo(
+    () => processStageNodeOptions.map((option) => ({
+      value: createProcessStageRecipientFieldKey(option.value),
+      label: `مسئول مرحله خاص: ${option.label}`,
+    })),
+    [processStageNodeOptions],
+  );
+
+  const persistProcessGraph = useCallback(async (
+    graph: ProcessGraphDefinition,
+    stages: any[] = draftGraphSnapshot.stages,
+  ) => {
+    const normalizedGraph = normalizeProcessGraph(graph, stages);
+    setProcessGraphOverride(normalizedGraph);
+    await saveDraftStages(stages, normalizedGraph);
+  }, [draftGraphSnapshot.stages, saveDraftStages]);
+
+  const handleCopyDraftLaneFromTemplate = useCallback(async (sourceLaneKey: string) => {
+    const cloneResult = cloneProcessGraphInto({
+      sourceStages: draftSourceGraphSnapshot.stages,
+      targetStages: draftGraphSnapshot.stages,
+      targetGraph: draftGraphSnapshot.graph,
+      sourceLaneKeys: [sourceLaneKey],
+      includeTriggers: false,
+    });
+    const targetLaneKey = cloneResult.laneKeyMap.get(sourceLaneKey) || null;
+    await persistProcessGraph(cloneResult.graph, cloneResult.stages);
+    setActiveDraftLaneKey(targetLaneKey);
+    setDraftStageChooserOpen(false);
+    message.success('ردیف کامل با شناسه‌های مستقل کپی شد');
+  }, [
+    draftGraphSnapshot.graph,
+    draftGraphSnapshot.stages,
+    draftSourceGraphSnapshot.stages,
+    persistProcessGraph,
+  ]);
+
+  const handleCopyFullDraftTemplate = useCallback(async () => {
+    const sourceTemplateId = String(draftSourceTemplateId || '').trim();
+    if (!sourceTemplateId || draftSourceGraphSnapshot.stages.length === 0) return;
+    if (!recordId && draftSourceGraphSnapshot.graph.triggers.some((trigger) => !!trigger.workflowId)) {
+      message.warning('برای کپی گردش‌کارهای فعال‌کننده، ابتدا الگوی مقصد را ذخیره کنید.');
+      return;
+    }
+    const cloneResult = cloneProcessGraphInto({
+      sourceStages: draftSourceGraphSnapshot.stages,
+      targetStages: draftGraphSnapshot.stages,
+      targetGraph: draftGraphSnapshot.graph,
+      includeTriggers: true,
+    });
+    const graphWithWorkflows = await cloneProcessActivatorWorkflows(
+      sourceTemplateId,
+      draftSourceGraphSnapshot.graph,
+      cloneResult,
+    );
+    await persistProcessGraph(graphWithWorkflows, cloneResult.stages);
+    setDraftStageChooserOpen(false);
+    message.success('الگوی فرآیند همراه ردیف‌ها و فعال‌کننده‌ها کپی شد');
+  }, [
+    cloneProcessActivatorWorkflows,
+    draftGraphSnapshot.graph,
+    draftGraphSnapshot.stages,
+    draftSourceGraphSnapshot,
+    draftSourceTemplateId,
+    persistProcessGraph,
+    recordId,
+  ]);
+
+  const handleAddProcessLane = useCallback(async () => {
+    if (!multiLaneFeatureEnabled || !canManageProcessGraph) return;
+    const laneKey = createProcessLaneKey();
+    const nextGraph: ProcessGraphDefinition = {
+      ...draftGraphSnapshot.graph,
+      lanes: [
+        ...draftGraphSnapshot.graph.lanes,
+        {
+          key: laneKey,
+          name: `ردیف ${toPersianNumber(draftGraphSnapshot.graph.lanes.length + 1)}`,
+          sortOrder: (draftGraphSnapshot.graph.lanes.length + 1) * 10,
+          parentTriggerKey: null,
+        },
+      ],
+    };
+    setActiveDraftLaneKey(laneKey);
+    await persistProcessGraph(nextGraph);
+  }, [
+    canManageProcessGraph,
+    draftGraphSnapshot.graph,
+    multiLaneFeatureEnabled,
+    persistProcessGraph,
+  ]);
+
+  const handleRenameProcessLane = useCallback(async (laneKey: string, name: string) => {
+    const nextGraph: ProcessGraphDefinition = {
+      ...draftGraphSnapshot.graph,
+      lanes: draftGraphSnapshot.graph.lanes.map((lane) => (
+        lane.key === laneKey ? { ...lane, name: String(name || '').trim() } : lane
+      )),
+    };
+    await persistProcessGraph(nextGraph);
+  }, [draftGraphSnapshot.graph, persistProcessGraph]);
+
+  const handleDuplicateDraftStage = useCallback(async (stage: any) => {
+    if (stage?.isProcessRunStagePreview) {
+      const processRunStageId = String(
+        stage?.process_run_stage_id
+        || String(stage?.id || '').replace(/^process_run_stage:/, '')
+      ).trim();
+      if (!processRunStageId) return;
+      const { error } = await supabase.rpc('copy_process_run_stage', {
+        p_process_run_stage_id: processRunStageId,
+      });
+      if (error) throw error;
+      await fetchTasks();
+      message.success('کپی مرحله پیش‌نویس در جایگاه بعدی اضافه شد');
+      return;
+    }
+    const laneKey = getProcessStageLaneKey(stage);
+    const laneStages = draftGraphSnapshot.stages
+      .filter((item) => getProcessStageLaneKey(item) === laneKey)
+      .sort((left, right) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0));
+    const sourceIndex = laneStages.findIndex(
+      (item, index) => getProcessStageNodeKey(item, index) === getProcessStageNodeKey(stage),
+    );
+    const copiedNodeKey = createProcessNodeKey();
+    const copiedStage = {
+      ...stage,
+      id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      template_stage_id: null,
+      source_template_stage_id: stage?.template_stage_id || stage?.id || null,
+      name: `${String(stage?.name || stage?.stage_name || 'مرحله').trim()} - کپی`,
+      stage_name: `${String(stage?.name || stage?.stage_name || 'مرحله').trim()} - کپی`,
+      [PROCESS_NODE_KEY]: copiedNodeKey,
+      [PROCESS_LANE_KEY]: laneKey,
+      metadata: {
+        ...(stage?.metadata || {}),
+        [PROCESS_NODE_KEY]: copiedNodeKey,
+        [PROCESS_LANE_KEY]: laneKey,
+      },
+    };
+    const nextLaneStages = [...laneStages];
+    nextLaneStages.splice(Math.max(0, sourceIndex + 1), 0, copiedStage);
+    const nextOrder = new Map(
+      nextLaneStages.map((item, index) => [getProcessStageNodeKey(item, index), (index + 1) * 10]),
+    );
+    const nextStages = draftGraphSnapshot.stages.map((item) => (
+      getProcessStageLaneKey(item) === laneKey
+        ? { ...item, sort_order: nextOrder.get(getProcessStageNodeKey(item)) || item.sort_order }
+        : item
+    ));
+    const insertedOrder = nextOrder.get(copiedStage[PROCESS_NODE_KEY]) || ((sourceIndex + 2) * 10);
+    await saveDraftStages([...nextStages, { ...copiedStage, sort_order: insertedOrder }]);
+    message.success('کپی مرحله در جایگاه بعدی اضافه شد');
+  }, [draftGraphSnapshot.stages, fetchTasks, saveDraftStages]);
+
+  const openStageMoveModal = useCallback((stage: any) => {
+    setStageMoveTarget(stage);
+    stageMoveForm.setFieldsValue({
+      lane_key: getProcessStageLaneKey(stage),
+      sort_order: Number(stage?.sort_order || 10),
+    });
+  }, [stageMoveForm]);
+
+  const handleMoveStage = useCallback(async (confirmedCompletedMove = false): Promise<void> => {
+    const values = await stageMoveForm.validateFields();
+    if (!stageMoveTarget) return;
+    const normalizedStageStatus = String(stageMoveTarget?.status || '').trim().toLowerCase();
+    const isCompletedActualTask = (
+      !stageMoveTarget?.isProcessRunStagePreview
+      && PROCESS_BAR_DONE_STATUSES.has(normalizedStageStatus)
+    );
+    if (isCompletedActualTask && !confirmedCompletedMove) {
+      Modal.confirm({
+        title: 'جابجایی فعالیت تکمیل‌شده',
+        content: 'این فعالیت تکمیل شده است. فقط جایگاه آن در ادامه فرآیند تغییر می‌کند و اتوماسیون‌های گذشته دوباره اجرا نمی‌شوند.',
+        okText: 'تایید جابجایی',
+        cancelText: 'انصراف',
+        zIndex: 10150,
+        onOk: () => handleMoveStage(true),
+      });
+      return;
+    }
+    const laneKey = String(values?.lane_key || '').trim() || 'lane_1';
+    const sortOrder = Math.max(1, Number(values?.sort_order || 10));
+
+    if (stageMoveTarget?.process_run_stage_id || stageMoveTarget?.isProcessRunStagePreview) {
+      const processRunStageId = String(
+        stageMoveTarget?.process_run_stage_id
+        || String(stageMoveTarget?.id || '').replace(/^process_run_stage:/, '')
+      ).trim();
+      const { error } = await supabase.rpc('move_process_run_stage', {
+        p_process_run_stage_id: processRunStageId,
+        p_lane_key: laneKey,
+        p_sort_order: sortOrder,
+      });
+      if (error) throw error;
+      setStageMoveTarget(null);
+      await fetchTasks();
+      message.success('مرحله و فعالیت متصل جابه‌جا شدند');
+      return;
+    }
+
+    const targetNodeKey = getProcessStageNodeKey(stageMoveTarget);
+    const nextStages = draftGraphSnapshot.stages.map((stage, index) => (
+      getProcessStageNodeKey(stage, index) === targetNodeKey
+        ? {
+            ...stage,
+            sort_order: sortOrder,
+            [PROCESS_LANE_KEY]: laneKey,
+            metadata: { ...(stage?.metadata || {}), [PROCESS_LANE_KEY]: laneKey },
+          }
+        : stage
+    ));
+    await saveDraftStages(nextStages);
+    setStageMoveTarget(null);
+    message.success('مرحله جابه‌جا شد');
+  }, [draftGraphSnapshot.stages, fetchTasks, saveDraftStages, stageMoveForm, stageMoveTarget]);
+
+  const handleDraftStageDragEnd = useCallback(async (event: DragEndEvent) => {
+    const activeData = event.active.data.current as ProcessStageDragData | undefined;
+    const overData = event.over?.data.current as (ProcessStageDragData & { dropIndex?: number }) | undefined;
+    if (!activeData || !overData || activeData.scopeKey !== overData.scopeKey) return;
+    const targetLaneKey = String(overData.laneKey || '').trim();
+    if (!targetLaneKey) return;
+    const targetIndex = Number.isFinite(Number(overData.dropIndex))
+      ? Number(overData.dropIndex)
+      : Number(overData.index || 0);
+    const targetNodeKey = getProcessStageNodeKey(activeData.stage);
+    const nextStages = moveProcessStageToPosition(
+      draftGraphSnapshot.stages,
+      targetNodeKey,
+      targetLaneKey,
+      targetIndex,
+      draftGraphSnapshot.graph,
+    );
+    await persistProcessGraph(draftGraphSnapshot.graph, nextStages);
+  }, [draftGraphSnapshot, persistProcessGraph]);
+
+  const persistRuntimeStageDrag = useCallback(async (
+    previousStages: any[],
+    nextStages: any[],
+  ) => {
+    const previousByNodeKey = new Map(
+      previousStages.map((stage, index) => [getProcessStageNodeKey(stage, index), stage]),
+    );
+    const changedStages = nextStages.filter((stage, index) => {
+      const previous = previousByNodeKey.get(getProcessStageNodeKey(stage, index));
+      return previous && (
+        getProcessStageLaneKey(previous) !== getProcessStageLaneKey(stage)
+        || Number(previous?.sort_order || 0) !== Number(stage?.sort_order || 0)
+      );
+    });
+    const draftPositionByNodeKey = new Map<string, any>();
+
+    for (const stage of changedStages) {
+      const processRunStageId = String(
+        stage?.process_run_stage_id
+        || (String(stage?.id || '').startsWith('process_run_stage:')
+          ? String(stage.id).replace(/^process_run_stage:/, '')
+          : '')
+      ).trim();
+      const laneKey = getProcessStageLaneKey(stage);
+      const sortOrder = Math.max(1, Number(stage?.sort_order || 10));
+
+      if (processRunStageId) {
+        const { error } = await supabase.rpc('move_process_run_stage', {
+          p_process_run_stage_id: processRunStageId,
+          p_lane_key: laneKey,
+          p_sort_order: sortOrder,
+        });
+        if (error) throw error;
+        continue;
+      }
+
+      if (stage?.type === 'task' && stage?.id) {
+        const recurrence = parseRecurrenceInfo(stage?.recurrence_info);
+        const { error } = await supabase
+          .from('tasks')
+          .update({
+            process_lane_key: laneKey,
+            sort_order: sortOrder,
+            source_stage_sort_order: sortOrder,
+            recurrence_info: {
+              ...recurrence,
+              [PROCESS_LANE_KEY]: laneKey,
+            },
+          })
+          .eq('id', stage.id);
+        if (error) throw error;
+        continue;
+      }
+
+      draftPositionByNodeKey.set(getProcessStageNodeKey(stage), stage);
+    }
+
+    if (draftPositionByNodeKey.size > 0) {
+      const nextDraftStages = draftGraphSnapshot.stages.map((stage, index) => {
+        const moved = draftPositionByNodeKey.get(getProcessStageNodeKey(stage, index));
+        if (!moved) return stage;
+        const laneKey = getProcessStageLaneKey(moved);
+        return {
+          ...stage,
+          sort_order: Number(moved?.sort_order || stage?.sort_order || 10),
+          [PROCESS_LANE_KEY]: laneKey,
+          metadata: {
+            ...(stage?.metadata || {}),
+            [PROCESS_LANE_KEY]: laneKey,
+          },
+        };
+      });
+      await saveDraftStages(nextDraftStages);
+    }
+
+    await fetchTasks();
+  }, [draftGraphSnapshot.stages, fetchTasks, parseRecurrenceInfo, saveDraftStages]);
+
+  const handleRuntimeStageDragEnd = useCallback(async (
+    event: DragEndEvent,
+    stages: any[],
+    graph: ProcessGraphDefinition,
+  ) => {
+    const activeData = event.active.data.current as ProcessStageDragData | undefined;
+    const overData = event.over?.data.current as (ProcessStageDragData & { dropIndex?: number }) | undefined;
+    if (!activeData || !overData || activeData.scopeKey !== overData.scopeKey) return;
+    const targetLaneKey = String(overData.laneKey || '').trim();
+    if (!targetLaneKey) return;
+    const targetIndex = Number.isFinite(Number(overData.dropIndex))
+      ? Number(overData.dropIndex)
+      : Number(overData.index || 0);
+    const executeMove = async () => {
+      const nextStages = moveProcessStageToPosition(
+        stages,
+        getProcessStageNodeKey(activeData.stage),
+        targetLaneKey,
+        targetIndex,
+        graph,
+      );
+      await persistRuntimeStageDrag(stages, nextStages);
+      message.success('جایگاه مرحله فرآیند تغییر کرد');
+    };
+    const normalizedStatus = String(activeData.stage?.status || '').trim().toLowerCase();
+    if (
+      activeData.stage?.type === 'task'
+      && PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)
+    ) {
+      Modal.confirm({
+        title: 'جابجایی فعالیت تکمیل‌شده',
+        content: 'این فعالیت تکمیل شده است. فقط جایگاه آن تغییر می‌کند و اتوماسیون‌های گذشته دوباره اجرا نمی‌شوند.',
+        okText: 'تایید جابجایی',
+        cancelText: 'انصراف',
+        zIndex: 10150,
+        onOk: executeMove,
+      });
+      return;
+    }
+    await executeMove();
+  }, [persistRuntimeStageDrag]);
+
+  const openProcessTriggerModal = useCallback((
+    sourceStage: any | null,
+    trigger?: ProcessTriggerDefinition | null,
+    initialTargetLaneKeys: string[] = [],
+  ) => {
+    const sourceNodeKey = sourceStage ? getProcessStageNodeKey(sourceStage) : null;
+    const nextTrigger = trigger || {
+      key: createProcessTriggerKey(),
+      name: 'فعال‌کننده فرآیند',
+      sourceNodeKey,
+      targetLaneKeys: initialTargetLaneKeys,
+      workflowId: null,
+      manualEnabled: true,
+      sortOrder: (draftGraphSnapshot.graph.triggers.length + 1) * 10,
+    };
+    setProcessTriggerEditor({ trigger: nextTrigger, sourceStage });
+    processTriggerForm.setFieldsValue({
+      name: nextTrigger.name,
+      manual_enabled: nextTrigger.manualEnabled,
+      target_lane_keys: nextTrigger.targetLaneKeys,
+      source_node_key: nextTrigger.sourceNodeKey || '__process_start__',
+      workflow_description: '',
+      workflow_trigger_type: 'on_upsert',
+      workflow_execution_mode: 'first_match',
+      workflow_interval_value: 1,
+      workflow_interval_unit: 'day',
+      workflow_interval_at: null,
+      workflow_batch_size: null,
+      workflow_is_active: true,
+    });
+    setProcessActivatorWorkflowRecord(null);
+    setProcessActivatorConditionsAll([]);
+    setProcessActivatorConditionsAny([]);
+  }, [draftGraphSnapshot.graph.triggers.length, processTriggerForm]);
+
+  useEffect(() => {
+    if (!processTriggerEditor || !recordId) {
+      setProcessActivatorWorkflowRecord(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      setProcessActivatorWorkflowLoading(true);
+      try {
+        let query = supabase
+          .from('workflows')
+          .select('*')
+          .eq('scope_type', 'process_activator')
+          .eq('process_template_id', recordId)
+          .eq('process_trigger_key', processTriggerEditor.trigger.key)
+          .limit(1);
+        if (processTriggerEditor.trigger.workflowId) {
+          query = query.eq('id', processTriggerEditor.trigger.workflowId);
+        }
+        const { data, error } = await query.maybeSingle();
+        if (error) throw error;
+        if (cancelled) return;
+        const workflow = (data || null) as WorkflowRecord | null;
+        setProcessActivatorWorkflowRecord(workflow);
+        processTriggerForm.setFieldsValue({
+          workflow_description: workflow?.description || '',
+          workflow_trigger_type: workflow?.trigger_type || 'on_upsert',
+          workflow_execution_mode: workflow?.execution_mode || 'first_match',
+          workflow_interval_value: workflow?.interval_value || 1,
+          workflow_interval_unit: workflow?.interval_unit || 'day',
+          workflow_interval_at: workflow?.interval_at || null,
+          workflow_batch_size: workflow?.batch_size || null,
+          workflow_is_active: workflow?.is_active !== false,
+        });
+        setProcessActivatorConditionsAll(
+          (Array.isArray(workflow?.conditions_all) ? workflow.conditions_all : []).filter(
+            (condition) => condition.id !== PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID,
+          ),
+        );
+        setProcessActivatorConditionsAny(Array.isArray(workflow?.conditions_any) ? workflow.conditions_any : []);
+      } catch (error) {
+        if (isAbortLikeError(error)) return;
+        if (!cancelled) {
+          message.error(toFaErrorMessage(error as Error, 'بارگذاری شرط‌ها و زمان‌بندی فعال‌کننده ناموفق بود'));
+        }
+      } finally {
+        if (!cancelled) setProcessActivatorWorkflowLoading(false);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [message, processTriggerEditor, processTriggerForm, recordId]);
+
+  const handleSaveProcessTrigger = useCallback(async () => {
+    if (!processTriggerEditor) return null;
+    const values = await processTriggerForm.validateFields();
+    const triggerBase: ProcessTriggerDefinition = {
+      ...processTriggerEditor.trigger,
+      name: String(values?.name || '').trim() || 'فعال‌کننده فرآیند',
+      sourceNodeKey: String(values?.source_node_key || '').trim() === '__process_start__'
+        ? null
+        : String(values?.source_node_key || '').trim() || null,
+      manualEnabled: values?.manual_enabled !== false,
+      targetLaneKeys: Array.isArray(values?.target_lane_keys) ? values.target_lane_keys : [],
+    };
+    if (isProcessGraphConnectionCyclic(
+      draftGraphSnapshot.graph,
+      triggerBase.key,
+      triggerBase.sourceNodeKey,
+      triggerBase.targetLaneKeys,
+      draftGraphSnapshot.stages,
+    )) {
+      throw new Error('این اتصال باعث ایجاد چرخه در فرآیند می‌شود. ردیف مقصد دیگری انتخاب کنید.');
+    }
+    let savedWorkflowId = String(triggerBase.workflowId || processActivatorWorkflowRecord?.id || '').trim() || null;
+    if (recordId) {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const workflowTriggerType = String(values?.workflow_trigger_type || 'on_upsert');
+      const isInterval = workflowTriggerType === 'interval';
+      const lockedConditions = triggerBase.sourceNodeKey
+        ? [{
+            id: PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID,
+            field: 'process_node_key',
+            operator: 'eq',
+            value: triggerBase.sourceNodeKey,
+          }]
+        : [];
+      const existingActivationAction = (Array.isArray(processActivatorWorkflowRecord?.actions)
+        ? processActivatorWorkflowRecord?.actions
+        : []
+      )?.find((action: any) => action?.type === 'activate_specific_process_stage');
+      const activationAction = {
+        id: String(existingActivationAction?.id || createWorkflowId()),
+        type: 'activate_specific_process_stage' as const,
+        config: {
+          template_id: recordId,
+          target_lane_keys: triggerBase.targetLaneKeys,
+        },
+      };
+      const workflowPayload: Record<string, any> = {
+        module_id: triggerBase.sourceNodeKey ? 'tasks' : (automationScopeModuleIds[0] || 'tasks'),
+        module_ids: automationScopeModuleIds,
+        scope_type: 'process_activator',
+        process_template_id: recordId,
+        process_trigger_key: triggerBase.key,
+        process_source_node_key: triggerBase.sourceNodeKey,
+        process_target_lane_keys: triggerBase.targetLaneKeys,
+        manual_enabled: triggerBase.manualEnabled,
+        name: triggerBase.name,
+        description: String(values?.workflow_description || '').trim() || null,
+        trigger_type: workflowTriggerType,
+        execution_mode: values?.workflow_execution_mode || 'first_match',
+        interval_value: isInterval ? Math.max(1, Number(values?.workflow_interval_value || 1)) : null,
+        interval_unit: isInterval ? values?.workflow_interval_unit || 'day' : null,
+        interval_at: isInterval ? values?.workflow_interval_at || null : null,
+        batch_size: isInterval && values?.workflow_batch_size ? Math.max(1, Number(values.workflow_batch_size)) : null,
+        conditions_all: [...lockedConditions, ...processActivatorConditionsAll],
+        conditions_any: processActivatorConditionsAny,
+        actions: [activationAction],
+        is_active: values?.workflow_is_active !== false,
+        updated_by: userId,
+      };
+
+      if (savedWorkflowId) {
+        const { error } = await supabase.from('workflows').update(workflowPayload).eq('id', savedWorkflowId);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from('workflows')
+          .insert({ ...workflowPayload, created_by: userId })
+          .select('id')
+          .single();
+        if (error) throw error;
+        savedWorkflowId = String(data?.id || '').trim() || null;
+      }
+    }
+    const trigger: ProcessTriggerDefinition = {
+      ...triggerBase,
+      workflowId: savedWorkflowId,
+    };
+    const nextGraph: ProcessGraphDefinition = {
+      ...draftGraphSnapshot.graph,
+      triggers: [
+        ...draftGraphSnapshot.graph.triggers
+          .filter((item) => item.key !== trigger.key)
+          .map((item) => ({
+            ...item,
+            targetLaneKeys: item.targetLaneKeys.filter(
+              (laneKey) => !trigger.targetLaneKeys.includes(laneKey),
+            ),
+          })),
+        trigger,
+      ],
+      lanes: draftGraphSnapshot.graph.lanes.map((lane) => (
+        trigger.targetLaneKeys.includes(lane.key)
+          ? { ...lane, parentTriggerKey: trigger.key }
+          : (lane.parentTriggerKey === trigger.key ? { ...lane, parentTriggerKey: null } : lane)
+      )),
+    };
+    await persistProcessGraph(nextGraph);
+    if (savedWorkflowId) {
+      setProcessActivatorWorkflowRecord((current) => current
+        ? { ...current, id: savedWorkflowId!, name: trigger.name }
+        : ({ id: savedWorkflowId, name: trigger.name } as WorkflowRecord));
+    }
+    setProcessTriggerEditor({ ...processTriggerEditor, trigger });
+    message.success('فعال‌کننده فرآیند ذخیره شد');
+    return trigger;
+  }, [
+    automationScopeModuleIds,
+    draftGraphSnapshot.graph,
+    draftGraphSnapshot.stages,
+    persistProcessGraph,
+    processActivatorConditionsAll,
+    processActivatorConditionsAny,
+    processActivatorWorkflowRecord,
+    processTriggerEditor,
+    processTriggerForm,
+    recordId,
+  ]);
+
+  const handleDeleteProcessTrigger = useCallback(async (deleteChildLanes: boolean) => {
+    if (!processTriggerEditor) return;
+    const triggerKey = processTriggerEditor.trigger.key;
+    const storedTrigger = draftGraphSnapshot.graph.triggers.find((trigger) => trigger.key === triggerKey);
+    if (!storedTrigger) {
+      setProcessTriggerEditor(null);
+      return;
+    }
+
+    const removedLaneKeys = new Set<string>();
+    const removedTriggerKeys = new Set<string>([triggerKey]);
+    if (deleteChildLanes) {
+      const pendingLaneKeys = [...storedTrigger.targetLaneKeys];
+      while (pendingLaneKeys.length > 0) {
+        const laneKey = String(pendingLaneKeys.shift() || '').trim();
+        if (!laneKey || removedLaneKeys.has(laneKey)) continue;
+        removedLaneKeys.add(laneKey);
+        const laneNodeKeys = new Set(
+          draftGraphSnapshot.stages
+            .filter((stage) => getProcessStageLaneKey(stage) === laneKey)
+            .map((stage, index) => getProcessStageNodeKey(stage, index)),
+        );
+        draftGraphSnapshot.graph.triggers.forEach((trigger) => {
+          if (!trigger.sourceNodeKey || !laneNodeKeys.has(trigger.sourceNodeKey)) return;
+          removedTriggerKeys.add(trigger.key);
+          trigger.targetLaneKeys.forEach((targetLaneKey) => pendingLaneKeys.push(targetLaneKey));
+        });
+      }
+    }
+
+    const removedWorkflowIds = draftGraphSnapshot.graph.triggers
+      .filter((trigger) => removedTriggerKeys.has(trigger.key))
+      .map((trigger) => String(trigger.workflowId || '').trim())
+      .filter(Boolean);
+    const nextStages = deleteChildLanes
+      ? draftGraphSnapshot.stages.filter((stage) => !removedLaneKeys.has(getProcessStageLaneKey(stage)))
+      : draftGraphSnapshot.stages;
+    const nextGraph: ProcessGraphDefinition = {
+      ...draftGraphSnapshot.graph,
+      lanes: draftGraphSnapshot.graph.lanes
+        .filter((lane) => !removedLaneKeys.has(lane.key))
+        .map((lane) => (
+          lane.parentTriggerKey && removedTriggerKeys.has(lane.parentTriggerKey)
+            ? { ...lane, parentTriggerKey: null }
+            : lane
+        )),
+      triggers: draftGraphSnapshot.graph.triggers.filter(
+        (trigger) => !removedTriggerKeys.has(trigger.key),
+      ),
+    };
+
+    await persistProcessGraph(nextGraph, nextStages);
+    if (removedWorkflowIds.length > 0) {
+      const { error } = await supabase.from('workflows').delete().in('id', removedWorkflowIds);
+      if (error) throw error;
+    }
+    setProcessTriggerEditor(null);
+    message.success(
+      deleteChildLanes
+        ? 'فعال‌کننده و ردیف‌های زیرمجموعه حذف شدند'
+        : 'فعال‌کننده حذف و ردیف‌ها مستقل شدند',
+    );
+  }, [
+    draftGraphSnapshot.graph,
+    draftGraphSnapshot.stages,
+    persistProcessGraph,
+    processTriggerEditor,
+  ]);
+
+  const handleRunProcessTrigger = useCallback(async (trigger: ProcessTriggerDefinition, stages: any[]) => {
+    if (!trigger.manualEnabled) return;
+    const processRunId = String(
+      stages.map((stage) => stage?.process_run_id || stage?.recurrence_info?.process_run_id).find(Boolean) || ''
+    ).trim();
+    if (!processRunId) {
+      const templateId = String(
+        stages
+          .map((stage) => (
+            stage?.source_template_id
+            || stage?.recurrence_info?.process_group?.template_id
+            || stage?.metadata?.source_template_id
+          ))
+          .find(Boolean)
+        || ''
+      ).trim();
+      if (!templateId || !recordId || !moduleId) {
+        message.warning('الگوی مبدا برای اجرای فعال‌کننده پیدا نشد');
+        return;
+      }
+      await activateProcessStageAction({
+        actionType: 'activate_specific_process_stage',
+        config: {
+          template_id: templateId,
+          target_lane_keys: trigger.targetLaneKeys,
+        },
+        record: { id: recordId },
+        moduleId,
+      });
+      await fetchTasks();
+      message.success('فعال‌کننده فرآیند اجرا شد');
+      return;
+    }
+    const materialized = materializeLegacyProcessGraph(stages);
+    const laneKeys = new Set(trigger.targetLaneKeys);
+    const nodeKeys = getProcessStagesByLane(materialized.stages, materialized.graph)
+      .filter((lane) => laneKeys.has(lane.key))
+      .map((lane) => lane.stages[0])
+      .filter(Boolean)
+      .map((stage, index) => getProcessStageNodeKey(stage, index));
+    await activateProcessRunNodes({ processRunId, nodeKeys });
+    await fetchTasks();
+    message.success('فعال‌کننده فرآیند اجرا شد');
+  }, [fetchTasks, moduleId, recordId]);
 
   const processDraftGroups = useMemo(() => {
     if (!isProcessRecordModule) return [] as Array<{ id: string; label: string; templateId: string | null; templateName: string | null; stages: any[] }>;
@@ -7148,12 +8392,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [processDraftGroups.length, tasks.length]);
 
   const getLineSegments = (lineTasks: any[], activeDraftSegments: any[] = draftSegments, fallbackGroupId?: any) => {
-    const normalizedTasks = (lineTasks || []).map((task: any) => ({
-      ...task,
-      type: 'task',
-      _normalizedName: normalizeStageName(task.name || task.title),
-      _normalizedKey: `${normalizeStageName(task.name || task.title)}::${Number(task?.sort_order || 0)}`,
-    }));
+    const normalizedTasks = (lineTasks || []).map((task: any) => {
+      const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+      const isRuntimeStagePreview = Boolean(task?.isProcessRunStagePreview);
+      return {
+        ...task,
+        type: isRuntimeStagePreview ? 'draft' : 'task',
+        label: task?.label || task?.name || task?.title || 'مرحله',
+        [PROCESS_NODE_KEY]: task?.[PROCESS_NODE_KEY] || recurrence?.[PROCESS_NODE_KEY],
+        [PROCESS_LANE_KEY]: task?.[PROCESS_LANE_KEY] || recurrence?.[PROCESS_LANE_KEY],
+        metadata: {
+          ...recurrence,
+          [PROCESS_GRAPH_METADATA_KEY]: recurrence?.[PROCESS_GRAPH_METADATA_KEY],
+        },
+        _normalizedName: normalizeStageName(task.name || task.title),
+        _normalizedKey: `${normalizeStageName(task.name || task.title)}::${Number(task?.sort_order || 0)}`,
+      };
+    });
     const taskIdentityKeys = new Set(
       normalizedTasks.flatMap((task: any) => buildProcessStageIdentityKeys(task, fallbackGroupId))
     );
@@ -7587,7 +8842,202 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <div className="text-xs text-gray-500 dark:text-gray-400">
             {isProcessTemplateModule ? 'مراحل پیش‌نویس فرآیند' : 'مراحل پیش‌نویس (BOM)'}
           </div>
-          <div className={`flex min-h-0 w-full items-stretch rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}>
+          {isProcessTemplateModule ? (
+            <div className="space-y-2">
+              <DndContext
+                sensors={processDragSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event) => {
+                  void handleDraftStageDragEnd(event).catch((error) => {
+                    message.error(toFaErrorMessage(error, 'جابجایی مرحله الگوی فرآیند ناموفق بود'));
+                  });
+                }}
+              >
+              {draftProcessLanes.map((lane, laneIndex) => {
+                const laneTriggers = draftGraphSnapshot.graph.triggers.filter(
+                  (trigger) => trigger.targetLaneKeys.includes(lane.key),
+                );
+                const laneDragScopeKey = `template:${recordId || 'draft'}`;
+                return (
+                  <div
+                    key={lane.key}
+                    className={`relative border-r-2 pr-2 ${lane.parentTriggerKey ? 'border-amber-300' : 'border-transparent'}`}
+                  >
+                  <div className="mb-1 flex items-center gap-2">
+                    <Input
+                      variant="borderless"
+                      defaultValue={lane.name}
+                      placeholder={laneIndex === 0 && !lane.name ? 'نام ردیف (اختیاری)' : 'نام ردیف'}
+                      disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                      className="max-w-64 !px-1 text-xs font-semibold"
+                      onBlur={(event) => {
+                        const nextName = event.target.value.trim();
+                        if (nextName !== lane.name) void handleRenameProcessLane(lane.key, nextName);
+                      }}
+                    />
+                  </div>
+                  <ProcessLaneDropZone
+                    id={`${laneDragScopeKey}:lane:${lane.key}:end`}
+                    scopeKey={laneDragScopeKey}
+                    laneKey={lane.key}
+                    index={lane.stages.length}
+                    disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                    className={`flex min-h-0 w-full items-stretch rounded-lg border border-gray-200/80 bg-white/80 p-1 dark:border-gray-700 dark:bg-white/5 ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}
+                  >
+                    <div className="flex shrink-0 items-center pl-1">
+                      {laneTriggers.length > 0 ? laneTriggers.map((trigger) => (
+                        <Tooltip key={trigger.key} title={trigger.name || 'فعال‌کننده فرآیند'}>
+                          <Button
+                            shape="circle"
+                            size="small"
+                            icon={<ThunderboltOutlined />}
+                            disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                            onClick={() => openProcessTriggerModal(null, trigger, [lane.key])}
+                            className="border-amber-300 bg-amber-50 text-amber-700"
+                          />
+                        </Tooltip>
+                      )) : (
+                        !readOnly && multiLaneFeatureEnabled && canManageProcessGraph ? (
+                          <Tooltip title="افزودن فعال‌کننده فرآیند">
+                            <Button
+                              type="text"
+                              shape="circle"
+                              size="small"
+                              icon={<ThunderboltOutlined />}
+                              onClick={() => openProcessTriggerModal(null, null, [lane.key])}
+                              className="text-gray-400 hover:!text-amber-600"
+                            />
+                          </Tooltip>
+                        ) : (
+                          <span className="inline-block h-6 w-6" />
+                        )
+                      )}
+                    </div>
+                    <div className="flex min-w-0 flex-1 items-stretch">
+                      {lane.stages.length > 0 ? lane.stages.map((stage: any, index: number) => {
+                        const nodeKey = getProcessStageNodeKey(stage, index);
+                        return (
+                          <React.Fragment key={stage.id || nodeKey}>
+                          <ProcessStageInsertionDropZone
+                            id={`${laneDragScopeKey}:lane:${lane.key}:insert:${index}`}
+                            scopeKey={laneDragScopeKey}
+                            laneKey={lane.key}
+                            index={index}
+                            disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                          />
+                          <ProcessStageDragSurface
+                            id={`${laneDragScopeKey}:stage:${nodeKey}`}
+                            data={{
+                              scopeKey: laneDragScopeKey,
+                              laneKey: lane.key,
+                              index,
+                              stage,
+                            }}
+                            disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                          >
+                            {({ ref, attributes, listeners, style: dragStyle, isOver }) => (
+                              <Popover
+                                content={
+                                  <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
+                                    <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{stage.label || stage.name}</div>
+                                    <div>ترتیب: {toPersianNumber(stage.sort_order || '-')}</div>
+                                    <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
+                                    <div>زمان انجام: {formatDraftDuration(stage)}</div>
+                                  </div>
+                                }
+                                trigger={readOnly ? 'click' : 'hover'}
+                                overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
+                              >
+                                <div
+                                  ref={ref as React.Ref<HTMLDivElement>}
+                                  className={`group relative flex min-w-0 flex-1 basis-0 items-stretch ${index !== 0 ? 'mr-px' : ''} ${isOver ? 'brightness-95' : ''}`}
+                                  style={{ ...dragStyle, zIndex: Math.max(1, 1000 - index) }}
+                                >
+                                  <ProcessStageDragHandleContext.Provider value={{ attributes, listeners }}>
+                                  <div
+                                    className="relative flex w-full min-w-0 cursor-pointer items-center justify-center overflow-hidden bg-[rgba(var(--brand-50-rgb),0.92)] px-2 py-2 text-center transition-all group-hover:bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] dark:group-hover:bg-[rgba(var(--brand-700-rgb),0.28)]"
+                                    style={getProcessStageShapeStyle(index)}
+                                    onClick={() => {
+                                      if (!readOnly) openDraftStageModal(stage, 'stage');
+                                    }}
+                                  >
+                                    <span className={`block w-full min-w-0 truncate font-medium text-gray-700 dark:text-gray-100 ${compact ? 'text-[10px]' : 'text-[12px]'}`}>
+                                      {stage.label || stage.name}
+                                    </span>
+                                    {!readOnly && (
+                                      <div className={`absolute left-4 top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}>
+                                        <Tooltip title="کپی مرحله">
+                                          <Button
+                                            type="text"
+                                            size="small"
+                                            icon={<CopyOutlined />}
+                                            className="!h-6 !w-6 !min-w-0 !p-0"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void handleDuplicateDraftStage(stage);
+                                            }}
+                                          />
+                                        </Tooltip>
+                                        <Tooltip title="جابجایی مرحله">
+                                          <ProcessStageMoveHandle
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              openStageMoveModal(stage);
+                                            }}
+                                          />
+                                        </Tooltip>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {renderDraftProcessStageOutline(index)}
+                                  </ProcessStageDragHandleContext.Provider>
+                                </div>
+                              </Popover>
+                            )}
+                          </ProcessStageDragSurface>
+                          {index === lane.stages.length - 1 ? (
+                            <ProcessStageInsertionDropZone
+                              id={`${laneDragScopeKey}:lane:${lane.key}:insert:${lane.stages.length}`}
+                              scopeKey={laneDragScopeKey}
+                              laneKey={lane.key}
+                              index={lane.stages.length}
+                              disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
+                            />
+                          ) : null}
+                          </React.Fragment>
+                        );
+                      }) : (
+                        <div className="flex w-full items-center justify-center text-xs text-gray-400">این ردیف هنوز مرحله‌ای ندارد</div>
+                      )}
+                    </div>
+                    {!readOnly && multiLaneFeatureEnabled && canManageProcessGraph ? (
+                      <div className="flex shrink-0 items-center pr-1">
+                        <Tooltip title="افزودن مرحله به انتهای این ردیف">
+                          <Button
+                            type="text"
+                            shape="circle"
+                            size="small"
+                            icon={<PlusOutlined />}
+                            onClick={() => {
+                              setActiveDraftLaneKey(lane.key);
+                              openDraftStageChooser();
+                            }}
+                            className="text-[rgba(var(--brand-700-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)]"
+                          />
+                        </Tooltip>
+                      </div>
+                    ) : null}
+                  </ProcessLaneDropZone>
+                  </div>
+                );
+              })}
+              </DndContext>
+              {draftProcessLanes.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="بدون ردیف فرآیند" />
+              ) : null}
+            </div>
+          ) : (
+            <div className={`flex min-h-0 w-full items-stretch rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}>
             {draftSegments.length > 0 ? (
               draftSegments.map((stage: any, index: number) => (
                 <Popover
@@ -7618,7 +9068,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
                 >
                   <div
-                    className={`relative flex min-w-0 flex-1 basis-0 items-center justify-center rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 py-2 text-center transition-all group hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${index !== 0 ? 'mr-1' : ''}`}
+                    className={`group relative flex min-w-0 flex-1 basis-0 cursor-pointer items-center justify-center rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 py-2 text-center transition-all hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${index !== 0 ? 'mr-1' : ''}`}
                     onClick={() => {
                       if (!readOnly) openDraftStageModal(stage, 'stage');
                     }}
@@ -7634,23 +9084,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 {compact ? <span className="opacity-50">-</span> : 'بدون مرحله پیش‌نویس'}
               </div>
             )}
-          </div>
-
-          {!readOnly && (
-            <div className="flex justify-start">
-              <Tooltip title="افزودن مرحله پیش‌نویس">
-                  <Button
-                    type="dashed"
-                    icon={<PlusOutlined />}
-                    size={compact ? 'small' : 'middle'}
-                    onClick={openDraftStageChooser}
-                    className="border-amber-300 text-amber-700 hover:!border-amber-600 hover:!text-amber-600 hover:!bg-amber-50"
-                  >
-                    افزودن مرحله
-                  </Button>
-              </Tooltip>
             </div>
           )}
+
+          {!readOnly && (
+            <div className="flex flex-wrap justify-start gap-2">
+              {isProcessTemplateModule ? (
+                <>
+                  <Button
+                    icon={<PlusOutlined />}
+                    size={compact ? 'small' : 'middle'}
+                    disabled={!multiLaneFeatureEnabled || !canManageProcessGraph}
+                    onClick={() => { void handleAddProcessLane(); }}
+                  >
+                    افزودن ردیف
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          )}
+          {isProcessTemplateModule && !multiLaneFeatureEnabled ? (
+            <Alert
+              type="info"
+              showIcon
+              message="نمایش فرآیند حفظ شده است؛ ایجاد یا ویرایش ردیف‌ها در پلن فعلی فعال نیست."
+            />
+          ) : null}
         </div>
       )}
 
@@ -7682,7 +9141,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           isEmpty: isProcessEmptyState,
         });
 
-        const renderSegmentsBar = (segments: any[], barKey: string) => {
+        const renderSegmentsBar = (
+          segments: any[],
+          barKey: string,
+          dragConfig?: { scopeKey: string; laneKey: string },
+        ) => {
           const displayMode = getProcessBarDisplayMode(segments);
           const useVerticalMainLayout = isMobileMainProcessView && displayMode === 'full';
           const shouldCompactSegments = displayMode !== 'summary' && cardCompact && segments.length > 5;
@@ -7714,8 +9177,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   key={`${barKey}-task-summary-${segment.id || index}`}
                   data-task-segment-id={String(segment.id)}
                   title={segmentLabel}
-                  className={`relative min-w-[0.7rem] flex-1 basis-0 rounded-full transition-all ${isCurrent ? 'h-3.5 ring-2 ring-white/90 dark:ring-gray-900' : 'h-2.5 opacity-90'} ${isRuntimeStagePreview ? 'cursor-default' : 'hover:opacity-100'} ${isAssignedToCurrent ? 'z-10' : ''}`}
+                  className={`relative min-w-[0.7rem] flex-1 basis-0 rounded-full transition-all ${isCurrent ? 'h-3.5 ring-2 ring-white/90 dark:ring-gray-900' : 'h-2.5 opacity-90'} ${isRuntimeStagePreview ? 'cursor-default' : 'cursor-pointer hover:opacity-100'} ${isAssignedToCurrent ? 'z-10' : ''}`}
                   style={{
+                    ...getProcessStageShapeStyle(index, { summary: true }),
+                    zIndex: Math.max(1, 1000 - index),
                     backgroundColor: segmentColor,
                     boxShadow: isAssignedToCurrent
                       ? `0 0 8px ${segmentColor}55, 0 0 18px ${segmentColor}33`
@@ -7736,8 +9201,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 type="button"
                 key={`${barKey}-task-${segment.id}`}
                 data-task-segment-id={String(segment.id)}
-                className={`relative flex min-w-0 overflow-hidden rounded-xl px-2 text-center transition-all ${isRuntimeStagePreview ? 'cursor-default' : 'hover:brightness-105'} ${useVerticalMainLayout ? `w-full justify-between gap-3 text-right ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? 'mr-1' : ''}`} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
+                className={`group relative flex min-w-0 overflow-hidden rounded-xl px-2 text-center transition-all ${isRuntimeStagePreview ? 'cursor-default' : 'cursor-pointer hover:brightness-105'} ${useVerticalMainLayout ? `w-full justify-between gap-3 text-right ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
                 style={{
+                  ...getProcessStageShapeStyle(index),
+                  zIndex: Math.max(1, 1000 - index),
                   backgroundColor: segmentColor,
                   boxShadow: isAssignedToCurrent
                     ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
@@ -7770,12 +9237,47 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     </span>
                   )}
                 </div>
+                {!readOnly && !isRuntimeStagePreview ? (
+                  <span
+                    className={`absolute left-4 top-1 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                  >
+                    <Tooltip title="کپی فعالیت">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded bg-black/15 text-white hover:bg-black/25"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleCopyActualTask(segment);
+                        }}
+                      >
+                        <CopyOutlined />
+                      </span>
+                    </Tooltip>
+                    <Tooltip title="جابجایی فعالیت">
+                      <ProcessStageMoveHandle
+                        inverse
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openStageMoveModal(segment);
+                        }}
+                      />
+                    </Tooltip>
+                  </span>
+                ) : null}
               </button>
             );
           };
 
           const renderDraftSegment = (segment: any, index: number, summary = false) => {
             const draftPopoverKey = `${barKey}-draft-${segment.id}-${index}-${summary ? 'summary' : 'full'}`;
+            const isRuntimeStagePreview = Boolean(segment?.isProcessRunStagePreview);
             return (
             <Popover
               key={draftPopoverKey}
@@ -7806,26 +9308,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           ایجاد فعالیت
                         </Button>
                       )}
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          setOpenDraftSegmentPopoverKey(null);
-                          openDraftStageModal(segment, 'automation');
-                        }}
-                      >
-                        اتوماسیون
-                      </Button>
-                      <Button
-                        size="small"
-                        danger
-                        icon={<DeleteOutlined />}
-                        onClick={() => {
-                          setOpenDraftSegmentPopoverKey(null);
-                          handleRemoveDraftStage(segment);
-                        }}
-                      >
-                        حذف
-                      </Button>
+                      {!isRuntimeStagePreview ? (
+                        <>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              setOpenDraftSegmentPopoverKey(null);
+                              openDraftStageModal(segment, 'automation');
+                            }}
+                          >
+                            اتوماسیون
+                          </Button>
+                          <Button
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => {
+                              setOpenDraftSegmentPopoverKey(null);
+                              handleRemoveDraftStage(segment);
+                            }}
+                          >
+                            حذف
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -7837,25 +9343,131 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               overlayStyle={{ zIndex: 10000, maxWidth: 'calc(100vw - 1rem)' }}
               title={null}
             >
-              <button
-                type="button"
+              <div
                 className={
                   summary
-                    ? `relative min-w-[0.7rem] flex-1 basis-0 rounded-full border border-dashed border-gray-300/90 bg-white/75 transition-all ${currentSegment && String(currentSegment?.id || '') === String(segment?.id || '') ? 'h-3.5 border-[rgba(var(--brand-400-rgb),0.95)] bg-[rgba(var(--brand-50-rgb),0.92)]' : 'h-2.5 hover:border-[rgba(var(--brand-400-rgb),0.8)]'} dark:border-gray-600 dark:bg-white/10`
-                    : `relative flex min-w-0 overflow-hidden rounded-xl border border-dashed border-gray-300/90 bg-white/70 px-2 text-center transition-all hover:border-[rgba(var(--brand-400-rgb),0.85)] hover:bg-white dark:border-gray-600/80 dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.55)] dark:hover:bg-white/10 ${useVerticalMainLayout ? `w-full justify-start ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? 'mr-1' : ''}`} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
+                    ? 'relative min-w-[0.7rem] flex-1 basis-0'
+                    : `group relative ${useVerticalMainLayout
+                      ? `w-full ${index !== 0 ? 'mt-1.5' : ''}`
+                      : `min-w-0 flex-1 basis-0 ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`}`
                 }
+                style={{ zIndex: Math.max(1, 1000 - index) }}
               >
-                {!summary && (
-                  <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : 'truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
-                    {displayMode === 'dense'
-                      ? getDenseSegmentLabel(segment.label)
-                      : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
-                  </span>
-                )}
-              </button>
+                <button
+                  type="button"
+                  className={
+                    summary
+                      ? `relative w-full cursor-pointer rounded-full border border-dashed border-gray-300/90 bg-white/75 transition-all ${currentSegment && String(currentSegment?.id || '') === String(segment?.id || '') ? 'h-3.5 border-[rgba(var(--brand-400-rgb),0.95)] bg-[rgba(var(--brand-50-rgb),0.92)]' : 'h-2.5 hover:border-[rgba(var(--brand-400-rgb),0.8)]'} dark:border-gray-600 dark:bg-white/10`
+                      : `relative flex h-full w-full min-w-0 cursor-pointer overflow-hidden bg-[rgba(var(--brand-50-rgb),0.92)] px-2 text-center transition-all group-hover:bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] dark:group-hover:bg-[rgba(var(--brand-700-rgb),0.28)] ${useVerticalMainLayout ? 'justify-start' : 'items-center justify-center'} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
+                  }
+                  style={getProcessStageShapeStyle(index, { summary })}
+                >
+                  {!summary && (
+                    <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : 'truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
+                      {displayMode === 'dense'
+                        ? getDenseSegmentLabel(segment.label)
+                        : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
+                    </span>
+                  )}
+                  {!summary && !readOnly ? (
+                    <span
+                      className={`absolute left-4 top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }}
+                    >
+                      <Tooltip title="کپی مرحله">
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          className="inline-flex h-6 w-6 items-center justify-center rounded bg-white/80 text-gray-600 shadow-sm"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleDuplicateDraftStage(segment);
+                          }}
+                        >
+                          <CopyOutlined />
+                        </span>
+                      </Tooltip>
+                      <Tooltip title="جابجایی مرحله">
+                        <ProcessStageMoveHandle
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openStageMoveModal(segment);
+                          }}
+                        />
+                      </Tooltip>
+                    </span>
+                  ) : null}
+                </button>
+                {!summary ? renderDraftProcessStageOutline(index) : null}
+              </div>
             </Popover>
           );
           };
+
+          const renderSegment = (segment: any, index: number, summary = false) => {
+            const content = segment.type === 'task'
+              ? renderTaskSegment(segment, index, summary)
+              : renderDraftSegment(segment, index, summary);
+            if (!dragConfig || summary || readOnly || !recordId) return content;
+            const nodeKey = getProcessStageNodeKey(segment, index);
+            return (
+              <ProcessStageDragSurface
+                key={`${barKey}-drag-${nodeKey}`}
+                id={`${dragConfig.scopeKey}:stage:${nodeKey}`}
+                data={{
+                  scopeKey: dragConfig.scopeKey,
+                  laneKey: dragConfig.laneKey,
+                  index,
+                  stage: segment,
+                }}
+              >
+                {({ ref, attributes, listeners, style: dragStyle, isOver }) => (
+                  <div
+                    ref={ref as React.Ref<HTMLDivElement>}
+                    className={`${useVerticalMainLayout ? 'relative flex w-full items-stretch' : 'relative flex min-w-0 flex-1 basis-0 items-stretch'} ${isOver ? 'brightness-95' : ''}`}
+                    style={dragStyle}
+                  >
+                    <ProcessStageDragHandleContext.Provider value={{ attributes, listeners }}>
+                      {content}
+                    </ProcessStageDragHandleContext.Provider>
+                  </div>
+                )}
+              </ProcessStageDragSurface>
+            );
+          };
+
+          const renderSegmentsWithDropZones = (items: any[]) => items.map((segment: any, index: number) => {
+            const nodeKey = getProcessStageNodeKey(segment, index);
+            if (!dragConfig || readOnly || !recordId) {
+              return <React.Fragment key={`${barKey}-segment-${nodeKey}`}>{renderSegment(segment, index)}</React.Fragment>;
+            }
+            return (
+              <React.Fragment key={`${barKey}-segment-${nodeKey}`}>
+                <ProcessStageInsertionDropZone
+                  id={`${dragConfig.scopeKey}:lane:${dragConfig.laneKey}:insert:${index}`}
+                  scopeKey={dragConfig.scopeKey}
+                  laneKey={dragConfig.laneKey}
+                  index={index}
+                  vertical={useVerticalMainLayout}
+                />
+                {renderSegment(segment, index)}
+                {index === items.length - 1 ? (
+                  <ProcessStageInsertionDropZone
+                    id={`${dragConfig.scopeKey}:lane:${dragConfig.laneKey}:insert:${items.length}`}
+                    scopeKey={dragConfig.scopeKey}
+                    laneKey={dragConfig.laneKey}
+                    index={items.length}
+                    vertical={useVerticalMainLayout}
+                  />
+                ) : null}
+              </React.Fragment>
+            );
+          });
 
           if (segments.length === 0) {
             return (
@@ -7869,14 +9481,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             return (
               <div className="w-full">
                 <div
-                  className="flex min-h-[2.75rem] items-stretch gap-1.5 overflow-hidden rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.94))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))]"
+                  className="flex min-h-[2.75rem] items-stretch gap-0.5 overflow-hidden rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.94))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))]"
                   title={`${currentStatusLabel} - ${currentSegmentLabel} (${toPersianNumber(`${Math.max(currentSegmentIndex + 1, 1)}/${segments.length}`)})`}
                 >
-                  {segments.map((segment: any, index: number) => (
-                    segment.type === 'task'
-                      ? renderTaskSegment(segment, index)
-                      : renderDraftSegment(segment, index)
-                  ))}
+                  {segments.map((segment: any, index: number) => renderSegment(segment, index, true))}
                 </div>
               </div>
             );
@@ -7895,14 +9503,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 </div>
               ) : null}
               <div className={`relative min-h-0 w-full rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${useVerticalMainLayout ? 'flex flex-col items-stretch' : 'flex items-stretch'} ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
-                {displaySegments.map((segment: any, index: number) => (
-                  segment.type === 'task'
-                    ? renderTaskSegment(segment, index)
-                    : renderDraftSegment(segment, index)
-                ))}
+                {renderSegmentsWithDropZones(displaySegments)}
                 {hiddenCount > 0 && (
                   <div
-                    className={`relative flex items-center justify-center rounded-xl bg-gray-200/90 px-2 text-gray-700 dark:bg-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? `${displaySegments.length !== 0 ? 'mt-1.5' : ''} w-full py-2.5` : `${displaySegments.length !== 0 ? 'mr-1' : ''}`} ${displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} font-semibold`}
+                    className={`relative flex items-center justify-center rounded-xl bg-gray-200/90 px-2 text-gray-700 dark:bg-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? `${displaySegments.length !== 0 ? 'mt-1.5' : ''} w-full py-2.5` : `${displaySegments.length !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`} ${displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} font-semibold`}
                     style={useVerticalMainLayout ? undefined : { flex: 0.8 }}
                     title={`${toPersianNumber(hiddenCount)} فعالیت دیگر`}
                   >
@@ -8012,6 +9616,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       const showAutoAssignButton = canAutoAssignProcessGroup(group);
                       const isTemplateLocked = hasProcessGroupStarted(group);
                       const processOriginLabel = getProcessGroupOriginLabel(group);
+                      const groupGraphMaterialized = materializeLegacyProcessGraph(group?.lineSegments || []);
+                      const groupProcessLanes = getProcessStagesByLane(
+                        groupGraphMaterialized.stages,
+                        groupGraphMaterialized.graph,
+                      );
+                      const groupDragScopeKey = `runtime:${line.id}:${group.id}`;
                       return (
                       <div
                         key={`${line.id}-${group.id}-${groupIndex}`}
@@ -8118,27 +9728,90 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             <span>مبدا فرآیند: {processOriginLabel}</span>
                           </div>
                         ) : null}
-                        <div className={`w-full flex gap-2 ${isMobileMainProcessView ? 'flex-col items-stretch' : 'items-center'}`}>
-                          {renderSegmentsBar(group?.lineSegments || [], `${line.id}-${group.id}-${groupIndex}`)}
-                          {!readOnly && !!recordId && (
-                            <Tooltip title="افزودن مرحله جدید">
-                              <Button
-                                type="dashed"
-                                shape="circle"
-                                icon={<PlusOutlined />}
-                                size={compact ? 'small' : 'middle'}
-                                onClick={() => {
-                                  openTaskModal(line.id, undefined, {
-                                    id: String(group?.id || ''),
-                                    label: group?.label || null,
-                                    templateId: group?.templateId || null,
-                                    templateName: group?.templateName || null,
-                                  });
-                                }}
-                                className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
-                              />
-                            </Tooltip>
-                          )}
+                        <div className="w-full space-y-2">
+                          <DndContext
+                            sensors={processDragSensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={(event) => {
+                              void handleRuntimeStageDragEnd(
+                                event,
+                                groupGraphMaterialized.stages,
+                                groupGraphMaterialized.graph,
+                              ).catch((error) => {
+                                message.error(toFaErrorMessage(error, 'جابجایی مرحله فرآیند ناموفق بود'));
+                              });
+                            }}
+                          >
+                          {groupProcessLanes.map((lane, laneIndex) => (
+                            <div
+                              key={`${group.id}-${lane.key}`}
+                              className={`relative ${lane.parentTriggerKey ? 'border-r-2 border-amber-300 pr-2' : ''}`}
+                            >
+                              {!compact && !cardCompact && (lane.name || groupProcessLanes.length > 1) ? (
+                                <div className="mb-1 truncate px-1 text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+                                  {lane.name || `ردیف ${toPersianNumber(laneIndex + 1)}`}
+                                </div>
+                              ) : null}
+                              <div className="flex w-full items-center gap-2">
+                                <div className="flex shrink-0 flex-col gap-1">
+                                  {groupGraphMaterialized.graph.triggers
+                                    .filter((trigger) => trigger.targetLaneKeys.includes(lane.key))
+                                    .map((trigger) => (
+                                      <Tooltip key={trigger.key} title={trigger.name}>
+                                        <Button
+                                          size="small"
+                                          shape="circle"
+                                          icon={<ThunderboltOutlined />}
+                                          disabled={!trigger.manualEnabled || !canManageProcessGraph}
+                                          onClick={() => {
+                                            void handleRunProcessTrigger(trigger, groupGraphMaterialized.stages).catch((error) => {
+                                              if (isAbortLikeError(error)) return;
+                                              message.error(toFaErrorMessage(error, 'اجرای فعال‌کننده ناموفق بود'));
+                                            });
+                                          }}
+                                          className="border-amber-300 bg-amber-50 text-amber-700"
+                                        />
+                                      </Tooltip>
+                                    ))}
+                                </div>
+                                <ProcessLaneDropZone
+                                  id={`${groupDragScopeKey}:lane:${lane.key}:end`}
+                                  scopeKey={groupDragScopeKey}
+                                  laneKey={lane.key}
+                                  index={lane.stages.length}
+                                  disabled={readOnly || !recordId}
+                                  className="min-w-0 flex-1"
+                                >
+                                  {renderSegmentsBar(
+                                    lane.stages || [],
+                                    `${line.id}-${group.id}-${lane.key}-${groupIndex}`,
+                                    { scopeKey: groupDragScopeKey, laneKey: lane.key },
+                                  )}
+                                </ProcessLaneDropZone>
+                                {!readOnly && !!recordId && (
+                                  <Tooltip title="افزودن مرحله جدید">
+                                    <Button
+                                      type="dashed"
+                                      shape="circle"
+                                      icon={<PlusOutlined />}
+                                      size={compact ? 'small' : 'middle'}
+                                      onClick={() => {
+                                        setActiveDraftLaneKey(lane.key);
+                                        openTaskModal(line.id, undefined, {
+                                          id: String(group?.id || ''),
+                                          label: group?.label || null,
+                                          templateId: group?.templateId || null,
+                                          templateName: group?.templateName || null,
+                                        });
+                                      }}
+                                      className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
+                                    />
+                                  </Tooltip>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          </DndContext>
                         </div>
                       </div>
                     )})}
@@ -8330,32 +10003,275 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               className="w-full"
               onChange={(value) => { void handleDraftSourceTemplateChange(String(value || '')); }}
             />
+            {draftSourceTemplateStages.length > 0 ? (
+              <Button
+                block
+                className="mt-3"
+                icon={<CopyOutlined />}
+                onClick={() => {
+                  void handleCopyFullDraftTemplate().catch((error) => {
+                    message.error(toFaErrorMessage(error, 'کپی کامل الگوی فرآیند ناموفق بود'));
+                  });
+                }}
+              >
+                کپی کامل الگو با همه ردیف‌ها و فعال‌کننده‌ها
+              </Button>
+            ) : null}
             <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-white/90 p-2 dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5">
               {draftSourceTemplateStagesLoading ? (
                 <div className="flex items-center justify-center py-4 text-xs text-gray-500">در حال بارگذاری مراحل...</div>
               ) : draftSourceTemplateStages.length === 0 ? (
                 <div className="py-4 text-center text-xs text-gray-500">مرحله‌ای برای نمایش وجود ندارد</div>
               ) : (
-                <div className="space-y-2">
-                  {draftSourceTemplateStages.map((stage: any, index: number) => {
-                    const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
-                    return (
-                      <button
-                        key={`${String(stage?.id || 'stage')}-${index}`}
-                        type="button"
-                        className="flex w-full items-center justify-between rounded-lg border border-[rgba(var(--brand-200-rgb),0.8)] bg-white px-3 py-2 text-right transition-colors hover:border-[rgba(var(--brand-500-rgb),0.6)] hover:bg-[rgba(var(--brand-50-rgb),0.75)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5"
-                        onClick={() => handleCopyDraftStageFromTemplate(stage)}
-                      >
-                        <span className="truncate text-sm text-[rgba(var(--brand-900-rgb),1)] dark:text-[rgba(var(--brand-50-rgb),0.95)]">{stageName}</span>
-                        <span className="text-xs text-[rgba(var(--brand-700-rgb),1)]">کپی و ویرایش</span>
-                      </button>
-                    );
-                  })}
+                <div className="space-y-3">
+                  {draftSourceProcessLanes.map((lane, laneIndex) => (
+                    <div
+                      key={lane.key}
+                      className="rounded-md border border-[rgba(var(--brand-200-rgb),0.8)] p-2 dark:border-[rgba(var(--brand-300-rgb),0.2)]"
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-semibold text-gray-600 dark:text-gray-300">
+                          {lane.name || `ردیف ${toPersianNumber(laneIndex + 1)}`}
+                        </span>
+                        <Button
+                          size="small"
+                          icon={<CopyOutlined />}
+                          onClick={() => {
+                            void handleCopyDraftLaneFromTemplate(lane.key).catch((error) => {
+                              message.error(toFaErrorMessage(error, 'کپی ردیف فرآیند ناموفق بود'));
+                            });
+                          }}
+                        >
+                          کپی ردیف کامل
+                        </Button>
+                      </div>
+                      <div className="space-y-1">
+                        {lane.stages.map((stage: any, index: number) => {
+                          const stageName = String(stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
+                          return (
+                            <button
+                              key={`${String(stage?.id || 'stage')}-${index}`}
+                              type="button"
+                              className="flex w-full items-center justify-between rounded border border-gray-200 bg-white px-3 py-2 text-right transition-colors hover:border-[rgba(var(--brand-500-rgb),0.6)] hover:bg-[rgba(var(--brand-50-rgb),0.75)] dark:border-gray-700 dark:bg-white/5"
+                              onClick={() => handleCopyDraftStageFromTemplate(stage)}
+                            >
+                              <span className="truncate text-sm text-[rgba(var(--brand-900-rgb),1)] dark:text-[rgba(var(--brand-50-rgb),0.95)]">{stageName}</span>
+                              <span className="text-xs text-[rgba(var(--brand-700-rgb),1)]">کپی و ویرایش</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        title="جابجایی مرحله فرآیند"
+        open={!!stageMoveTarget}
+        onCancel={() => setStageMoveTarget(null)}
+        onOk={() => { void handleMoveStage().catch((error) => {
+          message.error(toFaErrorMessage(error, 'جابجایی مرحله ناموفق بود'));
+        }); }}
+        okText="جابجایی"
+        cancelText="انصراف"
+        zIndex={10020}
+        destroyOnHidden
+      >
+        <Form form={stageMoveForm} layout="vertical">
+          <Alert
+            type="warning"
+            showIcon
+            className="mb-3"
+            message="جابجایی فعالیت واقعی، ترتیب آینده فرآیند را تغییر می‌دهد و اتوماسیون‌های گذشته دوباره اجرا نمی‌شوند."
+          />
+          <Form.Item name="lane_key" label="ردیف مقصد" rules={[{ required: true, message: 'ردیف مقصد را انتخاب کنید.' }]}>
+            <AdaptiveSelectField
+              {...adaptiveModalSelectProps}
+              options={(() => {
+                const recurrence = parseRecurrenceInfo(stageMoveTarget?.recurrence_info);
+                const targetGraph = normalizeProcessGraph(
+                  recurrence?.[PROCESS_GRAPH_METADATA_KEY]
+                    || stageMoveTarget?.metadata?.[PROCESS_GRAPH_METADATA_KEY]
+                    || draftGraphSnapshot.graph,
+                  draftGraphSnapshot.stages,
+                );
+                return targetGraph.lanes.map((lane, index) => ({
+                  value: lane.key,
+                  label: lane.name || `ردیف ${toPersianNumber(index + 1)}`,
+                }));
+              })()}
+            />
+          </Form.Item>
+          <Form.Item name="sort_order" label="ترتیب در ردیف" rules={[{ required: true, message: 'ترتیب را وارد کنید.' }]}>
+            <InputNumber min={1} className="w-full" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="فعال‌کننده فرآیند"
+        open={!!processTriggerEditor}
+        onCancel={() => setProcessTriggerEditor(null)}
+        onOk={() => { void handleSaveProcessTrigger().catch((error) => {
+          message.error(toFaErrorMessage(error, 'ذخیره فعال‌کننده ناموفق بود'));
+        }); }}
+        okText="ذخیره"
+        cancelText="انصراف"
+        width={900}
+        zIndex={10020}
+        destroyOnHidden
+        loading={processActivatorWorkflowLoading}
+      >
+        <Form form={processTriggerForm} layout="vertical">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item name="name" label="نام فعال‌کننده" rules={[{ required: true, message: 'نام فعال‌کننده را وارد کنید.' }]}>
+              <Input placeholder="مثلا: آغاز کنترل کیفیت" />
+            </Form.Item>
+            <Form.Item name="workflow_is_active" label="اجرای خودکار" valuePropName="checked">
+              <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+            </Form.Item>
+          </div>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item name="source_node_key" label="مرحله مبدا فعال‌سازی" rules={[{ required: true, message: 'مبدا فعال‌کننده را انتخاب کنید.' }]}>
+              <AdaptiveSelectField
+                {...adaptiveModalSelectProps}
+                options={[
+                  { value: '__process_start__', label: 'شروع فرآیند' },
+                  ...draftProcessLanes.flatMap((lane, laneIndex) => (
+                    lane.stages.map((stage: any, stageIndex: number) => ({
+                      value: getProcessStageNodeKey(stage, stageIndex),
+                      label: `${lane.name || `ردیف ${toPersianNumber(laneIndex + 1)}`} - ${stage.name || stage.stage_name || `مرحله ${toPersianNumber(stageIndex + 1)}`}`,
+                    }))
+                  )),
+                ]}
+                placeholder="انتخاب مرحله یا شروع فرآیند"
+              />
+            </Form.Item>
+            <Form.Item name="manual_enabled" label="اجرای دستی" valuePropName="checked">
+              <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+            </Form.Item>
+          </div>
+          <Form.Item name="target_lane_keys" label="ردیف‌های مقصد" rules={[{ required: true, message: 'حداقل یک ردیف مقصد انتخاب کنید.' }]}>
+            <AdaptiveSelectField
+              {...adaptiveModalSelectProps}
+              mode="multiple"
+              options={draftGraphSnapshot.graph.lanes.map((lane, index) => ({
+                value: lane.key,
+                label: lane.name || `ردیف ${toPersianNumber(index + 1)}`,
+                disabled: !!lane.parentTriggerKey
+                  && lane.parentTriggerKey !== processTriggerEditor?.trigger.key,
+              }))}
+              placeholder="انتخاب یک یا چند ردیف"
+            />
+          </Form.Item>
+          <Form.Item name="workflow_description" label="توضیحات">
+            <Input.TextArea rows={2} />
+          </Form.Item>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <Form.Item name="workflow_trigger_type" label="نوع اجرای خودکار">
+              <Radio.Group options={triggerTypeOptions} optionType="button" buttonStyle="solid" />
+            </Form.Item>
+            <Form.Item name="workflow_execution_mode" label="تکرار اجرا">
+              <Radio.Group options={workflowExecutionModeOptions} />
+            </Form.Item>
+          </div>
+          {watchedProcessActivatorTriggerType === 'interval' ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+              <Form.Item name="workflow_interval_value" label="هر">
+                <InputNumber min={1} className="w-full" />
+              </Form.Item>
+              <Form.Item name="workflow_interval_unit" label="واحد">
+                <AdaptiveSelectField {...adaptiveModalSelectProps} options={intervalUnitOptions} />
+              </Form.Item>
+              <Form.Item name="workflow_interval_at" label="در ساعت">
+                <PersianDatePicker type="TIME" />
+              </Form.Item>
+              <Form.Item name="workflow_batch_size" label="تعداد بررسی">
+                <InputNumber min={1} className="w-full" />
+              </Form.Item>
+            </div>
+          ) : null}
+          <Alert
+            type="info"
+            showIcon
+            message="همه تنظیمات دستی، خودکار، شرط‌ها و زمان‌بندی این فعال‌کننده با همین ذخیره اعمال می‌شود."
+          />
+          {!recordId ? (
+            <div className="mt-2 text-xs text-gray-500">
+              برای ذخیره اجرای خودکار، ابتدا رکورد الگوی فرآیند را ذخیره کنید. تنظیمات دستی فعال‌کننده در همین فرم باقی می‌ماند.
+            </div>
+          ) : null}
+          <div className="mt-4 space-y-4 border-t border-gray-200 pt-4 dark:border-gray-700">
+            <div>
+              <div className="mb-2 text-sm font-semibold">همه شرط‌ها</div>
+              <WorkflowConditionsGroup
+                value={processActivatorConditionsAll}
+                onChange={(next) => setProcessActivatorConditionsAll(next as WorkflowCondition[])}
+                fields={automationConditionFields}
+                dynamicOptions={automationDynamicOptions}
+                relationOptions={automationRelationOptions}
+                overlayZIndexBase={10060}
+              />
+            </div>
+            <div>
+              <div className="mb-2 text-sm font-semibold">یا یکی از شرط‌ها</div>
+              <WorkflowConditionsGroup
+                value={processActivatorConditionsAny}
+                onChange={(next) => setProcessActivatorConditionsAny(next as WorkflowCondition[])}
+                fields={automationConditionFields}
+                dynamicOptions={automationDynamicOptions}
+                relationOptions={automationRelationOptions}
+                overlayZIndexBase={10060}
+              />
+            </div>
+          </div>
+          {processTriggerEditor && draftGraphSnapshot.graph.triggers.some(
+            (trigger) => trigger.key === processTriggerEditor.trigger.key,
+          ) ? (
+            <div className="mt-4 grid grid-cols-1 gap-2 border-t border-gray-200 pt-4 sm:grid-cols-2 dark:border-gray-700">
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => {
+                  Modal.confirm({
+                    title: 'حذف فعال‌کننده و مستقل‌کردن ردیف‌ها',
+                    content: 'ردیف‌های متصل باقی می‌مانند و به ردیف‌های مستقل این فرآیند تبدیل می‌شوند.',
+                    okText: 'حذف و مستقل‌کردن',
+                    cancelText: 'انصراف',
+                    okButtonProps: { danger: true },
+                    zIndex: 10200,
+                    onOk: () => handleDeleteProcessTrigger(false),
+                  });
+                }}
+              >
+                حذف و مستقل‌کردن ردیف‌ها
+              </Button>
+              <Button
+                danger
+                type="primary"
+                icon={<DeleteOutlined />}
+                onClick={() => {
+                  Modal.confirm({
+                    title: 'حذف فعال‌کننده و ردیف‌های زیرمجموعه',
+                    content: 'همه مراحل ردیف‌های متصل و شاخه‌های زیرمجموعه آن‌ها حذف می‌شوند. این عملیات قابل بازگشت نیست.',
+                    okText: 'حذف همه',
+                    cancelText: 'انصراف',
+                    okButtonProps: { danger: true },
+                    zIndex: 10200,
+                    onOk: () => handleDeleteProcessTrigger(true),
+                  });
+                }}
+              >
+                حذف همراه ردیف‌ها
+              </Button>
+            </div>
+          ) : null}
+        </Form>
       </Modal>
 
       <Modal
@@ -8474,12 +10390,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     <AdaptiveSelectField
                       {...adaptiveModalSelectProps}
                       options={[
-                        { label: 'شروع پروژه', value: 'project_start' },
-                        { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
+                        { label: 'بعد از شروع فرآیند', value: 'project_start' },
+                        { label: 'بعد از موعد انجام مرحله قبلی', value: 'previous_stage_end' },
+                        { label: 'بعد از موعد انجام مرحله خاص', value: 'specific_stage_due' },
+                        { label: 'بعد از زمان تکمیل واقعی مرحله قبلی', value: 'previous_stage_completed' },
+                        { label: 'بعد از زمان تکمیل واقعی مرحله خاص', value: 'specific_stage_completed' },
                       ]}
                     />
                   </Form.Item>
                 </div>
+                {['specific_stage_due', 'specific_stage_completed'].includes(String(watchedTaskDurationFrom || '')) ? (
+                  <div className="col-span-12">
+                    <Form.Item
+                      name="due_anchor_stage_node_key"
+                      label="مرحله مبنا"
+                      rules={[{ required: true, message: 'مرحله مبنا را انتخاب کنید.' }]}
+                    >
+                      <AdaptiveSelectField
+                        {...adaptiveModalSelectProps}
+                        options={processStageNodeOptions}
+                        placeholder="انتخاب مرحله خاص"
+                      />
+                    </Form.Item>
+                  </div>
+                ) : null}
                 <div className="col-span-4">
                   <Form.Item name="duration_value" label="مقدار">
                     <InputNumber className="w-full" min={0} />
@@ -8669,12 +10603,32 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             <AdaptiveSelectField
                               {...adaptiveModalSelectProps}
                               options={[
-                                { label: 'شروع پروژه', value: 'project_start' },
-                                { label: 'اتمام مرحله قبلی', value: 'previous_stage_end' },
+                                { label: 'بعد از شروع فرآیند', value: 'project_start' },
+                                { label: 'بعد از موعد انجام مرحله قبلی', value: 'previous_stage_end' },
+                                { label: 'بعد از موعد انجام مرحله خاص', value: 'specific_stage_due' },
+                                { label: 'بعد از زمان تکمیل واقعی مرحله قبلی', value: 'previous_stage_completed' },
+                                { label: 'بعد از زمان تکمیل واقعی مرحله خاص', value: 'specific_stage_completed' },
                               ]}
                             />
                           </Form.Item>
                         </div>
+                        {['specific_stage_due', 'specific_stage_completed'].includes(String(watchedDraftDurationFrom || '')) ? (
+                          <div className="col-span-12">
+                            <Form.Item
+                              name="due_anchor_stage_node_key"
+                              label="مرحله مبنا"
+                              rules={[{ required: true, message: 'مرحله مبنا را انتخاب کنید.' }]}
+                            >
+                              <AdaptiveSelectField
+                                {...adaptiveModalSelectProps}
+                                options={processStageNodeOptions.filter(
+                                  (option) => option.value !== String(editingDraft?.[PROCESS_NODE_KEY] || ''),
+                                )}
+                                placeholder="انتخاب مرحله خاص"
+                              />
+                            </Form.Item>
+                          </div>
+                        ) : null}
                         <div className="col-span-4">
                           <Form.Item name="duration_value" label="مقدار">
                             <InputNumber className="w-full" min={0} />
@@ -8973,14 +10927,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       />
                     ) : null}
 
+                    {draftAutomationRules.length > 0 ? (
+                      <div className="flex items-center justify-end">
+                        <Segmented
+                          size="small"
+                          value={automationViewMode}
+                          onChange={(value) => {
+                            const nextMode = value as WorkflowEditorViewMode;
+                            setAutomationViewMode(nextMode);
+                            persistWorkflowViewMode(nextMode);
+                          }}
+                          options={[
+                            { label: 'فرم', value: 'form', icon: <UnorderedListOutlined /> },
+                            { label: 'دیاگرام', value: 'diagram', icon: <ApartmentOutlined /> },
+                          ]}
+                        />
+                      </div>
+                    ) : null}
+
                     {draftAutomationRules.map((rule, index) => {
                       const ruleActions = Array.isArray(rule.actions) ? rule.actions : [];
-                      const editableAllConditions = (Array.isArray(rule.conditions_all) ? rule.conditions_all : []).filter(
-                        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
-                      );
-                      const editableAnyConditions = (Array.isArray(rule.conditions_any) ? rule.conditions_any : []).filter(
-                        (condition) => String(condition?.field || '').trim() !== '__task__task_type'
-                      );
+                      const editableAllConditions = filterEditableAutomationConditions(rule.conditions_all);
+                      const editableAnyConditions = filterEditableAutomationConditions(rule.conditions_any);
                       const ruleId = String(rule?.id || '');
                       const isExpanded = expandedDraftAutomationRuleIds.includes(ruleId);
                       const isFirstRule = index === 0;
@@ -9000,10 +10968,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                             background: headerPalette.background,
                             borderColor: headerPalette.borderColor,
                           }}
-                          onClick={() => toggleDraftAutomationRuleExpanded(ruleId)}
+                          onClick={() => {
+                            if (automationViewMode === 'diagram') {
+                              setDiagramAutomationRuleId(ruleId);
+                              return;
+                            }
+                            toggleDraftAutomationRuleExpanded(ruleId);
+                          }}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault();
+                              if (automationViewMode === 'diagram') {
+                                setDiagramAutomationRuleId(ruleId);
+                                return;
+                              }
                               toggleDraftAutomationRuleExpanded(ruleId);
                             }
                           }}
@@ -9038,6 +11016,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 icon={<DownOutlined />}
                                 disabled={isLastRule}
                                 onClick={() => moveDraftAutomationRule(ruleId, 'down')}
+                              />
+                            </Tooltip>
+                            <Tooltip title="نمای دیاگرام">
+                              <Button
+                                type="text"
+                                htmlType="button"
+                                icon={<ApartmentOutlined />}
+                                onClick={() => setDiagramAutomationRuleId(ruleId)}
                               />
                             </Tooltip>
                             <Switch
@@ -9248,19 +11234,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       value={ruleActions}
                                       onChange={(next) => updateDraftAutomationRule(rule.id, {
                                         actions: next,
-                                        note_text: String(
-                                          next?.find((action) => {
-                                            const actionType = String(action?.type || '').trim();
-                                            return actionType === 'send_note' || actionType === 'send_note_sms';
-                                          })?.config?.note_text
-                                          || ''
-                                        ) || null,
+                                        note_text: extractRuleNoteTextFromActions(next),
                                       })}
                                       currentModuleId={automationScopeModuleId || 'tasks'}
                                       currentModuleFields={automationActionModuleFields}
                                       variableFields={automationActionVariableFields}
                                       nextStageFields={nextStageTransferFields}
                                       enableNextStageActions
+                                      processStageOptions={processStageNodeOptions}
                                       moduleOptions={workflowModuleOptions}
                                       relationSourceModuleOptions={automationScopeModuleIds.map((scopeModuleId) => ({
                                         value: scopeModuleId,
@@ -9270,6 +11251,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                         { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
                                         { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
                                         { label: 'مسئول مرحله بعد', value: '__comm_recipient__next_stage_assignee' },
+                                        ...processSpecificStageRecipientOptions,
                                       ]}
                                       dynamicOptions={automationDynamicOptions}
                                       relationOptions={automationRelationOptions}
@@ -9294,6 +11276,59 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     >
                       افزودن اتوماسیون
                     </Button>
+
+                    {diagramAutomationRuleId ? (
+                      <React.Suspense fallback={null}>
+                        <ProcessAutomationFlowModal
+                          open={!!diagramAutomationRuleId}
+                          onClose={() => setDiagramAutomationRuleId(null)}
+                          rule={
+                            draftAutomationRules.find(
+                              (rule) => String(rule?.id || '') === String(diagramAutomationRuleId)
+                            ) || null
+                          }
+                          onPatch={(patch) => updateDraftAutomationRule(diagramAutomationRuleId, patch)}
+                          zIndex={16100}
+                          context={{
+                            triggerTypeOptions: processAutomationTriggerTypeOptions,
+                            legacyTriggerOption: PROCESS_AUTOMATION_LEGACY_PREVIOUS_STAGE_TRIGGER_OPTION,
+                            conditionFields: draftStageTaskType ? automationConditionFieldsWithoutTaskType : automationConditionFields,
+                            hasLockedTaskType: !!draftStageTaskType,
+                            lockedTaskTypeLabel: draftStageTaskTypeLabel,
+                            dynamicOptions: automationDynamicOptions,
+                            relationOptions: automationRelationOptions,
+                            dynamicFieldProps: {
+                              task_type: {
+                                onOptionsUpdate: fetchTaskTypeOptions,
+                                protectedValues: getTaskTypeProtectedValues(),
+                              },
+                            },
+                            onBeforeAddCondition: guardDraftAutomationConditionAdd,
+                            actionsBuilder: {
+                              currentModuleId: automationScopeModuleId || 'tasks',
+                              currentModuleFields: automationActionModuleFields,
+                              variableFields: automationActionVariableFields,
+                              nextStageFields: nextStageTransferFields,
+                              enableNextStageActions: true,
+                              processStageOptions: processStageNodeOptions,
+                              moduleOptions: workflowModuleOptions,
+                              relationSourceModuleOptions: automationScopeModuleIds.map((scopeModuleId) => ({
+                                value: scopeModuleId,
+                                label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
+                              })),
+                              additionalRecipientFieldOptions: [
+                                { label: 'مسئول همین فعالیت', value: '__comm_recipient__current_task_assignee' },
+                                { label: 'مسئول مرحله قبل', value: '__comm_recipient__previous_stage_assignee' },
+                                { label: 'مسئول مرحله بعد', value: '__comm_recipient__next_stage_assignee' },
+                                ...processSpecificStageRecipientOptions,
+                              ],
+                            },
+                            overlayZIndexBase: 16140,
+                            popupContainer: resolveOverlayPopupContainer,
+                          }}
+                        />
+                      </React.Suspense>
+                    ) : null}
                   </div>
           )}
 

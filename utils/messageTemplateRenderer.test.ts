@@ -146,4 +146,14 @@ describe('messageTemplateRenderer option values', () => {
 
     expect(text).toBe('علی رضایی, نگار محمدی');
   });
+
+  it('prepends the site origin to the online invoice link', () => {
+    const text = renderTemplateText(
+      'لینک فاکتور: {{public_link}}',
+      { public_link: '/i/2cdc74346be8394ea3a6a2bcd73589341afdcf1e68e57993' },
+      { moduleId: 'invoices' }
+    );
+
+    expect(text).toBe(`لینک فاکتور: ${window.location.origin}/i/2cdc74346be8394ea3a6a2bcd73589341afdcf1e68e57993`);
+  });
 });

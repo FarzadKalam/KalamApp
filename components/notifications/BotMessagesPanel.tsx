@@ -51,6 +51,8 @@ type AiSuggestionPopoverActionProps = {
   onSubmit: (instruction: string) => void | Promise<void>;
 };
 
+const EMPTY_BOT_MESSAGES: BotMessageRow[] = [];
+
 const BOT_STATUS_LABELS_FA: Record<string, string> = {
   pending_join_link: 'در انتظار ثبت لینک',
   pending_join: 'انتظار برای پیام در گروه',
@@ -152,6 +154,238 @@ const AiSuggestionPopoverAction: React.FC<AiSuggestionPopoverActionProps> = ({
     </Popover>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Single bot message row — memoized so virtualizer scroll frames re-render
+// only changed rows: same row + same ctx ⇒ no work.
+// ---------------------------------------------------------------------------
+type BotMessageRowItemProps = {
+  row: BotMessageRow;
+  replyTarget: BotMessageRow | null;
+  ctx: Record<string, any>;
+};
+
+const BotMessageRowItem: React.FC<BotMessageRowItemProps> = React.memo(({ row, replyTarget, ctx }) => {
+  const {
+    selectedGroup,
+    getBotMessageAttachments,
+    importBotMessageAttachment,
+    resolveBotMessageAuthor,
+    resolveBotBubbleAvatar,
+    normalizeReadReceipts,
+    isUnreadBotRow,
+    isUuidValue,
+    renderReadReceiptStatus,
+    shouldAnimateChatEntry,
+    scrollMessageIntoView,
+    editingBotMessageId,
+    editingBotMessageValue,
+    setEditingBotMessageId,
+    setEditingBotMessageValue,
+    syncBotProviderMessageAction,
+    botConversationSummaryAvailable,
+    botTimelineAvailable,
+    refreshBotConversationSummaries,
+    refreshBotTimeline,
+    refreshUnreadSummary,
+    fetchBotMessages,
+    openForwardModal,
+    openCreateActivityFromMessage,
+    setBotReplyToId,
+    setBotMessages,
+    message,
+  } = ctx;
+
+  const outgoing = String(row.direction || '') === 'outbound';
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const parsedAttachments = getBotMessageAttachments(row);
+  const fileId = String((payload as any)?.media_file_id || '').trim();
+  const displayAttachments = parsedAttachments.length > 0
+    ? parsedAttachments
+    : (String(row.file_name || '').trim() && fileId
+      ? [{
+        name: String(row.file_name || '').trim(),
+        url: '',
+        mimeType: String(row.mime_type || '').trim() || null,
+        fileType: String(row.message_type || 'file').trim() || 'file',
+      }]
+      : []);
+  const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
+  const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item: any) => ({
+    name: item.name,
+    url: item.url,
+    mimeType: item.mimeType,
+    fileType: item.fileType,
+  } as any)) : [];
+  const body = String(row.content_text || '').trim()
+    || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
+  const isEditing = editingBotMessageId === row.id;
+  const author = resolveBotMessageAuthor(row);
+  const botAvatar = resolveBotBubbleAvatar(author, outgoing);
+  const botReadReceipts = normalizeReadReceipts(payload);
+  const botMessageId = String(row.id || '').trim();
+  const isPersistedBotMessage = isUuidValue(botMessageId);
+  const isUnreadBotMessage = isUnreadBotRow(row);
+
+  return (
+    <div>
+      <SharedNoteCard
+        authorName={author.name}
+        createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
+        text={body}
+        attachments={displayAttachments.map((item: any) => ({
+          name: item.name,
+          url: item.url,
+          mimeType: item.mimeType,
+          fileType: item.fileType,
+        } as any))}
+        onAttachmentClick={async (attachment) => {
+          const normalizedUrl = String(attachment?.url || '').trim();
+          const isImage = attachment?.fileType === 'image';
+          if (normalizedUrl) {
+            if (!isImage && typeof document !== 'undefined') {
+              const link = document.createElement('a');
+              link.href = normalizedUrl;
+              link.download = String(attachment?.name || 'file').trim() || 'file';
+              link.target = '_blank';
+              link.rel = 'noopener noreferrer';
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+            }
+            return;
+          }
+          try {
+            await importBotMessageAttachment(row, { force: true, downloadAfter: true });
+          } catch (error) {
+            message.error(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود.'));
+          }
+        }}
+        avatarUrl={botAvatar.src}
+        avatarFallback={botAvatar.fallback}
+        avatarClassName={botAvatar.className}
+        mentionUsers={[]}
+        mentionRoles={[]}
+        replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
+        replyAuthorName={replyAuthorName}
+        replyAttachments={replyAttachments}
+        onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`bot-message-${String(replyTarget.id)}`) : undefined}
+        messageDomId={`bot-message-${String(row.id)}`}
+        isMine={outgoing}
+        animateOnMount={shouldAnimateChatEntry(row.created_at)}
+        statusNode={renderReadReceiptStatus(botReadReceipts, [])}
+        unreadIndicator={isUnreadBotMessage}
+        footer={!outgoing && author.metaLabel ? author.metaLabel : undefined}
+        isEdited={Boolean((payload as any)?.is_edited)}
+        isEditing={isEditing}
+        editingValue={editingBotMessageValue}
+        onEditingChange={setEditingBotMessageValue}
+        onSaveEdit={outgoing ? async () => {
+          const nextText = String(editingBotMessageValue || '').trim();
+          if (!nextText) return;
+          await syncBotProviderMessageAction(selectedGroup, 'edit_message', row, nextText);
+          const nextPayload = {
+            ...(payload || {}),
+            is_edited: true,
+            edited_at: new Date().toISOString(),
+          };
+          const { error } = await supabase
+            .from('counterparty_bot_messages')
+            .update({
+              content_text: nextText,
+              payload: nextPayload,
+            })
+            .eq('id', row.id);
+          if (error) throw error;
+          setEditingBotMessageId(null);
+          setEditingBotMessageValue('');
+          if (botConversationSummaryAvailable) {
+            await refreshBotConversationSummaries();
+          }
+          if (botTimelineAvailable) {
+            await refreshBotTimeline();
+          } else {
+            await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+          }
+        } : undefined}
+        onCancelEdit={() => {
+          setEditingBotMessageId(null);
+          setEditingBotMessageValue('');
+        }}
+        onReply={isPersistedBotMessage ? () => setBotReplyToId(row.id) : undefined}
+        onForward={() => openForwardModal(row, 'bot')}
+        onCreateActivity={async () => {
+          let activityAttachments = displayAttachments
+            .map((item: any) => ({
+              name: item.name,
+              url: item.url,
+              mimeType: item.mimeType,
+              fileType: item.fileType,
+            }))
+            .filter((item: any) => String(item?.url || '').trim());
+          if (activityAttachments.length === 0 && fileId) {
+            try {
+              const hydrated = await importBotMessageAttachment(row, { force: true });
+              if (hydrated?.url) {
+                activityAttachments = [hydrated];
+              }
+            } catch (error) {
+              message.warning(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود؛ فعالیت بدون پیوست باز شد.'));
+            }
+          }
+          const relatedModuleId = selectedGroup?.customer_id
+            ? 'customers'
+            : (selectedGroup?.supplier_id ? 'suppliers' : null);
+          const relatedRecordId = selectedGroup?.customer_id
+            ? String(selectedGroup.customer_id || '').trim()
+            : (selectedGroup?.supplier_id ? String(selectedGroup.supplier_id || '').trim() : null);
+          const counterpartyLabel = String(selectedGroup?.counterparty_label || '').trim();
+          const actorName = counterpartyLabel
+            ? `${selectedGroup?.customer_id ? 'مشتری' : selectedGroup?.supplier_id ? 'تامین‌کننده' : 'طرف حساب'} ${counterpartyLabel}`
+            : author.name;
+          await openCreateActivityFromMessage({
+            channel: 'bot',
+            actorName,
+            createdAt: row.created_at,
+            createdAtLabel: safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm'),
+            content: body,
+            attachments: activityAttachments,
+            relatedModuleId,
+            relatedRecordId,
+          });
+        }}
+        onEdit={outgoing && isPersistedBotMessage ? () => {
+          setEditingBotMessageId(row.id);
+          setEditingBotMessageValue(String(row.content_text || '').trim());
+        } : undefined}
+        onDelete={outgoing && isPersistedBotMessage ? () => {
+          Modal.confirm({
+            title: 'حذف پیام بات',
+            content: 'این پیام حذف شود؟',
+            okText: 'حذف',
+            cancelText: 'انصراف',
+            okButtonProps: { danger: true },
+            onOk: async () => {
+              const rowId = String(row.id || '').trim();
+              await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
+              const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', rowId);
+              if (error) throw error;
+              setBotMessages((prev: any[]) => prev.filter((item: any) => String(item?.id || '') !== rowId));
+              await Promise.all([
+                botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
+                refreshUnreadSummary(),
+              ]);
+              if (!botTimelineAvailable) {
+                await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
+              }
+            },
+          });
+        } : undefined}
+      />
+    </div>
+  );
+});
+BotMessageRowItem.displayName = 'BotMessageRowItem';
 
 type BotMessagesPanelProps = {
   layout: 'desktop' | 'mobile';
@@ -306,6 +540,74 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   const { message } = App.useApp();
   const withDesktopSidebar = layout === 'desktop';
   const withMobileUserRail = layout === 'mobile';
+  // Stable row context: rows re-render only when something they show changes,
+  // never because the timeline virtualizer produced a new scroll frame.
+  const botRowCtx = React.useMemo(() => ({
+    selectedGroup,
+    getBotMessageAttachments,
+    importBotMessageAttachment,
+    resolveBotMessageAuthor,
+    resolveBotBubbleAvatar,
+    normalizeReadReceipts,
+    isUnreadBotRow,
+    isUuidValue,
+    renderReadReceiptStatus,
+    shouldAnimateChatEntry,
+    scrollMessageIntoView,
+    editingBotMessageId,
+    editingBotMessageValue,
+    setEditingBotMessageId,
+    setEditingBotMessageValue,
+    syncBotProviderMessageAction,
+    botConversationSummaryAvailable,
+    botTimelineAvailable,
+    refreshBotConversationSummaries,
+    refreshBotTimeline,
+    refreshUnreadSummary,
+    fetchBotMessages,
+    openForwardModal,
+    openCreateActivityFromMessage,
+    setBotReplyToId,
+    setBotMessages,
+    message,
+  }), [
+    botConversationSummaryAvailable,
+    botTimelineAvailable,
+    editingBotMessageId,
+    editingBotMessageValue,
+    fetchBotMessages,
+    getBotMessageAttachments,
+    importBotMessageAttachment,
+    isUnreadBotRow,
+    isUuidValue,
+    message,
+    normalizeReadReceipts,
+    openCreateActivityFromMessage,
+    openForwardModal,
+    refreshBotConversationSummaries,
+    refreshBotTimeline,
+    refreshUnreadSummary,
+    renderReadReceiptStatus,
+    resolveBotBubbleAvatar,
+    resolveBotMessageAuthor,
+    scrollMessageIntoView,
+    selectedGroup,
+    setBotMessages,
+    setBotReplyToId,
+    setEditingBotMessageId,
+    setEditingBotMessageValue,
+    shouldAnimateChatEntry,
+    syncBotProviderMessageAction,
+  ]);
+  const renderBotRow = React.useCallback((row: BotMessageRow) => {
+    if (!row) return null;
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const replyToId = String((payload as any)?.reply_to_message_id || '').trim();
+    const replyTarget = replyToId ? botMessageMap.get(replyToId) || null : null;
+    return <BotMessageRowItem row={row} replyTarget={replyTarget} ctx={botRowCtx} />;
+  }, [botMessageMap, botRowCtx]);
+  const getBotRowKey = React.useCallback((row: BotMessageRow, index: number) => String(row?.id ?? index), []);
+  const timelineBotMessages = selectedGroup ? filteredBotMessages : EMPTY_BOT_MESSAGES;
   const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
   const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
   const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
@@ -423,202 +725,10 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
           hasMoreBefore={botTimelineHasMoreBefore}
           loadingOlder={loadingOlderBotMessages}
           onLoadOlder={loadOlderBotMessages}
-        >
-          {selectedGroup ? filteredBotMessages.map((row) => {
-                if (!row) return null;
-                const outgoing = String(row.direction || '') === 'outbound';
-                const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-                const parsedAttachments = getBotMessageAttachments(row);
-                const fileId = String((payload as any)?.media_file_id || '').trim();
-                const displayAttachments = parsedAttachments.length > 0
-                  ? parsedAttachments
-                  : (String(row.file_name || '').trim() && fileId
-                    ? [{
-                      name: String(row.file_name || '').trim(),
-                      url: '',
-                      mimeType: String(row.mime_type || '').trim() || null,
-                      fileType: String(row.message_type || 'file').trim() || 'file',
-                    }]
-                    : []);
-                const replyToId = String(payload?.reply_to_message_id || '').trim();
-                const replyTarget = replyToId ? botMessageMap.get(replyToId) : null;
-                const replyAuthorName = replyTarget ? resolveBotMessageAuthor(replyTarget).name : null;
-                const replyAttachments = replyTarget ? getBotMessageAttachments(replyTarget).map((item: any) => ({
-                  name: item.name,
-                  url: item.url,
-                  mimeType: item.mimeType,
-                  fileType: item.fileType,
-                } as any)) : [];
-                const body = String(row.content_text || '').trim()
-                  || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
-                const isEditing = editingBotMessageId === row.id;
-                const author = resolveBotMessageAuthor(row);
-                const botAvatar = resolveBotBubbleAvatar(author, outgoing);
-                const botReadReceipts = normalizeReadReceipts(payload);
-                const botMessageId = String(row.id || '').trim();
-                const isPersistedBotMessage = isUuidValue(botMessageId);
-                const isUnreadBotMessage = isUnreadBotRow(row);
-                return (
-                  <div
-                    key={String(row.id)}
-                  >
-                    <SharedNoteCard
-                      authorName={author.name}
-                      createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
-                      text={body}
-                      attachments={displayAttachments.map((item: any) => ({
-                        name: item.name,
-                        url: item.url,
-                        mimeType: item.mimeType,
-                        fileType: item.fileType,
-                      } as any))}
-                      onAttachmentClick={async (attachment) => {
-                        const normalizedUrl = String(attachment?.url || '').trim();
-                        const isImage = attachment?.fileType === 'image';
-                        if (normalizedUrl) {
-                          if (!isImage && typeof document !== 'undefined') {
-                            const link = document.createElement('a');
-                            link.href = normalizedUrl;
-                            link.download = String(attachment?.name || 'file').trim() || 'file';
-                            link.target = '_blank';
-                            link.rel = 'noopener noreferrer';
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                          }
-                          return;
-                        }
-                        try {
-                          await importBotMessageAttachment(row, { force: true, downloadAfter: true });
-                        } catch (error) {
-                          message.error(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود.'));
-                        }
-                      }}
-                      avatarUrl={botAvatar.src}
-                      avatarFallback={botAvatar.fallback}
-                      avatarClassName={botAvatar.className}
-                      mentionUsers={[]}
-                      mentionRoles={[]}
-                      replyText={replyTarget ? String(replyTarget.content_text || '').trim() : null}
-                      replyAuthorName={replyAuthorName}
-                      replyAttachments={replyAttachments}
-                      onReplyPreviewClick={replyTarget ? () => scrollMessageIntoView(`bot-message-${String(replyTarget.id)}`) : undefined}
-                      messageDomId={`bot-message-${String(row.id)}`}
-                      isMine={outgoing}
-                      animateOnMount={shouldAnimateChatEntry(row.created_at)}
-                      statusNode={renderReadReceiptStatus(botReadReceipts, [])}
-                      unreadIndicator={isUnreadBotMessage}
-                      footer={!outgoing && author.metaLabel ? author.metaLabel : undefined}
-                      isEdited={Boolean(payload?.is_edited)}
-                      isEditing={isEditing}
-                      editingValue={editingBotMessageValue}
-                      onEditingChange={setEditingBotMessageValue}
-                      onSaveEdit={outgoing ? async () => {
-                        const nextText = String(editingBotMessageValue || '').trim();
-                        if (!nextText) return;
-                        await syncBotProviderMessageAction(selectedGroup, 'edit_message', row, nextText);
-                        const nextPayload = {
-                          ...(payload || {}),
-                          is_edited: true,
-                          edited_at: new Date().toISOString(),
-                        };
-                        const { error } = await supabase
-                          .from('counterparty_bot_messages')
-                          .update({
-                            content_text: nextText,
-                            payload: nextPayload,
-                          })
-                          .eq('id', row.id);
-                        if (error) throw error;
-                        setEditingBotMessageId(null);
-                        setEditingBotMessageValue('');
-                        if (botConversationSummaryAvailable) {
-                          await refreshBotConversationSummaries();
-                        }
-                        if (botTimelineAvailable) {
-                          await refreshBotTimeline();
-                        } else {
-                          await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
-                        }
-                      } : undefined}
-                      onCancelEdit={() => {
-                        setEditingBotMessageId(null);
-                        setEditingBotMessageValue('');
-                      }}
-                      onReply={isPersistedBotMessage ? () => setBotReplyToId(row.id) : undefined}
-                      onForward={() => openForwardModal(row, 'bot')}
-                      onCreateActivity={async () => {
-                        let activityAttachments = displayAttachments
-                          .map((item: any) => ({
-                            name: item.name,
-                            url: item.url,
-                            mimeType: item.mimeType,
-                            fileType: item.fileType,
-                          }))
-                          .filter((item: any) => String(item?.url || '').trim());
-                        if (activityAttachments.length === 0 && fileId) {
-                          try {
-                            const hydrated = await importBotMessageAttachment(row, { force: true });
-                            if (hydrated?.url) {
-                              activityAttachments = [hydrated];
-                            }
-                          } catch (error) {
-                            message.warning(toFaErrorMessage(error as any, 'دریافت فایل پیام بات ناموفق بود؛ فعالیت بدون پیوست باز شد.'));
-                          }
-                        }
-                        const relatedModuleId = selectedGroup?.customer_id
-                          ? 'customers'
-                          : (selectedGroup?.supplier_id ? 'suppliers' : null);
-                        const relatedRecordId = selectedGroup?.customer_id
-                          ? String(selectedGroup.customer_id || '').trim()
-                          : (selectedGroup?.supplier_id ? String(selectedGroup.supplier_id || '').trim() : null);
-                        const counterpartyLabel = String(selectedGroup?.counterparty_label || '').trim();
-                        const actorName = counterpartyLabel
-                          ? `${selectedGroup?.customer_id ? 'مشتری' : selectedGroup?.supplier_id ? 'تامین‌کننده' : 'طرف حساب'} ${counterpartyLabel}`
-                          : author.name;
-                        await openCreateActivityFromMessage({
-                          channel: 'bot',
-                          actorName,
-                          createdAt: row.created_at,
-                          createdAtLabel: safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm'),
-                          content: body,
-                          attachments: activityAttachments,
-                          relatedModuleId,
-                          relatedRecordId,
-                        });
-                      }}
-                      onEdit={outgoing && isPersistedBotMessage ? () => {
-                        setEditingBotMessageId(row.id);
-                        setEditingBotMessageValue(String(row.content_text || '').trim());
-                      } : undefined}
-                      onDelete={outgoing && isPersistedBotMessage ? () => {
-                        Modal.confirm({
-                          title: 'حذف پیام بات',
-                          content: 'این پیام حذف شود؟',
-                          okText: 'حذف',
-                          cancelText: 'انصراف',
-                          okButtonProps: { danger: true },
-                          onOk: async () => {
-                            const rowId = String(row.id || '').trim();
-                            await syncBotProviderMessageAction(selectedGroup, 'delete_message', row);
-                            const { error } = await supabase.from('counterparty_bot_messages').delete().eq('id', rowId);
-                            if (error) throw error;
-                            setBotMessages((prev) => prev.filter((item) => String(item?.id || '') !== rowId));
-                            await Promise.all([
-                              botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
-                              refreshUnreadSummary(),
-                            ]);
-                            if (!botTimelineAvailable) {
-                              await fetchBotMessages(selectedGroup?.id || null, { forceFull: true });
-                            }
-                          },
-                        });
-                      } : undefined}
-                    />
-                  </div>
-                );
-              }) : null}
-        </ConversationTimeline>
+          items={timelineBotMessages}
+          getItemKey={getBotRowKey}
+          renderItem={renderBotRow}
+        />
         {selectedGroup && botNewIncomingCount > 0 ? (
           <div className="pb-1 text-center">
             <button

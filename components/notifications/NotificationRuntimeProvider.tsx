@@ -28,6 +28,7 @@ import {
   setUiNotificationOverlayItems,
   setUiNotificationOverlayPagination,
 } from '../../utils/uiNotificationOverlayStore';
+import { botMessageInsertBus, noteInsertBus } from '../../utils/communicationRealtimeBus';
 
 type RuntimeSection = NotificationUnreadSection;
 type RuntimeRevisions = Record<RuntimeSection, number>;
@@ -576,13 +577,28 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     });
   }, [overlayLoadingMore]);
 
+  const pendingRevisionSectionsRef = useRef<Set<RuntimeSection>>(new Set());
   const scheduleRefresh = useCallback((section?: RuntimeSection) => {
-    if (section) {
-      setRevisions((prev) => ({ ...prev, [section]: prev[section] + 1 }));
-    }
-    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+    if (section) pendingRevisionSectionsRef.current.add(section);
+    // Leading-edge coalescing: keep the existing timer instead of resetting it
+    // per event. Resetting (classic debounce) never fires under a continuous
+    // realtime stream, and bumping revisions per event re-renders every
+    // consumer (Layout + open pages) on each org event — enough churn to
+    // starve router navigation transitions.
+    if (refreshTimerRef.current !== null) return;
     refreshTimerRef.current = window.setTimeout(() => {
       refreshTimerRef.current = null;
+      const sections = Array.from(pendingRevisionSectionsRef.current);
+      pendingRevisionSectionsRef.current.clear();
+      if (sections.length > 0) {
+        setRevisions((prev) => {
+          const next = { ...prev };
+          sections.forEach((pendingSection) => {
+            next[pendingSection] = prev[pendingSection] + 1;
+          });
+          return next;
+        });
+      }
       void Promise.all([refreshSummary(), refreshOverlay()]);
     }, 300);
   }, [refreshOverlay, refreshSummary]);
@@ -620,6 +636,12 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
               (table === 'notification_read_states' || table === 'communication_read_cursors')
               && String(row?.user_id || '').trim() !== identity.userId
             ) return;
+            // Hand the inserted row to any open conversation view so the new
+            // message renders instantly without waiting for an RPC refetch.
+            if (payload?.eventType === 'INSERT' && payload?.new) {
+              if (table === 'notes') noteInsertBus.emit(payload.new);
+              else if (table === 'counterparty_bot_messages') botMessageInsertBus.emit(payload.new);
+            }
             const section = mapRealtimeSection(table, row);
             if (section) scheduleRefresh(section);
           },
@@ -662,7 +684,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   useEffect(() => {
     const handleAiOpen = (event: Event) => {
       const detail = (event as CustomEvent<{ context?: AssistantContext }>).detail || {};
-      navigate('/messages?tab=assistant', {
+      navigate('/ai', {
         state: detail.context ? { assistantContext: detail.context } : undefined,
       });
     };

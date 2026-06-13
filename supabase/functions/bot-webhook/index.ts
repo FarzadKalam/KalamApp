@@ -520,7 +520,7 @@ const normalizeExtractedMedia = (
     if (normalizedHint === 'image' || normalizedHint === 'photo') {
       messageType = 'image';
     } else if (normalizedHint === 'video') {
-      messageType = 'file';
+      messageType = 'video';
     } else if (normalizedHint === 'voice') {
       messageType = 'voice';
     } else if (normalizedHint === 'audio') {
@@ -882,7 +882,7 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     (hasPhoto || looksLikeImage) ? 'image'
       : (hasVoice || looksLikeVoice) ? 'voice'
         : (hasAudio || looksLikeAudio) ? 'audio'
-      : (hasVideo || looksLikeVideo) ? 'file'
+      : (hasVideo || looksLikeVideo) ? 'video'
         : (hasDocument || hasAudio) ? 'file'
           : 'text';
   return {

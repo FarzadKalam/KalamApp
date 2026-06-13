@@ -9,7 +9,6 @@ import {
   NodeIndexOutlined,
   PlusOutlined,
   ProjectOutlined,
-  RobotOutlined,
   SendOutlined,
   SkinOutlined,
   TeamOutlined,
@@ -51,9 +50,16 @@ import StoryBar from '../components/stories/StoryBar';
 import StoryViewerModal from '../components/stories/StoryViewerModal';
 import StoryEditorModal from '../components/stories/StoryEditorModal';
 import ResilientImage from '../components/common/ResilientImage';
+import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
+import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
+import AiCapabilityComposerActions, { type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
 import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
+import { blobToBase64 } from '../utils/blobBase64';
+import { toFaErrorMessage } from '../utils/errorMessageFa';
+import AiSparkleIcon from '../components/ai/AiSparkleIcon';
+import { buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -975,6 +981,11 @@ const Dashboard: React.FC = () => {
   const [recentSections, setRecentSections] = useState<DashboardRecentSection[]>([]);
   const [prefetchedTasks, setPrefetchedTasks] = useState<any[]>([]);
   const [dashboardAiQuestion, setDashboardAiQuestion] = useState('');
+  const [dashboardVoiceSending, setDashboardVoiceSending] = useState(false);
+  const [dashboardFileSending, setDashboardFileSending] = useState(false);
+  const [dashboardAiCapabilities, setDashboardAiCapabilities] = useState<AiComposerCapability[]>([]);
+  const [dashboardAiCapabilityAvailability, setDashboardAiCapabilityAvailability] = useState<Record<string, any>>({});
+  const [dashboardRecordCreationTargetModuleId, setDashboardRecordCreationTargetModuleId] = useState<string | null>(null);
 
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -998,6 +1009,18 @@ const Dashboard: React.FC = () => {
     if (count <= 6) return 3;
     return 4;
   }, [quickActions.length]);
+  const dashboardRecordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
+  const dashboardImageMode = dashboardAiCapabilities.includes('image_generation');
+  const dashboardVoiceOutputMode = dashboardAiCapabilities.includes('voice_output');
+  const dashboardNeedsRecordModule = dashboardAiCapabilities.includes('record_creation') && !dashboardRecordCreationTargetModuleId;
+  const dashboardAiSendDisabled = !dashboardAiQuestion.trim() || dashboardNeedsRecordModule;
+
+  const handleDashboardCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
+    setDashboardAiCapabilities(next);
+    if (next.includes('process_operation') || !next.includes('record_creation')) {
+      setDashboardRecordCreationTargetModuleId(null);
+    }
+  }, []);
 
   useEffect(() => {
     const syncBranding = () => {
@@ -1075,6 +1098,26 @@ const Dashboard: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    let isMounted = true;
+    const loadAiOverview = async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('ai-assistant', {
+          body: { action: 'get_ai_overview' },
+        });
+        if (error) throw error;
+        if (!isMounted) return;
+        setDashboardAiCapabilityAvailability(data?.capabilityAvailability || {});
+      } catch {
+        // ارسال گفتگو خطای واقعی قابلیت را نشان می‌دهد؛ این فقط برای وضعیت کنترل‌هاست.
+      }
+    };
+    void loadAiOverview();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const canShowWidget = (key: string) => {
     if (!dashboardReady) return false;
     if (widgetPermissions.__all === false) return false;
@@ -1088,9 +1131,89 @@ const Dashboard: React.FC = () => {
   const handleSubmitDashboardAiQuestion = useCallback(() => {
     const question = dashboardAiQuestion.trim();
     if (!question) return;
+    if (dashboardNeedsRecordModule) {
+      message.warning('برای ساخت رکورد، ابتدا نوع رکورد را انتخاب کنید.');
+      return;
+    }
     setDashboardAiQuestion('');
-    navigate(`/ai?new=1&prompt=${encodeURIComponent(question)}`);
-  }, [dashboardAiQuestion, navigate]);
+    navigate('/ai', {
+      state: {
+        aiInitialPrompt: question,
+        aiInitialCapabilities: dashboardAiCapabilities,
+        aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+        forceNewThread: true,
+      },
+    });
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, navigate]);
+
+  const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
+    if (dashboardVoiceSending) return;
+    setDashboardVoiceSending(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-assistant', {
+        body: {
+          action: 'transcribe_voice',
+          audio: {
+            data: await blobToBase64(voice.blob),
+            mimeType: voice.mimeType,
+            durationMs: voice.durationMs,
+            filename: voice.filename,
+          },
+        },
+      });
+      if (error) throw error;
+      if (!data?.success) throw new Error(String(data?.message || 'ارسال ویس ناموفق بود.'));
+      const transcript = String(data?.transcript || '').trim();
+      if (!transcript) throw new Error('متنی از ویس دریافت نشد.');
+      navigate('/ai', {
+        state: {
+          aiInitialPrompt: transcript,
+          aiInitialInputKind: 'voice',
+          aiInitialCapabilities: Array.from(new Set<AiComposerCapability>([...dashboardAiCapabilities, 'voice_input'])),
+          aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+          forceNewThread: true,
+        },
+      });
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ارسال ویس به هوش مصنوعی ناموفق بود.'));
+    } finally {
+      setDashboardVoiceSending(false);
+    }
+  }, [dashboardAiCapabilities, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, navigate]);
+
+  const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
+    if (dashboardFileSending) return;
+    setDashboardFileSending(true);
+    try {
+      const fileCapabilities = dashboardAiCapabilities.includes('document_analysis')
+        ? dashboardAiCapabilities
+        : [...dashboardAiCapabilities, 'document_analysis' as AiComposerCapability];
+      navigate('/ai', {
+        state: {
+          aiInitialFile: {
+            fileName: filePrompt.fileName,
+            mimeType: filePrompt.mimeType,
+            size: filePrompt.size,
+            prompt: filePrompt.prompt,
+            data: filePrompt.data || null,
+            inputKind: filePrompt.inputKind || 'file',
+            url: filePrompt.url || null,
+            assetId: filePrompt.assetId || null,
+            entryId: filePrompt.entryId || null,
+            moduleId: filePrompt.moduleId || null,
+            recordId: filePrompt.recordId || null,
+            message: dashboardAiQuestion.trim() || 'این فایل را تحلیل کن و خلاصه، نکات مهم و اقدام‌های پیشنهادی را بگو.',
+          },
+          aiInitialCapabilities: fileCapabilities,
+          aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+          forceNewThread: true,
+        },
+      });
+      setDashboardAiQuestion('');
+    } finally {
+      setDashboardFileSending(false);
+    }
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardRecordCreationTargetModuleId, navigate]);
 
   // ─── handler‌های استوری ───────────────────────
   const handleOpenStory = useCallback((story: OrgStoryWithMeta, allStories: OrgStoryWithMeta[]) => {
@@ -1227,7 +1350,7 @@ const Dashboard: React.FC = () => {
                 }}
               >
                 <div className="flex items-center gap-2 rounded-lg bg-white p-2 dark:bg-dark-surface">
-                  <RobotOutlined className="shrink-0 text-lg text-leather-500" />
+                  <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
                   <Input
                     bordered={false}
                     value={dashboardAiQuestion}
@@ -1239,8 +1362,23 @@ const Dashboard: React.FC = () => {
                     type="primary"
                     shape="circle"
                     icon={<SendOutlined />}
-                    disabled={!dashboardAiQuestion.trim()}
+                    disabled={dashboardAiSendDisabled}
                     onClick={handleSubmitDashboardAiQuestion}
+                    aria-label={dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
+                  />
+                  <AiCapabilityComposerActions
+                    selected={dashboardAiCapabilities}
+                    onChange={handleDashboardCapabilitiesChange}
+                    capabilityAvailability={dashboardAiCapabilityAvailability}
+                    moduleId={null}
+                    recordId={null}
+                    onVoiceSend={handleSubmitDashboardVoice}
+                    onFilePrepared={handleSubmitDashboardFile}
+                    voiceLoading={dashboardVoiceSending}
+                    fileLoading={dashboardFileSending}
+                    recordCreationModuleOptions={dashboardRecordCreationModuleOptions}
+                    recordCreationTargetModuleId={dashboardRecordCreationTargetModuleId}
+                    onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
                   />
                 </div>
               </div>

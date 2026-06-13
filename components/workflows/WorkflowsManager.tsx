@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Empty, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag } from 'antd';
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { App, Button, Empty, Modal, Popconfirm, Select, Space, Spin, Switch, Table, Tag, Tooltip } from 'antd';
+import { DeleteOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import WorkflowEditorModal from './WorkflowEditorModal';
@@ -118,7 +118,7 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
     try {
       let query = supabase.from('workflows').select('*').order('created_at', { ascending: false });
       if (moduleFilter !== 'all') {
-        query = query.eq('module_id', moduleFilter);
+        query = query.or(`module_id.eq.${moduleFilter},module_ids.cs.{${moduleFilter}}`);
       }
       const { data, error } = await query;
       if (error) throw error;
@@ -177,7 +177,12 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       key: 'name',
       render: (_: any, row: WorkflowRecord) => (
         <div className="min-w-[180px]">
-          <div className="font-bold text-gray-800 dark:text-gray-100">{row?.name || '-'}</div>
+          <div className="flex flex-wrap items-center gap-1">
+            <div className="font-bold text-gray-800 dark:text-gray-100">{row?.name || '-'}</div>
+            {row?.scope_type === 'process_activator' ? (
+              <Tag icon={<ThunderboltOutlined />} color="gold">فعال‌کننده فرآیند</Tag>
+            ) : null}
+          </div>
           {row?.description ? (
             <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{row.description}</div>
           ) : null}
@@ -189,7 +194,22 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       dataIndex: 'module_id',
       key: 'module_id',
       width: 180,
-      render: (moduleId: string) => MODULES[moduleId]?.titles?.fa || moduleId || '-',
+      render: (moduleId: string, row: WorkflowRecord) => {
+        const moduleIds = Array.from(new Set(
+          row?.scope_type === 'process_activator'
+            ? (Array.isArray(row?.module_ids) ? row.module_ids : [moduleId])
+            : [moduleId],
+        )).filter(Boolean);
+        return (
+          <Space size={[4, 4]} wrap>
+            {moduleIds.map((targetModuleId) => (
+              <Tag key={targetModuleId}>
+                {MODULES[targetModuleId]?.titles?.fa || targetModuleId}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
     },
     {
       title: 'شرایط اجرا',
@@ -224,30 +244,43 @@ const WorkflowsManager: React.FC<WorkflowsManagerProps> = ({
       title: 'عملیات',
       key: 'actions_col',
       width: 140,
-      render: (_: any, row: WorkflowRecord) => (
-        <Space>
-          <Button
-            size="small"
-            disabled={!canEdit}
-            onClick={() => {
-              setEditingRecord(row);
-              setEditorOpen(true);
-            }}
-          >
-            ویرایش
-          </Button>
+      render: (_: any, row: WorkflowRecord) => {
+        const isProcessActivator = row?.scope_type === 'process_activator';
+        return (
+          <Space>
+            <Tooltip title={isProcessActivator ? 'ویرایش از داخل الگوی فرآیند انجام می‌شود' : undefined}>
+              <Button
+                size="small"
+                disabled={!canEdit || isProcessActivator}
+                onClick={() => {
+                  setEditingRecord(row);
+                  setEditorOpen(true);
+                }}
+              >
+                ویرایش
+              </Button>
+            </Tooltip>
           <Popconfirm
             title="حذف گردش کار"
             description="آیا از حذف این گردش کار مطمئن هستید؟"
             onConfirm={() => handleDelete(row.id)}
             okText="حذف"
             cancelText="انصراف"
-            disabled={!canDelete}
+            disabled={!canDelete || isProcessActivator}
           >
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={!canDelete} />
+            <Tooltip title={isProcessActivator ? 'حذف از داخل الگوی فرآیند انجام می‌شود' : 'حذف گردش کار'}>
+              <Button
+                size="small"
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                disabled={!canDelete || isProcessActivator}
+              />
+            </Tooltip>
           </Popconfirm>
         </Space>
-      ),
+        );
+      },
     },
   ];
 

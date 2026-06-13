@@ -111,6 +111,31 @@ describe('SmartTableRenderer', () => {
     });
   });
 
+  it('renders record cells as real links for browser open-in-new-tab actions', async () => {
+    const user = userEvent.setup();
+    const onRowLinkClick = vi.fn();
+
+    const { container } = render(
+      <SmartTableRenderer
+        moduleConfig={testModule}
+        data={[rows[0]]}
+        loading={false}
+        pagination={false}
+        getRowHref={(record) => `/test_module/${record.id}`}
+        onRowLinkClick={onRowLinkClick}
+      />
+    );
+
+    const recordLink = container.querySelector('.smarttable-row-link') as HTMLAnchorElement | null;
+    expect(recordLink).not.toBeNull();
+    expect(normalizeDigits(recordLink?.textContent || '')).toContain('Row 1');
+    expect(recordLink).toHaveAttribute('href', '/test_module/1');
+
+    await user.click(recordLink as HTMLAnchorElement);
+
+    expect(onRowLinkClick).toHaveBeenCalledWith(rows[0], expect.anything());
+  });
+
   it('enables the single scroll container mode without breaking pagination', () => {
     const { container } = render(
       <SmartTableRenderer

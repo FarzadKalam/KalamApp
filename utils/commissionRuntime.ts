@@ -11,6 +11,8 @@ export type CommissionDecisionStatus = 'auto' | 'include' | 'exclude' | 'defer_t
 
 export type CommissionDraftRecordStatus = 'draft' | 'posted' | 'canceled';
 
+export type CommissionReviewBucket = 'current_period' | 'backlog' | 'excluded';
+
 export type CommissionInvoiceRecord = {
   id: string;
   name?: string | null;
@@ -566,6 +568,17 @@ const recomputeFixedRow = (row: CommissionDraftRow): CommissionDraftRow => {
 
 export const recomputeCommissionDraftRow = (row: CommissionDraftRow) =>
   row.mode === 'pool' ? recomputePoolRow(row) : recomputeFixedRow(row);
+
+export const getCommissionLineReviewBucket = (
+  _row: CommissionDraftRow,
+  line: CommissionDraftLine,
+): CommissionReviewBucket => {
+  if (line.decision_status === 'exclude') return 'excluded';
+  if (line.decision_status === 'include' && line.selected_amount > 0) return 'current_period';
+  if (line.is_from_previous_period || line.decision_status === 'defer_to_next_period') return 'backlog';
+  if (line.selected_amount > 0 || line.remaining_amount > 0) return 'current_period';
+  return 'excluded';
+};
 
 const normalizeDraftStatus = (value: unknown): CommissionDraftRecordStatus => {
   const text = normalizeText(value).toLowerCase();

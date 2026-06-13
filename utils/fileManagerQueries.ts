@@ -8,6 +8,7 @@ import {
   setTimedFileManagerCache,
 } from './fileManagerQueryCache';
 import {
+  AI_WORKSPACE_FILES_SOURCE_SCOPE,
   detectFileManagerTables,
   resolveRecordFolderLabel,
 } from './fileManagerService';
@@ -23,6 +24,7 @@ import {
 } from './permissions';
 import { buildRecordTitleSelectColumns, runSelectWithCompatibleColumns } from './selectCompat';
 import type { FileFolderRow } from './fileManagerTypes';
+import { normalizePublicAssetUrl } from './assetUrl';
 
 export type FileManagerListItem = {
   id: string;
@@ -210,7 +212,7 @@ const mapLegacyRecordFile = (row: any): FileManagerListItem => ({
   folder_id: row.folder_id ? String(row.folder_id) : null,
   module_id: String(row.module_id || ''),
   record_id: String(row.record_id || ''),
-  file_url: String(row.file_url || ''),
+  file_url: normalizePublicAssetUrl(row.file_url) || String(row.file_url || ''),
   file_type: normalizeType(row.file_type, row.mime_type, row.file_url),
   file_name: row.file_name ? String(row.file_name) : null,
   mime_type: row.mime_type ? String(row.mime_type) : null,
@@ -239,7 +241,7 @@ const mapFileEntryRow = (row: any): FileManagerListItem => {
     folder_id: row?.folder_id ? String(row.folder_id) : null,
     module_id: String(row?.module_id || asset?.origin_module_id || ''),
     record_id: String(row?.record_id || asset?.origin_record_id || ''),
-    file_url: String(asset?.target_url || '').trim(),
+    file_url: normalizePublicAssetUrl(asset?.target_url) || String(asset?.target_url || '').trim(),
     file_type: normalizeType(asset?.file_type, asset?.mime_type, asset?.target_url),
     file_name: asset?.display_name ? String(asset.display_name) : null,
     mime_type: asset?.mime_type ? String(asset.mime_type) : null,
@@ -301,7 +303,7 @@ const mapSyntheticAttachment = (
   id: `synthetic:${moduleId}:${recordId}:${String(options?.idSuffix ?? url)}`,
   module_id: moduleId,
   record_id: recordId,
-  file_url: url,
+  file_url: normalizePublicAssetUrl(url) || url,
   file_type: guessTypeFromUrl(url),
   file_name: options?.fileName ? String(options.fileName) : null,
   mime_type: null,
@@ -558,6 +560,48 @@ const loadModuleSystemFolders = async () => {
   });
 };
 
+const loadWorkspaceRootFolders = async () => {
+  return getOrSetTimedFileManagerCache('file-manager:workspace-root-folders', async () => {
+    const hasTables = await detectFileManagerTables(supabase, false);
+    if (!hasTables) return [] as FileFolderRow[];
+    const { data, error } = await supabase
+      .from('file_folders')
+      .select('*')
+      .is('parent_id', null)
+      .is('module_id', null)
+      .is('record_id', null)
+      .eq('source_scope', AI_WORKSPACE_FILES_SOURCE_SCOPE)
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true });
+    if (error) {
+      console.warn('Could not load workspace root file folders', error);
+      return [];
+    }
+    return (data || []) as FileFolderRow[];
+  });
+};
+
+const loadWorkspaceFolderEntries = async (folderIds: string[]) => {
+  const normalizedFolderIds = Array.from(new Set((folderIds || []).map(normalizeText).filter(Boolean)));
+  if (normalizedFolderIds.length === 0) return [] as FileManagerListItem[];
+  const cacheKey = `file-manager:workspace-folder-entries:${normalizedFolderIds.slice().sort().join(',')}`;
+  const cached = getTimedFileManagerCache<FileManagerListItem[]>(cacheKey);
+  if (cached) return cached;
+  const hasTables = await detectFileManagerTables(supabase, false);
+  if (!hasTables) return [] as FileManagerListItem[];
+  const { data, error } = await supabase
+    .from('file_entries')
+    .select('id, folder_id, module_id, record_id, entry_type, source_row_id, source_module_id, source_record_id, source_record_title, metadata, created_at, file_assets(id, target_url, display_name, mime_type, file_type, visibility, origin_module_id, origin_record_id, created_at, metadata)')
+    .in('folder_id', normalizedFolderIds)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: true });
+  if (error) {
+    console.warn('Could not load workspace file entries', error);
+    return [];
+  }
+  return setTimedFileManagerCache(cacheKey, (data || []).map(mapFileEntryRow).filter((item) => item.file_url));
+};
+
 const loadRecordFoldersForModule = async (moduleId: string) => {
   return getOrSetTimedFileManagerCache(`${FILE_MANAGER_CACHE_PREFIXES.recordFolders}${moduleId}`, async () => {
     const hasTables = await detectFileManagerTables(supabase, false);
@@ -641,7 +685,7 @@ export const buildFileManagerTree = async (
   let initialFolderKey = ROOT_FOLDER_KEY;
 
   if (scope === 'global') {
-    const [moduleFolders, recordFolders] = await Promise.all([
+    const [moduleFolders, recordFolders, workspaceRootFolders] = await Promise.all([
       loadModuleSystemFolders(),
       detectFileManagerTables(supabase, false)
         .then(async (hasTables) => {
@@ -656,7 +700,30 @@ export const buildFileManagerTree = async (
           }
           return (data || []) as FileFolderRow[];
         }),
+      loadWorkspaceRootFolders(),
     ]);
+    const workspaceFolderIds = workspaceRootFolders.map((folder) => normalizeText(folder.id)).filter(Boolean);
+    const workspaceEntries = await loadWorkspaceFolderEntries(workspaceFolderIds);
+    const workspaceEntryCountByFolder = new Map<string, number>();
+    workspaceEntries.forEach((item) => {
+      const folderId = normalizeText(item.folder_id);
+      if (!folderId) return;
+      workspaceEntryCountByFolder.set(folderId, (workspaceEntryCountByFolder.get(folderId) || 0) + 1);
+    });
+    workspaceRootFolders.forEach((folder) => {
+      const folderId = normalizeText(folder.id);
+      if (!folderId) return;
+      folders.push({
+        key: physicalFolderKey(folderId),
+        label: normalizeText(folder.name) || 'پوشه',
+        parentKey: ROOT_FOLDER_KEY,
+        count: workspaceEntryCountByFolder.get(folderId) || 0,
+        isSystem: folder.is_system === true,
+        folderId,
+        folderType: folder.folder_type,
+        colorToken: folder.color_token || 'system-ai',
+      });
+    });
     const recordCountByModule = new Map<string, number>();
     const recordIdsByModule = new Map<string, string[]>();
     recordFolders.forEach((folder) => {
@@ -706,7 +773,29 @@ export const buildFileManagerTree = async (
       });
     });
     activeFolderKey = normalizeText(options.folderKey) || ROOT_FOLDER_KEY;
+    if (!folders.some((folder) => folder.key === activeFolderKey)) activeFolderKey = ROOT_FOLDER_KEY;
     initialFolderKey = ROOT_FOLDER_KEY;
+
+    const parsed = parseFolderKey(activeFolderKey);
+    if (parsed.kind === 'folder' && workspaceFolderIds.includes(parsed.folderId)) {
+      allItems = workspaceEntries.filter((item) => {
+        if (typeSet.size > 0 && !typeSet.has(item.file_type)) return false;
+        if (normalizeText(item.folder_id) !== parsed.folderId) return false;
+        return matchesItemSearch(item, search, recordTitleMap, moduleTitleMap);
+      });
+      const start = (page - 1) * pageSize;
+      return {
+        folders: folders.filter((folder) => matchesFolderSearch(folder, search) || folder.key === activeFolderKey || folder.key === ROOT_FOLDER_KEY),
+        items: allItems.slice(start, start + pageSize),
+        allItems,
+        activeFolderKey,
+        initialFolderKey,
+        totalItems: allItems.length,
+        page,
+        pageSize,
+        recordTitleMap,
+      };
+    }
   }
 
   if (scope === 'module' && moduleId) {

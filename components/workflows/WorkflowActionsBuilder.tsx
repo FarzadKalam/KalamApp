@@ -34,6 +34,7 @@ import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../u
 import { supabase } from '../../supabaseClient';
 import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import { buildAiRecordCreationSchema } from '../../utils/aiRecordCreation';
 
 const Select = AdaptiveSelectField;
 
@@ -51,10 +52,15 @@ interface WorkflowActionsBuilderProps {
   actionOptions?: Array<{ label: string; value: WorkflowActionType }>;
   nextStageFields?: ModuleField[];
   enableNextStageActions?: boolean;
+  processStageOptions?: Array<{ label: string; value: string }>;
   disabled?: boolean;
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
   adaptiveMode?: AdaptivePickerMode;
+  /** فقط این اقدام‌ها رندر شوند (value/onChange همچنان کل آرایه را حمل می‌کنند) — برای نمای دیاگرامی */
+  visibleActionIds?: string[];
+  hideAddButton?: boolean;
+  hideReorderControls?: boolean;
 }
 
 type CreateRelatedFieldMapping = {
@@ -90,7 +96,7 @@ const RUBIKA_RELATED_RECIPIENT_CHECKBOXES: Array<{
   },
 ];
 
-const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
+export const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
     case 'send_note':
     case 'send_note_sms':
@@ -158,7 +164,38 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
         capability: 'workflow_ai_prompt',
         prompt_template: '',
         output_mode: 'text',
-        require_human_approval: true,
+        require_human_approval: false,
+        target_module_id: '',
+        allowed_field_keys: [],
+        relation_field_key: '',
+        delivery_channels: ['note'],
+        channel_configs: {
+          note: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            note_text: '{{ai_answer}}',
+            attachment_fields: [],
+          },
+          sms: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            manual_numbers: [],
+            message: '{{ai_answer}}',
+          },
+          email: {
+            recipient_fields: [],
+            manual_emails: [],
+            subject: 'پیام هوش مصنوعی',
+            body: '{{ai_answer}}',
+          },
+          bot: {
+            recipient_fields: [],
+            recipient_assignees: [],
+            title: 'پیام هوش مصنوعی',
+            message: '{{ai_answer}}',
+            attachment_fields: [],
+          },
+        },
       };
     case 'send_bot_message':
     case 'send_telegram_bot':
@@ -177,6 +214,8 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'update_record':
     case 'send_to_next_stages':
       return { field: '', value_mode: 'static', value: null, source_field: '' };
+    case 'send_to_specific_stage':
+      return { field: '', value_mode: 'static', value: null, source_field: '', stage_node_key: '' };
     case 'create_standalone_record':
       return { target_module_id: '', field_mappings: [] };
     case 'create_related_record':
@@ -184,6 +223,10 @@ const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> =
     case 'copy_process_template':
     case 'execute_process':
       return { template_id: '' };
+    case 'activate_next_process_stage':
+      return {};
+    case 'activate_specific_process_stage':
+      return { stage_node_key: '' };
     case 'publish_story':
       return {
         slide_type: 'gradient',
@@ -271,12 +314,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   actionOptions,
   nextStageFields,
   enableNextStageActions = false,
+  processStageOptions = [],
   disabled = false,
   overlayZIndexBase = 1400,
   popupContainer: popupContainerProp,
   adaptiveMode = 'auto',
+  visibleActionIds,
+  hideAddButton = false,
+  hideReorderControls = false,
 }) => {
   const safeValue = Array.isArray(value) ? value : [];
+  const visibleActionIdSet = Array.isArray(visibleActionIds)
+    ? new Set(visibleActionIds.map((id) => String(id)))
+    : null;
+  const renderedActions = visibleActionIdSet
+    ? safeValue.filter((action) => visibleActionIdSet.has(String(action.id)))
+    : safeValue;
   const [templateModalTarget, setTemplateModalTarget] = useState<{ actionId: string; fieldKey: string; title: string } | null>(null);
   const [formulaModalTarget, setFormulaModalTarget] = useState<
     | { mode: 'action'; actionId: string; fieldKey: string }
@@ -779,6 +832,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       : actionTypeOptions.filter((option) => (
           option.value !== 'send_email'
           && (option.value !== 'send_to_next_stages' || enableNextStageActions)
+          && (
+            ![
+              'activate_next_process_stage',
+              'activate_specific_process_stage',
+              'send_to_specific_stage',
+            ].includes(option.value)
+            || processStageOptions.length > 0
+          )
         ));
     const optionsByValue = new Map(
       [...baseOptions, ...supplementalOptions].map((option) => [String(option.value), option] as const)
@@ -792,7 +853,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }
     });
     return Array.from(optionsByValue.values());
-  }, [actionOptions, enableNextStageActions, safeValue]);
+  }, [actionOptions, enableNextStageActions, processStageOptions.length, safeValue]);
 
   const addAction = () => {
     const type = effectiveActionTypeOptions[0]?.value || 'send_note';
@@ -1112,7 +1173,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const renderUpdateValueInput = (action: WorkflowAction) => {
     const targetFieldKey = String(action?.config?.field || '');
-    const targetFields = action.type === 'send_to_next_stages'
+    const targetFields = ['send_to_next_stages', 'send_to_specific_stage'].includes(action.type)
       ? (Array.isArray(nextStageFields) ? nextStageFields : [])
       : currentModuleFields;
     const targetField = targetFields.find((f) => f.key === targetFieldKey);
@@ -1650,12 +1711,75 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
     if (actionType === 'run_ai_prompt') {
+      const outputMode = String(config.output_mode || 'text');
+      const targetModuleId = String(config.target_module_id || '');
+      const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
+      const targetFields = (targetModule?.fields || []).filter(
+        (field) => !!field?.key && field?.nature !== 'system' && field?.readonly !== true
+      );
+      const targetWritableOptions = targetFields.map((field) => ({
+        label: getFieldLabel(field),
+        value: field.key,
+      }));
+      const selectedChannels = Array.isArray(config.delivery_channels)
+        ? config.delivery_channels.map((item: any) => String(item || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
+        ? config.channel_configs
+        : {};
+      const noteConfig = channelConfigs.note || {};
+      const smsConfig = channelConfigs.sms || {};
+      const emailConfig = channelConfigs.email || {};
+      const botConfig = channelConfigs.bot || {};
+      const phoneFields = communicationFieldSource
+        .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
+        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const smsRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...phoneFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const emailFields = communicationFieldSource
+        .filter((f) => /email/i.test(f.key))
+        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
+      const emailRecipientOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...emailFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const botRecipientFieldOptions = Array.from(new Map([
+        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
+        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
+      ]).values());
+      const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
+        updateActionConfig(action.id, {
+          channel_configs: {
+            ...channelConfigs,
+            [channelKey]: {
+              ...((channelConfigs as any)?.[channelKey] || {}),
+              ...patch,
+            },
+          },
+        });
+      };
+      const updateRecordCreationSchema = (nextModuleId: string, nextAllowedFieldKeys?: string[]) => {
+        const allowedKeys = Array.isArray(nextAllowedFieldKeys) ? nextAllowedFieldKeys : [];
+        updateActionConfig(action.id, {
+          target_module_id: nextModuleId,
+          allowed_field_keys: allowedKeys,
+          relation_field_key: '',
+          record_creation_schema: nextModuleId ? buildAiRecordCreationSchema(nextModuleId, allowedKeys) : null,
+        });
+      };
       return (
-        <div className="space-y-2">
+        <div className="space-y-3">
           <Alert
             type="info"
             showIcon
-            message="خروجی هوش مصنوعی فقط به‌صورت پیشنهاد ثبت می‌شود و اقدام واقعی نیازمند تایید انسانی است."
+            message="این اقدام به‌صورت خودکار اجرا می‌شود؛ برای workflowهای زمان‌بندی‌شده تایید انسانی درخواست نمی‌شود."
           />
           <Input.TextArea
             rows={5}
@@ -1665,6 +1789,163 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             placeholder="پرامپت هوش مصنوعی؛ می‌توانید از متغیرهایی مثل {{name}} استفاده کنید"
           />
           {renderVariableTools(action, [{ key: 'prompt_template', label: 'پرامپت هوش مصنوعی' }])}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+            <Select
+              {...commonSelectProps}
+              value={outputMode}
+              disabled={disabled}
+              options={[
+                { label: 'فقط پیام/تحلیل', value: 'text' },
+                { label: 'ساخت رکورد جدید', value: 'create_record' },
+                { label: 'اجرای/ساخت فرآیند و فعالیت', value: 'process_operation' },
+              ]}
+              onChange={(nextVal) => updateActionConfig(action.id, { output_mode: nextVal })}
+              placeholder="نوع خروجی"
+            />
+            <Select
+              {...commonSelectProps}
+              value={config.target_module_id || undefined}
+              disabled={disabled || outputMode !== 'create_record'}
+              options={moduleOptions}
+              onChange={(nextVal) => updateRecordCreationSchema(String(nextVal || ''), [])}
+              placeholder="ماژول رکورد جدید"
+            />
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={Array.isArray(config.allowed_field_keys) ? config.allowed_field_keys : []}
+              disabled={disabled || outputMode !== 'create_record' || !targetModuleId}
+              options={targetWritableOptions}
+              onChange={(nextVal) => updateRecordCreationSchema(targetModuleId, nextVal.map((item: any) => String(item)))}
+              placeholder="فیلدهایی که AI اجازه پر کردن دارد"
+              maxTagCount="responsive"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <div className="text-xs text-gray-500">کانال‌های اطلاع‌رسانی خروجی AI</div>
+            <Checkbox.Group
+              disabled={disabled}
+              value={selectedChannels}
+              options={[
+                { label: 'نمایش در اعلان/یادداشت', value: 'note' },
+                { label: 'پیامک', value: 'sms' },
+                { label: 'ایمیل', value: 'email' },
+                { label: 'بات', value: 'bot' },
+              ]}
+              onChange={(nextVal) => updateActionConfig(action.id, { delivery_channels: nextVal })}
+            />
+          </div>
+
+          {selectedChannels.includes('note') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">اعلان داخل سامانه</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(noteConfig.recipient_fields) ? noteConfig.recipient_fields : []}
+                  disabled={disabled}
+                  options={noteRecipientFieldOptions}
+                  onChange={(nextVal) => updateChannelConfig('note', { recipient_fields: nextVal })}
+                  placeholder="گیرنده‌های یادداشت"
+                  maxTagCount="responsive"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={Array.isArray(noteConfig.recipient_assignees) ? noteConfig.recipient_assignees : []}
+                  disabled={disabled}
+                  options={noteAssigneeDirectoryOptions}
+                  onChange={(nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal })}
+                  placeholder="کاربر/نقش/گروه"
+                  maxTagCount="responsive"
+                />
+              </div>
+              <Input.TextArea
+                rows={3}
+                value={noteConfig.note_text}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('note', { note_text: e.target.value })}
+                placeholder="متن یادداشت؛ از {{ai_answer}} استفاده کنید"
+              />
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('sms') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">پیامک</div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(smsConfig.recipient_fields) ? smsConfig.recipient_fields : []}
+                disabled={disabled}
+                options={smsRecipientOptions}
+                onChange={(nextVal) => updateChannelConfig('sms', { recipient_fields: nextVal })}
+                placeholder="فیلدهای مقصد شماره تماس"
+                maxTagCount="responsive"
+              />
+              <Input.TextArea
+                rows={3}
+                value={smsConfig.message}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('sms', { message: e.target.value })}
+                placeholder="متن پیامک؛ از {{ai_answer}} استفاده کنید"
+              />
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('email') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">ایمیل</div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(emailConfig.recipient_fields) ? emailConfig.recipient_fields : []}
+                disabled={disabled}
+                options={emailRecipientOptions}
+                onChange={(nextVal) => updateChannelConfig('email', { recipient_fields: nextVal })}
+                placeholder="فیلدهای ایمیل مقصد"
+                maxTagCount="responsive"
+              />
+              <Input
+                value={emailConfig.subject}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('email', { subject: e.target.value })}
+                placeholder="موضوع ایمیل"
+              />
+              <Input.TextArea
+                rows={3}
+                value={emailConfig.body}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('email', { body: e.target.value })}
+                placeholder="متن ایمیل؛ از {{ai_answer}} استفاده کنید"
+              />
+            </div>
+          ) : null}
+
+          {selectedChannels.includes('bot') ? (
+            <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
+              <div className="text-sm font-medium">بات</div>
+              <Select
+                {...commonSelectProps}
+                mode="multiple"
+                value={Array.isArray(botConfig.recipient_fields) ? botConfig.recipient_fields : []}
+                disabled={disabled}
+                options={botRecipientFieldOptions}
+                onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal })}
+                placeholder="فیلدهای مقصد بات"
+                maxTagCount="responsive"
+              />
+              <Input.TextArea
+                rows={3}
+                value={botConfig.message}
+                disabled={disabled}
+                onChange={(e) => updateChannelConfig('bot', { message: e.target.value })}
+                placeholder="متن بات؛ از {{ai_answer}} استفاده کنید"
+              />
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -2028,18 +2309,38 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         </div>
       );
     }
-    if (actionType === 'update_record' || actionType === 'send_to_next_stages') {
-      const targetOptions = actionType === 'send_to_next_stages'
+    if (
+      actionType === 'update_record'
+      || actionType === 'send_to_next_stages'
+      || actionType === 'send_to_specific_stage'
+    ) {
+      const isProcessStageTransfer = ['send_to_next_stages', 'send_to_specific_stage'].includes(actionType);
+      const targetOptions = isProcessStageTransfer
         ? nextStageFieldOptions
         : updatableFieldOptions;
       return (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
+        <div className="space-y-2">
+          {actionType === 'send_to_specific_stage' ? (
+            <div className="space-y-1">
+              <div className="text-xs text-gray-500">مرحله مقصد</div>
+              <AdaptiveSelectField
+                {...commonSelectProps}
+                value={config.stage_node_key || undefined}
+                disabled={disabled || processStageOptions.length === 0}
+                options={processStageOptions}
+                onChange={(nextVal) => updateActionConfig(action.id, { stage_node_key: nextVal })}
+                placeholder="انتخاب مرحله خاص"
+                pickerTitle="مرحله مقصد"
+              />
+            </div>
+          ) : null}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
           <div className="space-y-1 md:col-span-5">
             <div className="text-xs text-gray-500">فیلد مقصد</div>
             <Select
               {...commonSelectProps}
               value={config.field}
-              disabled={disabled || (actionType === 'send_to_next_stages' && targetOptions.length === 0)}
+              disabled={disabled || (isProcessStageTransfer && targetOptions.length === 0)}
               options={targetOptions}
               onChange={(nextVal) => updateActionConfig(action.id, {
                 field: nextVal,
@@ -2050,7 +2351,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 formula_expression_config: null,
                 value_mode: 'static',
               })}
-              placeholder={actionType === 'send_to_next_stages' && targetOptions.length === 0 ? 'مرحله بعدی برای ارسال اطلاعات پیدا نشد' : 'فیلد مقصد'}
+              placeholder={isProcessStageTransfer && targetOptions.length === 0 ? 'فیلد قابل انتقالی پیدا نشد' : 'فیلد مقصد'}
             />
           </div>
           <div className="space-y-1 md:col-span-3">
@@ -2064,7 +2365,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 { label: 'از فیلد رکورد جاری', value: 'from_source' },
                 { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
                 ...(canFieldUseFormula(
-                  (actionType === 'send_to_next_stages'
+                  (isProcessStageTransfer
                     ? (Array.isArray(nextStageFields) ? nextStageFields : [])
                     : currentModuleFields
                   ).find((field) => field.key === String(config.field || '').trim())
@@ -2092,6 +2393,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   : 'مقدار نهایی'}
             </div>
             {renderUpdateValueInput(action)}
+          </div>
           </div>
         </div>
       );
@@ -2122,6 +2424,35 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             <div className="text-xs text-gray-500">
               هنوز الگوی فعالی برای این ماژول پیدا نشد.
             </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (actionType === 'activate_next_process_stage') {
+      return (
+        <Alert
+          type="info"
+          showIcon
+          message="اولین مرحله بعدی در همین ردیف یا شاخه‌های متصل، فقط یک بار ساخته می‌شود."
+        />
+      );
+    }
+
+    if (actionType === 'activate_specific_process_stage') {
+      return (
+        <div className="space-y-2">
+          <AdaptiveSelectField
+            {...commonSelectProps}
+            value={config.stage_node_key || undefined}
+            disabled={disabled}
+            options={processStageOptions}
+            onChange={(nextVal) => updateActionConfig(action.id, { stage_node_key: nextVal })}
+            placeholder="مرحله موردنظر"
+            pickerTitle="انتخاب مرحله فرآیند"
+          />
+          {processStageOptions.length === 0 ? (
+            <div className="text-xs text-gray-500">مرحله قابل انتخابی در این فرآیند وجود ندارد.</div>
           ) : null}
         </div>
       );
@@ -2749,16 +3080,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   return (
     <div className="space-y-3">
-      {safeValue.length === 0 ? (
+      {renderedActions.length === 0 ? (
         <Empty description="اقدامی ثبت نشده است" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
-        safeValue.map((action, index) => (
+        renderedActions.map((action) => {
+          const actionIndex = safeValue.findIndex((item) => item.id === action.id);
+          return (
           <div
             key={action.id}
             className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-white/5 p-3 space-y-2"
           >
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-400 w-6 text-center">{index + 1}</span>
+              <span className="text-xs text-gray-400 w-6 text-center">{actionIndex + 1}</span>
               <div className="flex-1">
                 <Select
                   {...commonSelectProps}
@@ -2774,35 +3107,40 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   className="w-full"
                 />
               </div>
-              <Space>
-                <Button
-                  type="text"
-                  icon={<ArrowUpOutlined />}
-                  disabled={disabled || index === 0}
-                  onClick={() => moveAction(index, -1)}
-                />
-                <Button
-                  type="text"
-                  icon={<ArrowDownOutlined />}
-                  disabled={disabled || index === safeValue.length - 1}
-                  onClick={() => moveAction(index, 1)}
-                />
-                <Button
-                  type="text"
-                  danger
-                  icon={<DeleteOutlined />}
-                  disabled={disabled}
-                  onClick={() => removeAction(action.id)}
-                />
-              </Space>
+              {!hideReorderControls ? (
+                <Space>
+                  <Button
+                    type="text"
+                    icon={<ArrowUpOutlined />}
+                    disabled={disabled || actionIndex <= 0}
+                    onClick={() => moveAction(actionIndex, -1)}
+                  />
+                  <Button
+                    type="text"
+                    icon={<ArrowDownOutlined />}
+                    disabled={disabled || actionIndex === safeValue.length - 1}
+                    onClick={() => moveAction(actionIndex, 1)}
+                  />
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    disabled={disabled}
+                    onClick={() => removeAction(action.id)}
+                  />
+                </Space>
+              ) : null}
             </div>
             {renderActionFields(action)}
           </div>
-        ))
+          );
+        })
       )}
-      <Button type="dashed" icon={<PlusOutlined />} onClick={addAction} disabled={disabled}>
-        افزودن اقدام
-      </Button>
+      {!hideAddButton ? (
+        <Button type="dashed" icon={<PlusOutlined />} onClick={addAction} disabled={disabled}>
+          افزودن اقدام
+        </Button>
+      ) : null}
       {templateModalTarget ? (
         <MessageComposerModal
           open

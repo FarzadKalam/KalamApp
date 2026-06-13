@@ -24,11 +24,11 @@ import {
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
-  RobotOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 
 const { Text } = Typography;
 
@@ -38,6 +38,8 @@ const ALL_CAPABILITIES = [
   { key: 'customer_reply_suggestion', label: 'پیشنهاد پاسخ مشتری' },
   { key: 'document_analysis', label: 'تحلیل اسناد' },
   { key: 'workflow_ai_prompt', label: 'پرامپت گردش کار' },
+  { key: 'deep_reasoning', label: 'تفکر عمیق' },
+  { key: 'legal_assistant', label: 'دستیار حقوقی' },
   { key: 'voip_auto_reply', label: 'VOIP خودکار' },
   { key: 'web_search', label: 'جستجوی وب' },
   { key: 'voice_input', label: 'ورودی صوتی (STT)' },
@@ -270,7 +272,7 @@ const SaasAdminAiSettings: React.FC = () => {
 
   const usageColumns = [
     { title: 'تاریخ', dataIndex: 'created_at', width: 140, render: (v: string) => v ? new Date(v).toLocaleDateString('fa-IR', { dateStyle: 'short' }) : '-' },
-    { title: 'سازمان', dataIndex: 'org_id', width: 120, render: (v: string) => <Text className="font-mono text-[10px]">{String(v || '').slice(0, 8)}…</Text> },
+    { title: 'سازمان', dataIndex: 'org_name', width: 160, render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
     { title: 'قابلیت', dataIndex: 'capability' },
     { title: 'مدل', dataIndex: 'model', render: (v: string) => <Text className="font-mono text-xs">{v}</Text> },
     { title: 'وضعیت', dataIndex: 'status', render: (v: string) => <Tag>{v}</Tag> },
@@ -279,7 +281,7 @@ const SaasAdminAiSettings: React.FC = () => {
   ];
 
   const orgColumns = [
-    { title: 'سازمان', dataIndex: 'org_id', render: (v: string) => <Text className="font-mono text-xs">{String(v || '').slice(0, 8)}…</Text> },
+    { title: 'سازمان', dataIndex: 'org_name', render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
     { title: 'تعداد درخواست', dataIndex: 'requests' },
     { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
     { title: 'هزینه خام (تومان)', dataIndex: 'raw_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
@@ -369,7 +371,7 @@ const SaasAdminAiSettings: React.FC = () => {
             key: 'models',
             label: (
               <span className="inline-flex items-center gap-2">
-                <RobotOutlined /> مدیریت مدل‌ها و قیمت‌گذاری
+                <AiSparkleIcon className="h-4 w-4" /> مدیریت مدل‌ها و قیمت‌گذاری
               </span>
             ),
             children: (

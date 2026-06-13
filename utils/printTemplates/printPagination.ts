@@ -230,21 +230,6 @@ export const buildSmartPrintPageOffsets = ({
         : 0;
 
     if (!nextOffset) {
-      const hardTopCandidates = blockAnchors
-        .filter((anchor) => anchor.priority === 'high')
-        .map((anchor) => anchor.top)
-        .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
-      nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;
-    }
-
-    if (!nextOffset) {
-      const softTopCandidates = blockAnchors
-        .map((anchor) => anchor.top)
-        .filter((top) => top > currentOffset + minFill && top < targetBreak - 1);
-      nextOffset = softTopCandidates.length > 0 ? Math.max(...softTopCandidates) : 0;
-    }
-
-    if (!nextOffset) {
       const lineBottomCandidates = lineAnchors
         .map((anchor) => anchor.bottom)
         .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
@@ -271,6 +256,21 @@ export const buildSmartPrintPageOffsets = ({
       if (nearbyBottomBeforeBreak.length > 0) {
         nextOffset = Math.max(...nearbyBottomBeforeBreak);
       }
+    }
+
+    if (!nextOffset) {
+      const hardTopCandidates = blockAnchors
+        .filter((anchor) => anchor.priority === 'high')
+        .map((anchor) => anchor.top)
+        .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
+      nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;
+    }
+
+    if (!nextOffset) {
+      const softTopCandidates = blockAnchors
+        .map((anchor) => anchor.top)
+        .filter((top) => top > currentOffset + minFill && top < targetBreak - 1);
+      nextOffset = softTopCandidates.length > 0 ? Math.max(...softTopCandidates) : 0;
     }
 
     if (!nextOffset) {

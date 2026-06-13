@@ -5,14 +5,11 @@ import { getCachedAuthUser } from '../sessionCache';
 import { getResolvedCurrentOrgId } from '../companySettings';
 import { loadScopedIntegrationSettings } from '../integrationSettings';
 import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
+import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode } from './imageDisplay';
+import { buildDefaultPrintFooterTemplate } from './footerLayout';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
-
-export interface PrintFooterSignature {
-  title: string;
-  name: string;
-}
 
 export interface StoredPrintTemplate {
   id: string;
@@ -36,7 +33,12 @@ export interface StoredPrintTemplate {
   orientation?: 'portrait' | 'landscape';
   isSystem?: boolean;
   selectedFieldKeys?: string[];
-  footerSignatures?: PrintFooterSignature[];
+  renderMode?: 'standard' | 'org_letterhead';
+  backgroundImageUrl?: string | null;
+  backgroundSizing?: 'fit';
+  sourceTemplateId?: string | null;
+  letterheadId?: string | null;
+  isVirtual?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -320,37 +322,6 @@ export const getModuleTitle = (moduleId: string, mode: 'plural' | 'singular' = '
 
 const buildInvoiceFooterTemplate = () => buildDefaultFooterTemplateForModule('invoices');
 
-export const getDefaultFooterSignatures = (moduleId: string): PrintFooterSignature[] => {
-  if (INVOICE_MODULE_IDS.has(moduleId)) {
-    return [
-      { title: 'خریدار', name: '' },
-      { title: 'فروشنده', name: '' },
-    ];
-  }
-  return [{ title: 'مسئول', name: '' }];
-};
-
-export const buildFooterSignaturesHtml = (signatures: PrintFooterSignature[]): string => {
-  if (!signatures || signatures.length === 0) return '';
-  const totalWidth = Math.floor(100 / signatures.length);
-  return signatures
-    .map(
-      (sig, idx) => `
-<td style="width:${totalWidth}%; border:none; ${idx < signatures.length - 1 ? 'border-left:1px solid rgba(148,163,184,0.28);' : ''} padding:8px 10px; vertical-align:top; background:rgba(var(--brand-50-rgb),0.14);">
-  <div style="display:flex; flex-direction:column; min-height:80px; justify-content:space-between; gap:6px;">
-    <div style="font-weight:800; color:rgb(var(--brand-500-rgb)); text-align:center;">${sig.title}</div>
-    <div style="display:flex; align-items:flex-end; justify-content:center; min-height:54px;">
-      <div style="width:110px; border-bottom:1px dashed rgba(100,116,139,0.65);"></div>
-    </div>
-    <div style="text-align:center; line-height:1.9;">
-      <div style="font-weight:700;">${sig.name ? sig.name : '&nbsp;'}</div>
-    </div>
-  </div>
-</td>`.trim()
-    )
-    .join('\n');
-};
-
 const buildOfficialLetterHeaderTemplate = () => `
 <div style="width:100%; direction:rtl; color:#111827; font-size:12px; font-family:inherit;">
   <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:2px 2px 10px 2px; border-bottom:1px solid rgba(17,24,39,0.28);">
@@ -403,9 +374,7 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export const buildDefaultFooterTemplateForModule = (_moduleId = '') => `
-<table style="width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0; direction:rtl; color:#111827; font-size:12px; border:1px solid rgba(148,163,184,0.28); border-radius:18px; overflow:hidden;">
-  <tbody><tr>{{system.footer_signatures}}</tr></tbody>
-</table>
+${buildDefaultPrintFooterTemplate()}
 `;
 
 const buildBlockSnippetTemplate = (moduleId: string, blockId: string) => {
@@ -597,11 +566,12 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     raw?.is_system === true ||
     String(id).startsWith('default_');
   const footerHtml = String(raw?.footerHtml || raw?.footer_html || '').trim();
-  const footerSignatures: PrintFooterSignature[] | undefined = Array.isArray(raw?.footerSignatures)
-    ? raw.footerSignatures
-        .map((s: any) => ({ title: String(s?.title || '').trim(), name: String(s?.name || '').trim() }))
-        .filter((s: PrintFooterSignature) => s.title)
-    : undefined;
+  const renderMode = String(raw?.renderMode || raw?.render_mode || 'standard').trim() === 'org_letterhead'
+    ? 'org_letterhead'
+    : 'standard';
+  const backgroundImageUrl = String(raw?.backgroundImageUrl || raw?.background_image_url || '').trim() || null;
+  const sourceTemplateId = String(raw?.sourceTemplateId || raw?.source_template_id || '').trim() || null;
+  const letterheadId = String(raw?.letterheadId || raw?.letterhead_id || '').trim() || null;
 
   return {
     id,
@@ -625,7 +595,12 @@ const normalizeTemplate = (raw: any, moduleId: string): StoredPrintTemplate | nu
     orientation,
     isSystem,
     selectedFieldKeys,
-    footerSignatures,
+    renderMode,
+    backgroundImageUrl,
+    backgroundSizing: backgroundImageUrl ? 'fit' : undefined,
+    sourceTemplateId,
+    letterheadId,
+    isVirtual: raw?.isVirtual === true,
     createdAt,
     updatedAt,
   };
@@ -786,10 +761,6 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'نام سازمان', value: 'company.company_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام تجاری سازمان', value: 'company.trade_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'لوگوی سازمان', value: 'company.logo_url', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'نام امضاکننده رسمی', value: 'company.official_signatory_name', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'سمت امضاکننده رسمی', value: 'company.official_signatory_title', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'فایل امضای سازمان', value: 'company.signature_image_url', kind: 'field', group: 'اطلاعات سازمان' },
-    { label: 'فایل مهر سازمان', value: 'company.stamp_image_url', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'شناسه ملی سازمان', value: 'company.national_id', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'شماره ثبت سازمان', value: 'company.registration_number', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'کد اقتصادی سازمان', value: 'company.economic_code', kind: 'field', group: 'اطلاعات سازمان' },
@@ -801,10 +772,6 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'نام مسئول', value: 'responsible.name', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
-    { label: 'نام امضاکننده چاپ', value: 'system.company_signatory_name', kind: 'field', group: 'سیستم' },
-    { label: 'سمت امضاکننده چاپ', value: 'system.company_signatory_title', kind: 'field', group: 'سیستم' },
-    { label: 'تصویر امضای چاپ', value: 'system.company_signature_image', kind: 'field', group: 'سیستم' },
-    { label: 'تصویر مهر چاپ', value: 'system.company_stamp_image', kind: 'field', group: 'سیستم' },
     { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
     { label: 'فیلدها بصورت خطی (کاتالوگ)', value: 'system.compact_fields_inline', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'URL تصویر رکورد', value: 'system.record_image_url', kind: 'field', group: 'سیستم', scopes: ['record'] },
@@ -1297,7 +1264,10 @@ export const normalizeDynamicBlockTablesHtml = (moduleId: string, html?: string)
   }
 };
 
-const buildCatalogFullPageContentHtml = (moduleId: string): string => {
+export const buildCatalogFullPageContentHtml = (
+  moduleId: string,
+  imageDisplayMode: PrintImageDisplayMode = DEFAULT_PRINT_IMAGE_DISPLAY_MODE,
+): string => {
   const isBillboard = moduleId === 'billboards';
   const primaryTitle = isBillboard ? '{{record.address}}' : '{{record.name}}';
   return buildCatalogFullPageLayout({
@@ -1316,6 +1286,7 @@ const buildCatalogFullPageContentHtml = (moduleId: string): string => {
     todayDate: '{{system.today_date}}',
     qrSectionHtml: '{{system.catalog_qr_section}}',
     mapSectionHtml: isBillboard ? '{{system.catalog_map_section}}' : '',
+    imageDisplayMode,
     isFirstPage: true,
   });
 };
@@ -1434,7 +1405,7 @@ const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => (
   moduleId: 'secretariat_documents',
   scope: 'record',
   title: 'نامه رسمی اداری A4',
-  description: 'سربرگ رسمی دبیرخانه با تاریخ، شماره، پیوست و امضای سازمانی',
+  description: 'سربرگ رسمی دبیرخانه با تاریخ، شماره و پیوست',
   paperSize: 'A4',
   orientation: 'portrait',
   isActive: true,
@@ -1456,13 +1427,6 @@ const buildSecretariatOfficialTemplate = (now: string): StoredPrintTemplate => (
     <div><span style="font-weight:800;">به:</span> {{system.letter_recipient_display}}</div>
   </div>
   <div style="min-height:470px; text-align:right; padding:0 2px; ${getLongTextPrintStyle(13)}">{{record.body}}</div>
-  <div style="margin-top:26px; margin-right:auto; width:230px; min-height:92px; text-align:center; line-height:1.9;">
-    <div style="display:flex; align-items:flex-end; justify-content:center; gap:6px; min-height:62px;">
-      <span style="display:inline-flex; align-items:flex-end; justify-content:center;">{{system.company_stamp_image}}</span>
-      <span style="display:inline-flex; align-items:flex-end; justify-content:center;">{{system.company_signature_image}}</span>
-    </div>
-    <div style="font-weight:800; font-size:12px; color:#111827; overflow-wrap:anywhere;">{{system.company_signatory_name}}</div>
-  </div>
 </div>
 `.trim(),
   footerHtml: `
@@ -1634,7 +1598,7 @@ const buildEmployeeContractPrintTemplate = (now: string): StoredPrintTemplate =>
   moduleId: 'employee_contracts',
   scope: 'record',
   title: 'قرارداد کارمند A4',
-  description: 'قالب رسمی قرارداد کارکنان با مشخصات طرفین و امضای سازمان',
+  description: 'قالب رسمی قرارداد کارکنان با مشخصات طرفین',
   paperSize: 'A4',
   orientation: 'portrait',
   isActive: true,
@@ -1704,7 +1668,7 @@ const buildPayrollSlipPrintTemplate = (now: string): StoredPrintTemplate => ({
   moduleId: 'payroll_slips',
   scope: 'record',
   title: 'فیش حقوقی رسمی A4',
-  description: 'قالب رسمی فیش حقوقی با ردیف‌ها، پرداخت‌ها و امضای سازمان',
+  description: 'قالب رسمی فیش حقوقی با ردیف‌ها و پرداخت‌ها',
   paperSize: 'A4',
   orientation: 'portrait',
   isActive: true,
@@ -2151,6 +2115,8 @@ export const mergeTemplatesWithDefaults = (
           Array.isArray(existing.selectedFieldKeys) && existing.selectedFieldKeys.length > 0
             ? existing.selectedFieldKeys
             : defaultTemplate.selectedFieldKeys,
+        backgroundImageUrl: existing.backgroundImageUrl || defaultTemplate.backgroundImageUrl || null,
+        backgroundSizing: existing.backgroundSizing || defaultTemplate.backgroundSizing,
         isSystem: true,
         createdAt: existing.createdAt || defaultTemplate.createdAt,
         updatedAt: existing.updatedAt || defaultTemplate.updatedAt,

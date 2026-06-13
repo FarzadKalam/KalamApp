@@ -3,7 +3,7 @@
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-05-26-01';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-11-01';
 const MAX_WORKFLOWS = 30;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
@@ -81,7 +81,12 @@ type WorkflowRow = {
   id: string;
   org_id: string;
   module_id: string;
+  module_ids?: string[] | null;
+  scope_type?: string | null;
+  process_source_node_key?: string | null;
   name: string;
+  created_by?: string | null;
+  updated_by?: string | null;
   trigger_type: string;
   interval_value: number | null;
   interval_unit: string | null;
@@ -101,6 +106,11 @@ type WorkflowRow = {
   execution_mode: string | null;
   batch_size: number | null;
 };
+
+function resolveWorkflowActorId(workflow: Partial<WorkflowRow> | null | undefined): string | null {
+  const actor = String(workflow?.updated_by || workflow?.created_by || '').trim();
+  return actor || null;
+}
 
 // ── Jalali date conversion ─────────────────────────────────────────────────────
 
@@ -384,10 +394,31 @@ async function resolveWorkflowFieldValue(
   return getFieldValue(record, normalizedFieldKey);
 }
 
-function formatFieldValue(value: any, fieldKey: string): string {
+const orgPublicBaseUrlCache = new Map<string, Promise<string>>();
+
+// Resolves the tenant's public base URL (e.g. https://kalam.tazesystem.ir) from saas_org_settings
+// so relative links like /i/{code} (online invoice) can be expanded to absolute URLs in templates.
+function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<string> {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return Promise.resolve('');
+  if (!orgPublicBaseUrlCache.has(normalizedOrgId)) {
+    orgPublicBaseUrlCache.set(normalizedOrgId, (async () => {
+      const rows = await dbGet(url, key, `saas_org_settings?org_id=eq.${normalizedOrgId}&select=resolved_host&limit=1`).catch(() => []);
+      const host = String(rows?.[0]?.resolved_host || '').trim().replace(/\/+$/, '');
+      return host ? `https://${host}` : (CALENDAR_PUBLIC_BASE_URL || '');
+    })());
+  }
+  return orgPublicBaseUrlCache.get(normalizedOrgId)!;
+}
+
+async function formatFieldValue(value: any, fieldKey: string, url: string, key: string, orgId: string): Promise<string> {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
   const str = String(value);
+  if (typeof value === 'string' && str.startsWith('/i/')) {
+    const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
+    return baseUrl ? `${baseUrl}${str}` : str;
+  }
   if (DATE_LIKE_REGEX.test(str)) {
     if (str.length > 10) return formatJalaliDateTime(str);
     return formatJalaliDate(str);
@@ -405,6 +436,7 @@ async function renderTemplateAsync(
   url: string,
   key: string,
   bold = false,
+  orgId = '',
 ): Promise<string> {
   const raw = String(template || '');
   const matches = Array.from(raw.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
@@ -416,7 +448,7 @@ async function renderTemplateAsync(
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) continue;
     const value = await resolveWorkflowFieldValue(url, key, fieldKey, record);
-    const text = formatFieldValue(value, fieldKey);
+    const text = await formatFieldValue(value, fieldKey, url, key, orgId);
     rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
   }
   return rendered;
@@ -647,7 +679,9 @@ async function evaluateConditions(
 
 function parseIntervalAt(value: string | null): { hour: number; minute: number } | null {
   if (!value) return null;
-  const raw = String(value).replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)));
+  const raw = String(value)
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   const m = raw.match(/(\d{1,2})\s*:\s*(\d{1,2})/);
   if (!m) return null;
   const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
@@ -655,54 +689,131 @@ function parseIntervalAt(value: string | null): { hour: number; minute: number }
   return { hour: h, minute: min };
 }
 
-function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
-  const unit = String(workflow.interval_unit || 'day').toLowerCase();
+function isHourAllowed(hour: number, from: number | null | undefined, to: number | null | undefined): boolean {
+  if (typeof from === 'number' && typeof to === 'number') {
+    if (from <= to) return hour >= from && hour <= to;
+    return hour >= from || hour <= to;
+  }
+  if (typeof from === 'number') return hour >= from;
+  if (typeof to === 'number') return hour <= to;
+  return true;
+}
+
+function daysInTehranMonth(localDate: Date): number {
+  return new Date(Date.UTC(localDate.getUTCFullYear(), localDate.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+function clampMonthDay(localDate: Date, day: number): number {
+  return Math.min(Math.max(1, day), daysInTehranMonth(localDate));
+}
+
+function applyScheduledTime(localDate: Date, unit: string, workflow: WorkflowRow): Date {
+  const next = new Date(localDate);
+  if (unit === 'hour') {
+    if (typeof workflow.interval_minute === 'number') {
+      next.setUTCMinutes(Math.min(59, Math.max(0, workflow.interval_minute)), 0, 0);
+    }
+    return next;
+  }
+
+  if (unit === 'month' && workflow.interval_day_of_month) {
+    next.setUTCDate(clampMonthDay(next, workflow.interval_day_of_month));
+  }
+
+  const parsedTime = parseIntervalAt(workflow.interval_at);
+  if (parsedTime) {
+    next.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
+  }
+  return next;
+}
+
+function addIntervalLocal(localDate: Date, value: number, unit: string): Date {
+  const next = new Date(localDate);
+  if (unit === 'hour') next.setUTCHours(next.getUTCHours() + value);
+  else if (unit === 'day') next.setUTCDate(next.getUTCDate() + value);
+  else {
+    const originalDay = next.getUTCDate();
+    next.setUTCDate(1);
+    next.setUTCMonth(next.getUTCMonth() + value);
+    next.setUTCDate(Math.min(originalDay, daysInTehranMonth(next)));
+  }
+  return next;
+}
+
+function getInitialScheduledDueAt(workflow: WorkflowRow, unit: string, now: Date): Date | null {
+  const firstRun = workflow.interval_first_run_at ? new Date(workflow.interval_first_run_at) : null;
+  if (firstRun && !isNaN(firstRun.getTime())) {
+    if (now < firstRun) return null;
+    return getLatestScheduledDueAtAfter(firstRun, workflow, unit, now) || firstRun;
+  }
+
+  const nowLocal = toTehranDate(now);
+  let candidateLocal = new Date(nowLocal);
+
+  if (unit === 'hour') {
+    if (typeof workflow.interval_minute !== 'number') return now;
+    candidateLocal.setUTCMinutes(Math.min(59, Math.max(0, workflow.interval_minute)), 0, 0);
+  } else if (unit === 'day') {
+    const parsedTime = parseIntervalAt(workflow.interval_at);
+    if (!parsedTime) return now;
+    candidateLocal.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
+  } else {
+    if (workflow.interval_day_of_month) {
+      const targetDay = clampMonthDay(candidateLocal, workflow.interval_day_of_month);
+      if (candidateLocal.getUTCDate() !== targetDay) return null;
+      candidateLocal.setUTCDate(targetDay);
+    }
+    const parsedTime = parseIntervalAt(workflow.interval_at);
+    if (parsedTime) candidateLocal.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
+    else if (!workflow.interval_day_of_month) return now;
+  }
+
+  const candidate = fromTehranDate(candidateLocal);
+  return now >= candidate ? candidate : null;
+}
+
+function getLatestScheduledDueAtAfter(anchor: Date, workflow: WorkflowRow, unit: string, now: Date): Date | null {
   const value = Math.max(1, parseInt(String(workflow.interval_value || 1), 10) || 1);
+  let candidateLocal = toTehranDate(anchor);
+  let latestDue: Date | null = null;
+
+  for (let i = 0; i < 10000; i++) {
+    candidateLocal = addIntervalLocal(candidateLocal, value, unit);
+    candidateLocal = applyScheduledTime(candidateLocal, unit, workflow);
+    const candidate = fromTehranDate(candidateLocal);
+    if (candidate <= anchor) continue;
+    if (candidate > now) break;
+    latestDue = candidate;
+  }
+
+  return latestDue;
+}
+
+function getWorkflowScheduledDueAt(workflow: WorkflowRow, now: Date): Date | null {
+  const unit = String(workflow.interval_unit || 'day').toLowerCase();
   const lastRunAt = workflow.last_run_at ? new Date(workflow.last_run_at) : null;
   const tehranNow = toTehranDate(now);
 
-  // Respect interval_first_run_at for first run
-  if (!lastRunAt && workflow.interval_first_run_at) {
-    const firstRun = new Date(workflow.interval_first_run_at);
-    if (!isNaN(firstRun.getTime()) && now < firstRun) return false;
-  }
-
-  // Hour window check
   if (unit === 'hour') {
-    const from = workflow.interval_allowed_from_hour;
-    const to = workflow.interval_allowed_to_hour;
-    const h = tehranNow.getUTCHours();
-    if (from !== null && to !== null && (h < from || h > to)) return false;
-  }
-
-  // Month: day-of-month check
-  if (unit === 'month' && workflow.interval_day_of_month) {
-    const target = Math.min(31, Math.max(1, workflow.interval_day_of_month));
-    if (tehranNow.getUTCDate() !== target) return false;
-  }
-
-  if (!lastRunAt) return true;
-
-  const effectiveIntervalAt = unit === 'hour'
-    ? (typeof workflow.interval_minute === 'number' ? `00:${String(workflow.interval_minute).padStart(2, '0')}` : null)
-    : workflow.interval_at;
-
-  let nextLocal = toTehranDate(lastRunAt);
-  if (unit === 'hour') nextLocal.setUTCHours(nextLocal.getUTCHours() + value);
-  else if (unit === 'day') nextLocal.setUTCDate(nextLocal.getUTCDate() + value);
-  else nextLocal.setUTCMonth(nextLocal.getUTCMonth() + value);
-
-  const parsedTime = parseIntervalAt(effectiveIntervalAt);
-  if (parsedTime) {
-    if (unit === 'hour') {
-      nextLocal.setUTCMinutes(parsedTime.minute, 0, 0);
-    } else {
-      nextLocal.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
+    if (!isHourAllowed(tehranNow.getUTCHours(), workflow.interval_allowed_from_hour, workflow.interval_allowed_to_hour)) {
+      return null;
     }
   }
 
-  const next = fromTehranDate(nextLocal);
-  return now >= next;
+  if (unit === 'month' && workflow.interval_day_of_month) {
+    const target = clampMonthDay(tehranNow, workflow.interval_day_of_month);
+    if (tehranNow.getUTCDate() !== target) return null;
+  }
+
+  if (!lastRunAt || isNaN(lastRunAt.getTime())) {
+    return getInitialScheduledDueAt(workflow, unit, now);
+  }
+
+  return getLatestScheduledDueAtAfter(lastRunAt, workflow, unit, now);
+}
+
+function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
+  return !!getWorkflowScheduledDueAt(workflow, now);
 }
 
 function checkIntervalDayCondition(condition: string | null | undefined, now: Date): boolean {
@@ -776,12 +887,19 @@ async function fetchQueuedWorkflows(url: string, key: string): Promise<WorkflowR
   return rows as WorkflowRow[];
 }
 
-async function claimWorkflow(url: string, key: string, workflowId: string, expectedLastRunAt: string | null): Promise<boolean> {
+async function claimWorkflow(
+  url: string,
+  key: string,
+  workflowId: string,
+  expectedLastRunAt: string | null,
+  scheduledDueAt: Date,
+): Promise<boolean> {
+  const claimedAt = scheduledDueAt.toISOString();
   try {
     const result = await callRpc(url, key, 'claim_workflow_interval_run', {
       p_workflow_id: workflowId,
       p_expected_last_run_at: expectedLastRunAt,
-      p_claimed_at: new Date().toISOString(),
+      p_claimed_at: claimedAt,
     });
     return result === true;
   } catch {
@@ -790,7 +908,7 @@ async function claimWorkflow(url: string, key: string, workflowId: string, expec
       ? `id=eq.${workflowId}&is_active=eq.true&trigger_type=eq.interval&last_run_at=eq.${expectedLastRunAt}`
       : `id=eq.${workflowId}&is_active=eq.true&trigger_type=eq.interval&last_run_at=is.null`;
     try {
-      await dbPatch(url, key, 'workflows', filter, { last_run_at: new Date().toISOString(), server_queued_at: null });
+      await dbPatch(url, key, 'workflows', filter, { last_run_at: claimedAt, server_queued_at: null });
       return true;
     } catch { return false; }
   }
@@ -1193,14 +1311,91 @@ function getModuleTable(moduleId: string): string {
   return TABLE_MAP[moduleId] || moduleId;
 }
 
-async function updateRecord(url: string, key: string, moduleId: string, recordId: string, patch: Record<string, any>): Promise<void> {
+async function updateRecord(url: string, key: string, moduleId: string, recordId: string, patch: Record<string, any>, actorUserId: string | null = null): Promise<void> {
   const table = getModuleTable(moduleId);
-  await dbPatch(url, key, table, `id=eq.${recordId}`, { ...patch, updated_at: new Date().toISOString() });
+  const payload = { ...patch, updated_at: new Date().toISOString() };
+  if (actorUserId) payload.updated_by = actorUserId;
+  await dbPatch(url, key, table, `id=eq.${recordId}`, payload);
 }
 
-async function createRecord(url: string, key: string, moduleId: string, orgId: string, payload: Record<string, any>): Promise<any> {
+async function createRecord(url: string, key: string, moduleId: string, orgId: string, payload: Record<string, any>, actorUserId: string | null = null): Promise<any> {
   const table = getModuleTable(moduleId);
-  return await dbInsert(url, key, table, { org_id: orgId, ...payload });
+  const body = { org_id: orgId, ...payload };
+  if (actorUserId) {
+    if (!body.created_by) body.created_by = actorUserId;
+    if (!body.updated_by) body.updated_by = actorUserId;
+  }
+  return await dbInsert(url, key, table, body);
+}
+
+async function createWorkflowAiThread(
+  url: string,
+  key: string,
+  input: {
+    orgId: string;
+    moduleId: string;
+    recordId: string | null;
+    prompt: string;
+    answer: string;
+    model: string;
+    provider: string;
+    actionId?: string | null;
+    sharedUserIds?: string[];
+    sharedRoleIds?: string[];
+    metadata?: Record<string, any>;
+  }
+): Promise<any> {
+  const now = new Date().toISOString();
+  const sharedUserIds = Array.from(new Set((input.sharedUserIds || []).filter(Boolean)));
+  const sharedRoleIds = Array.from(new Set((input.sharedRoleIds || []).filter(Boolean)));
+  const thread = await dbInsert(url, key, 'ai_threads', {
+    org_id: input.orgId,
+    user_id: null,
+    status: 'active',
+    title: 'پرامپت هوش مصنوعی گردش کار',
+    context_type: 'workflow',
+    context_key: `workflow:${input.moduleId}:${input.recordId || 'record'}:${input.actionId || 'action'}:${Date.now()}`,
+    module_id: input.moduleId,
+    record_id: input.recordId,
+    provider: input.provider || 'avalai',
+    model: input.model || '',
+    is_shared: sharedUserIds.length > 0 || sharedRoleIds.length > 0,
+    shared_user_ids: sharedUserIds,
+    shared_role_ids: sharedRoleIds,
+    metadata: {
+      source: 'workflow_interval_runner',
+      context_kind: 'workflow',
+      context_label: 'گردش کار',
+      workflow_action_id: input.actionId || null,
+      last_activity_kind: 'workflow_ai_prompt',
+      last_message_preview: input.prompt.slice(0, 300),
+      ...(input.metadata || {}),
+    },
+    created_at: now,
+    updated_at: now,
+  });
+  if (!thread?.id) return null;
+  await dbInsert(url, key, 'ai_messages', {
+    org_id: input.orgId,
+    thread_id: thread.id,
+    role: 'user',
+    content: input.prompt,
+    provider: input.provider || 'avalai',
+    model: input.model || '',
+    metadata: { source: 'workflow_interval_runner', input_kind: 'workflow_prompt' },
+    created_at: now,
+  });
+  const assistantMessage = await dbInsert(url, key, 'ai_messages', {
+    org_id: input.orgId,
+    thread_id: thread.id,
+    role: 'assistant',
+    content: input.answer,
+    provider: input.provider || 'avalai',
+    model: input.model || '',
+    metadata: { source: 'workflow_interval_runner', capability: 'workflow_ai_prompt' },
+    created_at: new Date().toISOString(),
+  });
+  return { thread, assistantMessage };
 }
 
 async function loadWorkflowAiModel(url: string, key: string, orgId: string): Promise<string> {
@@ -1238,7 +1433,348 @@ function isRetryableAiStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
-async function callWorkflowAiPrompt(url: string, key: string, orgId: string, prompt: string): Promise<Record<string, any>> {
+function extractJsonObjectFromText(value: any): Record<string, any> | null {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const normalized = raw.replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+  const candidates = [normalized];
+  const start = normalized.indexOf('{');
+  const end = normalized.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(normalized.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // noop
+    }
+  }
+  return null;
+}
+
+function sanitizeAiRecordPayload(rawPayload: any, schema: any): Record<string, any> {
+  const allowedFields = Array.isArray(schema?.fields)
+    ? schema.fields.map((field: any) => String(field?.key || '').trim()).filter(Boolean)
+    : [];
+  const allowed = new Set(allowedFields);
+  const rawFields = rawPayload?.fields && typeof rawPayload.fields === 'object' ? rawPayload.fields : rawPayload;
+  const payload: Record<string, any> = {};
+  Object.entries(rawFields || {}).forEach(([key, value]) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey || !allowed.has(normalizedKey)) return;
+    if (value === undefined || value === '') {
+      payload[normalizedKey] = null;
+      return;
+    }
+    payload[normalizedKey] = value;
+  });
+  return payload;
+}
+
+function buildAiRecordTitle(record: any, fallback: string): string {
+  return String(
+    record?.system_code
+    || record?.name
+    || record?.title
+    || record?.full_name
+    || record?.business_name
+    || record?.invoice_number
+    || fallback
+    || 'رکورد جدید'
+  ).trim();
+}
+
+function normalizeWorkflowAiProcessStatus(value: any): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'completed') return 'done';
+  if (['todo', 'planned', 'in_progress', 'review', 'done', 'blocked', 'canceled'].includes(normalized)) return normalized;
+  return 'todo';
+}
+
+function addDaysIso(days: any): string | null {
+  const amount = Number(days);
+  if (!Number.isFinite(amount)) return null;
+  const date = new Date();
+  date.setDate(date.getDate() + amount);
+  return date.toISOString();
+}
+
+async function loadWorkflowProcessContext(url: string, key: string, orgId: string, moduleId: string, recordId: string): Promise<Record<string, any>> {
+  const templateRows = await dbGet(url, key,
+    `process_templates?org_id=eq.${orgId}&is_active=eq.true&select=*&order=updated_at.desc&limit=60`
+  ).catch(() => []);
+  const templates = templateRows.filter((template: any) => {
+    const primary = String(template?.module_id || '').trim();
+    const modules = Array.isArray(template?.module_ids) ? template.module_ids.map((item: any) => String(item || '').trim()) : [];
+    return !primary || primary === moduleId || primary === 'tasks' || primary === 'process_runs' || modules.includes(moduleId);
+  }).slice(0, 30);
+  const templateIds = templates.map((template: any) => String(template?.id || '').trim()).filter(Boolean);
+  const templateStages = templateIds.length
+    ? await dbGet(url, key, `process_template_stages?template_id=in.(${templateIds.join(',')})&select=*&order=sort_order.asc&limit=300`).catch(() => [])
+    : [];
+  const runs = recordId
+    ? await dbGet(url, key,
+        `process_runs?org_id=eq.${orgId}&module_id=eq.${moduleId}&record_id=eq.${recordId}&select=*&order=created_at.desc&limit=20`
+      ).catch(() => [])
+    : [];
+  const runIds = runs.map((run: any) => String(run?.id || '').trim()).filter(Boolean);
+  const runStages = runIds.length
+    ? await dbGet(url, key, `process_run_stages?process_run_id=in.(${runIds.join(',')})&select=*&order=sort_order.asc&limit=400`).catch(() => [])
+    : [];
+  const tasks = recordId
+    ? await dbGet(url, key,
+        `tasks?org_id=eq.${orgId}&source_module_id=eq.${moduleId}&source_record_id=eq.${recordId}&select=*&order=sort_order.asc&limit=300`
+      ).catch(() => [])
+    : [];
+  const stagesByTemplateId = new Map<string, any[]>();
+  templateStages.forEach((stage: any) => {
+    const id = String(stage?.template_id || '').trim();
+    stagesByTemplateId.set(id, [...(stagesByTemplateId.get(id) || []), stage]);
+  });
+  const stagesByRunId = new Map<string, any[]>();
+  runStages.forEach((stage: any) => {
+    const id = String(stage?.process_run_id || '').trim();
+    stagesByRunId.set(id, [...(stagesByRunId.get(id) || []), stage]);
+  });
+  return {
+    templates: templates.map((template: any) => ({ ...template, stages: (stagesByTemplateId.get(String(template.id)) || []).slice(0, 40) })),
+    runs: runs.map((run: any) => ({ ...run, stages: (stagesByRunId.get(String(run.id)) || []).slice(0, 60) })),
+    tasks,
+  };
+}
+
+function buildWorkflowProcessPrompt(prompt: string, input: Record<string, any>): string {
+  return [
+    'شما دستیار اجرای خودکار فرآیند تازه سیستم هستید. فقط JSON معتبر برگردان و هیچ توضیح خارج از JSON ننویس.',
+    'فقط از الگوها، اجراها، مرحله‌ها و taskهایی که در context آمده استفاده کن. UUID تازه یا ساختگی نساز.',
+    'حذف فیزیکی مرحله مجاز نیست؛ برای کم کردن مرحله از cancel_stage_task استفاده کن.',
+    'operationهای مجاز: materialize_template_to_tasks، create_raw_process_with_tasks، add_stage_task، update_stage_task، cancel_stage_task.',
+    'برای ساخت فرآیند خام، stages باید مرتب و قابل تبدیل به task واقعی باشند.',
+    'قالب خروجی: {"reply":"پیام کوتاه فارسی","operations":[{"type":"create_raw_process_with_tasks","process_name":"...","stages":[{"name":"...","sort_order":10,"task_type":"فعالیت سازمانی","status":"todo","due_days":2,"custom_fields":[],"custom_values":{},"status_options":[],"automation_rules":[]}]}]}',
+    '',
+    `درخواست: ${prompt}`,
+    JSON.stringify(input),
+  ].join('\n');
+}
+
+async function insertWorkflowProcessTask(url: string, key: string, orgId: string, moduleId: string, recordId: string, processRun: any, runStage: any, stage: any, actorUserId: string | null = null): Promise<any> {
+  const name = String(stage?.name || stage?.stage_name || stage?.title || runStage?.stage_name || 'فعالیت فرآیند').trim() || 'فعالیت فرآیند';
+  const processNodeKey = String(
+    runStage?.process_node_key
+    || runStage?.metadata?.process_node_key
+    || stage?.process_node_key
+    || stage?.metadata?.process_node_key
+    || '',
+  ).trim() || null;
+  const processLaneKey = String(
+    runStage?.process_lane_key
+    || runStage?.metadata?.process_lane_key
+    || stage?.process_lane_key
+    || stage?.metadata?.process_lane_key
+    || 'lane_1',
+  ).trim() || 'lane_1';
+  const processGraph = (
+    runStage?.metadata?.process_graph
+    || stage?.process_graph
+    || stage?.metadata?.process_graph
+    || null
+  );
+  const payload = {
+    org_id: orgId,
+    name,
+    status: normalizeWorkflowAiProcessStatus(stage?.task_status || stage?.status || runStage?.status),
+    priority: String(stage?.priority || 'medium').trim() || 'medium',
+    description: String(stage?.description || stage?.metadata?.description || '').trim() || null,
+    task_type: String(stage?.task_type || stage?.metadata?.task_type || 'فعالیت سازمانی').trim() || 'فعالیت سازمانی',
+    due_date: stage?.due_date || stage?.due_at || addDaysIso(stage?.due_days),
+    wage: Number(stage?.wage || runStage?.wage || 0) || 0,
+    weight: Number(stage?.weight || 0) || 0,
+    sort_order: Number(stage?.sort_order || runStage?.sort_order || 10) || 10,
+    source_template_id: processRun?.template_id || stage?.template_id || null,
+    source_stage_sort_order: Number(stage?.sort_order || runStage?.sort_order || 10) || 10,
+    process_group_id: processRun?.process_group_id || processRun?.id || null,
+    process_run_id: processRun?.id || null,
+    process_run_stage_id: runStage?.id || null,
+    process_node_key: processNodeKey,
+    process_lane_key: processLaneKey,
+    related_to_module: moduleId,
+    source_module_id: moduleId,
+    source_record_id: recordId,
+    recurrence_info: {
+      task_type: String(stage?.task_type || stage?.metadata?.task_type || 'فعالیت سازمانی').trim() || 'فعالیت سازمانی',
+      process_automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : Array.isArray(stage?.metadata?.automation_rules) ? stage.metadata.automation_rules : [],
+      process_target_module_ids: Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : [moduleId],
+      process_links: { [moduleId]: recordId },
+      process_run_id: processRun?.id || null,
+      process_run_stage_id: runStage?.id || null,
+      process_node_key: processNodeKey,
+      process_lane_key: processLaneKey,
+      process_graph: processGraph,
+      process_group: {
+        id: processRun?.process_group_id || processRun?.id || null,
+        name: processRun?.process_name || null,
+        template_id: processRun?.template_id || null,
+      },
+      process_task_custom_fields: Array.isArray(stage?.custom_fields) ? stage.custom_fields : Array.isArray(stage?.metadata?.custom_fields) ? stage.metadata.custom_fields : [],
+      process_task_status_options: Array.isArray(stage?.status_options) ? stage.status_options : Array.isArray(stage?.metadata?.status_options) ? stage.metadata.status_options : [],
+      process_task_custom_field_values: stage?.custom_values && typeof stage.custom_values === 'object' ? stage.custom_values : {},
+    },
+  };
+  if (actorUserId) {
+    payload.created_by = actorUserId;
+    payload.updated_by = actorUserId;
+  }
+  return await dbInsert(url, key, 'tasks', payload);
+}
+
+async function executeWorkflowProcessOperation(url: string, key: string, orgId: string, moduleId: string, recordId: string, operation: any, processContext: Record<string, any>, actorUserId: string | null = null): Promise<Record<string, any>> {
+  const type = String(operation?.type || '').trim();
+  if (type === 'materialize_template_to_tasks') {
+    const templateId = String(operation?.template_id || '').trim();
+    const template = (processContext.templates || []).find((item: any) => String(item?.id || '') === templateId);
+    if (!template) throw new Error('الگوی فرآیند مجاز پیدا نشد.');
+    const runIdResult = await callRpc(url, key, 'create_process_run_from_template', {
+      p_org_id: orgId,
+      p_template_id: templateId,
+      p_module_id: moduleId,
+      p_record_id: recordId,
+      p_process_name: String(operation?.process_name || template?.name || '').trim() || null,
+      p_copied_mode: 'auto',
+    });
+    const processRunId = Array.isArray(runIdResult) ? String(runIdResult[0] || '').trim() : String(runIdResult || '').trim();
+    if (actorUserId && processRunId) {
+      await dbPatch(url, key, 'process_runs', `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+      await dbPatch(url, key, 'process_run_stages', `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+    }
+    const runRows = await dbGet(url, key, `process_runs?id=eq.${processRunId}&org_id=eq.${orgId}&select=*&limit=1`).catch(() => []);
+    const processRun = runRows[0] || { id: processRunId, template_id: templateId, process_name: operation?.process_name || template?.name };
+    const stageRows = await dbGet(url, key, `process_run_stages?process_run_id=eq.${processRunId}&select=*&order=sort_order.asc&limit=200`).catch(() => []);
+    const createdTasks: any[] = [];
+    for (const runStage of stageRows) {
+      if (runStage?.task_id) continue;
+      const templateStage = (template.stages || []).find((stage: any) => String(stage?.id || '') === String(runStage?.template_stage_id || '')) || {};
+      if (templateStage?.auto_create_task === false && operation?.force !== true) continue;
+      const task = await insertWorkflowProcessTask(url, key, orgId, moduleId, recordId, processRun, runStage, { ...templateStage, ...runStage, name: runStage.stage_name }, actorUserId);
+      if (task?.id) {
+        createdTasks.push({ id: task.id, title: buildAiRecordTitle(task, task.name), stage_id: runStage.id });
+        const stagePatch = {
+          task_id: task.id,
+          status: normalizeWorkflowAiProcessStatus(task.status),
+          updated_at: new Date().toISOString(),
+        };
+        if (actorUserId) stagePatch.updated_by = actorUserId;
+        await dbPatch(url, key, 'process_run_stages', `id=eq.${runStage.id}`, stagePatch).catch(() => {});
+      }
+    }
+    return { type, process_run_id: processRunId, created_tasks: createdTasks };
+  }
+  if (type === 'create_raw_process_with_tasks' || type === 'add_stage_task') {
+    let processRun = null;
+    const requestedRunId = String(operation?.process_run_id || '').trim();
+    if (requestedRunId) {
+      processRun = (processContext.runs || []).find((run: any) => String(run?.id || '') === requestedRunId) || null;
+    }
+    if (!processRun) {
+      const processRunPayload = {
+        org_id: orgId,
+        template_id: null,
+        module_id: moduleId,
+        record_id: recordId,
+        process_name: String(operation?.process_name || 'فرآیند هوش مصنوعی').trim() || 'فرآیند هوش مصنوعی',
+        status: 'active',
+        copied_mode: 'auto',
+        started_at: new Date().toISOString(),
+        process_group_id: `ai_process_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      };
+      if (actorUserId) {
+        processRunPayload.created_by = actorUserId;
+        processRunPayload.updated_by = actorUserId;
+      }
+      processRun = await dbInsert(url, key, 'process_runs', processRunPayload);
+    }
+    const stages = type === 'add_stage_task' ? [operation] : (Array.isArray(operation?.stages) ? operation.stages : []);
+    const createdTasks: any[] = [];
+    for (const [index, stage] of stages.entries()) {
+      const stageName = String(stage?.name || stage?.stage_name || `مرحله ${index + 1}`).trim() || `مرحله ${index + 1}`;
+      const runStagePayload = {
+        process_run_id: processRun.id,
+        template_stage_id: null,
+        stage_name: stageName,
+        sort_order: Number(stage?.sort_order || (index + 1) * 10) || (index + 1) * 10,
+        status: normalizeWorkflowAiProcessStatus(stage?.status),
+        wage: Number(stage?.wage || 0) || 0,
+        metadata: {
+          source: 'workflow_ai_prompt',
+          custom_fields: Array.isArray(stage?.custom_fields) ? stage.custom_fields : [],
+          custom_values: stage?.custom_values && typeof stage.custom_values === 'object' ? stage.custom_values : {},
+          status_options: Array.isArray(stage?.status_options) ? stage.status_options : [],
+          automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : [],
+        },
+      };
+      if (actorUserId) {
+        runStagePayload.created_by = actorUserId;
+        runStagePayload.updated_by = actorUserId;
+      }
+      const runStage = await dbInsert(url, key, 'process_run_stages', runStagePayload);
+      const task = await insertWorkflowProcessTask(url, key, orgId, moduleId, recordId, processRun, runStage, stage, actorUserId);
+      if (task?.id) {
+        createdTasks.push({ id: task.id, title: buildAiRecordTitle(task, task.name), stage_id: runStage?.id || null });
+        if (runStage?.id) {
+          const stagePatch = { task_id: task.id, updated_at: new Date().toISOString() };
+          if (actorUserId) stagePatch.updated_by = actorUserId;
+          await dbPatch(url, key, 'process_run_stages', `id=eq.${runStage.id}`, stagePatch).catch(() => {});
+        }
+      }
+    }
+    return { type, process_run_id: processRun?.id || null, created_tasks: createdTasks };
+  }
+  if (type === 'update_stage_task') {
+    const taskId = String(operation?.task_id || '').trim();
+    const stageId = String(operation?.stage_id || operation?.process_run_stage_id || '').trim();
+    const task = taskId
+      ? (processContext.tasks || []).find((item: any) => String(item?.id || '') === taskId)
+      : (processContext.tasks || []).find((item: any) => String(item?.process_run_stage_id || '') === stageId);
+    if (!task?.id) throw new Error('فعالیت قابل ویرایش در context پیدا نشد.');
+    const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (actorUserId) patch.updated_by = actorUserId;
+    if (operation?.name || operation?.title) patch.name = String(operation.name || operation.title).trim();
+    if (operation?.status) patch.status = normalizeWorkflowAiProcessStatus(operation.status);
+    if (operation?.description !== undefined) patch.description = String(operation.description || '').trim() || null;
+    if (operation?.due_date || operation?.due_days !== undefined) patch.due_date = operation.due_date || addDaysIso(operation.due_days);
+    await dbPatch(url, key, 'tasks', `id=eq.${task.id}&org_id=eq.${orgId}`, patch);
+    if (task.process_run_stage_id) {
+      const stagePatch = {
+        status: normalizeWorkflowAiProcessStatus(patch.status || task.status),
+        updated_at: new Date().toISOString(),
+      };
+      if (actorUserId) stagePatch.updated_by = actorUserId;
+      await dbPatch(url, key, 'process_run_stages', `id=eq.${task.process_run_stage_id}`, stagePatch).catch(() => {});
+    }
+    return { type, updated_task_id: task.id, title: patch.name || task.name };
+  }
+  if (type === 'cancel_stage_task') {
+    const taskId = String(operation?.task_id || '').trim();
+    const stageId = String(operation?.stage_id || operation?.process_run_stage_id || '').trim();
+    const task = taskId
+      ? (processContext.tasks || []).find((item: any) => String(item?.id || '') === taskId)
+      : (processContext.tasks || []).find((item: any) => String(item?.process_run_stage_id || '') === stageId);
+    if (task?.id) {
+      const taskPatch = { status: 'canceled', updated_at: new Date().toISOString() };
+      if (actorUserId) taskPatch.updated_by = actorUserId;
+      await dbPatch(url, key, 'tasks', `id=eq.${task.id}&org_id=eq.${orgId}`, taskPatch);
+    }
+    const targetStageId = stageId || String(task?.process_run_stage_id || '').trim();
+    if (targetStageId) {
+      const stagePatch = { status: 'canceled', updated_at: new Date().toISOString() };
+      if (actorUserId) stagePatch.updated_by = actorUserId;
+      await dbPatch(url, key, 'process_run_stages', `id=eq.${targetStageId}`, stagePatch).catch(() => {});
+    }
+    return { type, canceled_task_id: task?.id || null, canceled_stage_id: targetStageId || null };
+  }
+  throw new Error(`اقدام فرآیندی ${type || 'نامشخص'} پشتیبانی نمی‌شود.`);
+}
+
+async function callWorkflowAiPrompt(url: string, key: string, orgId: string, prompt: string, options: Record<string, any> = {}): Promise<Record<string, any>> {
   const apiKey = String(
     Deno.env.get('AVALAI_API_KEY')
     || Deno.env.get('AI_API_KEY')
@@ -1248,14 +1784,38 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   if (!apiKey) throw new Error('کلید مرکزی AI برای workflow interval تنظیم نشده است.');
   const model = await loadWorkflowAiModel(url, key, orgId);
   const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
+  const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
+    ? options.recordCreationSchema
+    : null;
+  const processOperationContext = options?.processOperationContext && typeof options.processOperationContext === 'object'
+    ? options.processOperationContext
+    : null;
+  const fieldLines = schema && Array.isArray(schema.fields)
+    ? schema.fields.map((field: any) => `- ${field.key}: ${field.label || field.key} (${field.type || 'text'}${field.required ? '، ضروری' : ''})`).join('\n')
+    : '';
+  const userPrompt = processOperationContext
+    ? buildWorkflowProcessPrompt(prompt, processOperationContext)
+    : prompt;
   const requestBody: Record<string, any> = {
     model,
     messages: [
       {
         role: 'system',
-        content: 'شما دستیار هوش مصنوعی تازه سیستم هستید. خروجی این گردش کار فقط پیشنهاد است و هیچ اقدام واقعی را تایید یا اجرا نکنید.',
+        content: processOperationContext
+          ? 'شما دستیار اجرای خودکار فرآیند تازه سیستم هستید. خروجی فقط JSON معتبر باشد و عملیات واقعی را فقط از context مجاز بساز.'
+          : schema
+          ? [
+              'شما دستیار هوش مصنوعی تازه سیستم برای اجرای خودکار گردش کار هستید.',
+              'خروجی فقط JSON معتبر باشد و متن اضافی ننویس.',
+              'فقط کلیدهای مجاز schema را در fields برگردان. org_id، id، system_code و UUID خام نساز.',
+              `ماژول مقصد: ${schema.moduleLabel || schema.moduleId || ''}`,
+              'فیلدهای مجاز:',
+              fieldLines,
+              'قالب خروجی: {"reply":"پیام کوتاه فارسی","record":{"fields":{}}}',
+            ].join('\n')
+          : 'شما دستیار هوش مصنوعی تازه سیستم برای اجرای خودکار گردش کار هستید. پاسخ را کوتاه، دقیق و قابل ارسال به کاربر بنویس.',
       },
-      { role: 'user', content: prompt },
+      { role: 'user', content: userPrompt },
     ],
   };
   if (isReasoningModel) {
@@ -1335,29 +1895,115 @@ async function resolveConfiguredActionValue(
 
 async function executeAction(
   action: WorkflowAction, record: Record<string, any>,
-  moduleId: string, orgId: string, url: string, key: string
+  moduleId: string, orgId: string, url: string, key: string, actorUserId: string | null = null
 ): Promise<ActionExecutionResult> {
   const config = action.config || {};
   const recordId = String(record?.id || '').trim();
 
   // ── run_ai_prompt ─────────────────────────────────────────────────────
   if (action.type === 'run_ai_prompt') {
-    const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key)).trim();
+    const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key, false, orgId)).trim();
     if (!prompt) return actionResult(action, 'skipped', 'پرامپت هوش مصنوعی خالی است.');
     if (!recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای پیشنهاد AI مشخص نیست.');
-    const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt);
+    const outputMode = String(config.output_mode || 'text').trim();
+    const targetModuleId = String(config.target_module_id || '').trim();
+    const recordCreationSchema = outputMode === 'create_record'
+      ? (config.record_creation_schema && typeof config.record_creation_schema === 'object' ? config.record_creation_schema : null)
+      : null;
+    const processOperationContext = outputMode === 'process_operation'
+      ? await loadWorkflowProcessContext(url, key, orgId, moduleId, recordId)
+      : null;
+    const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt, { recordCreationSchema, processOperationContext });
     if (!aiResult.answer) return actionResult(action, 'skipped', 'پاسخ هوش مصنوعی خالی بود.');
+    let answer = aiResult.answer;
+    const createdRecords: any[] = [];
+    const executedProcessOperations: any[] = [];
+    if (outputMode === 'create_record') {
+      if (!targetModuleId || !recordCreationSchema) return actionResult(action, 'skipped', 'تنظیمات ساخت رکورد با AI کامل نیست.');
+      const parsed = extractJsonObjectFromText(aiResult.answer) || {};
+      const recordDraft = parsed?.record || (Array.isArray(parsed?.records) ? parsed.records[0] : null) || parsed;
+      const payload = sanitizeAiRecordPayload(recordDraft, recordCreationSchema);
+      const relationFieldKey = String(config.relation_field_key || '').trim();
+      if (relationFieldKey && recordId) payload[relationFieldKey] = recordId;
+      if (Object.keys(payload).length > 0) {
+        const created = await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
+        if (created) {
+          createdRecords.push({
+            module_id: targetModuleId,
+            id: created.id || null,
+            title: buildAiRecordTitle(created, recordCreationSchema?.moduleLabel || targetModuleId),
+          });
+        }
+      }
+      answer = String(parsed?.reply || '').trim()
+        || (createdRecords.length > 0
+          ? `${recordCreationSchema?.moduleLabel || targetModuleId} با اطلاعات استخراج‌شده ساخته شد.`
+          : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.');
+    }
+    if (outputMode === 'process_operation') {
+      const parsed = extractJsonObjectFromText(aiResult.answer) || {};
+      const operations = Array.isArray(parsed?.operations) ? parsed.operations : [];
+      if (operations.length === 0) return actionResult(action, 'skipped', 'هوش مصنوعی اقدام فرآیندی معتبری برنگرداند.');
+      for (const operation of operations.slice(0, 8)) {
+        executedProcessOperations.push(await executeWorkflowProcessOperation(url, key, orgId, moduleId, recordId, operation, processOperationContext || {}, actorUserId));
+      }
+      answer = String(parsed?.reply || '').trim() || 'اقدام‌های فرآیندی گردش کار اجرا شد.';
+    }
+    const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object' ? config.channel_configs : {};
+    const deliveryChannels = Array.from(new Set(
+      (Array.isArray(config.delivery_channels) ? config.delivery_channels : [])
+        .map((item: any) => String(item || '').trim().toLowerCase())
+        .filter((item: string) => ['sms', 'email', 'bot', 'note'].includes(item))
+    ));
+    const noteShareTargets = deliveryChannels.includes('note')
+      ? await resolveAssigneesToMentionTargets(
+          url,
+          key,
+          orgId,
+          (channelConfigs.note || {}).recipient_assignees || [],
+          (channelConfigs.note || {}).recipient_fields || [],
+          record
+        ).catch(() => ({ mentionUserIds: [], mentionRoleIds: [], groupTargets: [] }))
+      : { mentionUserIds: [], mentionRoleIds: [], groupTargets: [] };
+    const sharedUserIds = Array.from(new Set([
+      ...(noteShareTargets.mentionUserIds || []),
+      ...((noteShareTargets.groupTargets || []).flatMap((group: any) => group.userIds || [])),
+    ]));
+    const sharedRoleIds = Array.from(new Set([
+      ...(noteShareTargets.mentionRoleIds || []),
+      ...((noteShareTargets.groupTargets || []).flatMap((group: any) => group.roleIds || [])),
+    ]));
+    const threadResult = await createWorkflowAiThread(url, key, {
+      orgId,
+      moduleId,
+      recordId,
+      prompt,
+      answer,
+      model: aiResult.model,
+      provider: aiResult.provider,
+      actionId: action.id || null,
+      sharedUserIds,
+      sharedRoleIds,
+      metadata: { output_mode: outputMode, target_module_id: targetModuleId || null, created_records: createdRecords, process_operations: executedProcessOperations },
+    }).catch((error: any) => {
+      console.warn('[workflow-runner] workflow AI thread insert skipped:', error?.message || error);
+      return null;
+    });
     await dbInsert(url, key, 'ai_action_logs', {
       org_id: orgId,
+      thread_id: threadResult?.thread?.id || null,
+      message_id: threadResult?.assistantMessage?.id || null,
       module_id: moduleId,
       record_id: recordId,
       action_type: 'workflow_ai_prompt',
-      status: 'proposed',
+      status: 'executed',
       proposed_payload: {
         prompt,
-        answer: aiResult.answer,
+        answer,
         workflow_action_id: action.id || null,
-        require_human_approval: true,
+        require_human_approval: false,
+        output_mode: outputMode,
+        target_module_id: targetModuleId || null,
       },
       result_payload: {
         source: 'workflow_interval_runner',
@@ -1365,18 +2011,44 @@ async function executeAction(
         model: aiResult.model,
         usage: aiResult.usage,
         avalai_request_id: aiResult.requestId,
+        created_records: createdRecords,
+        process_operations: executedProcessOperations,
       },
       avalai_request_id: aiResult.requestId,
+      executed_at: new Date().toISOString(),
     });
+    const actionRecord = {
+      ...record,
+      ai_answer: answer,
+      ai_created_record_title: createdRecords[0]?.title || '',
+      ai_process_operation_count: String(executedProcessOperations.length || ''),
+    };
+    for (const channel of deliveryChannels) {
+      if (channel === 'sms') {
+        await executeAction({ ...action, type: 'send_sms', config: { message: '{{ai_answer}}', ...(channelConfigs.sms || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        continue;
+      }
+      if (channel === 'email') {
+        await executeAction({ ...action, type: 'send_email', config: { subject: 'پیام هوش مصنوعی', body: '{{ai_answer}}', ...(channelConfigs.email || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        continue;
+      }
+      if (channel === 'bot') {
+        await executeAction({ ...action, type: 'send_bot_message', config: { message: '{{ai_answer}}', ...(channelConfigs.bot || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        continue;
+      }
+      if (channel === 'note') {
+        await executeAction({ ...action, type: 'send_note', config: { note_text: '{{ai_answer}}', ...(channelConfigs.note || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+      }
+    }
     return actionResult(action, 'success', undefined, {
-      affected_count: 1,
-      details: { model: aiResult.model, avalai_request_id: aiResult.requestId },
+      affected_count: 1 + createdRecords.length + executedProcessOperations.length,
+      details: { model: aiResult.model, avalai_request_id: aiResult.requestId, created_records: createdRecords, process_operations: executedProcessOperations },
     });
   }
 
   // ── send_sms ──────────────────────────────────────────────────────────
   if (action.type === 'send_sms') {
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیامک خالی است.');
     const recipients = await resolveAssigneesToSmsRecipients(
       url, key, orgId,
@@ -1402,7 +2074,7 @@ async function executeAction(
 
   // ── send_note / send_note_sms ─────────────────────────────────────────
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
-    const noteText = (await renderTemplateAsync(String(config.note_text || ''), record, url, key, true)).trim();
+    const noteText = (await renderTemplateAsync(String(config.note_text || ''), record, url, key, true, orgId)).trim();
     if (!noteText) return actionResult(action, 'skipped', 'متن یادداشت خالی است.');
     if (!moduleId || !recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای یادداشت مشخص نیست.');
     const mentionTargets = await resolveAssigneesToMentionTargets(
@@ -1463,7 +2135,7 @@ async function executeAction(
       : configuredChannel === 'telegram' || configuredChannel === 'bale' || configuredChannel === 'rubika'
         ? configuredChannel
         : 'bale';
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیام بات خالی است.');
     const botSettings = await getOrgBotSettings(url, key, orgId, channel);
     if (!botSettings) return actionResult(action, 'skipped', `تنظیمات ${channel} فعال نیست.`);
@@ -1477,7 +2149,7 @@ async function executeAction(
 
   // ── send_rubika_bot ───────────────────────────────────────────────────
   if (action.type === 'send_rubika_bot') {
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیام روبیکا خالی است.');
     const botSettings = await getOrgBotSettings(url, key, orgId, 'rubika');
     if (!botSettings) return actionResult(action, 'skipped', 'تنظیمات روبیکا فعال نیست.');
@@ -1506,7 +2178,7 @@ async function executeAction(
     const fieldKey = String(config.field || '').trim();
     if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد یا رکورد مقصد برای بروزرسانی مشخص نیست.');
     const nextValue = await resolveConfiguredActionValue(config, record, url, key);
-    await updateRecord(url, key, moduleId, String(record.id), { [fieldKey]: nextValue });
+    await updateRecord(url, key, moduleId, String(record.id), { [fieldKey]: nextValue }, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey } });
   }
 
@@ -1526,7 +2198,7 @@ async function executeAction(
         payload[tf] = mapping?.value ?? null;
       }
     }
-    await createRecord(url, key, targetModuleId, orgId, payload);
+    await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
   }
 
@@ -1548,15 +2220,125 @@ async function executeAction(
         payload[tf] = mapping?.value ?? null;
       }
     }
-    await createRecord(url, key, targetModuleId, orgId, payload);
+    await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
+  }
+
+  // ── activate process stage ────────────────────────────────────────────
+  if (
+    action.type === 'activate_next_process_stage'
+    || action.type === 'activate_specific_process_stage'
+  ) {
+    const recurrence = record?.recurrence_info && typeof record.recurrence_info === 'object'
+      ? record.recurrence_info
+      : {};
+    let processRunId = String(record?.process_run_id || recurrence?.process_run_id || '').trim();
+    if (!processRunId) {
+      const templateId = String(config.template_id || '').trim();
+      const recordId = String(record?.id || '').trim();
+      if (!templateId || !recordId || !moduleId) {
+        return actionResult(action, 'skipped', 'اجرای فرآیند برای فعال‌سازی مرحله پیدا نشد.');
+      }
+      const runIdResult = await callRpc(url, key, 'create_process_run_from_template', {
+        p_org_id: orgId,
+        p_template_id: templateId,
+        p_module_id: moduleId,
+        p_record_id: recordId,
+        p_process_name: null,
+        p_copied_mode: 'auto',
+      });
+      processRunId = Array.isArray(runIdResult)
+        ? String(runIdResult[0] || '').trim()
+        : String(runIdResult || '').trim();
+    }
+    if (!processRunId) return actionResult(action, 'skipped', 'اجرای فرآیند برای فعال‌سازی مرحله پیدا نشد.');
+
+    const stages = await dbGet(
+      url,
+      key,
+      `process_run_stages?process_run_id=eq.${processRunId}&select=id,stage_name,sort_order,process_node_key,process_lane_key,metadata&order=sort_order.asc`,
+    ).catch(() => []);
+    const nodeKeyOf = (stage: any) => String(
+      stage?.process_node_key || stage?.metadata?.process_node_key || '',
+    ).trim();
+    const laneKeyOf = (stage: any) => String(
+      stage?.process_lane_key || stage?.metadata?.process_lane_key || 'lane_1',
+    ).trim() || 'lane_1';
+    let nodeKeys: string[] = [];
+
+    if (action.type === 'activate_specific_process_stage') {
+      nodeKeys = (
+        Array.isArray(config.stage_node_keys)
+          ? config.stage_node_keys
+          : [config.stage_node_key]
+      ).map((value: any) => String(value || '').trim()).filter(Boolean);
+    } else {
+      const currentNodeKey = String(
+        record?.process_node_key || recurrence?.process_node_key || record?.current_process_node_key || '',
+      ).trim();
+      const currentStage = stages.find((stage: any) => nodeKeyOf(stage) === currentNodeKey);
+      if (currentStage) {
+        const sameLane = stages
+          .filter((stage: any) => laneKeyOf(stage) === laneKeyOf(currentStage))
+          .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0));
+        const currentIndex = sameLane.findIndex((stage: any) => nodeKeyOf(stage) === currentNodeKey);
+        const directNext = currentIndex >= 0 ? sameLane[currentIndex + 1] : null;
+        if (directNext) {
+          nodeKeys = [nodeKeyOf(directNext)].filter(Boolean);
+        } else {
+          const graph = currentStage?.metadata?.process_graph || recurrence?.process_graph || {};
+          const triggers = Array.isArray(graph?.triggers) ? graph.triggers : [];
+          const targetLaneKeys = new Set(
+            triggers
+              .filter((trigger: any) => String(trigger?.sourceNodeKey || '').trim() === currentNodeKey)
+              .flatMap((trigger: any) => Array.isArray(trigger?.targetLaneKeys) ? trigger.targetLaneKeys : [])
+              .map((value: any) => String(value || '').trim())
+              .filter(Boolean),
+          );
+          nodeKeys = Array.from(targetLaneKeys)
+            .map((laneKey) => stages
+              .filter((stage: any) => laneKeyOf(stage) === laneKey)
+              .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0))[0])
+            .filter(Boolean)
+            .map(nodeKeyOf)
+            .filter(Boolean);
+        }
+      }
+    }
+
+    if (nodeKeys.length === 0 && Array.isArray(config.target_lane_keys)) {
+      const targetLaneKeys = new Set(
+        config.target_lane_keys
+          .map((value: any) => String(value || '').trim())
+          .filter(Boolean),
+      );
+      nodeKeys = Array.from(targetLaneKeys)
+        .map((laneKey) => stages
+          .filter((stage: any) => laneKeyOf(stage) === laneKey)
+          .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0))[0])
+        .filter(Boolean)
+        .map(nodeKeyOf)
+        .filter(Boolean);
+    }
+
+    if (nodeKeys.length === 0) return actionResult(action, 'skipped', 'مرحله مقصد برای فعال‌سازی پیدا نشد.');
+    const result = await callRpc(url, key, 'activate_process_run_nodes', {
+      p_org_id: orgId,
+      p_process_run_id: processRunId,
+      p_node_keys: Array.from(new Set(nodeKeys)),
+      p_actor_user_id: actorUserId || null,
+    });
+    return actionResult(action, 'success', undefined, {
+      affected_count: Array.isArray(result?.created_task_ids) ? result.created_task_ids.length : nodeKeys.length,
+      details: { process_run_id: processRunId, process_node_keys: nodeKeys },
+    });
   }
 
   // ── execute_process ───────────────────────────────────────────────────
   if (action.type === 'execute_process') {
     const templateId = String(config.template_id || '').trim();
     if (!templateId || !record?.id) return actionResult(action, 'skipped', 'قالب فرآیند یا رکورد مقصد مشخص نیست.');
-    await callRpc(url, key, 'create_process_run_from_template', {
+    const runIdResult = await callRpc(url, key, 'create_process_run_from_template', {
       p_org_id: orgId,
       p_template_id: templateId,
       p_module_id: moduleId,
@@ -1564,6 +2346,11 @@ async function executeAction(
       p_process_name: null,
       p_copied_mode: 'auto',
     });
+    const processRunId = Array.isArray(runIdResult) ? String(runIdResult[0] || '').trim() : String(runIdResult || '').trim();
+    if (actorUserId && processRunId) {
+      await dbPatch(url, key, 'process_runs', `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+      await dbPatch(url, key, 'process_run_stages', `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+    }
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
   }
 
@@ -1584,13 +2371,13 @@ async function executeAction(
     await updateRecord(url, key, moduleId, String(record.id), {
       process_template_id: templateId,
       [draftFieldKey]: JSON.stringify(draft),
-    });
+    }, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
   }
 
   // ── publish_story ─────────────────────────────────────────────────────
   if (action.type === 'publish_story') {
-    const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key)).trim();
+    const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key, false, orgId)).trim();
     if (!content) return actionResult(action, 'skipped', 'متن استوری خالی است.');
     const publisher = await resolveStoryPublisher(
       url,
@@ -1639,30 +2426,46 @@ async function executeAction(
     return actionResult(action, 'success', undefined, { affected_count: 1 });
   }
 
-  // ── send_to_next_stages ───────────────────────────────────────────────
-  if (action.type === 'send_to_next_stages') {
+  // ── send to process stages ────────────────────────────────────────────
+  if (action.type === 'send_to_next_stages' || action.type === 'send_to_specific_stage') {
     const fieldMeta = parseProcessNextStageFieldKey(String(config.field || '').trim());
     const fieldKey = fieldMeta?.fieldKey || String(config.field || '').trim();
-    if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد مرحله بعد مشخص نیست.');
+    if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد مرحله مقصد مشخص نیست.');
     const processRunId = String(record.process_run_id || '').trim();
     if (!processRunId) return actionResult(action, 'skipped', 'فرآیند مرتبط با رکورد پیدا نشد.');
     const nextValue = await resolveConfiguredActionValue(config, record, url, key);
     const tasks = await dbGet(url, key,
-      `tasks?process_run_id=eq.${processRunId}&order=sort_order.asc&select=id,sort_order,status`
+      `tasks?process_run_id=eq.${processRunId}&order=sort_order.asc&select=id,sort_order,status,process_node_key,recurrence_info`
     ).catch(() => []);
-    const currentTaskId = String(record.task_id || record.id || '').trim();
-    const currentIdx = tasks.findIndex((t: any) => String(t.id) === currentTaskId);
-    const offset = fieldMeta?.offset || parseInt(String(config.stage_offset || 1), 10) || 1;
-    const targetTask = tasks[currentIdx + offset];
+    let targetTask: any = null;
+    let offset = 0;
+    if (action.type === 'send_to_specific_stage') {
+      const targetNodeKey = String(config.stage_node_key || '').trim();
+      targetTask = tasks.find((task: any) => String(
+        task?.process_node_key || task?.recurrence_info?.process_node_key || '',
+      ).trim() === targetNodeKey);
+    } else {
+      const currentTaskId = String(record.task_id || record.id || '').trim();
+      const currentIdx = tasks.findIndex((t: any) => String(t.id) === currentTaskId);
+      offset = fieldMeta?.offset || parseInt(String(config.stage_offset || 1), 10) || 1;
+      targetTask = tasks[currentIdx + offset];
+    }
     if (!targetTask?.id) return actionResult(action, 'skipped', 'مرحله مقصد پیدا نشد.');
-    await updateRecord(url, key, 'tasks', String(targetTask.id), { [fieldKey]: nextValue });
-    return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey, stage_offset: offset } });
+    await updateRecord(url, key, 'tasks', String(targetTask.id), { [fieldKey]: nextValue }, actorUserId);
+    return actionResult(action, 'success', undefined, {
+      affected_count: 1,
+      details: {
+        field: fieldKey,
+        stage_offset: offset || null,
+        stage_node_key: action.type === 'send_to_specific_stage' ? config.stage_node_key : null,
+      },
+    });
   }
 
   // ── send_email ────────────────────────────────────────────────────────
   if (action.type === 'send_email') {
-    const subject = (await renderTemplateAsync(String(config.subject || ''), record, url, key)).trim();
-    const body = (await renderTemplateAsync(String(config.body || ''), record, url, key)).trim();
+    const subject = (await renderTemplateAsync(String(config.subject || ''), record, url, key, false, orgId)).trim();
+    const body = (await renderTemplateAsync(String(config.body || ''), record, url, key, false, orgId)).trim();
     if (!subject && !body) return actionResult(action, 'skipped', 'موضوع و متن ایمیل خالی است.');
     const manuals: string[] = (Array.isArray(config.manual_emails) ? config.manual_emails : [])
       .map((v: any) => String(v || '').trim()).filter(Boolean);
@@ -1705,103 +2508,113 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
 
   for (const workflow of workflows) {
     // Re-validate: check interval schedule + day condition (pg_cron doesn't check all of these)
-    if (!checkIntervalDue(workflow, now)) {
+    const scheduledDueAt = getWorkflowScheduledDueAt(workflow, now);
+    if (!scheduledDueAt) {
       await clearServerQueued(url, key, workflow.id);
       continue;
     }
-    if (!checkIntervalDayCondition(workflow.interval_day_condition, now)) {
+    if (!checkIntervalDayCondition(workflow.interval_day_condition, scheduledDueAt)) {
       await clearServerQueued(url, key, workflow.id);
       continue;
     }
 
-    const claimed = await claimWorkflow(url, key, workflow.id, workflow.last_run_at);
+    const claimed = await claimWorkflow(url, key, workflow.id, workflow.last_run_at, scheduledDueAt);
     if (!claimed) continue;
     stats.claimedWorkflows++;
 
-    const targetTable = getModuleTable(String(workflow.module_id || '').trim());
     const batchSize = Math.max(10, Math.min(5000, Number(workflow.batch_size || DEFAULT_BATCH_SIZE)));
-    const records = await fetchModuleRecords(url, key, targetTable, workflow.org_id, batchSize).catch((e) => {
-      console.error('[workflow-runner] Record fetch failed:', e.message); return [];
-    });
-
     const conditionsAll = (Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [])
       .filter((c) => !['changed', 'changed_from', 'changed_to'].includes(String(c?.operator || '')));
     const conditionsAny = (Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [])
       .filter((c) => !['changed', 'changed_from', 'changed_to'].includes(String(c?.operator || '')));
 
     const executionMode = String(workflow.execution_mode || 'first_match');
-    let executedRecordIds: Set<string> | null = null;
+    const actorUserId = resolveWorkflowActorId(workflow);
+    const targetModuleIds = Array.from(new Set(
+      workflow.scope_type === 'process_activator'
+        && !String(workflow.process_source_node_key || '').trim()
+        && Array.isArray(workflow.module_ids)
+        ? workflow.module_ids
+        : [workflow.module_id],
+    )).map((value) => String(value || '').trim()).filter(Boolean);
 
-    if (executionMode === 'first_match' && records.length > 0) {
-      const recordIds = records.map((r: any) => String(r?.id || '')).filter(Boolean);
-      if (recordIds.length > 0) {
-        const idList = recordIds.join(',');
-        const logs = await dbGet(url, key,
-          `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${workflow.module_id}&status=eq.success&record_id=in.(${idList})&select=record_id`
-        ).catch(() => []);
-        executedRecordIds = new Set(logs.map((l: any) => String(l?.record_id || '')));
-      }
-    }
+    for (const targetModuleId of targetModuleIds) {
+      const targetTable = getModuleTable(targetModuleId);
+      const records = await fetchModuleRecords(url, key, targetTable, workflow.org_id, batchSize).catch((e) => {
+        console.error('[workflow-runner] Record fetch failed:', e.message); return [];
+      });
+      let executedRecordIds: Set<string> | null = null;
 
-    for (const record of records) {
-      stats.processedRecords++;
-      const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
-      if (!matched) continue;
-
-      const recordId = String(record?.id || '').trim();
-      if (executionMode === 'first_match' && recordId) {
-        if (executedRecordIds?.has(recordId)) continue;
-      }
-
-      const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-      const errors: string[] = [];
-      const actionResults: ActionExecutionResult[] = [];
-
-      for (const action of actions) {
-        try {
-          const result = await executeAction(action as WorkflowAction, record, workflow.module_id, workflow.org_id, url, key);
-          actionResults.push(result);
-          if (result.status === 'success') stats.executedActions++;
-          if (result.status === 'failed') {
-            errors.push(result.message || String(action.type || 'action failed'));
-            stats.failedRuns++;
-          }
-        } catch (e: any) {
-          const errorMessage = String(e?.message || action.type || 'action failed');
-          errors.push(errorMessage);
-          actionResults.push({
-            action_type: String((action as any)?.type || ''),
-            action_id: (action as any)?.id || null,
-            status: 'failed',
-            message: errorMessage,
-          });
-          console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
-          stats.failedRuns++;
+      if (executionMode === 'first_match' && records.length > 0) {
+        const recordIds = records.map((r: any) => String(r?.id || '')).filter(Boolean);
+        if (recordIds.length > 0) {
+          const idList = recordIds.join(',');
+          const logs = await dbGet(url, key,
+            `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${targetModuleId}&status=eq.success&record_id=in.(${idList})&select=record_id`
+          ).catch(() => []);
+          executedRecordIds = new Set(logs.map((l: any) => String(l?.record_id || '')));
         }
       }
 
-      if (recordId) {
-        const hasFailedAction = actionResults.some((result) => result.status === 'failed');
-        const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
-        const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
-        const skippedMessage = !hasSuccessfulAction && errors.length === 0
-          ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
-          : undefined;
-        await insertWorkflowLog(url, key, {
-          workflow_id: workflow.id, org_id: workflow.org_id,
-          module_id: workflow.module_id, record_id: recordId,
-          run_type: 'scheduled',
-          status: runStatus,
-          message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
-          details: {
-            workflow_name: workflow.name,
-            action_count: actions.length,
-            action_results: actionResults,
-            timezone: 'Asia/Tehran',
-            runner_build: FUNCTION_BUILD,
-          },
-        });
-        if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
+      for (const record of records) {
+        stats.processedRecords++;
+        const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
+        if (!matched) continue;
+
+        const recordId = String(record?.id || '').trim();
+        if (executionMode === 'first_match' && recordId && executedRecordIds?.has(recordId)) continue;
+
+        const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+        const errors: string[] = [];
+        const actionResults: ActionExecutionResult[] = [];
+
+        for (const action of actions) {
+          try {
+            const result = await executeAction(action as WorkflowAction, record, targetModuleId, workflow.org_id, url, key, actorUserId);
+            actionResults.push(result);
+            if (result.status === 'success') stats.executedActions++;
+            if (result.status === 'failed') {
+              errors.push(result.message || String(action.type || 'action failed'));
+              stats.failedRuns++;
+            }
+          } catch (e: any) {
+            const errorMessage = String(e?.message || action.type || 'action failed');
+            errors.push(errorMessage);
+            actionResults.push({
+              action_type: String((action as any)?.type || ''),
+              action_id: (action as any)?.id || null,
+              status: 'failed',
+              message: errorMessage,
+            });
+            console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
+            stats.failedRuns++;
+          }
+        }
+
+        if (recordId) {
+          const hasFailedAction = actionResults.some((result) => result.status === 'failed');
+          const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
+          const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
+          const skippedMessage = !hasSuccessfulAction && errors.length === 0
+            ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
+            : undefined;
+          await insertWorkflowLog(url, key, {
+            workflow_id: workflow.id, org_id: workflow.org_id,
+            module_id: targetModuleId, record_id: recordId,
+            run_type: 'scheduled',
+            status: runStatus,
+            message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
+            details: {
+              workflow_name: workflow.name,
+              action_count: actions.length,
+              action_results: actionResults,
+              timezone: 'Asia/Tehran',
+              scheduled_due_at: scheduledDueAt.toISOString(),
+              runner_build: FUNCTION_BUILD,
+            },
+          });
+          if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
+        }
       }
     }
   }

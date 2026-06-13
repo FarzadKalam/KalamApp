@@ -1,9 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, Modal, Tabs } from 'antd';
+import { App, Button, Checkbox, Modal, Segmented, Tabs } from 'antd';
 import { DownOutlined, EyeOutlined, MinusOutlined, PlusOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons';
 import { createPortal } from 'react-dom';
 import { printStyles } from '../../utils/printTemplates';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import PrintSignatureConfigurator from './PrintSignatureConfigurator';
+import type {
+  PrintSignatureDerivedState,
+  PrintSignatureKind,
+  PrintSignatureQuickAddOption,
+  PrintSignatureSignerModule,
+} from '../../utils/printTemplates/signatures';
 
 interface PrintSectionProps {
   isPrintModalOpen: boolean;
@@ -23,9 +30,29 @@ interface PrintSectionProps {
   onTogglePrintField?: (templateId: string, fieldName: string) => void;
   onTogglePrintFieldGroup?: (templateId: string, groupName: string) => void;
   onMovePrintField?: (templateId: string, fieldName: string, direction: 'up' | 'down') => void;
+  imageDisplayMode?: 'fit' | 'actual';
+  onChangeImageDisplayMode?: (templateId: string, mode: 'fit' | 'actual') => void;
   onSavePrintFields?: () => void | Promise<boolean>;
   savingPrintFields?: boolean;
   allowFieldSelectionTab?: boolean;
+  showImageDisplayModeControl?: boolean;
+  printSignatureRows?: PrintSignatureDerivedState[];
+  printSignatureQuickAddOptions?: PrintSignatureQuickAddOption[];
+  signatureOptionsByRow?: Record<string, any[]>;
+  onAddPrintSignatureRow?: (kind: PrintSignatureKind) => void;
+  onRemovePrintSignatureRow?: (rowId: string) => void;
+  onMovePrintSignatureRow?: (rowId: string, direction: 'up' | 'down') => void;
+  onTogglePrintSignatureAutomatic?: (rowId: string, automatic: boolean) => void;
+  onChangePrintSignatureName?: (rowId: string, value: string) => void;
+  onChangePrintSignatureSubtitle?: (rowId: string, value: string) => void;
+  onChangePrintSignatureSignerModule?: (rowId: string, signerModule: PrintSignatureSignerModule) => void;
+  onChangePrintSignatureSignerId?: (rowId: string, signerId: string | null) => void;
+  onSearchPrintSignatureOptions?: (
+    rowId: string,
+    signerModule: PrintSignatureSignerModule,
+    search?: string,
+    exactId?: string | null
+  ) => Promise<void> | void;
   previewMeta?: {
     paperSize?: 'A4' | 'A5' | 'A6';
     orientation?: 'portrait' | 'landscape';
@@ -66,9 +93,24 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onTogglePrintField = () => {},
   onTogglePrintFieldGroup = () => {},
   onMovePrintField = () => {},
+  imageDisplayMode = 'fit',
+  onChangeImageDisplayMode = () => {},
   onSavePrintFields,
   savingPrintFields = false,
   allowFieldSelectionTab = false,
+  showImageDisplayModeControl = false,
+  printSignatureRows = [],
+  printSignatureQuickAddOptions = [],
+  signatureOptionsByRow = {},
+  onAddPrintSignatureRow = () => {},
+  onRemovePrintSignatureRow = () => {},
+  onMovePrintSignatureRow = () => {},
+  onTogglePrintSignatureAutomatic = () => {},
+  onChangePrintSignatureName = () => {},
+  onChangePrintSignatureSubtitle = () => {},
+  onChangePrintSignatureSignerModule = () => {},
+  onChangePrintSignatureSignerId = () => {},
+  onSearchPrintSignatureOptions = () => Promise.resolve(),
   previewMeta,
 }) => {
   const { message } = App.useApp();
@@ -111,6 +153,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
     Boolean(selectedTemplateId) &&
     Boolean(allowFieldSelectionTab) &&
     printableFields.length > 0;
+  const isSignatureTabAvailable = Boolean(selectedTemplateId);
 
   const selectedFieldCount = (selectedPrintFields[selectedTemplateId] || []).length;
   const mobileTemplateOptions = useMemo(
@@ -540,6 +583,23 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                               </div>
                             </div>
                             <div className="print-fields-scroll">
+                              {showImageDisplayModeControl ? (
+                                <div className="print-image-mode-panel">
+                                  <div className="print-image-mode-header">
+                                    <div className="print-image-mode-title">نوع نمایش تصویر</div>
+                                  </div>
+                                  <Segmented
+                                    block={isMobile}
+                                    size="middle"
+                                    value={imageDisplayMode}
+                                    onChange={(value) => onChangeImageDisplayMode(selectedTemplateId, value as 'fit' | 'actual')}
+                                    options={[
+                                      { label: 'فیت', value: 'fit' },
+                                      { label: 'اندازه واقعی', value: 'actual' },
+                                    ]}
+                                  />
+                                </div>
+                              ) : null}
                               {orderPanelOpen && orderedSelectedFields.length > 0 ? (
                                 <div className="print-selected-fields-panel">
                                   <div className="print-selected-fields-title">ترتیب چاپ فیلدهای انتخاب‌شده</div>
@@ -610,6 +670,34 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                 </div>
                               ))}
                             </div>
+                            </div>
+                          </div>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(isSignatureTabAvailable
+                  ? [
+                      {
+                        key: 'signatures',
+                        label: <span style={{ direction: 'rtl' }}>مهر و امضا</span>,
+                        children: (
+                          <div className="print-fields-pane">
+                            <div className="print-fields-scroll">
+                              <PrintSignatureConfigurator
+                                rows={printSignatureRows}
+                                quickAddOptions={printSignatureQuickAddOptions}
+                                signatureOptionsByRow={signatureOptionsByRow}
+                                onAddRow={onAddPrintSignatureRow}
+                                onRemoveRow={onRemovePrintSignatureRow}
+                                onMoveRow={onMovePrintSignatureRow}
+                                onToggleAutomatic={onTogglePrintSignatureAutomatic}
+                                onChangeName={onChangePrintSignatureName}
+                                onChangeSubtitle={onChangePrintSignatureSubtitle}
+                                onChangeSignerModule={onChangePrintSignatureSignerModule}
+                                onChangeSignerId={onChangePrintSignatureSignerId}
+                                onSearchSignerOptions={onSearchPrintSignatureOptions}
+                              />
                             </div>
                           </div>
                         ),
@@ -1111,6 +1199,105 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           min-height: 0;
           overflow: auto;
         }
+        .print-signature-pane {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          padding: 12px 16px 16px;
+        }
+        .print-signature-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+          direction: rtl;
+        }
+        .print-signature-toolbar-copy {
+          font-size: 12px;
+          color: #64748b;
+        }
+        .print-signature-toolbar-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .print-signature-empty {
+          border-radius: 18px;
+          border: 1px dashed rgba(148,163,184,0.26);
+          background: rgba(248,250,252,0.82);
+          padding: 18px;
+        }
+        .print-signature-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .print-signature-card {
+          border-radius: 18px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(255,255,255,0.86);
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .print-signature-card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+          direction: rtl;
+        }
+        .print-signature-card-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .print-signature-card-index {
+          width: 24px;
+          height: 24px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(var(--brand-500-rgb),0.14);
+          color: rgba(var(--brand-700-rgb),1);
+          font-size: 12px;
+          font-weight: 800;
+        }
+        .print-signature-card-source {
+          font-size: 12px;
+          color: #64748b;
+        }
+        .print-signature-card-actions {
+          display: flex;
+          gap: 8px;
+        }
+        .print-signature-card-body {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .print-signature-auto-row {
+          display: flex;
+          align-items: center;
+          justify-content: flex-start;
+          direction: rtl;
+        }
+        .print-signature-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          gap: 12px;
+        }
+        .print-signature-label {
+          font-size: 12px;
+          color: #475569;
+          margin-bottom: 6px;
+          direction: rtl;
+        }
         .print-fields-toolbar {
           display: flex;
           align-items: center;
@@ -1138,6 +1325,28 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           border-radius: 16px;
           border: 1px solid rgba(148,163,184,0.22);
           background: rgba(248,250,252,0.82);
+        }
+        .print-image-mode-panel {
+          margin: 12px 16px 0;
+          padding: 12px;
+          border-radius: 16px;
+          border: 1px solid rgba(148,163,184,0.22);
+          background: rgba(248,250,252,0.82);
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          direction: rtl;
+        }
+        .print-image-mode-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .print-image-mode-title {
+          font-size: 12px;
+          font-weight: 800;
+          color: #334155;
         }
         .print-selected-fields-title {
           font-size: 12px;
@@ -1174,6 +1383,13 @@ const PrintSection: React.FC<PrintSectionProps> = ({
         .dark .print-selected-fields-panel {
           background: rgba(15,23,42,0.7);
           border-color: rgba(71,85,105,0.4);
+        }
+        .dark .print-image-mode-panel {
+          background: rgba(15,23,42,0.7);
+          border-color: rgba(71,85,105,0.4);
+        }
+        .dark .print-image-mode-title {
+          color: #e2e8f0;
         }
         .dark .print-selected-fields-title {
           color: #e2e8f0;
@@ -1333,6 +1549,9 @@ const PrintSection: React.FC<PrintSectionProps> = ({
             flex: 1 1 0;
           }
           .print-selected-fields-panel {
+            margin: 12px 12px 0;
+          }
+          .print-image-mode-panel {
             margin: 12px 12px 0;
           }
           .print-selected-field-row {

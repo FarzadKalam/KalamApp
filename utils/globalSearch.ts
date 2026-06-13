@@ -45,6 +45,18 @@ const ARABIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const FALLBACK_SEARCH_LIMIT = 8;
 const SEARCH_CACHE_TTL_MS = 30000;
 const FALLBACK_CONCURRENCY = 6;
+const GLOBAL_SEARCH_FAST_MODULE_IDS = [
+  'customers',
+  'suppliers',
+  'employees',
+  'products',
+  'invoices',
+  'purchase_invoices',
+  'tasks',
+  'projects',
+  'marketing_leads',
+  'secretariat_documents',
+];
 
 export const GLOBAL_SEARCH_MIN_QUERY_LENGTH = 2;
 
@@ -58,6 +70,7 @@ const ILIKE_SEARCHABLE_FIELD_TYPES = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.STATUS,
 ]);
+const PHONE_LIKE_KEY_REGEX = /(phone|mobile|tel|cell|sender|recipient|source_number|destination_number|respondent_phone)/i;
 
 export const digitsToEnglish = (value: unknown): string =>
   String(value ?? '')
@@ -192,7 +205,7 @@ export const buildGlobalSearchModules = (
         return acc;
       }, {});
       const phoneKeys = (module.fields || [])
-        .filter((field: any) => field?.type === FieldType.PHONE || /phone|mobile/i.test(String(field?.key || '')))
+        .filter((field: any) => field?.type === FieldType.PHONE || PHONE_LIKE_KEY_REGEX.test(String(field?.key || '')))
         .map((field: any) => String(field.key || '').trim())
         .filter((key: string) => keys.includes(key));
 
@@ -207,6 +220,18 @@ export const buildGlobalSearchModules = (
       };
     })
     .filter((module) => module.keys.length > 0);
+
+export const splitGlobalSearchModulesByPriority = (
+  modules: GlobalSearchModule[]
+): { fastModules: GlobalSearchModule[]; remainingModules: GlobalSearchModule[] } => {
+  const priority = new Map(GLOBAL_SEARCH_FAST_MODULE_IDS.map((moduleId, index) => [moduleId, index]));
+  const fastModules = modules
+    .filter((module) => priority.has(module.id))
+    .sort((left, right) => (priority.get(left.id) ?? 999) - (priority.get(right.id) ?? 999));
+  const fastModuleIds = new Set(fastModules.map((module) => module.id));
+  const remainingModules = modules.filter((module) => !fastModuleIds.has(module.id));
+  return { fastModules, remainingModules };
+};
 
 const escapePostgrestSearchTerm = (value: string): string =>
   String(value || '')

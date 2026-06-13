@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   App,
   Button,
@@ -8,8 +8,11 @@ import {
   InputNumber,
   Modal,
   Radio,
+  Segmented,
+  Spin,
   Switch,
 } from 'antd';
+import { ApartmentOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { FieldType, ModuleField } from '../../types';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
@@ -31,18 +34,29 @@ import {
   WorkflowCondition,
   WorkflowModuleOption,
   WorkflowRecord,
+  createWorkflowId,
   intervalUnitOptions,
   triggerTypeOptions,
   workflowExecutionModeOptions,
 } from '../../utils/workflowTypes';
+import { getWorkflowActionTypeLabelFa } from '../../utils/workflowActionSummary';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
   resolveOverlayPopupContainer,
 } from '../../utils/popupContainer';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import PersianDatePicker from '../PersianDatePicker';
-import WorkflowActionsBuilder from './WorkflowActionsBuilder';
+import WorkflowActionsBuilder, { getDefaultActionConfig } from './WorkflowActionsBuilder';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
+import { buildWorkflowFlowDocument } from './flow/flowAdapters';
+import { FlowSelection } from './flow/flowTypes';
+import {
+  WorkflowEditorViewMode,
+  persistWorkflowViewMode,
+  readStoredWorkflowViewMode,
+} from './flow/viewModePreference';
+
+const WorkflowFlowSurface = lazy(() => import('./flow/WorkflowFlowSurface'));
 
 type WorkflowEditorModalProps = {
   open: boolean;
@@ -198,6 +212,8 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const [conditionsAll, setConditionsAll] = useState<WorkflowCondition[]>([]);
   const [conditionsAny, setConditionsAny] = useState<WorkflowCondition[]>([]);
   const [actions, setActions] = useState<WorkflowAction[]>([]);
+  const [viewMode, setViewMode] = useState<WorkflowEditorViewMode>(() => readStoredWorkflowViewMode());
+  const [flowSelection, setFlowSelection] = useState<FlowSelection | null>(null);
 
   const selectedModuleFields: ModuleField[] = useMemo(
     () => MODULES[moduleId]?.fields || [],
@@ -222,8 +238,83 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const triggerType = Form.useWatch('trigger_type', form);
   const intervalUnit = Form.useWatch('interval_unit', form);
   const intervalDayCondition = Form.useWatch('interval_day_condition', form);
+  const intervalValue = Form.useWatch('interval_value', form);
+  const intervalDayOfMonth = Form.useWatch('interval_day_of_month', form);
+  const isActiveValue = Form.useWatch('is_active', form);
 
   const showDaysAfterHoliday = intervalDayCondition === 'not_friday' || intervalDayCondition === 'not_friday_or_holiday';
+
+  const flowDocument = useMemo(
+    () =>
+      buildWorkflowFlowDocument({
+        trigger_type: triggerType,
+        interval_value: intervalValue ?? null,
+        interval_unit: intervalUnit ?? null,
+        interval_day_of_month: intervalDayOfMonth ?? null,
+        interval_day_condition: intervalDayCondition ?? null,
+        is_active: isActiveValue !== false,
+        conditionsAll,
+        conditionsAny,
+        actions,
+      }),
+    [triggerType, intervalValue, intervalUnit, intervalDayOfMonth, intervalDayCondition, isActiveValue, conditionsAll, conditionsAny, actions]
+  );
+
+  const handleViewModeChange = useCallback((nextMode: WorkflowEditorViewMode) => {
+    setViewMode(nextMode);
+    persistWorkflowViewMode(nextMode);
+  }, []);
+
+  const handleAddAction = useCallback((insertIndex: number) => {
+    if (!canEdit) return;
+    const newAction: WorkflowAction = {
+      id: createWorkflowId(),
+      type: 'send_note',
+      config: getDefaultActionConfig('send_note'),
+    };
+    setActions((prev) => {
+      const next = [...prev];
+      const boundedIndex = Math.max(0, Math.min(insertIndex, next.length));
+      next.splice(boundedIndex, 0, newAction);
+      return next;
+    });
+    setFlowSelection({ kind: 'action', actionId: newAction.id });
+  }, [canEdit]);
+
+  const handleMoveAction = useCallback((actionId: string, direction: -1 | 1) => {
+    setActions((prev) => {
+      const fromIndex = prev.findIndex((item) => String(item.id) === String(actionId));
+      const toIndex = fromIndex + direction;
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const temp = next[fromIndex];
+      next[fromIndex] = next[toIndex];
+      next[toIndex] = temp;
+      return next;
+    });
+  }, []);
+
+  const handleDeleteAction = useCallback((actionId: string) => {
+    setActions((prev) => prev.filter((item) => String(item.id) !== String(actionId)));
+    setFlowSelection((prev) => (
+      prev?.kind === 'action' && String(prev.actionId) === String(actionId) ? null : prev
+    ));
+  }, []);
+
+  const handleDuplicateAction = useCallback((actionId: string) => {
+    const sourceIndex = actions.findIndex((item) => String(item.id) === String(actionId));
+    if (sourceIndex < 0) return;
+    const source = actions[sourceIndex];
+    const cloned: WorkflowAction = {
+      id: createWorkflowId(),
+      type: source.type,
+      config: JSON.parse(JSON.stringify(source.config || {})),
+    };
+    const next = [...actions];
+    next.splice(sourceIndex + 1, 0, cloned);
+    setActions(next);
+    setFlowSelection({ kind: 'action', actionId: cloned.id });
+  }, [actions]);
 
   useEffect(() => {
     if (!open) return;
@@ -251,6 +342,7 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     setConditionsAll(Array.isArray(record?.conditions_all) ? (record.conditions_all as any) : []);
     setConditionsAny(Array.isArray(record?.conditions_any) ? (record.conditions_any as any) : []);
     setActions(Array.isArray(record?.actions) ? (record.actions as any) : []);
+    setFlowSelection(null);
   }, [open, record, initialModuleId, form]);
 
   useEffect(() => {
@@ -362,32 +454,10 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
     }
   };
 
-  return (
-    <Modal
-      open={open}
-      onCancel={onClose}
-      title={isEditMode ? 'ویرایش گردش کار' : 'ایجاد گردش کار جدید'}
-      width={1120}
-      zIndex={13000}
-      destroyOnHidden
-      footer={[
-        <Button key="cancel" onClick={onClose}>
-          انصراف
-        </Button>,
-        <Button
-          key="save"
-          type="primary"
-          loading={submitting}
-          disabled={!canEdit}
-          onClick={handleSubmit}
-          className="bg-leather-600 hover:!bg-leather-500"
-        >
-          {isEditMode ? 'ذخیره تغییرات' : 'ثبت گردش کار'}
-        </Button>,
-      ]}
-    >
-      <Form form={form} layout="vertical" disabled={!canEdit}>
-        <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
+  const isDiagramMode = viewMode === 'diagram';
+
+  const renderMetaSection = () => (
+    <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Form.Item label="ماژول مرتبط" name="module_id" rules={[{ required: true }]}>
               <AdaptiveSelectField
@@ -418,7 +488,9 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
           </Form.Item>
         </div>
+  );
 
+  const renderTriggerSection = () => (
         <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
           <h4 className="font-bold mb-3">شرایط اجرا</h4>
           <Form.Item name="trigger_type" initialValue="on_create">
@@ -565,66 +637,175 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             </div>
           )}
         </div>
+  );
 
-        <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
-          <h4 className="font-bold mb-3">شرط‌ها</h4>
-          <Collapse
-            defaultActiveKey={['all_conditions']}
-            items={[
-              {
-                key: 'all_conditions',
-                label: 'حتما همه این شرط‌ها باید برقرار باشند',
-                children: (
-                  <WorkflowConditionsGroup
-                    value={conditionsAll}
-                    onChange={setConditionsAll}
-                    fields={conditionFields}
-                    dynamicOptions={dynamicOptions}
-                    relationOptions={relationOptions}
-                    disabled={!canEdit}
-                    overlayZIndexBase={overlayZIndexBase}
-                    popupContainer={resolveOverlayPopupContainer}
-                    adaptiveMode="desktop"
-                  />
-                ),
-              },
-              {
-                key: 'any_conditions',
-                label: 'کافی است فقط یکی از این شرط‌ها برقرار باشد',
-                children: (
-                  <WorkflowConditionsGroup
-                    value={conditionsAny}
-                    onChange={setConditionsAny}
-                    fields={conditionFields}
-                    dynamicOptions={dynamicOptions}
-                    relationOptions={relationOptions}
-                    disabled={!canEdit}
-                    overlayZIndexBase={overlayZIndexBase}
-                    popupContainer={resolveOverlayPopupContainer}
-                    adaptiveMode="desktop"
-                  />
-                ),
-              },
+  const renderConditionsGroup = (kind: 'all' | 'any') => (
+    <WorkflowConditionsGroup
+      value={kind === 'all' ? conditionsAll : conditionsAny}
+      onChange={kind === 'all' ? setConditionsAll : setConditionsAny}
+      fields={conditionFields}
+      dynamicOptions={dynamicOptions}
+      relationOptions={relationOptions}
+      disabled={!canEdit}
+      overlayZIndexBase={overlayZIndexBase}
+      popupContainer={resolveOverlayPopupContainer}
+      adaptiveMode="desktop"
+    />
+  );
+
+  const getFlowInspectorTitle = (selection: FlowSelection): string => {
+    if (selection.kind === 'trigger') return 'مشخصات و شرایط اجرا';
+    if (selection.kind === 'conditions') return 'شرط‌ها';
+    const action = actions.find((item) => String(item.id) === String(selection.actionId));
+    return action ? getWorkflowActionTypeLabelFa(action.type) : 'تنظیمات اقدام';
+  };
+
+  const renderFlowInspector = (selection: FlowSelection): React.ReactNode => {
+    if (selection.kind === 'conditions') {
+      return (
+        <div className="space-y-4">
+          <div>
+            <div className="mb-2 text-xs font-semibold text-gray-500">حتما همه این شرط‌ها باید برقرار باشند</div>
+            {renderConditionsGroup('all')}
+          </div>
+          <div>
+            <div className="mb-2 text-xs font-semibold text-gray-500">کافی است فقط یکی از این شرط‌ها برقرار باشد</div>
+            {renderConditionsGroup('any')}
+          </div>
+        </div>
+      );
+    }
+    if (selection.kind === 'action') {
+      return (
+        <WorkflowActionsBuilder
+          value={actions}
+          onChange={setActions}
+          visibleActionIds={[String(selection.actionId)]}
+          hideAddButton
+          hideReorderControls
+          currentModuleId={moduleId}
+          currentModuleFields={selectedModuleFields}
+          variableFields={conditionFields}
+          moduleOptions={moduleOptions}
+          dynamicOptions={dynamicOptions}
+          relationOptions={relationOptions}
+          disabled={!canEdit}
+          overlayZIndexBase={overlayZIndexBase}
+          popupContainer={resolveOverlayPopupContainer}
+        />
+      );
+    }
+    return null;
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title={
+        <div className="flex flex-wrap items-center gap-3 pe-8">
+          <span>{isEditMode ? 'ویرایش گردش کار' : 'ایجاد گردش کار جدید'}</span>
+          <Segmented
+            size="small"
+            value={viewMode}
+            onChange={(value) => handleViewModeChange(value as WorkflowEditorViewMode)}
+            options={[
+              { label: 'فرم کلاسیک', value: 'form', icon: <UnorderedListOutlined /> },
+              { label: 'نمای دیاگرام', value: 'diagram', icon: <ApartmentOutlined /> },
             ]}
           />
         </div>
+      }
+      width={isDiagramMode ? '100vw' : 1120}
+      style={isDiagramMode ? { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 } : undefined}
+      styles={isDiagramMode ? { body: { height: 'calc(100vh - 130px)', padding: 0, overflow: 'hidden' } } : undefined}
+      zIndex={13000}
+      destroyOnHidden
+      footer={[
+        <Button key="cancel" onClick={onClose}>
+          انصراف
+        </Button>,
+        <Button
+          key="save"
+          type="primary"
+          loading={submitting}
+          disabled={!canEdit}
+          onClick={handleSubmit}
+          className="bg-leather-600 hover:!bg-leather-500"
+        >
+          {isEditMode ? 'ذخیره تغییرات' : 'ثبت گردش کار'}
+        </Button>,
+      ]}
+    >
+      <Form form={form} layout="vertical" disabled={!canEdit} style={isDiagramMode ? { height: '100%' } : undefined}>
+        {isDiagramMode ? (
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center py-16">
+                <Spin />
+              </div>
+            }
+          >
+            <WorkflowFlowSurface
+              document={flowDocument}
+              selection={flowSelection}
+              readOnly={!canEdit}
+              onSelect={setFlowSelection}
+              onAddAction={handleAddAction}
+              onMoveAction={handleMoveAction}
+              onDeleteAction={handleDeleteAction}
+              onDuplicateAction={handleDuplicateAction}
+              inspectorTitle={getFlowInspectorTitle}
+              renderInspector={renderFlowInspector}
+              alwaysMountedInspector={
+                <>
+                  {renderMetaSection()}
+                  {renderTriggerSection()}
+                </>
+              }
+            />
+          </Suspense>
+        ) : (
+          <>
+            {renderMetaSection()}
+            {renderTriggerSection()}
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-4">
+              <h4 className="font-bold mb-3">شرط‌ها</h4>
+              <Collapse
+                defaultActiveKey={['all_conditions']}
+                items={[
+                  {
+                    key: 'all_conditions',
+                    label: 'حتما همه این شرط‌ها باید برقرار باشند',
+                    children: renderConditionsGroup('all'),
+                  },
+                  {
+                    key: 'any_conditions',
+                    label: 'کافی است فقط یکی از این شرط‌ها برقرار باشد',
+                    children: renderConditionsGroup('any'),
+                  },
+                ]}
+              />
+            </div>
 
-        <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          <h4 className="font-bold mb-3">افزودن اقدام</h4>
-          <WorkflowActionsBuilder
-            value={actions}
-            onChange={setActions}
-            currentModuleId={moduleId}
-            currentModuleFields={selectedModuleFields}
-            variableFields={conditionFields}
-            moduleOptions={moduleOptions}
-            dynamicOptions={dynamicOptions}
-            relationOptions={relationOptions}
-            disabled={!canEdit}
-            overlayZIndexBase={overlayZIndexBase}
-            popupContainer={resolveOverlayPopupContainer}
-          />
-        </div>
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+              <h4 className="font-bold mb-3">افزودن اقدام</h4>
+              <WorkflowActionsBuilder
+                value={actions}
+                onChange={setActions}
+                currentModuleId={moduleId}
+                currentModuleFields={selectedModuleFields}
+                variableFields={conditionFields}
+                moduleOptions={moduleOptions}
+                dynamicOptions={dynamicOptions}
+                relationOptions={relationOptions}
+                disabled={!canEdit}
+                overlayZIndexBase={overlayZIndexBase}
+                popupContainer={resolveOverlayPopupContainer}
+              />
+            </div>
+          </>
+        )}
       </Form>
     </Modal>
   );

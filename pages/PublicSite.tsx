@@ -13,7 +13,6 @@ import {
   MessageOutlined,
   NodeIndexOutlined,
   PhoneOutlined,
-  RobotOutlined,
   SafetyCertificateOutlined,
   TeamOutlined,
   ThunderboltOutlined,
@@ -33,6 +32,7 @@ import { getMarketingPanelUrl, getMarketingSiteBasePath } from '../utils/hostRou
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
+import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 
 type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo';
 
@@ -54,7 +54,7 @@ const nav = [
 ] as const;
 
 const featureCards = [
-  ['هوش مصنوعی سازمانی', 'دستیار هوشمند کنار رکورد، لیست و دانش سازمانی می‌نشیند و برای خلاصه، پاسخ و پیشنهاد اقدام کمک می‌کند.', <RobotOutlined />],
+  ['هوش مصنوعی سازمانی', 'دستیار هوشمند کنار رکورد، لیست و دانش سازمانی می‌نشیند و برای خلاصه، پاسخ و پیشنهاد اقدام کمک می‌کند.', <AiSparkleIcon className="h-4 w-4" />],
   ['الگوهای فرآیند', 'مسیرهایی مثل جذب مشتری، اجرای کمپین، تایید هزینه و تحویل پروژه را به الگوی قابل اجرا تبدیل کنید.', <NodeIndexOutlined />],
   ['چت داخلی و پیام روی رکورد', 'گفت‌وگو، فایل و تصمیم‌های مربوط به مشتری یا پروژه همان‌جا ثبت می‌شود که کار انجام می‌شود.', <MessageOutlined />],
   ['فایل‌ها و دانش سازمان', 'پیوست‌ها، تصاویر، اسناد و فایل‌های کاری از حالت پراکنده خارج می‌شوند و به رکوردها وصل می‌شوند.', <FolderOpenOutlined />],
@@ -202,7 +202,7 @@ const ProductMockup = () => (
       </div>
       <div className="space-y-3">
         <div className="rounded-lg border border-zinc-200 bg-white p-4">
-          <div className="flex items-center gap-2 text-sm font-black text-zinc-950"><RobotOutlined className="text-rose-600" />دستیار هوشمند</div>
+          <div className="flex items-center gap-2 text-sm font-black text-zinc-950"><AiSparkleIcon className="h-4 w-4 text-rose-600" />دستیار هوشمند</div>
           <p className="mt-3 rounded-lg bg-zinc-100 p-3 text-sm leading-7 text-zinc-700">این مشتری دو پیگیری عقب‌افتاده دارد. پیشنهاد: تماس امروز و ارسال پروپوزال اصلاح‌شده.</p>
         </div>
         <div className="rounded-lg border border-zinc-200 bg-zinc-950 p-4 text-white">

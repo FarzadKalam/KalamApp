@@ -1240,14 +1240,13 @@ const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefi
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'video';
   if (mimeType.startsWith('audio/')) {
-    if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name)) return 'voice';
     return 'audio';
   }
 
   if (/\.(png|jpe?g|gif|webp)$/i.test(name)) return 'image';
   if (/\.(mp4|mkv|mov|avi|webm)$/i.test(name)) return 'video';
-  if (/\.(mp3)$/i.test(name)) return 'voice';
   if (/\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(name)) return 'audio';
+  if (/\.(mp3)$/i.test(name)) return 'audio';
   return 'file';
 };
 
@@ -1444,6 +1443,95 @@ const sendTelegramLikeAttachmentMessage = async ({
     send_result: payload,
     provider_message_id: pick(result?.message_id, payload?.message_id),
   };
+};
+
+const canSendTelegramLikeMediaGroup = (attachments: Array<Record<string, any>>) => {
+  if (!Array.isArray(attachments) || attachments.length < 2 || attachments.length > 10) return false;
+  const kinds = attachments.map((item) => normalizeAttachmentKind(item));
+  if (kinds.every((kind) => kind === 'image' || kind === 'video')) return true;
+  if (kinds.every((kind) => kind === 'file')) return true;
+  if (kinds.every((kind) => kind === 'audio')) return true;
+  return false;
+};
+
+const sendTelegramLikeMediaGroupMessage = async ({
+  channel,
+  settings,
+  chatId,
+  text,
+  attachments,
+}: {
+  channel: 'telegram' | 'bale';
+  settings: Record<string, any>;
+  chatId: string;
+  text?: string;
+  attachments: Array<Record<string, any>>;
+}) => {
+  const token = pick(settings?.bot_token);
+  if (!token) throw new Error('توکن بات تنظیم نشده است.');
+  const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
+  const url = `${baseUrl}/bot${encodeURIComponent(token)}/sendMediaGroup`;
+
+  const form = new FormData();
+  form.append('chat_id', chatId);
+  const mediaItems: Array<Record<string, any>> = [];
+  const providerUploads: Array<Record<string, any>> = [];
+
+  for (const [index, attachment] of attachments.entries()) {
+    const attachmentUrl = String(attachment?.url || '').trim();
+    if (!attachmentUrl) throw new Error('آدرس فایل برای ارسال خالی است.');
+    const downloaded = await downloadBinaryFromUrl(attachmentUrl);
+    if (!downloaded?.bytes?.length) {
+      throw new Error(`دانلود فایل ناموفق بود: ${String(attachment?.name || attachmentUrl)}`);
+    }
+
+    const kind = normalizeAttachmentKind(attachment);
+    const type = kind === 'image'
+      ? 'photo'
+      : kind === 'video'
+        ? 'video'
+        : kind === 'audio'
+          ? 'audio'
+          : 'document';
+    const fieldName = `media_${index}`;
+    const fileName = safeFileName(String(attachment?.name || 'file').trim() || 'file');
+    const contentType = String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream');
+    form.append(fieldName, new File([downloaded.bytes], fileName, { type: contentType }));
+    mediaItems.push({
+      type,
+      media: `attach://${fieldName}`,
+      ...(index === 0 && String(text || '').trim()
+        ? { caption: String(text || '').trim(), parse_mode: 'HTML' }
+        : {}),
+    });
+    providerUploads.push({
+      kind,
+      file_name: fileName,
+      mime_type: contentType,
+      attachment_url: attachmentUrl,
+    });
+  }
+
+  form.append('media', JSON.stringify(mediaItems));
+  const response = await fetch(url, { method: 'POST', body: form });
+  const payload = await parseResponse(response);
+  if (!response.ok) {
+    throw new Error(
+      typeof payload === 'string'
+        ? payload
+        : String(payload?.description || payload?.message || `HTTP ${response.status}`)
+    );
+  }
+  ensureTelegramLikeSuccess(payload);
+
+  const results = Array.isArray(payload?.result)
+    ? payload.result
+    : (Array.isArray(payload) ? payload : []);
+  return providerUploads.map((item, index) => ({
+    ...item,
+    send_result: payload,
+    provider_message_id: pick(results[index]?.message_id, payload?.message_id),
+  }));
 };
 
 // Configure Bale bot webhook (setWebhook).
@@ -1649,6 +1737,36 @@ const sendTestMessage = async (
             request_send_file_result: sentAttachment.request_send_file_result,
             upload_result: sentAttachment.upload_result,
           },
+        });
+        payload = sentAttachment.send_result;
+      }
+    } else if (
+      (channel === 'bale' || channel === 'telegram')
+      && canSendTelegramLikeMediaGroup(normalizedAttachments)
+    ) {
+      const sentAttachments = await sendTelegramLikeMediaGroupMessage({
+        channel: channel as 'bale' | 'telegram',
+        settings: integration?.settings || {},
+        chatId,
+        text: normalizedText,
+        attachments: normalizedAttachments,
+      });
+      for (const [index, sentAttachment] of sentAttachments.entries()) {
+        const attachment = normalizedAttachments[index] || {};
+        providerMessages.push({
+          message_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          content_text: index === 0 ? normalizedText : '',
+          file_url: String(attachment?.url || '').trim() || null,
+          file_name: sentAttachment.file_name,
+          mime_type: sentAttachment.mime_type,
+          attachment: {
+            url: String(attachment?.url || '').trim() || null,
+            name: sentAttachment.file_name,
+            mime_type: sentAttachment.mime_type,
+            file_type: String(sentAttachment.kind || 'file').trim() || 'file',
+          },
+          provider_result: sentAttachment.send_result,
+          provider_message_id: sentAttachment.provider_message_id,
         });
         payload = sentAttachment.send_result;
       }

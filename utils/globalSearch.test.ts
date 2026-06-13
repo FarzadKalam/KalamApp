@@ -7,6 +7,7 @@ import {
   normalizeGlobalSearchQuery,
   normalizePersianSearchText,
   searchGlobalRecords,
+  splitGlobalSearchModulesByPriority,
 } from './globalSearch';
 import { FieldType } from '../types';
 
@@ -74,6 +75,40 @@ describe('globalSearch normalization', () => {
 
     expect(result[0].keys).toContain('name');
     expect(result[0].keys).not.toContain('auto_name_enabled');
+  });
+
+  it('includes code and phone-like fields in global search modules', () => {
+    const modules = {
+      sms_delivery_reports: {
+        id: 'sms_delivery_reports',
+        titles: { fa: 'گزارش پیامک' },
+        fields: [
+          { key: 'system_code', labels: { fa: 'کد' }, type: FieldType.TEXT },
+          { key: 'recipient', labels: { fa: 'گیرنده' }, type: FieldType.PHONE },
+          { key: 'sender', labels: { fa: 'فرستنده' }, type: FieldType.PHONE },
+          { key: 'delivered', labels: { fa: 'تحویل شده' }, type: FieldType.CHECKBOX },
+        ],
+      },
+    } as any;
+
+    const result = buildGlobalSearchModules(modules);
+
+    expect(result[0].keys).toEqual(expect.arrayContaining(['system_code', 'recipient', 'sender']));
+    expect(result[0].phoneKeys).toEqual(expect.arrayContaining(['recipient', 'sender']));
+    expect(result[0].keys).not.toContain('delivered');
+  });
+
+  it('splits common modules into the fast global search batch first', () => {
+    const modules = [
+      { id: 'custom_forms', keys: ['name'] },
+      { id: 'products', keys: ['name'] },
+      { id: 'customers', keys: ['full_name'] },
+    ] as any;
+
+    const result = splitGlobalSearchModulesByPriority(modules);
+
+    expect(result.fastModules.map((module) => module.id)).toEqual(['customers', 'products']);
+    expect(result.remainingModules.map((module) => module.id)).toEqual(['custom_forms']);
   });
 
   it('keeps modules with disabled view out of global search requests', () => {

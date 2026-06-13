@@ -71,4 +71,31 @@ describe('fetchRelationOptionsForField', () => {
       label: 'کاربر تست',
     });
   });
+
+  it('falls back to a direct query when the RPC rejects an invalid uuid input', async () => {
+    const query = createQuery([{
+      id: '30000000-0000-4000-8000-000000000003',
+      full_name: 'کاربر دوم',
+      email: 'second@example.com',
+    }]);
+    const supabase = {
+      rpc: vi.fn(async () => ({
+        data: null,
+        error: { code: '22P02', message: 'invalid input syntax for type uuid' },
+      })),
+      from: vi.fn(() => query),
+    };
+
+    const options = await fetchRelationOptionsForField(
+      supabase,
+      { relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+      { search: 'کاربر', limit: 1 },
+    );
+
+    expect(supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(options[0]).toMatchObject({
+      value: '30000000-0000-4000-8000-000000000003',
+      label: 'کاربر دوم',
+    });
+  });
 });

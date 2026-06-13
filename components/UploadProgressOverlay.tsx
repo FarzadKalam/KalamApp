@@ -20,13 +20,13 @@ import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
 import RobotOutlined from '@ant-design/icons/RobotOutlined';
 import RollbackOutlined from '@ant-design/icons/RollbackOutlined';
 import SendOutlined from '@ant-design/icons/SendOutlined';
-import OpenAIOutlined from '@ant-design/icons/OpenAIOutlined';
 import StopFilled from '@ant-design/icons/StopFilled';
 import TeamOutlined from '@ant-design/icons/TeamOutlined';
 import CloudUploadOutlined from '@ant-design/icons/CloudUploadOutlined';
 import NotificationOutlined from '@ant-design/icons/NotificationOutlined';
 import SoundOutlined from '@ant-design/icons/SoundOutlined';
 import UpOutlined from '@ant-design/icons/UpOutlined';
+import AiSparkleIcon from './ai/AiSparkleIcon';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import {
   dismissUiNotificationOverlayItem,
@@ -472,7 +472,7 @@ const UploadProgressOverlay: React.FC = () => {
                   : item.kind === 'bot'
                     ? <RobotOutlined />
                     : item.kind === 'assistant'
-                      ? <OpenAIOutlined />
+                      ? <AiSparkleIcon className="h-4 w-4" />
                       : item.kind === 'sms'
                         ? <MessageOutlined />
                         : item.kind === 'voip_call'

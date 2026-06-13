@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined, RobotOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
+import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
@@ -123,7 +124,7 @@ const SettingsPage: React.FC = () => {
       },
       {
         key: 'ai',
-        label: <span className="flex items-center gap-2 text-base"><RobotOutlined /> هوش مصنوعی</span>,
+        label: <span className="flex items-center gap-2 text-base"><AiSparkleIcon className="h-4 w-4" /> هوش مصنوعی</span>,
         children: <AiSettingsTab />,
       },
       {

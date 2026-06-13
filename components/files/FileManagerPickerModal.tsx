@@ -17,9 +17,15 @@ type FileManagerPickerModalProps = {
   open: boolean;
   onClose: () => void;
   onSelect: (attachments: NoteAttachment[]) => void;
-  onUploadFiles?: (files: File[]) => void;
+  onUploadFiles?: (files: File[], context?: {
+    folderKey: string;
+    folderId?: string | null;
+    moduleId?: string | null;
+    recordId?: string | null;
+  }) => void;
   moduleId?: string | null;
   recordId?: string | null;
+  initialFolderKey?: string | null;
   title?: string;
   multiple?: boolean;
   fileTypes?: Array<'image' | 'video' | 'file'>;
@@ -56,6 +62,7 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   onUploadFiles,
   moduleId,
   recordId,
+  initialFolderKey,
   title = 'انتخاب فایل',
   multiple = true,
   fileTypes,
@@ -100,6 +107,15 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
     }
     if (normalized.startsWith('module:')) {
       return { scope: 'module' as const, moduleId: normalized.slice('module:'.length), recordId: null };
+    }
+    const matchedFolder = tree?.folders?.find((folder) => folder.key === normalized);
+    const folderModuleId = String(matchedFolder?.moduleId || '').trim();
+    const folderRecordId = String(matchedFolder?.recordId || '').trim();
+    if (folderModuleId && folderRecordId) {
+      return { scope: 'record' as const, moduleId: folderModuleId, recordId: folderRecordId };
+    }
+    if (folderModuleId) {
+      return { scope: 'module' as const, moduleId: folderModuleId, recordId: null };
     }
     if (hasRecordScope) {
       return { scope: 'record' as const, moduleId: normalizedModuleId, recordId: normalizedRecordId };
@@ -149,10 +165,10 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   useEffect(() => {
     if (!open) return;
     resetOnOpenRef.current = true;
-    setActiveFolderKey('all');
+    setActiveFolderKey(String(initialFolderKey || '').trim() || 'all');
     setPage(1);
     setPageSize(60);
-  }, [open, normalizedModuleId, normalizedRecordId]);
+  }, [open, normalizedModuleId, normalizedRecordId, initialFolderKey]);
 
   const moduleTitleMap = useMemo(() => {
     return Object.keys(MODULES).reduce<Record<string, string>>((acc, key) => {
@@ -168,7 +184,8 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
   useEffect(() => {
     if (!open) return;
     if (resetOnOpenRef.current) {
-      const isResetState = activeFolderKey === 'all' && page === 1 && pageSize === 60;
+      const expectedFolderKey = String(initialFolderKey || '').trim() || 'all';
+      const isResetState = activeFolderKey === expectedFolderKey && page === 1 && pageSize === 60;
       if (!isResetState) return;
       resetOnOpenRef.current = false;
     }
@@ -242,7 +259,13 @@ const FileManagerPickerModal: React.FC<FileManagerPickerModalProps> = ({
     const files = Array.from(event.target.files || []);
     event.target.value = '';
     if (files.length === 0) return;
-    onUploadFiles?.(multiple ? files : files.slice(0, 1));
+    const activeFolder = tree?.folders?.find((folder) => folder.key === activeFolderKey) || null;
+    onUploadFiles?.(multiple ? files : files.slice(0, 1), {
+      folderKey: activeFolderKey,
+      folderId: activeFolder?.folderId || null,
+      moduleId: activeFolder?.moduleId || normalizedModuleId || null,
+      recordId: activeFolder?.recordId || normalizedRecordId || null,
+    });
     onClose();
   };
 

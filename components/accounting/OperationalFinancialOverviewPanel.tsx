@@ -411,10 +411,27 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         printableFields={listPrintManager.printableFieldsForTemplate}
         selectedPrintFields={listPrintManager.selectedPrintFields}
         onTogglePrintField={listPrintManager.handleTogglePrintField}
+        onTogglePrintFieldGroup={listPrintManager.handleTogglePrintFieldGroup}
+        onMovePrintField={listPrintManager.handleMovePrintField}
+        imageDisplayMode={listPrintManager.imageDisplayMode}
+        onChangeImageDisplayMode={listPrintManager.handleChangeImageDisplayMode}
         onSavePrintFields={listPrintManager.handleSavePrintFields}
         savingPrintFields={listPrintManager.savingPrintFields}
+        printSignatureRows={listPrintManager.printSignatureStates}
+        printSignatureQuickAddOptions={listPrintManager.printSignatureQuickAddOptions}
+        signatureOptionsByRow={listPrintManager.signatureOptionsByRow}
+        onAddPrintSignatureRow={listPrintManager.handleAddPrintSignatureRow}
+        onRemovePrintSignatureRow={listPrintManager.handleRemovePrintSignatureRow}
+        onMovePrintSignatureRow={listPrintManager.handleMovePrintSignatureRow}
+        onTogglePrintSignatureAutomatic={listPrintManager.handleTogglePrintSignatureAutomatic}
+        onChangePrintSignatureName={listPrintManager.handleChangePrintSignatureName}
+        onChangePrintSignatureSubtitle={listPrintManager.handleChangePrintSignatureSubtitle}
+        onChangePrintSignatureSignerModule={listPrintManager.handleChangePrintSignatureSignerModule}
+        onChangePrintSignatureSignerId={listPrintManager.handleChangePrintSignatureSignerId}
+        onSearchPrintSignatureOptions={listPrintManager.loadSignatureSignerOptions}
         onRefreshPreview={listPrintManager.refreshTemplates}
         allowFieldSelectionTab={listPrintManager.allowFieldSelectionTab}
+        showImageDisplayModeControl={listPrintManager.showImageDisplayModeControl}
         previewMeta={listPrintManager.previewMeta}
       />
     </div>

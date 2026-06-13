@@ -9,6 +9,7 @@ type CompensationRecord = {
   title?: string | null;
   request_date?: string | null;
   effective_date?: string | null;
+  created_at?: string | null;
   amount?: number | string | null;
   status?: string | null;
   assignee_id?: string | null;
@@ -22,6 +23,8 @@ type ExistingLedgerRow = {
   source_type?: string | null;
   source_record_id?: string | null;
   status?: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 
 const ELIGIBLE_STATUSES = new Set(['approved', 'completed']);
@@ -33,6 +36,24 @@ const toNumber = (value: unknown) => {
 
 const buildSourceKey = (sourceType: CompensationSourceType, recordId: string) =>
   `${sourceType}:${String(recordId || '').trim()}`;
+
+const parseDateValue = (value: string | null | undefined) => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const isRecordInPayrollPeriod = (record: CompensationRecord, periodStart: string, periodEnd: string) => {
+  const start = parseDateValue(`${periodStart}T00:00:00`);
+  const end = parseDateValue(`${periodEnd}T23:59:59`);
+  if (!start || !end) return false;
+  const date = parseDateValue(record.effective_date)
+    || parseDateValue(record.request_date)
+    || parseDateValue(record.created_at);
+  if (!date) return false;
+  return date.getTime() >= start.getTime() && date.getTime() <= end.getTime();
+};
 
 const buildPayload = (
   sourceType: CompensationSourceType,
@@ -70,6 +91,25 @@ const buildPayload = (
   };
 };
 
+const resolveExistingRowKey = (sourceType: CompensationSourceType, row: ExistingLedgerRow) =>
+  String(row.source_key || buildSourceKey(sourceType, String(row.source_record_id || ''))).trim();
+
+const pickPreferredExistingRow = (
+  current: ExistingLedgerRow | undefined,
+  candidate: ExistingLedgerRow,
+  periodStart: string,
+  periodEnd: string,
+) => {
+  if (!current) return candidate;
+  const candidateInPeriod = candidate.period_start === periodStart && candidate.period_end === periodEnd;
+  const currentInPeriod = current.period_start === periodStart && current.period_end === periodEnd;
+  if (candidateInPeriod && !currentInPeriod) return candidate;
+  const candidateEditable = ['draft', 'proposed'].includes(String(candidate.status || ''));
+  const currentEditable = ['draft', 'proposed'].includes(String(current.status || ''));
+  if (candidateEditable && !currentEditable) return candidate;
+  return current;
+};
+
 const syncCompensationSource = async (
   supabase: SupabaseClient,
   {
@@ -88,26 +128,22 @@ const syncCompensationSource = async (
 ) => {
   const recordsResult = await supabase
     .from(table)
-    .select('id, employee_id, title, request_date, effective_date, amount, status, assignee_id, reason, notes')
+    .select('id, employee_id, title, request_date, effective_date, amount, status, assignee_id, reason, notes, created_at')
     .in('employee_id', employeeIds)
-    .gte('effective_date', periodStart)
-    .lte('effective_date', periodEnd);
+    .or(`effective_date.gte.${periodStart},request_date.gte.${periodStart},created_at.gte.${periodStart}`)
+    .or(`effective_date.lte.${periodEnd},request_date.lte.${periodEnd},created_at.lte.${periodEnd}`);
   if (recordsResult.error) throw recordsResult.error;
 
   const initialExistingResult = await supabase
     .from('payroll_calculation_entries')
-    .select('id, source_key, source_type, source_record_id, status')
-    .eq('period_start', periodStart)
-    .eq('period_end', periodEnd)
+    .select('id, period_start, period_end, source_key, source_type, source_record_id, status')
     .in('employee_id', employeeIds)
     .eq('source_type', sourceType);
   let existingResult: any = initialExistingResult;
   if (existingResult.error && String(existingResult.error?.message || existingResult.error?.details || '').toLowerCase().includes('source_key')) {
     existingResult = await supabase
       .from('payroll_calculation_entries')
-      .select('id, source_type, source_record_id, status')
-      .eq('period_start', periodStart)
-      .eq('period_end', periodEnd)
+      .select('id, period_start, period_end, source_type, source_record_id, status')
       .in('employee_id', employeeIds)
       .eq('source_type', sourceType);
   }
@@ -118,16 +154,18 @@ const syncCompensationSource = async (
 
   const records = ((recordsResult.data || []) as CompensationRecord[])
     .filter((record) => String(record.employee_id || '').trim())
+    .filter((record) => isRecordInPayrollPeriod(record, periodStart, periodEnd))
     .filter((record) => Math.abs(toNumber(record.amount)) > 0);
   const desiredRecords = records.filter((record) => ELIGIBLE_STATUSES.has(String(record.status || '').trim().toLowerCase()));
 
   const existingRows = (existingResult.data || []) as ExistingLedgerRow[];
-  const existingByKey = new Map(
-    existingRows.map((row) => [
-      String(row.source_key || buildSourceKey(sourceType, String(row.source_record_id || ''))).trim(),
-      row,
-    ] as const),
-  );
+  const currentPeriodExistingRows = existingRows.filter((row) => row.period_start === periodStart && row.period_end === periodEnd);
+  const existingByKey = existingRows.reduce<Map<string, ExistingLedgerRow>>((acc, row) => {
+    const key = resolveExistingRowKey(sourceType, row);
+    if (!key) return acc;
+    acc.set(key, pickPreferredExistingRow(acc.get(key), row, periodStart, periodEnd));
+    return acc;
+  }, new Map());
   const desiredByKey = new Map(
     desiredRecords.map((record) => [buildSourceKey(sourceType, record.id), record] as const),
   );
@@ -141,8 +179,9 @@ const syncCompensationSource = async (
     .filter((item) => item.existing?.id && String(item.existing.status || '') !== 'included_in_payroll');
 
   const voidIds = existingRows
+    .filter((row) => currentPeriodExistingRows.some((currentRow) => currentRow.id === row.id))
     .filter((row) => {
-      const key = String(row.source_key || buildSourceKey(sourceType, String(row.source_record_id || ''))).trim();
+      const key = resolveExistingRowKey(sourceType, row);
       return !desiredByKey.has(key) && ['draft', 'proposed'].includes(String(row.status || ''));
     })
     .map((row) => String(row.id || '').trim())
@@ -159,6 +198,12 @@ const syncCompensationSource = async (
       const { error } = await supabase
         .from('payroll_calculation_entries')
         .update({
+          period_start: payload.period_start,
+          period_end: payload.period_end,
+          source_key: payload.source_key,
+          source_module_id: payload.source_module_id,
+          source_record_id: payload.source_record_id,
+          entry_type: payload.entry_type,
           title: payload.title,
           amount: payload.amount,
           assignee_id: payload.assignee_id,

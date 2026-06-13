@@ -33,6 +33,22 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 760, 1620]);
   });
 
+  it('prefers line breaks inside a tall block before falling back to the block top', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2100,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 520, priority: 'normal', source: 'block' },
+        { top: 520, bottom: 1540, priority: 'high', source: 'block' },
+        { top: 930, bottom: 952, priority: 'normal', source: 'line' },
+        { top: 970, bottom: 992, priority: 'normal', source: 'line' },
+        { top: 1540, bottom: 2080, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 992, 1992]);
+  });
+
   it('keeps single-page content on the first page', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 640,

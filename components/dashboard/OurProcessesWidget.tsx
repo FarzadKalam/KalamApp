@@ -86,9 +86,14 @@ const PROCESS_RECORD_COLUMNS = [
   'id',
   'org_id',
   'process_template_id',
-  'execution_process_draft',
   'updated_at',
   'created_at',
+] as const;
+const PROCESS_DRAFT_FIELD_KEYS = [
+  'execution_process_draft',
+  'marketing_process_draft',
+  'process_draft',
+  'sub_process_draft',
 ] as const;
 
 const LINKED_RECORD_COLUMNS = [
@@ -227,9 +232,15 @@ const getProcessModuleIds = (access: CurrentUserRecordAccessContext) =>
       if (module?.systemManaged || module?.disableDetailView) return false;
       if (access.permissions?.[moduleId]?.view === false) return false;
       const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '').trim()));
-      return fieldKeys.has('process_template_id') || fieldKeys.has('execution_process_draft');
+      return fieldKeys.has('process_template_id')
+        || PROCESS_DRAFT_FIELD_KEYS.some((fieldKey) => fieldKeys.has(fieldKey));
     })
     .map((module: any) => String(module.id));
+
+const getProcessDraftFieldKey = (module: any) => {
+  const fieldKeys = new Set((module?.fields || []).map((field: any) => String(field?.key || '').trim()));
+  return PROCESS_DRAFT_FIELD_KEYS.find((fieldKey) => fieldKeys.has(fieldKey)) || null;
+};
 
 const getModuleTitle = (moduleId: string) =>
   MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId;
@@ -380,9 +391,11 @@ const OurProcessesWidget: React.FC = () => {
         getProcessModuleIds(access).map((moduleId) => async () => {
         if (unavailableProcessModulesRef.current.has(moduleId)) return;
         const module = MODULES[moduleId] as any;
+        const processDraftFieldKey = getProcessDraftFieldKey(module);
+        if (!processDraftFieldKey) return;
         const result = await runSelectWithCompatibleColumns<any[]>({
           cacheKey: `dashboard:our-processes:records:${moduleId}`,
-          columns: PROCESS_RECORD_COLUMNS,
+          columns: [...PROCESS_RECORD_COLUMNS, processDraftFieldKey],
           execute: (selectExpr) =>
             supabase
               .from(module.table)
@@ -406,7 +419,7 @@ const OurProcessesWidget: React.FC = () => {
         (result.data || []).forEach((record: any) => {
           const recordId = normalizeId(record?.id);
           if (!recordId) return;
-          const stages = parseStageDrafts(record?.execution_process_draft);
+          const stages = parseStageDrafts(record?.[processDraftFieldKey]);
           if (stages.length === 0) return;
           const baseTemplateId = normalizeId(record?.process_template_id) || null;
           if (baseTemplateId) templateIds.add(baseTemplateId);

@@ -1,0 +1,134 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildDefaultPrintSignatureConfigs,
+  buildPrintSignatureBandHtml,
+  materializePrintSignatureStates,
+  stripLegacyPrintSignatureTokens,
+} from './signatures';
+
+describe('print signatures', () => {
+  it('builds smart default rows for record print', () => {
+    const rows = buildDefaultPrintSignatureConfigs({
+      scope: 'record',
+      moduleConfig: {
+        fields: [
+          { key: 'assignee_id', labels: { fa: 'مسئول' }, type: 'relation', relationConfig: { targetModule: 'profiles' } },
+          { key: 'customer_id', labels: { fa: 'خریدار' }, type: 'relation', relationConfig: { targetModule: 'customers' } },
+        ],
+      },
+      record: {
+        assignee_id: 'user-1',
+        customer_id: 'customer-1',
+      },
+      currentUserId: 'user-current',
+      companyInfo: { ceo_name: 'مدیر عامل' },
+      canUseCeoSignature: true,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual([
+      'ceo',
+      'current_user',
+      'record_assignee',
+      'record_relation',
+    ]);
+  });
+
+  it('materializes dynamic rows from current context', () => {
+    const states = materializePrintSignatureStates({
+      configs: [
+        { id: 'ceo', kind: 'ceo', automatic: true },
+        { id: 'current', kind: 'current_user', automatic: true, signerModule: 'profiles', signerId: 'user-current' },
+        { id: 'customer', kind: 'record_relation', automatic: true, signerModule: 'customers', sourceFieldKey: 'customer_id', sourceFieldLabel: 'خریدار' },
+      ],
+      scope: 'record',
+      moduleConfig: {
+        fields: [{ key: 'customer_id', labels: { fa: 'خریدار' }, type: 'relation', relationConfig: { targetModule: 'customers' } }],
+      },
+      record: { customer_id: 'customer-1' },
+      companyInfo: {
+        ceo_name: 'مدیرعامل نمونه',
+        signature_image_url: 'https://cdn.example.com/signature.png',
+        stamp_image_url: 'https://cdn.example.com/stamp.png',
+      },
+      currentUser: { id: 'user-current', full_name: 'کاربر جاری' },
+      currentUserRoleTitle: 'مدیر فروش',
+      signerLabelByKey: { 'customers:customer-1': 'شرکت نمونه' },
+      canUseCeoSignature: true,
+      assigneeDirectory: {
+        users: [{ id: 'user-current', display_name: 'کاربر جاری', role_id: 'role-1' }],
+        roles: [{ id: 'role-1', title: 'مدیر فروش' }],
+      },
+    });
+
+    expect(states[0].subtitleValue).toBe('امضای مدیرعامل');
+    expect(states[0].nameValue).toBe('مدیرعامل نمونه');
+    expect(states[0].signatureImageUrl).toContain('signature.png');
+    expect(states[0].stampImageUrl).toContain('stamp.png');
+    expect(states[0].showCompanyAssets).toBe(true);
+    expect(states[1].subtitleValue).toBe('امضای مدیر فروش');
+    expect(states[2].subtitleValue).toBe('امضای خریدار');
+    expect(states[2].nameValue).toBe('شرکت نمونه');
+  });
+
+  it('hides ceo rows when the role permission is disabled', () => {
+    const states = materializePrintSignatureStates({
+      configs: [{ id: 'ceo', kind: 'ceo', automatic: false, nameOverride: 'مدیرعامل', subtitleOverride: 'امضای مدیرعامل' }],
+      scope: 'record',
+      moduleConfig: { fields: [] },
+      companyInfo: { ceo_name: 'مدیرعامل نمونه', signature_image_url: 'https://cdn.example.com/signature.png' },
+      canUseCeoSignature: false,
+    });
+
+    expect(states[0].nameValue).toBe('');
+    expect(states[0].subtitleValue).toBe('');
+    expect(states[0].showCompanyAssets).toBe(false);
+  });
+
+  it('strips legacy signature placeholders and renders new band html', () => {
+    expect(stripLegacyPrintSignatureTokens('{{system.footer_signatures}}<div>{{system.company_signature_image}}</div>')).toBe('<div></div>');
+
+    const html = buildPrintSignatureBandHtml([
+      {
+        id: '1',
+        kind: 'manual',
+        automatic: false,
+        signerModule: null,
+        signerId: null,
+        sourceFieldKey: null,
+        sourceFieldLabel: null,
+        derivedName: '',
+        derivedSubtitle: '',
+        nameValue: 'نام اول',
+        subtitleValue: 'امضای اول',
+        signatureImageUrl: null,
+        stampImageUrl: null,
+        showCompanyAssets: false,
+        sourceDescription: '',
+        unresolved: false,
+      },
+      {
+        id: '2',
+        kind: 'manual',
+        automatic: false,
+        signerModule: null,
+        signerId: null,
+        sourceFieldKey: null,
+        sourceFieldLabel: null,
+        derivedName: '',
+        derivedSubtitle: '',
+        nameValue: 'نام دوم',
+        subtitleValue: 'امضای دوم',
+        signatureImageUrl: 'https://cdn.example.com/signature.png',
+        stampImageUrl: 'https://cdn.example.com/stamp.png',
+        showCompanyAssets: true,
+        sourceDescription: '',
+        unresolved: false,
+      },
+    ]);
+
+    expect(html).toContain('نام اول');
+    expect(html).toContain('نام دوم');
+    expect(html).toContain('signature.png');
+    expect(html).toContain('stamp.png');
+  });
+});

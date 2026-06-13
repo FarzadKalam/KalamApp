@@ -194,4 +194,38 @@ describe('PrintSection', () => {
     expect(screen.getByText('بدون مقدار')).toBeInTheDocument();
     expect(screen.getByText('آدرس کامل')).toBeInTheDocument();
   });
+
+  it('renders and changes image display mode for print templates with images', async () => {
+    setDesktopViewport();
+    const user = userEvent.setup();
+    const onChangeImageDisplayMode = vi.fn();
+
+    render(
+      <PrintSection
+        isPrintModalOpen
+        onClose={vi.fn()}
+        onPrint={vi.fn()}
+        printTemplates={[{ id: 'custom:test', title: 'قالب تست', description: 'توضیحات' }]}
+        selectedTemplateId="custom:test"
+        onSelectTemplate={vi.fn()}
+        renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+        printMode={false}
+        allowFieldSelectionTab
+        showImageDisplayModeControl
+        imageDisplayMode="fit"
+        onChangeImageDisplayMode={onChangeImageDisplayMode}
+        printableFields={[
+          { key: 'image_url', labels: { fa: 'تصویر' }, group: 'فیلدهای عمومی', hasValue: true },
+        ]}
+        selectedPrintFields={{ 'custom:test': ['image_url'] }}
+      />
+    );
+
+    await user.click(await screen.findByRole('tab', { name: /فیلدهای قابل چاپ/i }));
+    expect(await screen.findByText('نوع نمایش تصویر')).toBeInTheDocument();
+
+    await user.click(screen.getByText('اندازه واقعی'));
+
+    expect(onChangeImageDisplayMode).toHaveBeenCalledWith('custom:test', 'actual');
+  });
 });

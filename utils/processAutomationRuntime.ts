@@ -12,6 +12,7 @@ import {
 } from './workflowRuntime';
 import { renderTemplateText } from './messageTemplateRenderer';
 import {
+  createProcessStageRecipientFieldKey,
   normalizeProcessAutomationRules,
   ProcessAutomationRule,
 } from './processAutomationTypes';
@@ -31,6 +32,12 @@ import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './inte
 import { fetchAssigneeDirectory } from './referenceData';
 import { resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
 import { assignProcessTemplateModuleAliases } from './processTemplateContext';
+import {
+  getNextProcessStages,
+  getPreviousProcessStage,
+  getProcessStageNodeKey,
+  materializeLegacyProcessGraph,
+} from './processGraph';
 
 type AutomationActor = {
   id?: string | null;
@@ -123,6 +130,10 @@ const buildAutomationActionRecord = (
     process_group_id: task?.process_group_id ?? parseRecurrenceInfo(task?.recurrence_info)?.process_group?.id ?? '',
     process_run_id: task?.process_run_id ?? recurrence?.process_run_id ?? '',
     process_run_stage_id: task?.process_run_stage_id ?? recurrence?.process_run_stage_id ?? '',
+    process_node_key: task?.process_node_key ?? recurrence?.process_node_key ?? '',
+    process_lane_key: task?.process_lane_key ?? recurrence?.process_lane_key ?? '',
+    process_graph: recurrence?.process_graph ?? null,
+    recurrence_info: recurrence,
     process_links: processLinks,
   };
   (MODULES.tasks?.fields || []).forEach((field: any) => {
@@ -208,6 +219,57 @@ const buildMentionTargetFromTask = (task: Record<string, any> | null | undefined
 };
 
 const isTaskCompleted = (status: unknown) => COMPLETED_TASK_STATUSES.has(normalizeTaskStatus(status));
+
+const materializeSiblingTaskGraph = (siblingTasks: Record<string, any>[]) => {
+  const graphStages = siblingTasks.map((row) => {
+    const recurrence = parseRecurrenceInfo(row?.recurrence_info);
+    return {
+      ...row,
+      process_node_key: row?.process_node_key || recurrence?.process_node_key,
+      process_lane_key: row?.process_lane_key || recurrence?.process_lane_key,
+      metadata: {
+        ...recurrence,
+        process_graph: recurrence?.process_graph,
+      },
+    };
+  });
+  return materializeLegacyProcessGraph(graphStages);
+};
+
+const getPreviousSiblingTask = (
+  task: Record<string, any>,
+  siblingTasks: Record<string, any>[],
+) => {
+  const materialized = materializeSiblingTaskGraph(siblingTasks);
+  const currentNodeKey = String(
+    task?.process_node_key || parseRecurrenceInfo(task?.recurrence_info)?.process_node_key || '',
+  ).trim();
+  if (currentNodeKey) {
+    return getPreviousProcessStage(materialized.stages, currentNodeKey, materialized.graph) || null;
+  }
+  const currentSort = Number(task?.sort_order || 0);
+  return siblingTasks
+    .filter((row) => Number(row?.sort_order || 0) < currentSort)
+    .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0] || null;
+};
+
+const getNextSiblingTasks = (
+  task: Record<string, any>,
+  siblingTasks: Record<string, any>[],
+) => {
+  const materialized = materializeSiblingTaskGraph(siblingTasks);
+  const currentNodeKey = String(
+    task?.process_node_key || parseRecurrenceInfo(task?.recurrence_info)?.process_node_key || '',
+  ).trim();
+  if (currentNodeKey) {
+    return getNextProcessStages(materialized.stages, currentNodeKey, materialized.graph);
+  }
+  const currentSort = Number(task?.sort_order || 0);
+  const nextTask = siblingTasks
+    .filter((row) => Number(row?.sort_order || 0) > currentSort)
+    .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
+  return nextTask ? [nextTask] : [];
+};
 
 const mergeMentionTargets = (...targets: MentionTarget[]): MentionTarget => ({
   userIds: Array.from(new Set(targets.flatMap((item) => item.userIds).filter(Boolean))),
@@ -572,13 +634,8 @@ const buildAutomationActionRecordWithLinks = async (
     assignProcessLinkedRecordFields(actionRecord, entry.moduleId, entry.record);
   });
 
-  const currentSort = Number(task?.sort_order || 0);
-  const previousTask = siblingTasks
-    .filter((row) => Number(row?.sort_order || 0) < currentSort)
-    .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0];
-  const nextTask = siblingTasks
-    .filter((row) => Number(row?.sort_order || 0) > currentSort)
-    .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
+  const previousTask = getPreviousSiblingTask(task, siblingTasks);
+  const nextTask = getNextSiblingTasks(task, siblingTasks)[0];
   const toCombo = (row?: Record<string, any> | null) => {
     if (!row) return '';
     const roleId = String(row?.assignee_role_id || '').trim();
@@ -593,6 +650,11 @@ const buildAutomationActionRecordWithLinks = async (
   actionRecord.__comm_recipient__current_task_assignee = toCombo(task);
   actionRecord.__comm_recipient__previous_stage_assignee = toCombo(previousTask);
   actionRecord.__comm_recipient__next_stage_assignee = toCombo(nextTask);
+  const materializedSiblingGraph = materializeLegacyProcessGraph(siblingTasks);
+  materializedSiblingGraph.stages.forEach((stage, index) => {
+    const nodeKey = getProcessStageNodeKey(stage, index);
+    actionRecord[createProcessStageRecipientFieldKey(nodeKey)] = toCombo(stage);
+  });
   previousTaskCustomFields.forEach((field) => {
     const fieldKey = String(field?.key || '').trim();
     if (!fieldKey) return;
@@ -672,18 +734,19 @@ const resolveRuleTarget = async (
     case 'current_task_assignee':
       return buildMentionTargetFromTask(task);
     case 'previous_stage_assignee': {
-      const currentSort = Number(task?.sort_order || 0);
-      const previousTask = siblingTasks
-        .filter((row) => Number(row?.sort_order || 0) < currentSort)
-        .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0];
-      return buildMentionTargetFromTask(previousTask);
+      return buildMentionTargetFromTask(getPreviousSiblingTask(task, siblingTasks));
     }
     case 'next_stage_assignee': {
-      const currentSort = Number(task?.sort_order || 0);
-      const nextTask = siblingTasks
-        .filter((row) => Number(row?.sort_order || 0) > currentSort)
-        .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
-      return buildMentionTargetFromTask(nextTask);
+      return buildMentionTargetFromTask(getNextSiblingTasks(task, siblingTasks)[0]);
+    }
+    case 'specific_stage_assignee': {
+      const targetNodeKey = String(rule?.target_stage_node_key || '').trim();
+      if (!targetNodeKey) return { userIds: [], roleIds: [] };
+      const materialized = materializeSiblingTaskGraph(siblingTasks);
+      const targetTask = materialized.stages.find(
+        (row, index) => getProcessStageNodeKey(row, index) === targetNodeKey,
+      );
+      return buildMentionTargetFromTask(targetTask);
     }
     case 'task_type_assignee': {
       const targetTaskType = String(rule?.target_task_type || '').trim();
@@ -950,7 +1013,17 @@ export const runProcessAutomationsForTaskEvent = async ({
           }
 
           const actionType = String(action?.type || '');
-          const canRunWithoutSourceRecord = ['send_sms', 'send_email', 'send_telegram_bot', 'send_bale_bot', 'send_rubika_bot', 'publish_story'].includes(actionType);
+          const canRunWithoutSourceRecord = [
+            'send_sms',
+            'send_email',
+            'send_telegram_bot',
+            'send_bale_bot',
+            'send_rubika_bot',
+            'publish_story',
+            'send_to_specific_stage',
+            'activate_next_process_stage',
+            'activate_specific_process_stage',
+          ].includes(actionType);
           if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
 
           const actionConfig = (action as any)?.config || {};
@@ -1052,11 +1125,8 @@ export const runProcessAutomationsForTaskEvent = async ({
     && !isTaskCompleted(previousTask?.status);
   if (didBecomeCompleted) {
     const siblings = await getSiblingTasks();
-    const currentSort = Number(task?.sort_order || 0);
-    const nextTask = siblings
-      .filter((row) => Number(row?.sort_order || 0) > currentSort)
-      .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0))[0];
-    if (nextTask) {
+    const nextTasks = getNextSiblingTasks(task, siblings);
+    for (const nextTask of nextTasks) {
       const nextTaskRules = normalizeProcessAutomationRules(parseRecurrenceInfo(nextTask?.recurrence_info)?.process_automation_rules)
         .filter((rule) => rule?.is_active !== false && rule?.trigger_type === 'previous_stage_completed');
       if (nextTaskRules.length > 0) {

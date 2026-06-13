@@ -3,6 +3,7 @@ import {
   App,
   Avatar,
   Button,
+  Drawer,
   Empty,
   Input,
   Modal,
@@ -14,11 +15,10 @@ import {
   Typography,
 } from 'antd';
 import {
-  AudioOutlined,
   DeleteOutlined,
   EditOutlined,
+  MenuUnfoldOutlined,
   PlusOutlined,
-  RobotOutlined,
   SearchOutlined,
   SendOutlined,
   ShareAltOutlined,
@@ -26,9 +26,18 @@ import {
 } from '@ant-design/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { loadProfilesWithCompat } from '../utils/profileDirectory';
+import ProfileAvatar from '../components/common/ProfileAvatar';
+import AiSparkleIcon from '../components/ai/AiSparkleIcon';
+import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
+import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
+import AiCapabilityComposerActions, { type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
+import AiMessageAttachmentPreview from '../components/ai/AiMessageAttachmentPreview';
+import { blobToBase64 } from '../utils/blobBase64';
+import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
 
 type AiThread = {
   id: string;
@@ -42,6 +51,9 @@ type AiThread = {
   owner_user_id?: string | null;
   shared_user_ids?: string[] | null;
   shared_role_ids?: string[] | null;
+  module_id?: string | null;
+  record_id?: string | null;
+  metadata?: Record<string, any> | null;
 };
 
 type AiMessage = {
@@ -54,12 +66,31 @@ type AiMessage = {
   metadata?: Record<string, any> | null;
 };
 
+type CurrentUserView = {
+  id: string | null;
+  name: string;
+  avatarUrl: string | null;
+};
+
 type DirectoryOption = {
   label: string;
   value: string;
 };
 
 const THREAD_SELECT_LIMIT = 80;
+
+const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حال فکر کردن...') => {
+  const set = new Set((capabilities || []).map((item) => String(item || '').trim()));
+  if (set.has('voice_output')) return 'در حال تولید صدا...';
+  if (set.has('image_generation')) return 'در حال ساخت تصویر...';
+  if (set.has('document_analysis')) return 'در حال تحلیل فایل...';
+  if (set.has('legal_assistant')) return 'در حال جستجو و بررسی حقوقی...';
+  if (set.has('web_search')) return 'در حال جستجو...';
+  if (set.has('deep_reasoning')) return 'در حال فکر کردن...';
+  if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
+  if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
+  return fallback;
+};
 
 const formatThreadDate = (value?: string | null) => {
   if (!value) return '';
@@ -76,16 +107,64 @@ const formatMessageTime = (value?: string | null) => {
 };
 
 const formatCostFa = (msg: AiMessage): string | null => {
-  // cost.irt from the Edge Function is already in Toman (exchange_rate is toman/USD)
-  const raw = msg.metadata?.usage?.cost?.irt ?? null;
-  if (raw == null || Number(raw) <= 0) return null;
-  return `${Math.round(Number(raw)).toLocaleString('fa-IR')} تومان`;
+  const billed = msg.metadata?.usage?.customer_billing?.amount_irt
+    ?? msg.metadata?.usage?.billing?.billed_amount_irt
+    ?? msg.metadata?.customer_billing?.amount_irt
+    ?? null;
+  if (billed == null || Number(billed) <= 0) return null;
+  return `${Math.round(Number(billed)).toLocaleString('fa-IR')} تومان`;
 };
 
 const normalizeIdArray = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
+
+const getModuleTitleFa = (moduleId?: string | null) => {
+  const key = String(moduleId || '').trim();
+  if (!key) return '';
+  return MODULES[key]?.titles?.fa || key;
+};
+
+const getThreadContextLabel = (thread?: AiThread | null) => {
+  if (!thread) return 'گفتگوی جدید';
+  const metadata = thread.metadata || {};
+  const storedLabel = String(metadata.context_label || '').trim();
+  if (storedLabel) return storedLabel;
+  const moduleTitle = getModuleTitleFa(thread.module_id || metadata.module_id);
+  const kind = String(metadata.context_kind || thread.context_type || '').trim();
+  if (kind === 'process_guide') return moduleTitle ? `راهنمای فرآیند ${moduleTitle}` : 'راهنمای فرآیند';
+  if (kind === 'record') return moduleTitle ? `رکورد ${moduleTitle}` : 'رکورد';
+  if (kind === 'module_page' || kind === 'list') return moduleTitle ? `صفحه ${moduleTitle}` : 'صفحه ماژول';
+  if (moduleTitle) return moduleTitle;
+  return 'گفتگوی عمومی';
+};
+
+const getThreadStoredContext = (thread?: AiThread | null): Record<string, any> | null => {
+  const context = thread?.metadata?.context;
+  if (context && typeof context === 'object') return context;
+  if (thread?.context_type === 'record' && thread.module_id) {
+    return {
+      mode: 'record',
+      moduleId: thread.module_id,
+      recordId: thread.record_id || null,
+    };
+  }
+  if (thread?.module_id) {
+    return {
+      mode: thread.context_type === 'module_page' ? 'list' : 'page',
+      moduleId: thread.module_id,
+      recordId: null,
+    };
+  }
+  return null;
+};
+
+const getRecordScopeFromContext = (context?: Record<string, any> | null) => {
+  const moduleId = String(context?.moduleId || '').trim();
+  const recordId = String(context?.recordId || '').trim();
+  return moduleId && recordId ? { moduleId, recordId } : { moduleId: null, recordId: null };
+};
 
 const AiChatPage: React.FC = () => {
   const { message } = App.useApp();
@@ -108,14 +187,39 @@ const AiChatPage: React.FC = () => {
   const [shareRoleIds, setShareRoleIds] = useState<string[]>([]);
   const [userOptions, setUserOptions] = useState<DirectoryOption[]>([]);
   const [roleOptions, setRoleOptions] = useState<DirectoryOption[]>([]);
-  const [voiceActive, setVoiceActive] = useState(false);
-  const recognitionRef = useRef<any>(null);
+  const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
+  const [processOperationMode, setProcessOperationMode] = useState(false);
+  const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
+  const [confirmingAiAction, setConfirmingAiAction] = useState(false);
+  const [currentUserView, setCurrentUserView] = useState<CurrentUserView>({ id: null, name: 'شما', avatarUrl: null });
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [fileSending, setFileSending] = useState(false);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [generatingVoiceOutput, setGeneratingVoiceOutput] = useState(false);
+  const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
+  const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
+  const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
+  const [chatContext, setChatContext] = useState<Record<string, any>>({ mode: 'dashboard', source: 'ai_chat_page' });
+  const skipNextThreadMessageLoadRef = useRef<string | null>(null);
 
   const activeThread = useMemo(
     () => threads.find((thread) => String(thread.id) === String(activeThreadId)) || null,
     [threads, activeThreadId]
   );
   const isActiveOwner = activeThread ? activeThread.is_owner !== false : true;
+  const recordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
+  const recordCreationSchema = useMemo(
+    () => recordCreationTargetModuleId ? buildAiRecordCreationSchema(recordCreationTargetModuleId) : null,
+    [recordCreationTargetModuleId],
+  );
+
+  useEffect(() => {
+    if (!activeThread) return;
+    const storedContext = getThreadStoredContext(activeThread);
+    if (storedContext) {
+      setChatContext({ ...storedContext, source: 'ai_chat_page' });
+    }
+  }, [activeThread]);
 
   const invokeAi = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
@@ -154,6 +258,21 @@ const AiChatPage: React.FC = () => {
     }
   }, [activeThreadId, invokeAi, message]);
 
+  const mergeThreadMessages = useCallback((serverMessages: AiMessage[]) => {
+    setMessages((prev) => {
+      const pending = prev.filter((item) => String(item.id || '').startsWith('pending-'));
+      const serverKeys = new Set(serverMessages.map((item) => `${item.role}:${String(item.content || '').trim()}`));
+      const hasServerAssistant = serverMessages.some((item) => item.role === 'assistant');
+      const unresolvedPending = pending.filter((item) => {
+        if (item.role === 'assistant' && item.metadata?.pending_status && hasServerAssistant) return false;
+        return !serverKeys.has(`${item.role}:${String(item.content || '').trim()}`);
+      });
+      return [...serverMessages, ...unresolvedPending].sort((a, b) =>
+        String(a.created_at || '').localeCompare(String(b.created_at || ''))
+      );
+    });
+  }, []);
+
   const loadThreadMessages = useCallback(async (threadId: string | null) => {
     if (!threadId) {
       setMessages([]);
@@ -163,7 +282,7 @@ const AiChatPage: React.FC = () => {
     try {
       const data = await invokeAi({ action: 'get_thread', threadId });
       const thread = data?.thread as AiThread | undefined;
-      setMessages(Array.isArray(data?.messages) ? data.messages as AiMessage[] : []);
+      mergeThreadMessages(Array.isArray(data?.messages) ? data.messages as AiMessage[] : []);
       if (thread?.id) {
         setThreads((prev) =>
           prev.map((item) => String(item.id) === String(thread.id) ? { ...item, ...thread } : item)
@@ -175,23 +294,67 @@ const AiChatPage: React.FC = () => {
     } finally {
       setMessagesLoading(false);
     }
-  }, [invokeAi, message]);
+  }, [invokeAi, mergeThreadMessages, message]);
 
   useEffect(() => {
     void loadThreads();
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const loadUser = async () => {
+      try {
+        const bootstrap = await fetchSessionBootstrap(supabase);
+        if (!active) return;
+        setCurrentUserView({
+          id: bootstrap?.user?.id || null,
+          name: String(bootstrap?.profile?.full_name || bootstrap?.user?.email || bootstrap?.profile?.mobile_1 || 'شما').trim() || 'شما',
+          avatarUrl: bootstrap?.profile?.avatar_url || null,
+        });
+        const data = await invokeAi({ action: 'get_ai_overview' });
+        if (!active) return;
+        setCapabilityAvailability(data?.capabilityAvailability || {});
+      } catch {
+        // Overview is an enhancement for controls; chat errors are handled on send.
+      }
+    };
+    void loadUser();
+    return () => {
+      active = false;
+    };
+  }, [invokeAi]);
+
+  useEffect(() => {
+    if (activeThreadId && skipNextThreadMessageLoadRef.current === activeThreadId) {
+      skipNextThreadMessageLoadRef.current = null;
+      return;
+    }
     void loadThreadMessages(activeThreadId);
   }, [activeThreadId, loadThreadMessages]);
 
-  const submitMessage = useCallback(async (rawText?: string, forceNewThread = false) => {
+  useEffect(() => {
+    const incomingContext = (location.state as any)?.assistantContext;
+    if (incomingContext && typeof incomingContext === 'object') {
+      setChatContext({ ...incomingContext, source: 'ai_chat_page' });
+    }
+  }, [location.state]);
+
+  const submitMessage = useCallback(async (
+    rawText?: string,
+    forceNewThread = false,
+    inputKind = 'text',
+    contextOverride?: Record<string, any>,
+    options?: { capabilities?: AiComposerCapability[]; processOperationMode?: boolean; recordCreationSchema?: any },
+  ) => {
     const text = String(rawText ?? input).trim();
     if (!text || sending) return;
     if (activeThread && !isActiveOwner) {
       message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
       return;
     }
+    const effectiveCapabilities = options?.capabilities || selectedCapabilities;
+    const effectiveProcessOperationMode = options?.processOperationMode ?? processOperationMode;
+    const effectiveRecordCreationSchema = options?.recordCreationSchema ?? recordCreationSchema;
 
     const optimistic: AiMessage = {
       id: `pending-${Date.now()}`,
@@ -199,37 +362,98 @@ const AiChatPage: React.FC = () => {
       content: text,
       created_at: new Date().toISOString(),
     };
+    const thinking: AiMessage = {
+      id: `pending-assistant-${Date.now()}`,
+      role: 'assistant',
+      content: buildAiPendingStatusText(effectiveCapabilities),
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: effectiveCapabilities },
+    };
     setInput('');
-    setMessages((prev) => [...prev, optimistic]);
+    setPendingAiAction(null);
+    setMessages((prev) => [...prev, optimistic, thinking]);
     setSending(true);
     try {
-      const data = await invokeAi({
-        action: 'chat',
-        capability: 'dashboard_chat',
+      const effectiveContext = contextOverride || chatContext;
+      const data = await invokeAi(effectiveProcessOperationMode ? {
+        action: 'process_operation_from_prompt',
+        capability: 'record_chat',
+        capabilities: effectiveCapabilities,
         message: text,
+        inputKind,
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
-        context: {
-          mode: 'dashboard',
-          source: 'ai_chat_page',
-        },
+        context: effectiveContext,
+        previewOnly: true,
+      } : effectiveRecordCreationSchema ? {
+        action: 'create_record_from_prompt',
+        capability: effectiveContext?.mode === 'record' ? 'record_chat' : 'dashboard_chat',
+        capabilities: effectiveCapabilities,
+        message: text,
+        inputKind,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
+        recordCreation: effectiveRecordCreationSchema,
+        previewOnly: true,
+      } : {
+        action: 'chat',
+        capability: effectiveCapabilities.includes('legal_assistant')
+          ? 'legal_assistant'
+          : effectiveCapabilities.includes('deep_reasoning')
+          ? 'deep_reasoning'
+          : effectiveContext?.mode === 'record'
+          ? 'record_chat'
+          : 'dashboard_chat',
+        capabilities: effectiveCapabilities,
+        message: text,
+        inputKind,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
       });
+      if (!data?.proposedAction && effectiveRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
+      }
+      if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       const nextThreadId = String(data?.thread?.id || data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
-        // Reload messages to replace optimistic msg with real DB messages (incl. AI response)
-        await loadThreadMessages(nextThreadId);
-        // Refresh thread list in background — don't block message display
+        setMessages((prev) => {
+          const withoutThinking = prev.filter((item) => item.id !== thinking.id);
+          const withRealUser = withoutThinking.map((item) =>
+            item.id === optimistic.id
+              ? { ...item, id: data.userMessageId || item.id }
+              : item
+          );
+          return [
+            ...withRealUser,
+            {
+              id: data.messageId || `assistant-${Date.now()}`,
+              role: 'assistant',
+              content: String(data.answer || '').trim() || 'پاسخ آماده شد.',
+              provider: data.provider || null,
+              model: data.model || null,
+              metadata: {
+                usage: data.usage || null,
+                capability: data.capability || null,
+                knowledgeSources: data.knowledgeSources || [],
+              },
+              created_at: new Date().toISOString(),
+            },
+          ];
+        });
         void loadThreads(nextThreadId);
       }
     } catch (error: any) {
-      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id));
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id));
       setInput(text);
       message.error(toFaErrorMessage(error, 'ارسال پیام به هوش مصنوعی ناموفق بود'));
     } finally {
       setSending(false);
     }
-  }, [activeThread, activeThreadId, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, sending]);
+  }, [activeThread, activeThreadId, chatContext, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, processOperationMode, recordCreationSchema, selectedCapabilities, sending]);
 
   useEffect(() => {
     if (autoPromptHandledRef.current) return;
@@ -242,40 +466,416 @@ const AiChatPage: React.FC = () => {
     });
   }, [location.search, navigate, submitMessage]);
 
-  const startVoice = useCallback(() => {
-    const SpeechRecognitionCtor = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionCtor) {
-      message.warning('مرورگر شما از ورودی صوتی پشتیبانی نمی‌کند. از Chrome یا Edge استفاده کنید.');
-      return;
-    }
-    if (voiceActive) {
-      recognitionRef.current?.stop();
-      setVoiceActive(false);
-      return;
-    }
-    const recognition = new SpeechRecognitionCtor();
-    recognition.lang = 'fa-IR';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognitionRef.current = recognition;
-    recognition.onstart = () => setVoiceActive(true);
-    recognition.onresult = (event: any) => {
-      const transcript = String(event.results?.[0]?.[0]?.transcript || '').trim();
-      if (transcript) setInput((prev) => (prev ? `${prev} ${transcript}` : transcript).trim());
-    };
-    recognition.onerror = (event: any) => {
-      if (event.error !== 'no-speech' && event.error !== 'aborted') {
-        message.error('خطا در دریافت صدا. دوباره تلاش کنید.');
-      }
-      setVoiceActive(false);
-    };
-    recognition.onend = () => setVoiceActive(false);
+  const submitVoice = useCallback(async (voice: RecordedVoice) => {
+    if (voiceSending || sending) return;
+    setVoiceSending(true);
     try {
-      recognition.start();
-    } catch {
-      setVoiceActive(false);
+      const transcriptData = await invokeAi({
+        action: 'transcribe_voice',
+        audio: {
+          data: await blobToBase64(voice.blob),
+          mimeType: voice.mimeType,
+          durationMs: voice.durationMs,
+          filename: voice.filename,
+        },
+      });
+      const transcript = String(transcriptData?.transcript || '').trim();
+      if (!transcript) throw new Error('متنی از ویس دریافت نشد.');
+      await submitMessage(transcript, false, 'voice');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ارسال ویس به هوش مصنوعی ناموفق بود'));
+    } finally {
+      setVoiceSending(false);
     }
-  }, [voiceActive, message]);
+  }, [invokeAi, message, sending, submitMessage, voiceSending]);
+
+  const submitImagePrompt = useCallback(async (
+    rawText?: string,
+    forceNewThread = false,
+    contextOverride?: Record<string, any>,
+  ) => {
+    const text = String(rawText ?? input).trim();
+    if (!text || generatingImage || sending) return;
+    if (activeThread && !isActiveOwner) {
+      message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
+      return;
+    }
+    const optimistic: AiMessage = {
+      id: `pending-image-${Date.now()}`,
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString(),
+      metadata: { input_kind: 'image_prompt' },
+    };
+    const thinking: AiMessage = {
+      id: `pending-assistant-image-${Date.now()}`,
+      role: 'assistant',
+      content: 'در حال ساخت تصویر...',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['image_generation'] },
+    };
+    setInput('');
+    setMessages((prev) => [...prev, optimistic, thinking]);
+    setGeneratingImage(true);
+    try {
+      const data = await invokeAi({
+        action: 'generate_image',
+        prompt: text,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: contextOverride || chatContext,
+      });
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
+        setActiveThreadId(nextThreadId);
+        setMessages((prev) => [
+          ...prev
+            .filter((item) => item.id !== thinking.id)
+            .map((item) => item.id === optimistic.id ? { ...item, id: data.userMessageId || item.id } : item),
+          {
+            id: data.messageId || `assistant-image-${Date.now()}`,
+            role: 'assistant',
+            content: String(data.answer || '').trim() || 'تصویر آماده شد.',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: {
+              usage: data.usage || null,
+              image: data.image || null,
+              capability: 'image_generation',
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        void loadThreads(nextThreadId);
+      }
+    } catch (error: any) {
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id));
+      setInput(text);
+      message.error(toFaErrorMessage(error, 'تولید تصویر ناموفق بود'));
+    } finally {
+      setGeneratingImage(false);
+    }
+  }, [activeThread, activeThreadId, chatContext, generatingImage, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, sending]);
+
+  const submitVoiceOutputPrompt = useCallback(async (
+    rawText?: string,
+    forceNewThread = false,
+    contextOverride?: Record<string, any>,
+  ) => {
+    const text = String(rawText ?? input).trim();
+    if (!text || generatingVoiceOutput || sending) return;
+    if (activeThread && !isActiveOwner) {
+      message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
+      return;
+    }
+    const optimistic: AiMessage = {
+      id: `pending-voice-output-${Date.now()}`,
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString(),
+      metadata: { input_kind: 'voice_output_prompt' },
+    };
+    const thinking: AiMessage = {
+      id: `pending-assistant-voice-output-${Date.now()}`,
+      role: 'assistant',
+      content: 'در حال تولید صدا...',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['voice_output'] },
+    };
+    setInput('');
+    setMessages((prev) => [...prev, optimistic, thinking]);
+    setGeneratingVoiceOutput(true);
+    try {
+      const data = await invokeAi({
+        action: 'generate_voice_output',
+        text,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: contextOverride || chatContext,
+      });
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
+        setActiveThreadId(nextThreadId);
+        setMessages((prev) => [
+          ...prev
+            .filter((item) => item.id !== thinking.id)
+            .map((item) => item.id === optimistic.id ? { ...item, id: data.userMessageId || item.id } : item),
+          {
+            id: data.messageId || `assistant-voice-output-${Date.now()}`,
+            role: 'assistant',
+            content: String(data.answer || '').trim() || 'فایل صوتی آماده شد.',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: {
+              usage: data.usage || null,
+              file: data.file || null,
+              capability: 'voice_output',
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        void loadThreads(nextThreadId);
+      }
+    } catch (error: any) {
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id));
+      setInput(text);
+      message.error(toFaErrorMessage(error, 'تولید صدا ناموفق بود'));
+    } finally {
+      setGeneratingVoiceOutput(false);
+    }
+  }, [activeThread, activeThreadId, chatContext, generatingVoiceOutput, input, invokeAi, isActiveOwner, loadThreads, message, sending]);
+
+  const submitUploadedFile = useCallback( async (
+    filePrompt: AiUploadedFilePrompt,
+    promptOverride?: string,
+    contextOverride?: Record<string, any>,
+    forceNewThread = false,
+    options?: { capabilities?: AiComposerCapability[]; processOperationMode?: boolean; recordCreationSchema?: any },
+  ) => {
+    if (fileSending || sending) return;
+    if (activeThread && !isActiveOwner) {
+      message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
+      return;
+    }
+    const baseCapabilities = options?.capabilities || selectedCapabilities;
+    const effectiveCapabilities = baseCapabilities.includes('document_analysis') ? baseCapabilities : [...baseCapabilities, 'document_analysis' as AiComposerCapability];
+    const effectiveProcessOperationMode = options?.processOperationMode ?? processOperationMode;
+    const effectiveRecordCreationSchema = options?.recordCreationSchema ?? recordCreationSchema;
+    const optimistic: AiMessage = {
+      id: `pending-file-${Date.now()}`,
+      role: 'user',
+      content: `فایل پیوست: ${filePrompt.fileName}`,
+      created_at: new Date().toISOString(),
+      metadata: { input_kind: 'file' },
+    };
+    const thinking: AiMessage = {
+      id: `pending-assistant-file-${Date.now()}`,
+      role: 'assistant',
+      content: buildAiPendingStatusText(effectiveCapabilities, 'در حال تحلیل فایل...'),
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: effectiveCapabilities },
+    };
+    setMessages((prev) => [...prev, optimistic, thinking]);
+    setPendingAiAction(null);
+    setFileSending(true);
+    try {
+      const effectiveContext = contextOverride || chatContext;
+      const data = await invokeAi(effectiveProcessOperationMode ? {
+        action: 'process_operation_from_prompt',
+        capability: 'record_chat',
+        capabilities: effectiveCapabilities,
+        message: String(promptOverride ?? input).trim() || 'با توجه به این فایل، اقدام فرآیندی لازم را پیشنهاد بده.',
+        inputKind: filePrompt.inputKind || 'file',
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.inputKind === 'text' ? filePrompt.prompt : '',
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
+        previewOnly: true,
+      } : effectiveRecordCreationSchema ? {
+        action: 'create_record_from_prompt',
+        capability: effectiveContext?.mode === 'record' ? 'record_chat' : 'dashboard_chat',
+        capabilities: effectiveCapabilities,
+        message: String(promptOverride ?? input).trim() || 'از اطلاعات این فایل یک رکورد جدید بساز.',
+        inputKind: filePrompt.inputKind || 'file',
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.inputKind === 'text' ? filePrompt.prompt : '',
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
+        recordCreation: effectiveRecordCreationSchema,
+        previewOnly: true,
+      } : {
+        action: 'chat_with_file',
+        capabilities: effectiveCapabilities,
+        message: String(promptOverride ?? input).trim() || 'این فایل را تحلیل کن و خلاصه، نکات مهم و اقدام‌های پیشنهادی را بگو.',
+        file: {
+          filename: filePrompt.fileName,
+          mimeType: filePrompt.mimeType,
+          size: filePrompt.size,
+          text: filePrompt.prompt,
+          data: filePrompt.data || null,
+          url: filePrompt.url || null,
+          assetId: filePrompt.assetId || null,
+          entryId: filePrompt.entryId || null,
+          moduleId: filePrompt.moduleId || null,
+          recordId: filePrompt.recordId || null,
+        },
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
+      });
+      if (!data?.proposedAction && effectiveRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
+      }
+      if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
+      setInput('');
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
+        setActiveThreadId(nextThreadId);
+        setMessages((prev) => [
+          ...prev
+            .filter((item) => item.id !== thinking.id)
+            .map((item) => item.id === optimistic.id ? { ...item, id: data.userMessageId || item.id } : item),
+          {
+            id: data.messageId || `assistant-file-${Date.now()}`,
+            role: 'assistant',
+            content: String(data.answer || data.reply || data.message || '').trim() || 'پاسخ آماده شد.',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: {
+              usage: data.usage || null,
+              capability: data.capability || null,
+              proposedAction: data.proposedAction || null,
+              createdRecords: data.createdRecords || null,
+            },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        void loadThreads(nextThreadId);
+      }
+    } catch (error: any) {
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id));
+      message.error(toFaErrorMessage(error, 'ارسال فایل به هوش مصنوعی ناموفق بود'));
+    } finally {
+      setFileSending(false);
+    }
+  }, [activeThread, activeThreadId, chatContext, fileSending, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, processOperationMode, recordCreationSchema, selectedCapabilities, sending]);
+
+  const confirmPendingAiAction = useCallback(async () => {
+    const actionId = String(pendingAiAction?.id || '').trim();
+    if (!actionId) return;
+    setConfirmingAiAction(true);
+    try {
+      const data = await invokeAi({ action: 'confirm_action', actionLogId: actionId });
+      message.success('اقدام تایید و اجرا شد.');
+      setPendingAiAction(null);
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || activeThreadId;
+      if (nextThreadId) await loadThreadMessages(nextThreadId);
+      if (nextThreadId) void loadThreads(nextThreadId);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود'));
+    } finally {
+      setConfirmingAiAction(false);
+    }
+  }, [activeThreadId, invokeAi, loadThreadMessages, loadThreads, message, pendingAiAction]);
+
+  useEffect(() => {
+    if (autoPromptHandledRef.current) return;
+    const state = (location.state || {}) as {
+      aiInitialPrompt?: string;
+      aiInitialInputKind?: string;
+      assistantContext?: Record<string, any>;
+      aiInitialFile?: {
+        fileName?: string;
+        mimeType?: string;
+        size?: number;
+        prompt?: string;
+        data?: string | null;
+        inputKind?: 'text' | 'file' | 'image';
+        message?: string;
+        url?: string | null;
+        assetId?: string | null;
+        entryId?: string | null;
+        moduleId?: string | null;
+        recordId?: string | null;
+      };
+      aiInitialCapabilities?: string[];
+      aiInitialRecordCreationTargetModuleId?: string | null;
+      forceNewThread?: boolean;
+    };
+    const initialFile = state.aiInitialFile;
+    const initialPrompt = String(state.aiInitialPrompt || '').trim();
+    const initialContext = state.assistantContext ? { ...state.assistantContext, source: 'ai_chat_page' } : undefined;
+    if (!initialFile && !initialPrompt) return;
+    autoPromptHandledRef.current = true;
+    const allowedCapabilities = new Set([
+      'document_analysis',
+      'voice_input',
+      'voice_output',
+      'image_generation',
+      'web_search',
+      'deep_reasoning',
+      'legal_assistant',
+      'record_creation',
+      'process_operation',
+    ]);
+    const initialCapabilities = (Array.isArray(state.aiInitialCapabilities) ? state.aiInitialCapabilities : [])
+      .map((item) => String(item || '').trim())
+      .filter((item): item is AiComposerCapability => allowedCapabilities.has(item));
+    const initialRecordCreationTargetModuleId = String(state.aiInitialRecordCreationTargetModuleId || '').trim() || null;
+    const initialProcessOperationMode = initialCapabilities.includes('process_operation');
+    const initialRecordCreationSchema = initialCapabilities.includes('record_creation') && initialRecordCreationTargetModuleId
+      ? buildAiRecordCreationSchema(initialRecordCreationTargetModuleId)
+      : null;
+    if (initialCapabilities.length > 0) setSelectedCapabilities(initialCapabilities);
+    setProcessOperationMode(initialProcessOperationMode);
+    setRecordCreationTargetModuleId(initialRecordCreationTargetModuleId);
+    if (initialFile?.prompt) {
+      void submitUploadedFile({
+        fileName: String(initialFile.fileName || 'فایل پیوست'),
+        mimeType: String(initialFile.mimeType || 'text/plain'),
+        size: Number(initialFile.size || 0),
+        prompt: String(initialFile.prompt || ''),
+        data: initialFile.data || null,
+        inputKind: initialFile.inputKind || 'file',
+        url: initialFile.url || null,
+        assetId: initialFile.assetId || null,
+        entryId: initialFile.entryId || null,
+        moduleId: initialFile.moduleId || null,
+        recordId: initialFile.recordId || null,
+      }, String(initialFile.message || '').trim(), initialContext, state.forceNewThread !== false, {
+        capabilities: initialCapabilities,
+        processOperationMode: initialProcessOperationMode,
+        recordCreationSchema: initialRecordCreationSchema,
+      }).finally(() => {
+        navigate('/ai', { replace: true });
+      });
+      return;
+    }
+    if (initialCapabilities.includes('voice_output')) {
+      void submitVoiceOutputPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
+        navigate('/ai', { replace: true });
+      });
+      return;
+    }
+    if (initialCapabilities.includes('image_generation')) {
+      void submitImagePrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
+        navigate('/ai', { replace: true });
+      });
+      return;
+    }
+    void submitMessage(initialPrompt, state.forceNewThread !== false, String(state.aiInitialInputKind || 'text'), initialContext, {
+      capabilities: initialCapabilities,
+      processOperationMode: initialProcessOperationMode,
+      recordCreationSchema: initialRecordCreationSchema,
+    }).then(() => {
+      navigate('/ai', { replace: true });
+    });
+  }, [input, location.state, navigate, submitImagePrompt, submitMessage, submitUploadedFile, submitVoiceOutputPrompt]);
 
   const loadShareOptions = useCallback(async () => {
     try {
@@ -383,63 +983,91 @@ const AiChatPage: React.FC = () => {
     setActiveThreadId(null);
     setMessages([]);
     setInput('');
+    setChatContext({ mode: 'dashboard', source: 'ai_chat_page' });
+    setThreadDrawerOpen(false);
   };
+
+  const fileRecordScope = getRecordScopeFromContext(chatContext);
+  const imageMode = selectedCapabilities.includes('image_generation');
+  const voiceOutputMode = selectedCapabilities.includes('voice_output');
+  const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
+    setSelectedCapabilities(next);
+    const wantsProcessOperation = next.includes('process_operation');
+    setProcessOperationMode(wantsProcessOperation);
+    if (wantsProcessOperation || !next.includes('record_creation')) {
+      setRecordCreationTargetModuleId(null);
+    }
+  }, []);
+
+  const renderThreadsPanel = () => (
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-border dark:bg-dark-surface md:border md:shadow-sm">
+      <Button type="primary" block icon={<PlusOutlined />} onClick={startNewChat}>
+        گفتگوی جدید
+      </Button>
+      <Input
+        className="mt-3"
+        allowClear
+        prefix={<SearchOutlined className="text-gray-400" />}
+        placeholder="جستجوی گفتگوها"
+        value={threadSearch}
+        onChange={(event) => setThreadSearch(event.target.value)}
+      />
+      <div className="mt-3 max-h-[calc(100vh-210px)] space-y-2 overflow-auto pr-1">
+        {threadLoading ? (
+          <div className="py-8 text-center"><Spin /></div>
+        ) : filteredThreads.length === 0 ? (
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گفتگویی ثبت نشده است" />
+        ) : (
+          filteredThreads.map((thread) => {
+            const active = String(thread.id) === String(activeThreadId);
+            return (
+              <button
+                key={thread.id}
+                type="button"
+                onClick={() => {
+                  setActiveThreadId(thread.id);
+                  setThreadDrawerOpen(false);
+                }}
+                className={`w-full rounded-lg border px-3 py-3 text-right transition ${
+                  active
+                    ? 'border-leather-400 bg-leather-50 text-leather-800 dark:border-leather-500 dark:bg-leather-900/20 dark:text-leather-100'
+                    : 'border-gray-200 bg-white hover:border-gray-300 dark:border-dark-border dark:bg-dark-surface'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <span className="line-clamp-2 text-sm font-semibold">
+                    {thread.title || 'گفتگوی بدون عنوان'}
+                  </span>
+                  {thread.is_shared ? <Tag color="blue" className="m-0 shrink-0">مشترک</Tag> : null}
+                </div>
+                <div className="mt-2 text-xs text-gray-500">{formatThreadDate(thread.updated_at || thread.created_at)}</div>
+                <div className="mt-1 truncate text-[11px] text-gray-400">{getThreadContextLabel(thread)}</div>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 dark:bg-dark-bg md:p-6" dir="rtl">
       <div className="mx-auto flex max-w-7xl flex-col gap-4 md:flex-row-reverse">
-        <aside className="w-full md:w-80">
-          <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-dark-border dark:bg-dark-surface">
-            <Button type="primary" block icon={<PlusOutlined />} onClick={startNewChat}>
-              گفتگوی جدید
-            </Button>
-            <Input
-              className="mt-3"
-              allowClear
-              prefix={<SearchOutlined className="text-gray-400" />}
-              placeholder="جستجوی گفتگوها"
-              value={threadSearch}
-              onChange={(event) => setThreadSearch(event.target.value)}
-            />
-            <div className="mt-3 max-h-[calc(100vh-210px)] space-y-2 overflow-auto pr-1">
-              {threadLoading ? (
-                <div className="py-8 text-center"><Spin /></div>
-              ) : filteredThreads.length === 0 ? (
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گفتگویی ثبت نشده است" />
-              ) : (
-                filteredThreads.map((thread) => {
-                  const active = String(thread.id) === String(activeThreadId);
-                  return (
-                    <button
-                      key={thread.id}
-                      type="button"
-                      onClick={() => setActiveThreadId(thread.id)}
-                      className={`w-full rounded-lg border px-3 py-3 text-right transition ${
-                        active
-                          ? 'border-leather-400 bg-leather-50 text-leather-800 dark:border-leather-500 dark:bg-leather-900/20 dark:text-leather-100'
-                          : 'border-gray-200 bg-white hover:border-gray-300 dark:border-dark-border dark:bg-dark-surface'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <span className="line-clamp-2 text-sm font-semibold">
-                          {thread.title || 'گفتگوی بدون عنوان'}
-                        </span>
-                        {thread.is_shared ? <Tag color="blue" className="m-0 shrink-0">مشترک</Tag> : null}
-                      </div>
-                      <div className="mt-2 text-xs text-gray-500">{formatThreadDate(thread.updated_at || thread.created_at)}</div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          </div>
+        <aside className="hidden w-full md:block md:w-80">
+          {renderThreadsPanel()}
         </aside>
 
         <main className="min-h-[calc(100vh-48px)] flex-1 rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-border dark:bg-dark-surface">
           <div className="flex min-h-[calc(100vh-48px)] flex-col">
             <header className="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-border md:flex-row md:items-center md:justify-between">
               <div className="flex min-w-0 items-center gap-3">
-                <Avatar icon={<RobotOutlined />} className="bg-leather-500" />
+                <Button
+                  className="md:hidden"
+                  icon={<MenuUnfoldOutlined />}
+                  onClick={() => setThreadDrawerOpen(true)}
+                  aria-label="باز کردن لیست گفتگوها"
+                />
+                <Avatar icon={<AiSparkleIcon className="h-4 w-4" />} className="bg-leather-500" />
                 <div className="min-w-0">
                   <Typography.Title level={4} className="!mb-0 truncate">
                     {activeThread?.title || 'هوش مصنوعی تازه سیستم'}
@@ -448,7 +1076,7 @@ const AiChatPage: React.FC = () => {
                     {activeThread
                       ? activeThread.is_owner === false
                         ? 'گفتگوی به‌اشتراک‌گذاشته‌شده'
-                        : 'تاریخچه اختصاصی شما'
+                        : getThreadContextLabel(activeThread)
                       : 'گفتگوی جدید'}
                   </div>
                 </div>
@@ -497,9 +1125,10 @@ const AiChatPage: React.FC = () => {
                     const modelName = item.model || item.metadata?.usage?.model || null;
                     const cost = isAssistant ? formatCostFa(item) : null;
                     const time = formatMessageTime(item.created_at);
+                    const aiAttachment = item.metadata?.image || item.metadata?.file || (item.metadata?.image_url ? { url: item.metadata.image_url } : null);
                     return (
                       <div key={item.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
-                        {!isUser ? <Avatar icon={<RobotOutlined />} className="mt-1 bg-leather-500" /> : null}
+                        {!isUser ? <Avatar icon={<AiSparkleIcon className="h-4 w-4" />} className="mt-1 bg-leather-500" /> : null}
                         <div className={`flex max-w-[85%] flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                           <div
                             className={`whitespace-pre-wrap rounded-lg px-4 py-3 leading-7 ${
@@ -509,19 +1138,29 @@ const AiChatPage: React.FC = () => {
                             }`}
                           >
                             {item.content}
+                            <AiMessageAttachmentPreview attachment={aiAttachment} fallbackName={isAssistant ? 'خروجی هوش مصنوعی' : 'فایل پیوست'} />
                           </div>
                           {(time || modelName || cost) ? (
                             <div
-                              className="mt-1 flex flex-wrap items-center gap-x-2 px-1 text-[10px] text-gray-400 dark:text-gray-500"
-                              dir="ltr"
+                              className={`mt-1 flex flex-wrap items-center gap-x-2 px-1 text-[10px] text-gray-400 dark:text-gray-500 ${isUser ? 'justify-end' : 'justify-start'}`}
+                              dir="rtl"
                             >
+                              {isUser ? <span>{currentUserView.name}</span> : null}
                               {time ? <span>{time}</span> : null}
                               {modelName ? <span className="font-mono">{modelName}</span> : null}
                               {cost ? <span>{cost}</span> : null}
                             </div>
                           ) : null}
                         </div>
-                        {isUser ? <Avatar icon={<UserOutlined />} className="mt-1 bg-gray-500" /> : null}
+                        {isUser ? (
+                          <ProfileAvatar
+                            size={32}
+                            src={currentUserView.avatarUrl}
+                            name={currentUserView.name}
+                            icon={<UserOutlined />}
+                            className="mt-1 bg-gray-500"
+                          />
+                        ) : null}
                       </div>
                     );
                   })}
@@ -535,6 +1174,22 @@ const AiChatPage: React.FC = () => {
                   این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.
                 </div>
               ) : null}
+              {pendingAiAction ? (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-100">
+                  <div className="mb-2 font-medium">هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.</div>
+                  <div className="mb-3 leading-6">
+                    می‌توانید تایید کنید، یا در کادر پیام توضیح بیشتری بنویسید تا پیشنهاد اصلاح شود.
+                  </div>
+                  <Space>
+                    <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
+                      تایید و اجرا
+                    </Button>
+                    <Button size="small" onClick={() => setPendingAiAction(null)} disabled={confirmingAiAction}>
+                      فعلا نه
+                    </Button>
+                  </Space>
+                </div>
+              ) : null}
               <div className="flex gap-2">
                 <Input.TextArea
                   autoSize={{ minRows: 1, maxRows: 5 }}
@@ -545,33 +1200,51 @@ const AiChatPage: React.FC = () => {
                   onPressEnter={(event) => {
                     if (!event.shiftKey) {
                       event.preventDefault();
-                      void submitMessage();
+                      void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage());
                     }
                   }}
                 />
-                <Tooltip title={voiceActive ? 'توقف ضبط' : 'ورودی صوتی (فارسی)'}>
-                  <Button
-                    icon={<AudioOutlined />}
-                    danger={voiceActive}
-                    disabled={Boolean(activeThread && !isActiveOwner)}
-                    onClick={startVoice}
-                    className={voiceActive ? 'animate-pulse' : ''}
-                  />
-                </Tooltip>
+                <AiCapabilityComposerActions
+                  selected={selectedCapabilities}
+                  onChange={handleComposerCapabilitiesChange}
+                  capabilityAvailability={capabilityAvailability}
+                  disabled={Boolean(activeThread && !isActiveOwner)}
+                  loading={sending || generatingImage || generatingVoiceOutput}
+                  moduleId={fileRecordScope.moduleId}
+                  recordId={fileRecordScope.recordId}
+                  onVoiceSend={submitVoice}
+                  onFilePrepared={submitUploadedFile}
+                  voiceLoading={voiceSending}
+                  fileLoading={fileSending}
+                  recordCreationModuleOptions={recordCreationModuleOptions}
+                  recordCreationTargetModuleId={recordCreationTargetModuleId}
+                  onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+                />
                 <Button
                   type="primary"
                   icon={<SendOutlined />}
-                  loading={sending}
+                  loading={voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : sending}
                   disabled={!input.trim() || Boolean(activeThread && !isActiveOwner)}
-                  onClick={() => void submitMessage()}
+                  onClick={() => void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage())}
                 >
-                  ارسال
+                  {voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
                 </Button>
               </div>
             </footer>
           </div>
         </main>
       </div>
+
+      <Drawer
+        title="گفتگوها"
+        open={threadDrawerOpen}
+        onClose={() => setThreadDrawerOpen(false)}
+        placement="right"
+        width="86%"
+        classNames={{ body: '!p-3' }}
+      >
+        {renderThreadsPanel()}
+      </Drawer>
 
       <Modal
         title="اشتراک‌گذاری گفتگو"

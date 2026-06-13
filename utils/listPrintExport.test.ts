@@ -93,6 +93,42 @@ describe('formatListCellValue assignee display', () => {
       ],
     );
 
-    expect(html).toContain('/storage/v1/object/public/images/products/1/photo.jpg');
+    expect(html).toContain('products/1/photo.jpg');
+  });
+
+  it('applies selected image display mode to catalog cards', () => {
+    const fitHtml = buildListCatalogHtml(
+      [
+        { key: 'image_url', label: 'تصویر', type: FieldType.IMAGE },
+        { key: 'name', label: 'نام', type: FieldType.TEXT },
+      ],
+      [
+        {
+          image_url: 'https://example.com/storage/v1/object/public/images/products/1/photo.jpg',
+          name: 'محصول نمونه',
+        },
+      ],
+      {},
+      '',
+      'fit',
+    );
+    const actualHtml = buildListCatalogHtml(
+      [
+        { key: 'image_url', label: 'تصویر', type: FieldType.IMAGE },
+        { key: 'name', label: 'نام', type: FieldType.TEXT },
+      ],
+      [
+        {
+          image_url: 'https://example.com/storage/v1/object/public/images/products/1/photo.jpg',
+          name: 'محصول نمونه',
+        },
+      ],
+      {},
+      '',
+      'actual',
+    );
+
+    expect(fitHtml).toContain('object-fit:contain');
+    expect(actualHtml).toContain('object-fit:none');
   });
 });
