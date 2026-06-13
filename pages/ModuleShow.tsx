@@ -5582,6 +5582,31 @@ const ModuleShow: React.FC = () => {
         </React.Suspense>
       );
     }
+    if (moduleId === 'delivery_forms' && id) {
+      content.details = (
+        <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.35)] p-4">
+          <div className="mb-3">
+            <div className="text-sm font-semibold text-[rgba(var(--brand-800-rgb),1)]">فایل‌ها و تصاویر</div>
+            <div className="mt-1 text-xs text-gray-500">
+              عکس‌ها، رسیدها و فایل‌های مرتبط با این فرم تحویل را از همین بخش بارگذاری و مدیریت کنید.
+            </div>
+          </div>
+          <div className="max-w-sm">
+            <RecordImageBox
+              moduleId={moduleId}
+              recordId={id}
+              imageUrl={null}
+              canEdit={canEditModule}
+              canViewFilesManager={true}
+              canEditFilesManager={canEditModule}
+              canDeleteFilesManager={canEditModule}
+              onImageUpdate={() => false}
+              filesButtonLabel="فایل‌ها و تصاویر"
+            />
+          </div>
+        </div>
+      );
+    }
     if (moduleId === 'projects' && projectProcessLinkedFields.length > 0) {
       content.process = (
         <div className="rounded-2xl border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-4">
@@ -5605,7 +5630,7 @@ const ModuleShow: React.FC = () => {
       );
     }
     return content;
-  }, [data, id, moduleId, projectProcessLinkedFields, relationOptions]);
+  }, [canEditModule, data, id, moduleId, projectProcessLinkedFields, relationOptions]);
 
   if (accessDenied) {
     return (
