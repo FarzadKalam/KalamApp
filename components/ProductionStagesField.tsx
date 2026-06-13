@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid, Segmented } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined } from '@ant-design/icons';
+import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid, Segmented, Dropdown } from 'antd';
+import type { MenuProps } from 'antd';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined, MoreOutlined } from '@ant-design/icons';
 import {
   DndContext,
   PointerSensor,
@@ -344,6 +345,79 @@ const ProcessStageMoveHandle = React.forwardRef<HTMLSpanElement, {
   );
 });
 ProcessStageMoveHandle.displayName = 'ProcessStageMoveHandle';
+
+const ProcessStageActionControls: React.FC<{
+  mobile: boolean;
+  inverse?: boolean;
+  copyTitle: string;
+  moveTitle: string;
+  onCopy: (event: React.MouseEvent<HTMLElement>) => void;
+  onMove: (event: React.MouseEvent<HTMLElement>) => void;
+}> = ({ mobile, inverse = false, copyTitle, moveTitle, onCopy, onMove }) => {
+  if (mobile) {
+    const items: MenuProps['items'] = [
+      { key: 'copy', label: copyTitle, icon: <CopyOutlined /> },
+      { key: 'move', label: moveTitle, icon: <DragOutlined /> },
+    ];
+    return (
+      <Dropdown
+        trigger={['click']}
+        placement="bottomLeft"
+        menu={{
+          items,
+          onClick: (info) => {
+            info.domEvent.preventDefault();
+            info.domEvent.stopPropagation();
+            const syntheticEvent = info.domEvent as unknown as React.MouseEvent<HTMLElement>;
+            if (info.key === 'copy') {
+              onCopy(syntheticEvent);
+              return;
+            }
+            onMove(syntheticEvent);
+          },
+        }}
+      >
+        <span
+          role="button"
+          tabIndex={0}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded ${
+            inverse
+              ? 'bg-black/15 text-white hover:bg-black/25'
+              : 'bg-white/80 text-gray-600 shadow-sm hover:bg-white dark:bg-black/25 dark:text-gray-200 dark:hover:bg-black/40'
+          }`}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <MoreOutlined />
+        </span>
+      </Dropdown>
+    );
+  }
+
+  return (
+    <>
+      <Tooltip title={copyTitle}>
+        <span
+          role="button"
+          tabIndex={0}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded shadow-sm ${
+            inverse
+              ? 'bg-black/15 text-white hover:bg-black/25'
+              : 'bg-white/80 text-gray-600 dark:bg-black/25 dark:text-gray-200'
+          }`}
+          onClick={onCopy}
+        >
+          <CopyOutlined />
+        </span>
+      </Tooltip>
+      <Tooltip title={moveTitle}>
+        <ProcessStageMoveHandle inverse={inverse} onClick={onMove} />
+      </Tooltip>
+    </>
+  );
+};
 
 const ProcessStageDragSurface: React.FC<ProcessStageDragSurfaceProps> = ({
   id,
@@ -876,6 +950,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [, setAppendProcessRelationLoading] = useState<Record<string, boolean>>({});
   const [showEmptyProcessDetails, setShowEmptyProcessDetails] = useState(false);
   const [showCompletedProcessGroups, setShowCompletedProcessGroups] = useState(false);
+  const [expandedProcessBars, setExpandedProcessBars] = useState<Set<string>>(() => new Set());
   const [processOriginTitleMap, setProcessOriginTitleMap] = useState<Record<string, string>>({});
   const [openDraftSegmentPopoverKey, setOpenDraftSegmentPopoverKey] = useState<string | null>(null);
   const [draftTemplatePickerOpenKey, setDraftTemplatePickerOpenKey] = useState<string | null>(null);
@@ -5071,6 +5146,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [isProcessModule]);
 
   const getProcessBarDisplayMode = useCallback((segments: any[]): ProcessBarDisplayMode => {
+    if (isMobileProcessViewport) return 'dense';
     if (!compact && !cardCompact) return 'full';
 
     const resolvedWidth = containerWidth || (cardCompact ? 320 : 480);
@@ -5081,9 +5157,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return 'dense';
     }
       return 'full';
-  }, [cardCompact, compact, containerWidth]);
-
-  const isMobileMainProcessView = !compact && !cardCompact && containerWidth > 0 && containerWidth <= PROCESS_BAR_BREAKPOINTS.dense;
+  }, [cardCompact, compact, containerWidth, isMobileProcessViewport]);
 
   const getDenseSegmentLabel = useCallback((value: unknown) => {
     const raw = String(value || '').trim();
@@ -5092,6 +5166,40 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (compactWords.length <= 14) return compactWords;
     return `${compactWords.slice(0, 13).trim()}…`;
   }, []);
+
+  const getExpandedProcessSegmentWidth = useCallback((value: unknown) => {
+    const raw = String(value || '').trim();
+    if (!raw) return 92;
+    return Math.max(112, Math.min(260, raw.length * 8 + 46));
+  }, []);
+
+  const toggleExpandedProcessBar = useCallback((barKey: string) => {
+    setExpandedProcessBars((prev) => {
+      const next = new Set(prev);
+      if (next.has(barKey)) {
+        next.delete(barKey);
+      } else {
+        next.add(barKey);
+      }
+      return next;
+    });
+  }, []);
+
+  const renderProcessBarExpandToggle = useCallback((barKey: string, expanded: boolean) => (
+    <button
+      type="button"
+      aria-label={expanded ? 'نمای فشرده فرآیند' : 'نمای باز فرآیند'}
+      title={expanded ? 'نمای فشرده فرآیند' : 'نمای باز فرآیند'}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleExpandedProcessBar(barKey);
+      }}
+      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-[11px] font-bold leading-none text-gray-600 shadow-sm transition-colors hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:text-[rgba(var(--brand-700-rgb),1)] dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+    >
+      {expanded ? '>|' : '|<'}
+    </button>
+  ), [toggleExpandedProcessBar]);
 
   const getSummarySegmentLabel = useCallback((value: unknown) => {
     const raw = String(value || '').trim();
@@ -8858,6 +8966,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   (trigger) => trigger.targetLaneKeys.includes(lane.key),
                 );
                 const laneDragScopeKey = `template:${recordId || 'draft'}`;
+                const laneBarKey = `${laneDragScopeKey}:bar:${lane.key}`;
+                const isLaneBarExpanded = expandedProcessBars.has(laneBarKey);
                 return (
                   <div
                     key={lane.key}
@@ -8875,6 +8985,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         if (nextName !== lane.name) void handleRenameProcessLane(lane.key, nextName);
                       }}
                     />
+                    {renderProcessBarExpandToggle(laneBarKey, isLaneBarExpanded)}
                   </div>
                   <ProcessLaneDropZone
                     id={`${laneDragScopeKey}:lane:${lane.key}:end`}
@@ -8882,7 +8993,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     laneKey={lane.key}
                     index={lane.stages.length}
                     disabled={readOnly || !multiLaneFeatureEnabled || !canManageProcessGraph}
-                    className={`flex min-h-0 w-full items-stretch rounded-lg border border-gray-200/80 bg-white/80 p-1 dark:border-gray-700 dark:bg-white/5 ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}
+                    className={`flex min-h-0 w-full items-stretch overflow-x-auto overflow-y-visible rounded-lg border border-gray-200/80 bg-white/80 p-1 dark:border-gray-700 dark:bg-white/5 ${compact ? 'min-h-[2.5rem]' : 'min-h-[3rem]'}`}
                   >
                     <div className="flex shrink-0 items-center pl-1">
                       {laneTriggers.length > 0 ? laneTriggers.map((trigger) => (
@@ -8951,7 +9062,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 <div
                                   ref={ref as React.Ref<HTMLDivElement>}
                                   className={`group relative flex min-w-0 flex-1 basis-0 items-stretch ${index !== 0 ? 'mr-px' : ''} ${isOver ? 'brightness-95' : ''}`}
-                                  style={{ ...dragStyle, zIndex: Math.max(1, 1000 - index) }}
+                                  style={{
+                                    ...dragStyle,
+                                    zIndex: Math.max(1, 1000 - index),
+                                    minWidth: isLaneBarExpanded
+                                      ? getExpandedProcessSegmentWidth(stage.label || stage.name)
+                                      : (isMobileProcessViewport ? 76 : undefined),
+                                  }}
                                 >
                                   <ProcessStageDragHandleContext.Provider value={{ attributes, listeners }}>
                                   <div
@@ -8965,27 +9082,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       {stage.label || stage.name}
                                     </span>
                                     {!readOnly && (
-                                      <div className={`absolute left-4 top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}>
-                                        <Tooltip title="کپی مرحله">
-                                          <Button
-                                            type="text"
-                                            size="small"
-                                            icon={<CopyOutlined />}
-                                            className="!h-6 !w-6 !min-w-0 !p-0"
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              void handleDuplicateDraftStage(stage);
-                                            }}
-                                          />
-                                        </Tooltip>
-                                        <Tooltip title="جابجایی مرحله">
-                                          <ProcessStageMoveHandle
-                                            onClick={(event) => {
-                                              event.stopPropagation();
-                                              openStageMoveModal(stage);
-                                            }}
-                                          />
-                                        </Tooltip>
+                                      <div className={`absolute top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'left-1 opacity-100' : 'left-4 opacity-0 transition-opacity group-hover:opacity-100'}`}>
+                                        <ProcessStageActionControls
+                                          mobile={isMobileProcessViewport}
+                                          copyTitle="کپی مرحله"
+                                          moveTitle="جابجایی مرحله"
+                                          onCopy={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            void handleDuplicateDraftStage(stage);
+                                          }}
+                                          onMove={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            openStageMoveModal(stage);
+                                          }}
+                                        />
                                       </div>
                                     )}
                                   </div>
@@ -9145,9 +9257,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           segments: any[],
           barKey: string,
           dragConfig?: { scopeKey: string; laneKey: string },
+          options?: { expanded?: boolean },
         ) => {
           const displayMode = getProcessBarDisplayMode(segments);
-          const useVerticalMainLayout = isMobileMainProcessView && displayMode === 'full';
+          const isBarExpanded = !!options?.expanded;
+          const useVerticalMainLayout = false;
+          const forceCompactProcessBar = isMobileProcessViewport || displayMode === 'dense';
           const shouldCompactSegments = displayMode !== 'summary' && cardCompact && segments.length > 5;
           const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
           const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
@@ -9206,6 +9321,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   ...getProcessStageShapeStyle(index),
                   zIndex: Math.max(1, 1000 - index),
                   backgroundColor: segmentColor,
+                  minWidth: forceCompactProcessBar ? 76 : undefined,
+                  width: isBarExpanded ? getExpandedProcessSegmentWidth(segmentLabel) : undefined,
+                  minHeight: forceCompactProcessBar ? 44 : undefined,
                   boxShadow: isAssignedToCurrent
                     ? `0 0 8px ${segmentColor}66, 0 0 16px ${segmentColor}4D, 0 0 24px ${segmentColor}33`
                     : undefined,
@@ -9227,7 +9345,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     )}
                     <span className={useVerticalMainLayout ? 'min-w-0 flex-1 whitespace-normal break-words leading-5' : 'truncate'}>
                       {displayMode === 'dense'
-                        ? getDenseSegmentLabel(segmentLabel)
+                        ? (isBarExpanded ? segmentLabel : getDenseSegmentLabel(segmentLabel))
                         : (shouldCompactSegments ? getSummarySegmentLabel(segmentLabel) : segmentLabel)}
                     </span>
                   </span>
@@ -9239,36 +9357,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 </div>
                 {!readOnly && !isRuntimeStagePreview ? (
                   <span
-                    className={`absolute left-4 top-1 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}
+                    className={`absolute top-1 flex gap-0.5 ${isMobileProcessViewport ? 'left-1 opacity-100' : 'left-4 opacity-0 transition-opacity group-hover:opacity-100'}`}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
                     }}
                   >
-                    <Tooltip title="کپی فعالیت">
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded bg-black/15 text-white hover:bg-black/25"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          handleCopyActualTask(segment);
-                        }}
-                      >
-                        <CopyOutlined />
-                      </span>
-                    </Tooltip>
-                    <Tooltip title="جابجایی فعالیت">
-                      <ProcessStageMoveHandle
-                        inverse
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          openStageMoveModal(segment);
-                        }}
-                      />
-                    </Tooltip>
+                    <ProcessStageActionControls
+                      mobile={isMobileProcessViewport}
+                      inverse
+                      copyTitle="کپی فعالیت"
+                      moveTitle="جابجایی فعالیت"
+                      onCopy={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        handleCopyActualTask(segment);
+                      }}
+                      onMove={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openStageMoveModal(segment);
+                      }}
+                    />
                   </span>
                 ) : null}
               </button>
@@ -9360,46 +9470,43 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       ? `relative w-full cursor-pointer rounded-full border border-dashed border-gray-300/90 bg-white/75 transition-all ${currentSegment && String(currentSegment?.id || '') === String(segment?.id || '') ? 'h-3.5 border-[rgba(var(--brand-400-rgb),0.95)] bg-[rgba(var(--brand-50-rgb),0.92)]' : 'h-2.5 hover:border-[rgba(var(--brand-400-rgb),0.8)]'} dark:border-gray-600 dark:bg-white/10`
                       : `relative flex h-full w-full min-w-0 cursor-pointer overflow-hidden bg-[rgba(var(--brand-50-rgb),0.92)] px-2 text-center transition-all group-hover:bg-[rgba(var(--brand-100-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.18)] dark:group-hover:bg-[rgba(var(--brand-700-rgb),0.28)] ${useVerticalMainLayout ? 'justify-start' : 'items-center justify-center'} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`
                   }
-                  style={getProcessStageShapeStyle(index, { summary })}
+                  style={{
+                    ...getProcessStageShapeStyle(index, { summary }),
+                    minWidth: !summary && forceCompactProcessBar ? 76 : undefined,
+                    width: !summary && isBarExpanded ? getExpandedProcessSegmentWidth(segment.label) : undefined,
+                    minHeight: !summary && forceCompactProcessBar ? 44 : undefined,
+                  }}
                 >
                   {!summary && (
                     <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : 'truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
                       {displayMode === 'dense'
-                        ? getDenseSegmentLabel(segment.label)
+                        ? (isBarExpanded ? segment.label : getDenseSegmentLabel(segment.label))
                         : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
                     </span>
                   )}
                   {!summary && !readOnly ? (
                     <span
-                      className={`absolute left-4 top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'opacity-100' : 'opacity-0 transition-opacity group-hover:opacity-100'}`}
+                      className={`absolute top-1 z-30 flex gap-0.5 ${isMobileProcessViewport ? 'left-1 opacity-100' : 'left-4 opacity-0 transition-opacity group-hover:opacity-100'}`}
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
                       }}
                     >
-                      <Tooltip title="کپی مرحله">
-                        <span
-                          role="button"
-                          tabIndex={0}
-                          className="inline-flex h-6 w-6 items-center justify-center rounded bg-white/80 text-gray-600 shadow-sm"
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            void handleDuplicateDraftStage(segment);
-                          }}
-                        >
-                          <CopyOutlined />
-                        </span>
-                      </Tooltip>
-                      <Tooltip title="جابجایی مرحله">
-                        <ProcessStageMoveHandle
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            openStageMoveModal(segment);
-                          }}
-                        />
-                      </Tooltip>
+                      <ProcessStageActionControls
+                        mobile={isMobileProcessViewport}
+                        copyTitle="کپی مرحله"
+                        moveTitle="جابجایی مرحله"
+                        onCopy={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleDuplicateDraftStage(segment);
+                        }}
+                        onMove={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openStageMoveModal(segment);
+                        }}
+                      />
                     </span>
                   ) : null}
                 </button>
@@ -9430,7 +9537,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   <div
                     ref={ref as React.Ref<HTMLDivElement>}
                     className={`${useVerticalMainLayout ? 'relative flex w-full items-stretch' : 'relative flex min-w-0 flex-1 basis-0 items-stretch'} ${isOver ? 'brightness-95' : ''}`}
-                    style={dragStyle}
+                    style={{
+                      ...dragStyle,
+                      minWidth: forceCompactProcessBar ? 76 : undefined,
+                      width: isBarExpanded ? getExpandedProcessSegmentWidth(segment?.title || segment?.name || segment?.label) : undefined,
+                    }}
                   >
                     <ProcessStageDragHandleContext.Provider value={{ attributes, listeners }}>
                       {content}
@@ -9502,7 +9613,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   </span>
                 </div>
               ) : null}
-              <div className={`relative min-h-0 w-full rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${useVerticalMainLayout ? 'flex flex-col items-stretch' : 'flex items-stretch'} ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
+              <div className={`relative min-h-0 w-full rounded-2xl border border-gray-200/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,244,246,0.96))] p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] dark:border-gray-700 dark:bg-[linear-gradient(180deg,rgba(31,41,55,0.94),rgba(17,24,39,0.94))] ${useVerticalMainLayout ? 'flex flex-col items-stretch' : 'flex items-stretch'} ${forceCompactProcessBar ? 'overflow-x-auto overflow-y-visible' : ''} ${displayMode === 'dense' ? 'min-h-[2.75rem]' : (compact || cardCompact ? 'min-h-[2.75rem]' : 'min-h-[3.25rem]')}`}>
                 {renderSegmentsWithDropZones(displaySegments)}
                 {hiddenCount > 0 && (
                   <div
@@ -9747,11 +9858,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               key={`${group.id}-${lane.key}`}
                               className={`relative ${lane.parentTriggerKey ? 'border-r-2 border-amber-300 pr-2' : ''}`}
                             >
-                              {!compact && !cardCompact && (lane.name || groupProcessLanes.length > 1) ? (
-                                <div className="mb-1 truncate px-1 text-[11px] font-semibold text-gray-500 dark:text-gray-400">
-                                  {lane.name || `ردیف ${toPersianNumber(laneIndex + 1)}`}
-                                </div>
-                              ) : null}
+                              {(() => {
+                                const runtimeLaneBarKey = `${groupDragScopeKey}:bar:${lane.key}`;
+                                const isRuntimeLaneBarExpanded = expandedProcessBars.has(runtimeLaneBarKey);
+                                return (
+                                  <>
+                              <div className="mb-1 flex items-center justify-between gap-2 px-1">
+                                {!compact && !cardCompact && (lane.name || groupProcessLanes.length > 1) ? (
+                                  <div className="min-w-0 truncate text-[11px] font-semibold text-gray-500 dark:text-gray-400">
+                                    {lane.name || `ردیف ${toPersianNumber(laneIndex + 1)}`}
+                                  </div>
+                                ) : <span />}
+                                {renderProcessBarExpandToggle(runtimeLaneBarKey, isRuntimeLaneBarExpanded)}
+                              </div>
                               <div className="flex w-full items-center gap-2">
                                 <div className="flex shrink-0 flex-col gap-1">
                                   {groupGraphMaterialized.graph.triggers
@@ -9786,6 +9905,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                     lane.stages || [],
                                     `${line.id}-${group.id}-${lane.key}-${groupIndex}`,
                                     { scopeKey: groupDragScopeKey, laneKey: lane.key },
+                                    { expanded: isRuntimeLaneBarExpanded },
                                   )}
                                 </ProcessLaneDropZone>
                                 {!readOnly && !!recordId && (
@@ -9809,6 +9929,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   </Tooltip>
                                 )}
                               </div>
+                                  </>
+                                );
+                              })()}
                             </div>
                           ))}
                           </DndContext>
@@ -9846,25 +9969,36 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 )}
               </>
             ) : (
-              <div className="w-full flex items-center gap-2">
-                {!readOnly && !!recordId && (
-                  <div className="flex items-center gap-2">
-                    <Tooltip title="افزودن مرحله جدید">
-                      <Button
-                        type="dashed"
-                        shape="circle"
-                        icon={<PlusOutlined />}
-                        size={compact ? 'small' : 'middle'}
-                        onClick={() => {
-                          openTaskModal(line.id);
-                        }}
-                        className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
-                      />
-                    </Tooltip>
+              (() => {
+                const lineBarKey = `line:${line.id}:bar`;
+                const isLineBarExpanded = expandedProcessBars.has(lineBarKey);
+                return (
+                  <div className="w-full space-y-1">
+                    <div className="flex justify-end">
+                      {renderProcessBarExpandToggle(lineBarKey, isLineBarExpanded)}
+                    </div>
+                    <div className="flex w-full items-center gap-2">
+                      {!readOnly && !!recordId && (
+                        <div className="flex items-center gap-2">
+                          <Tooltip title="افزودن مرحله جدید">
+                            <Button
+                              type="dashed"
+                              shape="circle"
+                              icon={<PlusOutlined />}
+                              size={compact ? 'small' : 'middle'}
+                              onClick={() => {
+                                openTaskModal(line.id);
+                              }}
+                              className="flex-shrink-0 border-[rgba(var(--brand-300-rgb),0.7)] text-[rgba(var(--brand-700-rgb),1)] hover:!border-[rgba(var(--brand-500-rgb),0.9)] hover:!text-[rgba(var(--brand-600-rgb),1)] hover:!bg-[rgba(var(--brand-50-rgb),0.7)]"
+                            />
+                          </Tooltip>
+                        </div>
+                      )}
+                      {renderSegmentsBar(lineSegments, String(line.id), undefined, { expanded: isLineBarExpanded })}
+                    </div>
                   </div>
-                )}
-                {renderSegmentsBar(lineSegments, String(line.id))}
-              </div>
+                );
+              })()
             )}
 
             {showWageSummary && (
