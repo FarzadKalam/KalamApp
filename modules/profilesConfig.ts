@@ -91,6 +91,30 @@ export const profilesModule: ModuleDefinition = {
       }
     },
     {
+      key: 'telegram_chat_id',
+      labels: { fa: 'شناسه چت تلگرام' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'details',
+      botSettingsOnly: true,
+    },
+    {
+      key: 'bale_chat_id',
+      labels: { fa: 'شناسه چت بله' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'details',
+      botSettingsOnly: true,
+    },
+    {
+      key: 'rubika_chat_id',
+      labels: { fa: 'شناسه چت روبیکا' },
+      type: FieldType.TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'details',
+      botSettingsOnly: true,
+    },
+    {
       key: 'voip_enabled',
       labels: { fa: 'فعال در VoIP' },
       type: FieldType.CHECKBOX,

@@ -5,6 +5,7 @@ import { getPreferredRelationTargetField } from './relationTargetField';
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from './cashBankLegacyAccountKeys';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
+import { isWorkflowVirtualField } from './moduleFieldVisibility';
 
 type ModuleFieldLike = {
   key: string;
@@ -59,6 +60,7 @@ const buildRelationTargetCacheKey = (
 
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
+    .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => field.isTableColumn)
     .filter((field) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(field?.key || '').trim()))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -68,6 +70,7 @@ const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[]
   }
 
   return (moduleConfig.fields || []).filter((field) =>
+    !isWorkflowVirtualField(field) &&
     ['name', 'title', 'business_name', 'system_code', 'sell_price', 'stock_quantity', 'status', 'mobile_1', 'rank'].includes(field.key)
   );
 };
@@ -128,7 +131,7 @@ export const getModuleListVisibleFields = (
     return prependCashBankImageField(moduleConfig, nextVisibleColumns
       .filter((fieldKey) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(fieldKey || '').trim()))
       .map((fieldKey) => moduleConfig.fields.find((field) => field.key === fieldKey))
-      .filter(Boolean) as ModuleFieldLike[]);
+      .filter((field) => Boolean(field) && !isWorkflowVirtualField(field)) as ModuleFieldLike[]);
   }
 
   return prependCashBankImageField(moduleConfig, getDefaultListFields(moduleConfig));

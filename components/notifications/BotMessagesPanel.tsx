@@ -12,12 +12,14 @@ import AiSparkleIcon from '../ai/AiSparkleIcon';
 import ConversationTimeline from './ConversationTimeline';
 import UnreadCountBadge, { NOTIFICATION_UNREAD_BADGE_COLOR } from './UnreadCountBadge';
 import ProfileAvatar from '../common/ProfileAvatar';
+import { BOT_CHANNEL_LABELS_FA, getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 
 type BotGroupRow = {
   id: string;
   target_type?: string | null;
   customer_id?: string | null;
   supplier_id?: string | null;
+  employee_id?: string | null;
   channel_type?: string | null;
   status?: string | null;
   group_title?: string | null;
@@ -61,30 +63,14 @@ const BOT_STATUS_LABELS_FA: Record<string, string> = {
   error: 'خطا',
 };
 
-const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
-  rubika: 'روبیکا',
-  telegram: 'تلگرام',
-  bale: 'بله',
-};
-
-const CHANNEL_AVATAR_CONFIG: Record<string, { className: string; label: string }> = {
-  telegram: { className: '!bg-sky-100 !text-sky-600 dark:!bg-sky-500/15 dark:!text-sky-300', label: 'T' },
-  bale: { className: '!bg-green-100 !text-green-700 dark:!bg-green-500/15 dark:!text-green-300', label: 'ب' },
-  rubika: { className: '!bg-purple-100 !text-purple-700 dark:!bg-purple-500/15 dark:!text-purple-300', label: 'R' },
-};
-
 const BotGroupAvatar: React.FC<{ row: Pick<BotGroupRow, 'channel_type' | 'counterparty_image_url'>; size: number; extraClassName?: string }> = ({ row, size, extraClassName = '' }) => {
   const imgSrc = normalizePublicAssetUrl(row.counterparty_image_url || '');
   if (imgSrc) {
     return <ProfileAvatar size={size} src={imgSrc} preset="avatar" className={extraClassName} name="مخاطب" />;
   }
-  const channelCfg = CHANNEL_AVATAR_CONFIG[String(row.channel_type || '')];
-  if (channelCfg) {
-    return (
-      <Avatar size={size} className={`${channelCfg.className} ${extraClassName}`}>
-        {channelCfg.label}
-      </Avatar>
-    );
+  const platformSrc = getBotPlatformAvatarSrc(String(row.channel_type || '').trim());
+  if (platformSrc) {
+    return <ProfileAvatar size={size} src={platformSrc} preset="avatar" className={extraClassName} name="پلتفرم بات" />;
   }
   return (
     <Avatar size={size} className={`!bg-amber-100 !text-amber-700 dark:!bg-amber-500/15 dark:!text-amber-300 ${extraClassName}`}>
@@ -221,6 +207,7 @@ const BotMessageRowItem: React.FC<BotMessageRowItemProps> = React.memo(({ row, r
     || (displayAttachments.length === 0 && row.file_name ? `فایل: ${row.file_name}` : '');
   const isEditing = editingBotMessageId === row.id;
   const author = resolveBotMessageAuthor(row);
+  const authorNodes = ctx.renderBotAuthorNodes ? ctx.renderBotAuthorNodes(row, author) : {};
   const botAvatar = resolveBotBubbleAvatar(author, outgoing);
   const botReadReceipts = normalizeReadReceipts(payload);
   const botMessageId = String(row.id || '').trim();
@@ -231,6 +218,8 @@ const BotMessageRowItem: React.FC<BotMessageRowItemProps> = React.memo(({ row, r
     <div>
       <SharedNoteCard
         authorName={author.name}
+        authorNameNode={authorNodes.authorNameNode}
+        metaNode={authorNodes.metaNode}
         createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
         text={body}
         attachments={displayAttachments.map((item: any) => ({
@@ -275,7 +264,7 @@ const BotMessageRowItem: React.FC<BotMessageRowItemProps> = React.memo(({ row, r
         animateOnMount={shouldAnimateChatEntry(row.created_at)}
         statusNode={renderReadReceiptStatus(botReadReceipts, [])}
         unreadIndicator={isUnreadBotMessage}
-        footer={!outgoing && author.metaLabel ? author.metaLabel : undefined}
+        footer={!outgoing && author.metaLabel && !authorNodes.metaNode ? author.metaLabel : undefined}
         isEdited={Boolean((payload as any)?.is_edited)}
         isEditing={isEditing}
         editingValue={editingBotMessageValue}
@@ -335,13 +324,13 @@ const BotMessageRowItem: React.FC<BotMessageRowItemProps> = React.memo(({ row, r
           }
           const relatedModuleId = selectedGroup?.customer_id
             ? 'customers'
-            : (selectedGroup?.supplier_id ? 'suppliers' : null);
+            : (selectedGroup?.supplier_id ? 'suppliers' : (selectedGroup?.employee_id ? 'employees' : null));
           const relatedRecordId = selectedGroup?.customer_id
             ? String(selectedGroup.customer_id || '').trim()
-            : (selectedGroup?.supplier_id ? String(selectedGroup.supplier_id || '').trim() : null);
+            : (selectedGroup?.supplier_id ? String(selectedGroup.supplier_id || '').trim() : (selectedGroup?.employee_id ? String(selectedGroup.employee_id || '').trim() : null));
           const counterpartyLabel = String(selectedGroup?.counterparty_label || '').trim();
           const actorName = counterpartyLabel
-            ? `${selectedGroup?.customer_id ? 'مشتری' : selectedGroup?.supplier_id ? 'تامین‌کننده' : 'طرف حساب'} ${counterpartyLabel}`
+            ? `${selectedGroup?.customer_id ? 'مشتری' : selectedGroup?.supplier_id ? 'تأمین‌کننده' : selectedGroup?.employee_id ? 'کارمند' : 'طرف حساب'} ${counterpartyLabel}`
             : author.name;
           await openCreateActivityFromMessage({
             channel: 'bot',
@@ -414,6 +403,7 @@ type BotMessagesPanelProps = {
   getBotMessageAttachments: any;
   importBotMessageAttachment: any;
   resolveBotMessageAuthor: any;
+  renderBotAuthorNodes?: (row: BotMessageRow, author: any) => { authorNameNode?: React.ReactNode; metaNode?: React.ReactNode };
   resolveBotBubbleAvatar: (author: { avatarUrl?: string | null; fallback?: React.ReactNode } | null | undefined, outgoing: boolean) => { src?: string | null; fallback?: React.ReactNode; className?: string };
   normalizeReadReceipts: (box: any) => any[];
   isUnreadBotRow: any;
@@ -490,6 +480,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   getBotMessageAttachments,
   importBotMessageAttachment,
   resolveBotMessageAuthor,
+  renderBotAuthorNodes,
   resolveBotBubbleAvatar,
   normalizeReadReceipts,
   isUnreadBotRow,
@@ -547,6 +538,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
     getBotMessageAttachments,
     importBotMessageAttachment,
     resolveBotMessageAuthor,
+    renderBotAuthorNodes,
     resolveBotBubbleAvatar,
     normalizeReadReceipts,
     isUnreadBotRow,
@@ -590,6 +582,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
     renderReadReceiptStatus,
     resolveBotBubbleAvatar,
     resolveBotMessageAuthor,
+    renderBotAuthorNodes,
     scrollMessageIntoView,
     selectedGroup,
     setBotMessages,
@@ -609,7 +602,8 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   const getBotRowKey = React.useCallback((row: BotMessageRow, index: number) => String(row?.id ?? index), []);
   const timelineBotMessages = selectedGroup ? filteredBotMessages : EMPTY_BOT_MESSAGES;
   const statusLabel = BOT_STATUS_LABELS_FA[String(selectedGroup?.status || '')] || String(selectedGroup?.status || 'نامشخص');
-  const channelLabel = BOT_CHANNEL_LABELS_FA[String(selectedGroup?.channel_type || '')] || String(selectedGroup?.channel_type || '-');
+  const channelKey = String(selectedGroup?.channel_type || '').trim() as keyof typeof BOT_CHANNEL_LABELS_FA;
+  const channelLabel = BOT_CHANNEL_LABELS_FA[channelKey] || String(selectedGroup?.channel_type || '-');
   const groupTitle = String(selectedGroup?.group_title || '').trim() || String(selectedGroup?.group_join_link || '').trim() || 'گروه بدون عنوان';
   const canSend = Boolean(String(selectedGroup?.bot_chat_id || '').trim());
   const activeConversationClass = 'border border-[rgba(var(--brand-500-rgb),0.34)] bg-[rgba(var(--brand-500-rgb),0.14)] text-[rgb(var(--brand-900-rgb))] shadow-[inset_3px_0_0_rgba(var(--brand-500-rgb),0.72),0_6px_18px_rgba(var(--brand-500-rgb),0.12)] dark:border-[rgba(var(--brand-300-rgb),0.38)] dark:bg-[rgba(var(--brand-300-rgb),0.16)] dark:text-white dark:shadow-[inset_3px_0_0_rgba(var(--brand-300-rgb),0.72)]';
@@ -637,7 +631,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گروه باتی ثبت نشده است." />
             ) : filteredBotGroups.map((row) => {
               const rowStatus = BOT_STATUS_LABELS_FA[String(row.status || '')] || String(row.status || '');
-              const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '')] || String(row.channel_type || '');
+              const rowChannel = BOT_CHANNEL_LABELS_FA[String(row.channel_type || '').trim() as keyof typeof BOT_CHANNEL_LABELS_FA] || String(row.channel_type || '');
               const rowTitle = String(row.group_title || '').trim() || String(row.group_join_link || '').trim() || 'گروه بدون عنوان';
               const active = String(selectedBotGroupId || '') === String(row.id);
               const unreadCount = botUnreadByGroup[String(row.id)] || 0;
@@ -687,11 +681,11 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
               onClick={() => void handleOpenBotStatusModal()}
             />
           </div>
-          {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id) ? (
+          {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id || selectedGroup.employee_id) ? (
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               طرف مرتبط:{' '}
               <Link
-                to={`/${selectedGroup.customer_id ? 'customers' : 'suppliers'}/${selectedGroup.customer_id || selectedGroup.supplier_id}`}
+                to={`/${selectedGroup.customer_id ? 'customers' : selectedGroup.supplier_id ? 'suppliers' : 'employees'}/${selectedGroup.customer_id || selectedGroup.supplier_id || selectedGroup.employee_id}`}
                 className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
                 onClick={handleClose}
               >
@@ -785,8 +779,8 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
           onRemoveLinkedAttachment={(url) => {
             setBotLinkedAttachments((prev) => prev.filter((attachment) => String(attachment.url || '') !== String(url || '')));
           }}
-          filePickerModuleId={selectedBotModuleId || (selectedGroup?.target_type === 'customers' ? 'customers' : selectedGroup?.target_type === 'suppliers' ? 'suppliers' : null)}
-          filePickerRecordId={selectedGroup?.target_type === 'customers' ? String(selectedGroup?.customer_id || '') : selectedGroup?.target_type === 'suppliers' ? String(selectedGroup?.supplier_id || '') : null}
+          filePickerModuleId={selectedBotModuleId || (selectedGroup?.target_type === 'customers' ? 'customers' : selectedGroup?.target_type === 'suppliers' ? 'suppliers' : selectedGroup?.target_type === 'employees' ? 'employees' : null)}
+          filePickerRecordId={selectedGroup?.target_type === 'customers' ? String(selectedGroup?.customer_id || '') : selectedGroup?.target_type === 'suppliers' ? String(selectedGroup?.supplier_id || '') : selectedGroup?.target_type === 'employees' ? String(selectedGroup?.employee_id || '') : null}
           replyActive={Boolean(botReplyToId)}
           onClearReply={() => setBotReplyToId(null)}
           enableImagePasteAndDrop

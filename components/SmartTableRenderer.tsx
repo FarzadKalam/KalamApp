@@ -26,6 +26,8 @@ import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRunt
 import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import ResilientImage from './common/ResilientImage';
 import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
+import FileExtensionTile from './files/FileExtensionTile';
+import { isImageFileLike } from '../utils/imagePreview';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 
@@ -1030,14 +1032,31 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
         const emptyDateCell = <span className="dir-ltr text-gray-500 font-mono text-[10px] md:text-[11px]">-</span>;
         
         if (field.type === FieldType.IMAGE) {
+            const imageUrl = String(value || '').trim();
+            const isImage = imageUrl ? isImageFileLike(imageUrl) : false;
             return renderRowLink(record, (
-              <Avatar
-                src={value ? <ResilientImage src={String(value)} preset="avatar" alt="image" className="h-full w-full object-cover" /> : undefined}
-                icon={<AppstoreOutlined />}
-                shape="square"
-                size={36}
-                className="bg-gray-100 border border-gray-200"
-              />
+              imageUrl ? (
+                isImage ? (
+                  <Avatar
+                    src={<ResilientImage src={imageUrl} preset="avatar" alt="image" className="h-full w-full object-cover" />}
+                    icon={<AppstoreOutlined />}
+                    shape="square"
+                    size={36}
+                    className="bg-gray-100 border border-gray-200"
+                  />
+                ) : (
+                  <div className="h-9 w-9 overflow-hidden rounded-md border border-gray-200 bg-white">
+                    <FileExtensionTile fileName={imageUrl.split('?')[0].split('/').pop() || 'file'} url={imageUrl} compact />
+                  </div>
+                )
+              ) : (
+                <Avatar
+                  icon={<AppstoreOutlined />}
+                  shape="square"
+                  size={36}
+                  className="bg-gray-100 border border-gray-200"
+                />
+              )
             ), "inline-flex min-w-0 max-w-full items-center justify-center text-inherit no-underline hover:text-inherit");
         }
         if (shouldDeferFieldValue) {
@@ -1662,4 +1681,3 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 };
 
 export default React.memo(SmartTableRenderer);
-

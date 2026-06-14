@@ -165,12 +165,10 @@ export const sendBotMessageViaGateway = async ({
   });
 
   try {
-    if (channel === 'rubika' && normalizedAttachments.length > 0) {
-      const activeConnection = await getActiveChannelSettings(channel);
-      const connectionId = String(activeConnection?.id || '').trim();
-      if (!connectionId) {
-        throw new Error('تنظیمات فعال بات روبیکا پیدا نشد.');
-      }
+    const activeConnection = await getActiveChannelSettings(channel);
+    const connectionId = String(activeConnection?.id || '').trim();
+
+    if (typeof window !== 'undefined' && connectionId) {
 
       const { data: proxyData, error: proxyError } = await supabase.functions.invoke('bot-admin', {
         body: {

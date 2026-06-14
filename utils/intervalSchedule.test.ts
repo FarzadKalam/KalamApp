@@ -39,4 +39,20 @@ describe('intervalSchedule', () => {
     expect(next.getHours()).toBe(14);
     expect(next.getMinutes()).toBe(45);
   });
+
+  it('keeps weekly runs anchored to seven-day intervals and the configured time', () => {
+    const next = getNextIntervalDueAt({
+      lastRunAt: '2026-04-10T08:00:00',
+      intervalValue: 2,
+      intervalUnit: 'week',
+      intervalAt: '14:45',
+      now: new Date('2026-04-20T00:00:00'),
+    });
+
+    expect(next.getFullYear()).toBe(2026);
+    expect(next.getMonth()).toBe(3);
+    expect(next.getDate()).toBe(24);
+    expect(next.getHours()).toBe(14);
+    expect(next.getMinutes()).toBe(45);
+  });
 });

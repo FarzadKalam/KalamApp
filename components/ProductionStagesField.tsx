@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom';
 import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid, Segmented, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined, MoreOutlined } from '@ant-design/icons';
+import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined, MoreOutlined, ColumnWidthOutlined, CompressOutlined } from '@ant-design/icons';
 import {
   DndContext,
   PointerSensor,
@@ -90,6 +90,9 @@ import {
   type WorkflowRecord,
   workflowExecutionModeOptions,
 } from '../utils/workflowTypes';
+import WorkflowIntervalScheduleFields, {
+  type WorkflowIntervalFieldNames,
+} from './workflows/WorkflowIntervalScheduleFields';
 import HelpHint from './HelpHint';
 import {
   buildProcessLinkMapFromRecord,
@@ -857,6 +860,19 @@ const PROCESS_BAR_BREAKPOINTS = {
 const PROCESS_BAR_DONE_STATUSES = new Set(['done', 'completed', 'canceled']);
 const PROCESS_BAR_ACTIVE_STATUSES = new Set(['in_progress', 'review']);
 const PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID = '__process_activator_source_node__';
+const PROCESS_ACTIVATOR_INTERVAL_FIELD_NAMES: WorkflowIntervalFieldNames = {
+  intervalValue: 'workflow_interval_value',
+  intervalUnit: 'workflow_interval_unit',
+  intervalAt: 'workflow_interval_at',
+  intervalFirstRunAt: 'workflow_interval_first_run_at',
+  intervalMinute: 'workflow_interval_minute',
+  intervalAllowedFromHour: 'workflow_interval_allowed_from_hour',
+  intervalAllowedToHour: 'workflow_interval_allowed_to_hour',
+  intervalDayOfMonth: 'workflow_interval_day_of_month',
+  intervalDayCondition: 'workflow_interval_day_condition',
+  intervalDaysAfterHoliday: 'workflow_interval_days_after_holiday',
+  batchSize: 'workflow_batch_size',
+};
 
 const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, onAutoOpenTaskClose = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, onRuntimeSnapshot }) => {
   const screens = Grid.useBreakpoint();
@@ -908,6 +924,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const draftLocalRef = useRef<any[]>(Array.isArray(draftStages) ? draftStages : []);
+  const autoAssignedProcessGroupIdsRef = useRef<Set<string>>(new Set());
   const draftEditorStageIdRef = useRef<any>(null);
   const draftStageSavePromiseRef = useRef<Promise<any> | null>(null);
   const isBom = moduleId === 'production_boms';
@@ -1647,10 +1664,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const groupId = String(fallbackGroupId || taskMeta.groupId || stageMeta.groupId || 'default_process_group').trim() || 'default_process_group';
     const keys: string[] = [];
     const processRunStageId = String(item?.process_run_stage_id || '').trim();
+    const recurrence = parseRecurrenceInfo(item?.recurrence_info);
+    const metadata = item?.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+    const processNodeKey = String(
+      item?.process_node_key
+      || item?.[PROCESS_NODE_KEY]
+      || recurrence?.[PROCESS_NODE_KEY]
+      || metadata?.[PROCESS_NODE_KEY]
+      || ''
+    ).trim();
     const templateStageId = String(item?.template_stage_id || item?.source_template_stage_id || '').trim();
     const sortOrder = getProcessStageSortOrder(item);
     const name = item?.name || item?.title || item?.label || item?.stage_name || '';
     if (processRunStageId) keys.push(`${groupId}::run-stage::${processRunStageId}`);
+    if (processNodeKey) keys.push(`${groupId}::node::${processNodeKey}`);
     if (templateStageId) keys.push(`${groupId}::template-stage::${templateStageId}`);
     if (sortOrder > 0) keys.push(`${groupId}::sort::${sortOrder}`);
     const nameKey = buildProcessStageTaskKey(groupId, name, sortOrder || item?.sort_order);
@@ -2109,8 +2136,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [loadTaskCustomFieldOptions]);
 
   useEffect(() => {
-    draftLocalRef.current = normalizedDraftStages;
-    setDraftLocal((prev) => (prev === normalizedDraftStages ? prev : normalizedDraftStages));
+    const suppressedGroupIds = autoAssignedProcessGroupIdsRef.current;
+    const incomingGroupIds = new Set(
+      normalizedDraftStages
+        .map((stage: any) => getDraftStageProcessGroupMeta(stage).groupId)
+        .filter(Boolean)
+    );
+    Array.from(suppressedGroupIds).forEach((groupId) => {
+      if (!incomingGroupIds.has(groupId)) suppressedGroupIds.delete(groupId);
+    });
+    const nextDraftStages = suppressedGroupIds.size > 0
+      ? removeDraftStagesForProcessGroups(normalizedDraftStages, Array.from(suppressedGroupIds))
+      : normalizedDraftStages;
+    draftLocalRef.current = nextDraftStages;
+    setDraftLocal((prev) => (prev === nextDraftStages ? prev : nextDraftStages));
   }, [normalizedDraftStages]);
 
   useEffect(() => {
@@ -5150,13 +5189,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!compact && !cardCompact) return 'full';
 
     const resolvedWidth = containerWidth || (cardCompact ? 320 : 480);
-    if (cardCompact || resolvedWidth <= PROCESS_BAR_BREAKPOINTS.summary || segments.length >= 7) {
+    const stageCount = Math.max(1, Array.isArray(segments) ? segments.length : 0);
+    const estimatedRequiredWidth = (Array.isArray(segments) ? segments : []).reduce((sum, segment) => {
+      const label = String(segment?.title || segment?.name || segment?.label || '').trim();
+      return sum + Math.max(76, label.length * 6.5 + 48);
+    }, Math.max(0, stageCount - 1) * 2 + 8);
+
+    if (estimatedRequiredWidth <= resolvedWidth) return 'full';
+    if (stageCount >= 9 || (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.summary && stageCount >= 4)) {
       return 'summary';
     }
-    if (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.dense || segments.length >= 5) {
+    if (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.dense || stageCount >= 5) {
       return 'dense';
     }
-      return 'full';
+    return 'full';
   }, [cardCompact, compact, containerWidth, isMobileProcessViewport]);
 
   const getDenseSegmentLabel = useCallback((value: unknown) => {
@@ -5170,8 +5216,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const getExpandedProcessSegmentWidth = useCallback((value: unknown) => {
     const raw = String(value || '').trim();
     if (!raw) return 92;
-    return Math.max(112, Math.min(260, raw.length * 8 + 46));
+    return Math.max(120, Math.min(720, raw.length * 8 + 64));
   }, []);
+
+  const shouldShortenProcessSegmentLabel = useCallback((
+    labelValue: unknown,
+    segmentCount: number,
+    displayMode: ProcessBarDisplayMode,
+    expanded: boolean,
+  ) => {
+    if (expanded || displayMode !== 'dense') return false;
+    const raw = String(labelValue || '').trim();
+    if (!raw) return false;
+    const resolvedWidth = containerWidth || (cardCompact ? 320 : (compact ? 480 : 720));
+    const availablePerSegment = Math.max(76, (resolvedWidth - 16 - Math.max(0, segmentCount - 1) * 2) / Math.max(1, segmentCount));
+    return raw.length * 6.3 + 34 > availablePerSegment;
+  }, [cardCompact, compact, containerWidth]);
 
   const toggleExpandedProcessBar = useCallback((barKey: string) => {
     setExpandedProcessBars((prev) => {
@@ -5195,9 +5255,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         event.stopPropagation();
         toggleExpandedProcessBar(barKey);
       }}
-      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-[11px] font-bold leading-none text-gray-600 shadow-sm transition-colors hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:text-[rgba(var(--brand-700-rgb),1)] dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-white text-[13px] leading-none text-gray-600 shadow-sm transition-colors hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:text-[rgba(var(--brand-700-rgb),1)] dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
     >
-      {expanded ? '>|' : '|<'}
+      {expanded ? <CompressOutlined /> : <ColumnWidthOutlined />}
     </button>
   ), [toggleExpandedProcessBar]);
 
@@ -6717,16 +6777,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setAutoAssigningProcessIds((prev) => ({ ...prev, [autoAssignKey]: true }));
     const sourceDraftRows = Array.isArray(draftLocal) ? draftLocal : [];
     const sourceDraftGraph = materializeLegacyProcessGraph(sourceDraftRows);
-    const rootLaneKeys = new Set(
-      sourceDraftGraph.graph.lanes
-        .filter((lane) => !lane.parentTriggerKey)
-        .map((lane) => lane.key),
-    );
     const stageRows = sourceDraftGraph.stages
       .filter((stage: any) => {
         const hasName = String(stage?.name || stage?.title || '').trim() !== '';
         if (!hasName) return false;
-        if (!rootLaneKeys.has(getProcessStageLaneKey(stage))) return false;
         if (!normalizedTargetGroupId) return true;
         return getStageProcessGroupMeta(stage).groupId === normalizedTargetGroupId;
       })
@@ -6909,6 +6963,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       const autoAssignedGroupIds = Array.from(new Set(stageRows.map((stage: any) => getStageProcessGroupMeta(stage).groupId)));
+      autoAssignedGroupIds
+        .map((groupId) => String(groupId || '').trim())
+        .filter(Boolean)
+        .forEach((groupId) => autoAssignedProcessGroupIdsRef.current.add(groupId));
       if (!payload.length) {
         const nextDrafts = removeDraftStagesForProcessGroups(
           Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [],
@@ -8151,6 +8209,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       workflow_interval_value: 1,
       workflow_interval_unit: 'day',
       workflow_interval_at: null,
+      workflow_interval_first_run_at: null,
+      workflow_interval_minute: null,
+      workflow_interval_allowed_from_hour: null,
+      workflow_interval_allowed_to_hour: null,
+      workflow_interval_day_of_month: null,
+      workflow_interval_day_condition: 'any',
+      workflow_interval_days_after_holiday: null,
       workflow_batch_size: null,
       workflow_is_active: true,
     });
@@ -8190,6 +8255,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           workflow_interval_value: workflow?.interval_value || 1,
           workflow_interval_unit: workflow?.interval_unit || 'day',
           workflow_interval_at: workflow?.interval_at || null,
+          workflow_interval_first_run_at: workflow?.interval_first_run_at || null,
+          workflow_interval_minute: workflow?.interval_minute ?? null,
+          workflow_interval_allowed_from_hour: workflow?.interval_allowed_from_hour ?? null,
+          workflow_interval_allowed_to_hour: workflow?.interval_allowed_to_hour ?? null,
+          workflow_interval_day_of_month: workflow?.interval_day_of_month ?? null,
+          workflow_interval_day_condition: workflow?.interval_day_condition || 'any',
+          workflow_interval_days_after_holiday: workflow?.interval_days_after_holiday ?? null,
           workflow_batch_size: workflow?.batch_size || null,
           workflow_is_active: workflow?.is_active !== false,
         });
@@ -8277,6 +8349,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         interval_value: isInterval ? Math.max(1, Number(values?.workflow_interval_value || 1)) : null,
         interval_unit: isInterval ? values?.workflow_interval_unit || 'day' : null,
         interval_at: isInterval ? values?.workflow_interval_at || null : null,
+        interval_first_run_at: isInterval ? values?.workflow_interval_first_run_at || null : null,
+        interval_minute: isInterval ? values?.workflow_interval_minute ?? null : null,
+        interval_allowed_from_hour: isInterval ? values?.workflow_interval_allowed_from_hour ?? null : null,
+        interval_allowed_to_hour: isInterval ? values?.workflow_interval_allowed_to_hour ?? null : null,
+        interval_day_of_month: isInterval ? values?.workflow_interval_day_of_month ?? null : null,
+        interval_day_condition: isInterval ? values?.workflow_interval_day_condition || null : null,
+        interval_days_after_holiday: isInterval ? values?.workflow_interval_days_after_holiday ?? null : null,
         batch_size: isInterval && values?.workflow_batch_size ? Math.max(1, Number(values.workflow_batch_size)) : null,
         conditions_all: [...lockedConditions, ...processActivatorConditionsAll],
         conditions_any: processActivatorConditionsAny,
@@ -9259,11 +9338,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           dragConfig?: { scopeKey: string; laneKey: string },
           options?: { expanded?: boolean },
         ) => {
-          const displayMode = getProcessBarDisplayMode(segments);
           const isBarExpanded = !!options?.expanded;
+          const naturalDisplayMode = getProcessBarDisplayMode(segments);
+          const displayMode = isBarExpanded && naturalDisplayMode === 'summary'
+            ? 'dense'
+            : naturalDisplayMode;
           const useVerticalMainLayout = false;
-          const forceCompactProcessBar = isMobileProcessViewport || displayMode === 'dense';
-          const shouldCompactSegments = displayMode !== 'summary' && cardCompact && segments.length > 5;
+          const forceCompactProcessBar = isMobileProcessViewport || displayMode === 'dense' || isBarExpanded;
+          const shouldCompactSegments = !isBarExpanded && displayMode !== 'summary' && cardCompact && segments.length > 5;
           const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
           const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
           const currentSegment = getCurrentProcessSegment(segments);
@@ -9316,7 +9398,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 type="button"
                 key={`${barKey}-task-${segment.id}`}
                 data-task-segment-id={String(segment.id)}
-                className={`group relative flex min-w-0 overflow-hidden rounded-xl px-2 text-center transition-all ${isRuntimeStagePreview ? 'cursor-default' : 'cursor-pointer hover:brightness-105'} ${useVerticalMainLayout ? `w-full justify-between gap-3 text-right ${index !== 0 ? 'mt-1.5' : ''}` : `flex-1 basis-0 items-center justify-center ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
+                className={`group relative flex min-w-0 overflow-hidden rounded-xl px-2 text-center transition-all ${isRuntimeStagePreview ? 'cursor-default' : 'cursor-pointer hover:brightness-105'} ${useVerticalMainLayout ? `w-full justify-between gap-3 text-right ${index !== 0 ? 'mt-1.5' : ''}` : `${isBarExpanded ? 'flex-none' : 'flex-1 basis-0'} items-center justify-center ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`} ${isAssignedToCurrent ? 'z-10' : ''} ${displayMode === 'dense' ? 'py-2.5' : 'py-3'}`}
                 style={{
                   ...getProcessStageShapeStyle(index),
                   zIndex: Math.max(1, 1000 - index),
@@ -9336,16 +9418,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 }}
               >
                 <div className={`flex min-w-0 overflow-hidden ${useVerticalMainLayout ? 'flex-1 items-center justify-between gap-3' : 'flex-col items-center justify-center gap-1'}`}>
-                  <span className={`inline-flex max-w-full items-center gap-1.5 text-white drop-shadow-md ${useVerticalMainLayout ? 'justify-start text-right' : 'justify-center truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
+                  <span className={`inline-flex max-w-full items-center gap-1.5 text-white drop-shadow-md ${useVerticalMainLayout ? 'justify-start text-right' : `justify-center ${isBarExpanded ? '' : 'truncate'}`} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')} font-semibold`}>
                     {renderTaskAssigneeAvatar(segment, displayMode)}
                     {normalizedStatus === 'canceled' ? <CloseOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} /> : (
                       PROCESS_BAR_DONE_STATUSES.has(normalizedStatus)
                         ? <CheckOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
                         : <HourglassOutlined className={displayMode === 'dense' ? 'text-[10px]' : 'text-[11px]'} />
                     )}
-                    <span className={useVerticalMainLayout ? 'min-w-0 flex-1 whitespace-normal break-words leading-5' : 'truncate'}>
+                    <span className={useVerticalMainLayout ? 'min-w-0 flex-1 whitespace-normal break-words leading-5' : (isBarExpanded ? 'whitespace-normal break-words leading-4' : 'truncate')}>
                       {displayMode === 'dense'
-                        ? (isBarExpanded ? segmentLabel : getDenseSegmentLabel(segmentLabel))
+                        ? (shouldShortenProcessSegmentLabel(segmentLabel, segments.length, displayMode, isBarExpanded) ? getDenseSegmentLabel(segmentLabel) : segmentLabel)
                         : (shouldCompactSegments ? getSummarySegmentLabel(segmentLabel) : segmentLabel)}
                     </span>
                   </span>
@@ -9459,7 +9541,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     ? 'relative min-w-[0.7rem] flex-1 basis-0'
                     : `group relative ${useVerticalMainLayout
                       ? `w-full ${index !== 0 ? 'mt-1.5' : ''}`
-                      : `min-w-0 flex-1 basis-0 ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`}`
+                      : `min-w-0 ${isBarExpanded ? 'flex-none' : 'flex-1 basis-0'} ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`}`
                 }
                 style={{ zIndex: Math.max(1, 1000 - index) }}
               >
@@ -9478,9 +9560,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   }}
                 >
                   {!summary && (
-                    <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : 'truncate'} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
+                    <span className={`block w-full min-w-0 font-medium text-gray-700 dark:text-gray-100 ${useVerticalMainLayout ? 'whitespace-normal break-words text-right leading-5' : (isBarExpanded ? 'whitespace-normal break-words leading-4' : 'truncate')} ${displayMode === 'dense' ? 'text-[10px]' : (compact || cardCompact ? 'text-[10px]' : 'text-[12px]')}`}>
                       {displayMode === 'dense'
-                        ? (isBarExpanded ? segment.label : getDenseSegmentLabel(segment.label))
+                        ? (shouldShortenProcessSegmentLabel(segment.label, segments.length, displayMode, isBarExpanded) ? getDenseSegmentLabel(segment.label) : segment.label)
                         : (shouldCompactSegments ? getSummarySegmentLabel(segment.label) : segment.label)}
                     </span>
                   )}
@@ -9536,7 +9618,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 {({ ref, attributes, listeners, style: dragStyle, isOver }) => (
                   <div
                     ref={ref as React.Ref<HTMLDivElement>}
-                    className={`${useVerticalMainLayout ? 'relative flex w-full items-stretch' : 'relative flex min-w-0 flex-1 basis-0 items-stretch'} ${isOver ? 'brightness-95' : ''}`}
+                    className={`${useVerticalMainLayout ? 'relative flex w-full items-stretch' : `relative flex min-w-0 ${isBarExpanded ? 'flex-none' : 'flex-1 basis-0'} items-stretch`} ${isOver ? 'brightness-95' : ''}`}
                     style={{
                       ...dragStyle,
                       minWidth: forceCompactProcessBar ? 76 : undefined,
@@ -10315,20 +10397,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             </Form.Item>
           </div>
           {watchedProcessActivatorTriggerType === 'interval' ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-              <Form.Item name="workflow_interval_value" label="هر">
-                <InputNumber min={1} className="w-full" />
-              </Form.Item>
-              <Form.Item name="workflow_interval_unit" label="واحد">
-                <AdaptiveSelectField {...adaptiveModalSelectProps} options={intervalUnitOptions} />
-              </Form.Item>
-              <Form.Item name="workflow_interval_at" label="در ساعت">
-                <PersianDatePicker type="TIME" />
-              </Form.Item>
-              <Form.Item name="workflow_batch_size" label="تعداد بررسی">
-                <InputNumber min={1} className="w-full" />
-              </Form.Item>
-            </div>
+            <WorkflowIntervalScheduleFields
+              form={processTriggerForm}
+              fieldNames={PROCESS_ACTIVATOR_INTERVAL_FIELD_NAMES}
+              overlayZIndexBase={10060}
+              popupContainer={resolveOverlayPopupContainer}
+            />
           ) : null}
           <Alert
             type="info"

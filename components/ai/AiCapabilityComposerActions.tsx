@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { lazy, Suspense, useMemo, useState } from 'react';
 import { Button, Checkbox, Popover, Select, Space, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
@@ -10,15 +10,22 @@ import {
   ThunderboltOutlined,
   PictureOutlined,
   SoundOutlined,
+  VideoCameraOutlined,
+  FileWordOutlined,
+  SnippetsOutlined,
 } from '@ant-design/icons';
 import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadButton';
+const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
+import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
 
 export type AiComposerCapability =
   | 'document_analysis'
   | 'voice_input'
   | 'voice_output'
   | 'image_generation'
+  | 'video_generation'
+  | 'document_generation'
   | 'web_search'
   | 'deep_reasoning'
   | 'legal_assistant'
@@ -43,6 +50,12 @@ type AiCapabilityComposerActionsProps = {
   recordCreationModuleOptions?: Array<{ label: string; value: string }>;
   recordCreationTargetModuleId?: string | null;
   onRecordCreationTargetModuleChange?: (moduleId: string | null) => void;
+  mediaSettings?: AiMediaSettings;
+  onMediaSettingsChange?: (next: AiMediaSettings) => void;
+  mediaSourceImages?: AiMediaSourceImage[];
+  onMediaSourceImagesChange?: (next: AiMediaSourceImage[]) => void;
+  onApplyPrompt?: (text: string) => void;
+  promptRecord?: Record<string, any> | null;
 };
 
 const CAPABILITY_META: Array<{
@@ -56,6 +69,8 @@ const CAPABILITY_META: Array<{
   { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل ویس به متن', icon: <AudioOutlined />, kind: 'inline' },
   { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
   { key: 'image_generation', label: 'ساخت تصویر', description: 'ارسال متن برای تولید تصویر', icon: <PictureOutlined />, kind: 'toggle' },
+  { key: 'video_generation', label: 'ساخت ویدیو', description: 'تولید ویدیو از متن یا تصویر', icon: <VideoCameraOutlined />, kind: 'toggle' },
+  { key: 'document_generation', label: 'ساخت فایل', description: 'ساخت فایل Word، Excel، PDF یا CSV', icon: <FileWordOutlined />, kind: 'toggle' },
   { key: 'web_search', label: 'جستجوی گوگل', description: 'استفاده از اطلاعات بروز وب', icon: <GlobalOutlined />, kind: 'toggle' },
   { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل reasoning سازمان', icon: <ThunderboltOutlined />, kind: 'toggle' },
   { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد و وب', icon: <SafetyCertificateOutlined />, kind: 'toggle' },
@@ -90,9 +105,27 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   recordCreationModuleOptions = [],
   recordCreationTargetModuleId,
   onRecordCreationTargetModuleChange,
+  mediaSettings = {},
+  onMediaSettingsChange,
+  mediaSourceImages = [],
+  onMediaSourceImagesChange,
+  onApplyPrompt,
+  promptRecord = null,
 }) => {
   const [open, setOpen] = useState(false);
+  const [promptModalOpen, setPromptModalOpen] = useState(false);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  // Only one media-generation capability is active at a time.
+  const activeMediaCapability = selectedSet.has('image_generation')
+    ? 'image_generation' as const
+    : selectedSet.has('video_generation')
+      ? 'video_generation' as const
+      : selectedSet.has('document_generation')
+        ? 'document_generation' as const
+        : selectedSet.has('voice_output')
+          ? 'voice_output' as const
+          : null;
+  const mediaSupportsSources = activeMediaCapability === 'image_generation' || activeMediaCapability === 'video_generation';
 
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
     let next = checked
@@ -179,6 +212,48 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
             );
           })}
       </Space>
+
+      {activeMediaCapability && onMediaSettingsChange ? (
+        <AiMediaSettingsPopover
+          capability={activeMediaCapability}
+          settings={mediaSettings}
+          onSettingsChange={onMediaSettingsChange}
+          sourceImages={mediaSupportsSources ? mediaSourceImages : undefined}
+          onSourceImagesChange={mediaSupportsSources ? onMediaSourceImagesChange : undefined}
+          maxSourceImages={activeMediaCapability === 'video_generation' ? 1 : 4}
+          disabled={disabled || loading}
+          size={size}
+        />
+      ) : null}
+
+      {onApplyPrompt ? (
+        <>
+          <Tooltip title="پرامپت‌های آماده">
+            <Button
+              icon={<SnippetsOutlined />}
+              size={size}
+              disabled={disabled || loading}
+              onClick={() => setPromptModalOpen(true)}
+            />
+          </Tooltip>
+          {promptModalOpen ? (
+            <Suspense fallback={null}>
+              <MessageComposerModal
+                open
+                mode="template"
+                moduleId={moduleId}
+                record={promptRecord}
+                templateOnlyTitle="پرامپت‌های آماده هوش مصنوعی"
+                onApplyTemplate={(content) => {
+                  const text = String(content || '').trim();
+                  if (text) onApplyPrompt(text);
+                }}
+                onCancel={() => setPromptModalOpen(false)}
+              />
+            </Suspense>
+          ) : null}
+        </>
+      ) : null}
 
       {selectedSet.has('voice_input') && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
         <AiVoiceRecorder disabled={disabled} loading={voiceLoading} onSend={onVoiceSend} />

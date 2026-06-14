@@ -75,6 +75,7 @@ import {
   loadSurveyTemplateDefinition,
   normalizeSurveyTemplateSnapshot,
 } from "../utils/surveyTemplates";
+import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -198,7 +199,12 @@ const sanitizeModuleVisibleColumns = (
   moduleConfig: ModuleDefinition | null | undefined,
   columns?: string[] | null,
 ) => {
-  const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || "").trim()).filter(Boolean));
+  const allowedFieldKeys = new Set(
+    (moduleConfig?.fields || [])
+      .filter((field) => !isWorkflowVirtualField(field))
+      .map((field) => String(field?.key || "").trim())
+      .filter(Boolean)
+  );
   const seen = new Set<string>();
   const sanitized = (Array.isArray(columns) ? columns : [])
     .map((item) => String(item || "").trim())
@@ -232,6 +238,7 @@ const normalizeVisibleColumnsForView = (
   if (!isDefaultView) return sanitized;
 
   const allFieldKeys = (moduleConfig?.fields || [])
+    .filter((field) => !isWorkflowVirtualField(field))
     .map((field) => String(field?.key || '').trim())
     .filter(Boolean)
     .filter((key, index, list) => list.indexOf(key) === index);
@@ -297,11 +304,13 @@ const buildModuleListRowSelect = (
     kanbanGroupBy?: string | null;
     calendarDateField?: string | null;
     filters?: CrudFilters | null;
+    sorters?: CrudSort[] | null;
   }
 ) => {
   if (!moduleConfig) return "*";
 
   const hasCustomFields = (moduleConfig.fields || []).some((field) => {
+    if (isWorkflowVirtualField(field)) return false;
     const key = String(field?.key || "").trim();
     return key && !getBaseModuleFieldDefinition(moduleConfig.id, key);
   });
@@ -309,7 +318,10 @@ const buildModuleListRowSelect = (
 
   const selectedKeys = new Set<string>();
   const moduleFieldKeys = new Set(
-    (moduleConfig.fields || []).map((field) => String(field?.key || "").trim()).filter(Boolean)
+    (moduleConfig.fields || [])
+      .filter((field) => !isWorkflowVirtualField(field))
+      .map((field) => String(field?.key || "").trim())
+      .filter(Boolean)
   );
   const extraSelectKeys = new Set(MODULE_LIST_EXTRA_SELECT_KEYS[moduleConfig.id] || []);
   // ستون‌های assignee فقط برای ماژول‌هایی که از global assignee پشتیبانی می‌کنند اضافه می‌شوند
@@ -328,12 +340,18 @@ const buildModuleListRowSelect = (
   MODULE_LIST_BASE_SELECT_KEYS.forEach(addKnownKey);
   getModuleListVisibleFields(moduleConfig, visibleColumns || undefined).forEach((field) => addKnownKey(field.key));
   collectCrudFilterFields(options?.filters).forEach(addKnownKey);
+  (options?.sorters || []).forEach((sorter) => addKnownKey(String(sorter?.field || "")));
 
   (moduleConfig.fields || []).forEach((field) => {
+    if (isWorkflowVirtualField(field)) return;
     const key = String(field?.key || "").trim();
     if (!isSelectableColumnKey(key)) return;
     if (field.isKey || field.isTableColumn) addKnownKey(key);
-    if (!MODULE_LIST_HEAVY_FIELD_TYPES.has(field.type) && field.type !== FieldType.TAGS) {
+    if (
+      moduleConfig.systemManaged !== true
+      && !MODULE_LIST_HEAVY_FIELD_TYPES.has(field.type)
+      && field.type !== FieldType.TAGS
+    ) {
       addKnownKey(key);
     }
     const dependsOn = String(field.relationConfig?.dependsOn || "").trim();
@@ -368,6 +386,8 @@ const MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES = new Set(["automation_executi
 
 const getDefaultSorters = (moduleConfig?: ModuleDefinition | null): CrudSort[] => {
   if (!moduleConfig) return [{ field: "created_at", order: "desc" }];
+  const configuredSorters = normalizeCrudSorters(moduleConfig.defaultSorters as CrudSort[] | undefined);
+  if (configuredSorters.length > 0) return configuredSorters;
   const moduleId = String(moduleConfig.id || "");
   const hasCreatedAt = moduleConfig.fields?.some((field) => field.key === "created_at");
   const field = MODULE_LIST_CREATED_AT_DEFAULT_SORT_MODULES.has(moduleId)
@@ -411,7 +431,10 @@ const sanitizeSorters = (
   }
 
   const sortableFields = new Set<string>([
-    ...moduleConfig.fields.map((field) => String(field?.key || "").trim()).filter(Boolean),
+    ...moduleConfig.fields
+      .filter((field) => !isWorkflowVirtualField(field))
+      .map((field) => String(field?.key || "").trim())
+      .filter(Boolean),
     "id",
     "created_at",
     "updated_at",
@@ -793,9 +816,10 @@ export const ModuleListRefine: React.FC<{
       kanbanGroupBy,
       calendarDateField,
       filters: effectiveInitialFilters,
+      sorters: defaultSorters,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [calendarDateField, stableFiltersKey, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
+    [calendarDateField, defaultSorters, stableFiltersKey, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
   );
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
@@ -967,6 +991,7 @@ export const ModuleListRefine: React.FC<{
             kanbanGroupBy,
             calendarDateField,
             filters: serverFilters,
+            sorters: stableSorters,
           }),
         },
       });
@@ -1007,6 +1032,7 @@ export const ModuleListRefine: React.FC<{
             kanbanGroupBy,
             calendarDateField,
             filters: serverFilters,
+            sorters: stableSorters,
           }),
         },
       });
@@ -2622,6 +2648,8 @@ export const ModuleListRefine: React.FC<{
 
     Object.entries(nextColumnFilters || {}).forEach(([fieldKey, values]) => {
       if (!Array.isArray(values) || values.length === 0) return;
+      const field = moduleConfig.fields.find((item) => item.key === fieldKey);
+      if (isWorkflowVirtualField(field)) return;
 
       if (fieldKey === "assignee_id") {
         const assigneeValues = values
@@ -2664,7 +2692,6 @@ export const ModuleListRefine: React.FC<{
         return;
       }
 
-      const field = moduleConfig.fields.find((item) => item.key === fieldKey);
       if (!field) return;
 
       if (
@@ -2726,9 +2753,25 @@ export const ModuleListRefine: React.FC<{
     nextPermFilters: CrudFilters = [],
     nextSearchFieldPermissions?: Record<string, any>
   ): CrudFilters {
-    const mergedFilters = [...nextPermFilters, ...nextViewFilters].filter((item: any) => {
-      return !getTagViewFilterMeta(item, moduleConfig);
-    });
+    const virtualFieldKeys = new Set(
+      (moduleConfig?.fields || [])
+        .filter((field) => isWorkflowVirtualField(field))
+        .map((field) => String(field?.key || "").trim())
+        .filter(Boolean)
+    );
+    const sanitizeFilter = (item: any): any | null => {
+      const fieldKey = String(item?.field || "").trim();
+      if (fieldKey && virtualFieldKeys.has(fieldKey)) return null;
+      if (Array.isArray(item?.value) && (item?.operator === "and" || item?.operator === "or")) {
+        const value = item.value.map(sanitizeFilter).filter(Boolean);
+        return value.length > 0 ? { ...item, value } : null;
+      }
+      return item;
+    };
+    const mergedFilters = [...nextPermFilters, ...nextViewFilters]
+      .map(sanitizeFilter)
+      .filter(Boolean)
+      .filter((item: any) => !getTagViewFilterMeta(item, moduleConfig)) as CrudFilters;
     mergedFilters.push(...buildColumnCrudFilters(nextColumnFilters));
     const searchFieldKeys = nextSearchFieldPermissions
       ? buildModuleListSearchFieldKeys(moduleConfig, nextSearchFieldPermissions)
@@ -2860,6 +2903,10 @@ export const ModuleListRefine: React.FC<{
       const operator = String(rawFilter?.operator || "").trim();
       const value = rawFilter?.value;
       if (!fieldKey || !operator) continue;
+      const configuredField = moduleConfig.fields.find(
+        (item) => String(item?.key || "").trim() === fieldKey
+      );
+      if (isWorkflowVirtualField(configuredField)) continue;
 
       if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
         if (operator === "is_null") {

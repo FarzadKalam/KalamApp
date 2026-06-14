@@ -10,6 +10,8 @@ import React, {
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
+import { sendBotMessageViaGateway } from '../../utils/botGateway';
+import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { isMissingRpcError } from '../../utils/notificationConversationRpc';
 import {
@@ -30,7 +32,7 @@ import {
 } from '../../utils/uiNotificationOverlayStore';
 import { botMessageInsertBus, noteInsertBus } from '../../utils/communicationRealtimeBus';
 
-type RuntimeSection = NotificationUnreadSection;
+type RuntimeSection = NotificationUnreadSection | 'bot_direct_messages';
 type RuntimeRevisions = Record<RuntimeSection, number>;
 
 type NotificationRuntimeValue = {
@@ -54,6 +56,7 @@ type OverlayFeedRow = {
   record_id: string | null;
   conversation_key: string | null;
   payload: Record<string, any> | null;
+  last_event_at?: string | null;
   feed_cursor?: string | null;
   has_more?: boolean | null;
 };
@@ -86,6 +89,7 @@ const wait = (delayMs: number) => new Promise<void>((resolve) => {
 const EMPTY_REVISIONS: RuntimeRevisions = {
   notes: 0,
   bot_messages: 0,
+  bot_direct_messages: 0,
   sms_messages: 0,
   voip_calls: 0,
   tasks: 0,
@@ -97,6 +101,7 @@ const NotificationRuntimeContext = createContext<NotificationRuntimeValue | null
 const mapRealtimeSection = (table: string, row: Record<string, any>): RuntimeSection | null => {
   if (table === 'notes') return 'notes';
   if (table === 'counterparty_bot_groups' || table === 'counterparty_bot_messages') return 'bot_messages';
+  if (table === 'counterparty_bot_direct_threads' || table === 'counterparty_bot_direct_messages') return 'bot_direct_messages';
   if (table === 'outbound_messages' && String(row?.channel_type || '').trim() === 'sms') return 'sms_messages';
   if (table === 'voip_call_logs') return 'voip_calls';
   if (table === 'tasks') return 'tasks';
@@ -173,6 +178,31 @@ const resolveBotOverlaySenderName = (row: OverlayFeedRow) => {
     || '';
 };
 
+const buildBotDirectConversationKey = (channel: string, chatId: string) =>
+  `bot:direct:${String(channel || '').trim()}:${String(chatId || '').trim()}`;
+
+type BotDirectThreadOverlayRow = {
+  id: string;
+  channel_type: string | null;
+  chat_id: string | null;
+  target_module_id: string | null;
+  target_record_id: string | null;
+  display_name: string | null;
+  username: string | null;
+  phone_number: string | null;
+};
+
+type BotDirectMessageOverlayRow = {
+  id: string;
+  direct_thread_id: string | null;
+  direction: string | null;
+  content_text: string | null;
+  file_name: string | null;
+  message_type: string | null;
+  created_at: string | null;
+  payload: Record<string, any> | null;
+};
+
 export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const navigate = useNavigate();
   const [identity, setIdentity] = useState({ userId: '', roleId: '', orgId: '', fullName: '' });
@@ -188,6 +218,117 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   const overlayRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const [overlayLoadingMore, setOverlayLoadingMore] = useState(false);
   const loadOverlayPageRef = useRef<(beforeCursor: string | null, append: boolean) => Promise<void>>(async () => {});
+
+  const loadBotDirectOverlayData = useCallback(async () => {
+    if (!identity.userId || !identity.orgId) {
+      return { unreadCount: 0, rows: [] as OverlayFeedRow[] };
+    }
+    const { data: directMessages, error: directMessagesError } = await supabase
+      .from('counterparty_bot_direct_messages')
+      .select('id,direct_thread_id,direction,content_text,file_name,message_type,created_at,payload')
+      .eq('org_id', identity.orgId)
+      .eq('direction', 'inbound')
+      .order('created_at', { ascending: false })
+      .limit(400);
+    if (directMessagesError) {
+      if (!isAbortRequestError(directMessagesError)) {
+        console.warn('Could not load bot direct overlay rows', directMessagesError);
+      }
+      return { unreadCount: 0, rows: [] as OverlayFeedRow[] };
+    }
+
+    const messageRows = (directMessages || []) as BotDirectMessageOverlayRow[];
+    const messageIds = messageRows
+      .map((row) => String(row?.id || '').trim())
+      .filter(Boolean);
+    const threadIds = Array.from(new Set(
+      messageRows
+        .map((row) => String(row?.direct_thread_id || '').trim())
+        .filter(Boolean),
+    ));
+    const [threadResult, readStateResult] = await Promise.all([
+      threadIds.length > 0
+        ? supabase
+            .from('counterparty_bot_direct_threads')
+            .select('id,channel_type,chat_id,target_module_id,target_record_id,display_name,username,phone_number')
+            .eq('org_id', identity.orgId)
+            .in('id', threadIds)
+        : Promise.resolve({ data: [], error: null }),
+      messageIds.length > 0
+        ? supabase
+            .from('notification_read_states')
+            .select('source_id')
+            .eq('org_id', identity.orgId)
+            .eq('user_id', identity.userId)
+            .eq('section', 'bot_messages')
+            .eq('source_type', 'counterparty_bot_direct_message')
+            .in('source_id', messageIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (threadResult.error && !isAbortRequestError(threadResult.error)) {
+      console.warn('Could not load bot direct threads for overlay', threadResult.error);
+    }
+    if (readStateResult.error && !isAbortRequestError(readStateResult.error)) {
+      console.warn('Could not load bot direct read states for overlay', readStateResult.error);
+    }
+
+    const threadMap = new Map(
+      ((threadResult.data || []) as BotDirectThreadOverlayRow[]).map((row) => [String(row.id), row] as const),
+    );
+    const readStateIds = new Set(
+      ((readStateResult.data || []) as Array<{ source_id?: string | null }>)
+        .map((row) => String(row?.source_id || '').trim())
+        .filter(Boolean),
+    );
+    const unreadRows = messageRows.filter((row) => {
+      const id = String(row?.id || '').trim();
+      return id && !readStateIds.has(id);
+    });
+
+    return {
+      unreadCount: unreadRows.length,
+      rows: unreadRows.map((row) => {
+        const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+        const thread = threadMap.get(String(row?.direct_thread_id || '').trim()) || null;
+        const channel = String(thread?.channel_type || payload.channel_type || '').trim();
+        const chatId = String(thread?.chat_id || payload.chat_id || '').trim();
+        const username = String(thread?.username || payload.username || '').trim().replace(/^@+/, '');
+        const title = String(
+          thread?.display_name
+          || payload.sender_display_name
+          || (username ? `@${username}` : '')
+          || chatId
+          || 'پیام شخصی بات',
+        ).trim();
+        const text = String(row?.content_text || '').trim()
+          || (String(row?.file_name || '').trim() ? `فایل: ${String(row?.file_name || '').trim()}` : '')
+          || 'برای مشاهده جزئیات کلیک کنید.';
+        return {
+          section: 'bot_messages' as const,
+          source_type: 'counterparty_bot_direct_message',
+          source_id: String(row?.id || '').trim(),
+          title,
+          body: text,
+          created_at: row?.created_at || null,
+          module_id: String(thread?.target_module_id || '').trim() || null,
+          record_id: String(thread?.target_record_id || '').trim() || null,
+          conversation_key: buildBotDirectConversationKey(channel, chatId),
+          payload: {
+            ...payload,
+            direct_thread_id: String(row?.direct_thread_id || '').trim() || null,
+            channel_type: channel || null,
+            chat_id: chatId || null,
+            conversation_title: title || null,
+            sender_display_name: title || null,
+            username: username || null,
+            phone_number: String(thread?.phone_number || payload.phone_number || '').trim() || null,
+            avatar_url: getBotPlatformAvatarSrc(channel),
+          },
+          last_event_at: row?.created_at || null,
+        } as OverlayFeedRow;
+      }),
+    };
+  }, [identity.orgId, identity.userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,6 +365,8 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
           continue;
         }
         const nextSummary = normalizeNotificationUnreadSummary(data);
+        const directOverlayData = await loadBotDirectOverlayData();
+        nextSummary.bot_messages += directOverlayData.unreadCount;
         setSummary((current) => (
           areNotificationUnreadSummariesEqual(current, nextSummary) ? current : nextSummary
         ));
@@ -239,7 +382,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         summaryRefreshInFlightRef.current = null;
       }
     }
-  }, [identity.orgId, identity.userId]);
+  }, [identity.orgId, identity.userId, loadBotDirectOverlayData]);
 
   const openOverlayRow = useCallback((row: OverlayFeedRow) => {
     if (row.section === 'notes') {
@@ -248,6 +391,11 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return;
     }
     if (row.section === 'bot_messages') {
+      const directThreadId = String(row.payload?.direct_thread_id || '').trim();
+      if (directThreadId) {
+        navigate(`/messages?tab=bot_direct_messages&botDirectThread=${encodeURIComponent(directThreadId)}`);
+        return;
+      }
       const groupId = String(row.payload?.bot_group_id || '').trim();
       navigate(groupId ? `/messages?tab=bot_messages&botGroup=${encodeURIComponent(groupId)}` : '/messages?tab=bot_messages');
       return;
@@ -424,6 +572,60 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     }
 
     if (row.section === 'bot_messages') {
+      const directThreadId = String(row.payload?.direct_thread_id || '').trim();
+      if (directThreadId) {
+        const { data: thread, error: threadError } = await supabase
+          .from('counterparty_bot_direct_threads')
+          .select('id, channel_type, chat_id, target_module_id, target_record_id, customer_id, supplier_id, employee_id, profile_id')
+          .eq('org_id', identity.orgId)
+          .eq('id', directThreadId)
+          .maybeSingle();
+        if (threadError) throw threadError;
+        if (!thread?.id) throw new Error('پی‌وی بات پیدا نشد.');
+        const textToSend = String(replyText || '').trim();
+        await sendBotMessageViaGateway({
+          channel: String(thread.channel_type || '').trim() as any,
+          chatId: String(thread.chat_id || '').trim(),
+          text: textToSend,
+          moduleId: String(thread.target_module_id || '').trim() || undefined,
+          recordId: String(thread.target_record_id || '').trim() || undefined,
+        });
+        const nowIso = new Date().toISOString();
+        const { error: insertError } = await supabase.from('counterparty_bot_direct_messages').insert([{
+          org_id: identity.orgId,
+          direct_thread_id: thread.id,
+          channel_type: String(thread.channel_type || '').trim() || null,
+          chat_id: String(thread.chat_id || '').trim() || null,
+          target_module_id: String(thread.target_module_id || '').trim() || null,
+          target_record_id: String(thread.target_record_id || '').trim() || null,
+          customer_id: thread.customer_id || null,
+          supplier_id: thread.supplier_id || null,
+          employee_id: thread.employee_id || null,
+          profile_id: thread.profile_id || null,
+          direction: 'outbound',
+          message_type: 'text',
+          content_text: textToSend,
+          created_by: identity.userId,
+          payload: {
+            sender_user_id: identity.userId,
+            sender_profile_id: identity.userId,
+            sender_display_name: identity.fullName || null,
+          },
+        }]);
+        if (insertError) throw insertError;
+        await supabase
+          .from('counterparty_bot_direct_threads')
+          .update({
+            last_outbound_at: nowIso,
+            last_message_at: nowIso,
+            last_message_preview: textToSend || null,
+          })
+          .eq('org_id', identity.orgId)
+          .eq('id', directThreadId);
+        const conversationKey = buildBotDirectConversationKey(String(thread.channel_type || ''), String(thread.chat_id || ''));
+        await markOverlayCommunicationRead('bot', conversationKey, row);
+        return;
+      }
       const botGroupId = String(row.payload?.bot_group_id || '').trim();
       if (!botGroupId) throw new Error('گروه بات مشخص نیست.');
       const { data: group, error } = await supabase
@@ -519,11 +721,21 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return;
     }
     const rows = Array.isArray(data) ? data as OverlayFeedRow[] : [];
+    const localDirectOverlayData = !append ? await loadBotDirectOverlayData() : { rows: [] as OverlayFeedRow[] };
+    const mergedSourceRows = append
+      ? rows
+      : [...localDirectOverlayData.rows, ...rows].sort((left, right) => {
+          const leftTime = Date.parse(String(left?.created_at || left?.last_event_at || '')) || 0;
+          const rightTime = Date.parse(String(right?.created_at || right?.last_event_at || '')) || 0;
+          return rightTime - leftTime;
+        });
     const merged = append
       ? Array.from(new Map(
-        [...overlayRowsRef.current, ...rows].map((row) => [`${row.section}:${row.source_type}:${row.source_id}`, row]),
+        [...overlayRowsRef.current, ...mergedSourceRows].map((row) => [`${row.section}:${row.source_type}:${row.source_id}`, row]),
       ).values())
-      : rows;
+      : Array.from(new Map(
+        mergedSourceRows.map((row) => [`${row.section}:${row.source_type}:${row.source_id}`, row]),
+      ).values());
     overlayRowsRef.current = merged;
     publishOverlayRows(merged);
     const last = rows[rows.length - 1];
@@ -544,7 +756,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         }
         : null,
     );
-  }, [identity.orgId, identity.userId, publishOverlayRows]);
+  }, [identity.orgId, identity.userId, loadBotDirectOverlayData, publishOverlayRows]);
   loadOverlayPageRef.current = loadOverlayPage;
 
   const refreshOverlay = useCallback(async () => {
@@ -614,6 +826,8 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       'notes',
       'counterparty_bot_groups',
       'counterparty_bot_messages',
+      'counterparty_bot_direct_threads',
+      'counterparty_bot_direct_messages',
       'outbound_messages',
       'voip_call_logs',
       'tasks',
@@ -640,7 +854,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
             // message renders instantly without waiting for an RPC refetch.
             if (payload?.eventType === 'INSERT' && payload?.new) {
               if (table === 'notes') noteInsertBus.emit(payload.new);
-              else if (table === 'counterparty_bot_messages') botMessageInsertBus.emit(payload.new);
+              else if (table === 'counterparty_bot_messages' || table === 'counterparty_bot_direct_messages') botMessageInsertBus.emit(payload.new);
             }
             const section = mapRealtimeSection(table, row);
             if (section) scheduleRefresh(section);

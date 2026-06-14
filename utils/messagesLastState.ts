@@ -13,6 +13,7 @@ export type MessagesLastState = {
   /** selectedNoteUserId — null means «یادداشت‌های من» */
   noteConversationId?: string | null;
   botGroupId?: string | null;
+  botDirectThreadId?: string | null;
 };
 
 export const loadMessagesLastState = (): MessagesLastState | null => {

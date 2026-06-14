@@ -108,6 +108,16 @@ export const bankAccountsConfig: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'is_default',
+      labels: { fa: 'حساب پیش فرض', en: 'Default Account' },
+      type: FieldType.CHECKBOX,
+      location: FieldLocation.BLOCK,
+      blockId: 'base',
+      order: 6.1,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
   ],
   blocks: [
     {

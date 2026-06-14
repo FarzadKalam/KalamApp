@@ -35,6 +35,8 @@ import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
 import AiCapabilityComposerActions, { type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
+import AiComposeModelBar from '../components/ai/AiComposeModelBar';
+import type { AiMediaSettings, AiMediaSourceImage } from '../components/ai/AiMediaSettingsPopover';
 import AiMessageAttachmentPreview from '../components/ai/AiMessageAttachmentPreview';
 import { blobToBase64 } from '../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
@@ -188,6 +190,8 @@ const AiChatPage: React.FC = () => {
   const [userOptions, setUserOptions] = useState<DirectoryOption[]>([]);
   const [roleOptions, setRoleOptions] = useState<DirectoryOption[]>([]);
   const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
+  const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
+  const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [processOperationMode, setProcessOperationMode] = useState(false);
   const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
@@ -196,6 +200,9 @@ const AiChatPage: React.FC = () => {
   const [fileSending, setFileSending] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
   const [generatingVoiceOutput, setGeneratingVoiceOutput] = useState(false);
+  const [generatingVideo, setGeneratingVideo] = useState(false);
+  const [generatingDocument, setGeneratingDocument] = useState(false);
+  const modelOverrideRef = useRef<string | null>(null);
   const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
   const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
@@ -237,26 +244,26 @@ const AiChatPage: React.FC = () => {
       const preferred = preferredThreadId
         ? nextThreads.find((thread) => String(thread.id) === String(preferredThreadId))
         : null;
-      // Honor preferredThreadId when provided (even if not yet in list due to timing)
-      let nextActive: string | null;
-      if (preferred?.id) {
-        nextActive = preferred.id;
-      } else if (preferredThreadId) {
-        nextActive = preferredThreadId;
-      } else if (activeThreadId) {
-        nextActive = activeThreadId;
-      } else {
-        nextActive = nextThreads[0]?.id || null;
-      }
-      setActiveThreadId(nextActive);
-      if (!nextActive) setMessages([]);
+      // Honor preferredThreadId when provided (even if not yet in list due to timing).
+      // Use a functional update so a thread selected by an in-flight send (e.g. a
+      // forceNewThread message coming from the dashboard chat box) is NOT clobbered
+      // by this list refresh resolving later with a stale activeThreadId closure.
+      let resolvedActive: string | null = null;
+      setActiveThreadId((current) => {
+        if (preferred?.id) { resolvedActive = preferred.id; return preferred.id; }
+        if (preferredThreadId) { resolvedActive = preferredThreadId; return preferredThreadId; }
+        if (current) { resolvedActive = current; return current; }
+        resolvedActive = nextThreads[0]?.id || null;
+        return resolvedActive;
+      });
+      if (!resolvedActive) setMessages([]);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'دریافت تاریخچه گفتگوها ناموفق بود'));
       // Don't clear the thread list on a transient error — preserve what the user sees
     } finally {
       setThreadLoading(false);
     }
-  }, [activeThreadId, invokeAi, message]);
+  }, [invokeAi, message]);
 
   const mergeThreadMessages = useCallback((serverMessages: AiMessage[]) => {
     setMessages((prev) => {
@@ -384,6 +391,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : effectiveRecordCreationSchema ? {
         action: 'create_record_from_prompt',
@@ -394,6 +402,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
         recordCreation: effectiveRecordCreationSchema,
         previewOnly: true,
       } : {
@@ -411,6 +420,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
       });
       if (!data?.proposedAction && effectiveRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
@@ -524,6 +534,9 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: contextOverride || chatContext,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
       });
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
@@ -556,7 +569,7 @@ const AiChatPage: React.FC = () => {
     } finally {
       setGeneratingImage(false);
     }
-  }, [activeThread, activeThreadId, chatContext, generatingImage, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, sending]);
+  }, [activeThread, activeThreadId, chatContext, generatingImage, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, mediaSettings, mediaSourceImages, message, sending]);
 
   const submitVoiceOutputPrompt = useCallback(async (
     rawText?: string,
@@ -593,6 +606,8 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: contextOverride || chatContext,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
       });
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
@@ -625,7 +640,168 @@ const AiChatPage: React.FC = () => {
     } finally {
       setGeneratingVoiceOutput(false);
     }
-  }, [activeThread, activeThreadId, chatContext, generatingVoiceOutput, input, invokeAi, isActiveOwner, loadThreads, message, sending]);
+  }, [activeThread, activeThreadId, chatContext, generatingVoiceOutput, input, invokeAi, isActiveOwner, loadThreads, mediaSettings, message, sending]);
+
+  const submitVideoPrompt = useCallback(async (
+    rawText?: string,
+    forceNewThread = false,
+    contextOverride?: Record<string, any>,
+  ) => {
+    const text = String(rawText ?? input).trim();
+    if (!text || generatingVideo || sending) return;
+    if (activeThread && !isActiveOwner) {
+      message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
+      return;
+    }
+    const optimistic: AiMessage = {
+      id: `pending-video-${Date.now()}`,
+      role: 'user',
+      content: text,
+      created_at: new Date().toISOString(),
+      metadata: { input_kind: 'video_prompt' },
+    };
+    const thinkingId = `pending-assistant-video-${Date.now()}`;
+    const thinking: AiMessage = {
+      id: thinkingId,
+      role: 'assistant',
+      content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['video_generation'] },
+    };
+    setInput('');
+    setMessages((prev) => [...prev, optimistic, thinking]);
+    setGeneratingVideo(true);
+    const effectiveContext = contextOverride || chatContext;
+    try {
+      const data = await invokeAi({
+        action: 'generate_video',
+        prompt: text,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+      });
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
+        setActiveThreadId(nextThreadId);
+      }
+      const videoId = String(data?.videoId || '').trim();
+      const realMessageId = String(data?.messageId || `assistant-video-${Date.now()}`);
+      // Poll for completion (server returns immediately while the job renders).
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      let finalStatus = String(data?.status || 'processing');
+      let fileResult: any = null;
+      let usage: any = null;
+      for (let attempt = 0; attempt < 60 && videoId; attempt += 1) {
+        if (finalStatus === 'completed' || finalStatus === 'failed') break;
+        await sleep(5000);
+        try {
+          const poll = await invokeAi({
+            action: 'get_video_status',
+            videoId,
+            messageId: data?.messageId || null,
+            threadId: nextThreadId,
+            prompt: text,
+            context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
+          });
+          finalStatus = String(poll?.status || 'processing');
+          if (finalStatus === 'completed') { fileResult = poll?.file || null; usage = poll?.usage || null; break; }
+          if (finalStatus === 'failed') break;
+        } catch {
+          // transient — keep polling
+        }
+      }
+      setMessages((prev) => [
+        ...prev
+          .filter((item) => item.id !== thinkingId)
+          .map((item) => item.id === optimistic.id ? { ...item, id: data?.userMessageId || item.id } : item),
+        {
+          id: realMessageId,
+          role: 'assistant',
+          content: finalStatus === 'completed' ? 'ویدیو آماده شد.' : finalStatus === 'failed' ? 'ساخت ویدیو ناموفق بود.' : 'ساخت ویدیو طول کشید؛ بعداً در همین گفتگو در دسترس خواهد بود.',
+          provider: data?.provider || null,
+          model: data?.model || null,
+          metadata: { usage, file: fileResult, capability: 'video_generation', status: finalStatus, video_id: videoId },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      if (nextThreadId) void loadThreads(nextThreadId);
+    } catch (error: any) {
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinkingId));
+      setInput(text);
+      message.error(toFaErrorMessage(error, 'تولید ویدیو ناموفق بود'));
+    } finally {
+      setGeneratingVideo(false);
+    }
+  }, [activeThread, activeThreadId, chatContext, generatingVideo, input, invokeAi, isActiveOwner, loadThreads, mediaSettings, mediaSourceImages, message, sending]);
+
+  const submitDocumentPrompt = useCallback(async (
+    rawText?: string,
+    forceNewThread = false,
+    contextOverride?: Record<string, any>,
+  ) => {
+    const text = String(rawText ?? input).trim();
+    if (!text || generatingDocument || sending) return;
+    if (activeThread && !isActiveOwner) {
+      message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
+      return;
+    }
+    const format = String(mediaSettings.format || 'docx');
+    const optimistic: AiMessage = { id: `pending-doc-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'document_prompt' } };
+    const thinkingId = `pending-assistant-doc-${Date.now()}`;
+    const thinking: AiMessage = {
+      id: thinkingId,
+      role: 'assistant',
+      content: `در حال ساخت فایل ${format.toUpperCase()}...`,
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['document_generation'] },
+    };
+    setInput('');
+    setMessages((prev) => [...prev, optimistic, thinking]);
+    setGeneratingDocument(true);
+    try {
+      const data = await invokeAi({
+        action: 'generate_document',
+        prompt: text,
+        format,
+        threadId: forceNewThread ? null : activeThreadId,
+        forceNewThread,
+        context: contextOverride || chatContext,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+      });
+      const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (nextThreadId) {
+        skipNextThreadMessageLoadRef.current = nextThreadId;
+        setActiveThreadId(nextThreadId);
+        setMessages((prev) => [
+          ...prev
+            .filter((item) => item.id !== thinkingId)
+            .map((item) => item.id === optimistic.id ? { ...item, id: data?.userMessageId || item.id } : item),
+          {
+            id: data.messageId || `assistant-doc-${Date.now()}`,
+            role: 'assistant',
+            content: String(data.answer || '').trim() || 'فایل آماده شد.',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: { usage: data.usage || null, file: data.file || null, capability: 'document_generation', format: data.format || format },
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        void loadThreads(nextThreadId);
+      }
+    } catch (error: any) {
+      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinkingId));
+      setInput(text);
+      message.error(toFaErrorMessage(error, 'ساخت فایل ناموفق بود'));
+    } finally {
+      setGeneratingDocument(false);
+    }
+  }, [activeThread, activeThreadId, chatContext, generatingDocument, input, invokeAi, isActiveOwner, loadThreads, mediaSettings, message, sending]);
 
   const submitUploadedFile = useCallback( async (
     filePrompt: AiUploadedFilePrompt,
@@ -683,6 +859,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : effectiveRecordCreationSchema ? {
         action: 'create_record_from_prompt',
@@ -705,6 +882,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
         recordCreation: effectiveRecordCreationSchema,
         previewOnly: true,
       } : {
@@ -726,6 +904,7 @@ const AiChatPage: React.FC = () => {
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: effectiveContext,
+        modelOverride: modelOverrideRef.current,
       });
       if (!data?.proposedAction && effectiveRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
@@ -817,6 +996,8 @@ const AiChatPage: React.FC = () => {
       'voice_input',
       'voice_output',
       'image_generation',
+      'video_generation',
+      'document_generation',
       'web_search',
       'deep_reasoning',
       'legal_assistant',
@@ -868,6 +1049,18 @@ const AiChatPage: React.FC = () => {
       });
       return;
     }
+    if (initialCapabilities.includes('video_generation')) {
+      void submitVideoPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
+        navigate('/ai', { replace: true });
+      });
+      return;
+    }
+    if (initialCapabilities.includes('document_generation')) {
+      void submitDocumentPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
+        navigate('/ai', { replace: true });
+      });
+      return;
+    }
     void submitMessage(initialPrompt, state.forceNewThread !== false, String(state.aiInitialInputKind || 'text'), initialContext, {
       capabilities: initialCapabilities,
       processOperationMode: initialProcessOperationMode,
@@ -875,7 +1068,7 @@ const AiChatPage: React.FC = () => {
     }).then(() => {
       navigate('/ai', { replace: true });
     });
-  }, [input, location.state, navigate, submitImagePrompt, submitMessage, submitUploadedFile, submitVoiceOutputPrompt]);
+  }, [input, location.state, navigate, submitDocumentPrompt, submitImagePrompt, submitMessage, submitUploadedFile, submitVideoPrompt, submitVoiceOutputPrompt]);
 
   const loadShareOptions = useCallback(async () => {
     try {
@@ -990,6 +1183,8 @@ const AiChatPage: React.FC = () => {
   const fileRecordScope = getRecordScopeFromContext(chatContext);
   const imageMode = selectedCapabilities.includes('image_generation');
   const voiceOutputMode = selectedCapabilities.includes('voice_output');
+  const videoMode = selectedCapabilities.includes('video_generation');
+  const documentMode = selectedCapabilities.includes('document_generation');
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     setSelectedCapabilities(next);
     const wantsProcessOperation = next.includes('process_operation');
@@ -1200,7 +1395,7 @@ const AiChatPage: React.FC = () => {
                   onPressEnter={(event) => {
                     if (!event.shiftKey) {
                       event.preventDefault();
-                      void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage());
+                      void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage());
                     }
                   }}
                 />
@@ -1209,7 +1404,7 @@ const AiChatPage: React.FC = () => {
                   onChange={handleComposerCapabilitiesChange}
                   capabilityAvailability={capabilityAvailability}
                   disabled={Boolean(activeThread && !isActiveOwner)}
-                  loading={sending || generatingImage || generatingVoiceOutput}
+                  loading={sending || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
                   moduleId={fileRecordScope.moduleId}
                   recordId={fileRecordScope.recordId}
                   onVoiceSend={submitVoice}
@@ -1219,16 +1414,28 @@ const AiChatPage: React.FC = () => {
                   recordCreationModuleOptions={recordCreationModuleOptions}
                   recordCreationTargetModuleId={recordCreationTargetModuleId}
                   onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+                  mediaSettings={mediaSettings}
+                  onMediaSettingsChange={setMediaSettings}
+                  mediaSourceImages={mediaSourceImages}
+                  onMediaSourceImagesChange={setMediaSourceImages}
+                  onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
                 />
                 <Button
                   type="primary"
                   icon={<SendOutlined />}
-                  loading={voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : sending}
+                  loading={documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : sending}
                   disabled={!input.trim() || Boolean(activeThread && !isActiveOwner)}
-                  onClick={() => void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage())}
+                  onClick={() => void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage())}
                 >
-                  {voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
+                  {documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
                 </Button>
+              </div>
+              <div className="mt-1 px-1">
+                <AiComposeModelBar
+                  selectedCapabilities={selectedCapabilities}
+                  contextMode={chatContext?.mode}
+                  onModelOverrideChange={(model) => { modelOverrideRef.current = model; }}
+                />
               </div>
             </footer>
           </div>

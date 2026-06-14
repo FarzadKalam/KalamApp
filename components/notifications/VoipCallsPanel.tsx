@@ -1,8 +1,10 @@
 import React from 'react';
-import { Button, Empty } from 'antd';
-import { EyeOutlined, UserAddOutlined } from '@ant-design/icons';
+import { Badge, Button, Empty } from 'antd';
+import { EditOutlined, EyeOutlined, UserAddOutlined } from '@ant-design/icons';
 import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
+import type { NoteAttachment } from '../../utils/noteContent';
 import UnreadCountBadge from './UnreadCountBadge';
+import VoipRecordingPlayer from './VoipRecordingPlayer';
 
 export type VoipThreadItem = {
   id: string;
@@ -28,7 +30,15 @@ type VoipCallsPanelProps = {
   getCentralRecordLabel: (moduleId?: string | null, recordId?: string | null, fallback?: string | null) => string;
   getPhoneMatchLabel: (value: any) => string;
   getModuleFieldOptionLabel: (moduleId: string, fieldKey: string, value: any) => string;
+  onOpenPhoneMatchPicker?: (input: {
+    phoneNumberId?: string | null;
+    phone: string;
+    moduleId?: string | null;
+    recordId?: string | null;
+    phoneMatchStatus?: string | null;
+  }) => void;
   openCreateActivityFromMessage: (input: any) => void | Promise<void>;
+  onForwardRecording?: (call: any, attachment: NoteAttachment) => void | Promise<void>;
 };
 
 const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
@@ -42,27 +52,51 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
   getCentralRecordLabel,
   getPhoneMatchLabel,
   getModuleFieldOptionLabel,
+  onOpenPhoneMatchPicker,
   openCreateActivityFromMessage,
+  onForwardRecording,
 }) => {
   const isDesktop = layout === 'desktop';
   const activeThread = selectedVoipThread;
   const calls = displayedVoipCalls;
+  const handleSelectThread = React.useCallback((thread: VoipThreadItem) => {
+    setSelectedVoipThreadKey(thread.id);
+  }, [setSelectedVoipThreadKey]);
+  const handleThreadRowKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>, thread: VoipThreadItem) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    handleSelectThread(thread);
+  }, [handleSelectThread]);
+
+  const openPhoneBinding = (input: {
+    phoneNumberId?: string | null;
+    phone: string;
+    moduleId?: string | null;
+    recordId?: string | null;
+    phoneMatchStatus?: string | null;
+  }) => {
+    if (!onOpenPhoneMatchPicker) return;
+    if (!String(input.phone || '').trim()) return;
+    onOpenPhoneMatchPicker(input);
+  };
 
   return (
-    <div className="h-full min-h-0 flex flex-col overflow-hidden">
-      <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[250px_minmax(0,1fr)]' : 'flex flex-col'}`}>
-        <div className={`${isDesktop ? 'border-l' : 'border-b'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0`}>
+    <div className="h-full min-h-0 flex overflow-hidden">
+      <div className={`min-h-0 flex-1 ${isDesktop ? 'grid grid-cols-[250px_minmax(0,1fr)]' : 'flex'}`}>
+        <div className={`${isDesktop ? 'border-l' : 'order-last w-[72px] shrink-0 border-l'} border-slate-200/45 dark:border-white/[0.07] bg-slate-50/65 dark:bg-white/[0.025] min-h-0 overflow-hidden`}>
           {voipThreads.length === 0 ? (
             <div className="p-3">
-              <Empty description="تماس ورودی جدیدی ندارید." />
+              <Empty description="تماسی برای نمایش وجود ندارد." />
             </div>
           ) : isDesktop ? (
-            <div className="h-full overflow-y-auto p-2 space-y-2">
+            <div className="min-h-0 h-full overflow-y-auto p-2 space-y-2">
               {voipThreads.map((thread) => (
-                <button
+                <div
                   key={thread.id}
-                  type="button"
-                  onClick={() => setSelectedVoipThreadKey(thread.id)}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleSelectThread(thread)}
+                  onKeyDown={(event) => handleThreadRowKeyDown(event, thread)}
                   className={`w-full rounded-xl border px-3 py-2 text-right transition-colors ${
                     activeThread?.id === thread.id
                       ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
@@ -72,9 +106,40 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                      <div className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</div>
+                      <button
+                        type="button"
+                        dir="ltr"
+                        className="truncate text-[11px] text-gray-500 transition-colors hover:text-[rgb(var(--brand-700-rgb))] dark:hover:text-[rgb(var(--brand-300-rgb))]"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openPhoneBinding({
+                            phoneNumberId: thread.phoneNumberId,
+                            phone: thread.phone,
+                            moduleId: thread.moduleId,
+                            recordId: thread.recordId,
+                            phoneMatchStatus: thread.phoneMatchStatus,
+                          });
+                        }}
+                      >
+                        {thread.phone || 'شماره ثبت نشده'}
+                      </button>
                       {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                        <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
+                        <button
+                          type="button"
+                          className="mt-1 truncate text-[11px] text-amber-600 underline decoration-dashed underline-offset-2 dark:text-amber-300"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openPhoneBinding({
+                              phoneNumberId: thread.phoneNumberId,
+                              phone: thread.phone,
+                              moduleId: thread.moduleId,
+                              recordId: thread.recordId,
+                              phoneMatchStatus: thread.phoneMatchStatus,
+                            });
+                          }}
+                        >
+                          {getPhoneMatchLabel(thread.phoneMatchStatus)}
+                        </button>
                       ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -82,62 +147,107 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                       <span className="text-[10px] text-gray-400">{safeJalaliFormat(thread.calls[0]?.started_at || thread.calls[0]?.created_at, 'MM/DD HH:mm')}</span>
                     </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           ) : (
-            <div className="flex max-h-[92px] gap-1.5 overflow-x-auto px-2 py-1.5">
+            <div className="flex h-full flex-col items-center gap-1 overflow-y-auto overflow-x-hidden px-1 py-1.5">
               {voipThreads.map((thread) => (
-                <button
+                <div
                   key={thread.id}
-                  type="button"
-                  onClick={() => setSelectedVoipThreadKey(thread.id)}
-                  className={`min-w-[132px] rounded-xl border px-2.5 py-1.5 text-right ${
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleSelectThread(thread)}
+                  onKeyDown={(event) => handleThreadRowKeyDown(event, thread)}
+                  title={thread.title}
+                  className={`flex w-full flex-col items-center gap-1 rounded-2xl px-1 py-1.5 transition-colors ${
                     activeThread?.id === thread.id
-                      ? 'border-slate-300/50 bg-white/95 shadow-[0_6px_18px_rgba(15,23,42,0.05)] dark:border-white/15 dark:bg-white/[0.075]'
-                      : 'border-transparent bg-white/60 dark:bg-transparent'
+                      ? 'bg-[rgba(var(--brand-500-rgb),0.14)] shadow-[inset_0_0_0_1px_rgba(var(--brand-500-rgb),0.22)] dark:bg-[rgba(var(--brand-300-rgb),0.15)] dark:shadow-[inset_0_0_0_1px_rgba(var(--brand-300-rgb),0.24)]'
+                      : 'hover:bg-white/75 dark:hover:bg-white/5'
                   }`}
                 >
-                  <div className="truncate text-xs font-semibold text-gray-800 dark:text-gray-100">{thread.title}</div>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <span className="truncate text-[11px] text-gray-500" dir="ltr">{thread.phone || 'شماره ثبت نشده'}</span>
-                    <UnreadCountBadge count={thread.unreadCount} className="px-2 py-0.5" />
-                  </div>
-                  {getPhoneMatchLabel(thread.phoneMatchStatus) ? (
-                    <div className="mt-1 truncate text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(thread.phoneMatchStatus)}</div>
-                  ) : null}
-                </button>
+                  <Badge count={thread.unreadCount > 0 ? thread.unreadCount : 0} size="small">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-xs font-semibold text-gray-700 shadow-sm dark:bg-white/[0.08] dark:text-gray-200">
+                      {String(thread.title || thread.phone || 'T').trim().slice(0, 1) || 'T'}
+                    </div>
+                  </Badge>
+                  <span className="line-clamp-2 text-center text-[10px] leading-4 text-gray-500 dark:text-gray-400">
+                    {thread.title}
+                  </span>
+                </div>
               ))}
             </div>
           )}
         </div>
-        <div className="min-h-0 flex flex-col overflow-hidden">
+        <div className="min-h-0 flex flex-1 flex-col overflow-hidden">
           <div className="border-b border-slate-200/45 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-white/[0.025]">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
-                  {activeThread?.title || 'تماس‌های ورودی'}
+                  {activeThread?.title || 'تماس‌ها'}
                 </div>
                 <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
-                  {activeThread?.phone || 'تماسی انتخاب نشده'}
+                  <button
+                    type="button"
+                    dir="ltr"
+                    className="truncate text-[11px] text-gray-500 transition-colors hover:text-[rgb(var(--brand-700-rgb))] dark:hover:text-[rgb(var(--brand-300-rgb))]"
+                    onClick={() => openPhoneBinding({
+                      phoneNumberId: activeThread?.phoneNumberId || null,
+                      phone: activeThread?.phone || '',
+                      moduleId: activeThread?.moduleId || null,
+                      recordId: activeThread?.recordId || null,
+                      phoneMatchStatus: activeThread?.phoneMatchStatus || null,
+                    })}
+                  >
+                    {activeThread?.phone || 'تماسی انتخاب نشده'}
+                  </button>
                 </div>
                 {getPhoneMatchLabel(activeThread?.phoneMatchStatus) ? (
-                  <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">{getPhoneMatchLabel(activeThread?.phoneMatchStatus)}</div>
+                  <button
+                    type="button"
+                    className="mt-1 text-[11px] text-amber-600 underline decoration-dashed underline-offset-2 dark:text-amber-300"
+                    onClick={() => openPhoneBinding({
+                      phoneNumberId: activeThread?.phoneNumberId || null,
+                      phone: activeThread?.phone || '',
+                      moduleId: activeThread?.moduleId || null,
+                      recordId: activeThread?.recordId || null,
+                      phoneMatchStatus: activeThread?.phoneMatchStatus || null,
+                    })}
+                  >
+                    {getPhoneMatchLabel(activeThread?.phoneMatchStatus)}
+                  </button>
                 ) : null}
               </div>
-              {activeThread?.moduleId && activeThread?.recordId ? (
-                <Button
-                  size="small"
-                  icon={<EyeOutlined />}
-                  onClick={() => openPreviewRecord(
-                    activeThread.moduleId!,
-                    activeThread.recordId!,
-                    getCentralRecordLabel(activeThread.moduleId, activeThread.recordId, activeThread.title),
-                  )}
-                >
-                  رکورد مرتبط
-                </Button>
-              ) : null}
+              <div className="flex shrink-0 items-center gap-2">
+                {activeThread?.phone ? (
+                  <Button
+                    size="small"
+                    icon={<EditOutlined />}
+                    onClick={() => openPhoneBinding({
+                      phoneNumberId: activeThread?.phoneNumberId || null,
+                      phone: activeThread?.phone || '',
+                      moduleId: activeThread?.moduleId || null,
+                      recordId: activeThread?.recordId || null,
+                      phoneMatchStatus: activeThread?.phoneMatchStatus || null,
+                    })}
+                  >
+                    اتصال مخاطب
+                  </Button>
+                ) : null}
+                {activeThread?.moduleId && activeThread?.recordId ? (
+                  <Button
+                    size="small"
+                    icon={<EyeOutlined />}
+                    onClick={() => openPreviewRecord(
+                      activeThread.moduleId!,
+                      activeThread.recordId!,
+                      getCentralRecordLabel(activeThread.moduleId, activeThread.recordId, activeThread.title),
+                    )}
+                  >
+                    مخاطب مرتبط
+                  </Button>
+                ) : null}
+              </div>
             </div>
           </div>
           <div className="flex-1 overflow-y-auto bg-slate-100/45 px-3 py-3 dark:bg-black/[0.08]">
@@ -155,6 +265,15 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                   const operatorLabel = row?.assignee_id
                     ? assigneeNameMap[String(row.assignee_id)] || ''
                     : '';
+                  const direction = String(row?.direction || '').trim();
+                  const directionLabel = direction === 'outgoing'
+                    ? 'خروجی'
+                    : direction === 'internal'
+                      ? 'داخلی'
+                      : 'ورودی';
+                  const counterpartyPhone = direction === 'outgoing'
+                    ? String(row?.destination_number || activeThread?.phone || '').trim()
+                    : String(row?.source_number || activeThread?.phone || '').trim();
                   return (
                     <div
                       key={String(row?.id || '')}
@@ -163,25 +282,51 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
-                            {String(row?.title || row?.source_number || 'تماس ورودی')}
+                            {String(row?.title || counterpartyPhone || `تماس ${directionLabel}`)}
                           </div>
                           <div className="mt-1 text-[11px] text-gray-500" dir="ltr">
-                            {String(row?.source_number || '').trim() || '-'}
+                            <button
+                              type="button"
+                              dir="ltr"
+                              className="transition-colors hover:text-[rgb(var(--brand-700-rgb))] dark:hover:text-[rgb(var(--brand-300-rgb))]"
+                              onClick={() => openPhoneBinding({
+                                phoneNumberId: row?.phone_number_id || null,
+                                phone: counterpartyPhone,
+                                moduleId: row?.module_id || null,
+                                recordId: row?.record_id || null,
+                                phoneMatchStatus: row?.phone_match_status || null,
+                              })}
+                            >
+                              {counterpartyPhone || '-'}
+                            </button>
                             {String(row?.extension || '').trim() ? ` → ${String(row.extension).trim()}` : ''}
                           </div>
                         </div>
                         <div className="text-[11px] text-gray-400">{safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm')}</div>
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
+                          {directionLabel}
+                        </span>
                         {statusLabel ? (
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
                             {statusLabel}
                           </span>
                         ) : null}
                         {phoneMatchLabel ? (
-                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200">
+                          <button
+                            type="button"
+                            className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200"
+                            onClick={() => openPhoneBinding({
+                              phoneNumberId: row?.phone_number_id || null,
+                              phone: counterpartyPhone,
+                              moduleId: row?.module_id || null,
+                              recordId: row?.record_id || null,
+                              phoneMatchStatus: row?.phone_match_status || null,
+                            })}
+                          >
                             {phoneMatchLabel}
-                          </span>
+                          </button>
                         ) : null}
                         {relatedLabel ? (
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
@@ -194,6 +339,13 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                           </span>
                         ) : null}
                       </div>
+                      <div className="mt-3">
+                        <VoipRecordingPlayer
+                          call={row}
+                          compact
+                          onForward={onForwardRecording ? (attachment) => onForwardRecording(row, attachment) : undefined}
+                        />
+                      </div>
                       <div className="mt-3 flex items-center gap-3 text-[12px]">
                         <Button
                           type="link"
@@ -202,18 +354,18 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                           icon={<UserAddOutlined />}
                           onClick={() => openCreateActivityFromMessage({
                             channel: 'voip',
-                            actorName: String(row?.source_number || activeThread?.phone || 'شماره تماس').trim(),
+                            actorName: counterpartyPhone || 'شماره تماس',
                             createdAt: startedAt,
                             createdAtLabel: safeJalaliFormat(startedAt, 'YYYY/MM/DD HH:mm'),
                             content: [
-                              `تماس ورودی از ${String(row?.source_number || activeThread?.phone || '').trim() || 'شماره نامشخص'}`,
+                              `تماس ${directionLabel} با ${counterpartyPhone || 'شماره نامشخص'}`,
                               String(row?.extension || '').trim() ? `داخلی: ${String(row.extension).trim()}` : '',
                               statusLabel ? `وضعیت: ${statusLabel}` : '',
                             ].filter(Boolean).join(' | '),
                             attachments: [],
-                            relatedModuleId: row?.module_id || activeThread?.moduleId || null,
-                            relatedRecordId: row?.record_id || activeThread?.recordId || null,
-                            taskType: 'تماس ورودی',
+                            relatedModuleId: row?.module_id || row?.related_module_id || activeThread?.moduleId || null,
+                            relatedRecordId: row?.record_id || row?.related_record_id || activeThread?.recordId || null,
+                            taskType: `تماس ${directionLabel}`,
                           })}
                         >
                           ایجاد فعالیت

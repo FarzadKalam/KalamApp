@@ -124,4 +124,18 @@ describe('moduleFormRuntime', () => {
     expect(payload.assignee_id).toBe('profile-1');
     expect(payload.employee_id).toBe('employee-1');
   });
+
+  it('removes virtual bot fields before saving employee records', () => {
+    const payload = transformModulePayloadForSave('employees', {
+      first_name: 'علی',
+      bot_default_channel: 'rubika',
+      telegram_group_join_link: 'https://example.com/group',
+      telegram_chat_id: '12345',
+    });
+
+    expect(payload.first_name).toBe('علی');
+    expect(payload.telegram_chat_id).toBe('12345');
+    expect(payload).not.toHaveProperty('bot_default_channel');
+    expect(payload).not.toHaveProperty('telegram_group_join_link');
+  });
 });

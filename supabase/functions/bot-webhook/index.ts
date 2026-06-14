@@ -1527,7 +1527,7 @@ const loadOrgCounterpartyBotGroups = async (
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_groups`);
   url.searchParams.set('org_id', `eq.${orgId}`);
   url.searchParams.set('channel_type', `eq.${channel}`);
-  url.searchParams.set('select', 'id,customer_id,supplier_id,status,group_join_link,group_title,bot_chat_id,metadata');
+  url.searchParams.set('select', 'id,customer_id,supplier_id,employee_id,status,group_join_link,group_title,bot_chat_id,metadata,updated_at,last_inbound_at');
   url.searchParams.set('limit', '200');
   const response = await fetch(url.toString(), {
     method: 'GET',
@@ -1592,16 +1592,20 @@ const loadCounterpartyLabel = async (
   serviceRoleKey: string,
   row: Record<string, any> | null | undefined
 ) => {
-  const targetType = String(row?.customer_id ? 'customers' : row?.supplier_id ? 'suppliers' : '').trim();
-  const targetId = String(row?.customer_id || row?.supplier_id || '').trim();
+  const targetType = String(
+    row?.customer_id ? 'customers' : row?.supplier_id ? 'suppliers' : row?.employee_id ? 'employees' : ''
+  ).trim();
+  const targetId = String(row?.customer_id || row?.supplier_id || row?.employee_id || '').trim();
   if (!targetType || !targetId) return '';
 
   const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${targetType}`);
   url.searchParams.set('id', `eq.${targetId}`);
   if (targetType === 'customers') {
     url.searchParams.set('select', 'full_name,business_name,legal_name,system_code');
-  } else {
+  } else if (targetType === 'suppliers') {
     url.searchParams.set('select', 'business_name,full_name,system_code');
+  } else {
+    url.searchParams.set('select', 'full_name,first_name,last_name,system_code,legacy_system_code');
   }
   url.searchParams.set('limit', '1');
 
@@ -1615,7 +1619,170 @@ const loadCounterpartyLabel = async (
   const item = Array.isArray(rows) ? rows[0] : null;
   if (!item) return '';
 
-  return pick(item?.full_name, item?.business_name, item?.legal_name, item?.system_code);
+  return pick(item?.full_name, item?.business_name, item?.legal_name, [item?.first_name, item?.last_name].filter(Boolean).join(' '), item?.system_code, item?.legacy_system_code);
+};
+
+const loadBotIdentityBindingByChatId = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  orgId: string,
+  channel: BotChannel,
+  chatId: string,
+) => {
+  const normalizedChatId = String(chatId || '').trim();
+  if (!orgId || !normalizedChatId) return null;
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/bot_chat_identity_bindings`);
+  url.searchParams.set('org_id', `eq.${orgId}`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('chat_id', `eq.${normalizedChatId}`);
+  url.searchParams.set('select', 'id,target_module_id,target_record_id,profile_id,display_name,username,phone_number,last_seen_at');
+  url.searchParams.set('limit', '1');
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    console.warn('[bot-webhook] could not load chat identity binding', raw);
+    return null;
+  }
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
+const upsertCounterpartyBotDirectThread = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: Record<string, any>,
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_threads`);
+  url.searchParams.set('on_conflict', 'org_id,channel_type,chat_id');
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'resolution=merge-duplicates,return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not upsert direct thread');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
+const patchCounterpartyBotDirectThread = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  id: string,
+  payload: Record<string, any>,
+) => {
+  const normalizedId = String(id || '').trim();
+  if (!normalizedId) return null;
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_threads`);
+  url.searchParams.set('id', `eq.${normalizedId}`);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not patch direct thread');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
+const loadConversationCounterpartyBotDirectMessages = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    directThreadId,
+    channel,
+    chatId,
+    limit = 40,
+  }: {
+    orgId?: string | null;
+    directThreadId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    limit?: number;
+  }
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_messages`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('select', 'id,direct_thread_id,chat_id,provider_message_id,created_at,content_text,file_url,file_name,mime_type,message_type,payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', String(Math.max(1, Math.min(limit, 80))));
+  const normalizedThreadId = String(directThreadId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
+  const normalizedOrgId = String(orgId || '').trim();
+  if (normalizedThreadId) {
+    url.searchParams.set('direct_thread_id', `eq.${normalizedThreadId}`);
+  } else if (normalizedChatId) {
+    url.searchParams.set('chat_id', `eq.${normalizedChatId}`);
+  }
+  if (normalizedOrgId) {
+    url.searchParams.set('org_id', `eq.${normalizedOrgId}`);
+  }
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    console.warn('[bot-webhook] could not load conversation direct messages', raw);
+    return [];
+  }
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
+};
+
+const insertCounterpartyBotDirectMessage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  payload: Record<string, any>,
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_messages`);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not insert direct bot message');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+};
+
+const patchCounterpartyBotDirectMessage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  messageId: string,
+  payload: Record<string, any>,
+) => {
+  const normalizedMessageId = String(messageId || '').trim();
+  if (!normalizedMessageId) return null;
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_messages`);
+  url.searchParams.set('id', `eq.${normalizedMessageId}`);
+  const response = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: {
+      ...getServiceHeaders(serviceRoleKey),
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify(payload),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'Could not patch direct bot message');
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed[0] || null : parsed || null;
 };
 
 const sendBotConnectionConfirmation = async ({
@@ -1891,6 +2058,102 @@ const loadCounterpartyBotMessageByMediaGroupId = async (
   }) || null;
 };
 
+const loadCounterpartyBotDirectMessageByProviderId = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    directThreadId,
+    channel,
+    chatId,
+    providerMessageId,
+  }: {
+    orgId?: string | null;
+    directThreadId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    providerMessageId?: string | null;
+  }
+) => {
+  const normalizedProviderMessageId = String(providerMessageId || '').trim();
+  if (!normalizedProviderMessageId) return null;
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_direct_messages`);
+  url.searchParams.set('provider_message_id', `eq.${normalizedProviderMessageId}`);
+  url.searchParams.set('channel_type', `eq.${channel}`);
+  url.searchParams.set('select', 'id,direct_thread_id,chat_id,provider_message_id,created_at,content_text,file_url,file_name,mime_type,message_type,payload');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '1');
+  const normalizedThreadId = String(directThreadId || '').trim();
+  const normalizedChatId = String(chatId || '').trim();
+  const normalizedOrgId = String(orgId || '').trim();
+  if (normalizedThreadId) {
+    url.searchParams.set('direct_thread_id', `eq.${normalizedThreadId}`);
+  } else if (normalizedChatId) {
+    url.searchParams.set('chat_id', `eq.${normalizedChatId}`);
+  }
+  if (normalizedOrgId) {
+    url.searchParams.set('org_id', `eq.${normalizedOrgId}`);
+  }
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  if (!response.ok) {
+    console.warn('[bot-webhook] could not resolve replied direct bot message', raw);
+    return null;
+  }
+  const parsed = raw ? JSON.parse(raw) : [];
+  const exactMatch = Array.isArray(parsed) ? parsed[0] || null : parsed || null;
+  if (exactMatch) return exactMatch;
+  const recentRows = await loadConversationCounterpartyBotDirectMessages(supabaseUrl, serviceRoleKey, {
+    orgId,
+    directThreadId,
+    channel,
+    chatId,
+    limit: 50,
+  });
+  return recentRows.find((row: any) => {
+    const payloadBox = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const providerIds = Array.isArray((payloadBox as any)?.provider_message_ids)
+      ? (payloadBox as any).provider_message_ids
+      : [];
+    return providerIds.some((value: any) => String(value || '').trim() === normalizedProviderMessageId);
+  }) || null;
+};
+
+const loadCounterpartyBotDirectMessageByMediaGroupId = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  {
+    orgId,
+    directThreadId,
+    channel,
+    chatId,
+    mediaGroupId,
+  }: {
+    orgId?: string | null;
+    directThreadId?: string | null;
+    channel: BotChannel;
+    chatId?: string | null;
+    mediaGroupId?: string | null;
+  }
+) => {
+  const normalizedMediaGroupId = String(mediaGroupId || '').trim();
+  if (!normalizedMediaGroupId) return null;
+  const recentRows = await loadConversationCounterpartyBotDirectMessages(supabaseUrl, serviceRoleKey, {
+    orgId,
+    directThreadId,
+    channel,
+    chatId,
+    limit: 60,
+  });
+  return recentRows.find((row: any) => {
+    const payloadBox = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    return String((payloadBox as any)?.media_group_id || '').trim() === normalizedMediaGroupId;
+  }) || null;
+};
+
 const syncCounterpartyBotGroupByInbound = async ({
   supabaseUrl,
   serviceRoleKey,
@@ -1922,7 +2185,24 @@ const syncCounterpartyBotGroupByInbound = async ({
       return expMs >= nowMs;
     };
 
-    const matchedByChatId = rows.find((row: any) => String(row?.bot_chat_id || '').trim() === chatId);
+    const matchedByChatIdCandidates = rows.filter((row: any) => String(row?.bot_chat_id || '').trim() === chatId);
+    const pickBestChatIdMatch = (candidates: any[]) => {
+      if (candidates.length <= 1) return candidates[0] || null;
+      const exactTitleCandidates = chatTitleToken
+        ? candidates.filter((row: any) => normalizePlainToken(row?.group_title) === chatTitleToken)
+        : [];
+      if (exactTitleCandidates.length === 1) return exactTitleCandidates[0];
+      const lastBoundTitleCandidates = chatTitleToken
+        ? candidates.filter((row: any) => normalizePlainToken(row?.metadata?.last_bound_chat_title) === chatTitleToken)
+        : [];
+      if (lastBoundTitleCandidates.length === 1) return lastBoundTitleCandidates[0];
+      return [...candidates].sort((left: any, right: any) => {
+        const leftTime = new Date(left?.last_inbound_at || left?.updated_at || 0).getTime() || 0;
+        const rightTime = new Date(right?.last_inbound_at || right?.updated_at || 0).getTime() || 0;
+        return rightTime - leftTime;
+      })[0] || null;
+    };
+    const matchedByChatId = pickBestChatIdMatch(matchedByChatIdCandidates);
     const captureActiveRows = rows.filter((row: any) => !String(row?.bot_chat_id || '').trim() && isCaptureActive(row));
     const matchedByCaptureSingle = captureActiveRows.length === 1 ? captureActiveRows[0] : null;
     const matchedByActivationRows = rows.filter((row: any) => {
@@ -1985,6 +2265,22 @@ const syncCounterpartyBotGroupByInbound = async ({
     }
 
     const matchedChatId = String(matched?.bot_chat_id || '').trim();
+    const clearDuplicateBindings = async (keepId: string) => {
+      const duplicateRows = matchedByChatIdCandidates.filter((row: any) => String(row?.id || '').trim() !== keepId);
+      for (const duplicate of duplicateRows) {
+        const duplicateMetadata = duplicate?.metadata && typeof duplicate.metadata === 'object' ? duplicate.metadata : {};
+        await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, String(duplicate.id), {
+          bot_chat_id: null,
+          status: 'pending_join',
+          metadata: {
+            ...duplicateMetadata,
+            duplicate_chat_binding_cleared_at: new Date().toISOString(),
+            duplicate_chat_binding_previous_chat_id: chatId || null,
+            duplicate_chat_binding_kept_group_id: keepId,
+          },
+        });
+      }
+    };
     if (matchedChatId) {
       const patchedExisting = await patchCounterpartyBotGroup(
         supabaseUrl,
@@ -1992,6 +2288,7 @@ const syncCounterpartyBotGroupByInbound = async ({
         String(matched.id),
         nextPatch
       );
+      await clearDuplicateBindings(String(matched.id));
       return {
         group: patchedExisting || matched,
         activatedNow: false,
@@ -2006,6 +2303,7 @@ const syncCounterpartyBotGroupByInbound = async ({
       { onlyIfBotChatIdNull: true }
     );
     if (claimedActivation?.id) {
+      await clearDuplicateBindings(String(claimedActivation.id));
       return {
         group: claimedActivation,
         activatedNow: true,
@@ -2059,6 +2357,8 @@ Deno.serve(async (req) => {
     const payload = await readJsonBody(req);
     const integration = await findIntegrationBySecret(supabaseUrl, serviceRoleKey, channel, secret);
     const contact = extractContact(payload);
+    const orgId = String(integration?.org_id || '').trim();
+    const senderChatId = String(contact?.senderId || contact?.chatId || '').trim();
 
     if (!contact.chatId) {
       return json(200, {
@@ -2083,14 +2383,73 @@ Deno.serve(async (req) => {
     if (contact.text) rowPayload.last_message_text = contact.text;
 
     const saved = await upsertInboundContact(supabaseUrl, serviceRoleKey, rowPayload);
+    let senderSaved = saved;
+    if (senderChatId && senderChatId !== String(contact.chatId || '').trim()) {
+      const senderPayload = {
+        ...rowPayload,
+        chat_id: senderChatId,
+        display_name: String(contact.displayName || '').trim() || null,
+        username: String(contact.username || '').trim() || null,
+        phone_number: String(contact.phoneNumber || '').trim() || null,
+      };
+      senderSaved = await upsertInboundContact(supabaseUrl, serviceRoleKey, senderPayload);
+    }
+    const senderBinding = senderChatId
+      ? await loadBotIdentityBindingByChatId(supabaseUrl, serviceRoleKey, orgId, channel, senderChatId)
+      : null;
     const syncResult = await syncCounterpartyBotGroupByInbound({
       supabaseUrl,
       serviceRoleKey,
-      orgId: String(integration?.org_id || ''),
+      orgId,
       channel,
       contact,
     });
     const matchedGroup = syncResult?.group || null;
+    const matchedGroupChatId = String(matchedGroup?.bot_chat_id || '').trim();
+    const shouldBlockDirectThreadUpsert = Boolean(
+      contact?.isGroup
+      || !senderChatId
+      || (matchedGroupChatId && senderChatId === matchedGroupChatId)
+      || (matchedGroup?.id && String(contact?.chatId || '').trim() && senderChatId === String(contact.chatId || '').trim())
+    );
+    const directThread = !shouldBlockDirectThreadUpsert && senderChatId
+      ? await upsertCounterpartyBotDirectThread(supabaseUrl, serviceRoleKey, {
+          org_id: integration.org_id || null,
+          channel_type: channel,
+          chat_id: senderChatId,
+          binding_id: senderBinding?.id || null,
+          target_module_id: senderBinding?.target_module_id || null,
+          target_record_id: senderBinding?.target_record_id || null,
+          customer_id: String(senderBinding?.target_module_id || '').trim() === 'customers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          supplier_id: String(senderBinding?.target_module_id || '').trim() === 'suppliers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          employee_id: String(senderBinding?.target_module_id || '').trim() === 'employees' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          profile_id: senderBinding?.profile_id || null,
+          display_name: String(senderBinding?.display_name || contact.displayName || '').trim() || null,
+          username: String(contact.username || senderBinding?.username || '').trim() || null,
+          phone_number: String(contact.phoneNumber || senderBinding?.phone_number || '').trim() || null,
+          last_seen_at: new Date().toISOString(),
+          last_inbound_at: new Date().toISOString(),
+          last_message_at: new Date().toISOString(),
+          last_message_preview: String(contact.text || '').trim() || null,
+        })
+      : null;
+    if (directThread?.id && !contact?.isGroup) {
+      try {
+        const existingMetadata = directThread?.metadata && typeof directThread.metadata === 'object'
+          ? directThread.metadata
+          : {};
+        await patchCounterpartyBotDirectThread(supabaseUrl, serviceRoleKey, String(directThread.id), {
+          metadata: {
+            ...existingMetadata,
+            direct_chat_verified: true,
+            direct_chat_verified_at: new Date().toISOString(),
+            direct_chat_verified_channel: channel,
+          },
+        });
+      } catch (error) {
+        console.warn('[bot-webhook] could not persist direct chat verification metadata', error);
+      }
+    }
 
     const shouldSendConnectionAck = Boolean(
       syncResult?.activatedNow === true
@@ -2107,7 +2466,7 @@ Deno.serve(async (req) => {
           settings: (integration?.settings || {}) as IntegrationSettings,
           chatId: String(contact?.chatId || '').trim(),
           counterpartyLabel: label || (
-            matchedGroup?.customer_id ? 'مشتری' : matchedGroup?.supplier_id ? 'تامین کننده' : 'طرف‌حساب'
+            matchedGroup?.customer_id ? 'مشتری' : matchedGroup?.supplier_id ? 'تامین کننده' : matchedGroup?.employee_id ? 'کارمند' : 'طرف‌حساب'
           ),
         });
         await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, String(matchedGroup.id), {
@@ -2124,6 +2483,7 @@ Deno.serve(async (req) => {
     }
 
     try {
+      const isDirectConversation = !contact?.isGroup && Boolean(directThread?.id);
       const mediaEnvelope = extractMediaEnvelope(payload);
       const messageIdentity = extractMessageIdentity(payload);
       const providerMessageIds = dedupeTextList([
@@ -2131,31 +2491,61 @@ Deno.serve(async (req) => {
         ...mediaEnvelope.providerMessageIds,
       ]);
       const replyTarget = messageIdentity.replyProviderMessageId
-        ? await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
-          orgId: integration.org_id || null,
-          botGroupId: matchedGroup?.id || null,
-          channel,
-          chatId: String(contact.chatId || '').trim() || null,
-          providerMessageId: messageIdentity.replyProviderMessageId,
-        })
+        ? (
+          isDirectConversation
+            ? await loadCounterpartyBotDirectMessageByProviderId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                directThreadId: directThread?.id || null,
+                channel,
+                chatId: senderChatId || null,
+                providerMessageId: messageIdentity.replyProviderMessageId,
+              })
+            : await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                botGroupId: matchedGroup?.id || null,
+                channel,
+                chatId: String(contact.chatId || '').trim() || null,
+                providerMessageId: messageIdentity.replyProviderMessageId,
+              })
+        )
         : null;
       const existingMessage = providerMessageIds[0]
-        ? await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
-          orgId: integration.org_id || null,
-          botGroupId: matchedGroup?.id || null,
-          channel,
-          chatId: String(contact.chatId || '').trim() || null,
-          providerMessageId: providerMessageIds[0],
-        })
+        ? (
+          isDirectConversation
+            ? await loadCounterpartyBotDirectMessageByProviderId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                directThreadId: directThread?.id || null,
+                channel,
+                chatId: senderChatId || null,
+                providerMessageId: providerMessageIds[0],
+              })
+            : await loadCounterpartyBotMessageByProviderId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                botGroupId: matchedGroup?.id || null,
+                channel,
+                chatId: String(contact.chatId || '').trim() || null,
+                providerMessageId: providerMessageIds[0],
+              })
+        )
         : null;
       const mediaGroupTarget = mediaEnvelope.mediaGroupId
-        ? await loadCounterpartyBotMessageByMediaGroupId(supabaseUrl, serviceRoleKey, {
-          orgId: integration.org_id || null,
-          botGroupId: matchedGroup?.id || null,
-          channel,
-          chatId: String(contact.chatId || '').trim() || null,
-          mediaGroupId: mediaEnvelope.mediaGroupId,
-        })
+        ? (
+          isDirectConversation
+            ? await loadCounterpartyBotDirectMessageByMediaGroupId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                directThreadId: directThread?.id || null,
+                channel,
+                chatId: senderChatId || null,
+                mediaGroupId: mediaEnvelope.mediaGroupId,
+              })
+            : await loadCounterpartyBotMessageByMediaGroupId(supabaseUrl, serviceRoleKey, {
+                orgId: integration.org_id || null,
+                botGroupId: matchedGroup?.id || null,
+                channel,
+                chatId: String(contact.chatId || '').trim() || null,
+                mediaGroupId: mediaEnvelope.mediaGroupId,
+              })
+        )
         : null;
       const normalizedOrgId = String(integration?.org_id || '').trim() || 'unknown_org';
       const mediaItems = mediaEnvelope.items.length > 0
@@ -2208,6 +2598,16 @@ Deno.serve(async (req) => {
       const mergeTarget = mediaGroupTarget || existingMessage || null;
       const rawPayload = payload && typeof payload === 'object' ? payload : {};
       const baseContentText = String(contact.text || '').trim() || null;
+      const senderPayload = {
+        ...rawPayload,
+        media_pipeline_build: BOT_WEBHOOK_BUILD,
+        sender_id: String(contact.senderId || '').trim() || null,
+        sender_display_name: String(contact.displayName || '').trim() || null,
+        username: String(contact.username || '').trim() || null,
+        phone_number: String(contact.phoneNumber || '').trim() || null,
+        sender_target_module_id: senderBinding?.target_module_id || null,
+        sender_target_record_id: senderBinding?.target_record_id || null,
+      };
 
       if (mergeTarget) {
         const existingPayload = mergeTarget?.payload && typeof mergeTarget.payload === 'object' ? mergeTarget.payload : {};
@@ -2229,7 +2629,7 @@ Deno.serve(async (req) => {
           }))
         );
         const mergedPrimaryAttachment = mergedAttachments[0] || primaryAttachment || null;
-        await patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, String(mergeTarget.id || ''), {
+        const mergePayload = {
           message_type: resolveCompositeMediaMessageType(
             mergedAttachmentItems,
             String(mergeTarget?.message_type || mediaEnvelope.messageType || 'text').trim() || 'text',
@@ -2240,11 +2640,7 @@ Deno.serve(async (req) => {
           mime_type: String(mergedPrimaryAttachment?.mime_type || mergeTarget?.mime_type || '').trim() || null,
           payload: {
             ...existingPayload,
-            ...rawPayload,
-            media_pipeline_build: BOT_WEBHOOK_BUILD,
-            sender_id: String(contact.senderId || '').trim() || null,
-            sender_display_name: String(contact.displayName || '').trim() || null,
-            username: String(contact.username || '').trim() || null,
+            ...senderPayload,
             media_group_id: mediaEnvelope.mediaGroupId || String((existingPayload as any)?.media_group_id || '').trim() || null,
             media_file_id: String(primaryAttachment?.media_file_id || (existingPayload as any)?.media_file_id || '').trim() || null,
             media_stored: Boolean((existingPayload as any)?.media_stored) || Boolean(primaryStoredEntry?.mediaStored?.stored),
@@ -2256,13 +2652,15 @@ Deno.serve(async (req) => {
             reply_provider_message_id: String((existingPayload as any)?.reply_provider_message_id || messageIdentity.replyProviderMessageId || '').trim() || null,
             reply_to_message_id: String((existingPayload as any)?.reply_to_message_id || replyTarget?.id || '').trim() || null,
           },
-        });
+        };
+        if (isDirectConversation) {
+          await patchCounterpartyBotDirectMessage(supabaseUrl, serviceRoleKey, String(mergeTarget.id || ''), mergePayload);
+        } else {
+          await patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, String(mergeTarget.id || ''), mergePayload);
+        }
       } else {
-        await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+        const insertPayloadBase = {
           org_id: integration.org_id || null,
-          bot_group_id: matchedGroup?.id || null,
-          customer_id: matchedGroup?.customer_id || null,
-          supplier_id: matchedGroup?.supplier_id || null,
           channel_type: channel,
           direction: 'inbound',
           message_type: resolveCompositeMediaMessageType(attachmentEntries.map((item: any) => normalizeExtractedMedia({
@@ -2272,18 +2670,14 @@ Deno.serve(async (req) => {
             mimeType: String(item?.mime_type || '').trim() || null,
             fileId: String(item?.media_file_id || '').trim() || null,
           })), mediaEnvelope.messageType),
-          chat_id: String(contact.chatId || '').trim() || null,
+          chat_id: isDirectConversation ? senderChatId || null : String(contact.chatId || '').trim() || null,
           provider_message_id: messageIdentity.providerMessageId || null,
           content_text: baseContentText,
           file_url: String(primaryAttachment?.url || '').trim() || null,
           file_name: primaryAttachment?.name || (resolvedMediaEntries[0]?.mediaStored?.fileName || resolvedMediaEntries[0]?.mediaInfo?.fileName || null),
           mime_type: primaryAttachment?.mime_type || (resolvedMediaEntries[0]?.mediaStored?.mimeType || resolvedMediaEntries[0]?.mediaInfo?.mimeType || null),
           payload: {
-            ...rawPayload,
-            media_pipeline_build: BOT_WEBHOOK_BUILD,
-            sender_id: String(contact.senderId || '').trim() || null,
-            sender_display_name: String(contact.displayName || '').trim() || null,
-            username: String(contact.username || '').trim() || null,
+            ...senderPayload,
             media_group_id: mediaEnvelope.mediaGroupId || null,
             media_file_id: String(primaryAttachment?.media_file_id || '').trim() || null,
             media_stored: Boolean(primaryStoredEntry?.mediaStored?.stored),
@@ -2295,6 +2689,45 @@ Deno.serve(async (req) => {
             reply_provider_message_id: messageIdentity.replyProviderMessageId || null,
             reply_to_message_id: replyTarget?.id || null,
           },
+        };
+        if (isDirectConversation) {
+          await insertCounterpartyBotDirectMessage(supabaseUrl, serviceRoleKey, {
+            ...insertPayloadBase,
+            direct_thread_id: directThread?.id || null,
+            target_module_id: senderBinding?.target_module_id || null,
+            target_record_id: senderBinding?.target_record_id || null,
+            customer_id: String(senderBinding?.target_module_id || '').trim() === 'customers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+            supplier_id: String(senderBinding?.target_module_id || '').trim() === 'suppliers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+            employee_id: String(senderBinding?.target_module_id || '').trim() === 'employees' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+            profile_id: senderBinding?.profile_id || null,
+          });
+        } else {
+          await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+            ...insertPayloadBase,
+            bot_group_id: matchedGroup?.id || null,
+            customer_id: matchedGroup?.customer_id || null,
+            supplier_id: matchedGroup?.supplier_id || null,
+            employee_id: matchedGroup?.employee_id || null,
+          });
+        }
+      }
+
+      if (isDirectConversation && directThread?.id) {
+        await patchCounterpartyBotDirectThread(supabaseUrl, serviceRoleKey, String(directThread.id), {
+          binding_id: senderBinding?.id || null,
+          target_module_id: senderBinding?.target_module_id || null,
+          target_record_id: senderBinding?.target_record_id || null,
+          customer_id: String(senderBinding?.target_module_id || '').trim() === 'customers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          supplier_id: String(senderBinding?.target_module_id || '').trim() === 'suppliers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          employee_id: String(senderBinding?.target_module_id || '').trim() === 'employees' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+          profile_id: senderBinding?.profile_id || null,
+          display_name: String(senderBinding?.display_name || contact.displayName || '').trim() || null,
+          username: String(contact.username || senderBinding?.username || '').trim() || null,
+          phone_number: String(contact.phoneNumber || senderBinding?.phone_number || '').trim() || null,
+          last_seen_at: new Date().toISOString(),
+          last_inbound_at: new Date().toISOString(),
+          last_message_at: new Date().toISOString(),
+          last_message_preview: baseContentText || String(primaryAttachment?.name || '').trim() || null,
         });
       }
     } catch (error) {
@@ -2308,7 +2741,9 @@ Deno.serve(async (req) => {
       is_group: contact?.isGroup === true,
       chat_title: String(contact?.chatTitle || '').trim() || null,
       contact: saved,
+      sender_contact: senderSaved,
       matched_group_id: matchedGroup?.id || null,
+      direct_thread_id: directThread?.id || null,
     });
   } catch (error: any) {
     console.error('[bot-webhook] error', String(error?.message || error));

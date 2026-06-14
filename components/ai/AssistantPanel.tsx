@@ -15,6 +15,8 @@ import ProfileAvatar from '../common/ProfileAvatar';
 import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapabilityComposerActions';
+import AiComposeModelBar from './AiComposeModelBar';
+import type { AiMediaSettings, AiMediaSourceImage } from './AiMediaSettingsPopover';
 import AiMessageAttachmentPreview from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
@@ -153,9 +155,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const [fileSending, setFileSending] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
   const [generatingVoiceOutput, setGeneratingVoiceOutput] = useState(false);
+  const [generatingVideo, setGeneratingVideo] = useState(false);
+  const [generatingDocument, setGeneratingDocument] = useState(false);
   const [currentUserView, setCurrentUserView] = useState({ name: 'شما', avatarUrl: null as string | null });
   const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
+  const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
+  const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [pendingProcessSelectionId, setPendingProcessSelectionId] = useState<string | null>(null);
@@ -165,6 +171,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAutoPromptSignatureRef = useRef<string>('');
+  const modelOverrideRef = useRef<string | null>(null);
 
   useEffect(() => {
     const handleContextUpdate = (event: Event) => {
@@ -295,6 +302,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   }), [contextWithSelection]);
   const imageMode = selectedCapabilities.includes('image_generation');
   const voiceOutputMode = selectedCapabilities.includes('voice_output');
+  const videoMode = selectedCapabilities.includes('video_generation');
+  const documentMode = selectedCapabilities.includes('document_generation');
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     setSelectedCapabilities(next);
     const wantsProcessOperation = next.includes('process_operation');
@@ -470,6 +479,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         inputKind,
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : recordCreationSchema ? {
         action: 'create_record_from_prompt',
@@ -479,6 +489,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         inputKind,
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
         recordCreation: recordCreationSchema,
         previewOnly: true,
       } : {
@@ -495,6 +506,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         inputKind,
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
       });
       if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
@@ -571,6 +583,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         prompt: text,
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
       });
       if (data.threadId) setThreadId(String(data.threadId));
       setMessages((prev) => [
@@ -592,7 +607,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     } finally {
       setGeneratingImage(false);
     }
-  }, [callAssistant, contextWithSelection, generatingImage, input, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingImage, input, mediaSettings, mediaSourceImages, message, submitting, threadId]);
 
   const submitVoiceOutputPrompt = useCallback(async () => {
     const text = input.trim();
@@ -614,6 +629,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         text,
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
       });
       if (data.threadId) setThreadId(String(data.threadId));
       setMessages((prev) => [
@@ -635,7 +652,125 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     } finally {
       setGeneratingVoiceOutput(false);
     }
-  }, [callAssistant, contextWithSelection, generatingVoiceOutput, input, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingVoiceOutput, input, mediaSettings, message, submitting, threadId]);
+
+  const submitVideoPrompt = useCallback(async () => {
+    const text = input.trim();
+    if (!text || generatingVideo || submitting) return;
+    setInput('');
+    const userMessage: ChatMessage = { id: `user-video-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'video_prompt' } };
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-video-pending-${Date.now()}`,
+      role: 'assistant',
+      content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['video_generation'] },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
+    setGeneratingVideo(true);
+    try {
+      const data = await callAssistant({
+        action: 'generate_video',
+        prompt: text,
+        threadId,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+      });
+      if (data.threadId) setThreadId(String(data.threadId));
+      const videoId = String(data?.videoId || '').trim();
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      let finalStatus = String(data?.status || 'processing');
+      let fileResult: any = null;
+      let usage: any = null;
+      for (let attempt = 0; attempt < 60 && videoId; attempt += 1) {
+        if (finalStatus === 'completed' || finalStatus === 'failed') break;
+        await sleep(5000);
+        try {
+          const poll = await callAssistant({
+            action: 'get_video_status',
+            videoId,
+            messageId: data?.messageId || null,
+            threadId: data?.threadId || threadId,
+            prompt: text,
+            context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+          });
+          finalStatus = String(poll?.status || 'processing');
+          if (finalStatus === 'completed') { fileResult = poll?.file || null; usage = poll?.usage || null; break; }
+          if (finalStatus === 'failed') break;
+        } catch {
+          // transient — keep polling
+        }
+      }
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
+        {
+          id: data.messageId || `assistant-video-${Date.now()}`,
+          role: 'assistant',
+          content: finalStatus === 'completed' ? 'ویدیو آماده شد.' : finalStatus === 'failed' ? 'ساخت ویدیو ناموفق بود.' : 'ساخت ویدیو طول کشید؛ بعداً در همین گفتگو در دسترس خواهد بود.',
+          metadata: { usage, file: fileResult, capability: 'video_generation' },
+          provider: data.provider || null,
+          model: data.model || null,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (error: any) {
+      setInput(text);
+      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+      message.error(toFaErrorMessage(error, 'تولید ویدیو ناموفق بود.'));
+    } finally {
+      setGeneratingVideo(false);
+    }
+  }, [callAssistant, contextWithSelection, generatingVideo, input, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+
+  const submitDocumentPrompt = useCallback(async () => {
+    const text = input.trim();
+    if (!text || generatingDocument || submitting) return;
+    const format = String(mediaSettings.format || 'docx');
+    setInput('');
+    const userMessage: ChatMessage = { id: `user-doc-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'document_prompt' } };
+    const thinkingMessage: ChatMessage = {
+      id: `assistant-doc-pending-${Date.now()}`,
+      role: 'assistant',
+      content: `در حال ساخت فایل ${format.toUpperCase()}...`,
+      created_at: new Date().toISOString(),
+      metadata: { pending_status: true, capabilities: ['document_generation'] },
+    };
+    setMessages((prev) => [...prev, userMessage, thinkingMessage]);
+    setGeneratingDocument(true);
+    try {
+      const data = await callAssistant({
+        action: 'generate_document',
+        prompt: text,
+        format,
+        threadId,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+      });
+      if (data.threadId) setThreadId(String(data.threadId));
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinkingMessage.id),
+        {
+          id: data.messageId || `assistant-doc-${Date.now()}`,
+          role: 'assistant',
+          content: String(data.answer || '').trim() || 'فایل آماده شد.',
+          metadata: { usage: data.usage, file: data.file, capability: 'document_generation', format: data.format || format },
+          provider: data.provider || null,
+          model: data.model || null,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    } catch (error: any) {
+      setInput(text);
+      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+      message.error(toFaErrorMessage(error, 'ساخت فایل ناموفق بود.'));
+    } finally {
+      setGeneratingDocument(false);
+    }
+  }, [callAssistant, contextWithSelection, generatingDocument, input, mediaSettings, message, submitting, threadId]);
 
   const submitUploadedFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
     if (fileSending || submitting) return;
@@ -680,6 +815,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : recordCreationSchema ? {
         action: 'create_record_from_prompt',
@@ -701,6 +837,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
         recordCreation: recordCreationSchema,
         previewOnly: true,
       } : {
@@ -721,6 +858,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
         threadId,
         context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
       });
       if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
@@ -973,7 +1111,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
           onPressEnter={(event) => {
             if (!event.shiftKey) {
               event.preventDefault();
-              void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
+              void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
             }
           }}
           placeholder="سوال خود را بنویسید..."
@@ -981,12 +1119,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
           className="!text-[12px] !leading-5"
           disabled={context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId}
         />
+        <div className="mt-1">
+          <AiComposeModelBar
+            selectedCapabilities={selectedCapabilities}
+            contextMode={context.mode}
+            onModelOverrideChange={(model) => { modelOverrideRef.current = model; }}
+          />
+        </div>
         <div className="mt-2 flex items-center justify-end gap-2">
           <AiCapabilityComposerActions
             selected={selectedCapabilities}
             onChange={handleComposerCapabilitiesChange}
             capabilityAvailability={capabilityAvailability}
-            loading={submitting || generatingImage || generatingVoiceOutput}
+            loading={submitting || generatingImage || generatingVoiceOutput || generatingVideo || generatingDocument}
             moduleId={fileRecordScope.moduleId}
             recordId={fileRecordScope.recordId}
             onVoiceSend={submitVoice}
@@ -997,16 +1142,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             recordCreationModuleOptions={recordCreationModuleOptions}
             recordCreationTargetModuleId={recordCreationTargetModuleId}
             onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
+            mediaSettings={mediaSettings}
+            onMediaSettingsChange={setMediaSettings}
+            mediaSourceImages={mediaSourceImages}
+            onMediaSourceImagesChange={setMediaSourceImages}
+            onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
           />
           <Button
             type="primary"
             icon={<SendOutlined />}
-            loading={voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
+            loading={documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
             disabled={!input.trim() || (context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId)}
-            onClick={() => void (voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
+            onClick={() => void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
-            {voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
+            {documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
           </Button>
         </div>
       </div>

@@ -1,176 +1,172 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { App, Button, Empty, Input, Modal, Skeleton, Tag } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
-import { supabase } from '../../supabaseClient';
-import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import React from 'react';
+import { Alert, Input, Modal, Radio, Space, Tag } from 'antd';
+import type { PhoneBindTargetModuleId } from '../../utils/phoneIdentityBindings';
+import AdaptiveSelectField from '../AdaptiveSelectField';
+import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
-const ENTITY_LABELS: Record<string, string> = {
-  customers: 'مشتری',
-  suppliers: 'تامین‌کننده',
-  profiles: 'کاربر سازمان',
-  employees: 'کارمند',
-  marketing_leads: 'سرنخ',
-};
-
-const ENTITY_COLORS: Record<string, string> = {
-  customers: 'blue',
-  suppliers: 'green',
-  profiles: 'purple',
-  employees: 'orange',
-  marketing_leads: 'cyan',
-};
-
-const ENTITY_PRIORITY: Record<string, number> = {
-  profiles: 1,
-  employees: 2,
-  customers: 3,
-  suppliers: 4,
-  marketing_leads: 9,
-};
-
-type Candidate = {
-  id: string;
-  entity_type: string;
-  entity_id: string;
-  display_title: string | null;
-  label: string | null;
-};
-
-export type PhoneMatchSelection = {
-  entityType: string;
-  entityId: string;
-  displayTitle: string;
+type TargetOption = {
+  value: string;
+  label: string;
+  meta?: string | null;
 };
 
 type Props = {
-  visible: boolean;
-  onClose: () => void;
-  phoneNumberId: string | null;
+  open: boolean;
+  loading?: boolean;
+  saving?: boolean;
   phone: string;
-  onSelect: (selection: PhoneMatchSelection) => Promise<void> | void;
+  existingBindingLabel?: string | null;
+  phoneMatchStatus?: string | null;
+  targetModuleId: PhoneBindTargetModuleId;
+  onChangeTargetModuleId: (value: PhoneBindTargetModuleId) => void;
+  targetRecordId: string | null;
+  onChangeTargetRecordId: (value: string | null) => void;
+  targetOptions: TargetOption[];
+  searchValue: string;
+  onChangeSearchValue: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void | Promise<void>;
+};
+
+const MODULE_OPTIONS: Array<{ label: string; value: PhoneBindTargetModuleId }> = [
+  { label: 'مشتری', value: 'customers' },
+  { label: 'تأمین‌کننده', value: 'suppliers' },
+  { label: 'کارمند', value: 'employees' },
+];
+const PHONE_BIND_MODAL_Z_INDEX = 15220;
+const PHONE_BIND_SELECT_Z_INDEX = 15320;
+
+const resolveStatusLabel = (value: string | null | undefined) => {
+  if (value === 'ambiguous') return 'این شماره هنوز به مخاطب اصلی وصل نشده است.';
+  if (value === 'unknown') return 'این شماره در مخاطبین سیستم شناخته نشده است.';
+  if (value === 'manual') return 'این شماره قبلا به صورت دستی متصل شده است.';
+  return '';
 };
 
 const PhoneMatchPickerModal: React.FC<Props> = ({
-  visible,
-  onClose,
-  phoneNumberId,
+  open,
+  loading = false,
+  saving = false,
   phone,
-  onSelect,
+  existingBindingLabel,
+  phoneMatchStatus,
+  targetModuleId,
+  onChangeTargetModuleId,
+  targetRecordId,
+  onChangeTargetRecordId,
+  targetOptions,
+  searchValue,
+  onChangeSearchValue,
+  onClose,
+  onSave,
 }) => {
-  const { message } = App.useApp();
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState('');
-
-  useEffect(() => {
-    if (!visible) {
-      setCandidates([]);
-      setSearch('');
-      return;
-    }
-    if (!phoneNumberId) return;
-    setLoading(true);
-    supabase
-      .from('phone_number_links')
-      .select('id,entity_type,entity_id,display_title,label')
-      .eq('phone_number_id', phoneNumberId)
-      .then(({ data, error }) => {
-        setLoading(false);
-        if (error) {
-          void message.error(toFaErrorMessage(error, 'خطا در بارگذاری مخاطبین'));
-          return;
-        }
-        setCandidates(data || []);
-      });
-  }, [visible, phoneNumberId, message]);
-
-  const filtered = candidates
-    .filter((c) => {
-      const q = String(search || '').trim().toLowerCase();
-      if (!q) return true;
-      return (
-        String(c.display_title || '').toLowerCase().includes(q)
-        || String(c.label || '').toLowerCase().includes(q)
-        || (ENTITY_LABELS[c.entity_type] || '').includes(q)
-      );
-    })
-    .sort((left, right) => {
-      const leftPriority = ENTITY_PRIORITY[left.entity_type] || 99;
-      const rightPriority = ENTITY_PRIORITY[right.entity_type] || 99;
-      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
-      return String(left.display_title || '').localeCompare(String(right.display_title || ''), 'fa');
-    });
-
-  const handleSelect = useCallback(async (candidate: Candidate) => {
-    setSaving(true);
-    try {
-      await onSelect({
-        entityType: candidate.entity_type,
-        entityId: candidate.entity_id,
-        displayTitle: candidate.display_title || candidate.label || candidate.entity_id,
-      });
-      onClose();
-    } catch (error: any) {
-      void message.error(toFaErrorMessage(error, 'خطا در ذخیره انتخاب'));
-    } finally {
-      setSaving(false);
-    }
-  }, [message, onClose, onSelect]);
+  const normalizedTargetOptions = React.useMemo(
+    () => targetOptions.map((option) => ({
+      value: option.value,
+      label: option.label,
+      meta: option.meta || '',
+      searchText: `${option.label} ${option.meta || ''}`.toLowerCase(),
+    })),
+    [targetOptions],
+  );
+  const resolveModalPopupContainer = React.useCallback((trigger?: HTMLElement | null) => {
+    const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
+    return modalBodyHost || resolveOverlayPopupContainer(trigger);
+  }, []);
 
   return (
     <Modal
-      open={visible}
+      open={open}
+      title="اتصال شماره به مخاطب"
       onCancel={onClose}
-      title={`انتخاب مخاطب برای شماره ${phone || ''}`}
-      footer={null}
-      width={420}
-      destroyOnClose
+      onOk={() => void onSave()}
+      okText="ذخیره اتصال"
+      cancelText="بستن"
+      confirmLoading={saving}
+      destroyOnHidden
+      width={620}
+      zIndex={PHONE_BIND_MODAL_Z_INDEX}
     >
-      {candidates.length > 3 && (
-        <Input
-          prefix={<SearchOutlined />}
-          placeholder="جستجو در مخاطبین..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="mb-3"
-          allowClear
-        />
-      )}
-      {loading ? (
-        <Skeleton active paragraph={{ rows: 3 }} />
-      ) : filtered.length === 0 ? (
-        <Empty description="مخاطب احتمالی یافت نشد." />
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              disabled={saving}
-              onClick={() => void handleSelect(c)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-right transition-colors hover:border-[rgb(var(--brand-500-rgb,59,130,246))] hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
-            >
-              <div className="flex items-center gap-2">
-                <Tag
-                  color={ENTITY_COLORS[c.entity_type] || 'default'}
-                  className="shrink-0 text-xs"
-                >
-                  {ENTITY_LABELS[c.entity_type] || c.entity_type}
-                </Tag>
-                <span className="min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">
-                  {c.display_title || c.label || c.entity_id}
-                </span>
-              </div>
-              {c.label && c.display_title && c.label !== c.display_title ? (
-                <div className="mt-0.5 truncate text-xs text-gray-400">{c.label}</div>
-              ) : null}
-            </button>
-          ))}
+      <div className="space-y-4">
+        {existingBindingLabel ? (
+          <Alert
+            type="info"
+            showIcon
+            message={`این شماره در حال حاضر به ${existingBindingLabel} وصل است.`}
+          />
+        ) : null}
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-white/10 dark:bg-white/5">
+          <div>شماره</div>
+          <div dir="ltr" className="mt-1 text-sm font-medium text-gray-800 dark:text-gray-100">
+            {phone || '-'}
+          </div>
+          {resolveStatusLabel(phoneMatchStatus) ? (
+            <Space size={[6, 6]} wrap className="mt-2">
+              <Tag color="gold" className="!m-0">
+                {resolveStatusLabel(phoneMatchStatus)}
+              </Tag>
+            </Space>
+          ) : null}
         </div>
-      )}
-      <div className="mt-4 flex justify-end">
-        <Button onClick={onClose}>بستن</Button>
+
+        <div>
+          <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">نوع مخاطب</div>
+          <Radio.Group
+            value={targetModuleId}
+            onChange={(event) => onChangeTargetModuleId(event.target.value)}
+            optionType="button"
+            buttonStyle="solid"
+            options={MODULE_OPTIONS}
+          />
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">جستجو</div>
+          <Input
+            value={searchValue}
+            onChange={(event) => onChangeSearchValue(event.target.value)}
+            placeholder="نام، کد یا مشخصه مخاطب را جستجو کنید"
+            allowClear
+          />
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">رکورد مقصد</div>
+          <AdaptiveSelectField
+            showSearch
+            value={targetRecordId || undefined}
+            onChange={(value: any) => onChangeTargetRecordId(String(value || '').trim() || null)}
+            placeholder="یک مخاطب موجود را انتخاب کنید"
+            loading={loading}
+            allowClear
+            filterOption={false}
+            options={normalizedTargetOptions}
+            optionFilterProp="searchText"
+            optionDisplayFallback={(option: any) => String(option?.label || option?.value || '').trim()}
+            renderMobileOption={(option: any) => (
+              <div className="min-w-0">
+                <div className="truncate">{option?.label}</div>
+                {option?.meta ? <div className="truncate text-[11px] text-gray-400">{option.meta}</div> : null}
+              </div>
+            )}
+            optionRender={(option: any) => {
+              const data = option?.data || option;
+              return (
+                <div className="min-w-0">
+                  <div className="truncate">{data?.label}</div>
+                  {data?.meta ? <div className="truncate text-[11px] text-gray-400">{data.meta}</div> : null}
+                </div>
+              );
+            }}
+            getPopupContainer={(trigger: HTMLElement) => resolveModalPopupContainer(trigger)}
+            modalContainer={resolveModalPopupContainer}
+            preferLocalPopupContainer
+            overlayZIndexBase={PHONE_BIND_SELECT_Z_INDEX}
+            styles={{ popup: { root: { zIndex: 19000 } } }}
+            className="w-full"
+          />
+        </div>
       </div>
     </Modal>
   );

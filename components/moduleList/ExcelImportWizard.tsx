@@ -3669,9 +3669,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           if (Object.prototype.hasOwnProperty.call(payload, "portal_status")) {
             payload.portal_status = String(payload.portal_status || "disabled").trim() || "disabled";
           }
-          clearIfPresent("telegram_chat_id");
-          clearIfPresent("bale_chat_id");
-          clearIfPresent("rubika_chat_id");
           if (payload.portal_permissions_override === "") {
             delete payload.portal_permissions_override;
           }

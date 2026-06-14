@@ -56,6 +56,7 @@ import { parseLocationValue } from '../location';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
+import { buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
@@ -1848,13 +1849,29 @@ export const usePrintManager = ({
     (blockId: string, column: any, row: any): string => {
       if (!column) return '-';
       const key = column.key;
-      const rowDiscountAmount = (() => {
-        if (key !== 'discount') return null;
-        const baseAmount = Math.max(0, toNumberSafe(row?.quantity) * toNumberSafe(row?.unit_price));
-        const discountInput = Math.max(0, toNumberSafe(row?.discount));
-        const isPercentDiscount = String(row?.discount_type || '').trim().toLowerCase() === 'percent';
-        if (!isPercentDiscount) return discountInput;
-        return Math.min(baseAmount, (baseAmount * Math.min(discountInput, 100)) / 100);
+      const rowAdjustmentDisplay = (() => {
+        if (key !== 'discount' && key !== 'vat') return null;
+        const rowBaseAmount = resolveInvoiceRowBaseAmount(row);
+        if (key === 'discount') {
+          return buildInvoiceAdjustmentDisplay({
+            value: row?.discount,
+            type: row?.discount_type,
+            baseAmount: rowBaseAmount,
+            currencyLabel: resolvedCurrencyLabel,
+          });
+        }
+        const discountAmount = buildInvoiceAdjustmentDisplay({
+          value: row?.discount,
+          type: row?.discount_type,
+          baseAmount: rowBaseAmount,
+          currencyLabel: resolvedCurrencyLabel,
+        }).amount;
+        return buildInvoiceAdjustmentDisplay({
+          value: row?.vat,
+          type: row?.vat_type,
+          baseAmount: Math.max(0, rowBaseAmount - discountAmount),
+          currencyLabel: resolvedCurrencyLabel,
+        });
       })();
       let rawValue =
         key === 'product_id'
@@ -1891,8 +1908,11 @@ export const usePrintManager = ({
         return rawValue ? toPersianNumber(safeJalaliFormat(rawValue, 'YYYY/MM/DD')) : '-';
       }
 
-      if (rowDiscountAmount !== null) {
-        return formatPersianPrice(rowDiscountAmount);
+      if (rowAdjustmentDisplay) {
+        if (!rowAdjustmentDisplay.hasValue) return '-';
+        return rowAdjustmentDisplay.secondaryText
+          ? `<div>${rowAdjustmentDisplay.primaryText}</div><div style="font-size:9px;color:#64748b;margin-top:2px;">${rowAdjustmentDisplay.secondaryText}</div>`
+          : rowAdjustmentDisplay.primaryText;
       }
 
       if (column.type === 'price' || ['amount', 'unit_price', 'total_price', 'discount', 'vat'].includes(key)) {

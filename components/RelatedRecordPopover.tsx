@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { App, Popover, Spin, Button, Modal, Tag } from 'antd';
+import { EditOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType } from '../types';
@@ -16,6 +17,17 @@ import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import ResilientImage from './common/ResilientImage';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
+import PhoneMatchPickerModal from './notifications/PhoneMatchPickerModal';
+import VoipRecordingPlayer from './notifications/VoipRecordingPlayer';
+import {
+  buildPhoneTargetDisplayName,
+  MANUAL_PHONE_BINDING_SOURCE_FIELD,
+  MANUAL_PHONE_BINDING_SOURCE_TABLE,
+  PHONE_BIND_TARGET_MODULES,
+  searchPhoneBindingTargets,
+  syncPhoneIdentityBinding,
+  type PhoneBindTargetModuleId,
+} from '../utils/phoneIdentityBindings';
 
 interface RelatedRecordPopoverProps {
   moduleId: string;
@@ -114,6 +126,24 @@ const SMS_PROVIDER_STATUS_LABELS: Record<string, string> = {
   failed: 'ناموفق',
 };
 
+const isPhoneIdentityBindableModule = (moduleId: string) =>
+  moduleId === 'sms_delivery_reports' || moduleId === 'voip_call_reports';
+
+const resolveCommunicationPhone = (moduleId: string, row: Record<string, any> | null | undefined) => {
+  if (!row) return '';
+  if (moduleId === 'sms_delivery_reports') {
+    return String(row.phone_number || row.sender || row.recipient || '').trim();
+  }
+  const direction = String(row.direction || '').trim().toLowerCase();
+  if (direction === 'incoming') {
+    return String(row.source_number || row.title || '').trim();
+  }
+  if (direction === 'outgoing') {
+    return String(row.destination_number || row.title || '').trim();
+  }
+  return String(row.source_number || row.destination_number || row.title || '').trim();
+};
+
 const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   moduleId,
   recordId,
@@ -135,6 +165,20 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, { label: string; value: string }[]>>({});
   const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [phoneIdentityBindModalOpen, setPhoneIdentityBindModalOpen] = useState(false);
+  const [phoneIdentityBindModalLoading, setPhoneIdentityBindModalLoading] = useState(false);
+  const [phoneIdentityBindModalSaving, setPhoneIdentityBindModalSaving] = useState(false);
+  const [phoneIdentityBindTargetModuleId, setPhoneIdentityBindTargetModuleId] = useState<PhoneBindTargetModuleId>('customers');
+  const [phoneIdentityBindTargetRecordId, setPhoneIdentityBindTargetRecordId] = useState<string | null>(null);
+  const [phoneIdentityBindSearch, setPhoneIdentityBindSearch] = useState('');
+  const [phoneIdentityBindOptions, setPhoneIdentityBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
+  const [phoneIdentityBindDraft, setPhoneIdentityBindDraft] = useState<{
+    phone: string;
+    phoneNumberId: string | null;
+    phoneMatchStatus: string | null;
+    existingBindingLabel?: string | null;
+  } | null>(null);
   const isMobileViewport = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
 
   const moduleConfig = MODULES[moduleId];
@@ -213,7 +257,6 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     );
     return fieldKeys;
   }, [audioFieldKey, fields]);
-  const audioUrl = audioFieldKey ? String(draftRecord?.[audioFieldKey] || record?.[audioFieldKey] || '').trim() : '';
 
   const hasDirtyQuickPreview = useMemo(() => (
     editableFields.some((field: any) => {
@@ -299,6 +342,154 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
       .map((item) => ({ ...item, value: String(item.value ?? '').trim() }))
       .filter((item) => item.value);
   }, [moduleId, record]);
+
+  const previewPhoneValue = useMemo(
+    () => resolveCommunicationPhone(moduleId, draftRecord || record),
+    [draftRecord, moduleId, record],
+  );
+  const supportsPhoneIdentityBinding = isPhoneIdentityBindableModule(moduleId);
+
+  useEffect(() => {
+    if (!phoneIdentityBindModalOpen) return;
+    let cancelled = false;
+    setPhoneIdentityBindModalLoading(true);
+    void searchPhoneBindingTargets({
+      client: supabase,
+      moduleId: phoneIdentityBindTargetModuleId,
+      search: phoneIdentityBindSearch,
+      limit: 30,
+    })
+      .then((options) => {
+        if (!cancelled) setPhoneIdentityBindOptions(options);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn('Could not load quick preview phone bind targets', error);
+          setPhoneIdentityBindOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPhoneIdentityBindModalLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [phoneIdentityBindModalOpen, phoneIdentityBindSearch, phoneIdentityBindTargetModuleId]);
+
+  const closePhoneIdentityBindModal = () => {
+    setPhoneIdentityBindModalOpen(false);
+    setPhoneIdentityBindModalLoading(false);
+    setPhoneIdentityBindModalSaving(false);
+    setPhoneIdentityBindTargetModuleId('customers');
+    setPhoneIdentityBindTargetRecordId(null);
+    setPhoneIdentityBindSearch('');
+    setPhoneIdentityBindOptions([]);
+    setPhoneIdentityBindDraft(null);
+  };
+
+  const openPhoneIdentityBindModal = async () => {
+    if (!supportsPhoneIdentityBinding || !record) return;
+    const normalizedPhone = String(previewPhoneValue || '').trim();
+    if (!normalizedPhone) {
+      message.warning('برای این رکورد شماره‌ای پیدا نشد.');
+      return;
+    }
+
+    setPhoneIdentityBindModalOpen(true);
+    setPhoneIdentityBindModalLoading(true);
+    try {
+      const phoneNumberId = String(record?.phone_number_id || '').trim() || null;
+      let existingBindingLabel = '';
+      let existingTargetModuleId: PhoneBindTargetModuleId | null = null;
+      let existingTargetRecordId: string | null = null;
+
+      if (phoneNumberId) {
+        const { data, error } = await supabase
+          .from('phone_number_links')
+          .select('entity_type,entity_id,display_title,source_table,source_field')
+          .eq('phone_number_id', phoneNumberId);
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        const manualBinding = rows.find((row: any) => (
+          String(row?.source_table || '').trim() === MANUAL_PHONE_BINDING_SOURCE_TABLE
+          && String(row?.source_field || '').trim() === MANUAL_PHONE_BINDING_SOURCE_FIELD
+          && PHONE_BIND_TARGET_MODULES.includes(String(row?.entity_type || '').trim() as PhoneBindTargetModuleId)
+        ));
+        if (manualBinding) {
+          existingTargetModuleId = String(manualBinding.entity_type || '').trim() as PhoneBindTargetModuleId;
+          existingTargetRecordId = String(manualBinding.entity_id || '').trim() || null;
+          existingBindingLabel = String(manualBinding.display_title || '').trim();
+        }
+      }
+
+      const currentModuleId = String(record?.module_id || '').trim();
+      const currentRecordId = String(record?.record_id || '').trim();
+      if (!existingTargetModuleId && PHONE_BIND_TARGET_MODULES.includes(currentModuleId as PhoneBindTargetModuleId)) {
+        existingTargetModuleId = currentModuleId as PhoneBindTargetModuleId;
+        existingTargetRecordId = currentRecordId || null;
+      }
+
+      if (existingTargetModuleId && existingTargetRecordId && !existingBindingLabel) {
+        const { data: targetRow } = await supabase
+          .from(existingTargetModuleId)
+          .select(existingTargetModuleId === 'customers'
+            ? 'id, full_name, business_name, legal_name, system_code, first_name, last_name'
+            : existingTargetModuleId === 'suppliers'
+              ? 'id, business_name, first_name, last_name, system_code'
+              : 'id, full_name, first_name, last_name, system_code, legacy_system_code')
+          .eq('id', existingTargetRecordId)
+          .maybeSingle();
+        existingBindingLabel = buildPhoneTargetDisplayName(existingTargetModuleId, targetRow) || existingBindingLabel;
+      }
+
+      setPhoneIdentityBindDraft({
+        phone: normalizedPhone,
+        phoneNumberId,
+        phoneMatchStatus: String(record?.phone_match_status || '').trim() || null,
+        existingBindingLabel: existingBindingLabel || null,
+      });
+      setPhoneIdentityBindTargetModuleId(existingTargetModuleId || 'customers');
+      setPhoneIdentityBindTargetRecordId(existingTargetRecordId || null);
+      setPhoneIdentityBindSearch('');
+    } catch (error: any) {
+      setPhoneIdentityBindModalOpen(false);
+      message.error(toFaErrorMessage(error, 'خواندن اطلاعات اتصال شماره ناموفق بود.'));
+    } finally {
+      setPhoneIdentityBindModalLoading(false);
+    }
+  };
+
+  const savePhoneIdentityBindModal = async () => {
+    if (!record || !phoneIdentityBindDraft) return;
+    const orgId = String(record?.org_id || '').trim();
+    const targetRecordId = String(phoneIdentityBindTargetRecordId || '').trim();
+    if (!orgId) {
+      message.error('سازمان این رکورد مشخص نیست.');
+      return;
+    }
+    if (!targetRecordId) {
+      message.error('مخاطب مقصد را انتخاب کنید.');
+      return;
+    }
+    setPhoneIdentityBindModalSaving(true);
+    try {
+      await syncPhoneIdentityBinding({
+        client: supabase,
+        orgId,
+        moduleId: phoneIdentityBindTargetModuleId,
+        recordId: targetRecordId,
+        phone: phoneIdentityBindDraft.phone,
+        phoneNumberId: phoneIdentityBindDraft.phoneNumberId,
+      });
+      setReloadToken((prev) => prev + 1);
+      message.success('اتصال شماره ذخیره شد.');
+      closePhoneIdentityBindModal();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره اتصال شماره ناموفق بود.'));
+    } finally {
+      setPhoneIdentityBindModalSaving(false);
+    }
+  };
 
   const previewTitle = useMemo(() => {
     if (!moduleConfig) return label || recordId || '-';
@@ -446,7 +637,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [fields, moduleConfig, moduleId, open, recordId]);
+  }, [fields, moduleConfig, moduleId, open, previewSelectColumns, recordId, reloadToken]);
 
   const openFullRecord = () => {
     const path = `/${moduleId}/${recordId}`;
@@ -628,10 +819,10 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           </div>
         )}
 
-        {!loading && record && audioUrl && (
-          <div className="mb-3 rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-white/5">
+        {!loading && record && moduleId === 'voip_call_reports' && (
+          <div className="mb-3">
             <div className="mb-1 text-[11px] font-semibold text-gray-600 dark:text-gray-300">فایل صوتی تماس</div>
-            <audio controls src={audioUrl} className="w-full" />
+            <VoipRecordingPlayer call={record} />
           </div>
         )}
 
@@ -666,28 +857,42 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
           </div>
         )}
 
-        {!loading && record && editableFields.length > 0 && (
-          <div className="pt-2 mt-2 flex items-center justify-end gap-2 border-t border-gray-100 dark:border-gray-800">
-            {hasDirtyQuickPreview ? (
-              <span className="text-[11px] text-gray-500 dark:text-gray-400">تغییرات ذخیره نشده</span>
-            ) : null}
-            <Button
-              size="small"
-              type="primary"
-              loading={savingQuickPreview}
-              disabled={!canEditModule || !hasDirtyQuickPreview}
-              onClick={handleSaveQuickPreview}
-            >
-              ذخیره
-            </Button>
-          </div>
-        )}
-
-        {!hideFullRecordAction ? (
-          <div className="pt-2 mt-2 flex justify-end border-t border-gray-100 dark:border-gray-800">
-            <Button size="small" type="link" onClick={openFullRecord}>
-              {'\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0645\u0644'}
-            </Button>
+        {(!loading && record) ? (
+          <div className="pt-2 mt-2 flex items-center justify-between gap-2 border-t border-gray-100 dark:border-gray-800">
+            <div className="flex items-center gap-2">
+              {supportsPhoneIdentityBinding && previewPhoneValue ? (
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={() => void openPhoneIdentityBindModal()}
+                >
+                  اتصال شماره
+                </Button>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-2">
+              {editableFields.length > 0 ? (
+                <>
+                  {hasDirtyQuickPreview ? (
+                    <span className="text-[11px] text-gray-500 dark:text-gray-400">تغییرات ذخیره نشده</span>
+                  ) : null}
+                  <Button
+                    size="small"
+                    type="primary"
+                    loading={savingQuickPreview}
+                    disabled={!canEditModule || !hasDirtyQuickPreview}
+                    onClick={handleSaveQuickPreview}
+                  >
+                    ذخیره
+                  </Button>
+                </>
+              ) : null}
+              {!hideFullRecordAction ? (
+                <Button size="small" type="link" onClick={openFullRecord}>
+                  {'\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0645\u0644'}
+                </Button>
+              ) : null}
+            </div>
           </div>
         ) : null}
     </div>
@@ -713,6 +918,28 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         }}
       >
         {content}
+        {phoneIdentityBindModalOpen && phoneIdentityBindDraft ? (
+          <PhoneMatchPickerModal
+            open={phoneIdentityBindModalOpen}
+            loading={phoneIdentityBindModalLoading}
+            saving={phoneIdentityBindModalSaving}
+            phone={phoneIdentityBindDraft.phone}
+            existingBindingLabel={phoneIdentityBindDraft.existingBindingLabel || null}
+            phoneMatchStatus={phoneIdentityBindDraft.phoneMatchStatus || null}
+            targetModuleId={phoneIdentityBindTargetModuleId}
+            onChangeTargetModuleId={(value) => {
+              setPhoneIdentityBindTargetModuleId(value);
+              setPhoneIdentityBindTargetRecordId(null);
+            }}
+            targetRecordId={phoneIdentityBindTargetRecordId}
+            onChangeTargetRecordId={setPhoneIdentityBindTargetRecordId}
+            targetOptions={phoneIdentityBindOptions}
+            searchValue={phoneIdentityBindSearch}
+            onChangeSearchValue={setPhoneIdentityBindSearch}
+            onClose={closePhoneIdentityBindModal}
+            onSave={() => void savePhoneIdentityBindModal()}
+          />
+        ) : null}
       </Modal>
     );
   }

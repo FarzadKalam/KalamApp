@@ -57,6 +57,11 @@ const isAudioLike = (url: string, fileName: string, mimeType: string) => {
   return mimeType.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|oga|webm)(\?|#|$)/i.test(lower);
 };
 
+const isVideoLike = (url: string, fileName: string, mimeType: string) => {
+  const lower = `${url} ${fileName} ${mimeType}`.toLowerCase();
+  return mimeType.startsWith('video/') || /\.(mp4|mov|webm|m4v|mkv)(\?|#|$)/i.test(lower);
+};
+
 const downloadAttachment = (url: string, fileName: string) => {
   if (!url || typeof document === 'undefined') return;
   const link = document.createElement('a');
@@ -87,10 +92,30 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
       fileName,
       isImage: isImageLike(url, fileName, mimeType),
       isAudio: isAudioLike(url, fileName, mimeType),
+      isVideo: isVideoLike(url, fileName, mimeType),
     };
   }, [attachment, fallbackName]);
 
   if (!normalized.url) return null;
+
+  if (normalized.isVideo) {
+    return (
+      <div className="mt-3 w-full max-w-[420px] overflow-hidden rounded-lg border border-gray-200 bg-white/80 p-2 dark:border-dark-border dark:bg-dark-surface/80">
+        <video controls preload="metadata" src={normalized.url} className="max-h-[360px] w-full rounded-lg">
+          مرورگر شما از پخش ویدیو پشتیبانی نمی‌کند.
+        </video>
+        <div className="mt-2 flex justify-end">
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            onClick={() => downloadAttachment(normalized.url, normalized.fileName)}
+          >
+            دانلود فایل اصلی
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   if (normalized.isImage) {
     return (

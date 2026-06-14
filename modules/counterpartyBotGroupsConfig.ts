@@ -22,6 +22,7 @@ export const counterpartyBotGroupsConfig: ModuleDefinition = {
       options: [
         { label: 'مشتری', value: 'customers' },
         { label: 'تامین‌کننده', value: 'suppliers' },
+        { label: 'کارمند', value: 'employees' },
       ],
       defaultValue: 'customers',
       validation: { required: true },
@@ -51,6 +52,19 @@ export const counterpartyBotGroupsConfig: ModuleDefinition = {
         targetField: 'business_name',
       },
       logic: { visibleIf: { field: 'target_type', operator: LogicOperator.EQUALS, value: 'suppliers' } },
+    },
+    {
+      key: 'employee_id',
+      labels: { fa: 'کارمند', en: 'Employee' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 1.16,
+      isTableColumn: true,
+      relationConfig: {
+        targetModule: 'employees',
+        targetField: 'full_name',
+      },
+      logic: { visibleIf: { field: 'target_type', operator: LogicOperator.EQUALS, value: 'employees' } },
     },
     {
       key: 'channel_type',

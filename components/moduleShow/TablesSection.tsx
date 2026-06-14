@@ -318,6 +318,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               mode={block.externalDataConfig ? 'local' : 'db'}
               moduleId={module.id}
               recordId={data.id}
+              parentValues={data}
               invoiceGlobalDiscountType={data?.global_discount_type ?? null}
               invoiceGlobalDiscountValue={data?.global_discount_value ?? null}
               relationOptions={relationOptions}

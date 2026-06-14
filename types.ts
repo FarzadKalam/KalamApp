@@ -163,6 +163,8 @@ export interface ModuleField {
   isActive?: boolean;
   isTableColumn?: boolean;
   hideInCreateForm?: boolean;
+  botSettingsOnly?: boolean;
+  virtualBotField?: boolean;
   options?: SelectOption[];
   
   // --- ویژگی اضافه شده برای رفع خطا ---
@@ -386,6 +388,10 @@ export interface ModuleDefinition {
     relatedModuleOptions?: string[];
     audioField?: string;
   };
+  defaultSorters?: Array<{
+    field: string;
+    order: 'asc' | 'desc';
+  }>;
   dashboard?: {
     quickCreateLabel?: string;
     recentListFields?: string[];

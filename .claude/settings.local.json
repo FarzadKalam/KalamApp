@@ -106,7 +106,12 @@
       "PowerShell(npx vitest run components/tasks/processDraftTaskFlow.test.tsx utils/processAutomationRuntime.test.ts 2>&1)",
       "Bash(python -)",
       "Bash(git stash *)",
-      "Bash(node -e \"console.log\\(require\\('@tanstack/react-virtual/package.json'\\).version\\)\")"
+      "Bash(node -e \"console.log\\(require\\('@tanstack/react-virtual/package.json'\\).version\\)\")",
+      "WebFetch(domain:docs.avalai.ir)",
+      "Bash(sort -t_ -k3 -n)",
+      "Bash(cd /d/Kalamapp)",
+      "Bash(deno --version)",
+      "Bash(NODE_OPTIONS=--max-old-space-size=8192 npx tsc --noEmit -p tsconfig.json)"
     ]
   },
   "hooks": {

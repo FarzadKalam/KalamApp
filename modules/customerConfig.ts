@@ -244,6 +244,7 @@ export const customerModule: ModuleDefinition = {
       type: FieldType.SELECT,
       blockId: 'portal_info',
       order: 3,
+      botSettingsOnly: true,
       options: [
         { label: 'روبیکا', value: 'rubika' },
         { label: 'تلگرام', value: 'telegram' },
@@ -253,9 +254,76 @@ export const customerModule: ModuleDefinition = {
       defaultValue: 'none',
       logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } }
     },
-    { key: 'telegram_chat_id', labels: { fa: 'شناسه چت تلگرام', en: 'Telegram Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 4, logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } } },
-    { key: 'bale_chat_id', labels: { fa: 'شناسه چت بله', en: 'Bale Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 5, logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } } },
-    { key: 'rubika_chat_id', labels: { fa: 'شناسه چت روبیکا', en: 'Rubika Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 6, logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } } },
+    { key: 'telegram_chat_id', labels: { fa: 'شناسه چت تلگرام', en: 'Telegram Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 4, botSettingsOnly: true },
+    { key: 'bale_chat_id', labels: { fa: 'شناسه چت بله', en: 'Bale Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 5, botSettingsOnly: true },
+    { key: 'rubika_chat_id', labels: { fa: 'شناسه چت روبیکا', en: 'Rubika Chat Id' }, type: FieldType.TEXT, blockId: 'portal_info', order: 6, botSettingsOnly: true },
+    {
+      key: 'bot_default_channel',
+      labels: { fa: 'پلتفرم اصلی بات', en: 'Bot Default Channel' },
+      type: FieldType.SELECT,
+      blockId: 'portal_info',
+      order: 6.1,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'روبیکا', value: 'rubika' },
+        { label: 'تلگرام', value: 'telegram' },
+        { label: 'بله', value: 'bale' },
+        { label: 'بدون بات', value: 'none' }
+      ],
+      defaultValue: 'none',
+    },
+    { key: 'telegram_group_join_link', labels: { fa: 'لینک گروه تلگرام', en: 'Telegram Group Join Link' }, type: FieldType.LINK, blockId: 'portal_info', order: 6.2, botSettingsOnly: true, virtualBotField: true },
+    { key: 'bale_group_join_link', labels: { fa: 'لینک گروه بله', en: 'Bale Group Join Link' }, type: FieldType.LINK, blockId: 'portal_info', order: 6.3, botSettingsOnly: true, virtualBotField: true },
+    { key: 'rubika_group_join_link', labels: { fa: 'لینک گروه روبیکا', en: 'Rubika Group Join Link' }, type: FieldType.LINK, blockId: 'portal_info', order: 6.4, botSettingsOnly: true, virtualBotField: true },
+    {
+      key: 'telegram_group_status',
+      labels: { fa: 'وضعیت گروه تلگرام', en: 'Telegram Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'portal_info',
+      order: 6.5,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    {
+      key: 'bale_group_status',
+      labels: { fa: 'وضعیت گروه بله', en: 'Bale Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'portal_info',
+      order: 6.6,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    {
+      key: 'rubika_group_status',
+      labels: { fa: 'وضعیت گروه روبیکا', en: 'Rubika Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'portal_info',
+      order: 6.7,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    { key: 'telegram_group_title', labels: { fa: 'عنوان گروه تلگرام', en: 'Telegram Group Title' }, type: FieldType.TEXT, blockId: 'portal_info', order: 6.8, botSettingsOnly: true, virtualBotField: true },
+    { key: 'bale_group_title', labels: { fa: 'عنوان گروه بله', en: 'Bale Group Title' }, type: FieldType.TEXT, blockId: 'portal_info', order: 6.9, botSettingsOnly: true, virtualBotField: true },
+    { key: 'rubika_group_title', labels: { fa: 'عنوان گروه روبیکا', en: 'Rubika Group Title' }, type: FieldType.TEXT, blockId: 'portal_info', order: 6.95, botSettingsOnly: true, virtualBotField: true },
     { key: 'portal_last_login_at', labels: { fa: 'آخرین ورود پورتال', en: 'Portal Last Login' }, type: FieldType.DATETIME, blockId: 'portal_info', order: 7, readonly: true, logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } } },
     { key: 'portal_permissions_override', labels: { fa: 'تنظیمات اختصاصی پورتال', en: 'Portal Permission Override' }, type: FieldType.JSON, blockId: 'portal_info', order: 8, logic: { visibleIf: { field: 'portal_enabled', operator: LogicOperator.IS_TRUE } } },
 

@@ -85,11 +85,13 @@ const DEFAULT_CAPABILITY_MODELS: Record<string, string> = {
   // ── Embeddings ─────────────────────────────────────────────────────────
   embedding: DEFAULT_EMBEDDING_MODEL,        // text-embedding-3-small (pgvector compat)
   // ── Voice ──────────────────────────────────────────────────────────────
-  voice_input: 'scribe_v2',                  // ElevenLabs Scribe v2 STT via /v1/audio/transcriptions
-  voice_output: 'eleven-v3',
+  voice_input: 'gpt-4o-transcribe',          // OpenAI STT via /v1/audio/transcriptions (scribe_v2 is NOT served here)
+  voice_output: 'eleven_v3',                 // AvalAI ElevenLabs ids use underscores (eleven_v3, eleven_flash_v2_5, eleven_multilingual_v2)
   // ── Media generation ───────────────────────────────────────────────────
-  image_generation: 'gemini-2.5-flash-image', // Nano Banana economical default; premium option: gemini-3-pro-image
+  image_generation: 'gemini-2.5-flash-image', // Nano Banana economical default; routed via /v1beta generateContent (premium: gemini-3-pro-image)
   video_generation: 'sora-2',
+  // ── Document/file generation (AI drafts structured content, server builds the file) ──
+  document_generation: 'gemini-3.1-pro-preview',
 };
 
 const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
@@ -106,6 +108,7 @@ const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   image_generation: 'ai_image_generation',
   voice_output: 'ai_voice_output',
   video_generation: 'ai_video_generation',
+  document_generation: 'ai_document_analysis',
   voip_auto_reply: 'ai_voip_auto_reply',
 };
 
@@ -122,6 +125,8 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'voice_input',
   'voice_output',
   'image_generation',
+  'video_generation',
+  'document_generation',
 ]);
 
 const ALLOWED_MODULES = new Set([
@@ -963,12 +968,29 @@ const resolveProviderConfig = async (
   serviceRoleKey: string,
   authContext: any,
   capability = 'dashboard_chat',
+  options: { modelOverride?: string | null } = {},
 ) => {
   const centralConfig = getCentralProviderConfig();
   const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  let model = getCapabilityModel(settings, capability, centralConfig.model);
+  // Per-message model override: only honored when the model is active in the
+  // catalog AND tagged for this capability (prevents arbitrary/invalid ids).
+  const override = String(options?.modelOverride || '').trim();
+  if (override && override !== model) {
+    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      id: `eq.${override}`,
+      is_active: 'eq.true',
+      select: 'id,capability_tags',
+      limit: 1,
+    }).catch(() => []);
+    const row = rows?.[0];
+    if (row && Array.isArray(row.capability_tags) && row.capability_tags.includes(capability)) {
+      model = override;
+    }
+  }
   return {
     ...centralConfig,
-    model: getCapabilityModel(settings, capability, centralConfig.model),
+    model,
     capability,
     orgAiSettings: settings,
   };
@@ -1826,13 +1848,18 @@ const buildPromptMessages = (
   const legalInstruction = options.legalMode
     ? ' حالت دستیار حقوقی فعال است: پاسخ حقوقی باید با احتیاط، فارسی، مبتنی بر منابع موجود در organization_knowledge و web_search_results باشد. اگر منبع کافی برای قانون یا رویه ایران ندارید، صریح بگویید منبع کافی ندارم. نتیجه را به‌عنوان جایگزین مشاوره وکیل یا مشاور حقوقی قطعی معرفی نکنید. مواد قانونی، تاریخ/منبع و عدم قطعیت‌ها را ذکر کنید.'
     : '';
+  // Deep-thinking flow: first ground the problem and get the user's go-ahead,
+  // THEN do the heavy reasoning on the next turn.
+  const hasPriorTurns = (historyRows || []).some((item) => String(item?.role || '') === 'assistant');
   const reasoningInstruction = options.deepReasoning
-    ? ' حالت تفکر عمیق فعال است: قبل از پاسخ نهایی مسئله را مرحله‌ای تحلیل کنید، اما فقط جمع‌بندی نهایی، فرض‌ها، ریسک‌ها و اقدام پیشنهادی را به کاربر نشان دهید.'
+    ? (hasPriorTurns
+        ? ' حالت تفکر عمیق فعال است و کاربر قبلاً زمینه را داده/تایید کرده است: حالا مسئله را عمیق و مرحله‌ای تحلیل کن، اما فقط جمع‌بندی نهایی، فرض‌ها، ریسک‌ها و اقدام پیشنهادی را نشان بده.'
+        : ' حالت تفکر عمیق فعال است و این اولین پیام است: هنوز تحلیل کامل را شروع نکن. ابتدا (۱) برداشت کوتاهت از خواسته را بگو، (۲) حداکثر ۳ تا ۵ سوال دقیق برای رفع ابهام بپرس، (۳) یک طرح کوتاه از مراحل کاری که انجام خواهی داد ارائه بده، و در پایان صریح از کاربر بخواه که تایید کند یا اطلاعات بدهد تا تفکر عمیق را شروع کنی. تا تایید نگرفته‌ای وارد تحلیل عمیق نشو.')
     : '';
 
   const systemContent = pageContext.intent === 'process_guide'
     ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید.`;
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -2326,6 +2353,63 @@ const callWebSearch = async (
   }
 };
 
+// Route a model id to the correct AvalAI endpoint family. Mirrors
+// ai_model_catalog.metadata.api_route (see database_v1_phase260).
+const isGeminiImageModel = (model: string) => /^gemini[-.\d]*.*image/i.test(String(model || '').trim());
+
+// Gemini image (Nano Banana) models are served via the native Gemini endpoint
+// (/v1beta/models/{id}:generateContent), NOT the OpenAI /v1/images/generations route.
+// Calling them on /images/generations hangs and returns a 504 gateway timeout.
+const callGeminiImageGenerate = async (
+  providerConfig: any,
+  prompt: string,
+  options: { sourceImages?: Array<{ data: string; mimeType?: string }>; extraConfig?: Record<string, any> } = {},
+) => {
+  if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.image_generation).trim();
+  const parts: any[] = [{ text: prompt }];
+  for (const src of (options.sourceImages || [])) {
+    const data = String(src?.data || '').replace(/^data:[^;]+;base64,/, '').trim();
+    if (data) parts.push({ inline_data: { mime_type: src?.mimeType || 'image/png', data } });
+  }
+  const body: Record<string, any> = { contents: [{ parts }] };
+  if (options.extraConfig && typeof options.extraConfig === 'object') {
+    body.generationConfig = options.extraConfig;
+  }
+  // Gemini native endpoint lives at /v1beta (strip the /v1 suffix from the base url).
+  const { response, baseUrl } = await requestAvalaiWithFallback(
+    providerConfig,
+    `/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(110000),
+    },
+    { stripVersionForPath: true },
+  );
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+  const parsed = parseJsonSafe(await response.text());
+  if (!response.ok) {
+    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+    throw new Error(`تولید تصویر ناموفق بود: ${message}`);
+  }
+  const responseParts = parsed?.candidates?.[0]?.content?.parts || [];
+  const imagePart = responseParts.find((part: any) => part?.inline_data?.data || part?.inlineData?.data);
+  const b64 = String(imagePart?.inline_data?.data || imagePart?.inlineData?.data || '').trim();
+  if (!b64) throw new Error('خروجی تصویر از مدل دریافت نشد.');
+  return {
+    imageBase64: b64,
+    imageUrl: '',
+    provider: providerConfig.provider,
+    model,
+    requestId,
+    baseUrl,
+    raw: parsed,
+    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
+  };
+};
+
 const base64ToUint8Array = (value: string) => {
   const normalized = String(value || '').replace(/^data:[^;]+;base64,/, '').trim();
   const binary = atob(normalized);
@@ -2345,11 +2429,12 @@ const callAudioTranscription = async (
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const bytes = base64ToUint8Array(audioBase64);
   if (!bytes.length) throw new Error('فایل صوتی معتبر نیست.');
+  // Candidate STT models served on /v1/audio/transcriptions (per AvalAI docs).
   const candidateModels = Array.from(new Set([
     String(providerConfig.model || '').trim(),
-    DEFAULT_CAPABILITY_MODELS.voice_input,
+    DEFAULT_CAPABILITY_MODELS.voice_input,   // gpt-4o-transcribe
+    'whisper-1',
     'groq.whisper-large-v3-turbo',
-    'scribe_v2',
   ].filter(Boolean)));
   let lastMessage = '';
 
@@ -2361,6 +2446,7 @@ const callAudioTranscription = async (
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
       body: formData,
+      signal: AbortSignal.timeout(90000),
     });
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
     const parsed = parseJsonSafe(await response.text());
@@ -2386,9 +2472,26 @@ const callAudioTranscription = async (
   throw new Error(`تبدیل صوت به متن ناموفق بود: ${lastMessage || 'مدل مناسب برای تبدیل صوت پیدا نشد.'}`);
 };
 
-const callAudioSpeech = async (providerConfig: any, text: string) => {
+// Valid OpenAI/ElevenLabs voices on /v1/audio/speech (per AvalAI docs).
+const AUDIO_SPEECH_VOICES = new Set([
+  'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse',
+]);
+const AUDIO_SPEECH_FORMATS = new Set(['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm']);
+
+const callAudioSpeech = async (
+  providerConfig: any,
+  text: string,
+  options: { voice?: string; speed?: number; responseFormat?: string } = {},
+) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
-  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.voice_output || 'eleven-v3').trim();
+  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.voice_output || 'eleven_v3').trim();
+  const requestedVoice = String(options.voice || '').trim().toLowerCase();
+  const voice = AUDIO_SPEECH_VOICES.has(requestedVoice) ? requestedVoice : 'alloy';
+  const requestedFormat = String(options.responseFormat || '').trim().toLowerCase();
+  const responseFormat = AUDIO_SPEECH_FORMATS.has(requestedFormat) ? requestedFormat : 'mp3';
+  const speed = Number.isFinite(Number(options.speed))
+    ? Math.min(4, Math.max(0.25, Number(options.speed)))
+    : undefined;
   const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/audio/speech', {
     method: 'POST',
     headers: {
@@ -2398,9 +2501,11 @@ const callAudioSpeech = async (providerConfig: any, text: string) => {
     body: JSON.stringify({
       model,
       input: text,
-      voice: 'alloy',
-      response_format: 'mp3',
+      voice,
+      response_format: responseFormat,
+      ...(speed !== undefined ? { speed } : {}),
     }),
+    signal: AbortSignal.timeout(110000),
   });
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const contentType = response.headers.get('content-type') || 'audio/mpeg';
@@ -2415,6 +2520,7 @@ const callAudioSpeech = async (providerConfig: any, text: string) => {
   return {
     bytes,
     contentType,
+    format: responseFormat,
     provider: providerConfig.provider,
     model,
     requestId,
@@ -2428,19 +2534,93 @@ const callAudioSpeech = async (providerConfig: any, text: string) => {
   };
 };
 
-const callImageGeneration = async (providerConfig: any, prompt: string) => {
+const callImageGeneration = async (
+  providerConfig: any,
+  prompt: string,
+  options: {
+    sourceImages?: Array<{ data: string; mimeType?: string; filename?: string }>;
+    size?: string;
+    quality?: string;
+    n?: number;
+    extraBody?: Record<string, any>;
+  } = {},
+) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.image_generation).trim();
+  const sourceImages = Array.isArray(options.sourceImages)
+    ? options.sourceImages.filter((src) => String(src?.data || '').trim())
+    : [];
+
+  // Gemini Nano Banana models -> native /v1beta generateContent (handles both
+  // generation and editing-with-source-images via inline_data parts).
+  if (isGeminiImageModel(model)) {
+    return await callGeminiImageGenerate({ ...providerConfig, model }, prompt, {
+      sourceImages,
+      extraConfig: options.extraBody,
+    });
+  }
+
+  const allowedSizes = new Set(['1024x1024', '1024x1792', '1792x1024', 'auto']);
+  const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
+  const n = Math.min(4, Math.max(1, Number(options.n) || 1));
+
+  // OpenAI-family image models with source image(s) -> /v1/images/edits (multipart).
+  if (sourceImages.length > 0) {
+    const formData = new FormData();
+    formData.append('model', model);
+    formData.append('prompt', prompt);
+    formData.append('n', String(n));
+    formData.append('size', size);
+    sourceImages.forEach((src, index) => {
+      const bytes = base64ToUint8Array(src.data);
+      const mime = src.mimeType || 'image/png';
+      const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+      formData.append('image[]', new Blob([bytes], { type: mime }), src.filename || `source_${index}.${ext}`);
+    });
+    if (options.extraBody && typeof options.extraBody === 'object') {
+      Object.entries(options.extraBody).forEach(([key, value]) => {
+        formData.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+      });
+    }
+    const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/edits', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
+      body: formData,
+      signal: AbortSignal.timeout(110000),
+    });
+    const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+    const parsed = parseJsonSafe(await response.text());
+    if (!response.ok) {
+      const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+      throw new Error(`ویرایش تصویر ناموفق بود: ${message}`);
+    }
+    const item = Array.isArray(parsed?.data) ? parsed.data[0] : parsed?.image || parsed;
+    return {
+      imageBase64: String(item?.b64_json || item?.base64 || item?.image_base64 || '').trim(),
+      imageUrl: String(item?.url || item?.image_url || '').trim(),
+      provider: providerConfig.provider,
+      model,
+      requestId,
+      baseUrl,
+      raw: parsed,
+      usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
+    };
+  }
+
   const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/generations', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${providerConfig.apiKey}`,
       'Content-Type': 'application/json',
     },
+    signal: AbortSignal.timeout(110000),
     body: JSON.stringify({
-      model: providerConfig.model,
+      model,
       prompt,
-      n: 1,
-      size: '1024x1024',
+      ...(options.quality ? { quality: options.quality } : {}),
+      ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
+      n,
+      size,
       response_format: 'b64_json',
     }),
   });
@@ -2457,12 +2637,101 @@ const callImageGeneration = async (providerConfig: any, prompt: string) => {
     imageBase64: b64,
     imageUrl: url,
     provider: providerConfig.provider,
-    model: providerConfig.model,
+    model,
     requestId,
     baseUrl,
     raw: parsed,
-    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, capability: 'image_generation' }),
+    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
   };
+};
+
+// ── Video generation (async job, per AvalAI /v1/videos docs) ──────────────────
+const callVideoCreate = async (
+  providerConfig: any,
+  prompt: string,
+  options: { seconds?: number; size?: string; inputReference?: { data: string; mimeType?: string } } = {},
+) => {
+  if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.video_generation).trim();
+  const seconds = String(Math.min(20, Math.max(1, Number(options.seconds) || 4)));
+  const size = String(options.size || '720x1280').trim();
+  const safetyIdentifier = `org_${providerConfig.orgId || ''}_video`.slice(0, 256);
+
+  let init: RequestInit;
+  if (options.inputReference?.data) {
+    const formData = new FormData();
+    formData.append('model', model);
+    formData.append('prompt', prompt.slice(0, 1000));
+    formData.append('seconds', seconds);
+    formData.append('size', size);
+    formData.append('safety_identifier', safetyIdentifier);
+    const mime = options.inputReference.mimeType || 'image/png';
+    const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+    formData.append('input_reference', new Blob([base64ToUint8Array(options.inputReference.data)], { type: mime }), `reference.${ext}`);
+    init = { method: 'POST', headers: { Authorization: `Bearer ${providerConfig.apiKey}` }, body: formData, signal: AbortSignal.timeout(60000) };
+  } else {
+    init = {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, safety_identifier: safetyIdentifier }),
+      signal: AbortSignal.timeout(60000),
+    };
+  }
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/videos', init);
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+  const parsed = parseJsonSafe(await response.text());
+  if (!response.ok) {
+    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+    throw new Error(`ساخت ویدیو ناموفق بود: ${message}`);
+  }
+  return {
+    videoId: String(parsed?.id || '').trim(),
+    status: String(parsed?.status || 'queued').trim(),
+    progress: numberFrom(parsed?.progress, 0),
+    model,
+    seconds: Number(seconds),
+    provider: providerConfig.provider,
+    requestId,
+    baseUrl,
+    raw: parsed,
+  };
+};
+
+const callVideoStatus = async (providerConfig: any, videoId: string) => {
+  if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const { response } = await requestAvalaiWithFallback(providerConfig, `/videos/${encodeURIComponent(videoId)}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  const parsed = parseJsonSafe(await response.text());
+  if (!response.ok) {
+    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+    throw new Error(`دریافت وضعیت ویدیو ناموفق بود: ${message}`);
+  }
+  return {
+    status: String(parsed?.status || 'processing').trim(),
+    progress: numberFrom(parsed?.progress, 0),
+    seconds: numberFrom(parsed?.seconds, 0),
+    raw: parsed,
+  };
+};
+
+const callVideoContent = async (providerConfig: any, videoId: string) => {
+  if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
+  const { response } = await requestAvalaiWithFallback(providerConfig, `/videos/${encodeURIComponent(videoId)}/content`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!response.ok) {
+    const message = parseJsonSafe(await response.text());
+    throw new Error(`دانلود ویدیو ناموفق بود: ${typeof message === 'string' ? message : JSON.stringify(message || {})}`);
+  }
+  const contentType = response.headers.get('content-type') || 'video/mp4';
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.length) throw new Error('خروجی ویدیو معتبر نیست.');
+  return { bytes, contentType };
 };
 
 const uploadGeneratedImage = async (
@@ -3042,6 +3311,52 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
   });
 };
 
+// Non-admin endpoint: lets any org member see which model each capability will
+// use in the compose box, and the selectable models — read from the ORG's
+// available model list (active catalog) + the org's per-capability selection.
+const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const [settings, rawModels] = await Promise.all([
+    loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+    safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      is_active: 'eq.true',
+      select: 'id,display_name_fa,capability_tags,is_coming_soon',
+      order: 'id.asc',
+      limit: 200,
+    }),
+  ]);
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const availability = buildAiCapabilityAvailability(planContext, settings, rawModels);
+  const models = (rawModels || []).filter((m: any) => m?.is_coming_soon !== true);
+  const labelOf = (id: string) => {
+    const row = models.find((m: any) => String(m?.id || '') === id);
+    return String(row?.display_name_fa || id || '').trim() || id;
+  };
+  const capabilities: Record<string, any> = {};
+  Object.keys(DEFAULT_CAPABILITY_MODELS).forEach((capability) => {
+    if (capability === 'embedding') return;
+    const resolved = getCapabilityModel(settings, capability);
+    const selectable = models
+      .filter((m: any) => {
+        const tags = Array.isArray(m?.capability_tags) ? m.capability_tags : [];
+        return tags.includes(capability) || String(m?.id || '') === resolved;
+      })
+      .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
+      .filter((opt: any) => opt.value);
+    if (!selectable.some((opt: any) => opt.value === resolved)) {
+      selectable.unshift({ value: resolved, label: labelOf(resolved) });
+    }
+    capabilities[capability] = {
+      model: resolved,
+      modelLabel: labelOf(resolved),
+      selectable,
+      available: availability?.[capability] ? availability[capability].planAvailable !== false
+        && availability[capability].tenantReady !== false
+        && availability[capability].hasReadyModel !== false : true,
+    };
+  });
+  return json(200, { success: true, capabilities });
+};
+
 const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const requestedThreadId = normalizeId(body?.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -3244,7 +3559,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     || (selectedCapabilitySet.has('deep_reasoning') ? 'deep_reasoning' : '')
     || (rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat');
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   for (const selectedCapability of selectedCapabilities) {
     if (AI_CAPABILITY_FEATURE_KEYS[selectedCapability]) {
@@ -3448,7 +3763,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const rawContext = normalizeContext(body?.context || {});
   const capability = 'document_analysis';
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
@@ -3631,7 +3946,7 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
   const rawContext = normalizeContext(body?.context || {});
   const capability = String(body?.capability || 'workflow_ai_prompt').trim() || 'workflow_ai_prompt';
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
@@ -4477,7 +4792,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
     return json(403, { success: false, message: 'دسترسی لازم برای مدیریت فرآیند و فعالیت‌ها را ندارید.' });
   }
   const capability = String(body?.capability || 'workflow_ai_prompt').trim() || 'workflow_ai_prompt';
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const [processContext, orgPeopleContext, companyContext] = await Promise.all([
     loadAiProcessContext(supabaseUrl, serviceRoleKey, authContext, pageContext),
@@ -4809,7 +5124,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
   if (!text) return json(400, { success: false, message: 'متن تولید صدا خالی است.' });
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_output');
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_output', { modelOverride: body?.modelOverride });
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'voice_output');
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
@@ -4835,8 +5150,14 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
       capability: 'voice_output',
     },
   });
-  const voiceResult = await callAudioSpeech(providerConfig, text);
-  const extension = String(voiceResult.contentType || '').includes('wav') ? 'wav' : 'mp3';
+  const voiceOptions = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const voiceResult = await callAudioSpeech(providerConfig, text, {
+    voice: voiceOptions.voice || body?.voice,
+    speed: voiceOptions.speed ?? body?.speed,
+    responseFormat: voiceOptions.responseFormat || voiceOptions.format || body?.responseFormat,
+  });
+  const extension = String(voiceResult.format || '').trim()
+    || (String(voiceResult.contentType || '').includes('wav') ? 'wav' : 'mp3');
   const storedVoice = await uploadGeneratedBinaryAsset(supabaseUrl, serviceRoleKey, authContext, voiceResult.bytes, voiceResult.contentType, {
     prefix: 'voice',
     extension,
@@ -4944,7 +5265,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   if (!prompt) return json(400, { success: false, message: 'متن درخواست تصویر خالی است.' });
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'image_generation');
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'image_generation', { modelOverride: body?.modelOverride });
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
@@ -4970,7 +5291,24 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       capability: 'image_generation',
     },
   });
-  const imageResult = await callImageGeneration(providerConfig, prompt);
+  const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const rawSources = Array.isArray(body?.sourceImages) ? body.sourceImages
+    : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
+    : [];
+  const sourceImages = rawSources
+    .map((src: any) => ({
+      data: String(src?.data || src?.base64 || '').trim(),
+      mimeType: String(src?.mimeType || src?.mime_type || 'image/png').trim() || 'image/png',
+      filename: String(src?.filename || src?.fileName || '').trim() || undefined,
+    }))
+    .filter((src: any) => src.data);
+  const imageResult = await callImageGeneration(providerConfig, prompt, {
+    sourceImages,
+    size: imageSettings.size || body?.size,
+    quality: imageSettings.quality || body?.quality,
+    n: imageSettings.n || body?.n,
+    extraBody: imageSettings.extraBody || imageSettings.extra_body,
+  });
   const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
   let fileManagerResult: any = null;
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
@@ -5062,6 +5400,376 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     usage: withCustomerBilling(imageResult.usageMetadata, ledger),
     ledger,
   });
+};
+
+// ── AI file generation (Word / Excel / PDF / CSV) ─────────────────────────────
+const DOCUMENT_FORMATS: Record<string, { ext: string; mime: string }> = {
+  docx: { ext: 'docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  xlsx: { ext: 'xlsx', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  pdf: { ext: 'pdf', mime: 'application/pdf' },
+  csv: { ext: 'csv', mime: 'text/csv' },
+};
+
+const escapeHtml = (value: any) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const normalizeDocumentSpec = (raw: any) => {
+  const spec = raw && typeof raw === 'object' ? raw : {};
+  const blocks = Array.isArray(spec.blocks) ? spec.blocks : [];
+  const sheets = Array.isArray(spec.sheets) ? spec.sheets : [];
+  // Derive a sheet from the first table block when none was provided (xlsx/csv).
+  if (!sheets.length) {
+    const table = blocks.find((b: any) => b?.type === 'table' && Array.isArray(b.columns));
+    if (table) sheets.push({ name: 'Sheet1', columns: table.columns, rows: Array.isArray(table.rows) ? table.rows : [] });
+  }
+  return { title: String(spec.title || '').trim() || 'سند هوش مصنوعی', blocks, sheets };
+};
+
+const buildDocumentHtml = (spec: any) => {
+  const parts: string[] = [];
+  parts.push(`<h1>${escapeHtml(spec.title)}</h1>`);
+  for (const block of spec.blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'heading') {
+      const level = Math.min(4, Math.max(1, Number(block.level) || 2));
+      parts.push(`<h${level}>${escapeHtml(block.text)}</h${level}>`);
+    } else if (block.type === 'paragraph') {
+      parts.push(`<p>${escapeHtml(block.text)}</p>`);
+    } else if (block.type === 'list' && Array.isArray(block.items)) {
+      parts.push(`<ul>${block.items.map((it: any) => `<li>${escapeHtml(it)}</li>`).join('')}</ul>`);
+    } else if (block.type === 'table' && Array.isArray(block.columns)) {
+      const head = `<tr>${block.columns.map((c: any) => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+      const rows = (Array.isArray(block.rows) ? block.rows : [])
+        .map((row: any[]) => `<tr>${(Array.isArray(row) ? row : []).map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
+        .join('');
+      parts.push(`<table border="1" cellspacing="0" cellpadding="6">${head}${rows}</table>`);
+    }
+  }
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8" />
+<style>
+  body{font-family:Tahoma,'IRANSans',sans-serif;direction:rtl;padding:32px;color:#1f2937;line-height:1.9}
+  h1{font-size:22px} h2{font-size:18px} h3{font-size:16px}
+  table{border-collapse:collapse;width:100%;margin:12px 0}
+  th{background:#f3f4f6} th,td{border:1px solid #d1d5db;padding:6px;text-align:right}
+  @page{size:A4;margin:18mm}
+</style></head><body>${parts.join('\n')}
+<script>window.__KALAMAPP_PRINT_READY = true;</script></body></html>`;
+};
+
+const buildCsvBytes = (spec: any) => {
+  const sheet = spec.sheets[0] || { columns: [], rows: [] };
+  const escapeCell = (cell: any) => {
+    const text = String(cell ?? '');
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const lines: string[] = [];
+  if (Array.isArray(sheet.columns) && sheet.columns.length) lines.push(sheet.columns.map(escapeCell).join(','));
+  for (const row of (Array.isArray(sheet.rows) ? sheet.rows : [])) {
+    lines.push((Array.isArray(row) ? row : []).map(escapeCell).join(','));
+  }
+  // Prepend UTF-8 BOM so Excel opens Persian text correctly.
+  return new TextEncoder().encode('﻿' + lines.join('\r\n'));
+};
+
+const buildDocxBytes = async (spec: any) => {
+  const docx = await import('https://esm.sh/docx@8.5.0');
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType } = docx as any;
+  const children: any[] = [
+    new Paragraph({ heading: HeadingLevel.TITLE, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(spec.title))] }),
+  ];
+  for (const block of spec.blocks) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'heading') {
+      const level = Number(block.level) || 2;
+      const heading = level <= 1 ? HeadingLevel.HEADING_1 : level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3;
+      children.push(new Paragraph({ heading, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(block.text || ''))] }));
+    } else if (block.type === 'paragraph') {
+      children.push(new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(block.text || ''))] }));
+    } else if (block.type === 'list' && Array.isArray(block.items)) {
+      for (const item of block.items) {
+        children.push(new Paragraph({ bullet: { level: 0 }, alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String(item || ''))] }));
+      }
+    } else if (block.type === 'table' && Array.isArray(block.columns)) {
+      const headerRow = new TableRow({ children: block.columns.map((c: any) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun({ text: String(c ?? ''), bold: true })] })] })) });
+      const bodyRows = (Array.isArray(block.rows) ? block.rows : []).map((row: any[]) =>
+        new TableRow({ children: block.columns.map((_: any, idx: number) => new TableCell({ children: [new Paragraph({ alignment: AlignmentType.RIGHT, bidirectional: true, children: [new TextRun(String((Array.isArray(row) ? row[idx] : '') ?? ''))] })] })) }));
+      children.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows: [headerRow, ...bodyRows] }));
+    }
+  }
+  const document = new Document({ sections: [{ properties: {}, children }] });
+  const buffer = await Packer.toBuffer(document);
+  return new Uint8Array(buffer);
+};
+
+const buildXlsxBytes = async (spec: any) => {
+  const XLSX = await import('https://esm.sh/xlsx@0.18.5');
+  const wb = (XLSX as any).utils.book_new();
+  const sheets = spec.sheets.length ? spec.sheets : [{ name: 'Sheet1', columns: [], rows: [] }];
+  sheets.forEach((sheet: any, index: number) => {
+    const aoa: any[][] = [];
+    if (Array.isArray(sheet.columns) && sheet.columns.length) aoa.push(sheet.columns);
+    for (const row of (Array.isArray(sheet.rows) ? sheet.rows : [])) aoa.push(Array.isArray(row) ? row : [row]);
+    const ws = (XLSX as any).utils.aoa_to_sheet(aoa);
+    (XLSX as any).utils.book_append_sheet(wb, ws, String(sheet.name || `Sheet${index + 1}`).slice(0, 31));
+  });
+  const out = (XLSX as any).write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Uint8Array(out);
+};
+
+const renderPdfViaService = async (supabaseUrl: string, serviceRoleKey: string, html: string, title: string) => {
+  const url = `${supabaseUrl.replace(/\/+$/, '')}/functions/v1/render-pdf`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentHtml: html, title, filename: title }),
+    signal: AbortSignal.timeout(110000),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`تولید PDF ناموفق بود: ${detail.slice(0, 300)}`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+};
+
+const handleGenerateDocument = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const prompt = String(body?.prompt || body?.message || '').trim();
+  if (!prompt) return json(400, { success: false, message: 'متن درخواست ساخت فایل خالی است.' });
+  const requestedFormat = String(body?.format || body?.settings?.format || 'docx').trim().toLowerCase();
+  const format = DOCUMENT_FORMATS[requestedFormat] ? requestedFormat : 'docx';
+  const rawContext = normalizeContext(body?.context || {});
+  const contextKey = buildContextKey(rawContext);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_generation', { modelOverride: body?.modelOverride });
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'document_generation');
+  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: body?.threadId || null,
+    title: `ساخت فایل: ${prompt}`.slice(0, 90),
+    pageContext,
+    contextKey,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    forceNew: body?.forceNewThread === true,
+  });
+  const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'user',
+    content: prompt,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    metadata: { context: pageContext.context, context_key: contextKey, input_kind: 'document_prompt', capability: 'document_generation', format },
+  });
+
+  // Ask the model for a strict JSON document spec.
+  const schemaHint = format === 'xlsx' || format === 'csv'
+    ? 'برای فایل صفحه‌گسترده، آرایه‌ی sheets را پر کن: [{"name":"...","columns":["..."],"rows":[["..."]]}].'
+    : 'برای سند متنی، آرایه‌ی blocks را پر کن: heading {type,text,level}، paragraph {type,text}، list {type,items[]}، table {type,columns[],rows[[]]}.';
+  const aiResult = await callChatCompletions(providerConfig, [
+    { role: 'system', content: `تو یک تولیدکننده‌ی محتوای ساختاریافته برای ساخت فایل هستی. فقط و فقط یک JSON معتبر برگردان (بدون توضیح، بدون markdown). ساختار: {"title":"...","blocks":[...],"sheets":[...]}. ${schemaHint} همه‌ی متن‌ها فارسی و رسمی باشند.` },
+    { role: 'user', content: prompt },
+  ], { safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_document_generation`, maxTokens: 4000 });
+
+  let spec: any;
+  try {
+    const cleaned = String(aiResult.content || '').replace(/^```(?:json)?/i, '').replace(/```$/i, '').trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    spec = normalizeDocumentSpec(JSON.parse(start >= 0 && end >= 0 ? cleaned.slice(start, end + 1) : cleaned));
+  } catch {
+    spec = normalizeDocumentSpec({ title: prompt.slice(0, 80), blocks: [{ type: 'paragraph', text: String(aiResult.content || '') }] });
+  }
+
+  let bytes: Uint8Array;
+  if (format === 'docx') bytes = await buildDocxBytes(spec);
+  else if (format === 'xlsx') bytes = await buildXlsxBytes(spec);
+  else if (format === 'csv') bytes = buildCsvBytes(spec);
+  else bytes = await renderPdfViaService(supabaseUrl, serviceRoleKey, buildDocumentHtml(spec), spec.title);
+
+  const stored = await uploadGeneratedBinaryAsset(supabaseUrl, serviceRoleKey, authContext, bytes, DOCUMENT_FORMATS[format].mime, {
+    prefix: 'document',
+    extension: DOCUMENT_FORMATS[format].ext,
+  });
+  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'assistant',
+    content: `فایل ${format.toUpperCase()} آماده شد: ${spec.title}`,
+    provider: aiResult.provider,
+    model: aiResult.model,
+    metadata: { capability: 'document_generation', format, prompt, file: stored, usage: aiResult.usageMetadata },
+  });
+  const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, stored, {
+    displayName: `${spec.title}.${DOCUMENT_FORMATS[format].ext}`,
+    fileType: 'file',
+    threadId: thread.id,
+    messageId: assistantMessage?.id || null,
+    prompt,
+  }).catch((error) => { console.warn('Could not register generated document', error); return null; });
+  const fileResult = {
+    ...stored,
+    asset_id: fileManagerResult?.asset?.id || null,
+    entry_id: fileManagerResult?.entry?.id || null,
+    folder_id: fileManagerResult?.folder?.id || null,
+  };
+  if (assistantMessage?.id && fileManagerResult) {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', { id: `eq.${assistantMessage.id}`, org_id: `eq.${authContext.orgId}` }, {
+      metadata: { capability: 'document_generation', format, prompt, file: fileResult, usage: aiResult.usageMetadata },
+    }).catch(() => []);
+  }
+  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: thread.id,
+    messageId: assistantMessage?.id || null,
+    requestId: aiResult.requestId,
+    capability: 'document_generation',
+    provider: aiResult.provider,
+    model: aiResult.model,
+    usageMetadata: aiResult.usageMetadata,
+    metadata: { source: 'document_generation', format, storage_path: stored.path },
+  });
+  await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
+  return json(200, {
+    success: true,
+    threadId: thread.id,
+    userMessageId: userMessage?.id || null,
+    messageId: assistantMessage?.id || null,
+    answer: `فایل ${format.toUpperCase()} آماده شد.`,
+    file: fileResult,
+    format,
+    provider: aiResult.provider,
+    model: aiResult.model,
+    usage: withCustomerBilling(aiResult.usageMetadata, ledger),
+    ledger,
+  });
+};
+
+const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const prompt = String(body?.prompt || body?.message || '').trim();
+  if (!prompt) return json(400, { success: false, message: 'متن درخواست ویدیو خالی است.' });
+  const rawContext = normalizeContext(body?.context || {});
+  const contextKey = buildContextKey(rawContext);
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'video_generation', { modelOverride: body?.modelOverride });
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'video_generation');
+  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const settings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const sources = Array.isArray(body?.sourceImages) ? body.sourceImages : (Array.isArray(settings.sourceImages) ? settings.sourceImages : []);
+  const firstSource = sources.map((src: any) => ({
+    data: String(src?.data || src?.base64 || '').trim(),
+    mimeType: String(src?.mimeType || src?.mime_type || 'image/png').trim() || 'image/png',
+  })).find((src: any) => src.data) || null;
+
+  const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: body?.threadId || null,
+    title: `تولید ویدیو: ${prompt}`.slice(0, 90),
+    pageContext,
+    contextKey,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    forceNew: body?.forceNewThread === true,
+  });
+  const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'user',
+    content: prompt,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    metadata: { context: pageContext.context, context_key: contextKey, input_kind: 'video_prompt', capability: 'video_generation' },
+  });
+  const created = await callVideoCreate({ ...providerConfig, orgId: authContext.orgId }, prompt, {
+    seconds: settings.seconds || body?.seconds,
+    size: settings.size || body?.size,
+    inputReference: firstSource,
+  });
+  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: thread.id,
+    role: 'assistant',
+    content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
+    provider: created.provider,
+    model: created.model,
+    metadata: {
+      capability: 'video_generation',
+      status: 'processing',
+      video_id: created.videoId,
+      prompt,
+      seconds: created.seconds,
+      avalai_request_id: created.requestId || null,
+    },
+  });
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    updated_at: new Date().toISOString(),
+    metadata: { ...(thread?.metadata || {}), last_activity_kind: 'video_generation', last_message_preview: prompt.slice(0, 300) },
+  }).catch(() => []);
+  return json(200, {
+    success: true,
+    threadId: thread.id,
+    userMessageId: userMessage?.id || null,
+    messageId: assistantMessage?.id || null,
+    videoId: created.videoId,
+    status: created.status || 'processing',
+    progress: created.progress,
+    provider: created.provider,
+    model: created.model,
+  });
+};
+
+const handleGetVideoStatus = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const videoId = String(body?.videoId || body?.video_id || '').trim();
+  const messageId = normalizeId(body?.messageId);
+  if (!videoId) return json(400, { success: false, message: 'شناسه ویدیو ارسال نشده است.' });
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'video_generation');
+  const statusResult = await callVideoStatus({ ...providerConfig, orgId: authContext.orgId }, videoId);
+
+  if (statusResult.status === 'completed') {
+    const rawContext = normalizeContext(body?.context || {});
+    const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+    const content = await callVideoContent({ ...providerConfig, orgId: authContext.orgId }, videoId);
+    const storedVideo = await uploadGeneratedBinaryAsset(supabaseUrl, serviceRoleKey, authContext, content.bytes, content.contentType, {
+      prefix: 'video',
+      extension: 'mp4',
+    });
+    const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedVideo, {
+      displayName: `ویدیو هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.mp4`,
+      fileType: 'video',
+      threadId: normalizeId(body?.threadId),
+      messageId,
+      prompt: String(body?.prompt || ''),
+    }).catch((error) => {
+      console.warn('Could not register generated video in file manager', error);
+      return null;
+    });
+    const fileResult = {
+      ...storedVideo,
+      asset_id: fileManagerResult?.asset?.id || null,
+      entry_id: fileManagerResult?.entry?.id || null,
+      folder_id: fileManagerResult?.folder?.id || null,
+    };
+    const usageMetadata = { provider: providerConfig.provider, model: providerConfig.model, capability: 'video_generation', video_seconds: statusResult.seconds };
+    const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+      threadId: normalizeId(body?.threadId),
+      messageId,
+      capability: 'video_generation',
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      usageMetadata,
+      metadata: { source: 'video_generation', video_id: videoId, storage_path: storedVideo.path },
+    });
+    if (messageId) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', { id: `eq.${messageId}`, org_id: `eq.${authContext.orgId}` }, {
+        content: 'ویدیو آماده شد.',
+        metadata: { capability: 'video_generation', status: 'completed', video_id: videoId, file: fileResult, usage: withCustomerBilling(usageMetadata, ledger) },
+      }).catch(() => []);
+    }
+    return json(200, { success: true, status: 'completed', progress: 100, file: fileResult, usage: withCustomerBilling(usageMetadata, ledger), ledger });
+  }
+
+  if (statusResult.status === 'failed') {
+    if (messageId) {
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', { id: `eq.${messageId}`, org_id: `eq.${authContext.orgId}` }, {
+        content: 'ساخت ویدیو ناموفق بود.',
+        metadata: { capability: 'video_generation', status: 'failed', video_id: videoId },
+      }).catch(() => []);
+    }
+    return json(200, { success: true, status: 'failed', progress: statusResult.progress });
+  }
+
+  return json(200, { success: true, status: statusResult.status || 'processing', progress: statusResult.progress });
 };
 
 const normalizeReplyDraftMessages = (items: any[]) =>
@@ -6361,6 +7069,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_ai_overview') return await handleGetAiOverview(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'get_compose_models') return await handleGetComposeModels(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_models') return await handleListModels(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_credit') return await handleGetCredit(supabaseUrl, serviceRoleKey, authContext, body);
@@ -6371,6 +7080,9 @@ Deno.serve(async (req: Request) => {
     if (action === 'transcribe_voice') return await handleTranscribeVoice(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_voice_output') return await handleGenerateVoiceOutput(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_image') return await handleGenerateImage(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'generate_video') return await handleGenerateVideo(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'get_video_status') return await handleGetVideoStatus(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);

@@ -7,6 +7,7 @@ import ShelfInventoryPanel from '../shelves/ShelfInventoryPanel';
 import ShelfStockMovementsPanel from '../shelves/ShelfStockMovementsPanel';
 import { shouldHideManagedAssigneeField } from '../../utils/assigneeSupport';
 import { isTaskLegacySourceField } from '../../utils/taskMeta';
+import { shouldRenderInGeneralModuleUi } from '../../utils/moduleFieldVisibility';
 
 interface FieldGroupsTabsProps {
   fieldGroups: any[];
@@ -73,6 +74,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => shouldRenderInGeneralModuleUi(f))
           .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .some((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
@@ -124,6 +126,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
             return !hasProcessBarsInSameBlock;
           })
           .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
+          .filter((f: any) => shouldRenderInGeneralModuleUi(f))
           .filter((f: any) => !shouldHideManagedAssigneeField(moduleId, f.key))
           .filter((f: any) => !(moduleId === 'tasks' && isTaskLegacySourceField(f.key)))
           .map((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))) && (
@@ -152,6 +155,7 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
               mode="db"
               moduleId={moduleId}
               recordId={recordId}
+              parentValues={data}
               invoiceGlobalDiscountType={data?.global_discount_type ?? null}
               invoiceGlobalDiscountValue={data?.global_discount_value ?? null}
               relationOptions={relationOptions}

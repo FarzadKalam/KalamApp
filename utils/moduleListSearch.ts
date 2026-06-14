@@ -1,5 +1,6 @@
 import type { CrudFilter } from '@refinedev/core';
 import { FieldNature, FieldType, type ModuleDefinition } from '../types';
+import { isWorkflowVirtualField } from './moduleFieldVisibility';
 
 const MODULE_LIST_SEARCHABLE_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
@@ -47,6 +48,7 @@ export const buildModuleListSearchFieldKeys = (
 
   const seen = new Set<string>();
   return (moduleConfig.fields || [])
+    .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => MODULE_LIST_SEARCHABLE_FIELD_TYPES.has(field.type) && !isLikelyUuidSystemField(field))
     .filter((field) => {
       const key = String(field.key || '').trim();

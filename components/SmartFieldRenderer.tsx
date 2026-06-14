@@ -61,6 +61,7 @@ import { normalizeProcessTargetModuleIds } from '../utils/processTargets';
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { shouldRenderInGeneralModuleUi } from '../utils/moduleFieldVisibility';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import {
   buildStandardSelectPopupRootStyle,
@@ -1710,9 +1711,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       }
       if (!payload?.portal_enabled) {
         payload.portal_status = payload.portal_status || 'disabled';
-        payload.telegram_chat_id = null;
-        payload.bale_chat_id = null;
-        payload.rubika_chat_id = null;
         if (payload.portal_permissions_override === '') {
           delete payload.portal_permissions_override;
         }
@@ -3484,6 +3482,7 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     () => (supportsAssignee
       ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
       : fields)
+      .filter((field) => shouldRenderInGeneralModuleUi(field))
       .filter((field) => String(field?.key || '') !== 'auto_name_enabled')
       .filter((field) => evaluateLegacyVisibilityRule((field as any)?.logic, watchedQuickCreateValues || {})),
     [fields, supportsAssignee, watchedQuickCreateValues],

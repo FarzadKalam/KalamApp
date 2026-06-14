@@ -105,6 +105,18 @@ describe('getWorkflowTriggerSummaryFa', () => {
     expect(summary).toContain('هر ۲ روز');
   });
 
+  it('بازه هفتگی با واحد فارسی نمایش داده می‌شود', () => {
+    const summary = getWorkflowTriggerSummaryFa({
+      trigger_type: 'interval',
+      interval_value: 2,
+      interval_unit: 'week',
+      interval_at: '09:30',
+      interval_day_condition: 'is_saturday',
+    });
+    expect(summary).toContain('هر ۲ هفته');
+    expect(summary).toContain('شنبه باشد');
+  });
+
   it('بازه ماهانه با روز ماه و شرط روز', () => {
     const summary = getWorkflowTriggerSummaryFa({
       trigger_type: 'interval',

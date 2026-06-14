@@ -45,6 +45,7 @@ import {
 import { fetchTaskSourceRecordOptions, getTaskModuleOptions, isTaskLegacySourceField, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { shouldRenderInGeneralModuleUi } from '../utils/moduleFieldVisibility';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
 import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { insertRecordActivity } from '../utils/recordActivity';
@@ -522,6 +523,44 @@ const SmartForm: React.FC<SmartFormProps> = ({
             } catch (err) {
               if (!isAbortLikeError(err)) {
                 console.warn('Could not set default assignee for create form', err);
+              }
+            }
+          }
+
+          if (module.id === 'invoices' && !String(finalValues.target_account || '').trim()) {
+            try {
+              const { data: defaultBank } = await supabase
+                .from('bank_accounts')
+                .select('id')
+                .eq('is_active', true)
+                .eq('is_default', true)
+                .limit(1)
+                .maybeSingle();
+              if (defaultBank?.id) {
+                finalValues.target_account = String(defaultBank.id);
+              }
+            } catch (err) {
+              if (!isAbortLikeError(err)) {
+                console.warn('Could not set default settlement account for invoice create form', err);
+              }
+            }
+          }
+
+          if (module.id === 'purchase_invoices' && !String(finalValues.source_account || '').trim()) {
+            try {
+              const { data: defaultBank } = await supabase
+                .from('bank_accounts')
+                .select('id')
+                .eq('is_active', true)
+                .eq('is_default', true)
+                .limit(1)
+                .maybeSingle();
+              if (defaultBank?.id) {
+                finalValues.source_account = String(defaultBank.id);
+              }
+            } catch (err) {
+              if (!isAbortLikeError(err)) {
+                console.warn('Could not set default settlement account for purchase invoice create form', err);
               }
             }
           }
@@ -1632,9 +1671,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
         }
         if (!values?.portal_enabled) {
           values.portal_status = values.portal_status || 'disabled';
-          values.telegram_chat_id = null;
-          values.bale_chat_id = null;
-          values.rubika_chat_id = null;
           if (values.portal_permissions_override === '') {
             delete values.portal_permissions_override;
           }
@@ -2197,6 +2233,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     .filter((b) => b.id !== 'auto_name');
   const autoNameToggleField = runtimeFields
     .filter((f) => recordId || f.hideInCreateForm !== true)
+    .filter((f) => shouldRenderInGeneralModuleUi(f))
     .filter((f) => canViewField(f.key))
     .find((f) => f.key === 'auto_name_enabled');
   const sortedBlocks = [...runtimeBlocks]
@@ -2205,6 +2242,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const baseHeaderFields = runtimeFields
       .filter(f => f.location === FieldLocation.HEADER)
       .filter((f) => recordId || f.hideInCreateForm !== true)
+      .filter((f) => shouldRenderInGeneralModuleUi(f))
       .filter(f => canViewField(f.key))
       .filter((f) => !shouldHideManagedAssigneeField(module.id, f.key))
       .filter((f) => f.key !== 'auto_name_enabled')
@@ -2223,6 +2261,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     const visibleImageFields = runtimeFields
       .filter((field) => field.type === FieldType.IMAGE)
       .filter((field) => recordId || field.hideInCreateForm !== true)
+      .filter((field) => shouldRenderInGeneralModuleUi(field))
       .filter((field) => canViewField(field.key))
       .filter((field) => field.nature !== 'system' || visibleSystemFieldKeys.has(field.key));
     if (visibleImageFields.length === 0) return null;
@@ -2756,6 +2795,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                   const blockFields = runtimeFields
                     .filter(f => f.blockId === block.id)
                     .filter((f) => recordId || f.hideInCreateForm !== true)
+                    .filter((f) => shouldRenderInGeneralModuleUi(f))
                     .filter((f) => !(!recordId && module.id === 'process_templates' && f.key === 'template_stages_preview'))
                     .filter((f) => !(
                       shouldHideProcessUiInSmartForm
@@ -2950,6 +2990,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                 initialData={formData[block.id] || []}
                                 mode="local"
                                 moduleId={module.id}
+                                parentValues={currentValues as Record<string, any>}
                                 relationOptions={relationOptions}
                                 dynamicOptions={dynamicOptions}
                                 canEditModule={canEditModule}
@@ -3016,6 +3057,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                     initialData={formData[block.id] || []}
                                     mode="local"
                                     moduleId={module.id}
+                                    parentValues={currentValues as Record<string, any>}
                                     relationOptions={relationOptions}
                                     dynamicOptions={dynamicOptions}
                                   canEditModule={canEditModule}

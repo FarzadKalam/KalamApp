@@ -121,7 +121,7 @@ const isWorkflowExecutionMode = (value: string): value is WorkflowExecutionMode 
   ['first_match', 'every_match'].includes(value);
 
 const isWorkflowIntervalUnit = (value: string): value is WorkflowIntervalUnit =>
-  ['hour', 'day', 'month'].includes(value);
+  ['hour', 'day', 'week', 'month'].includes(value);
 
 const createDefaultStatusCondition = (): WorkflowCondition => ({
   id: createWorkflowId(),

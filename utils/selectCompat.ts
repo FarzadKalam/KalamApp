@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleDefinition } from '../types';
 import { getRelationDisplayFields, getRelationSearchFields } from './relationDisplay';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from './relationTargetField';
+import { isWorkflowVirtualField } from './moduleFieldVisibility';
 
 const INCOMPATIBLE_COLUMN_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -87,11 +88,13 @@ const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?:
 
   const fieldKeys = new Set(
     moduleConfig.fields
+      .filter((field) => !isWorkflowVirtualField(field))
       .map((field) => String(field?.key || '').trim())
       .filter(Boolean)
   );
 
   const keyFields = moduleConfig.fields
+    .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => field.isKey)
     .map((field) => String(field.key || '').trim())
     .filter(Boolean);
@@ -113,6 +116,7 @@ const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?:
     .filter((field) => fieldKeys.has(field));
 
   const descriptiveTextFields = moduleConfig.fields
+    .filter((field) => !isWorkflowVirtualField(field))
     .filter((field) => {
       const key = String(field?.key || '').trim();
       if (!key) return false;
@@ -138,6 +142,7 @@ const getRecordTitleCandidateColumns = (moduleId?: string | null, moduleConfig?:
   return unique([
     ...descriptiveTextFields,
     ...moduleConfig.fields
+      .filter((field) => !isWorkflowVirtualField(field))
       .filter((field) => TEXTUAL_FIELD_TYPES.has(field?.type as FieldType))
       .slice(0, 3)
       .map((field) => String(field.key || '').trim())

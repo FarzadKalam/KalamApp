@@ -10,6 +10,7 @@ export const MODULE_LIST_LIVE_DEFAULT_MODULES = new Set([
   'invoices',
   'process_runs',
   'process_templates',
+  'voip_call_reports',
 ]);
 export const MODULE_LIST_LIVE_SUPPORTED_VIEWS = new Set<ViewMode>([
   ViewMode.LIST,

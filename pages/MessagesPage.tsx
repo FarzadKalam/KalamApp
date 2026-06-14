@@ -4,8 +4,8 @@ import type { AssistantContext } from '../utils/aiAssistantEvents';
 
 const NotificationsPopover = React.lazy(() => import('../components/NotificationsPopover'));
 
-type MessagesTab = 'notes' | 'bot_messages' | 'sms_messages' | 'voip_calls';
-const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'sms_messages', 'voip_calls']);
+type MessagesTab = 'notes' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls';
+const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls']);
 
 const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -18,6 +18,7 @@ const MessagesPage: React.FC = () => {
   }, [searchParams]);
   const requestedConversationKey = String(searchParams.get('conversation') || '').trim() || undefined;
   const requestedBotGroupId = String(searchParams.get('botGroup') || '').trim() || undefined;
+  const requestedBotDirectThreadId = String(searchParams.get('botDirectThread') || '').trim() || undefined;
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -57,6 +58,7 @@ const MessagesPage: React.FC = () => {
           requestedTab={requestedTab}
           requestedConversationKey={requestedConversationKey}
           requestedBotGroupId={requestedBotGroupId}
+          requestedBotDirectThreadId={requestedBotDirectThreadId}
         />
       </Suspense>
     </div>

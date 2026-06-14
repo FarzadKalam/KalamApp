@@ -3,6 +3,7 @@ export const MY_NOTES_CONVERSATION_KEY = 'mine';
 export const SAVED_MESSAGES_FORWARD_TARGET = '__saved_messages__';
 export const CHAT_GROUP_PREFIX = 'group:';
 export const BOT_GROUP_FORWARD_PREFIX = 'botgroup:';
+export const BOT_DIRECT_FORWARD_PREFIX = 'botdirect:';
 
 export const isChatGroupSelection = (value: string | null | undefined) =>
   String(value || '').startsWith(CHAT_GROUP_PREFIX);
@@ -38,6 +39,12 @@ export const isBotGroupForwardSelection = (value: string | null | undefined) =>
 
 export const getBotGroupForwardSelectionId = (value: string | null | undefined) =>
   isBotGroupForwardSelection(value) ? String(value || '').slice(BOT_GROUP_FORWARD_PREFIX.length) || null : null;
+
+export const isBotDirectForwardSelection = (value: string | null | undefined) =>
+  String(value || '').startsWith(BOT_DIRECT_FORWARD_PREFIX);
+
+export const getBotDirectForwardSelectionId = (value: string | null | undefined) =>
+  isBotDirectForwardSelection(value) ? String(value || '').slice(BOT_DIRECT_FORWARD_PREFIX.length) || null : null;
 
 export const isSavedMessagesForwardSelection = (value: string | null | undefined) =>
   String(value || '').trim() === SAVED_MESSAGES_FORWARD_TARGET;

@@ -84,6 +84,76 @@ export const supplierModule: ModuleDefinition = {
     { key: 'city', labels: { fa: 'شهر', en: 'City' }, type: FieldType.SELECT, blockId: 'contact_info', dynamicOptionsCategory: 'cities' },
     { key: 'address', labels: { fa: 'آدرس انبار/دفتر', en: 'Address' }, type: FieldType.LONG_TEXT, blockId: 'contact_info' },
     { key: 'location', labels: { fa: 'لوکیشن', en: 'Location' }, type: FieldType.LOCATION, blockId: 'contact_info' },
+    { key: 'telegram_chat_id', labels: { fa: 'شناسه چت تلگرام', en: 'Telegram Chat Id' }, type: FieldType.TEXT, blockId: 'bot_info', order: 1, botSettingsOnly: true },
+    { key: 'bale_chat_id', labels: { fa: 'شناسه چت بله', en: 'Bale Chat Id' }, type: FieldType.TEXT, blockId: 'bot_info', order: 2, botSettingsOnly: true },
+    { key: 'rubika_chat_id', labels: { fa: 'شناسه چت روبیکا', en: 'Rubika Chat Id' }, type: FieldType.TEXT, blockId: 'bot_info', order: 3, botSettingsOnly: true },
+    {
+      key: 'bot_default_channel',
+      labels: { fa: 'پلتفرم اصلی بات', en: 'Bot Default Channel' },
+      type: FieldType.SELECT,
+      blockId: 'bot_info',
+      order: 4,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'روبیکا', value: 'rubika' },
+        { label: 'تلگرام', value: 'telegram' },
+        { label: 'بله', value: 'bale' },
+        { label: 'بدون بات', value: 'none' }
+      ],
+      defaultValue: 'none',
+    },
+    { key: 'telegram_group_join_link', labels: { fa: 'لینک گروه تلگرام', en: 'Telegram Group Join Link' }, type: FieldType.LINK, blockId: 'bot_info', order: 5, botSettingsOnly: true, virtualBotField: true },
+    { key: 'bale_group_join_link', labels: { fa: 'لینک گروه بله', en: 'Bale Group Join Link' }, type: FieldType.LINK, blockId: 'bot_info', order: 6, botSettingsOnly: true, virtualBotField: true },
+    { key: 'rubika_group_join_link', labels: { fa: 'لینک گروه روبیکا', en: 'Rubika Group Join Link' }, type: FieldType.LINK, blockId: 'bot_info', order: 7, botSettingsOnly: true, virtualBotField: true },
+    {
+      key: 'telegram_group_status',
+      labels: { fa: 'وضعیت گروه تلگرام', en: 'Telegram Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'bot_info',
+      order: 8,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    {
+      key: 'bale_group_status',
+      labels: { fa: 'وضعیت گروه بله', en: 'Bale Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'bot_info',
+      order: 9,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    {
+      key: 'rubika_group_status',
+      labels: { fa: 'وضعیت گروه روبیکا', en: 'Rubika Group Status' },
+      type: FieldType.STATUS,
+      blockId: 'bot_info',
+      order: 10,
+      botSettingsOnly: true,
+      virtualBotField: true,
+      options: [
+        { label: 'در انتظار پیام', value: 'pending_join', color: 'orange' },
+        { label: 'فعال', value: 'active', color: 'green' },
+        { label: 'غیرفعال', value: 'disabled', color: 'gray' },
+        { label: 'خطا', value: 'error', color: 'red' }
+      ],
+    },
+    { key: 'telegram_group_title', labels: { fa: 'عنوان گروه تلگرام', en: 'Telegram Group Title' }, type: FieldType.TEXT, blockId: 'bot_info', order: 11, botSettingsOnly: true, virtualBotField: true },
+    { key: 'bale_group_title', labels: { fa: 'عنوان گروه بله', en: 'Bale Group Title' }, type: FieldType.TEXT, blockId: 'bot_info', order: 12, botSettingsOnly: true, virtualBotField: true },
+    { key: 'rubika_group_title', labels: { fa: 'عنوان گروه روبیکا', en: 'Rubika Group Title' }, type: FieldType.TEXT, blockId: 'bot_info', order: 13, botSettingsOnly: true, virtualBotField: true },
 
     { key: 'bank_account_number', labels: { fa: 'شماره کارت/حساب', en: 'Bank Account' }, type: FieldType.TEXT, blockId: 'financial_info' },
     { key: 'first_supply_date', labels: { fa: 'تاریخ شروع همکاری', en: 'Start Date' }, type: FieldType.DATE, blockId: 'financial_info' },
@@ -100,6 +170,10 @@ export const supplierModule: ModuleDefinition = {
     },
     {
       id: 'contact_info', titles: { fa: 'اطلاعات تماس', en: 'Contact Info' }, type: BlockType.FIELD_GROUP,
+      order: 0
+    },
+    {
+      id: 'bot_info', titles: { fa: 'تنظیمات بات', en: 'Bot Settings' }, type: BlockType.FIELD_GROUP,
       order: 0
     },
     {

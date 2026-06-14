@@ -43,6 +43,7 @@ import { loadProcessTemplateStages as loadProcessTemplateStagesShared } from './
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 import { buildAiRecordCreationSchema } from './aiRecordCreation';
+import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -133,9 +134,12 @@ const hydrateWorkflowCurrentRecord = async (
     return currentRecord;
   }
 
+  const botVirtualPatch = await loadBotWorkflowVirtualFieldPatch(supabase, moduleId, data).catch(() => ({}));
+
   return {
     ...currentRecord,
     ...data,
+    ...botVirtualPatch,
   };
 };
 

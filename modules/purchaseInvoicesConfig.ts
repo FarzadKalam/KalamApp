@@ -14,6 +14,10 @@ import {
   CASH_BANK_PAYMENT_TYPE_OPTIONS,
   CASH_BANK_RESPONSIBLE_LABEL_FA,
 } from '../utils/cashBankFieldCatalog';
+import {
+  INVOICE_PAYMENT_ACCOUNT_RELATION_CONFIG,
+  INVOICE_SETTLEMENT_BANK_RELATION_CONFIG,
+} from '../utils/invoiceAccountFieldConfig';
 import { HARD_CODED_UNIT_OPTIONS } from '../utils/unitConversions';
 import { getTodayLocalDateValue } from '../utils/defaultValues';
 
@@ -166,17 +170,8 @@ const BLOCKS = {
         title: 'حساب پرداخت',
         type: FieldType.RELATION,
         width: 220,
-        relationConfig: {
-          targetModule: 'bank_accounts',
-          targetField: 'bank_name',
-          filter: { is_active: true },
-           sourceModules: [
-             { targetModule: 'bank_accounts', targetField: 'bank_name', filter: { is_active: true }, tagLabel: 'بانک', tagColor: 'cyan' },
-             { targetModule: 'cash_boxes', targetField: 'name', filter: { is_active: true }, tagLabel: 'صندوق', tagColor: 'gold' },
-             { targetModule: 'petty_funds', targetField: 'name', filter: { is_active: true }, tagLabel: 'تنخواه', tagColor: 'magenta' },
-           ],
-         },
-       },
+        relationConfig: INVOICE_PAYMENT_ACCOUNT_RELATION_CONFIG,
+      },
       { key: 'use_existing_received_cheque', title: 'خرج چک', type: FieldType.CHECKBOX, width: 90 },
       {
         key: 'spent_cheque_id',
@@ -314,6 +309,16 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
       blockId: 'baseInfo',
       order: 7,
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'source_account',
+      labels: { fa: 'حساب مقصد', en: 'Settlement Account' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'baseInfo',
+      order: 7.1,
+      nature: FieldNature.STANDARD,
+      relationConfig: INVOICE_SETTLEMENT_BANK_RELATION_CONFIG,
     },
     {
       key: 'legacy_invoice_number',

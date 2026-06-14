@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'telefonchy-smartcall-2026-04-14-01';
+const FUNCTION_BUILD = 'telefonchy-smartcall-2026-06-14-02';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -588,8 +588,8 @@ Deno.serve(async (req) => {
       destination_number: to,
       extension,
       operator_code: firstValue(profile.voip_operator_code) || null,
-      module_id: firstValue(body.moduleId, body.module_id) || null,
-      record_id: firstValue(body.recordId, body.record_id) || null,
+      related_module_id: firstValue(body.moduleId, body.module_id, body.relatedModuleId, body.related_module_id) || null,
+      related_record_id: firstValue(body.recordId, body.record_id, body.relatedRecordId, body.related_record_id) || null,
       assignee_id: profile.id,
       created_by: user.id,
       title: to,
@@ -610,7 +610,7 @@ Deno.serve(async (req) => {
     }
 
     const ids = extractProviderIds(providerJson);
-    const callLog = await insertCallLog(supabaseUrl, serviceRoleKey, {
+    const callLog = await saveCallLog(supabaseUrl, serviceRoleKey, {
       ...baseLogRow,
       call_id: ids.callId || null,
       object_id: ids.objectId || null,

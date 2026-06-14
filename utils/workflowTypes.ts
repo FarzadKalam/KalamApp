@@ -1,7 +1,7 @@
 import { ModuleField } from '../types';
 
 export type WorkflowTriggerType = 'on_create' | 'on_upsert' | 'interval';
-export type WorkflowIntervalUnit = 'hour' | 'day' | 'month';
+export type WorkflowIntervalUnit = 'hour' | 'day' | 'week' | 'month';
 export type WorkflowExecutionMode = 'first_match' | 'every_match';
 
 export type IntervalDayCondition =
@@ -164,6 +164,7 @@ export const workflowExecutionModeOptions: Array<{ label: string; value: Workflo
 export const intervalUnitOptions: Array<{ label: string; value: WorkflowIntervalUnit }> = [
   { label: 'ساعت', value: 'hour' },
   { label: 'روز', value: 'day' },
+  { label: 'هفته', value: 'week' },
   { label: 'ماه', value: 'month' },
 ];
 

@@ -25,6 +25,8 @@ import FileExtensionTile from '../files/FileExtensionTile';
 
 interface SharedNoteCardProps {
   authorName: string;
+  authorNameNode?: React.ReactNode;
+  metaNode?: React.ReactNode;
   createdAtLabel: string;
   text: string;
   attachments: NoteAttachment[];
@@ -115,6 +117,8 @@ const normalizeMentionLabels = (values: string[], type: 'user' | 'role') => {
 
 const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   authorName,
+  authorNameNode,
+  metaNode,
   createdAtLabel,
   text,
   attachments,
@@ -470,7 +474,14 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       >
           <div className="mb-1 flex items-center justify-between gap-2 text-[9px]" style={subtleTextStyle}>
           <span className="inline-flex items-center gap-1.5 min-w-0">
-            <span className="truncate font-semibold" style={{ color: token.colorText }}>{authorName}</span>
+            <span className="truncate font-semibold" style={{ color: token.colorText }}>
+              {authorNameNode || authorName}
+            </span>
+            {metaNode ? (
+              <span className="inline-flex items-center gap-1 text-[9px] text-gray-500 dark:text-gray-400">
+                {metaNode}
+              </span>
+            ) : null}
             {sourceLabel && (
               <Tag
                 color="orange"

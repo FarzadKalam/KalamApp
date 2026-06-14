@@ -1,6 +1,6 @@
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
-import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined } from '@ant-design/icons';
+import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
@@ -26,6 +26,7 @@ import { getTaskStatusLabel } from '../utils/processTaskStatusOptions';
 import { setUiNotificationOverlayItems, setUiNotificationOverlaySuppressed } from '../utils/uiNotificationOverlayStore';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../utils/noteDispatch';
 import { getActiveChannelSettings } from '../utils/channelSettings';
+import { sendBotMessageViaGateway } from '../utils/botGateway';
 import { renderRecordTemplate } from '../utils/recordMessaging';
 import { resolveTemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
@@ -79,6 +80,23 @@ import ProfileAvatar from './common/ProfileAvatar';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 import type { BotChannel, BotPlatformState } from './bot/CounterpartyBotStatusModal';
+import {
+  BOT_CHANNELS,
+  BOT_CHANNEL_LABELS_FA as BOT_CHANNEL_LABELS_FA_SHARED,
+  getBotChatIdFieldKey,
+  isBotTargetModuleId,
+  type BotTargetModuleId,
+} from '../utils/botPlatform';
+import { syncBotDirectChatIdForTarget } from '../utils/botIdentityBindings';
+import {
+  buildPhoneTargetDisplayName,
+  MANUAL_PHONE_BINDING_SOURCE_FIELD,
+  MANUAL_PHONE_BINDING_SOURCE_TABLE,
+  PHONE_BIND_TARGET_MODULES,
+  searchPhoneBindingTargets,
+  syncPhoneIdentityBinding,
+  type PhoneBindTargetModuleId,
+} from '../utils/phoneIdentityBindings';
 import { loadScopedCompanySettings } from '../utils/companySettings';
 import { NOTIFICATION_UNREAD_BADGE_COLOR } from './notifications/UnreadCountBadge';
 import {
@@ -101,7 +119,10 @@ const VoipCallsPanel = React.lazy(() => import('./notifications/VoipCallsPanel')
 const ResponsibilitiesPanel = React.lazy(() => import('./notifications/ResponsibilitiesPanel'));
 const TasksPanel = React.lazy(() => import('./notifications/TasksPanel'));
 const SmsMessagesPanel = React.lazy(() => import('./notifications/SmsMessagesPanel'));
+const PhoneMatchPickerModal = React.lazy(() => import('./notifications/PhoneMatchPickerModal'));
 const BotMessagesPanel = React.lazy(() => import('./notifications/BotMessagesPanel'));
+const BotDirectMessagesPanel = React.lazy(() => import('./notifications/BotDirectMessagesPanel'));
+const BotChatIdentityBindModal = React.lazy(() => import('./notifications/BotChatIdentityBindModal'));
 const NotesPanel = React.lazy(() => import('./notifications/NotesPanel'));
 const ForwardMessageModalRuntime = React.lazy(() => import('./notifications/ForwardMessageModalRuntime'));
 const RelatedRecordPopover = React.lazy(() => import('./RelatedRecordPopover'));
@@ -125,9 +146,10 @@ const renderNotificationTemplate = async (
 interface NotificationsPopoverProps {
   isMobile: boolean;
   variant?: 'chat' | 'alerts';
-  requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
+  requestedTab?: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls';
   requestedConversationKey?: string;
   requestedBotGroupId?: string;
+  requestedBotDirectThreadId?: string;
   /** When true, renders as a full-page component (no drawer/popover wrapper, always open) */
   standalone?: boolean;
   managedByRuntime?: boolean;
@@ -168,13 +190,13 @@ const _notifDirectoryCache: {
   users: Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
   roles: Array<{ id: string; title: string }>;
 } = { orgId: null, users: [], roles: [] };
-type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls';
-type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms' | 'voip_calls';
+type NotificationSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls';
+type NotificationStateSectionKey = 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'bot_direct_messages' | 'sms' | 'voip_calls';
 type DrawerTabKey = NotificationSectionKey;
 type CreatedSortDirection = 'desc' | 'asc';
-const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'];
+const CHAT_TAB_KEYS: DrawerTabKey[] = ['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls'];
 const ALERT_TAB_KEYS: DrawerTabKey[] = ['tasks', 'responsibilities'];
-const CHAT_SECTION_KEYS: NotificationSectionKey[] = ['notes', 'bot_messages', 'sms_messages', 'voip_calls'];
+const CHAT_SECTION_KEYS: NotificationSectionKey[] = ['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls'];
 const ALERT_SECTION_KEYS: NotificationSectionKey[] = ['tasks', 'responsibilities'];
 const normalizeTabForVariant = (
   variant: 'chat' | 'alerts',
@@ -200,6 +222,8 @@ const buildEnglishActivationBase = (value: any) => {
 
 const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
   groupTitle: '',
+  groupJoinLink: '',
+  directChatId: '',
   currentStatus: 'pending_join',
   activationCode: '',
   lastInboundAt: '',
@@ -228,7 +252,7 @@ const loadOrgBotPrefix = async (): Promise<string> => {
   }
 };
 const isSectionTabKey = (value: DrawerTabKey): value is NotificationSectionKey =>
-  value === 'notes' || value === 'tasks' || value === 'responsibilities' || value === 'bot_messages' || value === 'sms_messages' || value === 'voip_calls';
+  value === 'notes' || value === 'tasks' || value === 'responsibilities' || value === 'bot_messages' || value === 'bot_direct_messages' || value === 'sms_messages' || value === 'voip_calls';
 const getSectionsForVariant = (variant: 'chat' | 'alerts'): NotificationSectionKey[] =>
   variant === 'chat' ? CHAT_SECTION_KEYS : ALERT_SECTION_KEYS;
 const NOTE_SELECT_FIELDS = 'id, module_id, record_id, content, author_id, author_name, mention_user_ids, mention_role_ids, created_at, reply_to, source_type, metadata, is_edited, edited_at';
@@ -249,6 +273,7 @@ type CounterpartyBotGroupRow = {
   target_type: 'customers' | 'suppliers' | string;
   customer_id: string | null;
   supplier_id: string | null;
+  employee_id?: string | null;
   channel_type: 'rubika' | 'telegram' | 'bale' | string;
   status: string;
   group_title: string | null;
@@ -278,13 +303,108 @@ type CounterpartyBotMessageRow = {
   created_at: string | null;
 };
 
-const BOT_CHANNEL_LABELS_FA: Record<string, string> = {
-  rubika: 'روبیکا',
-  telegram: 'تلگرام',
-  bale: 'بله',
+type BotDirectThreadRow = {
+  id: string;
+  channel_type: 'rubika' | 'telegram' | 'bale' | string;
+  chat_id: string;
+  binding_id?: string | null;
+  target_module_id?: 'customers' | 'suppliers' | 'employees' | string | null;
+  target_record_id?: string | null;
+  customer_id?: string | null;
+  supplier_id?: string | null;
+  employee_id?: string | null;
+  profile_id?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  phone_number?: string | null;
+  last_seen_at?: string | null;
+  last_inbound_at?: string | null;
+  last_outbound_at?: string | null;
+  last_message_at?: string | null;
+  last_message_preview?: string | null;
+  metadata?: Record<string, any> | null;
+  binding_status?: 'bound' | 'unbound';
+  counterparty_label?: string | null;
+  counterparty_image_url?: string | null;
 };
 
+type BotDirectMessageRow = {
+  id: string;
+  direct_thread_id: string;
+  direction: 'inbound' | 'outbound' | string;
+  message_type: 'text' | 'image' | 'file' | 'invoice' | 'other' | string;
+  content_text?: string | null;
+  file_url?: string | null;
+  file_name?: string | null;
+  mime_type?: string | null;
+  payload?: Record<string, any> | null;
+  chat_id?: string | null;
+  channel_type?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+};
+
+type BotIdentityBindingRow = {
+  id?: string;
+  target_module_id?: BotTargetModuleId | string | null;
+  target_record_id?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  phone_number?: string | null;
+  profile_id?: string | null;
+};
+
+type BotChatIdentityBindDraft = {
+  threadId?: string | null;
+  channel: BotChannel;
+  chatId: string;
+  displayName: string;
+  username: string;
+  phoneNumber: string;
+  existingBinding: BotIdentityBindingRow | null;
+};
+
+type BotIdentityMemberGroup = {
+  id: string;
+  title: string;
+  channelLabel: string;
+  statusLabel?: string | null;
+  lastActivityAt?: string | null;
+};
+
+type PhoneIdentityBindDraft = {
+  phone: string;
+  phoneNumberId: string | null;
+  phoneMatchStatus: string | null;
+  existingBindingLabel?: string | null;
+  existingTargetModuleId?: PhoneBindTargetModuleId | null;
+  existingTargetRecordId?: string | null;
+};
+
+const BOT_CHANNEL_LABELS_FA: Record<string, string> = BOT_CHANNEL_LABELS_FA_SHARED;
+
 const BOT_BIND_CAPTURE_SECONDS = 60;
+
+const isBlockedBotDirectThread = (row: BotDirectThreadRow | null | undefined) => {
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  return (metadata as any)?.suspected_group_chat === true || (metadata as any)?.send_blocked === true;
+};
+
+const scoreBotDirectThreadCandidate = (row: BotDirectThreadRow | null | undefined) => {
+  if (!row) return Number.NEGATIVE_INFINITY;
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const suspiciousPenalty = isBlockedBotDirectThread(row) ? -1_000_000 : 0;
+  const verifiedBonus = (metadata as any)?.direct_chat_verified === true ? 10_000 : 0;
+  const boundBonus = String(row?.target_module_id || '').trim() && String(row?.target_record_id || '').trim() ? 1_000 : 0;
+  const activityTime = new Date(
+    row?.last_message_at
+    || row?.last_inbound_at
+    || row?.last_outbound_at
+    || row?.last_seen_at
+    || 0
+  ).getTime() || 0;
+  return suspiciousPenalty + verifiedBonus + boundBonus + activityTime;
+};
 
 const isActiveCounterpartyBotGroup = (row: Pick<CounterpartyBotGroupRow, 'status'> | null | undefined) =>
   String(row?.status || '').trim() === 'active';
@@ -684,6 +804,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   renderTrigger = true,
   onOpenChange,
   onAfterClose,
+  requestedBotDirectThreadId,
 }) => {
   const notificationRuntime = useNotificationRuntime();
   const runtimeRefreshSummary = notificationRuntime.refreshSummary;
@@ -692,7 +813,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   // Last opened tab/conversation (per device). Only the standalone chat page
   // restores it, and only when the URL did not request a specific target.
   const storedLastStateRef = useRef(
-    variant === 'chat' && standalone && !requestedTab && !requestedConversationKey && !requestedBotGroupId
+    variant === 'chat' && standalone && !requestedTab && !requestedConversationKey && !requestedBotGroupId && !requestedBotDirectThreadId
       ? loadMessagesLastState()
       : null,
   );
@@ -709,9 +830,23 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [selectedBotGroupId, setSelectedBotGroupId] = useState<string | null>(
     () => String(storedLastStateRef.current?.botGroupId || '').trim() || null,
   );
+  const [botDirectThreads, setBotDirectThreads] = useState<BotDirectThreadRow[]>([]);
+  const [selectedBotDirectThreadId, setSelectedBotDirectThreadId] = useState<string | null>(
+    () => String((storedLastStateRef.current as any)?.botDirectThreadId || '').trim() || null,
+  );
+  const [botDirectThreadSearch, setBotDirectThreadSearch] = useState('');
+  const [botDirectMessageSearch, setBotDirectMessageSearch] = useState('');
+  const [botDirectMessageText, setBotDirectMessageText] = useState('');
+  const [botDirectMessages, setBotDirectMessages] = useState<BotDirectMessageRow[]>([]);
+  const [botDirectSending, setBotDirectSending] = useState(false);
+  const [botDirectSuggesting, setBotDirectSuggesting] = useState(false);
+  const [botDirectAttachments, setBotDirectAttachments] = useState<File[]>([]);
+  const [botDirectLinkedAttachments, setBotDirectLinkedAttachments] = useState<NoteAttachment[]>([]);
+  const [mobileBotDirectSearchOpen, setMobileBotDirectSearchOpen] = useState(false);
   const [botMessageText, setBotMessageText] = useState('');
   const [botSending, setBotSending] = useState(false);
   const [botSuggesting, setBotSuggesting] = useState(false);
+  const [botDirectAiPopoverOpen, setBotDirectAiPopoverOpen] = useState(false);
   const [botStatusModalOpen, setBotStatusModalOpen] = useState(false);
   const [botStatusModalLoading, setBotStatusModalLoading] = useState(false);
   const [botStatusModalSaving, setBotStatusModalSaving] = useState(false);
@@ -725,11 +860,33 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   });
   const [botStatusCountdown, setBotStatusCountdown] = useState(0);
   const [botStatusWatchingChannel, setBotStatusWatchingChannel] = useState<BotChannel | null>(null);
+  const [botIdentityBindModalOpen, setBotIdentityBindModalOpen] = useState(false);
+  const [botIdentityBindModalLoading, setBotIdentityBindModalLoading] = useState(false);
+  const [botIdentityBindModalSaving, setBotIdentityBindModalSaving] = useState(false);
+  const [botIdentityBindDraft, setBotIdentityBindDraft] = useState<BotChatIdentityBindDraft | null>(null);
+  const [botIdentityBindTargetModuleId, setBotIdentityBindTargetModuleId] = useState<BotTargetModuleId>('customers');
+  const [botIdentityBindTargetRecordId, setBotIdentityBindTargetRecordId] = useState<string | null>(null);
+  const [botIdentityBindSearch, setBotIdentityBindSearch] = useState('');
+  const [botIdentityBindOptions, setBotIdentityBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
+  const [botIdentityAllowedUserIds, setBotIdentityAllowedUserIds] = useState<string[]>([]);
+  const [botIdentityAllowedRoleIds, setBotIdentityAllowedRoleIds] = useState<string[]>([]);
+  const [botIdentityAiAutoReplyEnabled, setBotIdentityAiAutoReplyEnabled] = useState(false);
+  const [botIdentityAiCounterpartyGuide, setBotIdentityAiCounterpartyGuide] = useState('');
+  const [botIdentityMemberGroups, setBotIdentityMemberGroups] = useState<BotIdentityMemberGroup[]>([]);
   const [botAiPopoverOpen, setBotAiPopoverOpen] = useState(false);
   const [botGroupSearch, setBotGroupSearch] = useState('');
   const [botMessageSearch, setBotMessageSearch] = useState('');
   const [botNotificationMessages, setBotNotificationMessages] = useState<CounterpartyBotMessageRow[]>([]);
+  const [botDirectNotificationMessages, setBotDirectNotificationMessages] = useState<BotDirectMessageRow[]>([]);
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
+  const [phoneIdentityBindModalOpen, setPhoneIdentityBindModalOpen] = useState(false);
+  const [phoneIdentityBindModalLoading, setPhoneIdentityBindModalLoading] = useState(false);
+  const [phoneIdentityBindModalSaving, setPhoneIdentityBindModalSaving] = useState(false);
+  const [phoneIdentityBindDraft, setPhoneIdentityBindDraft] = useState<PhoneIdentityBindDraft | null>(null);
+  const [phoneIdentityBindTargetModuleId, setPhoneIdentityBindTargetModuleId] = useState<PhoneBindTargetModuleId>('customers');
+  const [phoneIdentityBindTargetRecordId, setPhoneIdentityBindTargetRecordId] = useState<string | null>(null);
+  const [phoneIdentityBindSearch, setPhoneIdentityBindSearch] = useState('');
+  const [phoneIdentityBindOptions, setPhoneIdentityBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
   const [selectedSmsThreadKey, setSelectedSmsThreadKey] = useState<string | null>(null);
   const [smsRecipient, setSmsRecipient] = useState('');
   const [smsSending, setSmsSending] = useState(false);
@@ -837,6 +994,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [loadingNotes, setLoadingNotes] = useState(false);
   // loadingTasks and loadingResponsibilities come from hooks (see below)
   const [loadingBotMessages, setLoadingBotMessages] = useState(false);
+  const [loadingBotDirectMessages, setLoadingBotDirectMessages] = useState(false);
   const [loadingSmsMessages, setLoadingSmsMessages] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [noteSending, setNoteSending] = useState(false);
@@ -861,6 +1019,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     tasks: 0,
     responsibilities: 0,
     bot_messages: 0,
+    bot_direct_messages: 0,
     sms_messages: 0,
     voip_calls: 0,
   });
@@ -886,9 +1045,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     pairs: { module_id: string; record_id: string }[];
   }>({ loadedAt: 0, userId: '', roleId: '', pairs: [] });
   const botMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const botDirectMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const pendingBotScrollRestoreRef = useRef<number | null>(null);
   const botShouldStickToBottomRef = useRef(true);
   const botForceScrollToBottomRef = useRef(false);
+  const botDirectShouldStickToBottomRef = useRef(true);
+  const botDirectForceScrollToBottomRef = useRef(false);
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const templateRecordCacheRef = useRef<Map<string, Record<string, any> | null>>(new Map());
   const noteConversationKeyRef = useRef<string | null>(null);
@@ -900,6 +1062,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const botMessagesFetchSeqRef = useRef(0);
   const botMessagesRef = useRef<CounterpartyBotMessageRow[]>([]);
   const botMessagesGroupIdRef = useRef<string | null>(null);
+  const botDirectMessagesRef = useRef<BotDirectMessageRow[]>([]);
+  const botDirectMessagesThreadIdRef = useRef<string | null>(null);
   const hydratingBotMessageIdsRef = useRef<Set<string>>(new Set());
   const botHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedBotHydrationFailuresRef = useRef<Set<string>>(new Set());
@@ -1027,10 +1191,70 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     () => effectiveBotGroups.find((row) => String(row.id) === String(selectedBotGroupId || '')) || null,
     [effectiveBotGroups, selectedBotGroupId]
   );
+  const filteredBotDirectThreads = useMemo(() => {
+    const search = String(botDirectThreadSearch || '').trim().toLowerCase();
+    if (!search) return botDirectThreads;
+    return botDirectThreads.filter((row) => {
+      const haystack = [
+        row.counterparty_label,
+        row.display_name,
+        row.username,
+        row.phone_number,
+        row.chat_id,
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .join(' ');
+      return haystack.includes(search);
+    });
+  }, [botDirectThreadSearch, botDirectThreads]);
+  const selectedBotDirectThread = useMemo(
+    () => filteredBotDirectThreads.find((row) => String(row.id) === String(selectedBotDirectThreadId || ''))
+      || botDirectThreads.find((row) => String(row.id) === String(selectedBotDirectThreadId || ''))
+      || null,
+    [botDirectThreads, filteredBotDirectThreads, selectedBotDirectThreadId],
+  );
+  const botDirectThreadByIdentityKey = useMemo(
+    () => botDirectThreads.reduce<Record<string, BotDirectThreadRow>>((acc, row) => {
+      const channel = String(row.channel_type || '').trim();
+      const chatId = String(row.chat_id || '').trim();
+      if (channel && chatId) acc[`${channel}:${chatId}`] = row;
+      return acc;
+    }, {}),
+    [botDirectThreads],
+  );
   const visibleBotGroupIds = useMemo(
     () => new Set(effectiveBotGroups.map((row) => String(row.id || '').trim()).filter(Boolean)),
     [effectiveBotGroups]
   );
+
+  const applyBotTargetFilter = useCallback((
+    query: any,
+    targetType: BotTargetModuleId,
+    counterpartyId: string,
+  ) => {
+    if (targetType === 'customers') return query.eq('customer_id', counterpartyId);
+    if (targetType === 'suppliers') return query.eq('supplier_id', counterpartyId);
+    return query.eq('employee_id', counterpartyId);
+  }, []);
+
+  const getBotTargetRecordIdFromGroup = useCallback((group: CounterpartyBotGroupRow | null | undefined) => {
+    const targetType = String(group?.target_type || '').trim();
+    if (targetType === 'customers') return String(group?.customer_id || '').trim() || null;
+    if (targetType === 'suppliers') return String(group?.supplier_id || '').trim() || null;
+    if (targetType === 'employees') return String(group?.employee_id || '').trim() || null;
+    return null;
+  }, []);
+
+  const formatBotTargetRecordLabel = useCallback((moduleId: BotTargetModuleId, row: Record<string, any> | null | undefined) => {
+    if (!row) return '';
+    if (moduleId === 'customers') {
+      return String(row.full_name || row.business_name || row.legal_name || row.system_code || '').trim();
+    }
+    if (moduleId === 'suppliers') {
+      return String(row.business_name || row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.system_code || '').trim();
+    }
+    return String(row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.system_code || row.legacy_system_code || '').trim();
+  }, []);
 
   const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
@@ -1042,26 +1266,31 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const loadBotStatusRow = useCallback(async (group: CounterpartyBotGroupRow, options?: { activeTab?: BotChannel | null }) => {
     const orgPrefix = await loadOrgBotPrefix();
     const counterpartyLabel = String(group?.counterparty_label || '').trim();
-    const targetType = String(group?.target_type || '').trim() as 'customers' | 'suppliers';
-    const counterpartyId = targetType === 'customers'
-      ? String(group?.customer_id || '').trim()
-      : String(group?.supplier_id || '').trim();
+    const targetType = String(group?.target_type || '').trim() as BotTargetModuleId;
+    const counterpartyId = getBotTargetRecordIdFromGroup(group);
     if (!counterpartyId) return;
 
     let groupQuery = supabase
       .from('counterparty_bot_groups')
-      .select('id, channel_type, status, group_title, metadata, last_inbound_at, bot_chat_id')
+      .select('id, channel_type, status, group_title, group_join_link, metadata, last_inbound_at, bot_chat_id')
       .limit(10);
-    groupQuery = targetType === 'customers'
-      ? groupQuery.eq('customer_id', counterpartyId)
-      : groupQuery.eq('supplier_id', counterpartyId);
+    groupQuery = applyBotTargetFilter(groupQuery, targetType, counterpartyId);
     const { data: rows, error } = await groupQuery;
     if (error) throw error;
     const rowMap = new Map((rows || []).map((row: any) => [String(row?.channel_type || '').trim(), row] as const));
 
     let prefQuery = supabase.from('counterparty_bot_config').select('default_channel, fallback_to_active').limit(1);
-    prefQuery = targetType === 'customers' ? prefQuery.eq('customer_id', counterpartyId) : prefQuery.eq('supplier_id', counterpartyId);
-    const { data: prefRow } = await prefQuery.maybeSingle();
+    prefQuery = applyBotTargetFilter(prefQuery, targetType, counterpartyId);
+    const [prefResult, targetRecordResult] = await Promise.all([
+      prefQuery.maybeSingle(),
+      supabase
+        .from(targetType)
+        .select(BOT_CHANNELS.map((channel) => getBotChatIdFieldKey(channel)).join(','))
+        .eq('id', counterpartyId)
+        .maybeSingle(),
+    ]);
+    const { data: prefRow } = prefResult;
+    const targetRecord = targetRecordResult.data || null;
     const defaultChannel = (['rubika', 'telegram', 'bale'].includes(String(prefRow?.default_channel || ''))
       ? prefRow!.default_channel : 'rubika') as BotChannel;
 
@@ -1083,7 +1312,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
       telegram: { ...DEFAULT_BOT_PLATFORM_STATE },
       bale: { ...DEFAULT_BOT_PLATFORM_STATE },
     };
-    for (const channel of ['rubika', 'telegram', 'bale'] as BotChannel[]) {
+    for (const channel of BOT_CHANNELS) {
       const row = rowMap.get(channel) || null;
       const metadata = (row?.metadata && typeof row.metadata === 'object') ? row.metadata : {};
       const existingCode = String(metadata?.activation_code || '').trim().toUpperCase();
@@ -1092,6 +1321,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
       const rawStatus = String(row?.status || 'pending_join').trim();
       platforms[channel] = {
         groupTitle: String(row?.group_title || '').trim(),
+        groupJoinLink: String(row?.group_join_link || '').trim(),
+        directChatId: String((targetRecord as any)?.[getBotChatIdFieldKey(channel)] || '').trim(),
         currentStatus: rawStatus === 'pending_join_link' ? 'pending_join' : (rawStatus || 'pending_join'),
         activationCode: existingCode || createBotActivationCode(counterpartyLabel, orgPrefix),
         lastInboundAt: String(inbound?.created_at || row?.last_inbound_at || '').trim(),
@@ -1107,7 +1338,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     setBotStatusDefaultChannel(defaultChannel);
     setBotStatusFallbackToActive(Boolean(prefRow?.fallback_to_active));
     setBotStatusActiveTab(options?.activeTab || defaultChannel);
-  }, []);
+  }, [applyBotTargetFilter, getBotTargetRecordIdFromGroup]);
 
   const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureChannel?: BotChannel; captureSeconds?: number }) => {
     if (!selectedBotGroup) return;
@@ -1116,15 +1347,19 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     const captureSeconds = Number(options?.captureSeconds || 30);
     const nowIso = new Date().toISOString();
     const captureExpiresAt = forceCapture ? new Date(Date.now() + Math.max(10, captureSeconds) * 1000).toISOString() : null;
-    const targetType = selectedBotGroup.target_type === 'customers' ? 'customers' : 'suppliers';
-    const counterpartyId = targetType === 'customers' ? String(selectedBotGroup.customer_id || '').trim() : String(selectedBotGroup.supplier_id || '').trim();
+    const targetType = String(selectedBotGroup.target_type || '').trim() as BotTargetModuleId;
+    const counterpartyId = getBotTargetRecordIdFromGroup(selectedBotGroup);
+    const currentOrgId = String(profile.org_id || '').trim();
+    if (!counterpartyId || !currentOrgId) {
+      throw new Error('اطلاعات رکورد یا سازمان برای ذخیره تنظیمات بات کامل نیست.');
+    }
 
-    for (const channel of ['rubika', 'telegram', 'bale'] as BotChannel[]) {
+    for (const channel of BOT_CHANNELS) {
       const platformState = botStatusPlatformData[channel];
       if (!platformState) continue;
       const isCapturing = forceCapture && channel === captureChannel;
       let existingQuery = supabase.from('counterparty_bot_groups').select('id, status, bot_chat_id, metadata').eq('channel_type', channel).limit(1);
-      existingQuery = targetType === 'customers' ? existingQuery.eq('customer_id', counterpartyId) : existingQuery.eq('supplier_id', counterpartyId);
+      existingQuery = applyBotTargetFilter(existingQuery, targetType, counterpartyId);
       const { data: existingRows } = await existingQuery;
       const existingRow = Array.isArray(existingRows) ? existingRows[0] : null;
       const existingStatus = String(existingRow?.status || '').trim() === 'pending_join_link' ? 'pending_join' : String(existingRow?.status || '').trim();
@@ -1134,8 +1369,9 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
       const payload: Record<string, any> = {
         target_type: targetType, channel_type: channel, status: nextStatus,
         group_title: String(platformState.groupTitle || '').trim() || null,
+        group_join_link: String(platformState.groupJoinLink || '').trim() || null,
         metadata: { ...existingMetadata, activation_code: String(platformState.activationCode || '').trim().toUpperCase(), activation_required: true, capture_mode: isCapturing, capture_started_at: isCapturing ? nowIso : null, capture_expires_at: isCapturing ? captureExpiresAt : null, last_capture_channel: isCapturing ? channel : existingMetadata?.last_capture_channel, allowed_user_ids: platformState.allowedUserIds, allowed_role_ids: platformState.allowedRoleIds, ai_auto_reply_enabled: platformState.aiAutoReplyEnabled, ai_counterparty_guide: String(platformState.aiCounterpartyGuide || '').trim() || null, activation_confirmation_sent: isCapturing ? false : Boolean(existingMetadata?.activation_confirmation_sent), last_capture_error: isCapturing ? null : existingMetadata?.last_capture_error, activation_updated_at: nowIso },
-        updated_by: null, customer_id: targetType === 'customers' ? counterpartyId : null, supplier_id: targetType === 'suppliers' ? counterpartyId : null,
+        updated_by: null, customer_id: targetType === 'customers' ? counterpartyId : null, supplier_id: targetType === 'suppliers' ? counterpartyId : null, employee_id: targetType === 'employees' ? counterpartyId : null,
       };
       if (existingRow?.id) {
         const { error } = await supabase.from('counterparty_bot_groups').update(payload).eq('id', String(existingRow.id));
@@ -1144,22 +1380,29 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
         const { error } = await supabase.from('counterparty_bot_groups').insert([payload]);
         if (error) throw error;
       }
+
+      await syncBotDirectChatIdForTarget({
+        client: supabase,
+        orgId: currentOrgId,
+        moduleId: targetType,
+        recordId: counterpartyId,
+        channel,
+        chatId: String(platformState.directChatId || '').trim() || null,
+        previousChatId: String((selectedBotGroup as any)?.[getBotChatIdFieldKey(channel)] || '').trim() || null,
+      });
     }
 
     // ذخیره تنظیمات پیش‌فرض در counterparty_bot_config
-    const resolvedOrgId = String(profile.org_id || '').trim();
-    if (!resolvedOrgId) {
-      throw new Error('شناسه سازمان برای ذخیره تنظیمات بات در دسترس نیست.');
-    }
     const configPayload = {
-      org_id: resolvedOrgId,
+      org_id: currentOrgId,
       default_channel: botStatusDefaultChannel,
       fallback_to_active: botStatusFallbackToActive,
       customer_id: targetType === 'customers' ? counterpartyId : null,
       supplier_id: targetType === 'suppliers' ? counterpartyId : null,
+      employee_id: targetType === 'employees' ? counterpartyId : null,
     };
     let existingConfigQuery = supabase.from('counterparty_bot_config').select('id').limit(1);
-    existingConfigQuery = targetType === 'customers' ? existingConfigQuery.eq('customer_id', counterpartyId) : existingConfigQuery.eq('supplier_id', counterpartyId);
+    existingConfigQuery = applyBotTargetFilter(existingConfigQuery, targetType, counterpartyId);
     const { data: existingConfigRow } = await existingConfigQuery.maybeSingle();
     if (existingConfigRow?.id) {
       const { error } = await supabase.from('counterparty_bot_config').update(configPayload).eq('id', String(existingConfigRow.id));
@@ -1168,7 +1411,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
       const { error } = await supabase.from('counterparty_bot_config').insert([configPayload]);
       if (error) throw error;
     }
-  }, [botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusPlatformData, profile.org_id, selectedBotGroup]);
+  }, [applyBotTargetFilter, botStatusActiveTab, botStatusDefaultChannel, botStatusFallbackToActive, botStatusPlatformData, getBotTargetRecordIdFromGroup, profile.org_id, selectedBotGroup]);
 
   const handleOpenBotStatusModal = useCallback(async () => {
     if (!selectedBotGroup) return;
@@ -1304,13 +1547,15 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   }, []);
   const selectedBotModuleId = useMemo(() => {
     if (!selectedBotGroup) return null;
-    return String(selectedBotGroup.target_type || '').trim() === 'customers' ? 'customers' : 'suppliers';
+    const targetType = String(selectedBotGroup.target_type || '').trim();
+    return isBotTargetModuleId(targetType) ? targetType : null;
   }, [selectedBotGroup]);
   const selectedBotRecordId = useMemo(() => {
     if (!selectedBotGroup) return null;
-    return selectedBotModuleId === 'customers'
-      ? String(selectedBotGroup.customer_id || '').trim() || null
-      : String(selectedBotGroup.supplier_id || '').trim() || null;
+    if (selectedBotModuleId === 'customers') return String(selectedBotGroup.customer_id || '').trim() || null;
+    if (selectedBotModuleId === 'suppliers') return String(selectedBotGroup.supplier_id || '').trim() || null;
+    if (selectedBotModuleId === 'employees') return String(selectedBotGroup.employee_id || '').trim() || null;
+    return null;
   }, [selectedBotGroup, selectedBotModuleId]);
 
   const fetchTemplateRecord = useCallback(async (moduleId?: string | null, recordId?: string | null) => {
@@ -1334,6 +1579,471 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     templateRecordCacheRef.current.set(cacheKey, normalized);
     return normalized;
   }, []);
+
+  const loadBotIdentityBindTargetOptions = useCallback(async (
+    moduleId: BotTargetModuleId,
+    search: string,
+  ) => {
+    const normalizedSearch = String(search || '').trim();
+    let query: any;
+    if (moduleId === 'customers') {
+      query = supabase
+        .from('customers')
+        .select('id, full_name, business_name, legal_name, system_code')
+        .limit(30)
+        .order('updated_at', { ascending: false, nullsFirst: false });
+      if (normalizedSearch) {
+        query = query.or(`full_name.ilike.%${normalizedSearch}%,business_name.ilike.%${normalizedSearch}%,legal_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%`);
+      }
+    } else if (moduleId === 'suppliers') {
+      query = supabase
+        .from('suppliers')
+        .select('id, business_name, full_name, first_name, last_name, system_code')
+        .limit(30)
+        .order('updated_at', { ascending: false, nullsFirst: false });
+      if (normalizedSearch) {
+        query = query.or(`business_name.ilike.%${normalizedSearch}%,full_name.ilike.%${normalizedSearch}%,first_name.ilike.%${normalizedSearch}%,last_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%`);
+      }
+    } else {
+      query = supabase
+        .from('employees')
+        .select('id, full_name, first_name, last_name, system_code, legacy_system_code')
+        .limit(30)
+        .order('updated_at', { ascending: false, nullsFirst: false });
+      if (normalizedSearch) {
+        query = query.or(`full_name.ilike.%${normalizedSearch}%,first_name.ilike.%${normalizedSearch}%,last_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%,legacy_system_code.ilike.%${normalizedSearch}%`);
+      }
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    return ((data || []) as Record<string, any>[])
+      .map((row) => {
+        const label = formatBotTargetRecordLabel(moduleId, row) || '[بدون عنوان]';
+        const meta = [String(row.system_code || '').trim(), String(row.legacy_system_code || '').trim()]
+          .filter(Boolean)
+          .join(' | ');
+        return {
+          value: String(row.id || '').trim(),
+          label,
+          meta: meta || null,
+        };
+      })
+      .filter((row) => row.value);
+  }, [formatBotTargetRecordLabel]);
+
+  useEffect(() => {
+    if (!botIdentityBindModalOpen) return;
+    let cancelled = false;
+    setBotIdentityBindModalLoading(true);
+    void loadBotIdentityBindTargetOptions(botIdentityBindTargetModuleId, botIdentityBindSearch)
+      .then((options) => {
+        if (!cancelled) setBotIdentityBindOptions(options);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn('Could not load bot identity bind targets', error);
+          setBotIdentityBindOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBotIdentityBindModalLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [botIdentityBindModalOpen, botIdentityBindSearch, botIdentityBindTargetModuleId, loadBotIdentityBindTargetOptions]);
+
+  const closeBotIdentityBindModal = useCallback(() => {
+    setBotIdentityBindModalOpen(false);
+    setBotIdentityBindModalLoading(false);
+    setBotIdentityBindModalSaving(false);
+    setBotIdentityBindDraft(null);
+    setBotIdentityBindTargetModuleId('customers');
+    setBotIdentityBindTargetRecordId(null);
+    setBotIdentityBindSearch('');
+    setBotIdentityBindOptions([]);
+    setBotIdentityAllowedUserIds([]);
+    setBotIdentityAllowedRoleIds([]);
+    setBotIdentityAiAutoReplyEnabled(false);
+    setBotIdentityAiCounterpartyGuide('');
+    setBotIdentityMemberGroups([]);
+  }, []);
+
+  const openBotIdentityBindModalForIdentity = useCallback(async ({
+    channel,
+    chatId,
+    displayName,
+    username,
+    phoneNumber,
+    sourceGroupId,
+  }: {
+    channel: BotChannel;
+    chatId: string;
+    displayName?: string | null;
+    username?: string | null;
+    phoneNumber?: string | null;
+    sourceGroupId?: string | null;
+  }) => {
+    const normalizedChatId = String(chatId || '').trim();
+    if (!channel || !BOT_CHANNELS.includes(channel) || !normalizedChatId) {
+      message.warning('اطلاعات لازم برای تنظیم حساب شخصی این کاربر کامل نیست.');
+      return;
+    }
+    setBotIdentityBindModalOpen(true);
+    setBotIdentityBindModalLoading(true);
+    try {
+      const normalizedOrgId = String(profile.org_id || '').trim();
+      const [bindingResult, threadResult, membershipResult] = await Promise.all([
+        supabase
+          .from('bot_chat_identity_bindings')
+          .select('id,target_module_id,target_record_id,display_name,username,phone_number,profile_id')
+          .eq('org_id', normalizedOrgId)
+          .eq('channel_type', channel)
+          .eq('chat_id', normalizedChatId)
+          .maybeSingle(),
+        supabase
+          .from('counterparty_bot_direct_threads')
+          .select('id,metadata,display_name,username,phone_number,target_module_id,target_record_id')
+          .eq('org_id', normalizedOrgId)
+          .eq('channel_type', channel)
+          .eq('chat_id', normalizedChatId)
+          .maybeSingle(),
+        supabase
+          .from('counterparty_bot_messages')
+          .select('bot_group_id,created_at')
+          .eq('direction', 'inbound')
+          .or(`payload->>sender_id.eq.${normalizedChatId},payload->>user_id.eq.${normalizedChatId},payload->>object_guid.eq.${normalizedChatId}`)
+          .order('created_at', { ascending: false })
+          .limit(400),
+      ]);
+      if (bindingResult.error) throw bindingResult.error;
+      if (threadResult.error) throw threadResult.error;
+      if (membershipResult.error) throw membershipResult.error;
+      const threadRow = threadResult.data as Record<string, any> | null;
+      const threadMetadata = threadRow?.metadata && typeof threadRow.metadata === 'object' ? threadRow.metadata : {};
+      const existingBinding = (bindingResult.data || null) as BotIdentityBindingRow | null;
+      const initialTargetModuleId = isBotTargetModuleId(String(existingBinding?.target_module_id || '').trim())
+        ? String(existingBinding?.target_module_id || '').trim() as BotTargetModuleId
+        : isBotTargetModuleId(String(threadRow?.target_module_id || '').trim())
+          ? String(threadRow?.target_module_id || '').trim() as BotTargetModuleId
+          : 'customers';
+      setBotIdentityBindDraft({
+        channel,
+        chatId: normalizedChatId,
+        threadId: String(threadRow?.id || '').trim() || null,
+        displayName: String(displayName || existingBinding?.display_name || threadRow?.display_name || '').trim(),
+        username: String(username || existingBinding?.username || threadRow?.username || '').trim().replace(/^@+/, ''),
+        phoneNumber: String(phoneNumber || existingBinding?.phone_number || threadRow?.phone_number || '').trim(),
+        existingBinding,
+      });
+      setBotIdentityBindTargetModuleId(initialTargetModuleId);
+      setBotIdentityBindTargetRecordId(String(existingBinding?.target_record_id || threadRow?.target_record_id || '').trim() || null);
+      setBotIdentityAllowedUserIds(
+        Array.isArray((threadMetadata as any)?.allowed_user_ids)
+          ? (threadMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+          : [],
+      );
+      setBotIdentityAllowedRoleIds(
+        Array.isArray((threadMetadata as any)?.allowed_role_ids)
+          ? (threadMetadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+          : [],
+      );
+      setBotIdentityAiAutoReplyEnabled(Boolean((threadMetadata as any)?.ai_auto_reply_enabled));
+      setBotIdentityAiCounterpartyGuide(String((threadMetadata as any)?.ai_counterparty_guide || '').trim());
+      setBotIdentityBindSearch('');
+      const statusLabelMap: Record<string, string> = {
+        active: 'فعال',
+        pending_join: 'در انتظار اتصال',
+        inactive: 'غیرفعال',
+        disabled: 'غیرفعال',
+      };
+      const recentGroupRows = Array.isArray(membershipResult.data) ? membershipResult.data as Array<Record<string, any>> : [];
+      const groupActivityMap = new Map<string, string>();
+      recentGroupRows.forEach((row) => {
+        const groupId = String(row?.bot_group_id || '').trim();
+        const createdAt = String(row?.created_at || '').trim();
+        if (!groupId || groupActivityMap.has(groupId)) return;
+        groupActivityMap.set(groupId, createdAt);
+      });
+      const effectiveGroupIds = Array.from(new Set([
+        String(sourceGroupId || '').trim(),
+        ...Array.from(groupActivityMap.keys()),
+      ].filter(Boolean)));
+      setBotIdentityMemberGroups(
+        effectiveGroupIds.map((groupId) => {
+          const groupRow = botGroups.find((row) => String(row?.id || '').trim() === groupId) || null;
+          const groupChannel = String(groupRow?.channel_type || channel || '').trim();
+          return {
+            id: groupId,
+            title: String(groupRow?.group_title || groupRow?.counterparty_label || groupRow?.group_join_link || groupId).trim() || groupId,
+            channelLabel: `گروه بات ${BOT_CHANNEL_LABELS_FA[groupChannel] || groupChannel || '-'}`,
+            statusLabel: statusLabelMap[String(groupRow?.status || '').trim()] || (String(groupRow?.status || '').trim() || null),
+            lastActivityAt: safeJalaliFormat(groupActivityMap.get(groupId) || null, 'YYYY/MM/DD HH:mm') || null,
+          };
+        }),
+      );
+    } catch (error: any) {
+      setBotIdentityBindModalOpen(false);
+      message.error(toFaErrorMessage(error, 'خواندن اتصال چت آیدی ناموفق بود.'));
+    } finally {
+      setBotIdentityBindModalLoading(false);
+    }
+  }, [botGroups, message, profile.org_id]);
+
+  const openBotIdentityBindModal = useCallback(async (row: CounterpartyBotMessageRow) => {
+    const channel = String(selectedBotGroup?.channel_type || '').trim() as BotChannel;
+    if (!channel || !BOT_CHANNELS.includes(channel)) {
+      message.warning('پلتفرم پیام برای اتصال sender مشخص نیست.');
+      return;
+    }
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const chatId = String(
+      (payload as any)?.sender_id
+      || (payload as any)?.user_id
+      || (payload as any)?.object_guid
+      || row?.chat_id
+      || ''
+    ).trim();
+    if (!chatId) {
+      message.warning('برای این پیام chat id فرستنده پیدا نشد.');
+      return;
+    }
+    await openBotIdentityBindModalForIdentity({
+      channel,
+      chatId,
+      displayName: String((payload as any)?.sender_display_name || '').trim(),
+      username: String((payload as any)?.username || '').trim().replace(/^@+/, ''),
+      phoneNumber: String((payload as any)?.phone_number || '').trim(),
+      sourceGroupId: String(row?.bot_group_id || '').trim() || null,
+    });
+  }, [message, openBotIdentityBindModalForIdentity, selectedBotGroup]);
+
+  const saveBotIdentityBinding = useCallback(async () => {
+    const draft = botIdentityBindDraft;
+    const orgId = String(profile.org_id || '').trim();
+    const targetRecordId = String(botIdentityBindTargetRecordId || '').trim();
+    if (!draft || !orgId) {
+      throw new Error('اطلاعات لازم برای اتصال چت آیدی کامل نیست.');
+    }
+    if (!targetRecordId) {
+      throw new Error('رکورد مقصد را انتخاب کنید.');
+    }
+    setBotIdentityBindModalSaving(true);
+    try {
+      const previousModuleId = String(draft.existingBinding?.target_module_id || '').trim();
+      const previousRecordId = String(draft.existingBinding?.target_record_id || '').trim();
+      if (
+        isBotTargetModuleId(previousModuleId)
+        && previousRecordId
+        && (previousModuleId !== botIdentityBindTargetModuleId || previousRecordId !== targetRecordId)
+      ) {
+        await syncBotDirectChatIdForTarget({
+          client: supabase,
+          orgId,
+          moduleId: previousModuleId,
+          recordId: previousRecordId,
+          channel: draft.channel,
+          chatId: null,
+          previousChatId: draft.chatId,
+        });
+      }
+      await syncBotDirectChatIdForTarget({
+        client: supabase,
+        orgId,
+        moduleId: botIdentityBindTargetModuleId,
+        recordId: targetRecordId,
+        channel: draft.channel,
+        chatId: draft.chatId,
+        previousChatId: draft.chatId,
+        username: draft.username || null,
+        phoneNumber: draft.phoneNumber || null,
+        displayName: draft.displayName || null,
+      });
+      const directThreadMetadata = {
+        allowed_user_ids: botIdentityAllowedUserIds,
+        allowed_role_ids: botIdentityAllowedRoleIds,
+        ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
+        ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
+      };
+      const { error: directThreadError } = await supabase
+        .from('counterparty_bot_direct_threads')
+        .update({
+          display_name: draft.displayName || null,
+          username: draft.username || null,
+          phone_number: draft.phoneNumber || null,
+          metadata: directThreadMetadata,
+          last_seen_at: new Date().toISOString(),
+        })
+        .eq('org_id', orgId)
+        .eq('channel_type', draft.channel)
+        .eq('chat_id', draft.chatId);
+      if (directThreadError) throw directThreadError;
+      await Promise.all([
+        fetchBotDirectThreads(),
+        refreshSection('bot_messages', { force: true }),
+        refreshSection('bot_direct_messages', { force: true }),
+      ]);
+      message.success('اتصال چت آیدی ذخیره شد.');
+      closeBotIdentityBindModal();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره اتصال چت آیدی ناموفق بود.'));
+    } finally {
+      setBotIdentityBindModalSaving(false);
+    }
+  }, [botIdentityAiAutoReplyEnabled, botIdentityAiCounterpartyGuide, botIdentityAllowedRoleIds, botIdentityAllowedUserIds, botIdentityBindDraft, botIdentityBindTargetModuleId, botIdentityBindTargetRecordId, closeBotIdentityBindModal, message, profile.org_id]);
+
+  useEffect(() => {
+    if (!phoneIdentityBindModalOpen) return;
+    let cancelled = false;
+    setPhoneIdentityBindModalLoading(true);
+    void searchPhoneBindingTargets({
+      client: supabase,
+      moduleId: phoneIdentityBindTargetModuleId,
+      search: phoneIdentityBindSearch,
+      limit: 30,
+    })
+      .then((options) => {
+        if (!cancelled) setPhoneIdentityBindOptions(options);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn('Could not load phone identity bind targets', error);
+          setPhoneIdentityBindOptions([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPhoneIdentityBindModalLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [phoneIdentityBindModalOpen, phoneIdentityBindSearch, phoneIdentityBindTargetModuleId]);
+
+  const closePhoneIdentityBindModal = useCallback(() => {
+    setPhoneIdentityBindModalOpen(false);
+    setPhoneIdentityBindModalLoading(false);
+    setPhoneIdentityBindModalSaving(false);
+    setPhoneIdentityBindDraft(null);
+    setPhoneIdentityBindTargetModuleId('customers');
+    setPhoneIdentityBindTargetRecordId(null);
+    setPhoneIdentityBindSearch('');
+    setPhoneIdentityBindOptions([]);
+  }, []);
+
+  const openPhoneIdentityBindModal = useCallback(async ({
+    phoneNumberId,
+    phone,
+    moduleId,
+    recordId,
+    phoneMatchStatus,
+  }: {
+    phoneNumberId?: string | null;
+    phone: string;
+    moduleId?: string | null;
+    recordId?: string | null;
+    phoneMatchStatus?: string | null;
+  }) => {
+    const normalizedPhone = String(phone || '').trim();
+    if (!normalizedPhone) {
+      message.warning('برای این مورد شماره‌ای پیدا نشد.');
+      return;
+    }
+    setPhoneIdentityBindModalOpen(true);
+    setPhoneIdentityBindModalLoading(true);
+    try {
+      const normalizedPhoneNumberId = String(phoneNumberId || '').trim() || null;
+      let existingBindingLabel = '';
+      let existingTargetModuleId: PhoneBindTargetModuleId | null = null;
+      let existingTargetRecordId: string | null = null;
+
+      if (normalizedPhoneNumberId) {
+        const { data, error } = await supabase
+          .from('phone_number_links')
+          .select('entity_type,entity_id,display_title,source_table,source_field')
+          .eq('phone_number_id', normalizedPhoneNumberId);
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        const manualBinding = rows.find((row: any) => (
+          String(row?.source_table || '').trim() === MANUAL_PHONE_BINDING_SOURCE_TABLE
+          && String(row?.source_field || '').trim() === MANUAL_PHONE_BINDING_SOURCE_FIELD
+          && PHONE_BIND_TARGET_MODULES.includes(String(row?.entity_type || '').trim() as PhoneBindTargetModuleId)
+        ));
+        if (manualBinding) {
+          existingTargetModuleId = String(manualBinding.entity_type || '').trim() as PhoneBindTargetModuleId;
+          existingTargetRecordId = String(manualBinding.entity_id || '').trim() || null;
+          existingBindingLabel = String(manualBinding.display_title || '').trim();
+        }
+      }
+
+      if (!existingTargetModuleId && PHONE_BIND_TARGET_MODULES.includes(String(moduleId || '').trim() as PhoneBindTargetModuleId)) {
+        existingTargetModuleId = String(moduleId || '').trim() as PhoneBindTargetModuleId;
+        existingTargetRecordId = String(recordId || '').trim() || null;
+      }
+
+      if (existingTargetModuleId && existingTargetRecordId && !existingBindingLabel) {
+        const { data: targetRow } = await supabase
+          .from(existingTargetModuleId)
+          .select(existingTargetModuleId === 'customers'
+            ? 'id, full_name, business_name, legal_name, system_code, first_name, last_name'
+            : existingTargetModuleId === 'suppliers'
+              ? 'id, business_name, first_name, last_name, system_code'
+              : 'id, full_name, first_name, last_name, system_code, legacy_system_code')
+          .eq('id', existingTargetRecordId)
+          .maybeSingle();
+        existingBindingLabel = buildPhoneTargetDisplayName(existingTargetModuleId, targetRow) || existingBindingLabel;
+      }
+
+      setPhoneIdentityBindDraft({
+        phone: normalizedPhone,
+        phoneNumberId: normalizedPhoneNumberId,
+        phoneMatchStatus: String(phoneMatchStatus || '').trim() || null,
+        existingBindingLabel: existingBindingLabel || null,
+        existingTargetModuleId,
+        existingTargetRecordId,
+      });
+      setPhoneIdentityBindTargetModuleId(existingTargetModuleId || 'customers');
+      setPhoneIdentityBindTargetRecordId(existingTargetRecordId || null);
+      setPhoneIdentityBindSearch('');
+    } catch (error: any) {
+      setPhoneIdentityBindModalOpen(false);
+      message.error(toFaErrorMessage(error, 'خواندن اطلاعات اتصال شماره ناموفق بود.'));
+    } finally {
+      setPhoneIdentityBindModalLoading(false);
+    }
+  }, [message]);
+
+  const savePhoneIdentityBinding = useCallback(async () => {
+    const draft = phoneIdentityBindDraft;
+    const orgId = String(profile.org_id || '').trim();
+    const targetRecordId = String(phoneIdentityBindTargetRecordId || '').trim();
+    if (!draft || !orgId) {
+      throw new Error('اطلاعات لازم برای اتصال شماره کامل نیست.');
+    }
+    if (!targetRecordId) {
+      throw new Error('مخاطب مقصد را انتخاب کنید.');
+    }
+    setPhoneIdentityBindModalSaving(true);
+    try {
+      await syncPhoneIdentityBinding({
+        client: supabase,
+        orgId,
+        moduleId: phoneIdentityBindTargetModuleId,
+        recordId: targetRecordId,
+        phone: draft.phone,
+        phoneNumberId: draft.phoneNumberId,
+      });
+      await Promise.all([
+        refreshSectionRef.current?.('sms_messages', { force: true }) || Promise.resolve(),
+        refreshSectionRef.current?.('voip_calls', { force: true }) || Promise.resolve(),
+      ]);
+      message.success('اتصال شماره ذخیره شد.');
+      closePhoneIdentityBindModal();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره اتصال شماره ناموفق بود.'));
+    } finally {
+      setPhoneIdentityBindModalSaving(false);
+    }
+  }, [closePhoneIdentityBindModal, message, phoneIdentityBindDraft, phoneIdentityBindTargetModuleId, phoneIdentityBindTargetRecordId, profile.org_id]);
 
   const openReadyTextsModal = useCallback((context: 'notes' | 'bot' | 'forward') => {
     setTemplateComposerContext(context);
@@ -1639,7 +2349,11 @@ useEffect(() => {
       setUnreadSummary((prev) => {
         const next = { ...prev };
         normalized.forEach((entry) => {
-          const section = entry.section === 'sms_messages' ? 'sms_messages' : entry.section;
+          const section = entry.section === 'sms_messages'
+            ? 'sms_messages'
+            : entry.section === 'bot_direct_messages'
+              ? 'bot_messages'
+              : entry.section;
           next[section] = Math.max(0, Number(next[section] || 0) - 1);
         });
         return next;
@@ -2284,6 +2998,23 @@ useEffect(() => {
       return;
     }
 
+    if (section === 'bot_direct_messages') {
+      const showSkeleton = botDirectThreads.length === 0 && botDirectMessages.length === 0;
+      if (showSkeleton) setLoadingBotDirectMessages(true);
+      const threads = await safeSectionFetch(() => fetchBotDirectThreads(), 'bot_direct_messages', [] as BotDirectThreadRow[]);
+      const resolvedThreadId = String(selectedBotDirectThreadId || threads[0]?.id || '').trim();
+      await safeSectionFetch(() => fetchBotDirectNotificationMessages(threads), 'bot_direct_messages', [] as BotDirectMessageRow[]);
+      if (resolvedThreadId && activeDrawerSection === 'bot_direct_messages') {
+        await safeSectionFetch(() => fetchBotDirectMessages(resolvedThreadId), 'bot_direct_messages', [] as BotDirectMessageRow[]);
+      } else {
+        setBotDirectMessages([]);
+      }
+      await safeSectionFetch(() => refreshUnreadSummary(), 'bot_direct_messages', null as any);
+      lastLoadedAtRef.current.bot_direct_messages = Date.now();
+      if (showSkeleton) setLoadingBotDirectMessages(false);
+      return;
+    }
+
     if (section === 'sms_messages') {
       const showSkeleton = smsMessages.length === 0;
       if (showSkeleton) setLoadingSmsMessages(true);
@@ -2501,10 +3232,12 @@ useEffect(() => {
     const shouldLoadTasks = sections.includes('tasks');
     const shouldLoadResponsibilities = sections.includes('responsibilities');
     const shouldLoadBotMessages = sections.includes('bot_messages');
+    const shouldLoadBotDirectMessages = sections.includes('bot_direct_messages');
     const shouldLoadSmsMessages = sections.includes('sms_messages');
     const shouldLoadVoipCalls = sections.includes('voip_calls');
     const shouldFetchBotGroups = shouldLoadBotMessages
       && (activeDrawerSection === 'bot_messages' || !botConversationSummaryAvailable);
+    const shouldFetchBotDirectThreads = shouldLoadBotDirectMessages;
     const shouldUseConversationScopedNotes = (
       shouldLoadNotes
       && variant === 'chat'
@@ -2516,10 +3249,12 @@ useEffect(() => {
       && (!noteConversationSummaryAvailable || activeDrawerSection === 'notes');
     const showNotesSkeleton = shouldFetchGlobalNotes && notes.length === 0;
     const showBotSkeleton = shouldFetchBotGroups && botGroups.length === 0 && botMessages.length === 0;
+    const showBotDirectSkeleton = shouldFetchBotDirectThreads && botDirectThreads.length === 0 && botDirectMessages.length === 0;
     const showSmsSkeleton = shouldLoadSmsMessages && smsMessages.length === 0;
 
     if (showNotesSkeleton) setLoadingNotes(true);
     if (showBotSkeleton) setLoadingBotMessages(true);
+    if (showBotDirectSkeleton) setLoadingBotDirectMessages(true);
     if (showSmsSkeleton) setLoadingSmsMessages(true);
     const safeFetch = async <T,>(loader: () => Promise<T>, type: NotificationSectionKey, fallback: T) => {
       try {
@@ -2537,11 +3272,12 @@ useEffect(() => {
         return fallback;
       }
     };
-    const [notesData, tasksData, responsibilitiesData, botGroupsData, smsData, voipCallsData] = await Promise.all([
+    const [notesData, tasksData, responsibilitiesData, botGroupsData, botDirectThreadsData, smsData, voipCallsData] = await Promise.all([
       shouldFetchGlobalNotes ? safeFetch(() => fetchNotes(), 'notes', [] as any[]) : Promise.resolve(notes),
       shouldLoadTasks ? safeFetch(() => refreshTasks(options), 'tasks', tasks) : Promise.resolve(tasks),
       shouldLoadResponsibilities ? safeFetch(() => refreshResponsibilities(options), 'responsibilities', responsibilities) : Promise.resolve(responsibilities),
       shouldFetchBotGroups ? safeFetch(() => fetchBotGroups(), 'bot_messages', [] as CounterpartyBotGroupRow[]) : Promise.resolve(botGroups),
+      shouldFetchBotDirectThreads ? safeFetch(() => fetchBotDirectThreads(), 'bot_direct_messages', [] as BotDirectThreadRow[]) : Promise.resolve(botDirectThreads),
       shouldLoadSmsMessages ? safeFetch(() => fetchSmsMessages(), 'sms_messages', [] as any[]) : Promise.resolve(smsMessages),
       shouldLoadVoipCalls ? safeFetch(() => fetchVoipCalls(), 'voip_calls', [] as any[]) : Promise.resolve(voipCalls),
     ]);
@@ -2579,6 +3315,15 @@ useEffect(() => {
         await safeFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
       }
     }
+    if (shouldFetchBotDirectThreads) {
+      const resolvedThreadId = String(selectedBotDirectThreadId || botDirectThreadsData[0]?.id || '').trim();
+      await safeFetch(() => fetchBotDirectNotificationMessages(botDirectThreadsData), 'bot_direct_messages', [] as BotDirectMessageRow[]);
+      if (resolvedThreadId && activeDrawerSection === 'bot_direct_messages') {
+        await safeFetch(() => fetchBotDirectMessages(resolvedThreadId), 'bot_direct_messages', [] as BotDirectMessageRow[]);
+      } else {
+        setBotDirectMessages([]);
+      }
+    }
     if (shouldLoadBotMessages && !shouldFetchBotGroups && botConversationSummaryAvailable) {
       await safeFetch(() => refreshBotConversationSummaries(), 'bot_messages', null as any);
     }
@@ -2605,6 +3350,7 @@ useEffect(() => {
     }
     if (showNotesSkeleton) setLoadingNotes(false);
     if (showBotSkeleton) setLoadingBotMessages(false);
+    if (showBotDirectSkeleton) setLoadingBotDirectMessages(false);
     if (showSmsSkeleton) setLoadingSmsMessages(false);
 
     if (!notificationsReadyRef.current) {
@@ -2695,8 +3441,8 @@ useEffect(() => {
 
     let query = supabase
       .from('voip_call_logs')
-      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, phone_number_id, phone_match_status, assignee_id, started_at, created_at')
-      .eq('direction', 'incoming')
+      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
+      .order('started_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(80);
 
@@ -2740,7 +3486,8 @@ useEffect(() => {
   const enrichBotGroups = async (rows: CounterpartyBotGroupRow[], requestSeq: number) => {
     const customerIds = Array.from(new Set(rows.map((row) => String(row.customer_id || '').trim()).filter(Boolean)));
     const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
-    if (customerIds.length === 0 && supplierIds.length === 0) return;
+    const employeeIds = Array.from(new Set(rows.map((row) => String(row.employee_id || '').trim()).filter(Boolean)));
+    if (customerIds.length === 0 && supplierIds.length === 0 && employeeIds.length === 0) return;
 
     const counterpartyLabelMap: Record<string, string> = {};
     const counterpartyImageMap: Record<string, string> = {};
@@ -2789,11 +3536,40 @@ useEffect(() => {
         if (imgUrl) counterpartyImageMap[`suppliers:${id}`] = imgUrl;
       });
     }
+    if (employeeIds.length > 0) {
+      const employeeResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:employees',
+        columns: ['id', 'full_name', 'first_name', 'last_name', 'system_code', 'legacy_system_code', 'image_url'],
+        ids: employeeIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) =>
+          supabase
+            .from('employees')
+            .select(selectExpr)
+            .in('id', idBatch),
+      });
+      (employeeResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        counterpartyLabelMap[`employees:${id}`] = String(
+          item?.full_name || [item?.first_name, item?.last_name].filter(Boolean).join(' ') || item?.system_code || item?.legacy_system_code || ''
+        ).trim();
+        const imgUrl = String(item?.image_url || '').trim();
+        if (imgUrl) counterpartyImageMap[`employees:${id}`] = imgUrl;
+      });
+    }
     if (requestSeq !== botGroupsEnrichSeqRef.current) return;
     setBotGroups((prev) => prev.map((row) => {
       const customerId = String(row.customer_id || '').trim();
       const supplierId = String(row.supplier_id || '').trim();
-      const key = customerId ? `customers:${customerId}` : supplierId ? `suppliers:${supplierId}` : '';
+      const employeeId = String(row.employee_id || '').trim();
+      const key = customerId
+        ? `customers:${customerId}`
+        : supplierId
+          ? `suppliers:${supplierId}`
+          : employeeId
+            ? `employees:${employeeId}`
+            : '';
       if (!key) return row;
       return {
         ...row,
@@ -2806,7 +3582,7 @@ useEffect(() => {
   const fetchBotGroups = async () => {
     const { data, error } = await supabase
       .from('counterparty_bot_groups')
-      .select('id,target_type,customer_id,supplier_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,metadata')
+      .select('id,target_type,customer_id,supplier_id,employee_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,metadata')
       .eq('status', 'active')
       .order('updated_at', { ascending: false, nullsFirst: false })
       .limit(200);
@@ -2827,8 +3603,28 @@ useEffect(() => {
       if (roleId && allowedRoleIds.includes(roleId)) return true;
       return false;
     });
+    const dedupedRows = rows.reduce<CounterpartyBotGroupRow[]>((acc, row) => {
+      const chatId = String(row?.bot_chat_id || '').trim();
+      const channel = String(row?.channel_type || '').trim();
+      if (!chatId || !channel) {
+        acc.push(row);
+        return acc;
+      }
+      const existingIndex = acc.findIndex((item) => String(item?.channel_type || '').trim() === channel && String(item?.bot_chat_id || '').trim() === chatId);
+      if (existingIndex < 0) {
+        acc.push(row);
+        return acc;
+      }
+      const existing = acc[existingIndex];
+      const existingTime = new Date(existing?.last_inbound_at || existing?.last_outbound_at || existing?.updated_at || 0).getTime() || 0;
+      const nextTime = new Date(row?.last_inbound_at || row?.last_outbound_at || row?.updated_at || 0).getTime() || 0;
+      if (nextTime >= existingTime) {
+        acc[existingIndex] = row;
+      }
+      return acc;
+    }, []);
 
-    const sortedRows = applyBotGroups(rows);
+    const sortedRows = applyBotGroups(dedupedRows);
     const requestSeq = ++botGroupsEnrichSeqRef.current;
     void enrichBotGroups(sortedRows, requestSeq).catch((enrichError) => {
       console.warn('Failed to enrich bot groups.', enrichError);
@@ -2941,6 +3737,180 @@ useEffect(() => {
     setBotNotificationMessages(rows);
     return rows;
   };
+  const enrichBotDirectThreads = useCallback(async (rows: BotDirectThreadRow[]): Promise<BotDirectThreadRow[]> => {
+    const customerIds = Array.from(new Set(rows.map((row) => String(row.customer_id || '').trim()).filter(Boolean)));
+    const supplierIds = Array.from(new Set(rows.map((row) => String(row.supplier_id || '').trim()).filter(Boolean)));
+    const employeeIds = Array.from(new Set(rows.map((row) => String(row.employee_id || '').trim()).filter(Boolean)));
+    const labelMap: Record<string, string> = {};
+    const imageMap: Record<string, string> = {};
+
+    if (customerIds.length > 0) {
+      const customerResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:bot-direct-customers',
+        columns: ['id', 'full_name', 'business_name', 'legal_name', 'system_code', 'first_name', 'last_name', 'image_url'],
+        ids: customerIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) => supabase.from('customers').select(selectExpr).in('id', idBatch),
+      });
+      (customerResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        const personName = `${String(item?.first_name || '').trim()} ${String(item?.last_name || '').trim()}`.trim();
+        labelMap[`customers:${id}`] = String(item?.full_name || item?.business_name || item?.legal_name || personName || item?.system_code || '').trim();
+        const img = String(item?.image_url || '').trim();
+        if (img) imageMap[`customers:${id}`] = img;
+      });
+    }
+    if (supplierIds.length > 0) {
+      const supplierResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:bot-direct-suppliers',
+        columns: ['id', 'business_name', 'full_name', 'system_code', 'image_url'],
+        ids: supplierIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) => supabase.from('suppliers').select(selectExpr).in('id', idBatch),
+      });
+      (supplierResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        labelMap[`suppliers:${id}`] = String(item?.business_name || item?.full_name || item?.system_code || '').trim();
+        const img = String(item?.image_url || '').trim();
+        if (img) imageMap[`suppliers:${id}`] = img;
+      });
+    }
+    if (employeeIds.length > 0) {
+      const employeeResult = await selectByIdsWithCompatibleColumns<any>({
+        cacheKey: 'notifications:bot-direct-employees',
+        columns: ['id', 'full_name', 'first_name', 'last_name', 'system_code', 'legacy_system_code', 'image_url'],
+        ids: employeeIds,
+        batchSize: 25,
+        execute: (selectExpr, idBatch) => supabase.from('employees').select(selectExpr).in('id', idBatch),
+      });
+      (employeeResult.data || []).forEach((item: any) => {
+        const id = String(item?.id || '').trim();
+        if (!id) return;
+        labelMap[`employees:${id}`] = String(item?.full_name || [item?.first_name, item?.last_name].filter(Boolean).join(' ') || item?.system_code || item?.legacy_system_code || '').trim();
+        const img = String(item?.image_url || '').trim();
+        if (img) imageMap[`employees:${id}`] = img;
+      });
+    }
+
+    return rows.map((row) => {
+      const moduleId = String(row.target_module_id || '').trim();
+      const recordId = String(row.target_record_id || '').trim();
+      const key = moduleId && recordId ? `${moduleId}:${recordId}` : '';
+      return {
+        ...row,
+        binding_status: (moduleId && recordId ? 'bound' : 'unbound') as 'bound' | 'unbound',
+        counterparty_label: key ? (labelMap[key] || String(row.display_name || '').trim() || null) : (String(row.display_name || '').trim() || null),
+        counterparty_image_url: key ? (imageMap[key] || row.counterparty_image_url || null) : (row.counterparty_image_url || null),
+      };
+    });
+  }, []);
+  const fetchBotDirectThreads = async () => {
+    const [{ data, error }, { data: groupData, error: groupError }] = await Promise.all([
+      supabase
+        .from('counterparty_bot_direct_threads')
+        .select('id,binding_id,channel_type,chat_id,target_module_id,target_record_id,customer_id,supplier_id,employee_id,profile_id,display_name,username,phone_number,last_seen_at,last_inbound_at,last_outbound_at,last_message_at,last_message_preview,metadata')
+        .order('last_message_at', { ascending: false, nullsFirst: false })
+        .order('last_seen_at', { ascending: false, nullsFirst: false })
+        .order('display_name', { ascending: true })
+        .limit(300),
+      supabase
+        .from('counterparty_bot_groups')
+        .select('channel_type,bot_chat_id')
+        .not('bot_chat_id', 'is', null)
+        .limit(300),
+    ]);
+    if (error) throw error;
+    if (groupError) throw groupError;
+    const groupIdentityKeys = new Set(
+      ((groupData || []) as Array<{ channel_type?: string | null; bot_chat_id?: string | null }>)
+        .map((row) => {
+          const channel = String(row?.channel_type || '').trim();
+          const chatId = String(row?.bot_chat_id || '').trim();
+          return channel && chatId ? `${channel}:${chatId}` : '';
+        })
+        .filter(Boolean),
+    );
+    const dedupedThreadMap = new Map<string, BotDirectThreadRow>();
+    ((data || []) as BotDirectThreadRow[]).forEach((row) => {
+      const channel = String(row?.channel_type || '').trim();
+      const chatId = String(row?.chat_id || '').trim();
+      if (!channel || !chatId) return;
+      const identityKey = `${channel}:${chatId}`;
+      if (groupIdentityKeys.has(identityKey)) {
+        return;
+      }
+      if (isBlockedBotDirectThread(row)) {
+        return;
+      }
+      const previous = dedupedThreadMap.get(identityKey) || null;
+      if (!previous || scoreBotDirectThreadCandidate(row) >= scoreBotDirectThreadCandidate(previous)) {
+        dedupedThreadMap.set(identityKey, row);
+      }
+    });
+    const baseRows = Array.from(dedupedThreadMap.values());
+    const userId = String(profile.id || '').trim();
+    const roleId = String(profile.role_id || '').trim();
+    const visibleRows = baseRows.filter((row) => {
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const allowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
+        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
+        ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      if (!allowedUserIds.length && !allowedRoleIds.length) return true;
+      if (userId && allowedUserIds.includes(userId)) return true;
+      if (roleId && allowedRoleIds.includes(roleId)) return true;
+      return false;
+    });
+    const rows = await enrichBotDirectThreads(visibleRows);
+    setBotDirectThreads(rows);
+    return rows;
+  };
+  const fetchBotDirectNotificationMessages = async (threads: BotDirectThreadRow[] = botDirectThreads) => {
+    const threadIds = Array.from(new Set((threads || []).map((row) => String(row?.id || '').trim()).filter(Boolean)));
+    if (!threadIds.length) {
+      setBotDirectNotificationMessages([]);
+      return [] as BotDirectMessageRow[];
+    }
+    const { data, error } = await supabase
+      .from('counterparty_bot_direct_messages')
+      .select('id,direct_thread_id,direction,message_type,chat_id,channel_type,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+      .in('direct_thread_id', threadIds)
+      .eq('direction', 'inbound')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const rows = ((data || []) as BotDirectMessageRow[]).reverse();
+    setBotDirectNotificationMessages(rows);
+    return rows;
+  };
+  const fetchBotDirectMessages = async (threadId: string | null) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    botDirectMessagesThreadIdRef.current = normalizedThreadId || null;
+    if (!normalizedThreadId) {
+      setBotDirectMessages([]);
+      return [] as BotDirectMessageRow[];
+    }
+    setLoadingBotDirectMessages(true);
+    try {
+      const { data, error } = await supabase
+        .from('counterparty_bot_direct_messages')
+        .select('id,direct_thread_id,direction,message_type,chat_id,channel_type,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+        .eq('direct_thread_id', normalizedThreadId)
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      const rows = ((data || []) as BotDirectMessageRow[]).reverse();
+      botDirectMessagesRef.current = rows;
+      setBotDirectMessages(rows);
+      return rows;
+    } finally {
+      setLoadingBotDirectMessages(false);
+    }
+  };
   const {
     items: botMessages,
     setItems: setBotMessages,
@@ -3001,6 +3971,16 @@ useEffect(() => {
     const chatId = String(group?.bot_chat_id || '').trim();
     if (!chatId) {
       throw new Error('برای این گروه chat id بات ثبت نشده است.');
+    }
+    const duplicateCheck = await supabase
+      .from('counterparty_bot_groups')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', String(profile.org_id || '').trim())
+      .eq('channel_type', channel)
+      .eq('bot_chat_id', chatId);
+    if (duplicateCheck.error) throw duplicateCheck.error;
+    if (Number(duplicateCheck.count || 0) > 1) {
+      throw new Error('این گروه در حال حاضر chat id مبهم یا تکراری دارد. ابتدا اتصال گروه‌های بات را یک‌دست کنید.');
     }
     const activeConnection = await getActiveChannelSettings(channel as any);
     const connectionId = String(activeConnection?.id || '').trim();
@@ -3097,7 +4077,125 @@ useEffect(() => {
       providerResponse,
       rows: (insertedRows || []) as CounterpartyBotMessageRow[],
     };
-  }, [buildCurrentBotSenderPayload]);
+  }, [buildCurrentBotSenderPayload, profile.org_id]);
+
+  const sendTextToBotDirectThread = useCallback(async (
+    thread: BotDirectThreadRow,
+    text: string,
+    options?: {
+      payload?: Record<string, any>;
+      messageType?: string;
+      fallbackText?: string;
+      attachments?: NoteAttachment[];
+    },
+  ) => {
+    const channel = String(thread?.channel_type || '').trim() as BotChannel;
+    const chatId = String(thread?.chat_id || '').trim();
+    if (!channel || !BOT_CHANNELS.includes(channel)) {
+      throw new Error('کانال پیام شخصی بات معتبر نیست.');
+    }
+    if (!chatId) {
+      throw new Error('شناسه چت این پی‌وی ثبت نشده است.');
+    }
+    if (isBlockedBotDirectThread(thread)) {
+      throw new Error('این گفتگو به‌عنوان مسیر شخصی معتبر شناخته نشده و ارسال برای آن متوقف شده است.');
+    }
+    const looksLikeGroupChatId = /^(g0|c0|ch)/i.test(chatId);
+    if (looksLikeGroupChatId) {
+      throw new Error('شناسه این گفتگو شبیه گروه است و برای ارسال پیام شخصی معتبر نیست.');
+    }
+    const groupCollision = await supabase
+      .from('counterparty_bot_groups')
+      .select('id', { count: 'exact', head: true })
+      .eq('org_id', String(profile.org_id || '').trim())
+      .eq('channel_type', channel)
+      .eq('bot_chat_id', chatId);
+    if (groupCollision.error) throw groupCollision.error;
+    if (Number(groupCollision.count || 0) > 0) {
+      throw new Error(`این چت در ${BOT_CHANNEL_LABELS_FA[channel] || channel} به یک گروه وصل شده است و ارسال شخصی برای آن متوقف شد.`);
+    }
+    const verifiedByMetadata = thread?.metadata && typeof thread.metadata === 'object'
+      ? (thread.metadata as any).direct_chat_verified === true
+      : false;
+    const { count: directMessageCount, error: directMessageCountError } = await supabase
+      .from('counterparty_bot_direct_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('direct_thread_id', String(thread.id || '').trim())
+      .eq('channel_type', channel);
+    if (directMessageCountError) throw directMessageCountError;
+    const hasVerifiedDirectHistory = verifiedByMetadata || Number(directMessageCount || 0) > 0;
+    if (!hasVerifiedDirectHistory) {
+      throw new Error(`برای ارسال پیام شخصی ${BOT_CHANNEL_LABELS_FA[channel] || channel}، لازم است کاربر ابتدا در پی‌وی به بات پیام بدهد تا مسیر خصوصی او با اطمینان ثبت شود.`);
+    }
+    const inboundCheck = await supabase
+      .from('bot_inbound_contacts')
+      .select('is_group, chat_title, chat_type')
+      .eq('org_id', String(profile.org_id || '').trim())
+      .eq('channel_type', channel)
+      .eq('chat_id', chatId)
+      .order('last_seen_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!inboundCheck.error && inboundCheck.data?.is_group === true) {
+      throw new Error(`این چت در ${BOT_CHANNEL_LABELS_FA[channel] || channel} به عنوان گروه ثبت شده است و ارسال شخصی برای آن متوقف شد.`);
+    }
+    const recordModuleId = String(thread?.target_module_id || '').trim() || null;
+    const recordId = String(thread?.target_record_id || '').trim() || null;
+    const attachments = options?.attachments || [];
+    await sendBotMessageViaGateway({
+      channel,
+      chatId,
+      text: String(text || '').trim(),
+      attachments: attachments.length > 0 ? attachments : undefined,
+      fallbackText: options?.fallbackText,
+      moduleId: recordModuleId || undefined,
+      recordId: recordId || undefined,
+    });
+    const senderPayload = buildCurrentBotSenderPayload();
+    const insertedPayload = {
+      org_id: String(profile.org_id || '').trim() || null,
+      direct_thread_id: thread.id,
+      channel_type: channel,
+      chat_id: chatId,
+      target_module_id: recordModuleId,
+      target_record_id: recordId,
+      customer_id: recordModuleId === 'customers' ? recordId : null,
+      supplier_id: recordModuleId === 'suppliers' ? recordId : null,
+      employee_id: recordModuleId === 'employees' ? recordId : null,
+      profile_id: String(thread.profile_id || '').trim() || null,
+      direction: 'outbound',
+      message_type: String(options?.messageType || (attachments.length > 0 ? 'file' : 'text')).trim() || 'text',
+      content_text: String(text || '').trim() || null,
+      file_url: String(attachments[0]?.url || '').trim() || null,
+      file_name: String(attachments[0]?.name || '').trim() || null,
+      mime_type: String(attachments[0]?.mimeType || '').trim() || null,
+      created_by: String(profile.id || '').trim() || null,
+      payload: {
+        ...(options?.payload || {}),
+        attachments,
+        ...senderPayload,
+      },
+    };
+    const { data: insertedRows, error: insertError } = await supabase
+      .from('counterparty_bot_direct_messages')
+      .insert([insertedPayload])
+      .select('id,direct_thread_id,direction,message_type,chat_id,channel_type,content_text,file_url,file_name,mime_type,payload,created_by,created_at');
+    if (insertError) throw insertError;
+    const previewText = String(text || '').trim() || String(attachments[0]?.name || '').trim() || null;
+    const nowIso = new Date().toISOString();
+    const { error: threadUpdateError } = await supabase
+      .from('counterparty_bot_direct_threads')
+      .update({
+        last_outbound_at: nowIso,
+        last_message_at: nowIso,
+        last_message_preview: previewText,
+      })
+      .eq('id', thread.id);
+    if (threadUpdateError) throw threadUpdateError;
+    return {
+      rows: (insertedRows || []) as BotDirectMessageRow[],
+    };
+  }, [buildCurrentBotSenderPayload, profile.id, profile.org_id]);
 
   const syncBotProviderMessageAction = useCallback(async (
     group: CounterpartyBotGroupRow | null | undefined,
@@ -3232,6 +4330,10 @@ useEffect(() => {
     if (variant !== 'chat' || !requestedBotGroupId) return;
     setSelectedBotGroupId(requestedBotGroupId);
   }, [requestedBotGroupId, variant]);
+  useEffect(() => {
+    if (variant !== 'chat' || !requestedBotDirectThreadId) return;
+    setSelectedBotDirectThreadId(requestedBotDirectThreadId);
+  }, [requestedBotDirectThreadId, variant]);
 
   // Restored last-state belongs to a specific user on this device — if a
   // different user signs in, fall back to the default selection.
@@ -3246,6 +4348,7 @@ useEffect(() => {
       storedLastStateRef.current = null;
       setSelectedNoteUserId(SYSTEM_MESSAGES_USER_ID);
       setSelectedBotGroupId(null);
+      setSelectedBotDirectThreadId(null);
       setDesktopActiveKey(normalizeTabForVariant(variant, requestedTab));
       setMobileActiveKey(normalizeTabForVariant(variant, requestedTab));
     }
@@ -3261,8 +4364,9 @@ useEffect(() => {
       tab: isSectionTabKey(activeDrawerTab) ? activeDrawerTab : null,
       noteConversationId: selectedNoteUserId,
       botGroupId: selectedBotGroupId,
+      botDirectThreadId: selectedBotDirectThreadId,
     });
-  }, [activeDrawerTab, profile.id, selectedBotGroupId, selectedNoteUserId, standalone, variant]);
+  }, [activeDrawerTab, profile.id, selectedBotDirectThreadId, selectedBotGroupId, selectedNoteUserId, standalone, variant]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'notes' || selectedNoteUserId) return;
@@ -3283,6 +4387,17 @@ useEffect(() => {
       void fetchBotMessages(selectedBotGroupId, { showLoading: true });
     }
   }, [activeDrawerSection, botTimelineAvailable, open, selectedBotGroupId]);
+  useEffect(() => {
+    if (!open) return;
+    if (activeDrawerSection !== 'bot_direct_messages') return;
+    if (!selectedBotDirectThreadId) {
+      setBotDirectMessages([]);
+      return;
+    }
+    botDirectShouldStickToBottomRef.current = true;
+    botDirectForceScrollToBottomRef.current = true;
+    void fetchBotDirectMessages(selectedBotDirectThreadId);
+  }, [activeDrawerSection, open, selectedBotDirectThreadId]);
 
   useEffect(() => {
     if (!open) return;
@@ -3390,7 +4505,6 @@ useEffect(() => {
   }, [currentRoleId, currentUserId, normalizeIdArray]);
   const hasVoipCallMatch = useCallback((row: any) => {
     if (!row || typeof row !== 'object') return false;
-    if (String(row.direction || '').trim() && String(row.direction || '').trim() !== 'incoming') return false;
     if (profile.can_view_all_calls) return true;
     const extension = String(profile.voip_extension || '').trim();
     if (!extension) return false;
@@ -3435,6 +4549,7 @@ useEffect(() => {
     if (variant === 'chat') {
       if (normalized === 'notes') return 'notes';
       if (normalized === 'bot_messages') return 'bot_messages';
+      if (normalized === 'bot_direct_messages') return 'bot_direct_messages';
       if (normalized === 'sms' || normalized === 'sms_messages') return 'sms_messages';
       if (normalized === 'voip_calls') return 'voip_calls';
       return null;
@@ -3458,7 +4573,7 @@ useEffect(() => {
     hasVoipCallMatch,
     responsibilityTables: RESPONSIBILITY_REALTIME_TABLES,
     onVoipUpsert: (row) => {
-      setVoipCalls((prev) => [row, ...prev.filter((item) => String(item?.id || '') !== String(row?.id || ''))].slice(0, 20));
+      setVoipCalls((prev) => [row, ...prev.filter((item) => String(item?.id || '') !== String(row?.id || ''))].slice(0, 80));
     },
   });
 
@@ -3531,6 +4646,14 @@ useEffect(() => {
         && !isNotificationRead('bot_messages', 'counterparty_bot_message', id, seenBotMessageIds.has(id));
     }).length;
   }, [botConversationSummaryAvailable, rpcBotConversationSummaries, botNotificationMessages, seenBotMessageIds, isNotificationRead, visibleBotGroupIds, unreadSummary.bot_messages, unreadSummaryAvailable]);
+  const botDirectMessagesTotalCount = useMemo(() => (
+    botDirectNotificationMessages.reduce((sum, row) => {
+      const id = String(row?.id || '').trim();
+      if (!id || String(row?.direction || '').trim() !== 'inbound') return sum;
+      if (isNotificationRead('bot_direct_messages', 'counterparty_bot_direct_message', id, seenBotMessageIds.has(id))) return sum;
+      return sum + 1;
+    }, 0)
+  ), [botDirectNotificationMessages, isNotificationRead, seenBotMessageIds]);
   const smsMessagesCount = useMemo(() => smsMessages.filter((row: any) => {
     if (unreadSummaryAvailable) {
       return false;
@@ -3550,7 +4673,7 @@ useEffect(() => {
     )).length;
   }, [voipCalls, seenVoipCallIds, isNotificationRead, unreadSummaryAvailable]);
   const effectiveVoipCallsCount = unreadSummaryAvailable ? unreadSummary.voip_calls : voipCallsCount;
-  const effectiveChatTotalCount = notesCount + botMessagesCount + effectiveSmsMessagesCount + effectiveVoipCallsCount;
+  const effectiveChatTotalCount = notesCount + botMessagesCount + botDirectMessagesTotalCount + effectiveSmsMessagesCount + effectiveVoipCallsCount;
   const alertsTotalCount = effectiveTasksCount + effectiveResponsibilitiesCount;
   const totalCount = variant === 'chat' ? effectiveChatTotalCount : alertsTotalCount;
   const smsThreads = useMemo<SmsThreadItem[]>(
@@ -3876,6 +4999,7 @@ useEffect(() => {
     selectedNoteUserId,
     selectedChatGroupId,
     selectedBotGroupId,
+    selectedBotDirectThreadId,
     currentUserId: String(profile.id || '').trim(),
     orgId: String(profile.org_id || '').trim(),
   });
@@ -3886,6 +5010,7 @@ useEffect(() => {
     selectedNoteUserId,
     selectedChatGroupId,
     selectedBotGroupId,
+    selectedBotDirectThreadId,
     currentUserId: String(profile.id || '').trim(),
     orgId: String(profile.org_id || '').trim(),
   };
@@ -3916,15 +5041,26 @@ useEffect(() => {
     });
     const unsubscribeBot = botMessageInsertBus.subscribe((row) => {
       const ctx = realtimeAppendCtxRef.current;
-      if (ctx.variant !== 'chat' || !ctx.open || ctx.activeDrawerSection !== 'bot_messages') return;
-      if (!ctx.selectedBotGroupId || String(row?.bot_group_id || '').trim() !== ctx.selectedBotGroupId) return;
       const rowOrgId = String(row?.org_id || '').trim();
       if (ctx.orgId && rowOrgId && rowOrgId !== ctx.orgId) return;
-      setBotMessages((prev) => {
-        const id = String(row?.id || '').trim();
-        if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
-        return [...prev, row as CounterpartyBotMessageRow].sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
-      });
+      if (ctx.variant !== 'chat' || !ctx.open) return;
+      if (ctx.activeDrawerSection === 'bot_messages') {
+        if (!ctx.selectedBotGroupId || String(row?.bot_group_id || '').trim() !== ctx.selectedBotGroupId) return;
+        setBotMessages((prev) => {
+          const id = String(row?.id || '').trim();
+          if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
+          return [...prev, row as CounterpartyBotMessageRow].sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
+        });
+        return;
+      }
+      if (ctx.activeDrawerSection === 'bot_direct_messages') {
+        if (!ctx.selectedBotDirectThreadId || String((row as any)?.direct_thread_id || '').trim() !== ctx.selectedBotDirectThreadId) return;
+        setBotDirectMessages((prev) => {
+          const id = String(row?.id || '').trim();
+          if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
+          return [...prev, row as BotDirectMessageRow].sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
+        });
+      }
     });
     return () => {
       unsubscribeNotes();
@@ -4571,11 +5707,24 @@ useEffect(() => {
     const rowId = String(row?.id || '').trim();
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
     const fileId = String((payload as any)?.media_file_id || '').trim();
+    const existingUsableUrl = String(row?.file_url || '').trim();
+    const persistedImportFailed = String((payload as any)?.media_import_status || '').trim() === 'failed';
+    const persistedRetryable = (payload as any)?.media_import_retryable === true;
     if (!rowId || !fileId) {
       throw new Error('شناسه فایل این پیام در دسترس نیست.');
     }
     if (String(selectedBotGroup?.channel_type || '').trim() !== 'rubika') {
       throw new Error('این عملیات فقط برای فایل‌های روبیکا پشتیبانی می‌شود.');
+    }
+    if (existingUsableUrl && !/https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(existingUsableUrl)) {
+      return mergeHydratedBotMessageAttachment(row, {
+        file_url: existingUsableUrl,
+        file_name: String(row.file_name || '').trim() || 'فایل',
+        mime_type: String(row.mime_type || '').trim() || null,
+      });
+    }
+    if (persistedImportFailed && !persistedRetryable && !options.force) {
+      throw new Error(String((payload as any)?.media_import_error_message || 'بازیابی این فایل روبیکا قبلاً ناموفق بوده است.').trim());
     }
     const activeConnection = await getActiveChannelSettings('rubika');
     const connectionId = String(activeConnection?.id || '').trim();
@@ -4648,10 +5797,14 @@ useEffect(() => {
       }
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const fileId = String((payload as any)?.media_file_id || '').trim();
+      const importStatus = String((payload as any)?.media_import_status || '').trim();
+      const importRetryable = (payload as any)?.media_import_retryable === true;
+      if (importStatus === 'failed' && !importRetryable) return false;
+      const rowFileUrl = String(row?.file_url || '').trim();
       const hasUsableAttachment = getBotMessageAttachments(row).some((item) => {
         const url = String(item?.url || '').trim();
         return Boolean(url) && !hasBrokenRubikaStorageUrl(url);
-      });
+      }) || (Boolean(rowFileUrl) && !hasBrokenRubikaStorageUrl(rowFileUrl));
       return Boolean(fileId && !hasUsableAttachment);
     }).slice(0, BOT_MEDIA_AUTO_HYDRATION_BATCH_SIZE);
     if (pendingRows.length === 0) return;
@@ -5016,6 +6169,59 @@ useEffect(() => {
       }
     }
   }, [botConversationSummaryAvailable, botReadModel, debouncedRefreshBotConversationSummaries, isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, patchLocalBotConversationSummary, refreshUnreadSummary, selectedBotGroupId]);
+  const markBotDirectMessagesAsSeen = useCallback((rows: BotDirectMessageRow[]) => {
+    const unreadInboundIds = rows
+      .filter((row) => String(row?.direction || '').trim() === 'inbound')
+      .map((row) => String(row?.id || '').trim())
+      .filter((id) => id && !isNotificationRead('bot_direct_messages', 'counterparty_bot_direct_message', id, seenBotMessageIds.has(id)));
+    if (unreadInboundIds.length === 0) {
+      if (selectedBotDirectThread) {
+        const receiptRows = selectBotReceiptCursorRows(rows as any);
+        if (receiptRows.length > 0) {
+          void markCommunicationReadCursor(
+            'bot',
+            `bot:direct:${String(selectedBotDirectThread.channel_type || '').trim()}:${String(selectedBotDirectThread.chat_id || '').trim()}`,
+            receiptRows,
+          );
+        }
+      }
+      return;
+    }
+    startTransition(() => {
+      setSeenBotMessageIds((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        unreadInboundIds.forEach((id) => {
+          if (!next.has(id)) {
+            next.add(id);
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    });
+    setBotDirectMessages((prev) => prev.map((row: any) => (
+      unreadInboundIds.includes(String(row?.id || '').trim()) ? { ...row, is_read: true } : row
+    )));
+    if (selectedBotDirectThread) {
+      const receiptRows = selectBotReceiptCursorRows(rows as any);
+      if (receiptRows.length > 0) {
+        void markCommunicationReadCursor(
+          'bot',
+          `bot:direct:${String(selectedBotDirectThread.channel_type || '').trim()}:${String(selectedBotDirectThread.chat_id || '').trim()}`,
+          receiptRows,
+        );
+      }
+    }
+    markNotificationEntriesRead(
+      unreadInboundIds.map((sourceId) => ({
+        section: 'bot_direct_messages' as const,
+        sourceType: 'counterparty_bot_direct_message',
+        sourceId,
+      })),
+    );
+    void refreshUnreadSummary();
+  }, [isNotificationRead, markCommunicationReadCursor, markNotificationEntriesRead, refreshUnreadSummary, seenBotMessageIds, selectedBotDirectThread]);
 
   const markTasksAsSeen = useCallback((rows: any[]) => {
     const visibleTaskIds = (rows || [])
@@ -5081,6 +6287,23 @@ useEffect(() => {
       markBotMessagesAsSeen(botMessages);
     }
   }, [botMessages, markBotMessagesAsSeen]);
+  const scrollBotDirectMessagesToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      const node = botDirectMessagesScrollContainerRef.current;
+      if (!node) return;
+      node.scrollTo({ top: node.scrollHeight, behavior });
+    });
+  }, []);
+  const handleBotDirectMessagesScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    const threshold = 24;
+    const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight <= threshold;
+    botDirectShouldStickToBottomRef.current = isAtBottom;
+    if (isAtBottom) {
+      markBotDirectMessagesAsSeen(botDirectMessages);
+    }
+  }, [botDirectMessages, markBotDirectMessagesAsSeen]);
 
   const captureDrawerCloseSnapshot = useCallback(() => {
     drawerCloseSnapshotRef.current = {
@@ -5257,6 +6480,19 @@ useEffect(() => {
     if (!selectedBotGroupId) return;
     markBotMessagesAsSeen(botMessages);
   }, [activeDrawerSection, botMessages, botViewportReady, markBotMessagesAsSeen, open, selectedBotGroupId]);
+  useLayoutEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_direct_messages') return;
+    if (loadingBotDirectMessages) return;
+    const shouldForceScroll = botDirectForceScrollToBottomRef.current;
+    if (!shouldForceScroll && !botDirectShouldStickToBottomRef.current) return;
+    scrollBotDirectMessagesToBottom('auto');
+    botDirectForceScrollToBottomRef.current = false;
+  }, [activeDrawerSection, botDirectMessages, loadingBotDirectMessages, open, scrollBotDirectMessagesToBottom, selectedBotDirectThreadId]);
+  useEffect(() => {
+    if (!open || activeDrawerSection !== 'bot_direct_messages') return;
+    if (!selectedBotDirectThreadId) return;
+    markBotDirectMessagesAsSeen(botDirectMessages);
+  }, [activeDrawerSection, botDirectMessages, markBotDirectMessagesAsSeen, open, selectedBotDirectThreadId]);
 
   useEffect(() => {
     if (!open || activeDrawerSection !== 'sms_messages') return;
@@ -6430,6 +7666,7 @@ useEffect(() => {
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
       requestReplySuggestion={requestReplySuggestion}
       refreshSection={refreshSectionStable}
+      onOpenPhoneMatchPicker={openPhoneIdentityBindModal}
       openCreateActivityFromMessage={openCreateActivityFromMessage}
     />
   );
@@ -6446,7 +7683,23 @@ useEffect(() => {
       getCentralRecordLabel={getCentralRecordLabelStable}
       getPhoneMatchLabel={getPhoneMatchLabel}
       getModuleFieldOptionLabel={getModuleFieldOptionLabel}
+      onOpenPhoneMatchPicker={openPhoneIdentityBindModal}
       openCreateActivityFromMessage={openCreateActivityFromMessage}
+      onForwardRecording={(call: any, attachment: NoteAttachment) => {
+        const direction = String(call?.direction || '').trim() === 'outgoing' ? 'خروجی' : 'ورودی';
+        const phone = direction === 'خروجی'
+          ? String(call?.destination_number || '').trim()
+          : String(call?.source_number || '').trim();
+        openForwardModal({
+          id: String(call?.id || '').trim(),
+          module_id: call?.module_id || call?.related_module_id || null,
+          record_id: call?.record_id || call?.related_record_id || null,
+          content: serializeNoteContent(
+            `فایل صوتی تماس ${direction}${phone ? ` با ${phone}` : ''}`,
+            [attachment],
+          ),
+        });
+      }}
     />
   );
 
@@ -6492,6 +7745,29 @@ useEffect(() => {
       return `${text} ${fileName}`.includes(normalizedMessageSearch);
     });
   }, [botMessageSearch, botMessages]);
+  const botDirectUnreadByThread = useMemo(() => (
+    botDirectNotificationMessages.reduce<Record<string, number>>((acc, row) => {
+      const threadId = String(row?.direct_thread_id || '').trim();
+      const id = String(row?.id || '').trim();
+      if (!threadId || !id || String(row?.direction || '').trim() !== 'inbound') return acc;
+      if (isNotificationRead('bot_direct_messages', 'counterparty_bot_direct_message', id, seenBotMessageIds.has(id))) return acc;
+      acc[threadId] = (acc[threadId] || 0) + 1;
+      return acc;
+    }, {})
+  ), [botDirectNotificationMessages, isNotificationRead, seenBotMessageIds]);
+  const botDirectMessagesCount = useMemo(
+    () => Object.values(botDirectUnreadByThread).reduce((sum, count) => sum + Number(count || 0), 0),
+    [botDirectUnreadByThread],
+  );
+  const filteredBotDirectMessages = useMemo(() => {
+    const normalizedMessageSearch = String(botDirectMessageSearch || '').trim().toLowerCase();
+    return botDirectMessages.filter((row) => {
+      if (!normalizedMessageSearch) return true;
+      const text = String(row.content_text || '').trim().toLowerCase();
+      const fileName = String(row.file_name || '').trim().toLowerCase();
+      return `${text} ${fileName}`.includes(normalizedMessageSearch);
+    });
+  }, [botDirectMessageSearch, botDirectMessages]);
   const resolveOutboundBotAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
       const userId = String(
@@ -6516,31 +7792,75 @@ useEffect(() => {
   }, [directoryUserMap]);
   const resolveInboundBotAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => {
       const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+      const channel = String(selectedBotGroup?.channel_type || (payload as any)?.channel_type || '').trim();
       const senderDisplayName = String((payload as any)?.sender_display_name || '').trim();
       const usernameRaw = String((payload as any)?.username || '').trim().replace(/^@+/, '');
       const username = usernameRaw ? `@${usernameRaw}` : '';
       const senderId = String((payload as any)?.sender_id || '').trim();
       const chatUserId = String((payload as any)?.user_id || (payload as any)?.object_guid || row?.chat_id || '').trim();
-      const name = senderDisplayName
-        || username
-        || (senderId ? `ID: ${senderId}` : '')
-        || (chatUserId ? `Chat: ${chatUserId}` : '')
-        || 'کاربر';
-      const metaLabel = senderDisplayName
-        ? (username || (senderId ? `ID: ${senderId}` : '') || (chatUserId ? `Chat: ${chatUserId}` : ''))
-        : null;
+      const identityThread = channel && chatUserId ? botDirectThreadByIdentityKey[`${channel}:${chatUserId}`] || null : null;
+      const mappedName = String(identityThread?.counterparty_label || identityThread?.display_name || '').trim();
+      const fallbackIdLabel = (chatUserId ? `Chat: ${chatUserId}` : '') || (senderId ? `ID: ${senderId}` : '') || '';
+      const primaryName = mappedName || senderDisplayName || username;
+      const name = primaryName || fallbackIdLabel || 'کاربر';
+      const metaLabel = mappedName
+        ? (username && username !== mappedName ? username : null)
+        : primaryName
+          ? (username && username !== primaryName
+            ? username
+            : (chatUserId ? `Chat: ${chatUserId}` : '') || (senderId ? `ID: ${senderId}` : '') || null)
+          : null;
       return {
         name,
         metaLabel,
-        avatarUrl: null as string | null,
+        avatarUrl: String(identityThread?.counterparty_image_url || '').trim() || null,
         fallback: String(name || 'ب').trim().slice(0, 1) || 'ب',
       };
-  }, []);
+  }, [botDirectThreadByIdentityKey, selectedBotGroup]);
   const resolveBotMessageAuthor = useCallback((row: CounterpartyBotMessageRow | null | undefined) => (
     String(row?.direction || '') === 'outbound'
       ? resolveOutboundBotAuthor(row)
       : resolveInboundBotAuthor(row)
   ), [resolveInboundBotAuthor, resolveOutboundBotAuthor]);
+  const renderBotAuthorNodes = useCallback((row: any, author: { name?: string | null; metaLabel?: string | null }) => {
+    if (String(row?.direction || '').trim() === 'outbound') return {};
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const senderChatId = String(
+      (payload as any)?.sender_id
+      || (payload as any)?.user_id
+      || (payload as any)?.object_guid
+      || row?.chat_id
+      || ''
+    ).trim();
+    if (!senderChatId) return {};
+    const openModal = () => {
+      void openBotIdentityBindModal(row);
+    };
+    const authorName = String(author?.name || '').trim();
+    const authorMetaLabel = String(author?.metaLabel || '').trim();
+    const resolvedMetaLabel = authorMetaLabel || (authorName && authorName !== senderChatId ? senderChatId : '');
+    return {
+      authorNameNode: (
+        <button
+          type="button"
+          onClick={openModal}
+          className="cursor-pointer text-inherit underline decoration-dotted underline-offset-2 hover:text-[rgb(var(--brand-700-rgb))] dark:hover:text-[rgb(var(--brand-300-rgb))]"
+        >
+          {String(author?.name || '').trim() || 'کاربر'}
+        </button>
+      ),
+      metaNode: resolvedMetaLabel ? (
+        <button
+          type="button"
+          onClick={openModal}
+          className="inline-flex items-center gap-1 cursor-pointer text-[11px] text-gray-400 underline decoration-dotted underline-offset-2 hover:text-[rgb(var(--brand-700-rgb))] dark:hover:text-[rgb(var(--brand-300-rgb))]"
+        >
+          <span dir="ltr">{resolvedMetaLabel}</span>
+          <EditOutlined className="text-[10px]" />
+        </button>
+      ) : null,
+    };
+  }, [openBotIdentityBindModal]);
 
   const sendBotMessage = useStableCallback(async () => {
       const text = String(botMessageText || '').trim();
@@ -6632,6 +7952,138 @@ useEffect(() => {
       }
   });
 
+  const sendBotDirectMessage = useStableCallback(async () => {
+    const text = String(botDirectMessageText || '').trim();
+    const selectedThread = selectedBotDirectThread;
+    if (!selectedThread) {
+      message.warning('ابتدا یک پی‌وی بات انتخاب کنید.');
+      return;
+    }
+    const channel = String(selectedThread.channel_type || '').trim() as BotChannel;
+    const chatId = String(selectedThread.chat_id || '').trim();
+    if (!chatId) {
+      message.warning('شناسه چت این پی‌وی ثبت نشده است.');
+      return;
+    }
+    setBotDirectSending(true);
+    try {
+      const recordModuleId = String(selectedThread.target_module_id || '').trim() || null;
+      const recordId = String(selectedThread.target_record_id || '').trim() || null;
+      const uploadedAttachments = botDirectAttachments.length > 0
+        ? await uploadNoteAttachments(recordModuleId, recordId, botDirectAttachments)
+        : [];
+      const attachments = [...botDirectLinkedAttachments, ...uploadedAttachments].filter((attachment, index, all) => {
+        const url = String(attachment?.url || '').trim();
+        return url && all.findIndex((item) => String(item?.url || '').trim() === url) === index;
+      });
+      if (botDirectLinkedAttachments.length > 0) {
+        await ensureNoteAttachmentShortcuts(recordModuleId, recordId, botDirectLinkedAttachments);
+      }
+      const outboundAttachments = attachments.length > 0
+        ? await shortenAttachmentsForExternalShare(attachments, {
+            moduleId: recordModuleId,
+            recordId,
+            metadata: {
+              source_type: 'notifications_popover_direct',
+              channel_type: channel,
+            },
+          })
+        : [];
+      const attachmentNameText = buildAttachmentNameText(outboundAttachments);
+      const finalText = String(text || '').trim();
+      if (!finalText && attachments.length === 0) {
+        message.warning('پیام خالی است.');
+        return;
+      }
+      const sendResult = await sendTextToBotDirectThread(selectedThread, finalText, {
+        attachments: attachments.length > 0 ? outboundAttachments : undefined,
+        fallbackText: attachments.length > 0 ? [finalText, attachmentNameText].filter(Boolean).join('\n') : undefined,
+        messageType: attachments.length > 0 ? 'file' : 'text',
+        payload: {
+          attachments: outboundAttachments,
+        },
+      });
+      const rows = Array.isArray((sendResult as any)?.rows)
+        ? (sendResult as any).rows as BotDirectMessageRow[]
+        : [];
+      if (rows.length > 0) {
+        botDirectShouldStickToBottomRef.current = true;
+        botDirectForceScrollToBottomRef.current = true;
+        setBotDirectMessages((prev) => mergeRowsByIdCreatedAsc(prev, rows as any) as any);
+      }
+      setBotDirectMessageText('');
+      setBotDirectAttachments([]);
+      setBotDirectLinkedAttachments([]);
+      await Promise.all([
+        fetchBotDirectThreads(),
+        fetchBotDirectNotificationMessages(),
+      ]);
+      message.success('پیام شخصی بات ارسال شد.');
+    } catch (error: any) {
+      console.warn('Could not send bot direct message', error);
+      message.error(toFaErrorMessage(error, 'ارسال پیام شخصی بات ناموفق بود.'));
+    } finally {
+      setBotDirectSending(false);
+    }
+  });
+
+  const suggestBotDirectReply = useStableCallback(async (instruction = '') => {
+    const selectedThread = selectedBotDirectThread;
+    if (!selectedThread) {
+      message.warning('ابتدا یک پی‌وی بات انتخاب کنید.');
+      return;
+    }
+    if (botDirectSuggesting) return;
+    setBotDirectSuggesting(true);
+    setBotDirectAiPopoverOpen(false);
+    try {
+      const recentMessages = (botDirectMessages || []).slice(-18).map((row: any) => {
+        const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+        const direction = String(row?.direction || '').trim() || 'inbound';
+        const isOutbound = direction === 'outbound';
+        const text = String(row?.content_text || '').trim()
+          || (String(row?.file_name || '').trim() ? `فایل: ${String(row.file_name || '').trim()}` : '');
+        return {
+          direction,
+          authorName: isOutbound
+            ? 'کاربر سازمان'
+            : (
+              String(selectedThread?.counterparty_label || '').trim()
+              || String(payload?.sender_display_name || '').trim()
+              || String(selectedThread?.display_name || '').trim()
+              || String(selectedThread?.username || '').trim()
+              || String(selectedThread?.chat_id || '').trim()
+              || 'مخاطب'
+            ),
+          text,
+          createdAt: row?.created_at || null,
+        };
+      }).filter((item: any) => item.text);
+
+      const suggested = await requestReplySuggestion({
+        channel: 'bot',
+        botDirectThreadId: String(selectedThread.id || '').trim() || null,
+        instruction: String(instruction || '').trim() || null,
+        context: {
+          mode: selectedThread?.target_module_id && selectedThread?.target_record_id ? 'record' : 'page',
+          moduleId: selectedThread?.target_module_id || null,
+          recordId: selectedThread?.target_record_id || null,
+          route: '/notifications?bot_direct=1',
+        },
+        counterparty: {
+          moduleId: selectedThread?.target_module_id || null,
+          recordId: selectedThread?.target_record_id || null,
+        },
+        recentMessages,
+      });
+      setBotDirectMessageText(suggested);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'پیشنهاد پاسخ پیام شخصی بات ناموفق بود.'));
+    } finally {
+      setBotDirectSuggesting(false);
+    }
+  });
+
   const suggestBotReply = useStableCallback(async (instruction = '') => {
       const selectedGroup = selectedBotGroup;
       if (!selectedGroup) {
@@ -6719,6 +8171,7 @@ useEffect(() => {
         getBotMessageAttachments={getBotMessageAttachments}
         importBotMessageAttachment={importBotMessageAttachment}
         resolveBotMessageAuthor={resolveBotMessageAuthor}
+        renderBotAuthorNodes={renderBotAuthorNodes}
         resolveBotBubbleAvatar={resolveBotBubbleAvatar}
         normalizeReadReceipts={normalizeReadReceipts}
         isUnreadBotRow={isUnreadBotRow}
@@ -6765,6 +8218,54 @@ useEffect(() => {
         suggestBotReply={suggestBotReply}
         openReadyTextsModal={openReadyTextsModal}
         handleOpenBotStatusModal={handleOpenBotStatusModal}
+        handleClose={handleClose}
+      />
+    );
+  };
+  const renderBotDirectMessagesPanel = (layout: 'desktop' | 'mobile' = 'desktop') => {
+    const selectedThread = selectedBotDirectThread;
+    const hideTimelineUntilSettled = false;
+    return (
+      <BotDirectMessagesPanel
+        layout={layout}
+        threads={filteredBotDirectThreads}
+        selectedThread={selectedThread}
+        selectedThreadId={selectedBotDirectThreadId}
+        setSelectedThreadId={setSelectedBotDirectThreadId}
+        threadSearch={botDirectThreadSearch}
+        setThreadSearch={setBotDirectThreadSearch}
+        mobileSearchOpen={mobileBotDirectSearchOpen}
+        setMobileSearchOpen={setMobileBotDirectSearchOpen}
+        unreadByThread={botDirectUnreadByThread}
+        messages={filteredBotDirectMessages}
+        messageSearch={botDirectMessageSearch}
+        setMessageSearch={setBotDirectMessageSearch}
+        loadingMessages={loadingBotDirectMessages}
+        hideTimelineUntilSettled={hideTimelineUntilSettled}
+        scrollContainerRef={botDirectMessagesScrollContainerRef}
+        handleScroll={handleBotDirectMessagesScroll}
+        messageText={botDirectMessageText}
+        onChangeMessageText={setBotDirectMessageText}
+        onSendMessage={sendBotDirectMessage}
+        sending={botDirectSending}
+        attachments={botDirectAttachments}
+        setAttachments={setBotDirectAttachments}
+        linkedAttachments={botDirectLinkedAttachments}
+        setLinkedAttachments={setBotDirectLinkedAttachments}
+        botDirectSuggesting={botDirectSuggesting}
+        botDirectAiPopoverOpen={botDirectAiPopoverOpen}
+        setBotDirectAiPopoverOpen={setBotDirectAiPopoverOpen}
+        suggestBotDirectReply={suggestBotDirectReply}
+        openReadyTextsModal={openReadyTextsModal}
+        onOpenSettings={(thread) => {
+          void openBotIdentityBindModalForIdentity({
+            channel: String(thread.channel_type || '').trim() as BotChannel,
+            chatId: String(thread.chat_id || '').trim(),
+            displayName: String(thread.display_name || thread.counterparty_label || '').trim(),
+            username: String(thread.username || '').trim(),
+            phoneNumber: String(thread.phone_number || '').trim(),
+          });
+        }}
         handleClose={handleClose}
       />
     );
@@ -6851,8 +8352,13 @@ useEffect(() => {
       },
       {
         key: 'bot_messages',
-        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>گروه‌های بات</Badge>,
         children: renderLazyDrawerPane('bot_messages', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderBotMessagesPanel('desktop')),
+      },
+      {
+        key: 'bot_direct_messages',
+        label: <Badge count={formatBadgeCount(botDirectMessagesCount)} color={badgeColor}>پیام‌های شخصی بات</Badge>,
+        children: renderLazyDrawerPane('bot_direct_messages', desktopActiveKey, `${desktopPaneH} flex flex-col overflow-hidden`, () => renderBotDirectMessagesPanel('desktop')),
       },
       {
         key: 'sms_messages',
@@ -6922,8 +8428,13 @@ useEffect(() => {
       },
       {
         key: 'bot_messages',
-        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>پیام‌های بات</Badge>,
+        label: <Badge count={formatBadgeCount(botMessagesCount)} color={badgeColor}>گروه‌های بات</Badge>,
         children: renderLazyDrawerPane('bot_messages', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderBotMessagesPanel('mobile')),
+      },
+      {
+        key: 'bot_direct_messages',
+        label: <Badge count={formatBadgeCount(botDirectMessagesCount)} color={badgeColor}>پیام‌های شخصی بات</Badge>,
+        children: renderLazyDrawerPane('bot_direct_messages', mobileActiveKey, 'h-full min-h-0 flex flex-col overflow-hidden', () => renderBotDirectMessagesPanel('mobile')),
       },
       {
         key: 'sms_messages',
@@ -7122,7 +8633,13 @@ useEffect(() => {
             activeTab={botStatusActiveTab}
             defaultChannel={botStatusDefaultChannel}
             fallbackToActive={botStatusFallbackToActive}
-            counterpartyType={selectedBotGroup?.target_type === 'suppliers' ? 'supplier' : 'customer'}
+            counterpartyType={
+              selectedBotGroup?.target_type === 'suppliers'
+                ? 'supplier'
+                : selectedBotGroup?.target_type === 'employees'
+                  ? 'employee'
+                  : 'customer'
+            }
             platforms={botStatusPlatformData}
             userOptions={directoryUsers.map((user: any) => ({
               label: String(user?.display_name || user?.id || '-').trim(),
@@ -7143,6 +8660,78 @@ useEffect(() => {
               ...prev,
               [channel]: { ...prev[channel], [key]: value },
             }))}
+          />
+        </React.Suspense>
+      ) : null}
+      {botIdentityBindModalOpen && botIdentityBindDraft ? (
+        <React.Suspense fallback={null}>
+          <BotChatIdentityBindModal
+            open={botIdentityBindModalOpen}
+            loading={botIdentityBindModalLoading}
+            saving={botIdentityBindModalSaving}
+            channelLabel={BOT_CHANNEL_LABELS_FA[botIdentityBindDraft.channel] || botIdentityBindDraft.channel}
+            chatId={botIdentityBindDraft.chatId}
+            displayName={botIdentityBindDraft.displayName}
+            username={botIdentityBindDraft.username}
+            phoneNumber={botIdentityBindDraft.phoneNumber}
+            existingBindingLabel={
+              isBotTargetModuleId(String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim())
+                ? `${String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim() === 'customers' ? 'مشتری' : String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim() === 'suppliers' ? 'تأمین‌کننده' : 'کارمند'} ${String(botIdentityBindDraft.existingBinding?.display_name || '').trim() || ''}`.trim()
+                : null
+            }
+            targetModuleId={botIdentityBindTargetModuleId}
+            onChangeTargetModuleId={(value) => {
+              setBotIdentityBindTargetModuleId(value);
+              setBotIdentityBindTargetRecordId(null);
+            }}
+            targetRecordId={botIdentityBindTargetRecordId}
+            onChangeTargetRecordId={setBotIdentityBindTargetRecordId}
+            targetOptions={botIdentityBindOptions}
+            searchValue={botIdentityBindSearch}
+            onChangeSearchValue={setBotIdentityBindSearch}
+            userOptions={directoryUsers.map((user: any) => ({
+              label: String(user?.display_name || user?.id || '-').trim(),
+              value: String(user?.id || '').trim(),
+            })).filter((item: any) => item.value)}
+            roleOptions={directoryRoles.map((role: any) => ({
+              label: String(role?.title || role?.id || '-').trim(),
+              value: String(role?.id || '').trim(),
+            })).filter((item: any) => item.value)}
+            allowedUserIds={botIdentityAllowedUserIds}
+            onChangeAllowedUserIds={setBotIdentityAllowedUserIds}
+            allowedRoleIds={botIdentityAllowedRoleIds}
+            onChangeAllowedRoleIds={setBotIdentityAllowedRoleIds}
+            aiAutoReplyEnabled={botIdentityAiAutoReplyEnabled}
+            onChangeAiAutoReplyEnabled={setBotIdentityAiAutoReplyEnabled}
+            aiCounterpartyGuide={botIdentityAiCounterpartyGuide}
+            onChangeAiCounterpartyGuide={setBotIdentityAiCounterpartyGuide}
+            memberGroups={botIdentityMemberGroups}
+            onClose={closeBotIdentityBindModal}
+            onSave={() => void saveBotIdentityBinding()}
+          />
+        </React.Suspense>
+      ) : null}
+      {phoneIdentityBindModalOpen && phoneIdentityBindDraft ? (
+        <React.Suspense fallback={null}>
+          <PhoneMatchPickerModal
+            open={phoneIdentityBindModalOpen}
+            loading={phoneIdentityBindModalLoading}
+            saving={phoneIdentityBindModalSaving}
+            phone={phoneIdentityBindDraft.phone}
+            existingBindingLabel={phoneIdentityBindDraft.existingBindingLabel || null}
+            phoneMatchStatus={phoneIdentityBindDraft.phoneMatchStatus || null}
+            targetModuleId={phoneIdentityBindTargetModuleId}
+            onChangeTargetModuleId={(value) => {
+              setPhoneIdentityBindTargetModuleId(value);
+              setPhoneIdentityBindTargetRecordId(null);
+            }}
+            targetRecordId={phoneIdentityBindTargetRecordId}
+            onChangeTargetRecordId={setPhoneIdentityBindTargetRecordId}
+            targetOptions={phoneIdentityBindOptions}
+            searchValue={phoneIdentityBindSearch}
+            onChangeSearchValue={setPhoneIdentityBindSearch}
+            onClose={closePhoneIdentityBindModal}
+            onSave={() => void savePhoneIdentityBinding()}
           />
         </React.Suspense>
       ) : null}
@@ -7220,6 +8809,7 @@ useEffect(() => {
             profileId={profile.id}
             currentAuthorName={directoryUserMap[String(profile.id || '')]?.display_name || null}
             botGroups={botGroups}
+            botDirectThreads={botDirectThreads}
             chatGroups={chatGroups}
             chatGroupMap={chatGroupMap}
             availableDirectUsers={availableDirectUsers}
@@ -7228,6 +8818,7 @@ useEffect(() => {
             getBotMessageAttachments={getBotMessageAttachments}
             buildAttachmentNameText={buildAttachmentNameText}
             sendTextToBotGroup={sendTextToBotGroup}
+            sendTextToBotDirectThread={sendTextToBotDirectThread}
             refreshSection={refreshSection}
             onForwarded={handleForwarded}
             onOpenReadyTexts={() => openReadyTextsModal('forward')}

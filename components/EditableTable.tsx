@@ -152,6 +152,7 @@ interface EditableTableProps {
   initialData: any[];
   moduleId?: string;
   recordId?: string;
+  parentValues?: Record<string, any> | null;
   relationOptions: Record<string, any[]>;
   onSaveSuccess?: (newData: any[]) => void;
   onChange?: (newData: any[]) => void;
@@ -180,6 +181,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   initialData,
   moduleId,
   recordId,
+  parentValues,
   relationOptions,
   onSaveSuccess,
   onChange,
@@ -1779,6 +1781,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
           if (!isAbortLikeError(error)) {
             console.warn('Could not set default payment amount from remaining balance', error);
           }
+        }
+      }
+      if (isAnyInvoicePayments) {
+        const accountField = isInvoicePayments ? 'target_account' : 'source_account';
+        const parentAccountValue = String(parentValues?.[accountField] || '').trim();
+        if (parentAccountValue && !String(newRow[accountField] || '').trim()) {
+          newRow[accountField] = parentAccountValue;
         }
       }
       newRow.row_key = ensurePaymentRowKey(newRow);

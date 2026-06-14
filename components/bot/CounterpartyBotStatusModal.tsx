@@ -13,6 +13,8 @@ export type BotChannel = 'rubika' | 'telegram' | 'bale';
 
 export type BotPlatformState = {
   groupTitle: string;
+  groupJoinLink: string;
+  directChatId: string;
   currentStatus: string;
   activationCode: string;
   lastInboundAt: string;
@@ -25,6 +27,8 @@ export type BotPlatformState = {
 
 export const DEFAULT_PLATFORM_STATE: BotPlatformState = {
   groupTitle: '',
+  groupJoinLink: '',
+  directChatId: '',
   currentStatus: 'pending_join',
   activationCode: '',
   lastInboundAt: '',
@@ -91,7 +95,7 @@ export type CounterpartyBotStatusModalProps = {
   activeTab?: BotChannel;
   defaultChannel?: BotChannel;
   fallbackToActive?: boolean;
-  counterpartyType?: 'customer' | 'supplier';
+  counterpartyType?: 'customer' | 'supplier' | 'employee';
   platforms?: Record<BotChannel, BotPlatformState>;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
@@ -185,6 +189,22 @@ const PlatformTabContent: React.FC<{
           value={state.groupTitle}
           placeholder="نام گروه را وارد کنید"
           onChange={(e) => onChangePlatform('groupTitle', e.target.value)}
+        />
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">لینک جوین گروه</div>
+        <Input
+          value={state.groupJoinLink}
+          placeholder="لینک عضویت گروه را وارد کنید"
+          onChange={(e) => onChangePlatform('groupJoinLink', e.target.value)}
+        />
+      </div>
+      <div>
+        <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">چت آیدی پی‌وی</div>
+        <Input
+          value={state.directChatId}
+          placeholder="شناسه چت شخصی این پلتفرم را وارد کنید"
+          onChange={(e) => onChangePlatform('directChatId', e.target.value)}
         />
       </div>
       <div className="rounded border border-violet-200 bg-violet-50 px-3 py-2 dark:border-violet-700/40 dark:bg-violet-900/20">
@@ -291,9 +311,15 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
 }) => {
   const normalizedActiveTab = activeTab || legacyChannel || 'rubika';
   const normalizedDefaultChannel = defaultChannel || normalizedActiveTab;
-  const counterpartyLabel = counterpartyType === 'supplier' ? 'تامین‌کننده' : 'مشتری';
+  const counterpartyLabel = counterpartyType === 'supplier'
+    ? 'تامین‌کننده'
+    : counterpartyType === 'employee'
+      ? 'کارمند'
+      : 'مشتری';
   const legacyPlatformState: BotPlatformState = {
     groupTitle: groupTitle || '',
+    groupJoinLink: '',
+    directChatId: '',
     currentStatus: currentStatus || 'pending_join',
     activationCode: activationCode || '',
     lastInboundAt: lastInboundAt || '',

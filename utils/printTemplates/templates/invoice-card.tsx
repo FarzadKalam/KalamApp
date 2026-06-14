@@ -1,4 +1,5 @@
 import React from 'react';
+import { buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../../invoicePresentation';
 
 interface InvoiceCardProps {
   data: any;
@@ -73,6 +74,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   const sellerEmail = sellerInfo.email;
   const sellerCeoName = sellerInfo.ceo_name;
   const sellerContactSummary = [sellerMobile, sellerPhone].filter(Boolean).join(' - ');
+  const currencyLabel = String(data?.company_settings?.currency_label || sellerInfo?.currency_label || 'ریال').trim() || 'ریال';
 
   const getInvoiceItemProductLabel = (item: any) => {
     if (!item) return '-';
@@ -384,6 +386,15 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
               data.invoiceItems.slice(0, isMobilePrint ? 4 : 6).map((item: any, idx: number) => {
                 const productLabel = getInvoiceItemProductLabel(item);
                 const deliveryTime = String(item?.delivery_time || '').trim();
+                const discountDisplay = buildInvoiceAdjustmentDisplay({
+                  value: item?.discount,
+                  type: item?.discount_type,
+                  baseAmount: resolveInvoiceRowBaseAmount(item),
+                  currencyLabel,
+                });
+                const rowTotal = Number(item?.total_price || 0) > 0
+                  ? Number(item.total_price)
+                  : (Number(item.quantity || 0) * Number(item.unit_price || 0));
                 return (
                   <tr key={idx} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ 
@@ -397,6 +408,12 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
                     {deliveryTime ? (
                       <div style={{ marginTop: '2px', color: '#6b7280', fontSize: isMobilePrint ? '5.5px' : '6px', lineHeight: 1.6 }}>
                         زمان تحویل: {deliveryTime}
+                      </div>
+                    ) : null}
+                    {discountDisplay.hasValue ? (
+                      <div style={{ marginTop: '2px', color: '#b45309', fontSize: isMobilePrint ? '5.5px' : '6px', lineHeight: 1.6 }}>
+                        تخفیف: {discountDisplay.primaryText}
+                        {discountDisplay.secondaryText ? ` (${discountDisplay.secondaryText})` : ''}
                       </div>
                     ) : null}
                   </td>
@@ -422,7 +439,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
                     fontWeight: 'bold',
                     fontSize: isMobilePrint ? '6px' : '7px'
                   }}>
-                    {formatPersianPrice((item.quantity || 0) * (item.unit_price || 0))}
+                    {formatPersianPrice(rowTotal)}
                   </td>
                 </tr>
                 );
@@ -467,7 +484,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
               <span>تخفیف:</span>
               <span style={{ fontSize: isMobilePrint ? '6px' : '7px' }}>
                 {globalDiscountType === 'percent'
-                  ? `${toPersianNumber(String(globalDiscountValue))}٪ (${formatPersianPrice(globalDiscountAmount)})`
+                  ? `${toPersianNumber(String(globalDiscountValue))} درصد (${formatPersianPrice(globalDiscountAmount)} ${currencyLabel})`
                   : formatPersianPrice(globalDiscountAmount)}
               </span>
             </div>

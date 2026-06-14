@@ -1,3 +1,5 @@
+import { BOT_TARGET_MODULE_IDS, BOT_VIRTUAL_FIELD_KEYS } from './botPlatform';
+
 export type RelationOptionLike = {
   value?: string | null;
   module?: string | null;
@@ -192,11 +194,18 @@ export const transformModulePayloadForSave = (
   rawPayload: Record<string, any>,
   relationOptions: Record<string, RelationOptionLike[]> = {}
 ) => {
-  if (moduleId !== 'cash_bank_operations') {
-    return rawPayload;
+  const sanitizedPayload = { ...(rawPayload || {}) };
+  if (BOT_TARGET_MODULE_IDS.includes(moduleId as any)) {
+    BOT_VIRTUAL_FIELD_KEYS.forEach((fieldKey) => {
+      delete sanitizedPayload[fieldKey];
+    });
   }
 
-  const payload = { ...(rawPayload || {}) };
+  if (moduleId !== 'cash_bank_operations') {
+    return sanitizedPayload;
+  }
+
+  const payload = sanitizedPayload;
   const operationType = String(payload.operation_type || '').trim();
   const assigneeType = String(
     payload.assignee_type

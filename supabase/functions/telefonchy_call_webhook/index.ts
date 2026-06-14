@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-04-14-01';
+const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-06-14-02';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -90,7 +90,7 @@ const normalizeTelefonchyPayload = (payload: Record<string, any>) => {
     ...data,
     call_id: firstValue(data.call_id, data.cuid, data.unique_id, payload.call_id, payload.cuid, payload.unique_id, payload.id),
     object_id: firstValue(data.object_id, data.id, payload.object_id, payload.objectId),
-    extension: firstValue(data.extension, data.operator_extension, exten.number, exten.caller_id, payload.extension, payload.operator_extension),
+    extension: firstValue(data.extension, data.operator_extension, exten.number, exten.id, payload.extension, payload.operator_extension),
     file_id: firstValue(data.file_id, data.record_id, payload.file_id, payload.fileId, payload.record_id),
     trunk: firstValue(data.trunk, data.trunk_number, payload.trunk, payload.trunk_number),
     started_at: firstValue(data.started_at, data.start_at, data.start_time, data.datetime, data.created_at, payload.started_at, payload.start_at, payload.start_time, payload.created_at),
@@ -234,7 +234,7 @@ const findExistingCallLog = async (
     url.searchParams.set('org_id', `eq.${orgId}`);
     url.searchParams.set('provider', `eq.${provider}`);
     url.searchParams.set(field, `eq.${value}`);
-    url.searchParams.set('select', 'id');
+    url.searchParams.set('select', 'id,metadata');
     url.searchParams.set('limit', '1');
 
     const response = await fetch(url.toString(), {
@@ -251,12 +251,41 @@ const findExistingCallLog = async (
   return (await query('call_id', callId)) || (await query('object_id', objectId));
 };
 
+const findRecentPendingOutgoingCall = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  row: Record<string, any>,
+) => {
+  if (
+    String(row.direction || '') !== 'outgoing'
+    || !String(row.destination_number || '').trim()
+    || !String(row.extension || '').trim()
+  ) return null;
+
+  const url = new URL(`${trimTrailingSlash(supabaseUrl)}/rest/v1/voip_call_logs`);
+  url.searchParams.set('org_id', `eq.${row.org_id}`);
+  url.searchParams.set('provider', `eq.${row.provider}`);
+  url.searchParams.set('direction', 'eq.outgoing');
+  url.searchParams.set('destination_number', `eq.${row.destination_number}`);
+  url.searchParams.set('extension', `eq.${row.extension}`);
+  url.searchParams.set('status', 'eq.ringing');
+  url.searchParams.set('created_at', `gte.${new Date(Date.now() - 5 * 60 * 1000).toISOString()}`);
+  url.searchParams.set('select', 'id,metadata');
+  url.searchParams.set('order', 'created_at.desc');
+  url.searchParams.set('limit', '1');
+  const response = await fetch(url.toString(), { headers: getServiceHeaders(serviceRoleKey) });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || 'خواندن تماس خروجی در انتظار ناموفق بود.');
+  const rows = parseJsonSafe(raw);
+  return Array.isArray(rows) ? rows[0] : null;
+};
+
 const saveCallLog = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   row: Record<string, any>
 ) => {
-  const existing = await findExistingCallLog(
+  let existing = await findExistingCallLog(
     supabaseUrl,
     serviceRoleKey,
     row.org_id,
@@ -264,6 +293,9 @@ const saveCallLog = async (
     String(row.call_id || ''),
     String(row.object_id || '')
   );
+  if (!existing) {
+    existing = await findRecentPendingOutgoingCall(supabaseUrl, serviceRoleKey, row);
+  }
 
   const write = async (payload: Record<string, any>) => {
     const targetUrl = existing?.id
@@ -281,9 +313,21 @@ const saveCallLog = async (
     return { response, raw };
   };
 
-  let result = await write(row);
+  const payload = existing?.id
+    ? Object.fromEntries(
+        Object.entries({
+          ...row,
+          metadata: {
+            ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+            ...(isPlainObject(row.metadata) ? row.metadata : {}),
+          },
+        }).filter(([, value]) => value !== null && value !== undefined && value !== '')
+      )
+    : row;
+
+  let result = await write(payload);
   if (!result.response.ok && /column .*title|schema cache/i.test(result.raw || '')) {
-    const { title: _title, ...withoutTitle } = row;
+    const { title: _title, ...withoutTitle } = payload;
     result = await write(withoutTitle);
   }
   if (!result.response.ok) throw new Error(result.raw || 'ذخیره گزارش تماس ناموفق بود.');
@@ -327,7 +371,17 @@ Deno.serve(async (req) => {
     const direction = mapDirection(firstValue(providerPayload.type, providerPayload.direction, providerPayload.call_type));
     const sourceNumber = normalizePhone(firstValue(providerPayload.call_source, providerPayload.source_number, providerPayload.source, providerPayload.from, providerPayload.caller));
     const destinationNumber = normalizePhone(firstValue(providerPayload.call_dest, providerPayload.destination_number, providerPayload.destination, providerPayload.to, providerPayload.callee));
-    const extension = firstValue(providerPayload.extension, providerPayload.operator_extension, providerPayload.exten);
+    const explicitExtension = firstValue(
+      providerPayload.extension,
+      providerPayload.operator_extension,
+      providerPayload.exten?.number,
+      providerPayload.exten?.id,
+    );
+    const extension = explicitExtension || (
+      direction === 'outgoing' && sourceNumber.length > 0 && sourceNumber.length <= 6
+        ? sourceNumber
+        : ''
+    );
     const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
     const status = mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
 

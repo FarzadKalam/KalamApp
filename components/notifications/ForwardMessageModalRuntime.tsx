@@ -16,6 +16,7 @@ type ForwardMessageModalRuntimeProps = {
   profileId: string | null;
   currentAuthorName: string | null;
   botGroups: any[];
+  botDirectThreads: any[];
   chatGroups: any[];
   chatGroupMap: Record<string, any>;
   availableDirectUsers: Array<{ id: string; display_name: string; role_id?: string | null }>;
@@ -28,7 +29,8 @@ type ForwardMessageModalRuntimeProps = {
   getBotMessageAttachments: (row: any) => any[];
   buildAttachmentNameText: (attachments: Array<{ name?: string; url?: string }>) => string;
   sendTextToBotGroup: (group: any, text: string, options?: Record<string, any>) => Promise<any>;
-  refreshSection: (section: 'notes' | 'bot_messages', options?: { force?: boolean }) => Promise<any>;
+  sendTextToBotDirectThread: (thread: any, text: string, options?: Record<string, any>) => Promise<any>;
+  refreshSection: (section: 'notes' | 'bot_messages' | 'bot_direct_messages', options?: { force?: boolean }) => Promise<any>;
   onForwarded: () => void;
   onOpenReadyTexts: () => void;
 };
@@ -47,6 +49,7 @@ const ForwardMessageModalRuntime: React.FC<ForwardMessageModalRuntimeProps> = ({
   profileId,
   currentAuthorName,
   botGroups,
+  botDirectThreads,
   chatGroups,
   chatGroupMap,
   availableDirectUsers,
@@ -55,6 +58,7 @@ const ForwardMessageModalRuntime: React.FC<ForwardMessageModalRuntimeProps> = ({
   getBotMessageAttachments,
   buildAttachmentNameText,
   sendTextToBotGroup,
+  sendTextToBotDirectThread,
   refreshSection,
   onForwarded,
   onOpenReadyTexts,
@@ -76,6 +80,7 @@ const ForwardMessageModalRuntime: React.FC<ForwardMessageModalRuntimeProps> = ({
     profileId,
     currentAuthorName,
     botGroups,
+    botDirectThreads,
     chatGroups,
     chatGroupMap,
     availableDirectUsers,
@@ -84,6 +89,7 @@ const ForwardMessageModalRuntime: React.FC<ForwardMessageModalRuntimeProps> = ({
     getBotMessageAttachments,
     buildAttachmentNameText,
     sendTextToBotGroup,
+    sendTextToBotDirectThread,
     refreshSection,
     onForwarded,
   });

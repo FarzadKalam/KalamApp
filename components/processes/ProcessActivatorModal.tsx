@@ -4,7 +4,6 @@ import {
   App,
   Form,
   Input,
-  InputNumber,
   Modal,
   Radio,
   Switch,
@@ -15,15 +14,13 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { isAbortLikeError } from '../../utils/requestErrors';
 import {
   createWorkflowId,
-  intervalUnitOptions,
   triggerTypeOptions,
   workflowExecutionModeOptions,
   type WorkflowCondition,
   type WorkflowRecord,
 } from '../../utils/workflowTypes';
-import AdaptiveSelectField from '../AdaptiveSelectField';
-import PersianDatePicker from '../PersianDatePicker';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
+import WorkflowIntervalScheduleFields from '../workflows/WorkflowIntervalScheduleFields';
 
 type OptionList = Array<{ label: string; value: string }>;
 
@@ -50,8 +47,15 @@ type FormValues = {
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
   execution_mode: 'first_match' | 'every_match';
   interval_value?: number | null;
-  interval_unit?: 'hour' | 'day' | 'month' | null;
+  interval_unit?: 'hour' | 'day' | 'week' | 'month' | null;
   interval_at?: string | null;
+  interval_first_run_at?: string | null;
+  interval_minute?: number | null;
+  interval_allowed_from_hour?: number | null;
+  interval_allowed_to_hour?: number | null;
+  interval_day_of_month?: number | null;
+  interval_day_condition?: string | null;
+  interval_days_after_holiday?: number | null;
   batch_size?: number | null;
   is_active?: boolean;
 };
@@ -115,6 +119,13 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           interval_value: nextRecord?.interval_value || 1,
           interval_unit: nextRecord?.interval_unit || 'day',
           interval_at: nextRecord?.interval_at || null,
+          interval_first_run_at: nextRecord?.interval_first_run_at || null,
+          interval_minute: nextRecord?.interval_minute ?? null,
+          interval_allowed_from_hour: nextRecord?.interval_allowed_from_hour ?? null,
+          interval_allowed_to_hour: nextRecord?.interval_allowed_to_hour ?? null,
+          interval_day_of_month: nextRecord?.interval_day_of_month ?? null,
+          interval_day_condition: nextRecord?.interval_day_condition || 'any',
+          interval_days_after_holiday: nextRecord?.interval_days_after_holiday ?? null,
           batch_size: nextRecord?.batch_size || null,
           is_active: nextRecord?.is_active !== false,
         });
@@ -176,6 +187,13 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
         interval_value: isInterval ? Math.max(1, Number(values.interval_value || 1)) : null,
         interval_unit: isInterval ? values.interval_unit || 'day' : null,
         interval_at: isInterval ? values.interval_at || null : null,
+        interval_first_run_at: isInterval ? values.interval_first_run_at || null : null,
+        interval_minute: isInterval ? values.interval_minute ?? null : null,
+        interval_allowed_from_hour: isInterval ? values.interval_allowed_from_hour ?? null : null,
+        interval_allowed_to_hour: isInterval ? values.interval_allowed_to_hour ?? null : null,
+        interval_day_of_month: isInterval ? values.interval_day_of_month ?? null : null,
+        interval_day_condition: isInterval ? values.interval_day_condition || null : null,
+        interval_days_after_holiday: isInterval ? values.interval_days_after_holiday ?? null : null,
         batch_size: isInterval && values.batch_size ? Math.max(1, Number(values.batch_size)) : null,
         conditions_all: [...lockedConditions, ...editableConditionsAll],
         conditions_any: conditionsAny,
@@ -245,20 +263,10 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           </Form.Item>
         </div>
         {triggerType === 'interval' ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-            <Form.Item name="interval_value" label="هر">
-              <InputNumber min={1} className="w-full" />
-            </Form.Item>
-            <Form.Item name="interval_unit" label="واحد">
-              <AdaptiveSelectField options={intervalUnitOptions} />
-            </Form.Item>
-            <Form.Item name="interval_at" label="در ساعت">
-              <PersianDatePicker type="TIME" />
-            </Form.Item>
-            <Form.Item name="batch_size" label="تعداد بررسی">
-              <InputNumber min={1} className="w-full" />
-            </Form.Item>
-          </div>
+          <WorkflowIntervalScheduleFields
+            form={form}
+            overlayZIndexBase={10150}
+          />
         ) : null}
         {sourceNodeKey ? (
           <Alert

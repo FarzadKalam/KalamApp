@@ -807,7 +807,16 @@ function App() {
 
   return (
     <HelmetProvider>
-    <BrowserRouter future={{ v7_startTransition: true }}>
+    {/*
+      Navigation is intentionally synchronous (no v7_startTransition).
+      With startTransition, React Router defers committing the new route and
+      keeps the previous page mounted until the destination is "ready". On the
+      heavy standalone messages page this deferral effectively never resolves
+      (the page's own renders starve the pending transition), so the URL changes
+      but the messages page stays on screen. Synchronous navigation commits
+      immediately and unmounts the old page.
+    */}
+    <BrowserRouter>
       <ConfigProvider
         direction="rtl"
         locale={faIR}

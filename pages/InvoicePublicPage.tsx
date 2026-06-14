@@ -7,18 +7,20 @@ import {
   ConfigProvider,
   Divider,
   Input,
+  Modal,
   Spin,
   Steps,
   Table,
   Tag,
-  Timeline,
   Tooltip,
   Typography,
+  Upload,
   theme as antdTheme,
 } from 'antd';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
+  CopyOutlined,
   MessageOutlined,
   PhoneOutlined,
   PrinterOutlined,
@@ -26,6 +28,7 @@ import {
   SendOutlined,
   ShareAltOutlined,
   ShopOutlined,
+  UploadOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
@@ -39,10 +42,15 @@ import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
+import { buildInvoiceAdjustmentDisplay, hasInvoiceAdjustmentValue, resolveInvoiceGlobalDiscountAmount, resolveInvoiceRowBaseAmount } from '../utils/invoicePresentation';
+import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
+import { uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { parseNoteContent, resolveNoteAttachmentFileType } from '../utils/noteContent';
+import SharedNoteCard from '../components/notes/SharedNoteCard';
 
 const anonClient = supabasePublic;
 
-const { Text, Title, Paragraph } = Typography;
+const { Text, Title } = Typography;
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -70,9 +78,9 @@ const toJalaliDateTime = (value: string | null | undefined): string => {
   }
 };
 
-const formatPrice = (value: number | null | undefined) => {
+const formatPrice = (value: number | null | undefined, currencyLabel = 'ریال') => {
   if (value == null || isNaN(Number(value))) return '—';
-  return Number(value).toLocaleString('fa-IR') + ' ریال';
+  return `${Number(value).toLocaleString('fa-IR')} ${currencyLabel}`;
 };
 
 const formatNumber = (value: number | null | undefined) => {
@@ -126,6 +134,13 @@ const PAYMENT_STATUS_LABELS: Record<string, { label: string; color: string }> = 
 };
 
 const OTP_RESEND_SECONDS = 90;
+const NIGHT_START_HOUR = 19;
+const NIGHT_END_HOUR = 6;
+
+const isNightInvoiceView = (date = new Date()) => {
+  const hour = date.getHours();
+  return hour >= NIGHT_START_HOUR || hour < NIGHT_END_HOUR;
+};
 
 // ─── types ──────────────────────────────────────────────────────────────────
 
@@ -162,6 +177,13 @@ type PublicNote = {
   created_at: string;
   reply_to?: string | null;
   metadata?: Record<string, any>;
+};
+
+type UploadingReceipt = {
+  name: string;
+  url: string;
+  mimeType?: string | null;
+  fileType?: string | null;
 };
 
 // ─── phone display helpers ───────────────────────────────────────────────────
@@ -235,6 +257,9 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
   const [messageText, setMessageText] = useState('');
   const [messageSending, setMessageSending] = useState(false);
   const [notes, setNotes] = useState<PublicNote[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<UploadingReceipt[]>([]);
+  const [receiptUploading, setReceiptUploading] = useState(false);
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
 
   // ── load invoice ──────────────────────────────────────────────────────────
 
@@ -432,17 +457,15 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
   // ── send message ───────────────────────────────────────────────────────────
 
   const handleSendMessage = async () => {
-    if (!messageText.trim() || !data) return;
-    const inv = data.invoice;
-    const authorName = isSales
-      ? String(inv.customer_name || 'مشتری')
-      : String(inv.supplier_name || 'تامین‌کننده');
+    if ((!messageText.trim() && pendingAttachments.length === 0) || !data) return;
+    const authorName = counterpartyName;
     setMessageSending(true);
     const { data: result, error: rpcErr } = await anonClient.rpc('insert_public_invoice_note', {
       p_system_code: code,
       p_module: moduleId,
       p_content: messageText.trim(),
       p_author_name: authorName,
+      p_attachments: pendingAttachments,
     });
     setMessageSending(false);
     if (rpcErr || result?.error) {
@@ -451,7 +474,9 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     }
     const newNote: PublicNote = {
       id: result.id || Date.now().toString(),
-      content: messageText.trim(),
+      content: pendingAttachments.length > 0
+        ? JSON.stringify({ text: messageText.trim(), attachments: pendingAttachments })
+        : messageText.trim(),
       author_name: authorName,
       created_at: new Date().toISOString(),
       reply_to: null,
@@ -459,7 +484,62 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     };
     setNotes((prev) => [...prev, newNote]);
     setMessageText('');
+    setPendingAttachments([]);
     antMessage.success('پیام ارسال شد.');
+  };
+
+  const handleCopyValue = async (rawValue: string | null | undefined, successLabel: string) => {
+    const value = String(rawValue || '').trim();
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    antMessage.success(successLabel);
+  };
+
+  const buildReceiptMessage = () => {
+    const invoiceTitle = String(invoice.name || 'بدون عنوان').trim() || 'بدون عنوان';
+    const invoiceCode = String(invoice.system_code || '—').trim() || '—';
+    const uploadedAt = toJalaliDateTime(new Date().toISOString());
+    return `ثبت رسید واریزی برای فاکتور "${invoiceTitle}" به شماره "${invoiceCode}" در تاریخ "${uploadedAt}"`;
+  };
+
+  const handleReceiptUpload = async (file: File) => {
+    if (!code) return false;
+    setReceiptUploading(true);
+    try {
+      const extension = String(file.name.split('.').pop() || '').trim().toLowerCase();
+      const safeBaseName = String(file.name || 'receipt')
+        .replace(/\.[^.]+$/, '')
+        .trim()
+        .replace(/[^0-9a-zA-Z._\-\u0600-\u06FF]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'receipt';
+      const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeBaseName}${extension ? `.${extension}` : ''}`;
+      const filePath = `record_files/public_invoices/${moduleId}/${code}/receipts/${finalName}`;
+      await uploadFileWithProgress({
+        client: fileStorageClient,
+        bucket: FILE_STORAGE_BUCKET,
+        path: filePath,
+        file,
+        label: file.name || 'رسید واریز',
+        detail: 'رسید واریز',
+      });
+      const publicUrl = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath).data.publicUrl || '';
+      const normalizedUrl = normalizePublicAssetUrl(publicUrl) || publicUrl;
+      const nextAttachment: UploadingReceipt = {
+        name: file.name || 'receipt',
+        url: normalizedUrl,
+        mimeType: file.type || null,
+        fileType: resolveNoteAttachmentFileType({ name: file.name, url: normalizedUrl, mimeType: file.type || null }),
+      };
+      setPendingAttachments([nextAttachment]);
+      setMessageText(buildReceiptMessage());
+      antMessage.success('رسید واریز آماده ثبت شد.');
+    } catch {
+      antMessage.error('آپلود رسید واریز ناموفق بود.');
+    } finally {
+      setReceiptUploading(false);
+    }
+    return false;
   };
 
   // ── print styles injection ────────────────────────────────────────────────
@@ -505,6 +585,19 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     const itemRows = filteredItems.map((row: Record<string, any>, idx: number) => {
       const subLine = buildItemSubLine(row, cfg);
       const desc = cfg.showItemNotes !== false && row.description ? row.description : '';
+      const rowBaseAmount = resolveInvoiceRowBaseAmount(row);
+      const discountDisplay = buildInvoiceAdjustmentDisplay({
+        value: row.discount,
+        type: row.discount_type,
+        baseAmount: rowBaseAmount,
+        currencyLabel,
+      });
+      const vatDisplay = buildInvoiceAdjustmentDisplay({
+        value: row.vat,
+        type: row.vat_type,
+        baseAmount: Math.max(0, rowBaseAmount - discountDisplay.amount),
+        currencyLabel,
+      });
       return `
         <tr>
           <td style="border:1px solid #d1d5db;padding:4px 5px;text-align:center;">${toFarsiDigits(String(idx + 1))}</td>
@@ -517,10 +610,10 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
             ${formatNumber(row.quantity)}
             ${row.main_unit ? `<div style="font-size:9px;color:#64748b;">${row.main_unit}</div>` : ''}
           </td>
-          <td style="border:1px solid #d1d5db;padding:4px 5px;">${formatPrice(row.unit_price)}</td>
-          ${cfg.showDiscount !== false ? `<td style="border:1px solid #d1d5db;padding:4px 5px;">${row.discount ? formatPrice(row.discount) : '—'}</td>` : ''}
-          ${cfg.showVat !== false ? `<td style="border:1px solid #d1d5db;padding:4px 5px;">${row.vat ? formatPrice(row.vat) : '—'}</td>` : ''}
-          <td style="border:1px solid #d1d5db;padding:4px 5px;font-weight:700;color:${pc};">${formatPrice(row.total_price)}</td>
+          <td style="border:1px solid #d1d5db;padding:4px 5px;">${formatPrice(row.unit_price, currencyLabel)}</td>
+          ${cfg.showDiscount !== false ? `<td style="border:1px solid #d1d5db;padding:4px 5px;">${discountDisplay.hasValue ? `<div>${discountDisplay.primaryText}</div>${discountDisplay.secondaryText ? `<div style="font-size:9px;color:#64748b;margin-top:2px;">${discountDisplay.secondaryText}</div>` : ''}` : '—'}</td>` : ''}
+          ${cfg.showVat !== false ? `<td style="border:1px solid #d1d5db;padding:4px 5px;">${vatDisplay.hasValue ? `<div>${vatDisplay.primaryText}</div>${vatDisplay.secondaryText ? `<div style="font-size:9px;color:#64748b;margin-top:2px;">${vatDisplay.secondaryText}</div>` : ''}` : '—'}</td>` : ''}
+          <td style="border:1px solid #d1d5db;padding:4px 5px;font-weight:700;color:${pc};">${formatPrice(row.total_price, currencyLabel)}</td>
         </tr>`;
     }).join('');
 
@@ -529,7 +622,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
         <tr>
           <td style="border:1px solid #d1d5db;padding:3px 5px;">${toJalali(p.date)}</td>
           <td style="border:1px solid #d1d5db;padding:3px 5px;">${PAYMENT_TYPE_LABELS[p.payment_type] || p.payment_type || '—'}</td>
-          <td style="border:1px solid #d1d5db;padding:3px 5px;font-weight:600;color:${pc};">${formatPrice(p.amount)}</td>
+          <td style="border:1px solid #d1d5db;padding:3px 5px;font-weight:600;color:${pc};">${formatPrice(p.amount, currencyLabel)}</td>
           <td style="border:1px solid #d1d5db;padding:3px 5px;">${p.description || '—'}</td>
         </tr>`).join('')
       : '';
@@ -618,9 +711,17 @@ ${cfg.showItemsTable !== false && filteredItems.length ? `
   </thead>
   <tbody>
     ${itemRows}
+    ${globalDiscountDisplay.hasValue && globalDiscountAmount > 0 ? `
+    <tr style="background:rgba(245,158,11,0.08);">
+      <td colspan="${4 + (cfg.showDiscount !== false ? 1 : 0) + (cfg.showVat !== false ? 1 : 0)}" style="border:1px solid #d1d5db;padding:5px;font-weight:700;">تخفیف کل</td>
+      <td style="border:1px solid #d1d5db;padding:5px;">
+        <div style="font-weight:700;color:#b45309;">${globalDiscountDisplay.primaryText}</div>
+        ${globalDiscountDisplay.secondaryText ? `<div style="font-size:9px;color:#64748b;">${globalDiscountDisplay.secondaryText}</div>` : ''}
+      </td>
+    </tr>` : ''}
     <tr style="background:rgba(0,0,0,0.04);">
       <td colspan="${4 + (cfg.showDiscount !== false ? 1 : 0) + (cfg.showVat !== false ? 1 : 0)}" style="border:1px solid #d1d5db;padding:5px;font-weight:800;">جمع کل فاکتور</td>
-      <td style="border:1px solid #d1d5db;padding:5px;font-weight:800;color:${pc};">${formatPrice(invoice.total_invoice_amount)}</td>
+      <td style="border:1px solid #d1d5db;padding:5px;font-weight:800;color:${pc};">${formatPrice(invoice.total_invoice_amount, currencyLabel)}</td>
     </tr>
   </tbody>
 </table>` : ''}
@@ -630,15 +731,15 @@ ${cfg.showItemsTable !== false && filteredItems.length ? `
   <tbody><tr>
     <td style="border:1px solid #e5e7eb;padding:7px 10px;text-align:center;width:33%;">
       <div style="font-size:9px;color:#6b7280;">مبلغ کل</div>
-      <div style="font-weight:800;font-size:13px;color:${pc};">${formatPrice(invoice.total_invoice_amount)}</div>
+      <div style="font-weight:800;font-size:13px;color:${pc};">${formatPrice(invoice.total_invoice_amount, currencyLabel)}</div>
     </td>
     <td style="border:1px solid #e5e7eb;border-right:none;padding:7px 10px;text-align:center;width:33%;">
       <div style="font-size:9px;color:#6b7280;">${isSales ? 'دریافت شده' : 'پرداخت شده'}</div>
-      <div style="font-weight:700;font-size:12px;color:#16a34a;">${formatPrice(invoice.total_received_amount)}</div>
+      <div style="font-weight:700;font-size:12px;color:#16a34a;">${formatPrice(invoice.total_received_amount, currencyLabel)}</div>
     </td>
     <td style="border:1px solid #e5e7eb;border-right:none;padding:7px 10px;text-align:center;width:33%;">
       <div style="font-size:9px;color:#6b7280;">مانده</div>
-      <div style="font-weight:700;font-size:12px;color:#dc2626;">${formatPrice(invoice.remaining_balance)}</div>
+      <div style="font-weight:700;font-size:12px;color:#dc2626;">${formatPrice(invoice.remaining_balance, currencyLabel)}</div>
     </td>
   </tr></tbody>
 </table>
@@ -673,7 +774,8 @@ ${invoice.description ? `
   };
 
   const handleShare = async () => {
-    const url = window.location.href;
+    const publicPath = String(invoice.public_link || '').trim();
+    const url = publicPath ? `${window.location.origin}${publicPath}` : window.location.href;
     const title = `فاکتور ${isSales ? 'فروش' : 'خرید'} — ${invoice.system_code || code || ''}`;
     if (navigator.share) {
       try {
@@ -694,6 +796,27 @@ ${invoice.description ? `
   const items = data?.items || [];
   const payments = data?.payments || [];
   const companySt = data?.branding?.company_settings as Record<string, any> | undefined;
+  const currencyLabel = String(companySt?.currency_label || 'ریال').trim() || 'ریال';
+  const paymentAccount = invoice.payment_account as Record<string, any> | undefined;
+  const paymentAccountModule = String(invoice.payment_account_module || '').trim();
+  const counterpartyName = String(
+    isSales ? (invoice.customer_name || 'مشتری') : (invoice.supplier_name || 'تامین‌کننده')
+  ).trim();
+  const itemsSubtotalForGlobalDiscount = items.reduce((sum: number, row: any) => {
+    const total = Number(row?.total_price ?? 0);
+    return sum + (Number.isFinite(total) ? total : 0);
+  }, 0);
+  const globalDiscountDisplay = buildInvoiceAdjustmentDisplay({
+    value: invoice.global_discount_value,
+    type: invoice.global_discount_type,
+    baseAmount: itemsSubtotalForGlobalDiscount,
+    currencyLabel,
+  });
+  const globalDiscountAmount = resolveInvoiceGlobalDiscountAmount(
+    itemsSubtotalForGlobalDiscount,
+    invoice.global_discount_value,
+    invoice.global_discount_type,
+  );
 
   const invoiceStatus = String(invoice.status || '');
   const statusInfo = STATUS_LABELS[invoiceStatus] || { label: invoiceStatus, color: 'default' };
@@ -1018,6 +1141,42 @@ ${invoice.description ? `
                 style={{ direction: 'rtl' }}
                 columns={[
                   {
+                    title: 'تصویر',
+                    dataIndex: 'image_url',
+                    width: 76,
+                    render: (v: any, row: any) => {
+                      const imageUrl = String(v || '').trim();
+                      if (!imageUrl) {
+                        return <span style={{ color: token.colorTextQuaternary, fontSize: 11 }}>—</span>;
+                      }
+                      const productTitle = String(row?.product_name || 'تصویر کالا').trim() || 'تصویر کالا';
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewImage({ src: imageUrl, title: productTitle })}
+                          style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 10,
+                            overflow: 'hidden',
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                            padding: 0,
+                            background: token.colorBgContainer,
+                            cursor: 'pointer',
+                          }}
+                          title="نمایش بزرگ‌تر تصویر"
+                        >
+                          <ResilientImage
+                            src={imageUrl}
+                            preset="thumb"
+                            alt={productTitle}
+                            className="h-full w-full object-cover"
+                          />
+                        </button>
+                      );
+                    },
+                  },
+                  {
                     title: 'ردیف',
                     width: 44,
                     render: (_: any, __: any, idx: number) => (
@@ -1077,50 +1236,99 @@ ${invoice.description ? `
                     title: 'قیمت واحد',
                     dataIndex: 'unit_price',
                     render: (v: any) => (
-                      <span style={{ fontSize: 12 }}>{formatPrice(v)}</span>
+                      <span style={{ fontSize: 12 }}>{formatPrice(v, currencyLabel)}</span>
                     ),
                   },
                   ...(cfg.showDiscount !== false ? [{
                     title: 'تخفیف',
                     dataIndex: 'discount',
-                    render: (v: any) => v ? (
-                      <span style={{ color: token.colorError, fontSize: 12 }}>{formatPrice(v)}</span>
-                    ) : <span style={{ color: token.colorTextQuaternary }}>—</span>,
+                    render: (v: any, row: any) => {
+                      const discountDisplay = buildInvoiceAdjustmentDisplay({
+                        value: v,
+                        type: row?.discount_type,
+                        baseAmount: resolveInvoiceRowBaseAmount(row),
+                        currencyLabel,
+                      });
+                      return discountDisplay.hasValue ? (
+                        <div style={{ color: token.colorError, fontSize: 12, lineHeight: 1.7 }}>
+                          <div>{discountDisplay.primaryText}</div>
+                          {discountDisplay.secondaryText ? (
+                            <div style={{ fontSize: 10, color: token.colorTextTertiary }}>{discountDisplay.secondaryText}</div>
+                          ) : null}
+                        </div>
+                      ) : <span style={{ color: token.colorTextQuaternary }}>—</span>;
+                    },
                   }] : []),
                   ...(cfg.showVat !== false ? [{
                     title: 'مالیات',
                     dataIndex: 'vat',
-                    render: (v: any) => v ? (
-                      <span style={{ fontSize: 12 }}>{formatPrice(v)}</span>
-                    ) : <span style={{ color: token.colorTextQuaternary }}>—</span>,
+                    render: (v: any, row: any) => {
+                      const discountAmount = buildInvoiceAdjustmentDisplay({
+                        value: row?.discount,
+                        type: row?.discount_type,
+                        baseAmount: resolveInvoiceRowBaseAmount(row),
+                        currencyLabel,
+                      }).amount;
+                      const vatDisplay = buildInvoiceAdjustmentDisplay({
+                        value: v,
+                        type: row?.vat_type,
+                        baseAmount: Math.max(0, resolveInvoiceRowBaseAmount(row) - discountAmount),
+                        currencyLabel,
+                      });
+                      return vatDisplay.hasValue ? (
+                        <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                          <div>{vatDisplay.primaryText}</div>
+                          {vatDisplay.secondaryText ? (
+                            <div style={{ fontSize: 10, color: token.colorTextTertiary }}>{vatDisplay.secondaryText}</div>
+                          ) : null}
+                        </div>
+                      ) : <span style={{ color: token.colorTextQuaternary }}>—</span>;
+                    },
                   }] : []),
                   {
                     title: 'جمع ردیف',
                     dataIndex: 'total_price',
                     render: (v: any) => (
                       <span style={{ fontWeight: 700, color: primaryColor, fontSize: 12 }}>
-                        {formatPrice(v)}
+                        {formatPrice(v, currencyLabel)}
                       </span>
                     ),
                   },
                 ]}
                 summary={() => {
-                  // ردیف + کالا/شرح + تعداد + قیمت واحد = 4، سپس تخفیف و مالیات اختیاری
+                  // تصویر + ردیف + کالا/شرح + تعداد + قیمت واحد = 5، سپس تخفیف و مالیات اختیاری
                   const labelSpan =
-                    4 +
+                    5 +
                     (cfg.showDiscount !== false ? 1 : 0) +
                     (cfg.showVat !== false ? 1 : 0);
                   return (
-                    <Table.Summary.Row style={{ background: hexToRgba(primaryColor, 0.05) }}>
-                      <Table.Summary.Cell index={0} colSpan={labelSpan}>
-                        <Text strong style={{ color: token.colorText }}>جمع کل فاکتور</Text>
-                      </Table.Summary.Cell>
-                      <Table.Summary.Cell index={labelSpan} colSpan={1}>
-                        <Text strong style={{ color: primaryColor, fontSize: 14 }}>
-                          {formatPrice(invoice.total_invoice_amount)}
-                        </Text>
-                      </Table.Summary.Cell>
-                    </Table.Summary.Row>
+                    <>
+                      {globalDiscountDisplay.hasValue && hasInvoiceAdjustmentValue(invoice.global_discount_value) ? (
+                        <Table.Summary.Row style={{ background: hexToRgba('#f59e0b', 0.08) }}>
+                          <Table.Summary.Cell index={0} colSpan={labelSpan}>
+                            <Text strong style={{ color: '#b45309' }}>تخفیف کل</Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={labelSpan} colSpan={1}>
+                            <div style={{ lineHeight: 1.7 }}>
+                              <Text strong style={{ color: '#b45309', fontSize: 13 }}>{globalDiscountDisplay.primaryText}</Text>
+                              {globalDiscountDisplay.secondaryText ? (
+                                <div style={{ fontSize: 10, color: token.colorTextTertiary }}>{globalDiscountDisplay.secondaryText}</div>
+                              ) : null}
+                            </div>
+                          </Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      ) : null}
+                      <Table.Summary.Row style={{ background: hexToRgba(primaryColor, 0.05) }}>
+                        <Table.Summary.Cell index={0} colSpan={labelSpan}>
+                          <Text strong style={{ color: token.colorText }}>جمع کل فاکتور</Text>
+                        </Table.Summary.Cell>
+                        <Table.Summary.Cell index={labelSpan} colSpan={1}>
+                          <Text strong style={{ color: primaryColor, fontSize: 14 }}>
+                            {formatPrice(invoice.total_invoice_amount, currencyLabel)}
+                          </Text>
+                        </Table.Summary.Cell>
+                      </Table.Summary.Row>
+                    </>
                   );
                 }}
               />
@@ -1131,12 +1339,33 @@ ${invoice.description ? `
         {/* ── Financial Summary ────────────────────────────────────────── */}
         <div style={card}>
           <div style={cardHead}>خلاصه مالی</div>
-          <div style={{
-            ...cardBody,
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 0,
-          }}>
+          <div style={cardBody}>
+            {globalDiscountDisplay.hasValue && hasInvoiceAdjustmentValue(invoice.global_discount_value) ? (
+              <div style={{
+                marginBottom: 12,
+                padding: '10px 12px',
+                borderRadius: token.borderRadius,
+                background: hexToRgba('#f59e0b', 0.08),
+                border: `1px solid ${hexToRgba('#f59e0b', 0.18)}`,
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+              }}>
+                <div>
+                  <div style={{ fontSize: 12, color: token.colorTextSecondary }}>تخفیف کل</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{globalDiscountDisplay.primaryText}</div>
+                </div>
+                {globalDiscountDisplay.secondaryText ? (
+                  <div style={{ fontSize: 12, color: token.colorTextTertiary }}>{globalDiscountDisplay.secondaryText}</div>
+                ) : null}
+              </div>
+            ) : null}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 0,
+            }}>
             <div style={{
               padding: '12px 16px',
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
@@ -1144,7 +1373,7 @@ ${invoice.description ? `
             }}>
               <div style={fieldLabel}>مبلغ کل</div>
               <div style={{ fontSize: 15, fontWeight: 800, color: primaryColor }}>
-                {formatPrice(invoice.total_invoice_amount)}
+                {formatPrice(invoice.total_invoice_amount, currencyLabel)}
               </div>
             </div>
             <div style={{
@@ -1154,17 +1383,63 @@ ${invoice.description ? `
             }}>
               <div style={fieldLabel}>{isSales ? 'دریافت شده' : 'پرداخت شده'}</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: token.colorSuccess }}>
-                {formatPrice(invoice.total_received_amount)}
+                {formatPrice(invoice.total_received_amount, currencyLabel)}
               </div>
             </div>
             <div style={{ padding: '12px 16px', textAlign: 'center' as const }}>
               <div style={fieldLabel}>مانده</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: token.colorError }}>
-                {formatPrice(invoice.remaining_balance)}
+                {formatPrice(invoice.remaining_balance, currencyLabel)}
               </div>
             </div>
           </div>
+          </div>
         </div>
+
+        {paymentAccountModule === 'bank_accounts' && paymentAccount && (paymentAccount.card_number || paymentAccount.shaba || paymentAccount.account_number) ? (
+          <div style={card}>
+            <div style={cardHead}>شماره حساب جهت واریز وجه</div>
+            <div style={cardBody}>
+              <div style={{ marginBottom: 10, color: token.colorTextSecondary, lineHeight: 1.9 }}>
+                بنام <strong style={{ color: token.colorText }}>{paymentAccount.account_holder_name || '—'}</strong>
+                {' '}نزد بانک <strong style={{ color: token.colorText }}>{paymentAccount.bank_name || '—'}</strong>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+                {[
+                  { key: 'card_number', label: 'شماره کارت', value: paymentAccount.card_number },
+                  { key: 'shaba', label: 'شماره شبا', value: paymentAccount.shaba },
+                  { key: 'account_number', label: 'شماره حساب', value: paymentAccount.account_number },
+                ].map((item) => item.value ? (
+                  <div
+                    key={item.key}
+                    style={{
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: token.borderRadius,
+                      padding: '10px 12px',
+                      background: token.colorBgLayout,
+                    }}
+                  >
+                    <div style={{ ...fieldLabel, marginBottom: 6 }}>{item.label}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <Text strong style={{ fontSize: 14 }}>{toFarsiDigits(String(item.value))}</Text>
+                      <Tooltip title="کپی">
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CopyOutlined />}
+                          onClick={() => void handleCopyValue(String(item.value), `${item.label} کپی شد.`)}
+                        />
+                      </Tooltip>
+                    </div>
+                  </div>
+                ) : null)}
+              </div>
+              <div style={{ marginTop: 12, fontSize: 12, color: token.colorTextTertiary, lineHeight: 1.9 }}>
+                لطفا پس از واریز، حتما رسید واریز را برای ما ارسال نمایید. در انتهای همین صفحه هم می‌توانید رسید واریزی را آپلود نمایید.
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* ── Payments Table ───────────────────────────────────────────── */}
         {cfg.showPaymentsTable !== false && payments.length > 0 && (
@@ -1201,7 +1476,7 @@ ${invoice.description ? `
                     title: 'مبلغ',
                     dataIndex: 'amount',
                     render: (v: any) => (
-                      <span style={{ fontWeight: 600, color: primaryColor }}>{formatPrice(v)}</span>
+                      <span style={{ fontWeight: 600, color: primaryColor }}>{formatPrice(v, currencyLabel)}</span>
                     ),
                   },
                   {
@@ -1263,15 +1538,33 @@ ${invoice.description ? `
                 )
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <Alert
+                    type="info"
+                    showIcon
+                    message={`اینجانب "${counterpartyName}"، توضیحات و قوانین را مطالعه و تایید می‌نمایم.`}
+                  />
                   <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>
                     برای تایید رسمی این فاکتور، کد تایید به شماره موبایل شما ارسال می‌شود.
                   </Text>
-                  <Steps
-                    size="small"
-                    current={confirmStep === 'idle' || confirmStep === 'select_phone' ? 0 : 1}
-                    items={[{ title: 'انتخاب شماره' }, { title: 'تایید کد' }]}
-                  />
-                  {(confirmStep === 'idle' || confirmStep === 'select_phone') && (
+                  {confirmStep === 'idle' ? (
+                    <Button
+                      type="primary"
+                      size="large"
+                      icon={<SafetyCertificateOutlined />}
+                      onClick={() => setConfirmStep('select_phone')}
+                      style={{ width: 'fit-content', fontWeight: 700 }}
+                    >
+                      تایید فاکتور
+                    </Button>
+                  ) : null}
+                  {confirmStep !== 'idle' ? (
+                    <Steps
+                      size="small"
+                      current={confirmStep === 'select_phone' ? 0 : 1}
+                      items={[{ title: 'انتخاب شماره' }, { title: 'تایید کد' }]}
+                    />
+                  ) : null}
+                  {confirmStep === 'select_phone' && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                       <Text style={{ fontSize: 12, color: token.colorTextTertiary }}>
                         شماره موبایل برای دریافت کد تایید:
@@ -1293,15 +1586,18 @@ ${invoice.description ? `
                         </div>
                       )}
                       {selectedPhoneKey && (
-                        <Button
-                          type="primary"
-                          loading={otpSending}
-                          onClick={handleSendOtp}
-                          icon={<SendOutlined />}
-                          style={{ width: 'fit-content' }}
-                        >
-                          ارسال کد تایید
-                        </Button>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <Button
+                            type="primary"
+                            loading={otpSending}
+                            onClick={handleSendOtp}
+                            icon={<SendOutlined />}
+                            style={{ width: 'fit-content' }}
+                          >
+                            ارسال کد تایید
+                          </Button>
+                          <Button onClick={() => setConfirmStep('idle')}>بازگشت</Button>
+                        </div>
                       )}
                       {otpError && <Alert type="error" message={otpError} showIcon />}
                     </div>
@@ -1363,36 +1659,35 @@ ${invoice.description ? `
             </div>
             <div style={cardBody}>
               {notes.length > 0 ? (
-                <Timeline
-                  style={{ marginTop: 4 }}
-                  items={notes.map((note) => {
-                    const isExternal = note.metadata?.source === 'online_invoice';
-                    const isConfirmation = note.metadata?.source === 'online_invoice_confirm';
-                    return {
-                      color: isConfirmation ? 'green' : isExternal ? 'blue' : primaryColor,
-                      dot: isConfirmation ? <CheckCircleOutlined style={{ color: token.colorSuccess }} /> : undefined,
-                      children: (
-                        <div style={{
-                          borderRadius: token.borderRadius,
-                          padding: '8px 12px',
-                          background: isExternal
-                            ? hexToRgba(token.colorInfo as string, 0.06)
-                            : token.colorBgLayout,
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          fontSize: 13,
-                        }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 8 }}>
-                            <Text strong style={{ fontSize: 12 }}>{note.author_name || '—'}</Text>
-                            <Text style={{ fontSize: 11, color: token.colorTextTertiary }}>
-                              {toJalaliDateTime(note.created_at)}
-                            </Text>
-                          </div>
-                          <Paragraph style={{ margin: 0, fontSize: 13 }}>{note.content}</Paragraph>
-                        </div>
-                      ),
-                    };
+                <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {notes.map((note) => {
+                    const parsed = parseNoteContent(note.content);
+                    const sourceLabel = note.metadata?.source === 'online_invoice_confirm'
+                      ? 'تایید فاکتور'
+                      : note.metadata?.source === 'online_invoice'
+                        ? 'فاکتور آنلاین'
+                        : undefined;
+                    return (
+                      <SharedNoteCard
+                        key={note.id || `${note.created_at}-${note.author_name}`}
+                        authorName={note.author_name || '—'}
+                        createdAtLabel={toJalaliDateTime(note.created_at)}
+                        text={parsed.text}
+                        attachments={parsed.attachments}
+                        sourceLabel={sourceLabel}
+                        onAttachmentClick={async (attachment) => {
+                          const url = String(attachment?.url || '').trim();
+                          if (!url) return;
+                          if (String(attachment?.fileType || '').trim() === 'image') {
+                            setPreviewImage({ src: url, title: attachment.name || 'پیوست' });
+                            return;
+                          }
+                          window.open(url, '_blank', 'noopener,noreferrer');
+                        }}
+                      />
+                    );
                   })}
-                />
+                </div>
               ) : (
                 <Text style={{ color: token.colorTextQuaternary, fontSize: 13 }}>
                   هنوز پیامی ارسال نشده است.
@@ -1407,14 +1702,51 @@ ${invoice.description ? `
                   placeholder="پیام خود را بنویسید..."
                   value={messageText}
                   onChange={(e) => setMessageText(e.target.value)}
-                  maxLength={1000}
+                  maxLength={4000}
                   showCount
                 />
+                {pendingAttachments.length > 0 ? (
+                  <div style={{
+                    border: `1px dashed ${token.colorBorderSecondary}`,
+                    borderRadius: token.borderRadius,
+                    padding: '10px 12px',
+                    background: token.colorBgLayout,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}>
+                    <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+                      فایل آماده ارسال:
+                      {' '}
+                      <strong style={{ color: token.colorText }}>{pendingAttachments[0]?.name || 'رسید واریز'}</strong>
+                    </div>
+                    <Button size="small" onClick={() => setPendingAttachments([])}>
+                      حذف فایل
+                    </Button>
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Upload
+                    showUploadList={false}
+                    accept="image/*,.pdf,.zip,.rar,.doc,.docx,.xls,.xlsx"
+                    beforeUpload={handleReceiptUpload}
+                    disabled={receiptUploading}
+                  >
+                    <Button loading={receiptUploading} icon={<UploadOutlined />}>
+                      ثبت رسید واریز
+                    </Button>
+                  </Upload>
+                  <Text style={{ fontSize: 12, color: token.colorTextTertiary }}>
+                    در پایین صفحه، می توانید تصویر رسید واریزی را بارگزاری نمایید.
+                  </Text>
+                </div>
                 <Button
                   type="primary"
                   loading={messageSending}
                   onClick={handleSendMessage}
-                  disabled={!messageText.trim()}
+                  disabled={!messageText.trim() && pendingAttachments.length === 0}
                   icon={<SendOutlined />}
                   style={{ width: 'fit-content' }}
                 >
@@ -1432,6 +1764,23 @@ ${invoice.description ? `
           </Text>
         </div>
 
+        <Modal
+          open={Boolean(previewImage)}
+          footer={null}
+          onCancel={() => setPreviewImage(null)}
+          title={previewImage?.title || 'پیش نمایش'}
+          width={720}
+        >
+          {previewImage ? (
+            <ResilientImage
+              src={previewImage.src}
+              preset="gallery"
+              alt={previewImage.title}
+              className="max-h-[75vh] w-full rounded-xl object-contain"
+            />
+          ) : null}
+        </Modal>
+
       </div>
     </div>
   );
@@ -1441,15 +1790,15 @@ ${invoice.description ? `
 
 const InvoicePublicPage = () => {
   const [isDark, setIsDark] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
+    () => typeof window !== 'undefined' && isNightInvoiceView()
   );
   const [primaryColor, setPrimaryColor] = useState(DEFAULT_BRANDING.palette?.primary || '#3730A3');
 
   useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const handler = (e: MediaQueryListEvent) => setIsDark(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    const syncThemeByTime = () => setIsDark(isNightInvoiceView());
+    syncThemeByTime();
+    const intervalId = window.setInterval(syncThemeByTime, 60 * 1000);
+    return () => window.clearInterval(intervalId);
   }, []);
 
   return (

@@ -1,4 +1,4 @@
-export type IntervalUnit = 'hour' | 'day' | 'month';
+export type IntervalUnit = 'hour' | 'day' | 'week' | 'month';
 
 export type IntervalScheduleParams = {
   lastRunAt?: string | Date | null;
@@ -36,7 +36,7 @@ export const clampIntervalValue = (value: unknown, fallback = 1) => {
 
 export const normalizeIntervalUnit = (value: unknown, fallback: IntervalUnit = 'day'): IntervalUnit => {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'hour' || normalized === 'day' || normalized === 'month') {
+  if (normalized === 'hour' || normalized === 'day' || normalized === 'week' || normalized === 'month') {
     return normalized;
   }
   return fallback;
@@ -71,6 +71,10 @@ export const addIntervalToDate = (source: Date, value: number, unit: IntervalUni
   }
   if (unit === 'day') {
     next.setDate(next.getDate() + safeValue);
+    return next;
+  }
+  if (unit === 'week') {
+    next.setDate(next.getDate() + (safeValue * 7));
     return next;
   }
   next.setMonth(next.getMonth() + safeValue);
@@ -184,4 +188,3 @@ export const isIntervalDue = (params: IntervalScheduleParams): boolean => {
   });
   return now.getTime() >= next.getTime();
 };
-

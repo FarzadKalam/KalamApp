@@ -5,7 +5,6 @@ import {
   Collapse,
   Form,
   Input,
-  InputNumber,
   Modal,
   Radio,
   Segmented,
@@ -28,14 +27,12 @@ import {
   getWorkflowConditionFields,
 } from '../../utils/workflowHelpers';
 import {
-  INTERVAL_DAY_CONDITION_OPTIONS,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   WorkflowAction,
   WorkflowCondition,
   WorkflowModuleOption,
   WorkflowRecord,
   createWorkflowId,
-  intervalUnitOptions,
   triggerTypeOptions,
   workflowExecutionModeOptions,
 } from '../../utils/workflowTypes';
@@ -45,9 +42,9 @@ import {
   resolveOverlayPopupContainer,
 } from '../../utils/popupContainer';
 import AdaptiveSelectField from '../AdaptiveSelectField';
-import PersianDatePicker from '../PersianDatePicker';
 import WorkflowActionsBuilder, { getDefaultActionConfig } from './WorkflowActionsBuilder';
 import WorkflowConditionsGroup from './WorkflowConditionsGroup';
+import WorkflowIntervalScheduleFields from './WorkflowIntervalScheduleFields';
 import { buildWorkflowFlowDocument } from './flow/flowAdapters';
 import { FlowSelection } from './flow/flowTypes';
 import {
@@ -75,7 +72,7 @@ type FormValues = {
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
   execution_mode: 'first_match' | 'every_match';
   interval_value?: number;
-  interval_unit?: 'hour' | 'day' | 'month';
+  interval_unit?: 'hour' | 'day' | 'week' | 'month';
   interval_at?: string | null;
   interval_first_run_at?: string | null;
   interval_minute?: number | null;
@@ -241,8 +238,6 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
   const intervalValue = Form.useWatch('interval_value', form);
   const intervalDayOfMonth = Form.useWatch('interval_day_of_month', form);
   const isActiveValue = Form.useWatch('is_active', form);
-
-  const showDaysAfterHoliday = intervalDayCondition === 'not_friday' || intervalDayCondition === 'not_friday_or_holiday';
 
   const flowDocument = useMemo(
     () =>
@@ -500,141 +495,12 @@ const WorkflowEditorModal: React.FC<WorkflowEditorModalProps> = ({
             <Radio.Group options={workflowExecutionModeOptions} />
           </Form.Item>
           {triggerType === 'interval' && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <Form.Item
-                  label="هر"
-                  name="interval_value"
-                  rules={[{ required: true, message: 'مقدار بازه الزامی است.' }]}
-                >
-                  <InputNumber min={1} className="w-full persian-number" placeholder="عدد" />
-                </Form.Item>
-                <Form.Item
-                  label="واحد زمان"
-                  name="interval_unit"
-                  rules={[{ required: true, message: 'واحد بازه را انتخاب کنید.' }]}
-                >
-                  <AdaptiveSelectField
-                    options={intervalUnitOptions}
-                    getPopupContainer={resolveOverlayPopupContainer}
-                    modalContainer={resolveOverlayPopupContainer}
-                    overlayZIndexBase={overlayZIndexBase}
-                  />
-                </Form.Item>
-                <Form.Item label="اولین زمان اجرا" name="interval_first_run_at">
-                  <PersianDatePicker
-                    type="DATETIME"
-                    overlayZIndexBase={overlayZIndexBase}
-                    modalContainer={resolveOverlayPopupContainer}
-                    pickerTitle="اولین زمان اجرا"
-                  />
-                </Form.Item>
-                <Form.Item label="چه تعداد رکورد بررسی شود؟" name="batch_size">
-                  <InputNumber min={1} className="w-full persian-number" placeholder="پیش‌فرض: همه" />
-                </Form.Item>
-              </div>
-
-              {intervalUnit === 'hour' && (
-                <div className="rounded-lg border border-blue-100 dark:border-blue-900/30 bg-blue-50/40 dark:bg-blue-950/20 p-3">
-                  <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-3">تنظیمات اجرای ساعتی</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <Form.Item label="در دقیقه" name="interval_minute" className="mb-0">
-                      <InputNumber
-                        min={0}
-                        max={59}
-                        className="w-full persian-number"
-                        placeholder="۰ تا ۵۹"
-                      />
-                    </Form.Item>
-                    <Form.Item label="از ساعت" name="interval_allowed_from_hour" className="mb-0">
-                      <InputNumber
-                        min={0}
-                        max={23}
-                        className="w-full persian-number"
-                        placeholder="مثال: ۸"
-                        addonAfter="زمان مجاز اجرا"
-                      />
-                    </Form.Item>
-                    <Form.Item label="الی ساعت" name="interval_allowed_to_hour" className="mb-0">
-                      <InputNumber
-                        min={0}
-                        max={23}
-                        className="w-full persian-number"
-                        placeholder="مثال: ۱۸"
-                      />
-                    </Form.Item>
-                  </div>
-                </div>
-              )}
-
-              {intervalUnit === 'day' && (
-                <div className="rounded-lg border border-orange-100 dark:border-orange-900/30 bg-orange-50/40 dark:bg-orange-950/20 p-3">
-                  <p className="text-xs font-semibold text-orange-700 dark:text-orange-300 mb-3">تنظیمات اجرای روزانه</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <Form.Item label="اگر آن روز" name="interval_day_condition" className="mb-0" initialValue="any">
-                      <AdaptiveSelectField
-                        options={INTERVAL_DAY_CONDITION_OPTIONS}
-                        getPopupContainer={resolveOverlayPopupContainer}
-                        modalContainer={resolveOverlayPopupContainer}
-                        overlayZIndexBase={overlayZIndexBase}
-                      />
-                    </Form.Item>
-                    {showDaysAfterHoliday && (
-                      <Form.Item
-                        label="چند روز پس از آخرین جمعه/تعطیلی اجرا شود؟"
-                        name="interval_days_after_holiday"
-                        className="mb-0"
-                      >
-                        <InputNumber min={0} className="w-full persian-number" placeholder="مثال: ۱" />
-                      </Form.Item>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {intervalUnit === 'month' && (
-                <div className="rounded-lg border border-purple-100 dark:border-purple-900/30 bg-purple-50/40 dark:bg-purple-950/20 p-3">
-                  <p className="text-xs font-semibold text-purple-700 dark:text-purple-300 mb-3">تنظیمات اجرای ماهانه</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <Form.Item label="در ساعت" name="interval_at" className="mb-0">
-                      <PersianDatePicker
-                        type="TIME"
-                        overlayZIndexBase={overlayZIndexBase}
-                        modalContainer={resolveOverlayPopupContainer}
-                        pickerTitle="ساعت اجرا"
-                      />
-                    </Form.Item>
-                    <Form.Item label="چندمین روز ماه؟" name="interval_day_of_month" className="mb-0">
-                      <InputNumber
-                        min={1}
-                        max={31}
-                        className="w-full persian-number"
-                        placeholder="۱ تا ۳۱"
-                      />
-                    </Form.Item>
-                    <Form.Item label="اگر آن روز" name="interval_day_condition" className="mb-0" initialValue="any">
-                      <AdaptiveSelectField
-                        options={INTERVAL_DAY_CONDITION_OPTIONS}
-                        getPopupContainer={resolveOverlayPopupContainer}
-                        modalContainer={resolveOverlayPopupContainer}
-                        overlayZIndexBase={overlayZIndexBase}
-                      />
-                    </Form.Item>
-                  </div>
-                  {showDaysAfterHoliday && (
-                    <div className="mt-3">
-                      <Form.Item
-                        label="چند روز پس از آخرین جمعه/تعطیلی اجرا شود؟"
-                        name="interval_days_after_holiday"
-                        className="mb-0"
-                      >
-                        <InputNumber min={0} className="w-full persian-number" placeholder="مثال: ۱" />
-                      </Form.Item>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <WorkflowIntervalScheduleFields
+              form={form}
+              disabled={!canEdit}
+              overlayZIndexBase={overlayZIndexBase}
+              popupContainer={resolveOverlayPopupContainer}
+            />
           )}
         </div>
   );

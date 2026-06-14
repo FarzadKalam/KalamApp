@@ -3,7 +3,7 @@
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-11-01';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-14-weekly-schedules';
 const MAX_WORKFLOWS = 30;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
@@ -97,6 +97,7 @@ type WorkflowRow = {
   interval_allowed_to_hour: number | null;
   interval_day_of_month: number | null;
   interval_day_condition: string | null;
+  interval_days_after_holiday: number | null;
   conditions_all: WorkflowCondition[];
   conditions_any: WorkflowCondition[];
   actions: WorkflowAction[];
@@ -731,6 +732,7 @@ function addIntervalLocal(localDate: Date, value: number, unit: string): Date {
   const next = new Date(localDate);
   if (unit === 'hour') next.setUTCHours(next.getUTCHours() + value);
   else if (unit === 'day') next.setUTCDate(next.getUTCDate() + value);
+  else if (unit === 'week') next.setUTCDate(next.getUTCDate() + (value * 7));
   else {
     const originalDay = next.getUTCDate();
     next.setUTCDate(1);
@@ -744,7 +746,9 @@ function getInitialScheduledDueAt(workflow: WorkflowRow, unit: string, now: Date
   const firstRun = workflow.interval_first_run_at ? new Date(workflow.interval_first_run_at) : null;
   if (firstRun && !isNaN(firstRun.getTime())) {
     if (now < firstRun) return null;
-    return getLatestScheduledDueAtAfter(firstRun, workflow, unit, now) || firstRun;
+    if (unit !== 'week') {
+      return getLatestScheduledDueAtAfter(firstRun, workflow, unit, now) || firstRun;
+    }
   }
 
   const nowLocal = toTehranDate(now);
@@ -753,7 +757,7 @@ function getInitialScheduledDueAt(workflow: WorkflowRow, unit: string, now: Date
   if (unit === 'hour') {
     if (typeof workflow.interval_minute !== 'number') return now;
     candidateLocal.setUTCMinutes(Math.min(59, Math.max(0, workflow.interval_minute)), 0, 0);
-  } else if (unit === 'day') {
+  } else if (unit === 'day' || unit === 'week') {
     const parsedTime = parseIntervalAt(workflow.interval_at);
     if (!parsedTime) return now;
     candidateLocal.setUTCHours(parsedTime.hour, parsedTime.minute, 0, 0);
@@ -816,12 +820,52 @@ function checkIntervalDue(workflow: WorkflowRow, now: Date): boolean {
   return !!getWorkflowScheduledDueAt(workflow, now);
 }
 
-function checkIntervalDayCondition(condition: string | null | undefined, now: Date): boolean {
+async function isOfficialHolidayAtTehranDate(value: Date): Promise<boolean> {
+  const tehranDate = toTehranDate(value);
+  const events = await getHolidayEventsForDate(tehranDate.toISOString());
+  return events.some((event) => event?.isHoliday === true);
+}
+
+async function isFridayOrOfficialHoliday(value: Date): Promise<boolean> {
+  const tehranDate = toTehranDate(value);
+  if (tehranDate.getUTCDay() === 5) return true;
+  return isOfficialHolidayAtTehranDate(value);
+}
+
+async function getDaysSinceLastBlockedDay(
+  now: Date,
+  includeOfficialHolidays: boolean,
+): Promise<number | null> {
+  for (let days = 1; days <= 370; days += 1) {
+    const candidate = new Date(now.getTime() - (days * 24 * 60 * 60 * 1000));
+    const blocked = includeOfficialHolidays
+      ? await isFridayOrOfficialHoliday(candidate)
+      : toTehranDate(candidate).getUTCDay() === 5;
+    if (blocked) return days;
+  }
+  return null;
+}
+
+async function checkIntervalDayCondition(
+  condition: string | null | undefined,
+  now: Date,
+  daysAfterHoliday: number | null | undefined,
+): Promise<boolean> {
   const cond = String(condition || 'any').trim();
   if (!cond || cond === 'any') return true;
   const day = toTehranDate(now).getUTCDay();
   if (cond === 'is_friday') return day === 5;
-  if (cond === 'not_friday') return day !== 5;
+  if (cond === 'not_friday') {
+    if (day === 5) return false;
+    if (typeof daysAfterHoliday !== 'number' || daysAfterHoliday <= 0) return true;
+    return await getDaysSinceLastBlockedDay(now, false) === Math.max(0, daysAfterHoliday);
+  }
+  if (cond === 'is_friday_or_holiday') return isFridayOrOfficialHoliday(now);
+  if (cond === 'not_friday_or_holiday') {
+    if (await isFridayOrOfficialHoliday(now)) return false;
+    if (typeof daysAfterHoliday !== 'number' || daysAfterHoliday <= 0) return true;
+    return await getDaysSinceLastBlockedDay(now, true) === Math.max(0, daysAfterHoliday);
+  }
   if (cond === 'is_saturday') return day === 6;
   if (cond === 'not_saturday') return day !== 6;
   if (cond === 'is_sunday') return day === 0;
@@ -834,7 +878,6 @@ function checkIntervalDayCondition(condition: string | null | undefined, now: Da
   if (cond === 'not_wednesday') return day !== 3;
   if (cond === 'is_thursday') return day === 4;
   if (cond === 'not_thursday') return day !== 4;
-  // Holiday-based conditions require external API; skip (return true)
   return true;
 }
 
@@ -2513,7 +2556,11 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
       await clearServerQueued(url, key, workflow.id);
       continue;
     }
-    if (!checkIntervalDayCondition(workflow.interval_day_condition, scheduledDueAt)) {
+    if (!await checkIntervalDayCondition(
+      workflow.interval_day_condition,
+      scheduledDueAt,
+      workflow.interval_days_after_holiday,
+    )) {
       await clearServerQueued(url, key, workflow.id);
       continue;
     }
