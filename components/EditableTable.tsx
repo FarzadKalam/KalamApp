@@ -312,6 +312,19 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
     return `row_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   };
+  const shouldDisableInvoicePaymentAccount = (row: any) => {
+    if (!isInvoicePayments) return false;
+    const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
+    return paymentType === 'barter' || paymentType === 'credit';
+  };
+  const sanitizeOperationalPaymentRow = (row: any) => {
+    if (!row || typeof row !== 'object' || !isOperationalPayments) return row;
+    const nextRow = { ...row };
+    if (shouldDisableInvoicePaymentAccount(nextRow)) {
+      nextRow.target_account = null;
+    }
+    return nextRow;
+  };
   const ensurePaymentRowKey = (row: any) => {
     const existingKey = resolveOperationalPaymentRowKey(row);
     if (existingKey) return existingKey;
@@ -320,10 +333,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const normalizePaymentRows = (rows: any[]) => (
     (Array.isArray(rows) ? rows : []).map((row: any) => {
       if (!row || typeof row !== 'object' || !isOperationalPayments) return row;
-      const rowKey = ensurePaymentRowKey(row);
-      if (String(row?.row_key || '').trim() === rowKey) return row;
+      const normalizedRow = sanitizeOperationalPaymentRow(row);
+      const rowKey = ensurePaymentRowKey(normalizedRow);
+      if (String(normalizedRow?.row_key || '').trim() === rowKey) return normalizedRow;
       return {
-        ...row,
+        ...normalizedRow,
         row_key: rowKey,
       };
     })
@@ -1845,7 +1859,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const normalizeRowForEdit = (row: any) => {
-    const nextRow = { ...row };
+    const nextRow = sanitizeOperationalPaymentRow({ ...row });
     (block.tableColumns || []).forEach((col: any) => {
       const key = String(col?.key || '');
       if (!key || !(key in nextRow)) return;
@@ -4305,8 +4319,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       || (isAnyInvoiceItems && col.key === 'sub_quantity' && !isManualSubUnit(record?.sub_unit))
       || (isAnyInvoicePayments
         && (
-          ((isInvoicePayments && col.key === 'target_account') || ((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account'))
-          && String((record as any)?.payment_type || '').trim() === 'barter'
+          ((isInvoicePayments && col.key === 'target_account' && shouldDisableInvoicePaymentAccount(record))
+            || (((isPurchaseInvoicePayments || isExpensePayments) && col.key === 'source_account')
+              && normalizeCashBankPaymentType((record as any)?.payment_type) === 'barter'))
         ));
 
     const isInvoicePaymentAccountColumn = isOperationalPayments
