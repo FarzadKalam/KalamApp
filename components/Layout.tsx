@@ -31,6 +31,7 @@ import {
   MessageOutlined,
   BellOutlined,
   ReadOutlined,
+  GiftOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -39,6 +40,7 @@ import { MODULES } from '../moduleRegistry';
 import AppVersionUpdateBanner from './AppVersionUpdateBanner';
 import {
   ACCOUNTING_PERMISSION_KEY,
+  CUSTOMER_CLUB_PERMISSION_KEY,
   REPORTS_PERMISSION_KEY,
   SETTINGS_PERMISSION_KEY,
   SAAS_ADMIN_PERMISSION_KEY,
@@ -47,6 +49,8 @@ import {
   resolvePreferredRoleModuleIds,
   type PermissionMap,
 } from '../utils/permissions';
+import { CUSTOMER_CLUB_FEATURE } from '../utils/customerClub';
+import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
 import {
@@ -116,6 +120,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const [renewalRequesting, setRenewalRequesting] = useState(false);
   const [rolePermissions, setRolePermissions] = useState<PermissionMap>({});
   const [rolePermissionsReady, setRolePermissionsReady] = useState(false);
+  const [customerClubFeatureEnabled, setCustomerClubFeatureEnabled] = useState(true);
   const [alertsDrawerMounted, setAlertsDrawerMounted] = useState(false);
   const [alertsDrawerOpen, setAlertsDrawerOpen] = useState(false);
   const [sessionBootstrapError, setSessionBootstrapError] = useState<any>(null);
@@ -165,6 +170,24 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       setRolePermissionsReady(true);
     }
   }, [applySessionBootstrapSnapshot]);
+
+  useEffect(() => {
+    if (!rolePermissionsReady || !currentUser?.id) {
+      setCustomerClubFeatureEnabled(true);
+      return;
+    }
+    let active = true;
+    void hasCurrentOrgPlanFeature(CUSTOMER_CLUB_FEATURE, { defaultEnabled: true })
+      .then((enabled) => {
+        if (active) setCustomerClubFeatureEnabled(enabled);
+      })
+      .catch(() => {
+        if (active) setCustomerClubFeatureEnabled(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id, rolePermissionsReady]);
 
   useEffect(() => {
     document.documentElement.classList.add('kalam-app-shell-lock');
@@ -332,11 +355,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     let isMounted = true;
     const updateViewportVars = () => {
       const visualViewport = window.visualViewport;
-      const viewportHeight = visualViewport?.height || window.innerHeight;
+      const layoutViewportHeight = window.innerHeight;
+      const viewportHeight = visualViewport?.height || layoutViewportHeight;
       const viewportOffsetTop = visualViewport?.offsetTop || 0;
       const keyboardInset = Math.max(
         0,
-        window.innerHeight - Math.round(viewportHeight + viewportOffsetTop)
+        layoutViewportHeight - Math.round(viewportHeight + viewportOffsetTop)
       );
       const activeElement = document.activeElement as HTMLElement | null;
       const isTextInputFocused = Boolean(
@@ -350,12 +374,13 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       const mobileViewport = window.innerWidth < 768;
       const keyboardVisible = mobileViewport && (
         keyboardInset > 120
-        || (isTextInputFocused && window.innerHeight - viewportHeight > 100)
+        || (isTextInputFocused && layoutViewportHeight - viewportHeight > 100)
       );
 
-      document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(viewportHeight)}px`);
-      document.documentElement.style.setProperty('--app-viewport-offset-top', `${Math.round(viewportOffsetTop)}px`);
-      document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardInset}px`);
+      const appViewportHeight = keyboardVisible ? viewportHeight : layoutViewportHeight;
+      document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(appViewportHeight)}px`);
+      document.documentElement.style.setProperty('--app-viewport-offset-top', `${keyboardVisible ? Math.round(viewportOffsetTop) : 0}px`);
+      document.documentElement.style.setProperty('--app-keyboard-inset', `${keyboardVisible ? keyboardInset : 0}px`);
       document.documentElement.style.setProperty('--app-mobile-footer-height', keyboardVisible ? '0px' : '64px');
       setIsKeyboardVisible(keyboardVisible);
     };
@@ -488,6 +513,9 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const canViewReportsHub =
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.view !== false &&
     rolePermissions?.[REPORTS_PERMISSION_KEY]?.fields?.hub_page !== false;
+  const canViewCustomerClub =
+    customerClubFeatureEnabled &&
+    rolePermissions?.[CUSTOMER_CLUB_PERMISSION_KEY]?.view !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
   const communicationsAccess = resolveCommunicationsPermissions(rolePermissions);
   const canRunIntervalAutomation = Boolean(rolePermissionsReady
@@ -663,6 +691,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/marketing_leads', label: 'بازاریابی' },
           { key: '/personas', label: 'پرسونا', disabled: !canViewModule('personas') },
+          { key: '/customer-club', label: 'باشگاه مشتریان', icon: <GiftOutlined />, disabled: !canViewCustomerClub },
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
@@ -677,7 +706,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/accounting', label: 'داشبورد حسابداری', disabled: !canViewAccountingDashboard },
           { key: '/cash_bank_operations', label: 'نقد و بانک' },
-          { key: '/employee_advances', label: 'مساعده‌ها', disabled: !canViewModule('employee_advances') },
           { key: '/payroll_slips', label: 'فیش‌های حقوقی', disabled: !canViewModule('payroll_slips') },
           { key: '/journal_entries', label: 'اسناد حسابداری', disabled: !canViewModule('journal_entries') },
           {
@@ -703,6 +731,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/recruitment_applicants', label: 'متقاضیان استخدام', disabled: !canViewModule('recruitment_applicants') },
           { key: '/attendance_logs', label: 'تردد' },
           { key: '/work_schedules', label: 'برنامه حضور' },
+          { key: '/employee_advances', label: 'مساعده‌ها', disabled: !canViewModule('employee_advances') },
           { key: '/leave_requests', label: 'مرخصی‌ها' },
           { key: '/overtime_requests', label: 'اضافه‌کاری‌ها' },
           { key: '/mission_requests', label: 'ماموریت‌ها' },
@@ -781,7 +810,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }] : []),
       { key: '/settings', icon: <SettingOutlined />, label: 'تنظیمات' },
     ];
-  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
+  }, [canViewAccountingDashboard, canViewAccountingSettings, canViewCustomerClub, canViewOrgKnowledge, canViewReportsHub, canViewSaasAdmin, communicationsAccess.canUseWorkspace, rolePermissions]);
 
   const visibleRawMenuItems = useMemo<NonNullable<MenuProps['items']>>(() => {
     const canShowMenuKey = (key?: string) => {
@@ -798,6 +827,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           return canViewAccountingSettings;
         case '/reports':
           return canViewReportsHub;
+        case '/customer-club':
+          return canViewCustomerClub;
         case '/messages':
           return communicationsAccess.canUseWorkspace;
         case '/gallery':
@@ -854,6 +885,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     canViewAccountingDashboard,
     canViewAccountingSettings,
     canViewCashBank,
+    canViewCustomerClub,
     canViewReportsHub,
     canViewSettingsRoot,
     canViewOrgKnowledge,

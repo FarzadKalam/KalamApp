@@ -57,9 +57,11 @@ import { syncEmployeeCompensationEntriesForPayroll } from '../utils/employeeComp
 import { syncSeniorityPayrollEntry, calcYearsOfService } from '../utils/seniorityRuntime';
 import {
   fetchPayrollLedgerEntries,
+  groupPayrollLedgerEntriesToSlipLines,
   isMissingPayrollLedgerError,
-  mapPayrollLedgerEntriesToLines,
   markPayrollLedgerEntriesIncluded,
+  type PayrollLedgerEntry,
+  type PayrollSlipLine,
 } from '../utils/payrollLedger';
 
 const HR_TASK_FETCH_LIMIT = 1500;
@@ -81,6 +83,8 @@ const HR_TASK_SELECT_FALLBACK =
   'id, name, status, task_type, assignee_id, assignee_role_id, assignee_type, due_date, due_at, completed_at, created_at, wage, produced_qty, spent_hours, estimated_hours, weight, related_to_module, related_production_order, production_line_id, recurrence_info, source_template_id';
 const HR_TASK_SELECT_MINIMAL =
   'id, name, status, assignee_id, created_at, spent_hours, wage, produced_qty';
+const PAYROLL_ADVANCE_DEDUCTION_STATUSES = new Set(['paid', 'posted']);
+const ADVANCE_VISIBLE_STATUSES = new Set(['requested', 'approved', 'paid', 'posted', 'settled']);
 const isMissingSelectColumnError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -305,12 +309,30 @@ type PayrollDashboardLedgerRow = {
   employee_id: string | null;
   entry_type: string | null;
   source_type: string | null;
+  source_record_id?: string | null;
   source_key?: string | null;
   title: string | null;
   amount: number;
+  quantity?: number | string | null;
+  rate?: number | string | null;
   status: string | null;
   payroll_slip_id?: string | null;
   details?: Record<string, any> | null;
+};
+
+type EmployeeAdvanceDashboardRow = {
+  id: string;
+  employee_id: string | null;
+  name: string | null;
+  system_code: string | null;
+  status: string | null;
+  request_date: string | null;
+  due_date: string | null;
+  amount: number;
+  paid_amount: number;
+  remaining_amount: number;
+  related_payroll_slip_id: string | null;
+  reason: string | null;
 };
 
 type HrSupportStats = {
@@ -517,6 +539,7 @@ const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis }>
   { label: 'بر اساس فاکتورهای تسویه شده', value: 'settled_invoices' },
   { label: 'بر اساس تسویه کامل و وصول آخرین بخش', value: 'full_settlement_only' },
   { label: 'بر اساس فاکتورهای پیش پرداخت و تسویه شده', value: 'prepaid_and_settled_invoices' },
+  { label: 'بر اساس فاکتورهای پیش پرداخت و چک های وصول شده', value: 'prepaid_and_collected_cheques' },
   { label: 'بر اساس فاکتورهای تسویه شده و چک های وصول شده', value: 'settled_and_collected_cheques' },
 ];
 
@@ -1343,6 +1366,40 @@ const calculateAttendanceDelayAbsenceMinutes = (
   )));
 };
 
+const calculateAttendanceDelayAbsenceBreakdown = (
+  row: AttendanceComputedRow,
+  profile: ProfileRecord | null | undefined,
+  paidLeaveMinutes?: number,
+) => {
+  const scheduledMinutes = calculateAttendanceRowScheduledMinutes(row);
+  const presenceMinutes = calculateAttendanceRowPresenceMinutes(row);
+  const coveredPaidLeaveMinutes = paidLeaveMinutes ?? calculateAttendancePaidLeaveMinutes(row, profile);
+  const shortageMinutes = Math.max(0, scheduledMinutes - presenceMinutes);
+  const graceMinutes = Math.max(0, toNumber(profile?.grace_minutes_for_late));
+  const lateMinutes = Math.max(0, toNumber(row.lateMinutes) - graceMinutes);
+  const earlyLeaveMinutes = Math.max(0, toNumber(row.earlyLeaveMinutes));
+  const rawAbsenceMinutes = Math.max(0, shortageMinutes - toNumber(row.lateMinutes) - earlyLeaveMinutes);
+  const unpaidLeaveMinutes = String(row.logType || '') === 'leave' ? Math.max(0, shortageMinutes - coveredPaidLeaveMinutes) : 0;
+  const absenceMinutes = String(row.logType || '') === 'absence' ? Math.max(0, rawAbsenceMinutes - coveredPaidLeaveMinutes) : 0;
+  const delayMinutes = Math.max(0, lateMinutes + earlyLeaveMinutes);
+  const totalMinutes = calculateAttendanceDelayAbsenceMinutes(row, profile, coveredPaidLeaveMinutes);
+  const deductionSubtype = unpaidLeaveMinutes > 0
+    ? 'unpaid_leave'
+    : absenceMinutes > 0
+      ? 'absence'
+      : delayMinutes > 0
+        ? 'late'
+        : 'delay_absence';
+  return {
+    deductionSubtype,
+    delayMinutes,
+    absenceMinutes,
+    unpaidLeaveMinutes,
+    paidLeaveMinutes: coveredPaidLeaveMinutes,
+    totalMinutes,
+  };
+};
+
 const calculateAttendancePaidLeaveMinutes = (
   row: AttendanceComputedRow,
   profile?: ProfileRecord | null,
@@ -1539,6 +1596,8 @@ const HRPage: React.FC = () => {
   const [commissionReviewTab, setCommissionReviewTab] = useState<CommissionReviewBucket>('current_period');
   const [payrollPeriodSlips, setPayrollPeriodSlips] = useState<PayrollPeriodSlipRow[]>([]);
   const [payrollLedgerRows, setPayrollLedgerRows] = useState<PayrollDashboardLedgerRow[]>([]);
+  const [employeeAdvanceRows, setEmployeeAdvanceRows] = useState<EmployeeAdvanceDashboardRow[]>([]);
+  const [employeeAdvancesLoading, setEmployeeAdvancesLoading] = useState(false);
   const [payrollStatusLoading, setPayrollStatusLoading] = useState(false);
   const [payrollWizardOpen, setPayrollWizardOpen] = useState(false);
   const [payrollWizardEmployeeId, setPayrollWizardEmployeeId] = useState<string | null>(null);
@@ -2417,7 +2476,7 @@ const HRPage: React.FC = () => {
           .neq('status', 'canceled'),
         supabase
           .from('payroll_calculation_entries')
-          .select('id, employee_id, entry_type, source_type, source_key, title, amount, status, payroll_slip_id, details')
+          .select('id, employee_id, entry_type, source_type, source_record_id, source_key, title, amount, quantity, rate, status, payroll_slip_id, details')
           .eq('period_start', periodStart)
           .eq('period_end', periodEnd)
           .in('employee_id', employeeIds)
@@ -2427,7 +2486,7 @@ const HRPage: React.FC = () => {
       if (ledgerResult.error && isMissingSourceKeyError(ledgerResult.error)) {
         ledgerResult = await supabase
           .from('payroll_calculation_entries')
-          .select('id, employee_id, entry_type, source_type, title, amount, status, payroll_slip_id, details')
+          .select('id, employee_id, entry_type, source_type, source_record_id, title, amount, quantity, rate, status, payroll_slip_id, details')
           .eq('period_start', periodStart)
           .eq('period_end', periodEnd)
           .in('employee_id', employeeIds)
@@ -2441,9 +2500,12 @@ const HRPage: React.FC = () => {
         employee_id: row?.employee_id || null,
         entry_type: row?.entry_type || null,
         source_type: row?.source_type || null,
+        source_record_id: row?.source_record_id || null,
         source_key: row?.source_key || row?.details?.source_key || null,
         title: row?.title || null,
         amount: toNumber(row?.amount),
+        quantity: row?.quantity ?? null,
+        rate: row?.rate ?? null,
         status: row?.status || null,
         payroll_slip_id: row?.payroll_slip_id || null,
         details: row?.details || null,
@@ -2482,6 +2544,55 @@ const HRPage: React.FC = () => {
     });
     return map;
   }, [payrollLedgerRows]);
+
+  const fetchEmployeeAdvancesForDashboard = useCallback(async () => {
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    const employeeIds = visibleSummaries
+      .map((row) => String(row.profile.source_id || row.profile.id || '').trim())
+      .filter(Boolean);
+    if (!periodEnd || employeeIds.length === 0) {
+      setEmployeeAdvanceRows([]);
+      return;
+    }
+
+    setEmployeeAdvancesLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('employee_advances')
+        .select('id, employee_id, name, system_code, status, request_date, due_date, amount, paid_amount, remaining_amount, related_payroll_slip_id, reason')
+        .in('employee_id', employeeIds)
+        .lte('request_date', periodEnd)
+        .order('request_date', { ascending: false })
+        .limit(HR_STATS_FETCH_LIMIT);
+      if (error) throw error;
+      setEmployeeAdvanceRows(((data || []) as any[])
+        .map((row) => ({
+          id: String(row?.id || ''),
+          employee_id: row?.employee_id || null,
+          name: row?.name || null,
+          system_code: row?.system_code || null,
+          status: row?.status || null,
+          request_date: row?.request_date || null,
+          due_date: row?.due_date || null,
+          amount: toNumber(row?.amount),
+          paid_amount: toNumber(row?.paid_amount),
+          remaining_amount: toNumber(row?.remaining_amount),
+          related_payroll_slip_id: row?.related_payroll_slip_id || null,
+          reason: row?.reason || null,
+        }))
+        .filter((row) => ADVANCE_VISIBLE_STATUSES.has(String(row.status || '').trim())));
+    } catch (error) {
+      console.warn('Employee advances are not available yet.', error);
+      setEmployeeAdvanceRows([]);
+    } finally {
+      setEmployeeAdvancesLoading(false);
+    }
+  }, [monthEnd, visibleSummaries]);
+
+  useEffect(() => {
+    if (activeTab !== 'advances' && activeTab !== 'payroll') return;
+    void fetchEmployeeAdvancesForDashboard();
+  }, [activeTab, fetchEmployeeAdvancesForDashboard]);
 
   useEffect(() => {
     // Handle both 'goals' and 'goal_fulfillment' tab keys for backwards compatibility
@@ -3807,6 +3918,7 @@ const HRPage: React.FC = () => {
       settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_invoices'),
       full_settlement_only: calculatedCommissionRows.filter((row) => row.details?.basis === 'full_settlement_only'),
       prepaid_and_settled_invoices: calculatedCommissionRows.filter((row) => row.details?.basis === 'prepaid_and_settled_invoices'),
+      prepaid_and_collected_cheques: calculatedCommissionRows.filter((row) => row.details?.basis === 'prepaid_and_collected_cheques'),
       settled_and_collected_cheques: calculatedCommissionRows.filter((row) => row.details?.basis === 'settled_and_collected_cheques'),
     };
     return {
@@ -3814,6 +3926,7 @@ const HRPage: React.FC = () => {
       settled: rowsByBasis.settled_invoices.reduce((sum, row) => sum + row.amount, 0),
       fullSettlement: rowsByBasis.full_settlement_only.reduce((sum, row) => sum + row.amount, 0),
       prepaid: rowsByBasis.prepaid_and_settled_invoices.reduce((sum, row) => sum + row.amount, 0),
+      prepaidCollectedCheque: rowsByBasis.prepaid_and_collected_cheques.reduce((sum, row) => sum + row.amount, 0),
       collectedCheque: rowsByBasis.settled_and_collected_cheques.reduce((sum, row) => sum + row.amount, 0),
       invoices: new Set(calculatedCommissionRows.map((row) => row.details?.invoice_id || row.source_record_id).filter(Boolean)).size,
       pendingRows: rowsByBasis.settled_and_collected_cheques.length,
@@ -3874,6 +3987,16 @@ const HRPage: React.FC = () => {
     return payrollLedgerByEmployeeId.get(String(payrollWizardEmployeeId)) || [];
   }, [payrollLedgerByEmployeeId, payrollWizardEmployeeId]);
 
+  const payrollWizardDeductibleAdvances = useMemo(() => {
+    if (!payrollWizardEmployeeId) return [];
+    return employeeAdvanceRows.filter((advance) => (
+      String(advance.employee_id || '') === String(payrollWizardEmployeeId)
+      && !advance.related_payroll_slip_id
+      && PAYROLL_ADVANCE_DEDUCTION_STATUSES.has(String(advance.status || '').trim())
+      && (advance.paid_amount > 0 || advance.amount > 0)
+    ));
+  }, [employeeAdvanceRows, payrollWizardEmployeeId]);
+
   const payrollWizardOpenLedger = useMemo(
     () => payrollWizardEmployeeLedger.filter((entry) => ['draft', 'proposed'].includes(String(entry.status || ''))),
     [payrollWizardEmployeeLedger],
@@ -3925,6 +4048,11 @@ const HRPage: React.FC = () => {
     [payrollWizardOpenLedger],
   );
 
+  const payrollWizardAdvanceDeductionTotal = useMemo(
+    () => payrollWizardDeductibleAdvances.reduce((sum, advance) => sum + (advance.paid_amount > 0 ? advance.paid_amount : advance.amount), 0),
+    [payrollWizardDeductibleAdvances],
+  );
+
   const payrollWizardBaseNetPayable = useMemo(() => {
     const row = payrollWizardSummary;
     if (!row) return 0;
@@ -3945,9 +4073,86 @@ const HRPage: React.FC = () => {
   }, [payrollWizardBaseNetPayable, payrollWizardSummary]);
 
   const payrollWizardFinalNet = useMemo(
-    () => payrollWizardBaseNetPayable + payrollWizardLedgerNet - payrollWizardInsurance.employee,
-    [payrollWizardBaseNetPayable, payrollWizardInsurance.employee, payrollWizardLedgerNet],
+    () => payrollWizardBaseNetPayable + payrollWizardLedgerNet - payrollWizardInsurance.employee - payrollWizardAdvanceDeductionTotal,
+    [payrollWizardAdvanceDeductionTotal, payrollWizardBaseNetPayable, payrollWizardInsurance.employee, payrollWizardLedgerNet],
   );
+
+  const buildAdvancePayrollSlipLines = useCallback((advances: EmployeeAdvanceDashboardRow[]): PayrollSlipLine[] => (
+    advances
+      .map((advance): PayrollSlipLine | null => {
+        const amount = advance.paid_amount > 0 ? advance.paid_amount : advance.amount;
+        if (amount <= 0) return null;
+        const dateText = advance.request_date ? safeJalaliFormat(advance.request_date, 'YYYY/MM/DD') : '';
+        const title = `مساعده - ${advance.system_code || advance.name || dateText || 'بدون شماره'}`;
+        const description = [
+          dateText ? `تاریخ درخواست: ${dateText}` : '',
+          advance.reason || '',
+        ].filter(Boolean).join('؛ ');
+        return {
+          line_type: 'deduction' as const,
+          title,
+          amount,
+          description,
+        };
+      })
+      .filter((item): item is PayrollSlipLine => Boolean(item))
+  ), []);
+
+  const payrollWizardGroupedLedgerLines = useMemo(
+    () => groupPayrollLedgerEntriesToSlipLines(payrollWizardOpenLedger as PayrollLedgerEntry[], currencyLabel),
+    [currencyLabel, payrollWizardOpenLedger],
+  );
+
+  const payrollWizardPreviewLines = useMemo(() => {
+    const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
+    const presenceHours = presenceMinutesValue / 60;
+    const effectiveBaseSalary = payrollWizardBaseCompensation.amount;
+    const baseLines: PayrollSlipLine[] = [
+      ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{
+        line_type: 'earning' as const,
+        title: payrollWizardBaseCompensation.displayTitle,
+        amount: effectiveBaseSalary,
+        description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت`,
+      }] : []),
+      ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{
+        line_type: 'earning' as const,
+        title: payrollWizardBaseCompensation.displayTitle,
+        amount: effectiveBaseSalary,
+        description: `بازه ${toNativeGregorianDateString(monthStart) || ''} تا ${toNativeGregorianDateString(monthEnd) || ''}`,
+      }] : []),
+      ...(payrollWizardSummary && payrollWizardSummary.taskWageTotal > 0 ? [{
+        line_type: 'earning' as const,
+        title: 'حقوق عملکردی فعالیت‌ها',
+        amount: payrollWizardSummary.taskWageTotal,
+        description: `${payrollWizardSummary.detailRows.length} فعالیت`,
+      }] : []),
+    ];
+    return [
+      ...baseLines,
+      ...payrollWizardGroupedLedgerLines,
+      ...buildAdvancePayrollSlipLines(payrollWizardDeductibleAdvances),
+      ...(payrollWizardInsurance.employee > 0 ? [{
+        line_type: 'deduction' as const,
+        title: 'بیمه سهم کارمند',
+        amount: payrollWizardInsurance.employee,
+        description: 'برآورد از تنظیمات پرسنل',
+      }] : []),
+    ];
+  }, [
+    buildAdvancePayrollSlipLines,
+    currencyLabel,
+    monthEnd,
+    monthStart,
+    payrollWizardAttendanceRows,
+    payrollWizardBaseCompensation.amount,
+    payrollWizardBaseCompensation.displayTitle,
+    payrollWizardBaseCompensation.isHourly,
+    payrollWizardDeductibleAdvances,
+    payrollWizardGroupedLedgerLines,
+    payrollWizardHourlyRate,
+    payrollWizardInsurance.employee,
+    payrollWizardSummary,
+  ]);
 
   const payrollWizardSeniorityAmount = useMemo(
     () => payrollWizardOpenLedger
@@ -3970,7 +4175,8 @@ const HRPage: React.FC = () => {
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
     setPayrollWizardOpen(true);
-  }, []);
+    void fetchEmployeeAdvancesForDashboard();
+  }, [fetchEmployeeAdvancesForDashboard]);
 
   const closePayrollWizard = useCallback(() => {
     setPayrollWizardOpen(false);
@@ -4320,6 +4526,10 @@ const HRPage: React.FC = () => {
       return recomputeCommissionDraftRow({ ...row, lines: nextLines });
     }));
   }, []);
+
+  const resolveCommissionReviewRowKey = useCallback((row: any) => (
+    String(row?.sourceRowKey || row?.key || '').replace(/:(current_period|backlog|excluded)$/, '')
+  ), []);
 
   const buildCommissionDraftPayloads = useCallback(async ({
     periodStart,
@@ -4785,12 +4995,17 @@ const HRPage: React.FC = () => {
     }, 0);
   }, [commissionForm, handleBuildCommissionPreview, message, profiles]);
 
-  const handleDeleteCommissionDraft = useCallback((row: CommissionLedgerRow) => {
+  const handleDeleteCommissionCalculation = useCallback((row: CommissionLedgerRow) => {
+    const isUuidLike = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    const rawLedgerEntryIds = Array.isArray(row.details?.ledger_entry_ids) && row.details.ledger_entry_ids.length > 0
+      ? row.details.ledger_entry_ids
+      : [row.id];
     const ledgerEntryIds = Array.from(new Set(
-      (Array.isArray(row.details?.ledger_entry_ids) ? row.details.ledger_entry_ids : [row.id])
+      rawLedgerEntryIds
         .map((value: unknown) => String(value || '').trim())
-        .filter(Boolean),
+        .filter((value) => Boolean(value) && isUuidLike(value)),
     ));
+    const calculationKey = String(row.details?.calculation_key || '').trim();
     const sourceKeys = Array.from(new Set(
       (Array.isArray(row.details?.rows) ? row.details.rows : [])
         .flatMap((invoiceRow: any) => Array.isArray(invoiceRow?.lines) ? invoiceRow.lines : [])
@@ -4799,8 +5014,8 @@ const HRPage: React.FC = () => {
     ));
 
     Modal.confirm({
-      title: 'حذف پیش‌نویس پورسانت',
-      content: 'این پیش‌نویس از فهرست محاسبات حذف می‌شود و فاکتورها دوباره قابل محاسبه خواهند بود.',
+      title: 'حذف محاسبه پورسانت',
+      content: 'در این صورت همه پورسانت های لحاظ شده در این محاسبه پورسانت حذف خواهند شد.',
       okText: 'حذف',
       okButtonProps: { danger: true },
       cancelText: 'انصراف',
@@ -4811,23 +5026,31 @@ const HRPage: React.FC = () => {
             const { error } = await supabase
               .from('payroll_calculation_entries')
               .update({ status: 'voided', updated_at: new Date().toISOString() })
-              .in('id', ledgerEntryIds)
-              .eq('status', 'draft');
+              .in('id', ledgerEntryIds);
             if (error && !isMissingPayrollLedgerError(error)) throw error;
+          } else if (calculationKey && row.employee_id && row.period_start && row.period_end) {
+            const { error } = await supabase
+              .from('payroll_calculation_entries')
+              .update({ status: 'voided', updated_at: new Date().toISOString() })
+              .eq('source_type', 'commission')
+              .eq('employee_id', row.employee_id)
+              .eq('period_start', row.period_start)
+              .eq('period_end', row.period_end)
+              .eq('source_key', calculationKey);
+            if (error && !isMissingPayrollLedgerError(error) && !isMissingSourceKeyError(error)) throw error;
           }
           if (sourceKeys.length > 0) {
             const { error } = await supabase
               .from('commission_drafts')
               .update({ draft_status: 'canceled', updated_at: new Date().toISOString() })
-              .in('source_key', sourceKeys)
-              .eq('draft_status', 'draft');
+              .in('source_key', sourceKeys);
             if (error && !isMissingCommissionDraftsError(error)) throw error;
           }
-          message.success('پیش‌نویس پورسانت حذف شد.');
+          message.success('محاسبه پورسانت حذف شد و ردیف‌های آن دوباره قابل محاسبه هستند.');
           await refreshPayrollPeriodState();
           await fetchCalculatedCommissionRows();
         } catch (error) {
-          message.error(toFaErrorMessage(error as any, 'حذف پیش‌نویس پورسانت ناموفق بود'));
+          message.error(toFaErrorMessage(error as any, 'حذف محاسبه پورسانت ناموفق بود'));
           throw error;
         } finally {
           setCommissionModalSaving(false);
@@ -4915,6 +5138,7 @@ const HRPage: React.FC = () => {
         details: {
           source_key: entry.source_key || null,
           source_rule_id: entry.source_rule_id,
+          formula_id: entry.formula_id || null,
           task_id: entry.task_id,
           metric_key: entry.metric_key || null,
           metric_label: entry.metric_label || null,
@@ -5017,7 +5241,7 @@ const HRPage: React.FC = () => {
 
     if (sourceType === 'attendance_early_bonus') {
       const minutes = calculateAttendanceEarlyBonusMinutes(row);
-      const rate = toNumber(employee?.early_bonus_rate) || hourlyRate;
+      const rate = toNumber(employee?.early_bonus_rate);
       return {
         sourceKey: buildAttendanceEarlyBonusSourceKey(row),
         sourceType,
@@ -5031,11 +5255,13 @@ const HRPage: React.FC = () => {
     }
 
     if (sourceType === 'attendance_delay_absence') {
+      const paidLeaveMinutes = paidLeaveEligibleMinutesByAttendanceRowKey.get(row.key) || 0;
       const minutes = calculateAttendanceDelayAbsenceMinutes(
         row,
         employee || null,
-        paidLeaveEligibleMinutesByAttendanceRowKey.get(row.key) || 0,
+        paidLeaveMinutes,
       );
+      const breakdown = calculateAttendanceDelayAbsenceBreakdown(row, employee || null, paidLeaveMinutes);
       const rate = toNumber(employee?.late_penalty_rate) || hourlyRate;
       return {
         sourceKey: buildAttendanceDelayAbsenceSourceKey(row),
@@ -5046,6 +5272,11 @@ const HRPage: React.FC = () => {
         rate,
         amount: -Math.round((minutes / 60) * rate),
         sourceModuleId: 'attendance_logs',
+        deductionSubtype: breakdown.deductionSubtype,
+        delayMinutes: breakdown.delayMinutes,
+        absenceMinutes: breakdown.absenceMinutes,
+        unpaidLeaveMinutes: breakdown.unpaidLeaveMinutes,
+        paidLeaveMinutes: breakdown.paidLeaveMinutes,
       };
     }
 
@@ -5146,6 +5377,15 @@ const HRPage: React.FC = () => {
     }
     const meta = resolveAttendanceLedgerEntry(row, sourceType);
     if (!meta.sourceKey || meta.minutes <= 0 || meta.amount === 0) return;
+    const attendanceDetails = sourceType === 'attendance_delay_absence'
+      ? {
+        deduction_subtype: (meta as any).deductionSubtype || null,
+        delay_minutes: (meta as any).delayMinutes || 0,
+        absence_minutes: (meta as any).absenceMinutes || 0,
+        unpaid_leave_minutes: (meta as any).unpaidLeaveMinutes || 0,
+        paid_leave_minutes: (meta as any).paidLeaveMinutes || 0,
+      }
+      : {};
     setSavingOvertimeLedgerKey(meta.sourceKey);
     try {
       const { data: existingRows, error: existingError } = await supabase
@@ -5176,6 +5416,7 @@ const HRPage: React.FC = () => {
               minutes: meta.minutes,
               employee_name: row.employeeName,
               approved_leave_request_id: row.approvedLeaveRequestId,
+              ...attendanceDetails,
             },
             updated_at: new Date().toISOString(),
           })
@@ -5203,6 +5444,7 @@ const HRPage: React.FC = () => {
             minutes: meta.minutes,
             employee_name: row.employeeName,
             approved_leave_request_id: row.approvedLeaveRequestId,
+            ...attendanceDetails,
           },
         });
         if (error && !isMissingPayrollLedgerError(error)) throw error;
@@ -5283,6 +5525,13 @@ const HRPage: React.FC = () => {
         rate: meta.rate,
         employee_name: row.employeeName,
         approved_leave_request_id: row.approvedLeaveRequestId,
+        ...(meta.sourceType === 'attendance_delay_absence' ? {
+          deduction_subtype: (meta as any).deductionSubtype || null,
+          delay_minutes: (meta as any).delayMinutes || 0,
+          absence_minutes: (meta as any).absenceMinutes || 0,
+          unpaid_leave_minutes: (meta as any).unpaidLeaveMinutes || 0,
+          paid_leave_minutes: (meta as any).paidLeaveMinutes || 0,
+        } : {}),
       };
 
       if (existing?.id) {
@@ -5475,6 +5724,7 @@ const HRPage: React.FC = () => {
         details: {
           source_key: entry.source_key || null,
           source_rule_id: entry.source_rule_id,
+          formula_id: entry.formula_id || null,
           task_id: entry.task_id,
           metric_key: entry.metric_key || null,
           metric_label: entry.metric_label || null,
@@ -5556,7 +5806,12 @@ const HRPage: React.FC = () => {
       await prepareAttendancePayrollLedgerEntriesForRows(payrollWizardAttendanceRows);
 
       const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, [employeeIdValue], periodStart, periodEnd);
-      const ledgerLines = mapPayrollLedgerEntriesToLines(ledgerEntries, currencyLabel);
+      const ledgerLines = groupPayrollLedgerEntriesToSlipLines(ledgerEntries, currencyLabel);
+      const advanceLines = buildAdvancePayrollSlipLines(payrollWizardDeductibleAdvances);
+      const advanceDeductionTotal = payrollWizardDeductibleAdvances.reduce(
+        (sum, advance) => sum + (advance.paid_amount > 0 ? advance.paid_amount : advance.amount),
+        0,
+      );
       const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
       const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
 
@@ -5583,16 +5838,17 @@ const HRPage: React.FC = () => {
         base_salary: effectiveBaseSalary,
         task_wage_total: row.taskWageTotal,
         bonus_total: ledgerBonusTotal,
-        deduction_total: ledgerDeductionTotal + employeeInsuranceAmount,
+        deduction_total: ledgerDeductionTotal + advanceDeductionTotal + employeeInsuranceAmount,
         insurance_employee_amount: employeeInsuranceAmount,
         insurance_employer_amount: employerInsuranceAmount,
         gross_amount: totalEarnings,
-        net_amount: totalEarnings - ledgerDeductionTotal - employeeInsuranceAmount,
+        net_amount: totalEarnings - ledgerDeductionTotal - advanceDeductionTotal - employeeInsuranceAmount,
         lines: [
           ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت` }] : []),
           ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
-          ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'کارکرد فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` }] : []),
+          ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'حقوق عملکردی فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` }] : []),
           ...ledgerLines,
+          ...advanceLines,
           ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
         ],
         payments: [],
@@ -5603,6 +5859,7 @@ const HRPage: React.FC = () => {
           late_hours: row.lateHours,
           produced_qty: row.producedQty,
           payroll_ledger_entry_ids: ledgerEntries.map((entry) => entry.id),
+          employee_advance_ids: payrollWizardDeductibleAdvances.map((advance) => advance.id),
           attendance: {
             required_minutes: payrollWizardRequiredMinutes,
             hourly_rate: payrollWizardHourlyRate,
@@ -5642,9 +5899,18 @@ const HRPage: React.FC = () => {
           .in('id', penaltyRequestIds);
         if (error) throw error;
       }
+      const advanceIds = payrollWizardDeductibleAdvances.map((advance) => String(advance.id || '').trim()).filter(Boolean);
+      if (advanceIds.length > 0) {
+        const { error } = await supabase
+          .from('employee_advances')
+          .update({ related_payroll_slip_id: inserted.id, updated_at: new Date().toISOString() })
+          .in('id', advanceIds);
+        if (error) throw error;
+      }
       message.success('فیش حقوقی پیش‌نویس ایجاد شد.');
       closePayrollWizard();
       await refreshPayrollPeriodState();
+      await fetchEmployeeAdvancesForDashboard();
       navigate(`/payroll_slips/${inserted.id}`);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فیش حقوقی ناموفق بود.'));
@@ -5654,6 +5920,8 @@ const HRPage: React.FC = () => {
   }, [
     closePayrollWizard,
     ensureActivityPerformanceLedgerForSummary,
+    buildAdvancePayrollSlipLines,
+    fetchEmployeeAdvancesForDashboard,
     message,
     monthEnd,
     monthStart,
@@ -5667,6 +5935,7 @@ const HRPage: React.FC = () => {
     payrollWizardBaseCompensation.isHourly,
     payrollWizardHourlyRate,
     payrollWizardRequiredMinutes,
+    payrollWizardDeductibleAdvances,
     payrollWizardSummary,
     refreshPayrollPeriodState,
   ]);
@@ -6484,17 +6753,24 @@ const HRPage: React.FC = () => {
         return (
           <Space size="small" wrap>
             {slip ? (
-              <Button size="small" icon={<EyeOutlined />} onClick={() => navigate(`/payroll_slips/${slip.id}`)}>
-                مشاهده فیش
-              </Button>
+              <>
+                <Button size="small" icon={<EyeOutlined />} onClick={() => openPayrollWizard(employeeIdValue)}>
+                  مشاهده فیش پیشرفته
+                </Button>
+                <Button size="small" onClick={() => navigate(`/payroll_slips/${slip.id}`)}>
+                  مشاهده فیش ثبت شده
+                </Button>
+              </>
             ) : (
               <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openPayrollWizard(employeeIdValue)}>
-                ایجاد فیش
+                ایجاد فیش پیشرفته
               </Button>
             )}
-            <Button size="small" onClick={() => openPayrollConfigModal(row.profile)}>
-              تنظیمات حقوق
-            </Button>
+            {!slip ? (
+              <Button size="small" onClick={() => openPayrollConfigModal(row.profile)}>
+                تنظیمات حقوق
+              </Button>
+            ) : null}
           </Space>
         );
       },
@@ -6506,6 +6782,7 @@ const HRPage: React.FC = () => {
     settled_invoices: 'فاکتور تسویه‌شده',
     full_settlement_only: 'تسویه کامل',
     prepaid_and_settled_invoices: 'پیش‌پرداخت و تسویه‌شده',
+    prepaid_and_collected_cheques: 'پیش‌پرداخت و چک وصول‌شده',
     settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
   };
   const commissionDecisionOptions: Array<{ label: string; value: CommissionDecisionStatus }> = [
@@ -6613,10 +6890,10 @@ const HRPage: React.FC = () => {
       key: 'actions',
       render: (_: unknown, row: any) => (
         <Space size="small" wrap>
-          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'include')}>لحاظ</Button>
-          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'defer_to_next_period')}>انتقال</Button>
-          <Button size="small" danger onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'exclude')}>عدم لحاظ</Button>
-          <Button size="small" onClick={() => applyCommissionDecisionToRow(row.sourceRowKey, 'auto')}>خودکار</Button>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(resolveCommissionReviewRowKey(row), 'include')}>لحاظ</Button>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(resolveCommissionReviewRowKey(row), 'defer_to_next_period')}>انتقال</Button>
+          <Button size="small" danger onClick={() => applyCommissionDecisionToRow(resolveCommissionReviewRowKey(row), 'exclude')}>عدم لحاظ</Button>
+          <Button size="small" onClick={() => applyCommissionDecisionToRow(resolveCommissionReviewRowKey(row), 'auto')}>خودکار</Button>
         </Space>
       ),
     },
@@ -6722,27 +6999,24 @@ const HRPage: React.FC = () => {
       title: 'عملیات',
       key: 'actions',
       fixed: 'left' as const,
-      render: (_: unknown, row: CommissionLedgerRow) => (
-        String(row.status || '') === 'draft' ? (
+      render: (_: unknown, row: CommissionLedgerRow) => {
+        const status = String(row.status || '');
+        return (
           <Space size="small" wrap>
-            <Button
-              size="small"
-              icon={<EditOutlined />}
-              onClick={() => handleEditCommissionDraft(row)}
-            >
-              ویرایش
+            <Button size="small" icon={<EditOutlined />} onClick={() => handleEditCommissionDraft(row)}>
+              {status === 'draft' ? 'ویرایش' : 'بازبینی'}
             </Button>
             <Button
               size="small"
               danger
               loading={commissionModalSaving}
-              onClick={() => handleDeleteCommissionDraft(row)}
+              onClick={() => handleDeleteCommissionCalculation(row)}
             >
               حذف
             </Button>
           </Space>
-        ) : <span className="text-xs text-gray-400">-</span>
-      ),
+        );
+      },
     },
   ];
 
@@ -7200,19 +7474,25 @@ const HRPage: React.FC = () => {
             <div className="text-2xl font-black">{formatMoney(commissionTotals.settled)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={8} lg={5}>
+        <Col xs={24} md={8} lg={4}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">تسویه کامل</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.fullSettlement)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={12} lg={5}>
+        <Col xs={24} md={8} lg={4}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">پیش‌پرداخت و تسویه</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.prepaid)}</div>
           </Card>
         </Col>
-        <Col xs={24} md={12} lg={6}>
+        <Col xs={24} md={8} lg={4}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">پیش‌پرداخت و چک وصول‌شده</div>
+            <div className="text-2xl font-black">{formatMoney(commissionTotals.prepaidCollectedCheque)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8} lg={4}>
           <Card>
             <div className="text-xs text-gray-500 mb-1">مبنای وصول چک</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.collectedCheque)}</div>
@@ -7303,6 +7583,102 @@ const HRPage: React.FC = () => {
               },
               rowExpandable: (ledgerRow: CommissionLedgerRow) => Array.isArray(ledgerRow.details?.rows) && (ledgerRow.details?.rows as any[]).length > 0,
             }}
+          />
+        )}
+      </Card>
+    </>
+  );
+
+  const advanceStatusMeta: Record<string, { label: string; color: string }> = {
+    requested: { label: 'درخواست شده', color: 'orange' },
+    approved: { label: 'تایید شده', color: 'blue' },
+    paid: { label: 'پرداخت شده', color: 'green' },
+    posted: { label: 'سند شده', color: 'cyan' },
+    settled: { label: 'تسویه شده', color: 'purple' },
+  };
+  const payrollDeductibleAdvanceRows = employeeAdvanceRows.filter((row) => (
+    !row.related_payroll_slip_id
+    && PAYROLL_ADVANCE_DEDUCTION_STATUSES.has(String(row.status || '').trim())
+  ));
+  const advancesTabContent = (
+    <>
+      <Row gutter={[12, 12]} className="mb-4">
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">مساعده‌های قابل کسر</div>
+            <div className="text-2xl font-black">{toPersianNumber(payrollDeductibleAdvanceRows.length)}</div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">جمع قابل کسر از فیش</div>
+            <div className="text-2xl font-black text-red-700">
+              {formatMoney(payrollDeductibleAdvanceRows.reduce((sum, row) => sum + (row.paid_amount > 0 ? row.paid_amount : row.amount), 0))}
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card>
+            <div className="text-xs text-gray-500 mb-1">مساعده‌های متصل به فیش</div>
+            <div className="text-2xl font-black">{toPersianNumber(employeeAdvanceRows.filter((row) => row.related_payroll_slip_id).length)}</div>
+          </Card>
+        </Col>
+      </Row>
+      <Card>
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Button type="primary" onClick={() => navigate('/employee_advances')}>مشاهده ماژول مساعده‌ها</Button>
+          <Button onClick={fetchEmployeeAdvancesForDashboard} loading={employeeAdvancesLoading}>بروزرسانی</Button>
+        </div>
+        {employeeAdvancesLoading ? (
+          <div className="py-10 flex items-center justify-center"><Spin /></div>
+        ) : employeeAdvanceRows.length === 0 ? (
+          <Empty description="مساعده‌ای برای نیروهای انتخاب‌شده یافت نشد." />
+        ) : (
+          <Table
+            rowKey="id"
+            dataSource={employeeAdvanceRows}
+            pagination={{ pageSize: 15, showSizeChanger: false }}
+            scroll={{ x: 1100 }}
+            columns={[
+              {
+                title: 'کارمند',
+                key: 'employee',
+                render: (_: unknown, row: EmployeeAdvanceDashboardRow) =>
+                  profiles.find((profile) => String(profile.source_id || profile.id) === String(row.employee_id || ''))?.full_name || '-',
+              },
+              {
+                title: 'مساعده',
+                key: 'advance',
+                render: (_: unknown, row: EmployeeAdvanceDashboardRow) => (
+                  <button type="button" className="text-leather-700 font-bold hover:underline" onClick={() => navigate(`/employee_advances/${row.id}`)}>
+                    {row.system_code || row.name || 'مساعده'}
+                  </button>
+                ),
+              },
+              { title: 'تاریخ درخواست', dataIndex: 'request_date', key: 'request_date', render: (val: string | null) => val ? toPersianNumber(safeJalaliFormat(val, 'YYYY/MM/DD')) : '-' },
+              { title: 'مبلغ', dataIndex: 'amount', key: 'amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+              { title: 'پرداخت شده', dataIndex: 'paid_amount', key: 'paid_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
+              {
+                title: 'وضعیت',
+                dataIndex: 'status',
+                key: 'status',
+                render: (val: string | null) => {
+                  const meta = advanceStatusMeta[String(val || '')] || { label: val || '-', color: 'default' };
+                  return <Tag color={meta.color}>{meta.label}</Tag>;
+                },
+              },
+              {
+                title: 'وضعیت فیش',
+                key: 'payroll',
+                render: (_: unknown, row: EmployeeAdvanceDashboardRow) => {
+                  const slip = row.related_payroll_slip_id ? payrollSlipById.get(String(row.related_payroll_slip_id)) : null;
+                  if (slip) return <Button size="small" onClick={() => navigate(`/payroll_slips/${slip.id}`)}>{slip.name || 'مشاهده فیش'}</Button>;
+                  const deductible = PAYROLL_ADVANCE_DEDUCTION_STATUSES.has(String(row.status || '').trim());
+                  return <Tag color={deductible ? 'orange' : 'default'}>{deductible ? 'آماده کسر در فیش' : 'در انتظار پرداخت'}</Tag>;
+                },
+              },
+              { title: 'توضیحات', dataIndex: 'reason', key: 'reason', render: (val: string | null) => val || '-' },
+            ]}
           />
         )}
       </Card>
@@ -7566,6 +7942,7 @@ const HRPage: React.FC = () => {
               { key: 'compensation', label: 'پاداش / جریمه', children: compensationTabContent },
               { key: 'goals', label: 'تحقق اهداف', children: goalFulfillmentTabContent },
               { key: 'commissions', label: 'پورسانت‌ها', children: commissionsTabContent },
+              { key: 'advances', label: 'مساعده‌ها', children: advancesTabContent },
               { key: 'payroll', label: 'فیش حقوقی', children: payrollTabContent },
             ]}
           />
@@ -7845,7 +8222,7 @@ const HRPage: React.FC = () => {
                 <Row gutter={[12, 12]}>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">{payrollWizardBaseCompensation.displayTitle}</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardBaseCompensation.amount)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">کارکرد فعالیت‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.taskWageTotal)}</div></Card></Col>
-                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ردیف‌های انتخابی فیش</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardLedgerNet)}</div></Card></Col>
+                  <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ردیف‌ها و مساعده‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardLedgerNet - payrollWizardAdvanceDeductionTotal)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">بیمه سهم کارمند</div><div className="persian-number text-2xl font-black text-red-700">{formatMoney(payrollWizardInsurance.employee)}</div></Card></Col>
                 </Row>
                 <Card>
@@ -7854,21 +8231,20 @@ const HRPage: React.FC = () => {
                     rowKey="key"
                     size="small"
                     pagination={false}
-                    dataSource={[
-                      { key: 'base', title: payrollWizardBaseCompensation.displayTitle, amount: payrollWizardBaseCompensation.amount, type: 'earning' },
-                      { key: 'task', title: 'کارکرد فعالیت‌ها', amount: payrollWizardSummary.taskWageTotal, type: 'earning' },
-                      ...payrollWizardOpenLedger.map((entry) => ({
-                        key: entry.id,
-                        title: entry.title || 'آیتم محاسباتی',
-                        amount: toNumber(entry.amount),
-                        type: toNumber(entry.amount) < 0 ? 'deduction' : 'bonus',
-                      })),
-                      ...(payrollWizardInsurance.employee > 0 ? [{ key: 'insurance', title: 'بیمه سهم کارمند', amount: -payrollWizardInsurance.employee, type: 'deduction' as const }] : []),
-                    ].filter((item) => item.amount !== 0)}
+                    dataSource={payrollWizardPreviewLines
+                      .map((line, index) => ({
+                        key: `${line.title}:${index}`,
+                        title: line.title,
+                        description: line.description,
+                        amount: line.line_type === 'deduction' ? -Math.abs(line.amount) : Math.abs(line.amount),
+                        type: line.line_type,
+                      }))
+                      .filter((item) => item.amount !== 0)}
                     columns={[
                       { title: 'شرح', dataIndex: 'title', key: 'title' },
                       { title: 'نوع', dataIndex: 'type', key: 'type', render: (val: string) => <Tag color={val === 'deduction' ? 'red' : 'green'}>{val === 'deduction' ? 'کسورات' : 'مزایا'}</Tag> },
                       { title: 'مبلغ', dataIndex: 'amount', key: 'amount', render: (val: number) => <span className={`persian-number font-bold ${val < 0 ? 'text-red-700' : 'text-green-700'}`}>{formatMoney(val)}</span> },
+                      { title: 'توضیحات', dataIndex: 'description', key: 'description', render: (val: string) => val || '-' },
                     ]}
                   />
                 </Card>
@@ -8058,7 +8434,7 @@ const HRPage: React.FC = () => {
                                             <AdaptiveSelectField
                                               value={line.decision_status}
                                               options={commissionDecisionOptions}
-                                              onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                              onChange={(value) => applyCommissionDecisionToLine(resolveCommissionReviewRowKey(invoiceRow), line.key, value as CommissionDecisionStatus)}
                                               getPopupContainer={resolveSelectPopupContainer}
                                               modalContainer={resolveSelectPopupContainer}
                                               overlayZIndexBase={15000}
@@ -8126,7 +8502,7 @@ const HRPage: React.FC = () => {
                                         <AdaptiveSelectField
                                           value={line.decision_status}
                                           options={commissionDecisionOptions}
-                                          onChange={(value) => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, value as CommissionDecisionStatus)}
+                                          onChange={(value) => applyCommissionDecisionToLine(resolveCommissionReviewRowKey(invoiceRow), line.key, value as CommissionDecisionStatus)}
                                           getPopupContainer={resolveSelectPopupContainer}
                                           modalContainer={resolveSelectPopupContainer}
                                           overlayZIndexBase={15000}
@@ -8182,11 +8558,11 @@ const HRPage: React.FC = () => {
                                 { title: 'مبلغ نهایی', dataIndex: 'net_amount', key: 'net_amount', render: (val: number) => <span className="persian-number">{formatMoney(val)}</span> },
                                 { title: 'علت', key: 'reason', render: (_: unknown, line: CommissionDraftLine) => <span>{line.exclusion_reason || invoiceRow.exclusion_reason || '-'}</span> },
                                 {
-                                  title: 'بازگردانی',
+                                  title: 'اقدام',
                                   key: 'restore',
                                   render: (_: unknown, line: CommissionDraftLine) => (
-                                    <Button size="small" onClick={() => applyCommissionDecisionToLine(invoiceRow.sourceRowKey, line.key, 'auto')}>
-                                      بازگشت به خودکار
+                                    <Button size="small" onClick={() => applyCommissionDecisionToLine(resolveCommissionReviewRowKey(invoiceRow), line.key, 'include')}>
+                                      لحاظ
                                     </Button>
                                   ),
                                 },

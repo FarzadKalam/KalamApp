@@ -6,6 +6,7 @@ import { formatPersianPrice, formatPersianTime, safeJalaliFormat, toPersianNumbe
 import { readCurrencyConfig } from './currency';
 import { fetchDynamicOptionsMap } from './referenceData';
 import { fetchRelationOptionsForField } from './relationOptions';
+import { localizeFinancialValue, FinancialValueKind } from './financialValueLabels';
 
 type RenderTemplateOptions = {
   moduleId?: string | null;
@@ -197,6 +198,16 @@ const resolveFieldContext = (moduleId: string | null | undefined, fieldKey: stri
 
 const isAssigneeFieldKey = (key: string | null | undefined) =>
   ASSIGNEE_FIELD_KEYS.has(String(key || '').trim());
+
+// فیلدهای مالی که مقدار خام انگلیسی‌شان باید به فارسی نمایش داده شود.
+const resolveFinancialValueKind = (key: string | null | undefined): FinancialValueKind | null => {
+  const normalizedKey = String(key || '').trim().toLowerCase();
+  if (!normalizedKey) return null;
+  if (/(^|_)(payment_type|payment_method|receipt_type)$/.test(normalizedKey)) return 'payment_type';
+  if (/(^|_)(operation_type|direction)$/.test(normalizedKey)) return 'operation_type';
+  if (/(^|_)(cheque_status|status)$/.test(normalizedKey)) return 'status';
+  return null;
+};
 
 const normalizeAssigneeValue = (
   value: unknown,
@@ -409,6 +420,12 @@ export const formatTemplateValueByField = ({
   const optionLabel = resolveOptionLabel(fieldContext, value, optionLabelMaps);
   if (optionLabel) return optionLabel;
 
+  const financialKind = resolveFinancialValueKind(fieldContext.key || fieldKey);
+  if (financialKind && (typeof value === 'string' || typeof value === 'number')) {
+    const financialLabel = localizeFinancialValue(value, financialKind);
+    if (financialLabel) return financialLabel;
+  }
+
   if (fieldType === FieldType.CHECKBOX || typeof value === 'boolean') {
     return value === true || String(value).toLowerCase() === 'true' ? 'بله' : 'خیر';
   }
@@ -432,8 +449,8 @@ export const formatTemplateValueByField = ({
   if (fieldType === FieldType.LINK) {
     const raw = String(value ?? '').trim();
     if (!raw) return '';
-    // Online invoice public_link is stored as a relative path (/i/{code}) — prepend the org origin.
-    if (raw.startsWith('/i/')) {
+    // Public record links are stored as relative paths; prepend the org origin for messages.
+    if (raw.startsWith('/i/') || raw.startsWith('/d/')) {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
       return origin ? `${origin}${raw}` : raw;
     }

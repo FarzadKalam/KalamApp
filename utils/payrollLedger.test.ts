@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapPayrollLedgerEntriesToLines, sumPayrollLedgerEntries, type PayrollLedgerEntry } from './payrollLedger';
+import { groupPayrollLedgerEntriesToSlipLines, mapPayrollLedgerEntriesToLines, sumPayrollLedgerEntries, type PayrollLedgerEntry } from './payrollLedger';
 
 describe('payrollLedger', () => {
   it('maps positive and negative ledger entries to payroll lines', () => {
@@ -65,6 +65,59 @@ describe('payrollLedger', () => {
         description: 'اضافه‌کاری تردد؛ ۲ ساعت × ۱۵۰٬۰۰۰ ریال؛ تاریخ: 2026-06-10',
         source_entry_id: 'overtime-1',
       },
+    ]);
+  });
+
+  it('groups payroll ledger rows by final payroll slip line policy', () => {
+    const entries: PayrollLedgerEntry[] = [
+      {
+        id: 'activity-1',
+        employee_id: 'employee-1',
+        entry_type: 'activity_performance',
+        source_type: 'activity_performance',
+        title: 'عملکرد نصب',
+        amount: 100000,
+        details: { formula_id: 'formula-a', source_rule_id: 'rule-a' },
+      },
+      {
+        id: 'activity-2',
+        employee_id: 'employee-1',
+        entry_type: 'activity_performance',
+        source_type: 'activity_performance',
+        title: 'عملکرد نصب',
+        amount: 150000,
+        details: { formula_id: 'formula-a', source_rule_id: 'rule-a' },
+      },
+      {
+        id: 'bonus-1',
+        employee_id: 'employee-1',
+        entry_type: 'employee_bonus',
+        source_type: 'employee_bonus',
+        title: 'پاداش دستی',
+        amount: 50000,
+      },
+      {
+        id: 'bonus-2',
+        employee_id: 'employee-1',
+        entry_type: 'employee_bonus',
+        source_type: 'employee_bonus',
+        title: 'پاداش دستی',
+        amount: 75000,
+      },
+      {
+        id: 'penalty-1',
+        employee_id: 'employee-1',
+        entry_type: 'penalty',
+        source_type: 'employee_penalty',
+        title: 'جریمه دستی',
+        amount: -25000,
+      },
+    ];
+
+    expect(groupPayrollLedgerEntriesToSlipLines(entries)).toMatchObject([
+      { line_type: 'bonus', title: 'عملکرد نصب', amount: 250000, source_entry_ids: ['activity-1', 'activity-2'] },
+      { line_type: 'bonus', title: 'پاداش‌های دستی', amount: 125000, source_entry_ids: ['bonus-1', 'bonus-2'] },
+      { line_type: 'deduction', title: 'جریمه‌ها', amount: 25000, source_entry_ids: ['penalty-1'] },
     ]);
   });
 });

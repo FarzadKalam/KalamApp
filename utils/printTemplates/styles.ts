@@ -71,13 +71,19 @@ export const printStyles = `
     line-height: 1.9;
     font-size: 14px;
   }
-  .invoice-custom-print-shell [data-print-flow-block] {
+  .invoice-custom-print-shell [data-print-flow-role="manual-keep"],
+  .invoice-custom-print-shell [data-print-flow-role="semantic-block"],
+  .invoice-custom-print-shell [data-print-flow-role="media-block"] {
     break-inside: avoid;
     page-break-inside: avoid;
   }
-  .invoice-custom-print-shell [data-print-flow-block="high"] {
-    break-inside: avoid-page;
-    page-break-inside: avoid;
+  .invoice-custom-print-shell [data-print-flow-role="table-container"] {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+  }
+  .invoice-custom-print-shell [data-print-flow-role="table-row"] {
+    break-inside: auto !important;
+    page-break-inside: auto !important;
   }
   .invoice-custom-print-shell table {
     --table-border-color: #d1d5db;

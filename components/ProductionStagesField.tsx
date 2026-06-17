@@ -354,13 +354,16 @@ const ProcessStageActionControls: React.FC<{
   inverse?: boolean;
   copyTitle: string;
   moveTitle: string;
+  deleteTitle?: string;
   onCopy: (event: React.MouseEvent<HTMLElement>) => void;
   onMove: (event: React.MouseEvent<HTMLElement>) => void;
-}> = ({ mobile, inverse = false, copyTitle, moveTitle, onCopy, onMove }) => {
+  onDelete?: (event: React.MouseEvent<HTMLElement>) => void;
+}> = ({ mobile, inverse = false, copyTitle, moveTitle, deleteTitle = 'حذف', onCopy, onMove, onDelete }) => {
   if (mobile) {
     const items: MenuProps['items'] = [
       { key: 'copy', label: copyTitle, icon: <CopyOutlined /> },
       { key: 'move', label: moveTitle, icon: <DragOutlined /> },
+      ...(onDelete ? [{ key: 'delete', label: deleteTitle, icon: <DeleteOutlined />, danger: true }] : []),
     ];
     return (
       <Dropdown
@@ -376,7 +379,11 @@ const ProcessStageActionControls: React.FC<{
               onCopy(syntheticEvent);
               return;
             }
-            onMove(syntheticEvent);
+            if (info.key === 'move') {
+              onMove(syntheticEvent);
+              return;
+            }
+            onDelete?.(syntheticEvent);
           },
         }}
       >
@@ -418,6 +425,22 @@ const ProcessStageActionControls: React.FC<{
       <Tooltip title={moveTitle}>
         <ProcessStageMoveHandle inverse={inverse} onClick={onMove} />
       </Tooltip>
+      {onDelete ? (
+        <Tooltip title={deleteTitle}>
+          <span
+            role="button"
+            tabIndex={0}
+            className={`inline-flex h-6 w-6 items-center justify-center rounded shadow-sm ${
+              inverse
+                ? 'bg-black/15 text-white hover:bg-red-500/75'
+                : 'bg-white/80 text-red-500 dark:bg-black/25 dark:text-red-300'
+            }`}
+            onClick={onDelete}
+          >
+            <DeleteOutlined />
+          </span>
+        </Tooltip>
+      ) : null}
     </>
   );
 };
@@ -905,6 +928,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   } | null>(null);
   const [processTriggerForm] = Form.useForm();
   const watchedProcessActivatorTriggerType = Form.useWatch('workflow_trigger_type', processTriggerForm);
+  const watchedProcessActivatorSourceNodeKey = Form.useWatch('source_node_key', processTriggerForm);
   const [processActivatorWorkflowRecord, setProcessActivatorWorkflowRecord] = useState<WorkflowRecord | null>(null);
   const [processActivatorConditionsAll, setProcessActivatorConditionsAll] = useState<WorkflowCondition[]>([]);
   const [processActivatorConditionsAny, setProcessActivatorConditionsAny] = useState<WorkflowCondition[]>([]);
@@ -1201,6 +1225,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       || ''
     ),
     [automationContextModuleId, automationContextModuleIds, moduleId]
+  );
+  const processActivatorTargetModuleOptions = useMemo(
+    () => automationScopeModuleIds.map((scopeModuleId) => ({
+      value: scopeModuleId,
+      label: MODULES[scopeModuleId]?.titles?.fa || scopeModuleId,
+    })),
+    [automationScopeModuleIds]
+  );
+  const shouldShowProcessActivatorModulePicker = (
+    (watchedProcessActivatorTriggerType === 'on_create' || watchedProcessActivatorTriggerType === 'on_upsert')
+    && String(watchedProcessActivatorSourceNodeKey || '__process_start__') === '__process_start__'
+    && processActivatorTargetModuleOptions.length > 0
   );
   const stageAutomationScopeModuleIds = useMemo(() => {
     const stageModuleIds = normalizeProcessTargetModuleIds(
@@ -8218,11 +8254,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       workflow_interval_days_after_holiday: null,
       workflow_batch_size: null,
       workflow_is_active: true,
+      workflow_trigger_module_ids: automationScopeModuleIds,
     });
     setProcessActivatorWorkflowRecord(null);
     setProcessActivatorConditionsAll([]);
     setProcessActivatorConditionsAny([]);
-  }, [draftGraphSnapshot.graph.triggers.length, processTriggerForm]);
+  }, [automationScopeModuleIds, draftGraphSnapshot.graph.triggers.length, processTriggerForm]);
 
   useEffect(() => {
     if (!processTriggerEditor || !recordId) {
@@ -8264,6 +8301,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           workflow_interval_days_after_holiday: workflow?.interval_days_after_holiday ?? null,
           workflow_batch_size: workflow?.batch_size || null,
           workflow_is_active: workflow?.is_active !== false,
+          workflow_trigger_module_ids: normalizeProcessTargetModuleIds(
+            workflow?.module_ids,
+            workflow?.module_id
+          ),
         });
         setProcessActivatorConditionsAll(
           (Array.isArray(workflow?.conditions_all) ? workflow.conditions_all : []).filter(
@@ -8284,7 +8325,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return () => {
       cancelled = true;
     };
-  }, [message, processTriggerEditor, processTriggerForm, recordId]);
+  }, [automationScopeModuleIds, message, processTriggerEditor, processTriggerForm, recordId]);
 
   const handleSaveProcessTrigger = useCallback(async () => {
     if (!processTriggerEditor) return null;
@@ -8313,6 +8354,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const userId = authData?.user?.id || null;
       const workflowTriggerType = String(values?.workflow_trigger_type || 'on_upsert');
       const isInterval = workflowTriggerType === 'interval';
+      const selectedTriggerModuleIds = triggerBase.sourceNodeKey
+        ? ['tasks']
+        : (isInterval
+            ? automationScopeModuleIds
+            : (() => {
+                const selectedModuleIds = normalizeProcessTargetModuleIds(values?.workflow_trigger_module_ids);
+                return selectedModuleIds.length > 0 ? selectedModuleIds : automationScopeModuleIds;
+              })());
       const lockedConditions = triggerBase.sourceNodeKey
         ? [{
             id: PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID,
@@ -8334,8 +8383,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         },
       };
       const workflowPayload: Record<string, any> = {
-        module_id: triggerBase.sourceNodeKey ? 'tasks' : (automationScopeModuleIds[0] || 'tasks'),
-        module_ids: automationScopeModuleIds,
+        module_id: triggerBase.sourceNodeKey ? 'tasks' : (selectedTriggerModuleIds[0] || 'tasks'),
+        module_ids: selectedTriggerModuleIds,
         scope_type: 'process_activator',
         process_template_id: recordId,
         process_trigger_key: triggerBase.key,
@@ -9166,6 +9215,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                           mobile={isMobileProcessViewport}
                                           copyTitle="کپی مرحله"
                                           moveTitle="جابجایی مرحله"
+                                          deleteTitle="حذف مرحله"
                                           onCopy={(event) => {
                                             event.preventDefault();
                                             event.stopPropagation();
@@ -9175,6 +9225,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                             event.preventDefault();
                                             event.stopPropagation();
                                             openStageMoveModal(stage);
+                                          }}
+                                          onDelete={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            void handleRemoveDraftStage(stage);
                                           }}
                                         />
                                       </div>
@@ -9450,6 +9505,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       inverse
                       copyTitle="کپی فعالیت"
                       moveTitle="جابجایی فعالیت"
+                      deleteTitle="حذف فعالیت"
                       onCopy={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -9459,6 +9515,20 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         event.preventDefault();
                         event.stopPropagation();
                         openStageMoveModal(segment);
+                      }}
+                      onDelete={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openTaskLayerConfirm({
+                          title: 'حذف کامل فعالیت',
+                          content: 'این فعالیت به طور کامل حذف می‌شود. ادامه می‌دهید؟',
+                          okText: 'حذف',
+                          cancelText: 'انصراف',
+                          okButtonProps: { danger: true },
+                          onOk: async () => {
+                            await handleDeleteTaskCompletely(segment);
+                          },
+                        });
                       }}
                     />
                   </span>
@@ -9578,6 +9648,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         mobile={isMobileProcessViewport}
                         copyTitle="کپی مرحله"
                         moveTitle="جابجایی مرحله"
+                        deleteTitle="حذف مرحله"
                         onCopy={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
@@ -9587,6 +9658,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           event.preventDefault();
                           event.stopPropagation();
                           openStageMoveModal(segment);
+                        }}
+                        onDelete={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setOpenDraftSegmentPopoverKey(null);
+                          void handleRemoveDraftStage(segment);
                         }}
                       />
                     </span>
@@ -10396,6 +10473,23 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               <Radio.Group options={workflowExecutionModeOptions} />
             </Form.Item>
           </div>
+          {shouldShowProcessActivatorModulePicker ? (
+            <Form.Item
+              name="workflow_trigger_module_ids"
+              label={watchedProcessActivatorTriggerType === 'on_create'
+                ? 'ایجاد رکورد جدید در ماژول‌های'
+                : 'ایجاد/به‌روزرسانی رکورد در ماژول‌های'}
+              rules={[{ required: true, message: 'حداقل یک ماژول را انتخاب کنید.' }]}
+            >
+              <AdaptiveSelectField
+                {...adaptiveModalSelectProps}
+                mode="multiple"
+                options={processActivatorTargetModuleOptions}
+                placeholder="انتخاب از ماژول‌های هدف"
+                pickerTitle="ماژول‌های محرک"
+              />
+            </Form.Item>
+          ) : null}
           {watchedProcessActivatorTriggerType === 'interval' ? (
             <WorkflowIntervalScheduleFields
               form={processTriggerForm}

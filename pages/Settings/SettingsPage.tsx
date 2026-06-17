@@ -1,12 +1,11 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Tabs, Empty, Spin } from 'antd';
-import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, RiseOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
+import { BankOutlined, UsergroupAddOutlined, ClusterOutlined, FunctionOutlined, ApartmentOutlined, ApiOutlined, SettingOutlined, FileTextOutlined } from '@ant-design/icons';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
 import CompanyTab from './CompanyTab';
 import UsersTab from './UsersTab';
 import RolesTab from './RolesTab';
 import ConnectionsTab from './ConnectionsTab';
-import CustomerLevelingTab from './CustomerLevelingTab';
 import ModuleListRefine from '../ModuleList_Refine';
 import { supabase } from '../../supabaseClient';
 import { SETTINGS_PERMISSION_KEY, WORKFLOWS_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../../utils/permissions';
@@ -50,7 +49,6 @@ const SettingsPage: React.FC = () => {
               formulas: false,
               connections: false,
               ai: false,
-              customer_leveling: false,
               workflows: false,
               print_templates: false,
             });
@@ -63,7 +61,6 @@ const SettingsPage: React.FC = () => {
               formulas: fields.formulas !== false,
               connections: fields.connections !== false,
               ai: fields.ai !== false && fields.ai_settings !== false,
-              customer_leveling: fields.customer_leveling !== false,
               print_templates: fields.print_templates !== false,
               workflows:
                 fields.workflows !== false &&
@@ -126,11 +123,6 @@ const SettingsPage: React.FC = () => {
         key: 'ai',
         label: <span className="flex items-center gap-2 text-base"><AiSparkleIcon className="h-4 w-4" /> هوش مصنوعی</span>,
         children: <AiSettingsTab />,
-      },
-      {
-        key: 'customer_leveling',
-        label: <span className="flex items-center gap-2 text-base"><RiseOutlined /> تنظیمات سطح بندی</span>,
-        children: <CustomerLevelingTab />,
       },
       {
         key: 'print_templates',

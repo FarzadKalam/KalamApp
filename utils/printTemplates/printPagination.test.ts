@@ -49,6 +49,24 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 992, 1992]);
   });
 
+  it('uses complete line anchors inside an oversized table row instead of leaving a large blank area', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 1900,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 420, priority: 'normal', source: 'block' },
+        { top: 420, bottom: 1880, priority: 'normal', source: 'block' },
+        { top: 420, bottom: 460, priority: 'high', source: 'block' },
+        { top: 460, bottom: 1240, priority: 'high', source: 'block' },
+        { top: 870, bottom: 894, priority: 'normal', source: 'line' },
+        { top: 915, bottom: 939, priority: 'normal', source: 'line' },
+        { top: 960, bottom: 984, priority: 'normal', source: 'line' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 984]);
+  });
+
   it('keeps single-page content on the first page', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 640,
@@ -61,11 +79,22 @@ describe('buildSmartPrintPageOffsets', () => {
 });
 
 describe('annotatePrintFlowHtml', () => {
-  it('marks paragraphs and tables as print-flow blocks', () => {
+  it('marks paragraphs and table rows as print-flow blocks without making the whole table hard-kept', () => {
     const annotated = annotatePrintFlowHtml('<div><p>text</p><table><tbody><tr><td>row</td></tr></tbody></table></div>');
 
     expect(annotated).toContain(PRINT_FLOW_BLOCK_ATTR);
     expect(annotated).toContain('data-print-flow-role="text-block"');
-    expect(annotated).toContain('data-print-flow-role="table-block"');
+    expect(annotated).toContain('data-print-flow-role="table-container"');
+    expect(annotated).toContain('data-print-flow-role="table-row"');
+    expect(annotated).toContain(`<table ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);
+  });
+
+  it('keeps legacy page-break avoidance from hard-keeping entire tables', () => {
+    const annotated = annotatePrintFlowHtml(
+      '<table style="page-break-inside: avoid;"><tbody><tr><td>row</td></tr></tbody></table>'
+    );
+
+    expect(annotated).toContain(`<table style="page-break-inside: avoid;" ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);
+    expect(annotated).not.toContain('data-print-flow-role="manual-keep"');
   });
 });

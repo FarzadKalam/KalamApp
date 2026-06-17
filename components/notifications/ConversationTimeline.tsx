@@ -5,6 +5,7 @@ import { UpOutlined } from '@ant-design/icons';
 const CHAT_TIMELINE_STACK_CLASS = 'space-y-4 pb-1';
 // Distance (px) from the top of the thread that triggers loading older messages.
 const AUTO_LOAD_OLDER_THRESHOLD_PX = 80;
+const AUTO_LOAD_COOLDOWN_MS = 650;
 
 type ConversationTimelineProps<T> = {
   containerRef: React.RefObject<HTMLDivElement | null>;
@@ -46,6 +47,7 @@ const ConversationTimeline = <T,>({
   // Re-armed when items change (the older page has been prepended).
   const autoLoadFiredRef = useRef(false);
   const lastScrollTopRef = useRef(0);
+  const lastAutoLoadAtRef = useRef(0);
   useEffect(() => {
     autoLoadFiredRef.current = false;
   }, [items.length]);
@@ -56,11 +58,13 @@ const ConversationTimeline = <T,>({
     const scrollingUp = node.scrollTop < lastScrollTopRef.current;
     lastScrollTopRef.current = node.scrollTop;
     if (!hasMoreBefore || loadingOlder || autoLoadFiredRef.current || !onLoadOlder) return;
+    if (Date.now() - lastAutoLoadAtRef.current < AUTO_LOAD_COOLDOWN_MS) return;
     if (!scrollingUp) return;
     if (node.scrollTop > AUTO_LOAD_OLDER_THRESHOLD_PX) return;
     // Ignore when the thread doesn't actually scroll (content shorter than view).
     if (node.scrollHeight <= node.clientHeight + 10) return;
     autoLoadFiredRef.current = true;
+    lastAutoLoadAtRef.current = Date.now();
     void onLoadOlder();
   };
 
@@ -69,6 +73,7 @@ const ConversationTimeline = <T,>({
       ref={containerRef as React.Ref<HTMLDivElement>}
       onScroll={handleScroll}
       className={`flex-1 overflow-y-auto ${layoutPaddingClass} bg-[rgba(var(--brand-50-rgb),0.14)] dark:bg-black/[0.10] ${hideUntilSettled ? 'opacity-0 pointer-events-none' : 'opacity-100'} transition-opacity`}
+      style={{ overflowAnchor: 'none', overscrollBehavior: 'contain' }}
     >
       {loading ? (
         <div className="space-y-3">

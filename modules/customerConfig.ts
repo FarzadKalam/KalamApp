@@ -347,11 +347,20 @@ export const customerModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
 
+    { key: 'previous_system_first_purchase_date', labels: { fa: 'تاریخ اولین خرید سیستم قبلی', en: 'Previous System First Purchase' }, type: FieldType.DATE, blockId: 'previous_system_info' },
+    { key: 'previous_system_last_purchase_date', labels: { fa: 'تاریخ آخرین خرید سیستم قبلی', en: 'Previous System Last Purchase' }, type: FieldType.DATE, blockId: 'previous_system_info' },
+    { key: 'previous_system_purchase_count', labels: { fa: 'تعداد دفعات خرید سیستم قبلی', en: 'Previous System Purchase Count' }, type: FieldType.NUMBER, blockId: 'previous_system_info' },
+    { key: 'previous_system_invoice_total', labels: { fa: 'جمع فاکتورهای سیستم قبلی', en: 'Previous System Invoice Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+    { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداخت‌های سیستم قبلی', en: 'Previous System Paid Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+    { key: 'previous_system_balance_total', labels: { fa: 'جمع مانده سیستم قبلی', en: 'Previous System Balance Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+
     { key: 'first_purchase_date', labels: { fa: 'تاریخ اولین خرید', en: 'First Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'last_purchase_date', labels: { fa: 'تاریخ آخرین خرید', en: 'Last Purchase' }, type: FieldType.DATE, blockId: 'financial_stats', readonly: true },
     { key: 'purchase_count', labels: { fa: 'تعداد دفعات خرید', en: 'Count' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
     { key: 'total_spend', labels: { fa: 'جمع فاکتورهای مشتری', en: 'Customer Invoice Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
     { key: 'total_paid_amount', labels: { fa: 'جمع پرداخت‌های مشتری', en: 'Customer Payment Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
+    { key: 'total_balance', labels: { fa: 'جمع مانده مشتری', en: 'Customer Balance Total' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true },
+    { key: 'loyalty_credit_balance', labels: { fa: 'اعتبار باشگاه مشتریان', en: 'Customer Club Credit' }, type: FieldType.PRICE, blockId: 'financial_stats', readonly: true, isTableColumn: true },
     { key: 'acquaintance_days', labels: { fa: 'تعداد روزهای آشنایی', en: 'Acquaintance Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
     { key: 'cooperation_days', labels: { fa: 'تعداد روزهای همکاری', en: 'Cooperation Days' }, type: FieldType.NUMBER, blockId: 'financial_stats', readonly: true },
   
@@ -368,6 +377,10 @@ export const customerModule: ModuleDefinition = {
     },
     {
       id: 'financial_stats', titles: { fa: 'آمار مالی و سوابق', en: 'Financial Stats' }, type: BlockType.FIELD_GROUP,
+      order: 0
+    },
+    {
+      id: 'previous_system_info', titles: { fa: 'اطلاعات سیستم قبلی', en: 'Previous System Info' }, type: BlockType.FIELD_GROUP,
       order: 0
     },
     {

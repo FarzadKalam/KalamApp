@@ -57,7 +57,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-06-09-01';
+const FUNCTION_BUILD = 'ai-assistant-2026-06-15-02';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
@@ -88,7 +88,7 @@ const DEFAULT_CAPABILITY_MODELS: Record<string, string> = {
   voice_input: 'gpt-4o-transcribe',          // OpenAI STT via /v1/audio/transcriptions (scribe_v2 is NOT served here)
   voice_output: 'eleven_v3',                 // AvalAI ElevenLabs ids use underscores (eleven_v3, eleven_flash_v2_5, eleven_multilingual_v2)
   // ── Media generation ───────────────────────────────────────────────────
-  image_generation: 'gemini-2.5-flash-image', // Nano Banana economical default; routed via /v1beta generateContent (premium: gemini-3-pro-image)
+  image_generation: 'gpt-image-2', // newest, best for posters/print & text-in-image; handler falls back to gpt-image-1 on failure
   video_generation: 'sora-2',
   // ── Document/file generation (AI drafts structured content, server builds the file) ──
   document_generation: 'gemini-3.1-pro-preview',
@@ -2053,6 +2053,23 @@ const REASONING_MODEL_PATTERNS = [
 const isReasoningModel = (model: string) =>
   REASONING_MODEL_PATTERNS.some((p) => p.test(String(model || '').trim()));
 
+// AvalAI gateway errors sometimes arrive as a full HTML error page (e.g. a 504
+// Cloudflare page). Turn that into a short, readable Persian message.
+const shortenProviderError = (raw: any) => {
+  const text = String(raw || '').trim();
+  const isHtml = /<html|<!doctype/i.test(text);
+  if (isHtml && /gateway timeout|error\s*504|خطای ۵۰۴|\b504\b/i.test(text)) {
+    return 'سرویس هوش مصنوعی موقتاً پاسخ نداد (Gateway Timeout). چند لحظه بعد دوباره تلاش کنید.';
+  }
+  if (isHtml) {
+    const stripped = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return (stripped.slice(0, 200) || 'خطای موقت سرویس هوش مصنوعی.');
+  }
+  return text.length > 400 ? `${text.slice(0, 400)}…` : text;
+};
+
+const CHAT_COMPLETIONS_TIMEOUT_MS = 120000;
+
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: any }>,
@@ -2065,50 +2082,71 @@ const callChatCompletions = async (
     throw new Error('کلید مرکزی AI تنظیم نشده است. مقدار AI_API_KEY یا AVALAI_API_KEY را در Edge Function secrets ثبت کنید.');
   }
 
-  const model = String(providerConfig.model || '').trim();
-  const reasoning = isReasoningModel(model);
+  const primaryModel = String(providerConfig.model || '').trim() || DEFAULT_AI_MODEL;
+  // If the selected model's gateway is timing out (504) or erroring (5xx), retry
+  // once with a fast, stable fallback model so chat/document features stay usable.
+  const fallbackModel = DEFAULT_AI_MODEL;
+  const modelsToTry = primaryModel === fallbackModel ? [primaryModel] : [primaryModel, fallbackModel];
 
-  // Reasoning models: large max_completion_tokens budget (thinking + output),
-  // no temperature. Regular models: standard max_tokens + temperature.
-  const requestBody: Record<string, any> = {
-    model,
-    messages,
-    safety_identifier: options?.safetyIdentifier || undefined,
-  };
-  if (reasoning) {
-    requestBody.max_completion_tokens = 8000;
-  } else {
-    requestBody.temperature = options?.temperature ?? 0.2;
-    requestBody.max_tokens = options?.maxTokens ?? 2000;
+  let lastErrorMessage = '';
+  for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
+    const model = modelsToTry[attempt];
+    const reasoning = isReasoningModel(model);
+    const requestBody: Record<string, any> = {
+      model,
+      messages,
+      safety_identifier: options?.safetyIdentifier || undefined,
+    };
+    if (reasoning) {
+      requestBody.max_completion_tokens = 8000;
+    } else {
+      requestBody.temperature = options?.temperature ?? 0.2;
+      requestBody.max_tokens = options?.maxTokens ?? 2000;
+    }
+
+    let response: Response;
+    let baseUrl: string;
+    try {
+      const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${providerConfig.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(CHAT_COMPLETIONS_TIMEOUT_MS),
+      });
+      response = result.response;
+      baseUrl = result.baseUrl;
+    } catch (error: any) {
+      // Network error / timeout — try the fallback model on the next attempt.
+      lastErrorMessage = String(error?.message || 'اتصال به سرویس هوش مصنوعی برقرار نشد.');
+      continue;
+    }
+
+    const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+    const raw = await response.text();
+    const parsed = parseJsonSafe(raw);
+    if (!response.ok) {
+      const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
+      lastErrorMessage = String(message);
+      // Retry with fallback model only for gateway/server errors (5xx incl. 504).
+      if (response.status >= 500 && attempt < modelsToTry.length - 1) continue;
+      throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
+    }
+
+    const content = parsed?.choices?.[0]?.message?.content || parsed?.choices?.[0]?.text || '';
+    return {
+      content: String(content || '').trim(),
+      provider: providerConfig.provider,
+      model,
+      requestId,
+      baseUrl,
+      raw: parsed,
+      usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model }),
+    };
   }
-
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-  });
-
-  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
-  const raw = await response.text();
-  const parsed = parseJsonSafe(raw);
-  if (!response.ok) {
-    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-    throw new Error(`خطای provider هوش مصنوعی: ${message}`);
-  }
-
-  const content = parsed?.choices?.[0]?.message?.content || parsed?.choices?.[0]?.text || '';
-  return {
-    content: String(content || '').trim(),
-    provider: providerConfig.provider,
-    model: providerConfig.model,
-    requestId,
-    baseUrl,
-    raw: parsed,
-    usageMetadata: extractUsageMetadata(parsed, providerConfig),
-  };
+  throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(lastErrorMessage || 'سرویس در دسترس نیست.')}`);
 };
 
 const normalizeBase64Payload = (value: any, mimeType?: string | null) => {
@@ -2392,7 +2430,7 @@ const callGeminiImageGenerate = async (
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) {
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-    throw new Error(`تولید تصویر ناموفق بود: ${message}`);
+    throw new Error(`تولید تصویر ناموفق بود: ${shortenProviderError(message)}`);
   }
   const responseParts = parsed?.candidates?.[0]?.content?.parts || [];
   const imagePart = responseParts.find((part: any) => part?.inline_data?.data || part?.inlineData?.data);
@@ -2408,6 +2446,15 @@ const callGeminiImageGenerate = async (
     raw: parsed,
     usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
   };
+};
+
+const uint8ToBase64 = (bytes: Uint8Array) => {
+  let binary = '';
+  const chunkSize = 0x8000; // avoid call-stack limits on large images
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 };
 
 const base64ToUint8Array = (value: string) => {
@@ -2513,7 +2560,7 @@ const callAudioSpeech = async (
     const raw = await response.text();
     const parsed = parseJsonSafe(raw);
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || parsed?.message || raw || 'تولید صدا ناموفق بود.');
-    throw new Error(`تولید صدا ناموفق بود: ${message}`);
+    throw new Error(`تولید صدا ناموفق بود: ${shortenProviderError(message)}`);
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   if (!bytes.length) throw new Error('خروجی صوتی معتبر نیست.');
@@ -2592,7 +2639,7 @@ const callImageGeneration = async (
     const parsed = parseJsonSafe(await response.text());
     if (!response.ok) {
       const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-      throw new Error(`ویرایش تصویر ناموفق بود: ${message}`);
+      throw new Error(`ویرایش تصویر ناموفق بود: ${shortenProviderError(message)}`);
     }
     const item = Array.isArray(parsed?.data) ? parsed.data[0] : parsed?.image || parsed;
     return {
@@ -2621,14 +2668,15 @@ const callImageGeneration = async (
       ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
       n,
       size,
-      response_format: 'b64_json',
+      // gpt-image-* always return b64_json and REJECT the response_format param.
+      ...(/^gpt-image/i.test(model) ? {} : { response_format: 'b64_json' }),
     }),
   });
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) {
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-    throw new Error(`تولید تصویر ناموفق بود: ${message}`);
+    throw new Error(`تولید تصویر ناموفق بود: ${shortenProviderError(message)}`);
   }
   const item = Array.isArray(parsed?.data) ? parsed.data[0] : parsed?.image || parsed;
   const b64 = String(item?.b64_json || item?.base64 || item?.image_base64 || '').trim();
@@ -2682,7 +2730,7 @@ const callVideoCreate = async (
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) {
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-    throw new Error(`ساخت ویدیو ناموفق بود: ${message}`);
+    throw new Error(`ساخت ویدیو ناموفق بود: ${shortenProviderError(message)}`);
   }
   return {
     videoId: String(parsed?.id || '').trim(),
@@ -5302,13 +5350,45 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       filename: String(src?.filename || src?.fileName || '').trim() || undefined,
     }))
     .filter((src: any) => src.data);
-  const imageResult = await callImageGeneration(providerConfig, prompt, {
+  // Edit/refine an existing image (e.g. the last output or a replied-to image):
+  // the client passes its storage URL and we fetch it server-side as a source.
+  const sourceUrls = (Array.isArray(body?.sourceImageUrls) ? body.sourceImageUrls
+    : Array.isArray(imageSettings.sourceImageUrls) ? imageSettings.sourceImageUrls
+    : [])
+    .map((u: any) => String(u || '').trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  for (const url of sourceUrls) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      if (!resp.ok) continue;
+      const mimeType = resp.headers.get('content-type') || 'image/png';
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      if (bytes.length) sourceImages.push({ data: uint8ToBase64(bytes), mimeType, filename: undefined });
+    } catch (error) {
+      console.warn('Could not fetch source image url for editing', error);
+    }
+  }
+  const imageCallOptions = {
     sourceImages,
     size: imageSettings.size || body?.size,
     quality: imageSettings.quality || body?.quality,
     n: imageSettings.n || body?.n,
     extraBody: imageSettings.extraBody || imageSettings.extra_body,
-  });
+  };
+  // On failure (e.g. a model that is slow/unavailable on the gateway), retry once
+  // with a stable image model so poster/image generation stays usable.
+  let imageResult: any;
+  try {
+    imageResult = await callImageGeneration(providerConfig, prompt, imageCallOptions);
+  } catch (error) {
+    const fallbackImageModel = 'gpt-image-1';
+    if (String(providerConfig.model || '').trim() !== fallbackImageModel) {
+      imageResult = await callImageGeneration({ ...providerConfig, model: fallbackImageModel }, prompt, imageCallOptions);
+    } else {
+      throw error;
+    }
+  }
   const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
   let fileManagerResult: any = null;
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {

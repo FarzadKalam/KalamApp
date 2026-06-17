@@ -99,7 +99,7 @@ Deno.serve(async (req: Request) => {
     return json(400, { error: 'invalid_json' });
   }
 
-  const { system_code, module: p_module, phone } = body;
+  const { system_code, module: p_module, phone, party } = body;
   if (!system_code || !p_module || !phone) {
     return json(400, { error: 'missing_params' });
   }
@@ -111,18 +111,32 @@ Deno.serve(async (req: Request) => {
 
   try {
     // 1. Generate OTP hash in DB and get the plain OTP code back
-    const otpResult = await callRpc('send_invoice_confirm_otp', {
-      p_system_code: system_code,
-      p_module,
-      p_phone: normalizedPhone,
-    });
+    const isDeliveryForm = String(p_module || '').trim() === 'delivery_forms';
+    const otpResult = isDeliveryForm
+      ? await callRpc('send_delivery_confirm_otp', {
+          p_code: system_code,
+          p_party: String(party || '').trim(),
+          p_phone: normalizedPhone,
+        })
+      : await callRpc('send_invoice_confirm_otp', {
+          p_system_code: system_code,
+          p_module,
+          p_phone: normalizedPhone,
+        });
 
     if (otpResult?.error) {
       const errMap: Record<string, string> = {
         not_found:      'فاکتور پیدا نشد.',
         invalid_status: 'وضعیت فاکتور اجازه تایید را نمی‌دهد.',
         phone_not_allowed: 'این شماره برای تایید این فاکتور مجاز نیست.',
+        invalid_party: 'نوع تاییدکننده معتبر نیست.',
+        already_confirmed: 'این بخش قبلا تایید شده است.',
       };
+      if (isDeliveryForm) {
+        errMap.not_found = 'فرم تحویل پیدا نشد.';
+        errMap.invalid_status = 'وضعیت فرم تحویل اجازه تایید را نمی‌دهد.';
+        errMap.phone_not_allowed = 'این شماره برای تایید این فرم تحویل مجاز نیست.';
+      }
       return json(400, {
         error:   otpResult.error,
         message: errMap[otpResult.error] ?? 'خطا در ارسال کد.',

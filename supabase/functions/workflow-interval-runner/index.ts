@@ -398,7 +398,7 @@ async function resolveWorkflowFieldValue(
 const orgPublicBaseUrlCache = new Map<string, Promise<string>>();
 
 // Resolves the tenant's public base URL (e.g. https://kalam.tazesystem.ir) from saas_org_settings
-// so relative links like /i/{code} (online invoice) can be expanded to absolute URLs in templates.
+// so relative links like /i/{code} or /d/{code} can be expanded to absolute URLs in templates.
 function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<string> {
   const normalizedOrgId = String(orgId || '').trim();
   if (!normalizedOrgId) return Promise.resolve('');
@@ -416,7 +416,7 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
   const str = String(value);
-  if (typeof value === 'string' && str.startsWith('/i/')) {
+  if (typeof value === 'string' && (str.startsWith('/i/') || str.startsWith('/d/'))) {
     const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
     return baseUrl ? `${baseUrl}${str}` : str;
   }

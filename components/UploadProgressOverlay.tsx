@@ -318,7 +318,7 @@ const UploadProgressOverlay: React.FC = () => {
   if (minimized) {
     return (
       <div
-        className="pointer-events-none fixed bottom-3 right-3 flex items-center gap-2 md:right-4"
+        className="pointer-events-none fixed bottom-[calc(var(--app-mobile-footer-height,64px)+0.75rem+env(safe-area-inset-bottom,0px))] right-3 flex items-center gap-2 md:bottom-3 md:right-4"
         style={{ zIndex: 2147483000 }}
       >
         {hasDisplayedNotifications ? (

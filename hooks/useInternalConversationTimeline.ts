@@ -310,11 +310,13 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
-      // Always merge with existing items: a force refresh fires while the user is
-      // reading (realtime updates), and replacing would trim loaded history back
-      // to the latest page and break the scroll position. Duplicates resolve to
-      // the freshly fetched row (read receipts / edits win).
-      const applied = applyPayload(payload, { preserveExistingItemsOnEmpty: true, mergeWithExisting: true });
+      // Keep loaded history only for background/force refreshes. Conversation
+      // switches must replace the old timeline so messages never bleed across
+      // direct/system/mine views.
+      const applied = applyPayload(payload, {
+        preserveExistingItemsOnEmpty: true,
+        mergeWithExisting: Boolean(options?.force),
+      });
       if (applied) {
         _internalTimelineCache.set(timelineCacheKey, { payload: { ...payload, items: itemsRef.current }, fetchedAt: Date.now() });
       }

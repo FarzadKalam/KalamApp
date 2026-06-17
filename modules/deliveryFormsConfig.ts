@@ -1,5 +1,4 @@
-import { BlockType, FieldLocation, FieldNature, FieldType, ModuleDefinition, ModuleNature, ViewMode } from '../types';
-import { getTodayLocalDateValue } from '../utils/defaultValues';
+import { BlockType, FieldLocation, FieldNature, FieldType, LogicOperator, ModuleDefinition, ModuleNature, ViewMode } from '../types';
 
 const RELATED_MODULE_OPTIONS = [
   { label: 'تردد کالاها', value: 'stock_transfers' },
@@ -23,8 +22,10 @@ export const deliveryFormsConfig: ModuleDefinition = {
     searchFields: ['name', 'system_code', 'location_text'],
   },
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر / فایل اصلی', en: 'Main Image / File' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فرم', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'شماره فرم', en: 'Form No.' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'public_link', labels: { fa: 'لینک تحویل آنلاین', en: 'Online Delivery Link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 1, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
     {
       key: 'form_type',
       labels: { fa: 'نوع فرم', en: 'Form Type' },
@@ -63,12 +64,52 @@ export const deliveryFormsConfig: ModuleDefinition = {
         { label: 'لغو شده', value: 'canceled', color: 'red' },
       ],
     },
-    { key: 'delivery_date', labels: { fa: 'تاریخ تحویل', en: 'Delivery Date' }, type: FieldType.DATE, location: FieldLocation.HEADER, order: 5, defaultValue: getTodayLocalDateValue, validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
-    { key: 'delivered_by_id', labels: { fa: 'تحویل‌دهنده داخلی', en: 'Delivered By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
-    { key: 'received_by_id', labels: { fa: 'تحویل‌گیرنده داخلی', en: 'Received By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'delivery_date', labels: { fa: 'زمان تحویل', en: 'Delivery Time' }, type: FieldType.DATETIME, location: FieldLocation.HEADER, order: 5, validation: { required: true }, nature: FieldNature.STANDARD, isTableColumn: true },
+    {
+      key: 'delivered_by_type',
+      labels: { fa: 'نوع تحویل‌دهنده', en: 'Delivered By Type' },
+      type: FieldType.SELECT,
+      location: FieldLocation.HEADER,
+      order: 6,
+      defaultValue: 'internal',
+      options: [
+        { label: 'داخلی', value: 'internal' },
+        { label: 'مشتری', value: 'customer' },
+        { label: 'تامین‌کننده', value: 'supplier' },
+        { label: 'سایر (بیرونی)', value: 'other' },
+      ],
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
+    { key: 'delivered_by_employee_id', labels: { fa: 'تحویل‌دهنده', en: 'Delivered By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.1, relationConfig: { targetModule: 'employees', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true, logic: { visibleIf: { field: 'delivered_by_type', operator: LogicOperator.EQUALS, value: 'internal' } } },
+    { key: 'delivered_by_customer_id', labels: { fa: 'تحویل‌دهنده', en: 'Delivered By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.2, relationConfig: { targetModule: 'customers', targetField: 'full_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'delivered_by_type', operator: LogicOperator.EQUALS, value: 'customer' } } },
+    { key: 'delivered_by_supplier_id', labels: { fa: 'تحویل‌دهنده', en: 'Delivered By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.3, relationConfig: { targetModule: 'suppliers', targetField: 'business_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'delivered_by_type', operator: LogicOperator.EQUALS, value: 'supplier' } } },
+    { key: 'external_delivered_by', labels: { fa: 'تحویل‌دهنده', en: 'External Delivered By' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 6.4, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'delivered_by_type', operator: LogicOperator.EQUALS, value: 'other' } } },
+    { key: 'external_delivered_by_phone', labels: { fa: 'موبایل تحویل‌دهنده', en: 'Delivered By Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 6.5, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'delivered_by_type', operator: LogicOperator.EQUALS, value: 'other' } } },
+    {
+      key: 'received_by_type',
+      labels: { fa: 'نوع تحویل‌گیرنده', en: 'Received By Type' },
+      type: FieldType.SELECT,
+      location: FieldLocation.HEADER,
+      order: 7,
+      defaultValue: 'internal',
+      options: [
+        { label: 'داخلی', value: 'internal' },
+        { label: 'مشتری', value: 'customer' },
+        { label: 'تامین‌کننده', value: 'supplier' },
+        { label: 'سایر (بیرونی)', value: 'other' },
+      ],
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
+    { key: 'received_by_employee_id', labels: { fa: 'تحویل‌گیرنده', en: 'Received By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7.1, relationConfig: { targetModule: 'employees', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true, logic: { visibleIf: { field: 'received_by_type', operator: LogicOperator.EQUALS, value: 'internal' } } },
+    { key: 'received_by_customer_id', labels: { fa: 'تحویل‌گیرنده', en: 'Received By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7.2, relationConfig: { targetModule: 'customers', targetField: 'full_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'received_by_type', operator: LogicOperator.EQUALS, value: 'customer' } } },
+    { key: 'received_by_supplier_id', labels: { fa: 'تحویل‌گیرنده', en: 'Received By' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 7.3, relationConfig: { targetModule: 'suppliers', targetField: 'business_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'received_by_type', operator: LogicOperator.EQUALS, value: 'supplier' } } },
+    { key: 'external_received_by', labels: { fa: 'تحویل‌گیرنده', en: 'External Received By' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 7.4, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'received_by_type', operator: LogicOperator.EQUALS, value: 'other' } } },
+    { key: 'external_received_by_phone', labels: { fa: 'موبایل تحویل‌گیرنده', en: 'Received By Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 7.5, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'received_by_type', operator: LogicOperator.EQUALS, value: 'other' } } },
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 8, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
-    { key: 'external_delivered_by', labels: { fa: 'تحویل‌دهنده بیرونی', en: 'External Delivered By' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 1, nature: FieldNature.STANDARD },
-    { key: 'external_received_by', labels: { fa: 'تحویل‌گیرنده بیرونی', en: 'External Received By' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 2, nature: FieldNature.STANDARD },
+    { key: 'delivered_by_id', labels: { fa: 'تحویل‌دهنده داخلی قدیمی', en: 'Legacy Delivered By' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 0.1, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'received_by_id', labels: { fa: 'تحویل‌گیرنده داخلی قدیمی', en: 'Legacy Received By' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 0.2, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, hideInCreateForm: true },
     { key: 'location_text', labels: { fa: 'محل تحویل', en: 'Location' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'related_module_id', labels: { fa: 'مرتبط با بخش', en: 'Related Module' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'details', order: 4, options: RELATED_MODULE_OPTIONS, nature: FieldNature.STANDARD },
     { key: 'related_record_id', labels: { fa: 'رکورد مرتبط', en: 'Related Record' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 5, relationConfig: { targetModule: '', dependsOn: 'related_module_id' }, nature: FieldNature.STANDARD },
@@ -76,6 +117,10 @@ export const deliveryFormsConfig: ModuleDefinition = {
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 2, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'process_template_id', labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'process', order: 1, relationConfig: { targetModule: 'process_templates', targetField: 'name' }, nature: FieldNature.STANDARD },
     { key: 'execution_process_draft', labels: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'process', order: 2, nature: FieldNature.STANDARD },
+    { key: 'delivered_by_confirmed_at', labels: { fa: 'زمان تایید تحویل‌دهنده', en: 'Delivered By Confirmed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 2, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'delivered_by_confirmer_name', labels: { fa: 'تاییدکننده تحویل‌دهنده', en: 'Delivered By Confirmer' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 3, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'received_by_confirmed_at', labels: { fa: 'زمان تایید تحویل‌گیرنده', en: 'Received By Confirmed At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 4, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
+    { key: 'received_by_confirmer_name', labels: { fa: 'تاییدکننده تحویل‌گیرنده', en: 'Received By Confirmer' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 5, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },
   ],
   blocks: [
     { id: 'details', titles: { fa: 'جزئیات تحویل', en: 'Delivery Details' }, type: BlockType.FIELD_GROUP, order: 1, icon: 'ProfileOutlined' },
@@ -96,6 +141,7 @@ export const deliveryFormsConfig: ModuleDefinition = {
     },
     { id: 'notes', titles: { fa: 'یادداشت‌ها', en: 'Notes' }, type: BlockType.FIELD_GROUP, order: 3, icon: 'FileTextOutlined' },
     { id: 'process', titles: { fa: 'فرآیند اجرا', en: 'Execution Process' }, type: BlockType.FIELD_GROUP, order: 4, icon: 'DeploymentUnitOutlined' },
+    { id: 'onlineDelivery', titles: { fa: 'تحویل آنلاین', en: 'Online Delivery' }, type: BlockType.FIELD_GROUP, order: 5, icon: 'LinkOutlined' },
   ],
   relatedTabs: [
     {

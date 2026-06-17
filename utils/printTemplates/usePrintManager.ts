@@ -11,6 +11,7 @@ import { supabase } from '../../supabaseClient';
 import { BlockType } from '../../types';
 import { getAssigneeLabel } from '../assigneeLabel';
 import { getFieldLabelFa } from '../fieldLabel';
+import { localizeFinancialValue } from '../financialValueLabels';
 import { resolvePrintAssigneeLabel } from './assigneeDisplay';
 import {
   calculateSalesPackageDiscountTotal,
@@ -300,6 +301,8 @@ const localizePlainText = (value: any): string => {
   if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return raw;
   const normalized = raw.toLowerCase();
   if (COMMON_VALUE_LABELS[normalized]) return COMMON_VALUE_LABELS[normalized];
+  const financialLabel = localizeFinancialValue(raw);
+  if (financialLabel) return financialLabel;
   return toPersianNumber(raw);
 };
 
@@ -1746,7 +1749,9 @@ export const usePrintManager = ({
     const rowsHtml = regularRows.slice(0, 24).join('');
     const longTextRowsHtml = longTextRows.join('');
     if (!rowsHtml && !longTextRowsHtml) {
-      return '<div style="padding:8px;border:1px solid var(--table-border-color, #d1d5db);border-radius:8px;">مقدار قابل چاپی ثبت نشده است.</div>';
+      // وقتی هیچ فیلد قابل چاپی وجود ندارد، کل جدول حذف می‌شود (نه نمایش متن جایگزین).
+      // wrapper خالی باقی‌مانده توسط pruneEmptyPrintContainers پاک می‌شود.
+      return '';
     }
     return [
       rowsHtml
@@ -2003,6 +2008,39 @@ export const usePrintManager = ({
     });
   }, []);
 
+  // پاک‌سازی سراسری wrapper های خالی بعد از جایگزینی توکن‌ها.
+  // وقتی همه فیلدهای یک جدول/بخش غیرفعال یا بی‌مقدار باشند، توکن‌ها به رشته خالی resolve می‌شوند و
+  // کادر/فاصلهٔ خالی باقی می‌ماند؛ این پاس آن container ها را حذف می‌کند تا اصلاً نمایش داده نشوند.
+  const pruneEmptyPrintContainers = useCallback((rootEl: Element) => {
+    // عناصری که نشان‌دهندهٔ محتوای واقعی هستند و نباید container شامل آن‌ها حذف شود.
+    const MEANINGFUL_SELECTOR = 'img,svg,table,hr,canvas,input,textarea,iframe,video,object,picture,source,br';
+    const hasVisualStyle = (el: Element) => {
+      const style = String(el.getAttribute('style') || '');
+      // container هایی که ارتفاع ثابت یا پس‌زمینه دارند ممکن است عمداً به‌عنوان spacer/کادر تصویری باشند.
+      return /(?:^|;)\s*(?:min-)?height\s*:/i.test(style) || /background(?:-color|-image)?\s*:/i.test(style);
+    };
+
+    let changed = true;
+    let guard = 0;
+    while (changed && guard < 6) {
+      changed = false;
+      guard += 1;
+      rootEl.querySelectorAll('div, section').forEach((el) => {
+        if (!el.isConnected) return;
+        if (el.querySelector(MEANINGFUL_SELECTOR)) return;
+        if (hasVisualStyle(el)) return;
+        const text = String(el.textContent || '')
+          .replace(/‌/g, '')
+          .replace(/ /g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (text) return;
+        el.remove();
+        changed = true;
+      });
+    }
+  }, []);
+
   const renderBlockTemplateHtml = useCallback(
     (templateHtml: string) => {
       if (typeof window === 'undefined' || !templateHtml) return templateHtml;
@@ -2151,9 +2189,12 @@ export const usePrintManager = ({
         );
       });
 
+      // حذف سراسری wrapper های خالی‌مانده (مثلاً وقتی جدول فیلدها یا تصویر/QR بی‌مقدار حذف شده‌اند).
+      pruneEmptyPrintContainers(root);
+
       return root.innerHTML;
     },
-    [buildBlockSummaryMap, buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyTableCells, resolveBillboardPrintLabel]
+    [buildBlockSummaryMap, buildRowMetaText, data, formatCellValue, isSystemFieldVisible, moduleConfig?.blocks, pruneEmptyPrintContainers, pruneEmptyTableCells, resolveBillboardPrintLabel]
   );
 
   const buildBlockTableHtml = useCallback(

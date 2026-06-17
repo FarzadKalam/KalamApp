@@ -1,4 +1,5 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
+import { localizeFinancialValue, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
 import {
   buildSourceOperationKey,
   getOperationalPaymentRowKeyCandidates,
@@ -13,6 +14,7 @@ import {
 
 export type OperationalFinancialEntityType = 'customer' | 'supplier' | 'employee';
 export type OperationalFinancialRowType =
+  | 'opening'
   | 'invoice'
   | 'receipt'
   | 'payment'
@@ -81,13 +83,9 @@ const ADVANCE_VISIBLE_STATUSES = new Set(['requested', 'approved', 'paid', 'sett
 const SETTLED_OPERATION_STATUSES = new Set(['received', 'approved', 'paid', 'settled', 'cleared']);
 const FAILED_CHEQUE_STATUSES = new Set(['bounced', 'returned']);
 
+// از منبع مرکزی مشتق می‌شود تا لیبل نوع پرداخت در همه‌جا یکدست بماند.
 export const OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL: Record<string, string> = {
-  cash: 'نقد',
-  card: 'کارت',
-  transfer: 'انتقال',
-  cheque: 'چک',
-  online: 'آنلاین',
-  barter: 'تهاتر',
+  ...FINANCIAL_PAYMENT_TYPE_LABELS_FA,
 };
 
 export const OPERATIONAL_FINANCIAL_STATUS_LABEL: Record<string, string> = {
@@ -118,6 +116,7 @@ export const OPERATIONAL_FINANCIAL_STATUS_LABEL: Record<string, string> = {
 };
 
 export const OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL: Record<OperationalFinancialRowType, string> = {
+  opening: 'اول دوره',
   invoice: 'فاکتور',
   receipt: 'دریافت',
   payment: 'پرداخت',
@@ -185,8 +184,8 @@ const buildBalanceRow = (row: Omit<OperationalFinancialRow, 'balance' | 'printab
   printableFields: {
     rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[row.rowType] || row.rowType,
     sourceLabel: row.sourceLabel,
-    paymentTypeLabel: OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || row.paymentType || '-',
-    statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || row.status || '-',
+    paymentTypeLabel: localizeFinancialValue(row.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || row.paymentType || '-',
+    statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || localizeFinancialValue(row.status, 'status') || row.status || '-',
     date: row.date,
     debit: row.debit,
     credit: row.credit,
@@ -416,6 +415,74 @@ export const fetchOperationalFinancialOverview = async ({
       totals: { totalDebit: 0, totalCredit: 0, finalBalance: 0 },
       printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
     };
+  }
+
+  if (entityType === 'customer') {
+    try {
+      const { data, error } = await supabase.rpc('get_customer_operational_financial_overview', {
+        p_customer_id: normalizedEntityId,
+      });
+      if (error) throw error;
+      const rows = ((data || []) as any[]).map((row: any): OperationalFinancialRow => {
+        const rowType = String(row?.row_type || 'invoice') as OperationalFinancialRowType;
+        const sourceModuleId = String(row?.source_module_id || '');
+        const sourceRecordId = normalizeOperationalText(row?.source_record_id) || null;
+        const base = {
+          key: String(row?.key || `${sourceModuleId}_${sourceRecordId || Math.random()}`),
+          rowType,
+          sourceLabel: String(row?.source_label || ''),
+          sourceModuleId,
+          sourceRecordId,
+          paymentType: String(row?.payment_type || ''),
+          status: String(row?.status || ''),
+          chequeStatus: String(row?.cheque_status || ''),
+          date: row?.row_date || null,
+          debit: toNumber(row?.debit),
+          credit: toNumber(row?.credit),
+          balance: toNumber(row?.balance),
+          invoiceLabel: String(row?.invoice_label || '-'),
+          bankLabel: String(row?.bank_label || '-'),
+          description: String(row?.description || ''),
+          createdAt: row?.created_at || null,
+          invoiceRelation: sourceRecordId && sourceModuleId && sourceModuleId !== 'customers'
+            ? { moduleId: sourceModuleId, recordId: sourceRecordId }
+            : null,
+          bankRelation: null,
+        };
+        return {
+          ...base,
+          printableFields: {
+            rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[rowType] || rowType,
+            sourceLabel: base.sourceLabel,
+            paymentTypeLabel: localizeFinancialValue(base.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[base.paymentType] || base.paymentType || '-',
+            statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[base.status] || localizeFinancialValue(base.status, 'status') || base.status || '-',
+            date: base.date,
+            debit: base.debit,
+            credit: base.credit,
+            balance: base.balance,
+            invoiceLabel: base.invoiceLabel,
+            bankLabel: base.bankLabel,
+            description: base.description,
+          },
+        };
+      });
+      const totals = computeOperationalFinancialTotals(rows);
+      return {
+        rows,
+        recentItems: [...rows].sort((a, b) => {
+          const aDate = new Date(a.date || a.createdAt || 0).getTime();
+          const bDate = new Date(b.date || b.createdAt || 0).getTime();
+          return bDate - aDate;
+        }).slice(0, 6),
+        summary: totals,
+        totals,
+        printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
+      };
+    } catch (error: any) {
+      const raw = String(error?.message || error?.details || '').toLowerCase();
+      const missingRpc = raw.includes('get_customer_operational_financial_overview') || raw.includes('function');
+      if (!missingRpc) throw error;
+    }
   }
 
   const employeeScope = await resolveEntityScope(supabase, entityType, normalizedEntityId);

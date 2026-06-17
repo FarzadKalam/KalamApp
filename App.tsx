@@ -101,6 +101,7 @@ const loadWebFormBuilderPage = () => import("./pages/WebFormBuilderPage");
 const loadReportsHubPage = () => import("./pages/ReportsHubPage");
 const loadReportBuilderPage = () => import("./pages/ReportBuilderPage");
 const loadReportViewerPage = () => import("./pages/ReportViewerPage");
+const loadCustomerClubPage = () => import("./pages/CustomerClubPage");
 const loadPublicSite = () => import("./pages/PublicSite");
 const loadSaasPortalPage = () => import("./pages/SaasPortalPage");
 const loadWorkSchedulesPage = () => import("./pages/WorkSchedulesPage");
@@ -108,6 +109,7 @@ const loadRecycleBinPage = () => import("./pages/RecycleBinPage");
 const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
+const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
@@ -146,6 +148,7 @@ const WebFormBuilderPage = lazy(loadWebFormBuilderPage);
 const ReportsHubPage = lazy(loadReportsHubPage);
 const ReportBuilderPage = lazy(loadReportBuilderPage);
 const ReportViewerPage = lazy(loadReportViewerPage);
+const CustomerClubPage = lazy(loadCustomerClubPage);
 const PublicSite = lazy(loadPublicSite);
 const SaasPortalPage = lazy(loadSaasPortalPage);
 const WorkSchedulesPage = lazy(loadWorkSchedulesPage);
@@ -153,6 +156,7 @@ const RecycleBinPage = lazy(loadRecycleBinPage);
 const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
+const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
@@ -187,6 +191,8 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
     preloader = detail ? loadWebFormBuilderPage : loadWebFormsHubPage;
   } else if (section === "reports") {
     preloader = detail === "create" ? loadReportBuilderPage : detail ? loadReportViewerPage : loadReportsHubPage;
+  } else if (section === "customer-club") {
+    preloader = loadCustomerClubPage;
   } else if (section === "accounting") {
     if (detail === "reports") {
       preloader = segments[2] ? loadAccountingReportViewerPage : loadAccountingReportsPage;
@@ -315,6 +321,7 @@ const MarketingSiteHostApp: React.FC = () => {
           <LazyRouteBoundary>
             <Routes>
               <Route path="/i/:code" element={<InvoicePublicPage />} />
+              <Route path="/d/:code" element={<DeliveryPublicPage />} />
               <Route path="/*" element={<PublicSite />} />
             </Routes>
           </LazyRouteBoundary>
@@ -558,6 +565,7 @@ function App() {
     if (/^\/web_forms\/[^/]+$/.test(pathname)) return "ویرایش وب فرم";
     if (/^\/web_forms\/[^/]+\/edit$/.test(pathname)) return "ویرایش وب فرم";
     if (pathname.startsWith("/settings")) return "تنظیمات";
+    if (pathname.startsWith("/customer-club")) return "باشگاه مشتریان";
     if (pathname.startsWith("/org-knowledge")) return "دانش سازمان";
     if (pathname.startsWith("/profile")) return "پروفایل";
     if (pathname.startsWith("/hr")) return "منابع انسانی";
@@ -703,6 +711,7 @@ function App() {
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
           <Route path="/i/:code" element={<LazyRouteBoundary><InvoicePublicPage /></LazyRouteBoundary>} />
+          <Route path="/d/:code" element={<LazyRouteBoundary><DeliveryPublicPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 
           <Route
@@ -751,6 +760,7 @@ function App() {
             <Route path="/reports/create" element={<ReportBuilderPage />} />
             <Route path="/reports/:reportId" element={<ReportViewerPage />} />
             <Route path="/reports/:reportId/edit" element={<ReportBuilderPage />} />
+            <Route path="/customer-club" element={<CustomerClubPage />} />
             <Route path="/accounting" element={<AccountingPage />} />
             <Route path="/accounting/reports" element={<AccountingReportsPage />} />
             <Route path="/accounting/reports/:reportKey" element={<AccountingReportViewerPage />} />

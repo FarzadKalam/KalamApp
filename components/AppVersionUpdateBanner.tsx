@@ -267,7 +267,7 @@ const AppVersionUpdateBanner: React.FC = () => {
       </div>
 
       {expanded && releaseHistory.length > 0 && (
-        <div className="mx-auto mt-2 max-w-[1320px] rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+        <div className="mx-auto mt-2 max-h-[min(58vh,520px)] max-w-[1320px] overflow-y-auto rounded-xl border border-gray-100 bg-gray-50/70 px-3 py-2 overscroll-contain dark:border-white/10 dark:bg-white/5">
           <div className="grid gap-3 md:grid-cols-2">
             {releaseHistory.map((release) => {
               const releaseDate = release.releasedAt

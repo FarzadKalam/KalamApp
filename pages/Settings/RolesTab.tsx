@@ -45,6 +45,8 @@ import {
   VOIP_PERMISSION_FIELDS,
   COMMUNICATIONS_PERMISSION_KEY,
   COMMUNICATIONS_PERMISSION_FIELDS,
+  CUSTOMER_CLUB_PERMISSION_KEY,
+  CUSTOMER_CLUB_PERMISSION_FIELDS,
   STORIES_PERMISSION_KEY,
   STORIES_PERMISSION_FIELDS,
   SAAS_ADMIN_PERMISSION_KEY,
@@ -53,6 +55,8 @@ import {
   MOBILE_FOOTER_PERMISSION_KEY,
   DASHBOARD_QUICK_ACCESS_DEFAULT_MODULES,
   PREFERRED_ROLE_MODULE_SLOT_KEYS,
+  hasViewConditionGroupConditions,
+  normalizeViewConditionGroup,
   type PermissionMap,
   type RecordScope,
   type ViewConditionGroup,
@@ -398,13 +402,14 @@ const RolesTab: React.FC = () => {
 
   const handleViewConditionsChange = useCallback(
     (moduleId: string, group: ViewConditionGroup) => {
+      const normalizedGroup = normalizeViewConditionGroup(group);
       setPermissions((prev) => {
         const merged = mergePermissionsWithDefaults(prev, defaultPermissions);
         return {
           ...merged,
           [moduleId]: {
             ...(merged[moduleId] || {}),
-            view_conditions: group.conditions.length > 0 ? group : undefined,
+            view_conditions: hasViewConditionGroupConditions(normalizedGroup) ? normalizedGroup : undefined,
           },
         };
       });
@@ -745,8 +750,10 @@ const RolesTab: React.FC = () => {
                         {(() => {
                           const condOpen = conditionEditorOpen[module.id] || false;
                           const condOpts = moduleConditionOptions[module.id];
-                          const existingConditions = modPerms.view_conditions;
-                          const condCount = existingConditions?.conditions?.length || 0;
+                          const existingConditions = normalizeViewConditionGroup(modPerms.view_conditions);
+                          const conditionsAll = existingConditions.conditions_all || [];
+                          const conditionsAny = existingConditions.conditions_any || [];
+                          const condCount = conditionsAll.length + conditionsAny.length;
                           const condFields = getWorkflowConditionFields(module.id);
                           return (
                             <div className="mb-5">
@@ -763,24 +770,39 @@ const RolesTab: React.FC = () => {
                               </button>
                               {condOpen && (
                                 <div className="mt-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/60 p-3 dark:border-[rgba(var(--brand-300-rgb),0.15)] dark:bg-white/5">
-                                  <div className="mb-3 flex items-center justify-between">
+                                  <div className="mb-3">
                                     <span className="text-xs font-medium text-gray-500 dark:text-gray-400">رکوردهایی که این شرط‌ها را دارند قابل مشاهده می‌شوند</span>
-                                    <Radio.Group size="small" value={existingConditions?.logic || 'and'} onChange={(e) => handleViewConditionsChange(module.id, { logic: e.target.value, conditions: existingConditions?.conditions || [] })}>
-                                      <Radio.Button value="and">همه شرط‌ها</Radio.Button>
-                                      <Radio.Button value="or">یکی از شرط‌ها</Radio.Button>
-                                    </Radio.Group>
                                   </div>
-                                  <WorkflowConditionsGroup
-                                    value={(existingConditions?.conditions || []) as any}
-                                    onChange={(next) => handleViewConditionsChange(module.id, { logic: existingConditions?.logic || 'and', conditions: next as any })}
-                                    fields={condFields}
-                                    dynamicOptions={condOpts?.dynamicOptions || {}}
-                                    relationOptions={condOpts?.relationOptions || {}}
-                                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
-                                    getDefaultOperator={getDefaultWorkflowOperator}
-                                    overlayZIndexBase={2000}
-                                    disabled={disabled}
-                                  />
+                                  <div className="space-y-4">
+                                    <div>
+                                      <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">حتماً همه این شرط‌ها برقرار باشند</div>
+                                      <WorkflowConditionsGroup
+                                        value={conditionsAll as any}
+                                        onChange={(next) => handleViewConditionsChange(module.id, { ...existingConditions, conditions_all: next as any })}
+                                        fields={condFields}
+                                        dynamicOptions={condOpts?.dynamicOptions || {}}
+                                        relationOptions={condOpts?.relationOptions || {}}
+                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                                        getDefaultOperator={getDefaultWorkflowOperator}
+                                        overlayZIndexBase={2000}
+                                        disabled={disabled}
+                                      />
+                                    </div>
+                                    <div>
+                                      <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">کافی است یکی از این شرط‌ها برقرار باشد</div>
+                                      <WorkflowConditionsGroup
+                                        value={conditionsAny as any}
+                                        onChange={(next) => handleViewConditionsChange(module.id, { ...existingConditions, conditions_any: next as any })}
+                                        fields={condFields}
+                                        dynamicOptions={condOpts?.dynamicOptions || {}}
+                                        relationOptions={condOpts?.relationOptions || {}}
+                                        getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                                        getDefaultOperator={getDefaultWorkflowOperator}
+                                        overlayZIndexBase={2000}
+                                        disabled={disabled}
+                                      />
+                                    </div>
+                                  </div>
                                   {condCount === 0 && <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">بدون شرط — همه رکوردها (با توجه به محدوده بالا) نمایش داده می‌شوند</div>}
                                 </div>
                               )}
@@ -871,6 +893,22 @@ const RolesTab: React.FC = () => {
                   <div className="pl-6 pt-2">
                     <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های گزارش</Divider>
                     {renderFieldSwitches(REPORTS_PERMISSION_KEY, REPORTS_PERMISSION_FIELDS, getModulePerms(REPORTS_PERMISSION_KEY).view === false)}
+                  </div>
+                </Panel>
+
+                <Panel key={CUSTOMER_CLUB_PERMISSION_KEY} className="dark:border-gray-800" header={
+                  <div className="flex items-center justify-between w-full dark:text-gray-200">
+                    <span className="font-bold">باشگاه مشتریان</span>
+                    <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).view !== false} onChange={(e) => handlePermissionChange(CUSTOMER_CLUB_PERMISSION_KEY, 'view', undefined, e.target.checked)}>مشاهده</Checkbox>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).edit !== false} disabled={getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).view === false} onChange={(e) => handlePermissionChange(CUSTOMER_CLUB_PERMISSION_KEY, 'edit', undefined, e.target.checked)}>ویرایش/ایجاد</Checkbox>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).delete !== false} disabled={getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).view === false} onChange={(e) => handlePermissionChange(CUSTOMER_CLUB_PERMISSION_KEY, 'delete', undefined, e.target.checked)}>حذف</Checkbox>
+                    </div>
+                  </div>
+                }>
+                  <div className="pl-6 pt-2">
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های باشگاه مشتریان</Divider>
+                    {renderFieldSwitches(CUSTOMER_CLUB_PERMISSION_KEY, CUSTOMER_CLUB_PERMISSION_FIELDS, getModulePerms(CUSTOMER_CLUB_PERMISSION_KEY).view === false)}
                   </div>
                 </Panel>
 

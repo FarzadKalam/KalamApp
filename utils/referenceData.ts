@@ -21,6 +21,9 @@ export type AssigneeDirectory = {
     full_name?: string | null;
     email?: string | null;
     mobile_1?: string | null;
+    job_title?: string | null;
+    voip_operator_code?: string | null;
+    voip_extension?: string | null;
     avatar_url?: string | null;
     role_id?: string | null;
     display_name: string;
@@ -194,6 +197,12 @@ const normalizeUsers = (rows: any[]) =>
     id: String(user?.id || ''),
     role_id: user?.role_id ? String(user.role_id) : null,
     avatar_url: normalizePublicAssetUrl(user?.avatar_url) || null,
+    full_name: String(user?.full_name || '').trim() || null,
+    email: String(user?.email || '').trim() || null,
+    mobile_1: String(user?.mobile_1 || user?.mobile || '').trim() || null,
+    job_title: String(user?.job_title || '').trim() || null,
+    voip_operator_code: String(user?.voip_operator_code || '').trim() || null,
+    voip_extension: String(user?.voip_extension || '').trim() || null,
     display_name:
       String(user?.full_name || '').trim() ||
       [user?.first_name, user?.last_name].map((part) => String(part || '').trim()).filter(Boolean).join(' ') ||

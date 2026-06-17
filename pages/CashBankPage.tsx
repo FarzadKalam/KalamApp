@@ -7,6 +7,7 @@ import { supabase } from '../supabaseClient';
 import RelatedRecordPopover from '../components/RelatedRecordPopover';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
+import { localizeFinancialValue } from '../utils/financialValueLabels';
 import { useCurrencyConfig } from '../utils/currency';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from '../components/accounting/tableColumnFilters';
 import { ACCOUNTING_PERMISSION_KEY, fetchCurrentUserRoleContext } from '../utils/permissions';
@@ -610,7 +611,7 @@ const CashBankPage: React.FC = () => {
   const paymentTypeFilters = useMemo(
     () =>
       Array.from(new Set(rows.map((r) => r.paymentType).filter(Boolean))).map((value) => ({
-        text: PAYMENT_TYPE_LABEL[value] || value,
+        text: localizeFinancialValue(value, 'payment_type') || PAYMENT_TYPE_LABEL[value] || value,
         value,
       })),
     [rows]
@@ -619,7 +620,7 @@ const CashBankPage: React.FC = () => {
   const statusFilters = useMemo(
     () =>
       Array.from(new Set(rows.map((r) => r.status).filter(Boolean))).map((value) => ({
-        text: STATUS_LABEL[value] || value,
+        text: STATUS_LABEL[value] || localizeFinancialValue(value, 'status') || value,
         value,
       })),
     [rows]
@@ -657,7 +658,7 @@ const CashBankPage: React.FC = () => {
         key: 'paymentType',
         width: 130,
         ...createChoiceFilter('روش', paymentTypeFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.paymentType),
-        render: (v: string) => PAYMENT_TYPE_LABEL[v] || v || '-',
+        render: (v: string) => localizeFinancialValue(v, 'payment_type') || PAYMENT_TYPE_LABEL[v] || v || '-',
       },
       {
         title: 'وضعیت',
@@ -665,7 +666,7 @@ const CashBankPage: React.FC = () => {
         key: 'status',
         width: 130,
         ...createChoiceFilter('وضعیت', statusFilters.map((item) => ({ label: String(item.text), value: String(item.value) })), (record) => record.status),
-        render: (v: string) => <Tag color={statusColor(v)}>{STATUS_LABEL[v] || v || '-'}</Tag>,
+        render: (v: string) => <Tag color={statusColor(v)}>{STATUS_LABEL[v] || localizeFinancialValue(v, 'status') || v || '-'}</Tag>,
       },
       {
         title: 'تاریخ',

@@ -74,6 +74,8 @@ type CreateRelatedFieldMapping = {
   formula_expression_config?: any;
 };
 
+type BasicSelectOption = { label: string; value: string };
+
 const RUBIKA_RELATED_RECIPIENT_CHECKBOXES: Array<{
   key: 'customer_related' | 'supplier_related' | 'employee_related';
   label: string;
@@ -299,6 +301,54 @@ const FORMULA_COMPATIBLE_FIELD_TYPES = new Set<FieldType>([
 
 const canFieldUseFormula = (field?: ModuleField | null) =>
   !!field && FORMULA_COMPATIBLE_FIELD_TYPES.has(field.type);
+
+const normalizeBasicOption = (item: any): BasicSelectOption | null => {
+  const value = String(item?.value ?? '').trim();
+  if (!value) return null;
+  return {
+    label: String(item?.label ?? item?.value ?? '').trim() || value,
+    value,
+  };
+};
+
+const mergeBasicOptions = (...groups: Array<Array<any> | undefined | null>): BasicSelectOption[] => {
+  const optionsByValue = new Map<string, BasicSelectOption>();
+  groups.forEach((group) => {
+    (Array.isArray(group) ? group : []).forEach((item) => {
+      const option = normalizeBasicOption(item);
+      if (!option || optionsByValue.has(option.value)) return;
+      optionsByValue.set(option.value, option);
+    });
+  });
+  return Array.from(optionsByValue.values());
+};
+
+const isAssigneeValueField = (field?: ModuleField | null) => {
+  if (!field) return false;
+  const key = String(field?.key || '').trim();
+  if (!key) return false;
+  if (
+    key === WORKFLOW_ASSIGNEE_FIELD_KEY
+    || key.endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
+    || key.endsWith(`::${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
+  ) {
+    return true;
+  }
+  const processLinked = parseProcessLinkedFieldKey(key);
+  if (processLinked?.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return true;
+  const related = parseWorkflowRelatedFieldKey(key);
+  if (related?.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return true;
+  return /(^|_)assignee(_|$)/i.test(key)
+    && (field.type === FieldType.RELATION || field.type === FieldType.SELECT || field.type === FieldType.USER);
+};
+
+const isMultiValueField = (field?: ModuleField | null) =>
+  !!field && (
+    field.type === FieldType.MULTI_SELECT
+    || field.type === FieldType.MULTI_RELATION
+    || field.type === FieldType.CHECKLIST
+    || field.type === FieldType.TAGS
+  );
 
 const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   value,
@@ -621,6 +671,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const [storyMentionUserOptions, setStoryMentionUserOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [storyViewerRoleOptions, setStoryViewerRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [workflowAssigneeRoleOptions, setWorkflowAssigneeRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const assigneeRoleOptions = useMemo(
+    () => workflowAssigneeRoleOptions.map((role) => ({
+      label: `نقش: ${role.label}`,
+      value: `role:${role.value}`,
+    })),
+    [workflowAssigneeRoleOptions]
+  );
   const [webFormOptions, setWebFormOptions] = useState<Array<{ label: string; value: string; targetModuleId: string }>>([]);
   useEffect(() => {
     let cancelled = false;
@@ -642,6 +700,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             label: role.title,
             value: role.id,
           }))
+      );
+      setWorkflowAssigneeRoleOptions(
+        directory.roles.map((role) => ({
+          label: role.title,
+          value: role.id,
+        }))
       );
     };
 
@@ -708,6 +772,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           token: '{{web_form_link}}',
         });
       }
+      [
+        { key: 'assignee_full_name', label: 'مسئول: نام و نام خانوادگی' },
+        { key: 'assignee_mobile_1', label: 'مسئول: شماره موبایل' },
+        { key: 'assignee_job_title', label: 'مسئول: جایگاه سازمانی' },
+        { key: 'assignee_voip_operator_code', label: 'مسئول: کد اپراتور تلفن گویا' },
+        { key: 'assignee_voip_extension', label: 'مسئول: داخلی تلفن گویا' },
+        { key: 'assignee_role_title', label: 'مسئول: نام نقش' },
+      ].forEach((item) => {
+        if (sourceFields.some((field) => field.key === item.key)) return;
+        sourceFields.push({ ...item, token: `{{${item.key}}}` });
+      });
       return sourceFields;
     },
     [currentModuleFields, variableFields]
@@ -926,8 +1001,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
   const getFieldSelectOptions = (field: ModuleField | undefined) => {
     if (!field) return [];
+    const includeRoleAssigneeOptions = isAssigneeValueField(field);
     if (field.dynamicOptionsCategory) {
-      return dynamicOptions[field.dynamicOptionsCategory] || [];
+      return includeRoleAssigneeOptions
+        ? mergeBasicOptions(dynamicOptions[field.dynamicOptionsCategory], assigneeRoleOptions)
+        : dynamicOptions[field.dynamicOptionsCategory] || [];
     }
     const fieldKey = String(field.key || '').trim();
     const hasAssigneeDirectoryOptions =
@@ -936,25 +1014,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       || fieldKey.endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
       || fieldKey.endsWith(`::${WORKFLOW_ASSIGNEE_FIELD_KEY}`);
     if (hasAssigneeDirectoryOptions && relationOptions[field.key]) {
-      return (relationOptions[field.key] || []).map((opt) => ({
-        label: String(opt?.label || opt?.value || '-'),
-        value: String(opt?.value || ''),
-      }));
+      return mergeBasicOptions(relationOptions[field.key], assigneeRoleOptions);
     }
     if (
       field.type === FieldType.RELATION
       || field.type === FieldType.MULTI_RELATION
       || field.type === FieldType.USER
     ) {
-      return (relationOptions[field.key] || []).map((opt) => ({
-        label: String(opt?.label || opt?.value || '-'),
-        value: String(opt?.value || ''),
-      }));
+      return mergeBasicOptions(
+        relationOptions[field.key],
+        includeRoleAssigneeOptions ? assigneeRoleOptions : []
+      );
     }
-    return (field.options || []).map((opt) => ({
-      label: String(opt?.label ?? opt?.value ?? ''),
-      value: String(opt?.value ?? ''),
-    }));
+    return mergeBasicOptions(
+      field.options || [],
+      includeRoleAssigneeOptions ? assigneeRoleOptions : []
+    );
   };
 
   const renderTypedValueInput = (
@@ -975,6 +1050,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={(nextVal) => onValueChange(normalizeWorkflowValueByFieldType(field, nextVal))}
           options={options}
           category={field.dynamicOptionsCategory}
+          mode={isMultiValueField(field) ? 'multiple' : undefined}
           className="w-full"
           disabled={disabled}
           getPopupContainer={popupContainer as any}
@@ -998,13 +1074,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       field.type === FieldType.STATUS ||
       field.type === FieldType.RELATION ||
       field.type === FieldType.MULTI_RELATION ||
-      field.type === FieldType.USER
+      field.type === FieldType.USER ||
+      field.type === FieldType.MULTI_SELECT ||
+      field.type === FieldType.CHECKLIST ||
+      field.type === FieldType.TAGS
     ) {
       return (
         <AdaptiveSelectField
           {...commonSelectProps}
-          mode={field.type === FieldType.MULTI_RELATION ? 'multiple' : undefined}
-          value={field.type === FieldType.MULTI_RELATION
+          mode={isMultiValueField(field) ? 'multiple' : undefined}
+          value={isMultiValueField(field)
             ? (Array.isArray(value) ? value : value ? [value] : [])
             : value}
           options={options}
@@ -2598,18 +2677,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           {mapping.formula_name || 'تعریف فرمول'}
                         </Button>
                       ) : (
-                        <Input
-                          disabled={disabled}
-                          value={mapping.value ?? ''}
-                          onChange={(e) =>
+                        renderTypedValueInput(targetField, mapping.value, (nextVal) =>
                             updateActionConfig(action.id, {
                               field_mappings: fieldMappings.map((item) =>
-                                item.id === mapping.id ? { ...item, value: e.target.value } : item
+                                item.id === mapping.id ? { ...item, value: nextVal } : item
                               ),
                             })
-                          }
-                          placeholder="مقدار"
-                        />
+                        )
                       )}
                     </div>
                     <div className="flex justify-end md:col-span-1">

@@ -34,6 +34,7 @@ type InboxItem = {
   record_id: string | null;
   source_type: string | null;
   source_id: string | null;
+  action: string | null;
   title: string | null;
   body: string | null;
   last_event_at: string | null;
@@ -44,7 +45,7 @@ type InboxItem = {
 const fetchInboxSection = async (limit = 200): Promise<InboxItem[] | null> => {
   const { data, error } = await supabase
     .from('notification_inbox_items')
-    .select('id,source_type,source_id,section,category,title,body,module_id,record_id,payload,last_event_at,created_at')
+    .select('id,source_type,source_id,section,category,action,title,body,module_id,record_id,payload,last_event_at,created_at')
     .eq('section', 'responsibilities')
     .order('last_event_at', { ascending: false })
     .limit(limit);

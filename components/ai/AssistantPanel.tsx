@@ -16,8 +16,9 @@ import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
+import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import type { AiMediaSettings, AiMediaSourceImage } from './AiMediaSettingsPopover';
-import AiMessageAttachmentPreview from './AiMessageAttachmentPreview';
+import AiMessageAttachmentPreview, { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 
@@ -42,6 +43,15 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
   if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
   if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
   return fallback;
+};
+
+const GENERATION_PENDING_KINDS = new Set<AiGenerationKind>([
+  'image_generation', 'voice_output', 'video_generation', 'document_generation', 'document_analysis',
+]);
+const getPendingGenerationKind = (item: { metadata?: Record<string, any> | null }): AiGenerationKind | null => {
+  if (!item?.metadata?.pending_status || item.metadata?.failed) return null;
+  const kind = String(item.metadata?.kind || '') as AiGenerationKind;
+  return GENERATION_PENDING_KINDS.has(kind) ? kind : null;
 };
 
 interface AssistantPanelProps {
@@ -157,6 +167,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const [generatingVoiceOutput, setGeneratingVoiceOutput] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [generatingDocument, setGeneratingDocument] = useState(false);
+  const [recheckingId, setRecheckingId] = useState<string | null>(null);
+  const [imageEditSourceUrl, setImageEditSourceUrl] = useState<string | null>(null);
   const [currentUserView, setCurrentUserView] = useState({ name: 'شما', avatarUrl: null as string | null });
   const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
@@ -324,6 +336,69 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     if (!data?.success) throw new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
     return data;
   }, []);
+
+  const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
+    setMessages((prev) => prev.map((item) => item.id === pendingId ? {
+      id: String(serverMsg?.id || pendingId),
+      role: 'assistant' as const,
+      content: String(serverMsg?.content || '').trim() || 'آماده شد.',
+      provider: serverMsg?.provider || null,
+      model: serverMsg?.model || null,
+      metadata: serverMsg?.metadata || null,
+      created_at: serverMsg?.created_at || new Date().toISOString(),
+    } : item));
+  }, []);
+
+  const markPendingError = useCallback((pendingId: string, note: string) => {
+    setMessages((prev) => prev.map((m) => m.id === pendingId
+      ? { ...m, metadata: { ...(m.metadata || {}), pending_status: true, recheckable: true, failed_note: note } }
+      : m));
+  }, []);
+
+  // Re-check a pending generation WITHOUT re-triggering it (poll job / reload thread).
+  const recheckPending = useCallback(async (item: ChatMessage) => {
+    const kind = String(item?.metadata?.kind || '') as AiGenerationKind;
+    const startedAt = Number(item?.metadata?.started_at || 0);
+    const currentThreadId = threadId;
+    setRecheckingId(item.id);
+    try {
+      if (kind === 'video_generation') {
+        let videoId = String(item?.metadata?.video_id || '').trim();
+        if (!videoId && currentThreadId) {
+          const data = await callAssistant({ action: 'get_thread', threadId: currentThreadId });
+          const msgs = Array.isArray(data?.messages) ? data.messages : [];
+          const vmsg = msgs
+            .filter((m: any) => m.role === 'assistant' && String(m.metadata?.capability || '') === 'video_generation')
+            .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
+          if (vmsg?.metadata?.file) { resolvePendingMessage(item.id, vmsg); return; }
+          videoId = String(vmsg?.metadata?.video_id || '').trim();
+        }
+        if (videoId) {
+          const poll = await callAssistant({ action: 'get_video_status', videoId, threadId: currentThreadId, prompt: item.metadata?.prompt || '', context: contextWithSelection });
+          if (poll?.status === 'completed') {
+            resolvePendingMessage(item.id, { content: 'ویدیو آماده شد.', metadata: { file: poll.file, usage: poll.usage, capability: 'video_generation' } });
+          } else if (poll?.status === 'failed') {
+            setMessages((prev) => prev.map((m) => m.id === item.id ? { ...m, content: 'ساخت ویدیو ناموفق بود.', metadata: { ...m.metadata, pending_status: false, failed: true } } : m));
+          }
+        }
+        return;
+      }
+      if (!currentThreadId) return;
+      const data = await callAssistant({ action: 'get_thread', threadId: currentThreadId });
+      const msgs = Array.isArray(data?.messages) ? data.messages : [];
+      const match = msgs
+        .filter((m: any) => m.role === 'assistant'
+          && !m.metadata?.pending_status
+          && new Date(m.created_at || 0).getTime() >= startedAt - 3000
+          && (kind === 'document_analysis' ? true : (String(m.metadata?.capability || '') === kind && (m.metadata?.image || m.metadata?.file))))
+        .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
+      if (match) resolvePendingMessage(item.id, match);
+    } catch {
+      // keep waiting
+    } finally {
+      setRecheckingId(null);
+    }
+  }, [callAssistant, contextWithSelection, resolvePendingMessage, threadId]);
 
   const loadThread = useCallback(async () => {
     if (!active) return;
@@ -573,7 +648,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       role: 'assistant',
       content: 'در حال ساخت تصویر...',
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: ['image_generation'] },
+      metadata: { pending_status: true, capabilities: ['image_generation'], kind: 'image_generation', started_at: Date.now(), prompt: text },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setGeneratingImage(true);
@@ -586,8 +661,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
         sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
       });
       if (data.threadId) setThreadId(String(data.threadId));
+      const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
+      if (newImageUrl) setImageEditSourceUrl(newImageUrl);
       setMessages((prev) => [
         ...prev.filter((item) => item.id !== thinkingMessage.id),
         {
@@ -601,13 +679,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
       ]);
     } catch (error: any) {
-      setInput(text);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'تولید تصویر ناموفق بود.'));
+      markPendingError(thinkingMessage.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت…'));
     } finally {
       setGeneratingImage(false);
     }
-  }, [callAssistant, contextWithSelection, generatingImage, input, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingImage, imageEditSourceUrl, input, markPendingError, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+
+  const handleEditImage = useCallback((url: string) => {
+    const clean = String(url || '').trim();
+    if (!clean) return;
+    setImageEditSourceUrl(clean);
+    setSelectedCapabilities((prev) => prev.includes('image_generation') ? prev : [...prev, 'image_generation']);
+    message.info('این تصویر مبنای اصلاح شد؛ تغییر موردنظر را بنویسید و «ساخت تصویر» را بزنید.');
+  }, [message]);
 
   const submitVoiceOutputPrompt = useCallback(async () => {
     const text = input.trim();
@@ -619,7 +703,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       role: 'assistant',
       content: 'در حال تولید صدا...',
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: ['voice_output'] },
+      metadata: { pending_status: true, capabilities: ['voice_output'], kind: 'voice_output', started_at: Date.now(), prompt: text },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setGeneratingVoiceOutput(true);
@@ -646,13 +730,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
       ]);
     } catch (error: any) {
-      setInput(text);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'تولید صدا ناموفق بود.'));
+      markPendingError(thinkingMessage.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت تولید صدا…'));
     } finally {
       setGeneratingVoiceOutput(false);
     }
-  }, [callAssistant, contextWithSelection, generatingVoiceOutput, input, mediaSettings, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingVoiceOutput, input, markPendingError, mediaSettings, message, submitting, threadId]);
 
   const submitVideoPrompt = useCallback(async () => {
     const text = input.trim();
@@ -664,11 +746,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       role: 'assistant',
       content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: ['video_generation'] },
+      metadata: { pending_status: true, capabilities: ['video_generation'], kind: 'video_generation', started_at: Date.now(), prompt: text },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setGeneratingVideo(true);
     try {
+      // Create the async job, then hand off to the pending card's auto-poll.
       const data = await callAssistant({
         action: 'generate_video',
         prompt: text,
@@ -680,50 +763,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       });
       if (data.threadId) setThreadId(String(data.threadId));
       const videoId = String(data?.videoId || '').trim();
-      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      let finalStatus = String(data?.status || 'processing');
-      let fileResult: any = null;
-      let usage: any = null;
-      for (let attempt = 0; attempt < 60 && videoId; attempt += 1) {
-        if (finalStatus === 'completed' || finalStatus === 'failed') break;
-        await sleep(5000);
-        try {
-          const poll = await callAssistant({
-            action: 'get_video_status',
-            videoId,
-            messageId: data?.messageId || null,
-            threadId: data?.threadId || threadId,
-            prompt: text,
-            context: contextWithSelection,
-        modelOverride: modelOverrideRef.current,
-          });
-          finalStatus = String(poll?.status || 'processing');
-          if (finalStatus === 'completed') { fileResult = poll?.file || null; usage = poll?.usage || null; break; }
-          if (finalStatus === 'failed') break;
-        } catch {
-          // transient — keep polling
-        }
-      }
-      setMessages((prev) => [
-        ...prev.filter((item) => item.id !== thinkingMessage.id),
-        {
-          id: data.messageId || `assistant-video-${Date.now()}`,
-          role: 'assistant',
-          content: finalStatus === 'completed' ? 'ویدیو آماده شد.' : finalStatus === 'failed' ? 'ساخت ویدیو ناموفق بود.' : 'ساخت ویدیو طول کشید؛ بعداً در همین گفتگو در دسترس خواهد بود.',
-          metadata: { usage, file: fileResult, capability: 'video_generation' },
-          provider: data.provider || null,
-          model: data.model || null,
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
+        ? { ...item, metadata: { ...(item.metadata || {}), video_id: videoId, server_message_id: data?.messageId || null } }
+        : item));
     } catch (error: any) {
-      setInput(text);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'تولید ویدیو ناموفق بود.'));
+      markPendingError(thinkingMessage.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت ویدیو…'));
     } finally {
       setGeneratingVideo(false);
     }
-  }, [callAssistant, contextWithSelection, generatingVideo, input, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingVideo, input, markPendingError, mediaSettings, mediaSourceImages, message, submitting, threadId]);
 
   const submitDocumentPrompt = useCallback(async () => {
     const text = input.trim();
@@ -736,7 +784,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       role: 'assistant',
       content: `در حال ساخت فایل ${format.toUpperCase()}...`,
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: ['document_generation'] },
+      metadata: { pending_status: true, capabilities: ['document_generation'], kind: 'document_generation', started_at: Date.now(), prompt: text },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setGeneratingDocument(true);
@@ -764,13 +812,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
       ]);
     } catch (error: any) {
-      setInput(text);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'ساخت فایل ناموفق بود.'));
+      markPendingError(thinkingMessage.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت فایل…'));
     } finally {
       setGeneratingDocument(false);
     }
-  }, [callAssistant, contextWithSelection, generatingDocument, input, mediaSettings, message, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, generatingDocument, input, markPendingError, mediaSettings, message, submitting, threadId]);
 
   const submitUploadedFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
     if (fileSending || submitting) return;
@@ -785,12 +831,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
       metadata: { input_kind: 'file' },
     };
     const fileCapabilities = selectedCapabilities.includes('document_analysis') ? selectedCapabilities : [...selectedCapabilities, 'document_analysis'];
+    const isPlainAnalysis = !processOperationMode && !recordCreationSchema;
     const thinkingMessage: ChatMessage = {
       id: `assistant-file-pending-${Date.now()}`,
       role: 'assistant',
       content: buildAiPendingStatusText(fileCapabilities, 'در حال تحلیل فایل...'),
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: fileCapabilities },
+      metadata: isPlainAnalysis
+        ? { pending_status: true, capabilities: fileCapabilities, kind: 'document_analysis', started_at: Date.now() }
+        : { pending_status: true, capabilities: fileCapabilities },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setFileSending(true);
@@ -878,13 +927,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
       ]);
     } catch (error: any) {
-      setInput(prompt);
-      setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'ارسال فایل ناموفق بود.'));
+      if (isPlainAnalysis) {
+        markPendingError(thinkingMessage.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی نتیجهٔ تحلیل…'));
+      } else {
+        setInput(prompt);
+        setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
+        message.error(toFaErrorMessage(error, 'ارسال فایل ناموفق بود.'));
+      }
     } finally {
       setFileSending(false);
     }
-  }, [callAssistant, contextWithSelection, fileSending, input, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, fileSending, input, markPendingError, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
 
   const confirmPendingAiAction = useCallback(async () => {
     const actionId = String(pendingAiAction?.id || '').trim();
@@ -927,6 +980,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     const isUser = item.role === 'user';
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata) : '';
     const aiAttachment = item.metadata?.image || item.metadata?.file || (item.metadata?.image_url ? { url: item.metadata.image_url } : null);
+    const pendingKind = getPendingGenerationKind(item);
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
         {isUser ? (
@@ -939,6 +993,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
           />
         )}
         <div className={`min-w-0 max-w-[82%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+          {pendingKind ? (
+            <AiGenerationStatusCard
+              kind={pendingKind}
+              startedAtMs={Number(item.metadata?.started_at) || Date.now()}
+              checking={recheckingId === item.id}
+              failedNote={item.metadata?.failed_note || null}
+              onRecheck={() => recheckPending(item)}
+              onDismiss={() => setMessages((prev) => prev.filter((m) => m.id !== item.id))}
+            />
+          ) : (
           <div
             className={`whitespace-pre-wrap rounded-[1.1rem] px-2.5 py-2 text-[12px] leading-5 shadow-[0_3px_10px_rgba(15,23,42,0.08)] dark:shadow-[0_3px_10px_rgba(0,0,0,0.22)] ${
               isUser
@@ -947,8 +1011,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             }`}
           >
             {item.content}
-            <AiMessageAttachmentPreview attachment={aiAttachment} fallbackName={isUser ? 'فایل پیوست' : 'خروجی هوش مصنوعی'} />
+            <AiMessageAttachmentPreview
+              attachment={aiAttachment}
+              fallbackName={isUser ? 'فایل پیوست' : 'خروجی هوش مصنوعی'}
+              onEditImage={!isUser ? handleEditImage : undefined}
+            />
           </div>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 text-gray-400">
             {isUser ? <span>{currentUserView.name}</span> : null}
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
@@ -1103,6 +1172,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
                 فعلا نه
               </Button>
             </Space>
+          </div>
+        ) : null}
+        {imageEditSourceUrl ? (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.7)] p-1.5 ps-2 text-[11px] text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-gray-300">
+            <img src={imageEditSourceUrl} alt="مبنای اصلاح" className="h-8 w-8 rounded object-cover" />
+            <span className="flex-1">در حال اصلاح روی این تصویر</span>
+            <Button type="text" size="small" onClick={() => setImageEditSourceUrl(null)}>شروع از نو</Button>
           </div>
         ) : null}
         <Input.TextArea

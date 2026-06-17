@@ -21,10 +21,13 @@ import {
   canAccessAssignedRecord,
   fetchCurrentUserRecordAccessContext,
   GOALS_PERMISSION_KEY,
+  hasViewConditionGroupConditions,
   isSaasAdminModuleId,
+  normalizeViewConditionGroup,
   resolveModuleGoalAccessPermissions,
   SAAS_ADMIN_PERMISSION_KEY,
   WORKFLOWS_PERMISSION_KEY,
+  type ViewConditionGroup,
   type RecordScope,
 } from "../utils/permissions";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
@@ -48,6 +51,7 @@ import { AI_CONTEXT_EVENT } from "../utils/aiAssistantEvents";
 import { getRecordPhoneCandidates } from "../utils/recordMessaging";
 import { formatIranMobileForInput } from "../utils/phoneNumber";
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from "../utils/workflowTypes";
+import { createWorkflowEvaluationContext, evaluateWorkflowConditions, prefetchWorkflowRecordTags } from "../utils/workflowRuntime";
 import { getAssigneeLabel } from "../utils/assigneeLabel";
 import { syncDefaultPriceListItemsToProducts } from "../utils/priceListDefaults";
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from "../utils/recordReference";
@@ -742,6 +746,9 @@ export const ModuleListRefine: React.FC<{
   const [allUsers, setAllUsers] = useState<any[]>(() => cachedOptionSnapshot?.allUsers || []);
   const [allRoles, setAllRoles] = useState<any[]>(() => cachedOptionSnapshot?.allRoles || []);
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
+  const [permissionViewConditions, setPermissionViewConditions] = useState<ViewConditionGroup | null>(null);
+  const [permissionConditionAllowedIds, setPermissionConditionAllowedIds] = useState<Set<string> | null>(null);
+  const [permissionConditionLoading, setPermissionConditionLoading] = useState(false);
   const [permissionFilters, setPermissionFilters] = useState<CrudFilters>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
@@ -895,12 +902,12 @@ export const ModuleListRefine: React.FC<{
     [activeTagViewFilters]
   );
   const hasActiveTagViewFilters = activeTagViewFilters.length > 0;
-  const loading = isListView
+  const loading = permissionConditionLoading || (isListView
     ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading)
-    : nonListLoading;
-  const queryPending = isListView
+    : nonListLoading);
+  const queryPending = permissionConditionLoading || (isListView
     ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending)
-    : nonListLoading;
+    : nonListLoading);
   const allData = isListView
     ? (hasActiveTagViewFilters ? tagViewFilterRows : baseAllData)
     : nonListRows;
@@ -1537,6 +1544,8 @@ export const ModuleListRefine: React.FC<{
       if (!context.roleId) {
         setModulePermissions({});
         setFieldPermissions({});
+        setPermissionViewConditions(null);
+        setPermissionFilters([]);
         setCanOpenWorkflows(true);
         return;
       }
@@ -1565,6 +1574,8 @@ export const ModuleListRefine: React.FC<{
         });
         setFieldPermissions({});
         setFieldPermissionsModuleId(String(resolvedModuleId || ""));
+        setPermissionViewConditions(null);
+        setPermissionFilters([]);
         setCanOpenWorkflows(false);
         setCanOpenGoals(false);
         setCanShowGoalCards(false);
@@ -1572,6 +1583,7 @@ export const ModuleListRefine: React.FC<{
       }
       const modulePerms = permissions?.[resolvedModuleId] || {};
       const nextFieldPermissions = modulePerms.fields || {};
+      const normalizedViewConditions = normalizeViewConditionGroup(modulePerms.view_conditions);
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
       const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};
       const moduleGoalAccess = resolveModuleGoalAccessPermissions(permissions, resolvedModuleId);
@@ -1583,10 +1595,10 @@ export const ModuleListRefine: React.FC<{
       });
       setFieldPermissions(nextFieldPermissions);
       setFieldPermissionsModuleId(String(resolvedModuleId || ""));
+      setPermissionViewConditions(hasViewConditionGroupConditions(normalizedViewConditions) ? normalizedViewConditions : null);
       // build permission-level filters from view_conditions
-      const viewCondGroup = modulePerms.view_conditions;
-      if (viewCondGroup && Array.isArray(viewCondGroup.conditions) && viewCondGroup.conditions.length > 0) {
-        buildViewCrudFilters(viewCondGroup.conditions, viewCondGroup.logic).then((pFilters) => {
+      if (hasViewConditionGroupConditions(normalizedViewConditions)) {
+        buildPermissionViewCrudFilters(normalizedViewConditions).then((pFilters) => {
           setPermissionFilters(pFilters);
           applyCombinedFilters(
             effectiveInitialViewFilters as CrudFilters,
@@ -1632,6 +1644,7 @@ export const ModuleListRefine: React.FC<{
         return;
       }
       console.warn('Could not fetch permissions:', err);
+      setPermissionViewConditions(null);
       setCanOpenWorkflows(true);
       setCanOpenGoals(true);
       setCanShowGoalCards(true);
@@ -1723,6 +1736,115 @@ export const ModuleListRefine: React.FC<{
   const useSaasUserDrawer = moduleConfig?.listDetailSurface === "saas_user_drawer";
   const useQuickPreviewModal = moduleConfig?.listPreviewMode === "modal" || detailDisabled;
   const canCreateModule = canEditModule && !createDisabled;
+  const normalizedPermissionViewConditions = useMemo(
+    () => normalizeViewConditionGroup(permissionViewConditions),
+    [permissionViewConditions]
+  );
+  const hasPermissionViewConditions = useMemo(
+    () => hasViewConditionGroupConditions(normalizedPermissionViewConditions),
+    [normalizedPermissionViewConditions]
+  );
+  const permissionViewConditionsSignature = useMemo(
+    () => JSON.stringify(normalizedPermissionViewConditions),
+    [normalizedPermissionViewConditions]
+  );
+  const shouldEvaluatePermissionConditionsOnClient = useMemo(() => {
+    if (!hasPermissionViewConditions) return false;
+    const conditions = [
+      ...(normalizedPermissionViewConditions.conditions_all || []),
+      ...(normalizedPermissionViewConditions.conditions_any || []),
+    ];
+    return conditions.some((condition) => !canBuildViewConditionAsCrudFilter(condition));
+  }, [hasPermissionViewConditions, moduleConfig, normalizedPermissionViewConditions, permissionViewConditionsSignature]);
+  const clientPermissionViewConditions = useMemo(() => {
+    const resolveAssigneeValue = (value: any): any => {
+      if (Array.isArray(value)) return value.map(resolveAssigneeValue);
+      const normalized = String(value || "").trim();
+      if (normalized === "__current_user__") {
+        return currentUserId ? `user_${currentUserId}` : normalized;
+      }
+      if (normalized === "__current_role__") {
+        return currentUserRoleId ? `role_${currentUserRoleId}` : normalized;
+      }
+      return value;
+    };
+
+    const normalizeCondition = (condition: any) => {
+      const fieldKey = String(condition?.field || "").trim();
+      if (!fieldKey.includes(WORKFLOW_ASSIGNEE_FIELD_KEY)) return condition;
+      return {
+        ...condition,
+        value: resolveAssigneeValue(condition?.value),
+      };
+    };
+
+    return {
+      conditions_all: (normalizedPermissionViewConditions.conditions_all || []).map(normalizeCondition),
+      conditions_any: (normalizedPermissionViewConditions.conditions_any || []).map(normalizeCondition),
+    };
+  }, [currentUserId, currentUserRoleId, normalizedPermissionViewConditions, permissionViewConditionsSignature]);
+
+  useEffect(() => {
+    if (!resolvedModuleId || !shouldEvaluatePermissionConditionsOnClient) {
+      setPermissionConditionAllowedIds(null);
+      setPermissionConditionLoading(false);
+      return;
+    }
+
+    const rows = Array.isArray(effectiveAllData) ? effectiveAllData : [];
+    if (rows.length === 0) {
+      setPermissionConditionAllowedIds(new Set());
+      setPermissionConditionLoading(false);
+      return;
+    }
+
+    let isActive = true;
+    const context = createWorkflowEvaluationContext(resolvedModuleId);
+    setPermissionConditionLoading(true);
+    setPermissionConditionAllowedIds(null);
+
+    const evaluateRows = async () => {
+      try {
+        await prefetchWorkflowRecordTags({
+          moduleId: resolvedModuleId,
+          records: rows,
+          context,
+        });
+
+        const entries = await Promise.all(
+          rows.map(async (record: any) => {
+            const recordId = String(record?.id || "").trim();
+            if (!recordId) return null;
+            try {
+              const passed = await evaluateWorkflowConditions({
+                conditionsAll: clientPermissionViewConditions.conditions_all || [],
+                conditionsAny: clientPermissionViewConditions.conditions_any || [],
+                currentRecord: record,
+                moduleId: resolvedModuleId,
+                context,
+              });
+              return passed ? recordId : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+
+        if (!isActive) return;
+        setPermissionConditionAllowedIds(new Set(entries.filter(Boolean) as string[]));
+      } finally {
+        if (isActive) {
+          setPermissionConditionLoading(false);
+        }
+      }
+    };
+
+    void evaluateRows();
+
+    return () => {
+      isActive = false;
+    };
+  }, [clientPermissionViewConditions, effectiveAllData, permissionViewConditionsSignature, resolvedModuleId, shouldEvaluatePermissionConditionsOnClient]);
 
   // ✅ Define field keys FIRST (before any useMemo/useEffect that uses them)
   const imageField = moduleConfig?.fields.find(f => f.type === FieldType.IMAGE)?.key;
@@ -1782,6 +1904,12 @@ export const ModuleListRefine: React.FC<{
         });
       })
       .filter((record: any) => {
+        if (!shouldEvaluatePermissionConditionsOnClient) return true;
+        const recordId = String(record?.id || "").trim();
+        if (!recordId || !permissionConditionAllowedIds) return false;
+        return permissionConditionAllowedIds.has(recordId);
+      })
+      .filter((record: any) => {
         if (resolvedModuleId !== "cash_bank_operations") return true;
         if (String(record?.status || "").trim() !== "canceled") return true;
         const rawMetadata = record?.metadata;
@@ -1799,7 +1927,7 @@ export const ModuleListRefine: React.FC<{
               : null;
         return metadata?.is_auto_generated !== true;
       });
-  }, [allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, effectiveAllData, recordScope, resolvedModuleId]);
+  }, [allowedRoleIds, allowedUserIds, canViewModule, currentOrgId, currentUserId, currentUserRoleId, effectiveAllData, permissionConditionAllowedIds, recordScope, resolvedModuleId, shouldEvaluatePermissionConditionsOnClient]);
 
   const normalizedAccessibleData = useMemo(() => {
     if (resolvedModuleId === "attendance_logs") return enrichAttendancePresenceRows(accessibleData);
@@ -3091,6 +3219,31 @@ export const ModuleListRefine: React.FC<{
     return filters;
   }
 
+  function canBuildViewConditionAsCrudFilter(condition: any) {
+    const fieldKey = String(condition?.field || "").trim();
+    const operator = String(condition?.operator || "").trim();
+    if (!fieldKey || !operator || !moduleConfig) return false;
+    if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return true;
+    const field = moduleConfig.fields.find((item) => String(item?.key || "").trim() === fieldKey);
+    return !!field && !isWorkflowVirtualField(field);
+  }
+
+  async function buildPermissionViewCrudFilters(group?: ViewConditionGroup | null): Promise<CrudFilters> {
+    const normalized = normalizeViewConditionGroup(group);
+    const conditionsAll = normalized.conditions_all || [];
+    const conditionsAny = normalized.conditions_any || [];
+    const allFilters = await buildViewCrudFilters(conditionsAll as any[], 'and');
+
+    if (conditionsAny.length === 0) return allFilters;
+
+    if (!conditionsAny.every(canBuildViewConditionAsCrudFilter)) {
+      return allFilters;
+    }
+
+    const anyFilters = await buildViewCrudFilters(conditionsAny as any[], 'or');
+    return [...allFilters, ...anyFilters];
+  }
+
   function applyCombinedFilters(
     nextViewFilters: CrudFilters,
     nextSearchTerm: string,
@@ -3340,9 +3493,39 @@ export const ModuleListRefine: React.FC<{
       }
 
       const allRows = Array.from(selectedRowsById.values());
-      const allowedRows = allRows.filter((row) =>
-        canAccessAssignedRecord(row, currentUserId, currentUserRoleId, recordScope)
+      let allowedRows = allRows.filter((row) =>
+        canAccessAssignedRecord(row, currentUserId, currentUserRoleId, recordScope, {
+          currentOrgId,
+          allowedRoleIds,
+          allowedUserIds,
+        })
       );
+
+      if (shouldEvaluatePermissionConditionsOnClient && allowedRows.length > 0) {
+        const context = createWorkflowEvaluationContext(resolvedModuleId);
+        await prefetchWorkflowRecordTags({
+          moduleId: resolvedModuleId,
+          records: allowedRows,
+          context,
+        });
+        const evaluatedRows = await Promise.all(
+          allowedRows.map(async (row) => {
+            try {
+              const passed = await evaluateWorkflowConditions({
+                conditionsAll: clientPermissionViewConditions.conditions_all || [],
+                conditionsAny: clientPermissionViewConditions.conditions_any || [],
+                currentRecord: row,
+                moduleId: resolvedModuleId,
+                context,
+              });
+              return passed ? row : null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        allowedRows = evaluatedRows.filter(Boolean) as any[];
+      }
       const allowedKeys = allowedRows
         .map((row) => String(row?.id || "").trim())
         .filter(Boolean);
@@ -3379,8 +3562,12 @@ export const ModuleListRefine: React.FC<{
     buildMergedFilters,
     canAccessAssignedRecord,
     columnFilters,
+    allowedRoleIds,
+    allowedUserIds,
+    currentOrgId,
     currentUserId,
     currentUserRoleId,
+    clientPermissionViewConditions,
     recordScope,
     refineProvider,
     dataResource,
@@ -3388,6 +3575,7 @@ export const ModuleListRefine: React.FC<{
     searchTerm,
     selectAllPagesLoading,
     showListMessage,
+    shouldEvaluatePermissionConditionsOnClient,
     stableSorters,
     viewFiltersState,
   ]);

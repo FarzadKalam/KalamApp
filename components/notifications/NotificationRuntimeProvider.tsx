@@ -9,6 +9,7 @@ import React, {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
+import { MODULES } from '../../moduleRegistry';
 import { AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { sendBotMessageViaGateway } from '../../utils/botGateway';
 import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
@@ -153,6 +154,28 @@ const getPayloadText = (payload: Record<string, any> | null | undefined, keys: s
   return '';
 };
 
+const getOverlayModuleSingularTitle = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const moduleConfig = normalizedModuleId ? MODULES[normalizedModuleId] : null;
+  return String(moduleConfig?.titles?.faSingular || moduleConfig?.titles?.fa || normalizedModuleId || 'رکورد').trim();
+};
+
+const resolveResponsibilityOverlayBody = (row: OverlayFeedRow) => {
+  const moduleTitle = getOverlayModuleSingularTitle(row.module_id || row.payload?.module_id || row.source_type);
+  const action = String(row.payload?.action || '').trim().toLowerCase();
+  if (action === 'insert') {
+    return `یک ${moduleTitle} جدید ایجاد شد.`;
+  }
+  return `یک ${moduleTitle} به شما ارجاع داده شد.`;
+};
+
+const resolveInternalOverlayKindLabel = (row: OverlayFeedRow) => {
+  const category = String(row.payload?.category || '').trim().toLowerCase();
+  if (category === 'assistant') return 'هوش مصنوعی';
+  if (category === 'system') return 'پیام سیستم';
+  return 'پیام داخلی';
+};
+
 const resolveInternalOverlayConversationTitle = (row: OverlayFeedRow) => {
   const payload = row.payload || {};
   const category = String(payload.category || '').trim().toLowerCase();
@@ -160,13 +183,47 @@ const resolveInternalOverlayConversationTitle = (row: OverlayFeedRow) => {
     return String(row.title || '').trim() || 'پیام سیستم';
   }
   return getPayloadText(payload, [
-    'conversation_title',
-    'group_title',
-    'chat_group_name',
     'sender_display_name',
     'author_name',
     'display_name',
+    'conversation_title',
+    'group_title',
+    'chat_group_name',
   ]) || String(row.title || '').trim() || 'پیام داخلی';
+};
+
+const resolveOverlayTitle = (row: OverlayFeedRow) => {
+  if (row.section === 'notes') return resolveInternalOverlayConversationTitle(row);
+  if (row.section === 'bot_messages') {
+    return getPayloadText(row.payload, ['group_title', 'conversation_title'])
+      || String(row.title || '').trim()
+      || 'پیام جدید بات';
+  }
+  return String(row.title || '').trim() || 'اعلان جدید';
+};
+
+const resolveOverlayBody = (row: OverlayFeedRow) => {
+  if (row.section === 'responsibilities') return resolveResponsibilityOverlayBody(row);
+  return String(row.body || '').trim() || 'برای مشاهده جزئیات کلیک کنید.';
+};
+
+const resolveOverlayAvatarUrl = (row: OverlayFeedRow) => {
+  if (row.section === 'bot_messages') {
+    return getPayloadText(row.payload, ['group_avatar_url', 'counterparty_image_url', 'avatar_url']) || null;
+  }
+  if (row.section === 'notes') {
+    return getPayloadText(row.payload, ['author_avatar_url', 'sender_avatar_url', 'conversation_avatar_url', 'avatar_url']) || null;
+  }
+  return getPayloadText(row.payload, ['conversation_avatar_url', 'sender_avatar_url', 'author_avatar_url', 'avatar_url']) || null;
+};
+
+const resolveOverlayAvatarName = (row: OverlayFeedRow) => {
+  if (row.section === 'bot_messages') {
+    return getPayloadText(row.payload, ['group_title', 'conversation_title'])
+      || String(row.title || '').trim()
+      || null;
+  }
+  return resolveOverlayTitle(row);
 };
 
 const resolveBotOverlaySenderName = (row: OverlayFeedRow) => {
@@ -668,18 +725,12 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         id: `${row.section}:${row.source_type}:${row.source_id}`,
         kind,
         channel: getOverlayChannel(row),
-        kindLabel: row.section === 'notes' ? resolveInternalOverlayConversationTitle(row) : undefined,
-        title: row.section === 'bot_messages'
-          ? getPayloadText(row.payload, ['group_title', 'conversation_title']) || String(row.title || '').trim() || 'پیام جدید بات'
-          : String(row.title || '').trim() || 'اعلان جدید',
+        kindLabel: row.section === 'notes' ? resolveInternalOverlayKindLabel(row) : undefined,
+        title: resolveOverlayTitle(row),
         subtitle: row.section === 'bot_messages' ? resolveBotOverlaySenderName(row) : undefined,
-        body: String(row.body || '').trim() || 'برای مشاهده جزئیات کلیک کنید.',
-        avatarUrl: getPayloadText(row.payload, row.section === 'bot_messages'
-          ? ['group_avatar_url', 'counterparty_image_url', 'avatar_url']
-          : ['conversation_avatar_url', 'sender_avatar_url', 'author_avatar_url', 'avatar_url']) || null,
-        avatarName: row.section === 'bot_messages'
-          ? getPayloadText(row.payload, ['group_title', 'conversation_title']) || String(row.title || '').trim() || null
-          : resolveInternalOverlayConversationTitle(row),
+        body: resolveOverlayBody(row),
+        avatarUrl: resolveOverlayAvatarUrl(row),
+        avatarName: resolveOverlayAvatarName(row),
         createdAt: row.created_at,
         onOpen: () => openOverlayRow(row),
         onDismiss: () => markOverlayRowRead(row),
@@ -701,10 +752,16 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
-        response = await supabase.rpc('get_notification_overlay_feed_v1', {
+        response = await supabase.rpc('get_notification_overlay_feed_v2', {
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
+        if (isMissingRpcError(response.error)) {
+          response = await supabase.rpc('get_notification_overlay_feed_v1', {
+            p_before_cursor: beforeCursor,
+            p_limit: 20,
+          });
+        }
       } catch (error) {
         response = { data: null, error };
       }

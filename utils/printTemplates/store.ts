@@ -1472,7 +1472,7 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
         <div style="font-size:11px; color:#64748b;">{{company.company_full_name}}</div>
       </td>
       <td style="width:32%; border:none; padding:8px 10px; background:rgba(var(--brand-50-rgb),0.24); line-height:1.9;">
-        <div>تاریخ: {{record.delivery_date}}</div>
+        <div>زمان تحویل: {{record.delivery_date}}</div>
         <div>شماره: {{record.system_code}}</div>
         <div>وضعیت: {{record.status}}</div>
       </td>
@@ -1492,9 +1492,9 @@ const buildDeliveryFormPrintTemplate = (now: string): StoredPrintTemplate => ({
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌دهنده</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.delivered_by_id}} {{record.external_delivered_by}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.delivered_by_employee_id}} {{record.delivered_by_customer_id}} {{record.delivered_by_supplier_id}} {{record.external_delivered_by}} {{record.delivered_by_id}}</td>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">تحویل‌گیرنده</td>
-        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.received_by_id}} {{record.external_received_by}}</td>
+        <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px;">{{record.received_by_employee_id}} {{record.received_by_customer_id}} {{record.received_by_supplier_id}} {{record.external_received_by}} {{record.received_by_id}}</td>
       </tr>
       <tr>
         <td style="border:1px solid var(--table-border-color, #d1d5db); padding:6px; font-weight:700; background:rgba(var(--brand-50-rgb),0.28);">محل تحویل</td>

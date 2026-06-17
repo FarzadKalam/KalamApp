@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Button, Image, Space } from 'antd';
-import { CustomerServiceOutlined, DownloadOutlined } from '@ant-design/icons';
+import { CustomerServiceOutlined, DownloadOutlined, EditOutlined } from '@ant-design/icons';
 import FileExtensionTile from '../files/FileExtensionTile';
 import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { buildImagePreviewUrl } from '../../utils/imagePreview';
@@ -76,11 +76,13 @@ const downloadAttachment = (url: string, fileName: string) => {
 type AiMessageAttachmentPreviewProps = {
   attachment?: AiAttachmentLike | null;
   fallbackName?: string;
+  onEditImage?: (url: string) => void;
 };
 
 const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
   attachment,
   fallbackName = 'فایل هوش مصنوعی',
+  onEditImage,
 }) => {
   const normalized = useMemo(() => {
     const url = resolveAiAttachmentUrl(attachment);
@@ -126,7 +128,18 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
           alt={normalized.fileName}
           className="max-h-[360px] rounded-lg object-contain"
         />
-        <div className="mt-2 flex justify-end">
+        <div className="mt-2 flex justify-end gap-2">
+          {onEditImage ? (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<EditOutlined />}
+              onClick={() => onEditImage(normalized.url)}
+            >
+              اصلاح این تصویر
+            </Button>
+          ) : null}
           <Button
             size="small"
             icon={<DownloadOutlined />}

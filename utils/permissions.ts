@@ -1,5 +1,6 @@
 ﻿import { BlockType, type ModuleDefinition } from '../types';
 import { getResolvedAssigneeId } from './assigneeValue';
+import { CUSTOMER_CLUB_PERMISSION_KEY } from './customerClub';
 import { fetchAssigneeDirectory } from './referenceData';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from './sessionCache';
 
@@ -13,8 +14,10 @@ export type ViewConditionItem = {
 };
 
 export type ViewConditionGroup = {
-  logic: 'and' | 'or';
-  conditions: ViewConditionItem[];
+  logic?: 'and' | 'or';
+  conditions?: ViewConditionItem[];
+  conditions_all?: ViewConditionItem[] | null;
+  conditions_any?: ViewConditionItem[] | null;
 };
 
 export type ModulePermissionConfig = {
@@ -51,6 +54,7 @@ export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
+export { CUSTOMER_CLUB_PERMISSION_KEY };
 export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
@@ -77,7 +81,6 @@ export const SETTINGS_TAB_PERMISSIONS = [
   { key: 'module_settings', label: 'تنظیمات ماژول ها' },
   { key: 'formulas', label: 'فرمول های محاسباتی' },
   { key: 'connections', label: 'اتصالات' },
-  { key: 'customer_leveling', label: 'تنظیمات سطح بندی' },
   { key: 'print_templates', label: 'قالب‌های پرینت' },
   { key: 'ai_knowledge', label: 'دانش سازمان' },
   { key: 'workflows', label: 'گردش کارها' },
@@ -153,6 +156,13 @@ export const COMMUNICATIONS_PERMISSION_FIELDS = [
   { key: 'use_voip', label: 'تماس VoIP' },
   { key: 'view_system_feed', label: 'فید سیستم و اتوماسیون' },
   { key: 'audit_all_conversations', label: 'ممیزی همه گفتگوها' },
+] as const;
+
+export const CUSTOMER_CLUB_PERMISSION_FIELDS = [
+  { key: 'rules', label: 'طرح‌های باشگاه مشتریان' },
+  { key: 'discount_codes', label: 'کدهای تخفیف' },
+  { key: 'credit_ledger', label: 'دفتر اعتبار مشتریان' },
+  { key: 'leveling', label: 'سطح‌بندی مشتریان' },
 ] as const;
 
 export const STORIES_PERMISSION_FIELDS = [
@@ -277,7 +287,42 @@ const createFieldsMap = (items: Array<{ key: string }>) => {
   }, {});
 };
 
+const normalizeConditionList = (value: unknown): ViewConditionItem[] =>
+  Array.isArray(value)
+    ? value.filter((item) => item && typeof item === 'object' && String((item as any)?.field || '').trim())
+      .map((item) => item as ViewConditionItem)
+    : [];
+
+export const normalizeViewConditionGroup = (
+  value?: ViewConditionGroup | null
+): ViewConditionGroup => {
+  const legacyConditions = normalizeConditionList(value?.conditions);
+  const hasModernShape =
+    Array.isArray(value?.conditions_all) ||
+    Array.isArray(value?.conditions_any);
+
+  const conditionsAll = hasModernShape
+    ? normalizeConditionList(value?.conditions_all)
+    : (value?.logic === 'or' ? [] : legacyConditions);
+  const conditionsAny = hasModernShape
+    ? normalizeConditionList(value?.conditions_any)
+    : (value?.logic === 'or' ? legacyConditions : []);
+
+  return {
+    conditions_all: conditionsAll,
+    conditions_any: conditionsAny,
+  };
+};
+
+export const hasViewConditionGroupConditions = (
+  value?: ViewConditionGroup | null
+) => {
+  const normalized = normalizeViewConditionGroup(value);
+  return (normalized.conditions_all?.length || 0) > 0 || (normalized.conditions_any?.length || 0) > 0;
+};
+
 const mergeModulePermission = (base: ModulePermissionConfig, incoming?: ModulePermissionConfig) => {
+  const viewConditions = normalizeViewConditionGroup(incoming?.view_conditions || base.view_conditions);
   return {
     view: incoming?.view ?? base.view ?? true,
     edit: incoming?.edit ?? base.edit ?? true,
@@ -289,6 +334,7 @@ const mergeModulePermission = (base: ModulePermissionConfig, incoming?: ModulePe
       ...(base.fields || {}),
       ...(incoming?.fields || {}),
     },
+    view_conditions: hasViewConditionGroupConditions(viewConditions) ? viewConditions : undefined,
   };
 };
 
@@ -364,6 +410,14 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     delete: true,
     record_scope: 'all',
     fields: createFieldsMap(REPORTS_PERMISSION_FIELDS),
+  };
+
+  defaults[CUSTOMER_CLUB_PERMISSION_KEY] = {
+    view: true,
+    edit: true,
+    delete: true,
+    record_scope: 'all',
+    fields: createFieldsMap([...CUSTOMER_CLUB_PERMISSION_FIELDS]),
   };
 
   defaults[VOIP_PERMISSION_KEY] = {

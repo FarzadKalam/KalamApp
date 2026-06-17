@@ -26,6 +26,7 @@ export const secretariatDocumentsConfig: ModuleDefinition = {
     searchFields: ['name', 'system_code', 'external_number', 'indicator_number'],
   },
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر / فایل اصلی', en: 'Main Image / File' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'موضوع', en: 'Subject' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'شماره داخلی', en: 'Internal No.' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     {

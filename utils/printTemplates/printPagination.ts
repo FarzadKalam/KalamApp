@@ -26,7 +26,8 @@ const ROOT_BLOCK_TAGS = new Set([
 ]);
 
 const TEXT_BLOCK_SELECTOR = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, hr';
-const TABLE_BLOCK_SELECTOR = 'table, thead, tbody, tfoot, tr';
+const TABLE_CONTAINER_SELECTOR = 'table, tbody';
+const TABLE_ROW_SELECTOR = 'thead, tfoot, tr';
 const MEDIA_BLOCK_SELECTOR = 'img, svg, canvas, figure, picture';
 const MANUAL_KEEP_SELECTOR = '[style*="page-break-inside: avoid"], [style*="page-break-before: avoid"], [style*="break-inside: avoid"]';
 const MIN_ANCHOR_HEIGHT_PX = 4;
@@ -36,6 +37,11 @@ const DEFAULT_MIN_PAGE_FILL_RATIO = 0.55;
 const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
 
 const roundPx = (value: number) => Math.max(0, Math.round(value));
+
+const isFragmentableTableContainer = (element: Element) => {
+  const tagName = String(element.tagName || '').toLowerCase();
+  return tagName === 'table' || tagName === 'tbody';
+};
 
 const markPrintFlowElement = (
   element: Element,
@@ -85,6 +91,7 @@ export const annotatePrintFlowHtml = (html: string) => {
   Array.from(root.children || []).forEach((child) => {
     const tagName = String(child.tagName || '').toLowerCase();
     if (!ROOT_BLOCK_TAGS.has(tagName)) return;
+    if (isFragmentableTableContainer(child)) return;
     markPrintFlowElement(child, getElementPriority(child), 'root-block');
   });
 
@@ -92,14 +99,18 @@ export const annotatePrintFlowHtml = (html: string) => {
     markPrintFlowElement(element, getElementPriority(element), 'text-block');
   });
 
-  root.querySelectorAll(TABLE_BLOCK_SELECTOR).forEach((element) => {
-    markPrintFlowElement(element, getElementPriority(element), 'table-block');
+  root.querySelectorAll(TABLE_CONTAINER_SELECTOR).forEach((element) => {
+    markPrintFlowElement(element, 'normal', 'table-container');
+  });
+  root.querySelectorAll(TABLE_ROW_SELECTOR).forEach((element) => {
+    markPrintFlowElement(element, 'high', 'table-row');
   });
   root.querySelectorAll(MEDIA_BLOCK_SELECTOR).forEach((element) => {
     markPrintFlowElement(element, 'high', 'media-block');
   });
 
   root.querySelectorAll(MANUAL_KEEP_SELECTOR).forEach((element) => {
+    if (isFragmentableTableContainer(element)) return;
     markPrintFlowElement(element, 'high', 'manual-keep');
   });
 
@@ -113,6 +124,7 @@ export const annotatePrintFlowHtml = (html: string) => {
       .map((value) => String(value || '').toLowerCase())
       .join(' ');
     if (/(signature|signatory|stamp|seal|footer|header|heading|title|summary)/.test(hint)) {
+      if (isFragmentableTableContainer(element)) return;
       markPrintFlowElement(element, 'high', 'semantic-block');
     }
   });

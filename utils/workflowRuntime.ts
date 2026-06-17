@@ -2,7 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField } from '../types';
 import { supabase } from '../supabaseClient';
 import { loadScopedIntegrationSettings } from './integrationSettings';
-import { buildResolvedAssigneeCombo } from './assigneeValue';
+import { buildResolvedAssigneeCombo, parseAssigneeValue } from './assigneeValue';
 import { buildClientFallbackSystemCode, supportsSystemCode } from './systemCode';
 import { buildWebFormPublicPath } from './webForms';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage } from './botGateway';
@@ -322,12 +322,60 @@ const getValueByPath = (record: Record<string, any> | null | undefined, path: st
 const templateMayNeedAssigneeDirectory = (template: string) =>
   /\{\{\s*[^}]*assignee[^}]*\s*\}\}/i.test(String(template || ''));
 
+const ASSIGNEE_PROFILE_TEMPLATE_FIELDS: Record<string, string> = {
+  assignee_full_name: 'full_name',
+  assignee_name: 'full_name',
+  assignee_mobile: 'mobile_1',
+  assignee_mobile_1: 'mobile_1',
+  assignee_job_title: 'job_title',
+  assignee_voip_operator_code: 'voip_operator_code',
+  assignee_voip_extension: 'voip_extension',
+};
+
+const parseAssigneeProfileTemplateField = (fieldKey: string) => {
+  const normalized = String(fieldKey || '').trim();
+  if (!normalized) return null;
+  if (ASSIGNEE_PROFILE_TEMPLATE_FIELDS[normalized]) {
+    return { type: 'user' as const, profileField: ASSIGNEE_PROFILE_TEMPLATE_FIELDS[normalized] };
+  }
+  const dotMatch = normalized.match(/^(?:assignee|__workflow_assignee)\.(full_name|mobile_1|mobile|job_title|voip_operator_code|voip_extension)$/i);
+  if (dotMatch) {
+    const rawField = String(dotMatch[1] || '').trim();
+    return { type: 'user' as const, profileField: rawField === 'mobile' ? 'mobile_1' : rawField };
+  }
+  if (normalized === 'assignee_role_title' || normalized === 'assignee.role_title') {
+    return { type: 'role' as const, profileField: 'title' };
+  }
+  return null;
+};
+
+const resolveAssigneeProfileTemplateValue = async (
+  fieldKey: string,
+  record: Record<string, any>
+) => {
+  const meta = parseAssigneeProfileTemplateField(fieldKey);
+  if (!meta) return undefined;
+  const combo = buildResolvedAssigneeCombo(record);
+  const parsed = parseAssigneeValue(combo || record?.assignee_id || record?.assignee_role_id, record?.assignee_role_id ? 'role' : 'user');
+  if (!parsed.assigneeId) return null;
+  const directory = await fetchAssigneeDirectory(supabase).catch(() => null);
+  if (!directory) return null;
+  if (meta.type === 'role' || parsed.assigneeType === 'role') {
+    const role = (directory.roles || []).find((item) => String(item?.id || '').trim() === parsed.assigneeId);
+    return meta.type === 'role' ? String(role?.title || '').trim() || null : null;
+  }
+  const user = (directory.users || []).find((item) => String(item?.id || '').trim() === parsed.assigneeId);
+  return user ? (user as any)?.[meta.profileField] ?? null : null;
+};
+
 const resolveWorkflowTemplateValue = async (
   fieldKey: string,
   record: Record<string, any>,
   moduleId: string | null | undefined,
   context: WorkflowEvaluationContext
 ) => {
+  const assigneeProfileValue = await resolveAssigneeProfileTemplateValue(fieldKey, record);
+  if (assigneeProfileValue !== undefined) return assigneeProfileValue;
   if (Object.prototype.hasOwnProperty.call(record || {}, fieldKey)) {
     return record?.[fieldKey];
   }
@@ -2064,6 +2112,25 @@ const buildAssigneePatch = (value: any) => {
   };
 };
 
+const isWorkflowAssigneePatchField = (fieldKey: string) => {
+  const normalized = String(fieldKey || '').trim();
+  return normalized === WORKFLOW_ASSIGNEE_FIELD_KEY || normalized === 'assignee_id';
+};
+
+const applyWorkflowPayloadValue = (
+  payload: Record<string, any>,
+  fieldKey: string,
+  value: any
+) => {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  if (!normalizedFieldKey) return;
+  if (isWorkflowAssigneePatchField(normalizedFieldKey)) {
+    Object.assign(payload, buildAssigneePatch(value));
+    return;
+  }
+  payload[normalizedFieldKey] = value;
+};
+
 const updateNextStageTaskField = async (
   targetTask: Record<string, any>,
   fieldKey: string,
@@ -2745,7 +2812,8 @@ export const executeWorkflowAction = async (
     if (!targetRecordId) return;
 
     const user = await getCurrentAuthUser();
-    const patch = { [patchFieldKey]: nextValue, updated_at: new Date().toISOString() } as Record<string, any>;
+    const patch = { updated_at: new Date().toISOString() } as Record<string, any>;
+    applyWorkflowPayloadValue(patch, patchFieldKey, nextValue);
     if (user?.id) patch.updated_by = user.id;
     const { error } = await supabase
       .from(getModuleTable(targetModuleId))
@@ -2753,7 +2821,7 @@ export const executeWorkflowAction = async (
       .eq('id', targetRecordId);
     if (error) throw error;
     currentRecord[fieldKey] = nextValue;
-    currentRecord[patchFieldKey] = nextValue;
+    Object.assign(currentRecord, patch);
     return;
   }
 
@@ -2790,18 +2858,18 @@ export const executeWorkflowAction = async (
       if (!targetField) continue;
       if (mapping?.mode === 'from_source' || mapping?.mode === 'from_related') {
         const sourceField = String(mapping?.source_field || '').trim();
-        payload[targetField] = sourceField
+        applyWorkflowPayloadValue(payload, targetField, sourceField
           ? await resolveConditionFieldValue(sourceField, currentRecord, moduleId, mappingContext)
-          : null;
+          : null);
         continue;
       }
       if (mapping?.mode === 'formula') {
-        payload[targetField] = mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
+        applyWorkflowPayloadValue(payload, targetField, mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
           ? evaluateFormulaExpression(mapping.formula_expression_config, currentRecord || {}).value
-          : null;
+          : null);
         continue;
       }
-      payload[targetField] = mapping?.value ?? null;
+      applyWorkflowPayloadValue(payload, targetField, mapping?.value ?? null);
     }
 
     if (supportsSystemCode(targetModuleId) && !payload.system_code) {
@@ -2852,18 +2920,18 @@ export const executeWorkflowAction = async (
       if (!targetField) continue;
       if (mapping?.mode === 'from_source' || mapping?.mode === 'from_related') {
         const sourceField = String(mapping?.source_field || '').trim();
-        payload[targetField] = sourceField
+        applyWorkflowPayloadValue(payload, targetField, sourceField
           ? await resolveConditionFieldValue(sourceField, currentRecord, moduleId, mappingContext)
-          : null;
+          : null);
         continue;
       }
       if (mapping?.mode === 'formula') {
-        payload[targetField] = mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
+        applyWorkflowPayloadValue(payload, targetField, mapping?.formula_expression_config && typeof mapping.formula_expression_config === 'object'
           ? evaluateFormulaExpression(mapping.formula_expression_config, currentRecord || {}).value
-          : null;
+          : null);
         continue;
       }
-      payload[targetField] = mapping?.value ?? null;
+      applyWorkflowPayloadValue(payload, targetField, mapping?.value ?? null);
     }
 
     if (supportsSystemCode(targetModuleId) && !payload.system_code) {

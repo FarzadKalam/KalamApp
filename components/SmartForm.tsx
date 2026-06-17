@@ -73,6 +73,8 @@ import {
   InvoicePaymentOverflowPlan,
 } from '../utils/invoicePaymentAllocation';
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
+import { isCustomerPurchaseStatus, normalizeCustomerClubCode, resolveCustomerClubAmount } from '../utils/customerClub';
+import { evaluateWorkflowConditions } from '../utils/workflowRuntime';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const SAAS_ANNOUNCEMENT_CONDITION_FIELD_KEYS = new Set(['conditions_all', 'conditions_any']);
@@ -1741,16 +1743,111 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (mapping.total && summaryData.total !== undefined) values[mapping.total] = summaryData.total;
           if (mapping.received && summaryData.received !== undefined) values[mapping.received] = summaryData.received;
           if (mapping.remaining && summaryData.remaining !== undefined) values[mapping.remaining] = summaryData.remaining;
-        } else if (summaryData && (module.id === 'products' || module.id === 'production_boms' || module.id === 'production_orders')) {
+      } else if (summaryData && (module.id === 'products' || module.id === 'production_boms' || module.id === 'production_orders')) {
           values['production_cost'] = summaryData.total;
+      }
+      let customerClubDiscountRedemption: {
+        discountCodeId: string;
+        customerId: string;
+        discountAmount: number;
+      } | null = null;
+      if (module.id === 'invoices') {
+        const discountCode = normalizeCustomerClubCode(values?.loyalty_discount_code);
+        if (discountCode) {
+          const customerId = String(values?.customer_id || '').trim();
+          if (!customerId) {
+            messageApi.error('برای استفاده از کد تخفیف باشگاه، ابتدا مشتری را انتخاب کنید.');
+            return;
+          }
+          const today = new Date().toISOString().slice(0, 10);
+          const { data: discountRow, error: discountError } = await supabase
+            .from('customer_discount_codes')
+            .select('id, code, title, discount_type, discount_value, max_discount_amount, starts_at, ends_at, max_uses, per_customer_max_uses, is_active, conditions_all, conditions_any')
+            .eq('code', discountCode)
+            .maybeSingle();
+          if (discountError) throw discountError;
+          if (!discountRow || discountRow.is_active === false) {
+            messageApi.error('کد تخفیف باشگاه مشتریان معتبر یا فعال نیست.');
+            return;
+          }
+          if (discountRow.starts_at && String(discountRow.starts_at) > today) {
+            messageApi.error('زمان استفاده از این کد تخفیف هنوز شروع نشده است.');
+            return;
+          }
+          if (discountRow.ends_at && String(discountRow.ends_at) < today) {
+            messageApi.error('مهلت استفاده از این کد تخفیف تمام شده است.');
+            return;
+          }
+          const conditionsAll = Array.isArray(discountRow.conditions_all) ? discountRow.conditions_all : [];
+          const conditionsAny = Array.isArray(discountRow.conditions_any) ? discountRow.conditions_any : [];
+          if (conditionsAll.length > 0 || conditionsAny.length > 0) {
+            const { data: customerRecord, error: customerError } = await supabase
+              .from('customers')
+              .select('*')
+              .eq('id', customerId)
+              .maybeSingle();
+            if (customerError) throw customerError;
+            const conditionMatched = await evaluateWorkflowConditions({
+              conditionsAll,
+              conditionsAny,
+              currentRecord: customerRecord || {},
+              moduleId: 'customers',
+            });
+            if (!conditionMatched) {
+              messageApi.error('این کد تخفیف برای این مشتری قابل استفاده نیست.');
+              return;
+            }
+          }
+          if (discountRow.max_uses || discountRow.per_customer_max_uses) {
+            const { data: redemptionRows, error: redemptionError } = await supabase
+              .from('customer_discount_redemptions')
+              .select('id, customer_id, invoice_id')
+              .eq('discount_code_id', discountRow.id)
+              .limit(1000);
+            if (redemptionError) throw redemptionError;
+            const effectiveRows = (redemptionRows || []).filter((row: any) => String(row?.invoice_id || '') !== String(recordId || ''));
+            if (discountRow.max_uses && effectiveRows.length >= Number(discountRow.max_uses)) {
+              messageApi.error('ظرفیت استفاده از این کد تخفیف تکمیل شده است.');
+              return;
+            }
+            const customerUseCount = effectiveRows.filter((row: any) => String(row?.customer_id || '') === customerId).length;
+            if (discountRow.per_customer_max_uses && customerUseCount >= Number(discountRow.per_customer_max_uses)) {
+              messageApi.error('این مشتری قبلاً به سقف استفاده از این کد تخفیف رسیده است.');
+              return;
+            }
+          }
+          const discountAmount = resolveCustomerClubAmount({
+            baseAmount: summaryData?.total ?? values?.total_invoice_amount ?? 0,
+            type: discountRow.discount_type,
+            amount: discountRow.discount_value,
+            percent: discountRow.discount_value,
+            maxAmount: discountRow.max_discount_amount,
+          });
+          values.loyalty_discount_code = discountCode;
+          values.loyalty_discount_code_id = discountRow.id;
+          values.loyalty_discount_amount = discountAmount;
+          values.global_discount_type = 'amount';
+          values.global_discount_value = discountAmount;
+          customerClubDiscountRedemption = {
+            discountCodeId: String(discountRow.id),
+            customerId,
+            discountAmount,
+          };
+        } else {
+          values.loyalty_discount_code = null;
+          values.loyalty_discount_code_id = null;
+          values.loyalty_discount_amount = 0;
+        }
       }
       if (module.id === 'invoices' || module.id === 'purchase_invoices') {
         const discountType = String(formData?.global_discount_type || values?.global_discount_type || '').trim().toLowerCase();
         values.global_discount_type = discountType === 'percent' ? 'percent' : 'amount';
-        values.global_discount_value = Math.max(
-          0,
-          Number(formData?.global_discount_value ?? values?.global_discount_value ?? 0) || 0
-        );
+        if (!customerClubDiscountRedemption) {
+          values.global_discount_value = Math.max(
+            0,
+            Number(formData?.global_discount_value ?? values?.global_discount_value ?? 0) || 0
+          );
+        }
       }
       if (module.id === 'tasks') {
         values = attachTaskCompletionIfNeeded(values, {
@@ -1943,6 +2040,160 @@ const SmartForm: React.FC<SmartFormProps> = ({
           }
           return insertResult;
         };
+        const registerCustomerClubDiscountRedemption = async (invoiceId?: string | null) => {
+          if (!customerClubDiscountRedemption || !invoiceId) return;
+          const payload = {
+            discount_code_id: customerClubDiscountRedemption.discountCodeId,
+            customer_id: customerClubDiscountRedemption.customerId,
+            invoice_id: invoiceId,
+            discount_amount: customerClubDiscountRedemption.discountAmount,
+          };
+          const { data: existing, error: lookupError } = await supabase
+            .from('customer_discount_redemptions')
+            .select('id')
+            .eq('discount_code_id', payload.discount_code_id)
+            .eq('invoice_id', invoiceId)
+            .maybeSingle();
+          if (lookupError) throw lookupError;
+          const result = existing?.id
+            ? await supabase.from('customer_discount_redemptions').update(payload).eq('id', existing.id)
+            : await supabase.from('customer_discount_redemptions').insert([payload]);
+          if (result.error) throw result.error;
+        };
+        const applyConditionedCustomerClubRewards = async (invoiceId?: string | null) => {
+          if (module.id !== 'invoices' || !invoiceId) return;
+          const rewardSourceTypes = [
+            'conditioned_cashback_reward',
+            'conditioned_first_purchase_reward',
+            'conditioned_referral_reward',
+          ];
+          const customerId = String(values?.customer_id || '').trim();
+          const previousCustomerId = String(initialRecord?.customer_id || '').trim();
+          const { data: existingRewardRows, error: existingRewardsError } = await supabase
+            .from('customer_loyalty_ledger')
+            .select('customer_id')
+            .eq('source_table', 'invoices')
+            .eq('source_record_id', invoiceId)
+            .in('source_type', rewardSourceTypes);
+          if (existingRewardsError) throw existingRewardsError;
+
+          const { error: cleanupError } = await supabase
+            .from('customer_loyalty_ledger')
+            .delete()
+            .eq('source_table', 'invoices')
+            .eq('source_record_id', invoiceId)
+            .in('source_type', rewardSourceTypes);
+          if (cleanupError) throw cleanupError;
+          if (previousCustomerId) {
+            await supabase.rpc('sync_customer_loyalty_balance', { p_customer_id: previousCustomerId });
+          }
+          for (const row of existingRewardRows || []) {
+            const ledgerCustomerId = String((row as any)?.customer_id || '').trim();
+            if (ledgerCustomerId && ledgerCustomerId !== previousCustomerId) {
+              await supabase.rpc('sync_customer_loyalty_balance', { p_customer_id: ledgerCustomerId });
+            }
+          }
+
+          if (!customerId || !isCustomerPurchaseStatus(values?.status ?? initialRecord?.status)) return;
+          const { data: customerRecord, error: customerError } = await supabase
+            .from('customers')
+            .select('*')
+            .eq('id', customerId)
+            .maybeSingle();
+          if (customerError) throw customerError;
+          if (!customerRecord?.org_id) return;
+
+          const invoiceDate = String(values?.invoice_date || initialRecord?.invoice_date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+          const { data: ruleRows, error: rulesError } = await supabase
+            .from('customer_loyalty_rules')
+            .select('*')
+            .eq('is_active', true)
+            .in('rule_type', ['cashback', 'first_purchase', 'referral']);
+          if (rulesError) throw rulesError;
+
+          const candidateRules = (ruleRows || []).filter((rule: any) => {
+            const conditionsAll = Array.isArray(rule?.conditions_all) ? rule.conditions_all : [];
+            const conditionsAny = Array.isArray(rule?.conditions_any) ? rule.conditions_any : [];
+            if (conditionsAll.length === 0 && conditionsAny.length === 0) return false;
+            if (rule?.starts_at && String(rule.starts_at) > invoiceDate) return false;
+            if (rule?.ends_at && String(rule.ends_at) < invoiceDate) return false;
+            return true;
+          });
+          if (candidateRules.length === 0) return;
+
+          let hasPriorPurchase: boolean | null = null;
+          const syncedCustomerIds = new Set<string>();
+          for (const rule of candidateRules as any[]) {
+            const conditionsAll = Array.isArray(rule?.conditions_all) ? rule.conditions_all : [];
+            const conditionsAny = Array.isArray(rule?.conditions_any) ? rule.conditions_any : [];
+            const conditionMatched = await evaluateWorkflowConditions({
+              conditionsAll,
+              conditionsAny,
+              currentRecord: customerRecord,
+              moduleId: 'customers',
+            });
+            if (!conditionMatched) continue;
+
+            if (rule.rule_type === 'first_purchase') {
+              if (Number(customerRecord.previous_system_purchase_count || 0) > 0) continue;
+              if (hasPriorPurchase === null) {
+                const { data: priorRows, error: priorError } = await supabase
+                  .from('invoices')
+                  .select('id, status')
+                  .eq('customer_id', customerId)
+                  .neq('id', invoiceId)
+                  .limit(1000);
+                if (priorError) throw priorError;
+                hasPriorPurchase = (priorRows || []).some((row: any) => isCustomerPurchaseStatus(row?.status));
+              }
+              if (hasPriorPurchase) continue;
+            }
+
+            const targetCustomerId = rule.rule_type === 'referral'
+              ? String(customerRecord.referrer_module || '') === 'customers'
+                ? String(customerRecord.referrer_customer_id || '').trim()
+                : ''
+              : customerId;
+            if (!targetCustomerId) continue;
+
+            const amount = resolveCustomerClubAmount({
+              baseAmount: values?.total_invoice_amount ?? summaryData?.total ?? 0,
+              type: rule.reward_type === 'percent' ? 'percent' : 'amount',
+              amount: rule.reward_amount,
+              percent: rule.reward_percent,
+              maxAmount: rule.max_reward_amount,
+            });
+            if (amount <= 0) continue;
+
+            const sourceType = `conditioned_${rule.rule_type}_reward`;
+            const { error: ledgerError } = await supabase
+              .from('customer_loyalty_ledger')
+              .upsert([{
+                org_id: customerRecord.org_id,
+                customer_id: targetCustomerId,
+                rule_id: rule.id,
+                entry_type: 'credit',
+                source_type: sourceType,
+                source_table: 'invoices',
+                source_record_id: invoiceId,
+                amount,
+                effective_date: invoiceDate,
+                idempotency_key: `${sourceType}:${rule.id}:${invoiceId}`,
+                description: rule.rule_type === 'referral' ? 'پاداش معرفی مشتری' : rule.rule_type === 'first_purchase' ? 'هدیه اولین خرید' : 'کش‌بک باشگاه مشتریان',
+                metadata: {
+                  invoice_id: invoiceId,
+                  customer_id: customerId,
+                  conditioned: true,
+                },
+              }], { onConflict: 'org_id,idempotency_key' });
+            if (ledgerError) throw ledgerError;
+            syncedCustomerIds.add(targetCustomerId);
+          }
+
+          for (const syncCustomerId of syncedCustomerIds) {
+            await supabase.rpc('sync_customer_loyalty_balance', { p_customer_id: syncCustomerId });
+          }
+        };
 
         if (recordId) {
           const { error: updateError } = await persistWithAuditFallback('update', values, recordId);
@@ -1985,6 +2236,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
               userId,
             });
             if (module.id === 'invoices') {
+              await registerCustomerClubDiscountRedemption(recordId);
+              await applyConditionedCustomerClubRewards(recordId);
               await syncCustomerLevelsByInvoiceCustomers({
                 supabase: supabase as any,
                 customerIds: [initialRecord?.customer_id, values?.customer_id],
@@ -2077,10 +2330,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
                 invoiceItems: values?.invoiceItems ?? [],
                 userId,
               });
-              if (module.id === 'invoices') {
-                await syncCustomerLevelsByInvoiceCustomers({
-                  supabase: supabase as any,
-                  customerIds: [values?.customer_id],
+            if (module.id === 'invoices') {
+              await registerCustomerClubDiscountRedemption(String(inserted.id));
+              await applyConditionedCustomerClubRewards(String(inserted.id));
+              await syncCustomerLevelsByInvoiceCustomers({
+                supabase: supabase as any,
+                customerIds: [values?.customer_id],
                 });
               }
             }

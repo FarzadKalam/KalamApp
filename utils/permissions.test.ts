@@ -3,6 +3,7 @@ import {
   buildDefaultPermissions,
   COMMUNICATIONS_PERMISSION_KEY,
   mergePermissionsWithDefaults,
+  normalizeViewConditionGroup,
   resolveCommunicationsPermissions,
   resolvePreferredRoleModuleIds,
   SAAS_ADMIN_PERMISSION_KEY,
@@ -73,5 +74,33 @@ describe('permissions', () => {
     });
 
     expect(resolved.canAuditAllConversations).toBe(true);
+  });
+
+  it('preserves advanced view conditions while merging defaults', () => {
+    const defaults = buildDefaultPermissions(modules);
+    const merged = mergePermissionsWithDefaults({
+      products: {
+        view: true,
+        view_conditions: {
+          conditions_all: [{ id: 'a', field: 'status', operator: 'eq', value: 'active' }],
+          conditions_any: [{ id: 'b', field: 'category', operator: 'eq', value: 'vip' }],
+        },
+      },
+    }, defaults);
+
+    expect(merged.products?.view_conditions?.conditions_all).toHaveLength(1);
+    expect(merged.products?.view_conditions?.conditions_any).toHaveLength(1);
+  });
+
+  it('normalizes legacy role view conditions into all or any groups', () => {
+    expect(normalizeViewConditionGroup({
+      logic: 'or',
+      conditions: [{ id: 'a', field: 'status', operator: 'eq', value: 'open' }],
+    }).conditions_any).toHaveLength(1);
+
+    expect(normalizeViewConditionGroup({
+      logic: 'and',
+      conditions: [{ id: 'b', field: 'status', operator: 'eq', value: 'open' }],
+    }).conditions_all).toHaveLength(1);
   });
 });

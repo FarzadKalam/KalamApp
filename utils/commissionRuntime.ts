@@ -2,6 +2,7 @@ export type CommissionBasis =
   | 'approved_invoices'
   | 'settled_invoices'
   | 'prepaid_and_settled_invoices'
+  | 'prepaid_and_collected_cheques'
   | 'settled_and_collected_cheques'
   | 'full_settlement_only';
 
@@ -203,6 +204,12 @@ const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
   return payments.reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
 };
 
+const hasAnyFinalPayment = (invoice: CommissionInvoiceRecord) => {
+  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+  if (payments.some((payment) => isFinalPayment(payment) && resolvePaymentAmount(payment) > 0)) return true;
+  return toNumber(invoice.total_received_amount) > 0;
+};
+
 const isFinalPayment = (payment: any) =>
   FINAL_PAYMENT_STATUSES.has(normalizeText(payment?.status).toLowerCase());
 
@@ -347,12 +354,16 @@ const getInvoiceEvent = (
 
   if (basis === 'settled_invoices') {
     const settledAt = resolveInvoiceSettlementDate(invoice);
-    if (!fullySettled || !isInPeriod(settledAt, periodStart, periodEnd)) {
+    const isRelevantPeriodInvoice = isInPeriod(invoice.invoice_date, periodStart, periodEnd);
+    const isSettledInPeriod = isInPeriod(settledAt, periodStart, periodEnd);
+    const isPeriodInvoiceSettledByCalculationEnd = isRelevantPeriodInvoice
+      && hasAnyFinalPayment(invoice);
+    if (!fullySettled || (!isSettledInPeriod && !isPeriodInvoiceSettledByCalculationEnd)) {
       return {
         eventType: 'invoice_settlement',
         eventAt: settledAt,
         poolAmount: 0,
-        exclusionReason: 'تسویه کامل فاکتور در این بازه محقق نشده است',
+        exclusionReason: 'تسویه کامل فاکتور تا زمان محاسبه محقق نشده است',
       };
     }
     return {
@@ -409,6 +420,49 @@ const getInvoiceEvent = (
       eventAt: null,
       poolAmount: 0,
       exclusionReason: 'دریافت یا پیش‌پرداخت موثری در این بازه ثبت نشده است',
+    };
+  }
+
+  if (basis === 'prepaid_and_collected_cheques') {
+    const collectedChequeAmount = sumPaymentsInPeriod(
+      payments,
+      periodStart,
+      periodEnd,
+      (payment) => isFinalPayment(payment) && isChequePayment(payment) && isCollectedChequePayment(payment),
+    );
+    const nonChequePaidAmount = sumPaymentsInPeriod(
+      payments,
+      periodStart,
+      periodEnd,
+      (payment) => isFinalPayment(payment) && !isChequePayment(payment),
+    );
+    const poolAmount = clamp(collectedChequeAmount + nonChequePaidAmount, 0, invoiceTotal);
+    if (poolAmount > 0) {
+      return {
+        eventType: 'prepayment_or_collected_cheque',
+        eventAt: findLatestPaymentDate(
+          payments,
+          (payment) => isInPeriod(paymentDate(payment), periodStart, periodEnd)
+            && isFinalPayment(payment)
+            && (!isChequePayment(payment) || isCollectedChequePayment(payment)),
+        ),
+        poolAmount,
+        exclusionReason: null,
+      };
+    }
+    if (PREPAYMENT_STATUSES.has(status) && toNumber(invoice.total_received_amount) > 0 && isInPeriod(invoice.invoice_date, periodStart, periodEnd)) {
+      return {
+        eventType: 'prepayment',
+        eventAt: invoice.invoice_date || null,
+        poolAmount: clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal),
+        exclusionReason: null,
+      };
+    }
+    return {
+      eventType: 'prepayment_or_collected_cheque',
+      eventAt: null,
+      poolAmount: 0,
+      exclusionReason: 'پیش‌پرداخت یا چک وصول‌شده‌ای در این بازه ثبت نشده است',
     };
   }
 
@@ -492,13 +546,18 @@ export const buildCommissionDraftSourceKey = ({
   ].join(':');
 
 const recomputePoolRow = (row: CommissionDraftRow): CommissionDraftRow => {
-  const allocatableLines = row.lines.filter((line) => line.decision_status !== 'exclude' && line.net_amount > 0 && line.commission_percent > 0);
+  const manualIncludeLines = row.lines.filter((line) => line.decision_status === 'include' && line.net_amount > 0 && line.commission_percent > 0);
+  const allocatableLines = row.event_pool_amount > 0 || manualIncludeLines.length === 0
+    ? row.lines.filter((line) => line.decision_status !== 'exclude' && line.net_amount > 0 && line.commission_percent > 0)
+    : manualIncludeLines;
   const allocatableNetTotal = allocatableLines.reduce((sum, line) => sum + line.net_amount, 0);
-  const cappedPoolAmount = allocatableNetTotal > 0 ? clamp(row.event_pool_amount, 0, allocatableNetTotal) : 0;
+  const manualIncludeNetTotal = manualIncludeLines.reduce((sum, line) => sum + line.net_amount, 0);
+  const effectivePoolAmount = row.event_pool_amount > 0 ? row.event_pool_amount : manualIncludeNetTotal;
+  const cappedPoolAmount = allocatableNetTotal > 0 ? clamp(effectivePoolAmount, 0, allocatableNetTotal) : 0;
   const ratio = allocatableNetTotal > 0 ? cappedPoolAmount / allocatableNetTotal : 0;
 
   const nextLines = row.lines.map((line) => {
-    const active = line.decision_status !== 'exclude' && line.net_amount > 0 && line.commission_percent > 0;
+    const active = allocatableLines.some((item) => item.key === line.key);
     const entitledAmount = active ? (line.net_amount * (line.commission_percent / 100) * ratio) : 0;
     const postedAmount = clamp(line.posted_amount, 0, entitledAmount);
     const remainingAmount = Math.max(0, entitledAmount - postedAmount);

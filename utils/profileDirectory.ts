@@ -10,6 +10,9 @@ export const PROFILE_DIRECTORY_SAFE_COLUMNS = [
   'avatar_url',
   'email',
   'mobile_1',
+  'job_title',
+  'voip_operator_code',
+  'voip_extension',
   'is_active',
   'created_at',
 ] as const;
@@ -23,6 +26,9 @@ export const normalizeProfileDirectoryRow = (row: any) => ({
   full_name: String(row?.full_name || '').trim() || null,
   email: String(row?.email || '').trim() || null,
   mobile_1: String(row?.mobile_1 || '').trim() || null,
+  job_title: String(row?.job_title || '').trim() || null,
+  voip_operator_code: String(row?.voip_operator_code || '').trim() || null,
+  voip_extension: String(row?.voip_extension || '').trim() || null,
 });
 
 export const loadProfilesWithCompat = async (

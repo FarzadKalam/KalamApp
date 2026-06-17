@@ -14,6 +14,15 @@ export type PayrollLedgerEntry = {
   details?: Record<string, any> | null;
 };
 
+export type PayrollSlipLine = {
+  line_type: 'earning' | 'bonus' | 'deduction';
+  title: string;
+  amount: number;
+  description: string;
+  source_entry_id?: string;
+  source_entry_ids?: string[];
+};
+
 export const isMissingPayrollLedgerError = (error: any) => {
   const text = String(error?.message || error?.details || error || '').toLowerCase();
   return text.includes('payroll_calculation_entries') && (text.includes('does not exist') || text.includes('could not find'));
@@ -148,6 +157,83 @@ export const mapPayrollLedgerEntriesToLines = (entries: PayrollLedgerEntry[], cu
       };
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+const joinDescriptions = (items: string[]) =>
+  Array.from(new Set(items.map((item) => String(item || '').trim()).filter(Boolean))).join('؛ ');
+
+const resolveGroupedLedgerTitle = (entries: PayrollLedgerEntry[]) => {
+  const first = entries[0];
+  const details = first?.details || {};
+  const sourceType = String(first?.source_type || '');
+  if (sourceType === 'activity_performance') return String(first?.title || details.metric_label || 'حقوق عملکردی');
+  if (sourceType === 'goal_reward') return `تحقق هدف - ${String(details.goal_name || first?.title || 'هدف')}`;
+  if (sourceType === 'commission') return 'پورسانت‌ها';
+  if (sourceType === 'employee_bonus') return 'پاداش‌های دستی';
+  if (sourceType === 'employee_penalty') return 'جریمه‌ها';
+  if (sourceType === 'attendance_paid_leave') return 'مرخصی‌های با حقوق';
+  if (sourceType === 'attendance_overtime') return 'اضافه‌کاری‌ها';
+  if (sourceType === 'attendance_early_bonus') return 'پاداش تعجیل';
+  if (sourceType === 'attendance_unpaid_leave') return 'مرخصی‌های بدون حقوق';
+  if (sourceType === 'attendance_absence') return 'غیبت‌ها';
+  if (sourceType === 'attendance_late') return 'تاخیرها';
+  if (sourceType === 'attendance_delay_absence') {
+    const subtype = String(details.deduction_subtype || '').trim();
+    if (subtype === 'unpaid_leave') return 'مرخصی‌های بدون حقوق';
+    if (subtype === 'absence') return 'غیبت‌ها';
+    if (subtype === 'late') return 'تاخیرها';
+    return 'تاخیر / غیبت';
+  }
+  if (sourceType === 'mission') return 'ماموریت‌ها';
+  if (sourceType === 'seniority') return first?.title || 'پایه سنوات';
+  return first?.title || resolveLedgerSourceLabel(first);
+};
+
+const resolveGroupedLedgerKey = (entry: PayrollLedgerEntry) => {
+  const details = entry.details || {};
+  const sourceType = String(entry.source_type || '').trim();
+  if (sourceType === 'activity_performance') {
+    return `activity_performance:${String(details.formula_id || details.source_rule_id || entry.title || entry.entry_type || '').trim()}`;
+  }
+  if (sourceType === 'goal_reward') return `goal_reward:${String(details.goal_id || entry.source_record_id || entry.title || '').trim()}`;
+  if (sourceType === 'commission') return 'commission';
+  if (sourceType === 'employee_bonus') return 'employee_bonus';
+  if (sourceType === 'employee_penalty') return 'employee_penalty';
+  if (sourceType === 'attendance_paid_leave') return 'attendance_paid_leave';
+  if (sourceType === 'attendance_overtime') return 'attendance_overtime';
+  if (sourceType === 'attendance_early_bonus') return 'attendance_early_bonus';
+  if (sourceType === 'attendance_delay_absence') {
+    const subtype = String(details.deduction_subtype || '').trim();
+    return subtype ? `attendance_${subtype}` : 'attendance_delay_absence';
+  }
+  if (sourceType === 'mission' || sourceType === 'attendance_mission') return 'mission';
+  if (sourceType === 'seniority') return 'seniority';
+  return `${sourceType || entry.entry_type}:${String(entry.title || '').trim()}`;
+};
+
+export const groupPayrollLedgerEntriesToSlipLines = (entries: PayrollLedgerEntry[], currencyLabel = 'تومان'): PayrollSlipLine[] => {
+  const groups = new Map<string, PayrollLedgerEntry[]>();
+  entries.forEach((entry) => {
+    if (toNumber(entry.amount) === 0) return;
+    const key = resolveGroupedLedgerKey(entry);
+    groups.set(key, [...(groups.get(key) || []), entry]);
+  });
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const amount = group.reduce((sum, entry) => sum + toNumber(entry.amount), 0);
+      if (amount === 0) return null;
+      const isDeduction = amount < 0 || group.some((entry) => entry.entry_type === 'penalty' || entry.entry_type === 'employee_purchase');
+      return {
+        line_type: isDeduction ? 'deduction' : 'bonus',
+        title: resolveGroupedLedgerTitle(group),
+        amount: Math.abs(amount),
+        description: joinDescriptions(group.map((entry) => buildLedgerDescription(entry, currencyLabel))),
+        source_entry_id: group.length === 1 ? group[0].id : undefined,
+        source_entry_ids: group.map((entry) => entry.id).filter(Boolean),
+      } as PayrollSlipLine;
+    })
+    .filter((item): item is PayrollSlipLine => Boolean(item));
+};
 
 export const sumPayrollLedgerEntries = (entries: PayrollLedgerEntry[]) =>
   entries.reduce((sum, entry) => sum + toNumber(entry.amount), 0);

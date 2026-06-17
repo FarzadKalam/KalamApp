@@ -701,6 +701,32 @@ const formatRecordLabel = (row: any, moduleId?: string | null) => {
   return `${label}${code}`.trim();
 };
 
+const getResponsibilityModuleTitle = (moduleId?: string | null) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const moduleConfig = normalizedModuleId ? MODULES[normalizedModuleId] : null;
+  return String(moduleConfig?.titles?.faSingular || moduleConfig?.titles?.fa || normalizedModuleId || 'رکورد').trim();
+};
+
+const isNewResponsibilityAssignment = (item: any) => {
+  const inboxItem = item?.__notification_inbox_item || {};
+  const payload = isPlainRecord(inboxItem?.payload) ? inboxItem.payload : {};
+  const action = String(inboxItem?.action || payload?.action || '').trim().toLowerCase();
+  if (action === 'insert') return true;
+  if (action === 'update') return false;
+
+  const createdAt = new Date(item?.created_at || '').getTime();
+  const updatedAt = new Date(item?.updated_at || item?.last_event_at || '').getTime();
+  if (!Number.isFinite(createdAt) || !Number.isFinite(updatedAt)) return false;
+  return Math.abs(updatedAt - createdAt) <= 60_000;
+};
+
+const getResponsibilityOverlayBody = (item: any) => {
+  const moduleTitle = getResponsibilityModuleTitle(item?.module_id);
+  return isNewResponsibilityAssignment(item)
+    ? `یک ${moduleTitle} جدید ایجاد شد.`
+    : `یک ${moduleTitle} به شما ارجاع داده شد.`;
+};
+
 const normalizeRoleRows = (rows: any[]) =>
   (rows || []).map((row: any) => ({
     id: row?.id,
@@ -3418,9 +3444,13 @@ useEffect(() => {
   ]);
 
   const fetchSmsMessages = async () => {
+    const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
+    if (!rpcResult.error) return rpcResult.data || [];
+    if (!isMissingRpcError(rpcResult.error)) throw rpcResult.error;
+
     const { data, error } = await supabase
       .from('sms_delivery_reports')
-      .select('id, title, module_id, record_id, assignee_id, direction, provider, provider_message_id, sender, recipient, phone_number, phone_number_id, phone_match_status, message_text, status, error_message, metadata, sent_at, received_at, message_at, created_at, updated_at')
+      .select('id, title, module_id, record_id, related_module_id, related_record_id, customer_id, assignee_id, assignee_type, assignee_role_id, direction, provider, provider_message_id, sender, recipient, phone_number, phone_number_id, phone_match_status, message_text, status, error_message, metadata, sent_at, received_at, message_at, created_at, updated_at')
       .order('message_at', { ascending: false })
       .limit(80);
     if (error) {
@@ -3434,6 +3464,10 @@ useEffect(() => {
 
   const fetchVoipCalls = async () => {
     if (variant !== 'chat' || !profile.id) return [];
+    const rpcResult = await supabase.rpc('get_accessible_voip_call_logs', { p_limit: 80 });
+    if (!rpcResult.error) return rpcResult.data || [];
+    if (!isMissingRpcError(rpcResult.error)) throw rpcResult.error;
+
     const extension = String(profile.voip_extension || '').trim();
     if (!profile.can_view_all_calls && !extension) {
       return [];
@@ -3441,7 +3475,7 @@ useEffect(() => {
 
     let query = supabase
       .from('voip_call_logs')
-      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
+      .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
       .order('started_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(80);
@@ -5089,6 +5123,26 @@ useEffect(() => {
       ? (selectedConversationNotes || [])
       : notes;
     if (selectedConversationKey) {
+      if (selectedConversationKey === MY_NOTES_CONVERSATION_KEY) {
+        const currentUserId = String(profile.id || '').trim();
+        return sourceNotes.filter((note: any) => (
+          currentUserId
+          && String(note?.author_id || '').trim() === currentUserId
+          && !isSystemNote(note)
+          && !String(note?.metadata?.chat_group_id || '').trim()
+        ));
+      }
+      if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || selectedConversationKey === 'system') {
+        return sourceNotes.filter((note: any) => isSystemNote(note));
+      }
+      if (selectedChatGroupId) {
+        return sourceNotes.filter((note: any) => String(note?.metadata?.chat_group_id || '').trim() === selectedChatGroupId);
+      }
+      if (selectedNoteUserId) {
+        return sourceNotes.filter((note: any) =>
+          isDirectConversationNote(note, String(profile.id || ''), String(selectedNoteUserId), noteLookup)
+        );
+      }
       return sourceNotes;
     }
     if (!selectedNoteUserId) {
@@ -5181,6 +5235,12 @@ useEffect(() => {
   }, [isNotificationRead, notes, seenNoteIds]);
   const myNoteStats = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
+    const rpcMyNotesSummary = noteConversationSummaryAvailable && rpcNoteConversationSummaries
+      ? (rpcNoteConversationSummaries || []).find((item) => (
+        String(item?.section || '').trim() === 'notes'
+        && String(item?.conversation_key || '').trim() === MY_NOTES_CONVERSATION_KEY
+      ))
+      : null;
     const sourceRows = selectedConversationKey === MY_NOTES_CONVERSATION_KEY
       ? (selectedConversationNotes || [])
       : notes;
@@ -5195,8 +5255,11 @@ useEffect(() => {
       const createdAt = new Date(note?.created_at || '').getTime();
       return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
     }, 0);
-    return { noteCount: effectiveMyNotes.length, latestMessageAt };
-  }, [notes, profile.id, selectedConversationKey, selectedConversationNotes]);
+    return {
+      noteCount: Math.max(Number(rpcMyNotesSummary?.note_count || 0), effectiveMyNotes.length),
+      latestMessageAt: Math.max(new Date(rpcMyNotesSummary?.latest_message_at || 0).getTime() || 0, latestMessageAt),
+    };
+  }, [noteConversationSummaryAvailable, notes, profile.id, rpcNoteConversationSummaries, selectedConversationKey, selectedConversationNotes]);
   const noteConversations = useMemo<ConversationListItem[]>(
     () => buildNoteConversations({
       availableDirectUsers,
@@ -5213,12 +5276,12 @@ useEffect(() => {
   const noteConversationsFromRpc = useMemo<ConversationListItem[]>(() => {
     const summaries = rpcNoteConversationSummaries || [];
     const rpcGroupIds = new Set<string>();
-    const rpcItems = summaries
+    const rpcItems: ConversationListItem[] = summaries
       .filter((item) => String(item?.section || '').trim() === 'notes')
-      .map((item: NotificationConversationSummary) => {
+      .reduce<ConversationListItem[]>((acc, item: NotificationConversationSummary) => {
         const kind = String(item.kind || '').trim();
         if (kind === 'system') {
-          return {
+          acc.push({
             id: SYSTEM_MESSAGES_USER_ID,
             kind: 'system' as const,
             conversationKey: String(item.conversation_key || 'system'),
@@ -5228,13 +5291,14 @@ useEffect(() => {
             latestMessageAt: new Date(item.latest_message_at || 0).getTime() || 0,
             userId: SYSTEM_MESSAGES_USER_ID,
             isGroup: false,
-          };
+          });
+          return acc;
         }
         if (kind === 'group') {
           const groupId = String(item.group_id || '').trim();
           if (groupId) rpcGroupIds.add(groupId);
           const chatGroup = groupId ? chatGroupMap[groupId] || null : null;
-          return {
+          acc.push({
             id: `${CHAT_GROUP_PREFIX}${groupId}`,
             kind: 'group' as const,
             conversationKey: String(item.conversation_key || `group:${groupId}`),
@@ -5244,11 +5308,14 @@ useEffect(() => {
             latestMessageAt: new Date(item.latest_message_at || 0).getTime() || 0,
             groupId,
             isGroup: true,
-          };
+          });
+          return acc;
         }
+        if (kind === 'mine') return acc;
         const userId = String(item.user_id || '').trim();
+        if (!userId) return acc;
         const directoryUser = userId ? directoryUserMap[userId] || null : null;
-        return {
+        acc.push({
           id: userId,
           kind: 'direct' as const,
           conversationKey: String(item.conversation_key || '').trim() || null,
@@ -5260,9 +5327,9 @@ useEffect(() => {
           roleLabel: (directoryUser?.role_id ? roleLookup[String(directoryUser.role_id)] : null) || item.role_label || null,
           userId,
           isGroup: false,
-        };
-      })
-      .filter((item) => Boolean(item.id));
+        });
+        return acc;
+      }, []);
 
     // Merge groups the user is a member of that RPC didn't return (e.g. no recent
     // notification_inbox_items with this user in target_user_ids). These groups are
@@ -5293,7 +5360,7 @@ useEffect(() => {
       .filter((item, index, arr) => arr.findIndex((other) => other.id === item.id) === index);
   }, [chatGroupMap, chatGroups, directoryUserMap, roleLookup, rpcNoteConversationSummaries]);
   const effectiveNoteConversations = noteConversationSummaryAvailable && rpcNoteConversationSummaries
-    ? noteConversationsFromRpc.filter((item) => item.kind !== 'system')
+    ? noteConversationsFromRpc.filter((item) => item.kind !== 'system' && item.conversationKey !== MY_NOTES_CONVERSATION_KEY)
     : noteConversations;
   const effectiveSystemNoteStats = useMemo(() => {
     const systemSummary = noteConversationSummaryAvailable && rpcNoteConversationSummaries
@@ -6856,10 +6923,12 @@ useEffect(() => {
       noteShouldStickToBottomRef.current = true;
       noteForceScrollToBottomRef.current = true;
       resetNoteComposer();
-      await Promise.all([
+      void Promise.all([
         noteConversationSummaryAvailable ? refreshNoteConversationSummaries() : Promise.resolve(null),
         refreshUnreadSummary(),
-      ]);
+      ]).catch((refreshError) => {
+        console.warn('Could not refresh note summaries after send', refreshError);
+      });
     } catch (error: any) {
       if (optimisticInserted) {
         setNotes((prev) => prev.filter((row: any) => String(row?.id || '') !== optimisticId));
@@ -7101,7 +7170,7 @@ useEffect(() => {
           id: `responsibility:${String(item.id)}`,
           kind: 'responsibility' as const,
           title: formatRecordLabel(item, item?.module_id) || 'مسئولیت جدید',
-          body: MODULES[String(item?.module_id || '')]?.titles?.faSingular || 'رکورد جدید نیاز به رسیدگی دارد.',
+          body: getResponsibilityOverlayBody(item),
           createdAt: item.created_at || null,
           responsibility: item,
         })),
@@ -7936,13 +8005,15 @@ useEffect(() => {
         setBotAttachments([]);
         setBotLinkedAttachments([]);
         setBotMentionPickerOpen(false);
-        await Promise.all([
+        void Promise.all([
           fetchBotGroups(),
           botConversationSummaryAvailable ? refreshBotConversationSummaries() : Promise.resolve(null),
           insertedRows.length > 0
             ? Promise.resolve(null)
             : (botTimelineAvailable ? refreshBotTimeline({ force: true }) : fetchBotMessages(selectedGroup.id, { forceFull: true })),
-        ]);
+        ]).catch((refreshError) => {
+          console.warn('Could not refresh bot conversation after send', refreshError);
+        });
         message.success('پیام بات ارسال شد.');
       } catch (error: any) {
         console.warn('Could not send bot group message', error);
@@ -8014,10 +8085,12 @@ useEffect(() => {
       setBotDirectMessageText('');
       setBotDirectAttachments([]);
       setBotDirectLinkedAttachments([]);
-      await Promise.all([
+      void Promise.all([
         fetchBotDirectThreads(),
         fetchBotDirectNotificationMessages(),
-      ]);
+      ]).catch((refreshError) => {
+        console.warn('Could not refresh bot direct conversation after send', refreshError);
+      });
       message.success('پیام شخصی بات ارسال شد.');
     } catch (error: any) {
       console.warn('Could not send bot direct message', error);
