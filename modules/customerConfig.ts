@@ -110,7 +110,7 @@ export const customerModule: ModuleDefinition = {
       relationConfig: { targetModule: 'profiles', targetField: 'full_name' },
       logic: { visibleIf: { field: 'is_employee', operator: LogicOperator.IS_TRUE } },
     },
-    { key: 'birth_date', labels: { fa: 'تاریخ تولد', en: 'Birthday' }, type: FieldType.DATE, blockId: 'basic_info', order: 3.5, logic: { visibleIf: { field: 'person_type', operator: LogicOperator.EQUALS, value: 'real' } } },
+    { key: 'birth_date', labels: { fa: 'تاریخ تولد', en: 'Birthday' }, type: FieldType.DATE, blockId: 'basic_info', order: 3.5, defaultValue: null, logic: { visibleIf: { field: 'person_type', operator: LogicOperator.EQUALS, value: 'real' } } },
     {
       key: 'national_code',
       labels: { fa: 'کد ملی', en: 'National Code' },

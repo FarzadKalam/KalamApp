@@ -309,6 +309,7 @@ export const invoicesConfig: ModuleDefinition = {
       type: FieldType.CHECKBOX,
       location: FieldLocation.HEADER,
       order: 6.2,
+      defaultValue: true,
       nature: FieldNature.STANDARD,
     },
     {

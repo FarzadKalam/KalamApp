@@ -106,6 +106,33 @@ const hexToRgba = (hex: string, alpha: number) => {
   return `rgba(${r},${g},${b},${alpha})`;
 };
 
+const getPublicTableRowKey = (prefix: string, row: Record<string, any>) => {
+  const candidates = [
+    row?.row_key,
+    row?.id,
+    row?.key,
+    row?.system_code,
+    row?.product_id,
+    row?.payment_id,
+    row?.created_at,
+    row?.date,
+    row?.name,
+    row?.title,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    if (normalized) return `${prefix}-${normalized}`;
+  }
+  return `${prefix}-${JSON.stringify({
+    title: row?.title,
+    description: row?.description,
+    quantity: row?.quantity,
+    amount: row?.amount,
+    unit_price: row?.unit_price,
+    total_price: row?.total_price,
+  })}`;
+};
+
 const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   created:    { label: 'ایجاد شده',    color: 'blue' },
   proforma:   { label: 'پیش فاکتور',   color: 'orange' },
@@ -1136,7 +1163,7 @@ ${invoice.description ? `
             <div style={{ overflowX: 'auto' }}>
               <Table
                 dataSource={items.filter(Boolean)}
-                rowKey={(_, index) => `invoice-item-${index}`}
+                rowKey={(row) => getPublicTableRowKey('invoice-item', row)}
                 pagination={false}
                 size="small"
                 style={{ direction: 'rtl' }}
@@ -1451,7 +1478,7 @@ ${invoice.description ? `
             <div style={{ overflowX: 'auto' }}>
               <Table
                 dataSource={payments}
-                rowKey={(_, index) => `invoice-payment-${index}`}
+                rowKey={(row) => getPublicTableRowKey('invoice-payment', row)}
                 pagination={false}
                 size="small"
                 columns={[

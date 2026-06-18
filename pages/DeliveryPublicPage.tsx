@@ -98,6 +98,29 @@ const normalizePhone = (raw: string): string => {
   return digits;
 };
 
+const getDeliveryTableRowKey = (row: Record<string, any>) => {
+  const candidates = [
+    row?.row_key,
+    row?.id,
+    row?.key,
+    row?.system_code,
+    row?.product_id,
+    row?.created_at,
+    row?.title,
+    row?.name,
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    if (normalized) return `delivery-item-${normalized}`;
+  }
+  return `delivery-item-${JSON.stringify({
+    title: row?.title,
+    quantity: row?.quantity,
+    unit: row?.unit,
+    description: row?.description,
+  })}`;
+};
+
 const formatPhoneDisplay = (raw: string | null | undefined): string => {
   const normalized = normalizePhone(String(raw || ''));
   return normalized ? toFarsiDigits(normalized) : '—';
@@ -569,7 +592,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
           <div style={{ overflowX: 'auto' }}>
             <Table
               dataSource={items}
-              rowKey={(_, index) => `delivery-item-${index}`}
+              rowKey={(row) => getDeliveryTableRowKey(row)}
               pagination={false}
               size="small"
               locale={{ emptyText: 'قلمی ثبت نشده است.' }}

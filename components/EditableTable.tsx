@@ -312,6 +312,34 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
     return `row_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   };
+  const ensureStableTableRowKey = (record: any) => {
+    const directKey = getRowKey(record);
+    if (directKey) return String(directKey);
+    const candidates = [
+      record?.row_key,
+      record?.id,
+      record?._cash_bank_operation_id,
+      record?.asset_id,
+      record?.entry_id,
+      record?.system_code,
+      record?.file_url,
+      record?.created_at,
+    ];
+    for (const candidate of candidates) {
+      const normalized = String(candidate || '').trim();
+      if (!normalized) continue;
+      const resolvedKey = `${block.id || 'row'}_${normalized}`;
+      if (record && typeof record === 'object' && !String(record?.key || '').trim()) {
+        record.key = resolvedKey;
+      }
+      return resolvedKey;
+    }
+    const generatedKey = createLocalRowKey();
+    if (record && typeof record === 'object') {
+      record.key = generatedKey;
+    }
+    return generatedKey;
+  };
   const shouldDisableInvoicePaymentAccount = (row: any) => {
     if (!isInvoicePayments) return false;
     const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
@@ -624,9 +652,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
   useEffect(() => {
     if (mode !== 'external_view' && !populateSource?.recordId && !isProductInventory && !isShelfInventory && !isProductStockMovements) {
       const safeData = normalizePaymentRows(Array.isArray(initialData) ? initialData : []);
-      const dataWithKey = safeData.map((item, index) => ({
+      const dataWithKey = safeData.map((item) => ({
         ...item,
-        key: item.key || item.row_key || item.id || `${String(block?.id || 'row')}_${index}`,
+        key: item.key || item.row_key || item.id || createLocalRowKey(),
       }));
       const lockedData = isProductionOrder && isBomItemBlock
         ? dataWithKey.map((row: any) => {
@@ -1745,7 +1773,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
 
     const newRow = {
-      key: Date.now(),
+      key: createLocalRowKey(),
       ...numericDefaults,
       ...defaults,
     };
@@ -1843,7 +1871,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const copiedRow = {
       ...sourceRow,
-      key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      key: createLocalRowKey(),
     };
     if (isOperationalPayments) {
       copiedRow.row_key = createLocalRowKey();
@@ -4942,25 +4970,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const hasPersistedRows = Array.isArray(data) && data.length > 0;
   const isPaymentsTable = block?.id === 'payments' && isOperationalPayments;
   const paymentsActionNounFa = isInvoicePayments ? 'دریافت' : 'پرداخت';
-  const resolveTableRowKey = (record: any, index?: number) => {
-    const directKey = getRowKey(record);
-    if (directKey) return String(directKey);
-    const candidates = [
-      record?.row_key,
-      record?.id,
-      record?._cash_bank_operation_id,
-      record?.asset_id,
-      record?.entry_id,
-      record?.system_code,
-      record?.file_url,
-      record?.created_at,
-    ];
-    for (const candidate of candidates) {
-      const normalized = String(candidate || '').trim();
-      if (normalized) return `${block.id || 'row'}_${normalized}`;
-    }
-    return `${block.id || 'row'}_${index ?? 0}`;
-  };
+  const resolveTableRowKey = (record: any) => ensureStableTableRowKey(record);
   const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
     ? ['target_account', 'responsible_id', 'description']
@@ -5225,7 +5235,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
           columns={columns}
           pagination={false}
           size="middle"
-          rowKey={(record: any, index?: number) => resolveTableRowKey(record, index)}
+          rowKey={(record: any) => resolveTableRowKey(record)}
           locale={{ emptyText: <Empty description="لیست خالی است" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
           className="custom-erp-table font-medium editable-table-main"
           tableLayout="auto"
