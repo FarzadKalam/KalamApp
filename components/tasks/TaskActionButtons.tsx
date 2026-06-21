@@ -20,6 +20,7 @@ type TaskActionButtonsProps = {
   modalZIndex?: number;
   stopPropagation?: boolean;
   showReview?: boolean;
+  disabled?: boolean;
 };
 
 const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
@@ -31,6 +32,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
   modalZIndex = 12000,
   stopPropagation = true,
   showReview = false,
+  disabled = false,
 }) => {
   const { message } = App.useApp();
   const overlayAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -157,7 +159,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   const handleComplete = async (event?: React.SyntheticEvent) => {
     stopEvent(event);
-    if (!task?.id || isDone) return;
+    if (disabled || !task?.id || isDone) return;
     setSavingComplete(true);
     try {
       const optimisticTask = { ...(task || {}), status: 'done' };
@@ -180,7 +182,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   const handleStart = async (event?: React.SyntheticEvent) => {
     stopEvent(event);
-    if (!task?.id || isInProgress || isDone) return;
+    if (disabled || !task?.id || isInProgress || isDone) return;
     setSavingStart(true);
     try {
       const optimisticTask = { ...(task || {}), status: 'in_progress' };
@@ -203,7 +205,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
 
   const handleReview = async (event?: React.SyntheticEvent) => {
     stopEvent(event);
-    if (!task?.id || isInReview || isDone) return;
+    if (disabled || !task?.id || isInReview || isDone) return;
     setSavingReview(true);
     try {
       const optimisticTask = { ...(task || {}), status: 'review' };
@@ -247,13 +249,13 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
           size={size}
           icon={<ClockCircleOutlined />}
           className={`task-action-button ${buttonClassName}`}
-          style={getActionButtonStyle(undefined, { reschedule: true, disabled: isDone })}
+          style={getActionButtonStyle(undefined, { reschedule: true, disabled: disabled || isDone })}
           title="برنامه‌ریزی مجدد فعالیت"
           aria-label="برنامه‌ریزی مجدد فعالیت"
-          aria-disabled={isDone}
+          aria-disabled={disabled || isDone}
           onClick={(event) => {
             stopEvent(event);
-            if (isDone) return;
+            if (disabled || isDone) return;
             setRescheduleOpen(true);
           }}
         />
@@ -262,11 +264,11 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
           size={size}
           icon={<CaretRightOutlined />}
           className={`task-action-button ${buttonClassName}`}
-          style={getActionButtonStyle('in_progress', { active: isInProgress, disabled: isDone })}
+          style={getActionButtonStyle('in_progress', { active: isInProgress, disabled: disabled || isDone })}
           title="در حال انجام"
           aria-label="در حال انجام"
           loading={savingStart}
-          aria-disabled={isInProgress || isDone}
+          aria-disabled={disabled || isInProgress || isDone}
           onClick={handleStart}
         />
         {showReview ? (
@@ -275,11 +277,11 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
             size={size}
             icon={<EyeOutlined />}
             className={`task-action-button ${buttonClassName}`}
-            style={getActionButtonStyle('review', { active: isInReview, disabled: isDone })}
+            style={getActionButtonStyle('review', { active: isInReview, disabled: disabled || isDone })}
             title="بازبینی"
             aria-label="بازبینی"
             loading={savingReview}
-            aria-disabled={isInReview || isDone}
+            aria-disabled={disabled || isInReview || isDone}
             onClick={handleReview}
           />
         ) : null}
@@ -288,11 +290,11 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
           size={size}
           icon={<CheckOutlined />}
           className={`task-action-button ${buttonClassName}`}
-          style={getActionButtonStyle('done', { active: isDone })}
+          style={getActionButtonStyle('done', { active: isDone, disabled })}
           title="تکمیل فعالیت"
           aria-label="تکمیل فعالیت"
           loading={savingComplete}
-          aria-disabled={isDone}
+          aria-disabled={disabled || isDone}
           onClick={handleComplete}
         />
       </div>
@@ -316,6 +318,7 @@ const TaskActionButtons: React.FC<TaskActionButtonsProps> = ({
         onConfirm={async (value) => {
           setDraftDueDate(value);
           if (!task?.id) return;
+          if (disabled) return;
           setSavingReschedule(true);
           try {
             const updatedTask = await updateTaskDueDateWithAutomation({

@@ -1,7 +1,7 @@
 import { buildRecordReferenceKey } from './recordReference';
 
 export type NotificationReadChecker = (
-  section: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'sms_messages' | 'voip_calls',
+  section: 'notes' | 'tasks' | 'responsibilities' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls',
   sourceType: string,
   sourceId: string,
   fallbackRead?: boolean,

@@ -13,6 +13,7 @@ interface RecordImageBoxProps {
   canEdit?: boolean;
   canViewFilesManager?: boolean;
   canEditFilesManager?: boolean;
+  canUploadFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
   compact?: boolean;
   onImageUpdate?: (file: File) => Promise<boolean> | boolean;
@@ -71,6 +72,7 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
   canEdit = false,
   canViewFilesManager = true,
   canEditFilesManager = true,
+  canUploadFilesManager,
   canDeleteFilesManager = true,
   compact = false,
   onImageUpdate,
@@ -230,6 +232,7 @@ const RecordImageBox: React.FC<RecordImageBoxProps> = ({
           mainImage={imageUrl || null}
           onMainImageChange={onMainImageChange}
           canEdit={canEdit && canEditFilesManager}
+          canUpload={canUploadFilesManager ?? (canEdit && canEditFilesManager)}
           canDelete={canDeleteFilesManager}
           highlightFileId={highlightFileId || undefined}
         />

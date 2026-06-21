@@ -16,6 +16,7 @@ export type ProcessTriggerDefinition = {
   sourceNodeKey: string | null;
   targetLaneKeys: string[];
   workflowId: string | null;
+  workflowTriggerModuleIds?: string[];
   manualEnabled: boolean;
   sortOrder: number;
 };
@@ -106,6 +107,13 @@ const normalizeTrigger = (
       .filter(Boolean)
   )),
   workflowId: normalizeText(value?.workflowId ?? value?.workflow_id) || null,
+  workflowTriggerModuleIds: Array.from(new Set(
+    (Array.isArray(value?.workflowTriggerModuleIds)
+      ? value.workflowTriggerModuleIds
+      : (Array.isArray(value?.workflow_trigger_module_ids) ? value.workflow_trigger_module_ids : []))
+      .map(normalizeText)
+      .filter(Boolean)
+  )),
   manualEnabled: value?.manualEnabled !== false && value?.manual_enabled !== false,
   sortOrder: toPositiveNumber(value?.sortOrder ?? value?.sort_order, (index + 1) * 10),
 });
@@ -287,6 +295,28 @@ export const getProcessStagesByLane = (
       .filter((stage) => getProcessStageLaneKey(stage) === lane.key)
       .sort((left, right) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0)),
   }));
+};
+
+export const getInitialProcessStageNodeKeys = (
+  stages: Record<string, any>[] | null | undefined,
+  rawGraph?: ProcessGraphDefinition | null,
+): string[] => {
+  const normalized = materializeLegacyProcessGraph(stages);
+  const graph = rawGraph ? normalizeProcessGraph(rawGraph, normalized.stages) : normalized.graph;
+  const rootLaneKeys = new Set(
+    graph.lanes
+      .filter((lane) => !lane.parentTriggerKey)
+      .map((lane) => lane.key),
+  );
+
+  return Array.from(new Set(
+    getProcessStagesByLane(normalized.stages, graph)
+      .filter((lane) => rootLaneKeys.has(lane.key))
+      .map((lane) => lane.stages[0])
+      .filter(Boolean)
+      .map((stage, index) => getProcessStageNodeKey(stage, index))
+      .filter(Boolean),
+  ));
 };
 
 export const moveProcessStageToPosition = (

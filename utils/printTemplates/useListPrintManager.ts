@@ -1028,8 +1028,8 @@ export const useListPrintManager = ({
     [selectedStoredTemplate?.orientation, selectedStoredTemplate?.paperSize]
   );
   const printSignatureQuickAddOptions = useMemo(
-    () => getPrintSignatureQuickAddOptions({ canUseCeoSignature }),
-    [canUseCeoSignature]
+    () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo }),
+    [canUseCeoSignature, companyInfo?.manager_title]
   );
 
   return {

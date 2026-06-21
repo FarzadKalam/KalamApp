@@ -154,10 +154,39 @@ export const cmsTagsConfig: ModuleDefinition = buildModule('cms_tags', 'برچس
   },
 ]);
 
+export const cmsPagesConfig: ModuleDefinition = buildModule('cms_pages', 'صفحات سایت', [
+  { key: 'title', type: FieldType.TEXT, labels: { fa: 'عنوان' }, isKey: true, location: FieldLocation.HEADER },
+  { key: 'slug', type: FieldType.TEXT, labels: { fa: 'Slug' }, location: FieldLocation.HEADER },
+  {
+    key: 'status',
+    type: FieldType.SELECT,
+    labels: { fa: 'وضعیت' },
+    location: FieldLocation.HEADER,
+    options: [
+      { value: 'draft', label: 'پیش‌نویس' },
+      { value: 'published', label: 'منتشرشده' },
+      { value: 'archived', label: 'آرشیو' },
+    ],
+  },
+  { key: 'seo_title', type: FieldType.TEXT, labels: { fa: 'عنوان SEO' }, location: FieldLocation.BLOCK },
+  { key: 'seo_description', type: FieldType.LONG_TEXT, labels: { fa: 'توضیح SEO' }, location: FieldLocation.BLOCK },
+], {
+  recordActions: [
+    {
+      id: 'open_editor',
+      label: 'ویرایشگر محتوا',
+      variant: 'primary',
+      placement: 'header',
+      navigateTo: (record) => `/taze-system/page/${record.id}`,
+    },
+  ],
+});
+
 export const CMS_MODULES = [
   cmsBlogPostsConfig,
   cmsTutorialPostsConfig,
   cmsTutorialSeriesConfig,
   cmsCategoriesConfig,
   cmsTagsConfig,
+  cmsPagesConfig,
 ];

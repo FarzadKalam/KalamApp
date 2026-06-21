@@ -7,6 +7,9 @@ const AiSparkleIcon: React.FC<AiSparkleIconProps> = ({ className, ...props }) =>
     viewBox="0 0 24 24"
     fill="none"
     aria-hidden="true"
+    width="1em"
+    height="1em"
+    preserveAspectRatio="xMidYMid meet"
     className={className}
     {...props}
   >

@@ -41,6 +41,7 @@ interface RelatedSidebarProps {
   moduleConfig: ModuleDefinition;
   recordId: string;
   recordName?: string; // ✅ اضافه شده
+  currentRecord?: Record<string, any> | null;
     mentionUsers?: any[];
     mentionRoles?: any[];
 }
@@ -147,7 +148,7 @@ const getModuleTableName = (moduleId?: string | null) => {
   return MODULES[normalized]?.table || normalized;
 };
 
-const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', mentionUsers = [], mentionRoles = [] }) => {
+const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', currentRecord = null, mentionUsers = [], mentionRoles = [] }) => {
   const DESKTOP_TAB_RAIL_LEFT_OFFSET = 12;
   const DESKTOP_TAB_RAIL_WIDTH = 56;
   const DESKTOP_TAB_RAIL_GAP = 12;
@@ -620,7 +621,13 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                 )}
                 {relatedTabs.map(tab => (
                     activeKey === tab.key && (
-                        <RelatedRecordsPanel key={tab.key} tab={tab as RelatedTabConfig} currentRecordId={recordId} currentModuleId={moduleConfig.id} />
+                        <RelatedRecordsPanel
+                          key={tab.key}
+                          tab={tab as RelatedTabConfig}
+                          currentRecordId={recordId}
+                          currentModuleId={moduleConfig.id}
+                          currentRecord={currentRecord}
+                        />
                     )
                 ))}
             </div>

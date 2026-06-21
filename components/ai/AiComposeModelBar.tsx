@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Select, Tooltip } from 'antd';
 import { supabase } from '../../supabaseClient';
 import AiSparkleIcon from './AiSparkleIcon';
@@ -50,6 +50,11 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
 }) => {
   const [capabilities, setCapabilities] = useState<Record<string, CapabilityModelInfo>>({});
   const [override, setOverride] = useState<string | null>(null);
+  const onModelOverrideChangeRef = useRef(onModelOverrideChange);
+
+  useEffect(() => {
+    onModelOverrideChangeRef.current = onModelOverrideChange;
+  }, [onModelOverrideChange]);
 
   useEffect(() => {
     let mounted = true;
@@ -75,31 +80,36 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   // Reset the per-message override whenever the effective capability changes.
   useEffect(() => {
     setOverride(null);
-    onModelOverrideChange(null);
-  }, [effectiveCapability, onModelOverrideChange]);
+    onModelOverrideChangeRef.current(null);
+  }, [effectiveCapability]);
+
+  const value = info ? (override || info.model) : null;
+
+  useEffect(() => {
+    if (info) onModelOverrideChangeRef.current(value || null);
+  }, [info, value]);
 
   if (!info) return null;
 
-  const value = override || info.model;
   const options = info.selectable?.length ? info.selectable : [{ value: info.model, label: info.modelLabel }];
 
   return (
-    <div className="flex items-center gap-1 text-[10px] text-gray-400 dark:text-gray-500" dir="rtl">
-      <AiSparkleIcon className="h-3 w-3 text-[rgb(var(--brand-500-rgb))]" />
+    <div className="flex items-center gap-1 text-[9px] leading-4 text-gray-400 dark:text-gray-500" dir="rtl">
+      <AiSparkleIcon className="h-2.5 w-2.5 text-[rgb(var(--brand-500-rgb))]" />
       <Tooltip title={`مدل فعال برای «${CAPABILITY_FA[effectiveCapability] || effectiveCapability}» — برای این پیام قابل تغییر است`}>
         <span className="shrink-0">مدل:</span>
       </Tooltip>
       <Select
         size="small"
         variant="borderless"
-        value={value}
+        value={value || undefined}
         options={options}
         popupMatchSelectWidth={false}
-        className="min-w-[120px] !text-[10px]"
+        className="min-w-[104px] !text-[9px]"
         onChange={(next) => {
           const model = String(next || '');
           setOverride(model);
-          onModelOverrideChange(model === info.model ? null : model);
+          onModelOverrideChange(model || null);
         }}
         disabled={info.available === false}
       />

@@ -5,6 +5,11 @@ import { normalizePrintLetterheads } from './printTemplates/letterheads';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
+export const DEFAULT_MANAGER_TITLE = 'مدیرعامل';
+
+export const resolveManagerTitle = (companyInfo: any) =>
+  normalizeText(companyInfo?.manager_title) || DEFAULT_MANAGER_TITLE;
+
 export const normalizeCompanyAssetFields = (row: any) => {
   if (!row || typeof row !== 'object') return row;
   const letterheads = normalizePrintLetterheads(row.print_letterheads).map((item) => ({

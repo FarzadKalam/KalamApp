@@ -17,6 +17,8 @@ interface GridViewProps {
   navigate: (path: string) => void;
   canViewField?: (fieldKey: string) => boolean;
   relationOptions?: Record<string, any[]>;
+  canLockRecord?: boolean;
+  canUnlockRecord?: boolean;
 }
 
 const GridView: React.FC<GridViewProps> = ({
@@ -34,6 +36,8 @@ const GridView: React.FC<GridViewProps> = ({
   navigate,
   canViewField,
   relationOptions,
+  canLockRecord,
+  canUnlockRecord,
 }) => {
   if (!data?.length) {
     return <Empty description="داده‌ای یافت نشد" className="py-10" />;
@@ -58,6 +62,8 @@ const GridView: React.FC<GridViewProps> = ({
           navigate={navigate}
           canViewField={canViewField}
           relationOptions={relationOptions}
+          canLockRecord={canLockRecord}
+          canUnlockRecord={canUnlockRecord}
         />
       ))}
     </div>

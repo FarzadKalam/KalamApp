@@ -42,10 +42,13 @@ import AiMessageAttachmentPreview, { resolveAiAttachmentUrl } from '../component
 import { blobToBase64 } from '../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
 
+const AiChatSurfacePrototype = React.lazy(() => import('../components/ai/AiChatSurfacePrototype'));
+
 type AiThread = {
   id: string;
   title?: string | null;
   context_type?: string | null;
+  context_key?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   archived_at?: string | null;
@@ -80,7 +83,13 @@ type DirectoryOption = {
   value: string;
 };
 
+type SubmitMediaOptions = {
+  mediaSettings?: AiMediaSettings;
+  mediaSourceImages?: AiMediaSourceImage[];
+};
+
 const THREAD_SELECT_LIMIT = 80;
+const IMAGE_GENERATION_CLIENT_TIMEOUT_MS = 70000;
 
 const GENERATION_PENDING_KINDS = new Set<AiGenerationKind>([
   'image_generation', 'voice_output', 'video_generation', 'document_generation', 'document_analysis',
@@ -102,6 +111,20 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
   if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
   if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
   return fallback;
+};
+
+const withClientTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 };
 
 const formatThreadDate = (value?: string | null) => {
@@ -178,10 +201,33 @@ const getRecordScopeFromContext = (context?: Record<string, any> | null) => {
   return moduleId && recordId ? { moduleId, recordId } : { moduleId: null, recordId: null };
 };
 
-const AiChatPage: React.FC = () => {
+const isHiddenAssistantThread = (thread?: AiThread | null) => {
+  const metadata = thread?.metadata && typeof thread.metadata === 'object' ? thread.metadata : {};
+  const contextKey = String(thread?.context_key || metadata.context_key || '').trim();
+  const lastActivityKind = String(metadata.last_activity_kind || '').trim();
+  const replyChannel = String(metadata.reply_channel || '').trim();
+  const source = String(metadata.source || metadata.context?.source || '').trim();
+  const capability = String(metadata.capability || '').trim();
+  return contextKey.startsWith('reply:sms:')
+    || contextKey.startsWith('reply:bot:')
+    || lastActivityKind === 'reply_suggestion'
+    || replyChannel === 'sms'
+    || replyChannel === 'bot'
+    || source === 'reply_suggestion'
+    || source === 'notifications_chat_reply_suggest'
+    || capability === 'customer_reply_suggestion'
+    || metadata.customer_reply_suggestion === true;
+};
+
+const AiChatPageRuntime: React.FC = () => {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
+  const routeStateAtMount = (location.state || {}) as any;
+  const hasInitialForcedRequest = Boolean(
+    routeStateAtMount.forceNewThread !== false
+    && (routeStateAtMount.aiInitialFile || String(routeStateAtMount.aiInitialPrompt || '').trim())
+  );
   const autoPromptHandledRef = useRef(false);
   const [threads, setThreads] = useState<AiThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -220,6 +266,9 @@ const AiChatPage: React.FC = () => {
   const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
   const [chatContext, setChatContext] = useState<Record<string, any>>({ mode: 'dashboard', source: 'ai_chat_page' });
   const skipNextThreadMessageLoadRef = useRef<string | null>(null);
+  const creatingForcedThreadRef = useRef(hasInitialForcedRequest);
+  const protectedActiveThreadIdRef = useRef<string | null>(null);
+  const visibleMessagesRef = useRef<AiMessage[]>([]);
 
   const activeThread = useMemo(
     () => threads.find((thread) => String(thread.id) === String(activeThreadId)) || null,
@@ -233,7 +282,12 @@ const AiChatPage: React.FC = () => {
   );
 
   useEffect(() => {
+    visibleMessagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     if (!activeThread) return;
+    if (creatingForcedThreadRef.current) return;
     const storedContext = getThreadStoredContext(activeThread);
     if (storedContext) {
       setChatContext({ ...storedContext, source: 'ai_chat_page' });
@@ -244,6 +298,11 @@ const AiChatPage: React.FC = () => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
     if (error) throw error;
     if ((data as any)?.error) throw new Error(String((data as any).error));
+    if ((data as any)?.success === false) {
+      const nextError: any = new Error(String((data as any)?.message || 'درخواست هوش مصنوعی ناموفق بود.'));
+      nextError.payload = data;
+      throw nextError;
+    }
     return data as any;
   }, []);
 
@@ -251,7 +310,8 @@ const AiChatPage: React.FC = () => {
     setThreadLoading(true);
     try {
       const data = await invokeAi({ action: 'list_threads', limit: THREAD_SELECT_LIMIT });
-      const nextThreads = Array.isArray(data?.threads) ? data.threads as AiThread[] : [];
+      const nextThreads = (Array.isArray(data?.threads) ? data.threads as AiThread[] : [])
+        .filter((thread) => !isHiddenAssistantThread(thread));
       setThreads(nextThreads);
       const preferred = preferredThreadId
         ? nextThreads.find((thread) => String(thread.id) === String(preferredThreadId))
@@ -264,11 +324,13 @@ const AiChatPage: React.FC = () => {
       setActiveThreadId((current) => {
         if (preferred?.id) { resolvedActive = preferred.id; return preferred.id; }
         if (preferredThreadId) { resolvedActive = preferredThreadId; return preferredThreadId; }
+        if (protectedActiveThreadIdRef.current) { resolvedActive = protectedActiveThreadIdRef.current; return protectedActiveThreadIdRef.current; }
+        if (creatingForcedThreadRef.current) { resolvedActive = current; return current; }
         if (current) { resolvedActive = current; return current; }
         resolvedActive = nextThreads[0]?.id || null;
         return resolvedActive;
       });
-      if (!resolvedActive) setMessages([]);
+      if (!resolvedActive && !creatingForcedThreadRef.current) setMessages([]);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'دریافت تاریخچه گفتگوها ناموفق بود'));
       // Don't clear the thread list on a transient error — preserve what the user sees
@@ -281,10 +343,19 @@ const AiChatPage: React.FC = () => {
     setMessages((prev) => {
       const pending = prev.filter((item) => String(item.id || '').startsWith('pending-'));
       const serverKeys = new Set(serverMessages.map((item) => `${item.role}:${String(item.content || '').trim()}`));
-      const hasServerAssistant = serverMessages.some((item) => item.role === 'assistant');
       const unresolvedPending = pending.filter((item) => {
-        if (item.role === 'assistant' && item.metadata?.pending_status && hasServerAssistant) return false;
-        return !serverKeys.has(`${item.role}:${String(item.content || '').trim()}`);
+        const pendingKey = `${item.role}:${String(item.content || '').trim()}`;
+        if (serverKeys.has(pendingKey)) return false;
+        const pendingTime = new Date(item.created_at || 0).getTime();
+        const hasFreshServerReplacement = serverMessages.some((serverItem) => {
+          if (String(serverItem.role || '') !== String(item.role || '')) return false;
+          const serverTime = new Date(serverItem.created_at || 0).getTime();
+          return Number.isFinite(pendingTime)
+            && Number.isFinite(serverTime)
+            && pendingTime > 0
+            && serverTime >= pendingTime - 1500;
+        });
+        return !hasFreshServerReplacement;
       });
       return [...serverMessages, ...unresolvedPending].sort((a, b) =>
         String(a.created_at || '').localeCompare(String(b.created_at || ''))
@@ -294,6 +365,13 @@ const AiChatPage: React.FC = () => {
 
   const loadThreadMessages = useCallback(async (threadId: string | null) => {
     if (!threadId) {
+      if (
+        creatingForcedThreadRef.current
+        || protectedActiveThreadIdRef.current
+        || visibleMessagesRef.current.some((item) => item.metadata?.pending_status)
+      ) {
+        return;
+      }
       setMessages([]);
       return;
     }
@@ -309,7 +387,8 @@ const AiChatPage: React.FC = () => {
       }
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'دریافت پیام‌های گفتگو ناموفق بود'));
-      setMessages([]);
+      // Preserve the visible chat on transient get_thread failures. Clearing here
+      // makes a valid newly-created thread look empty until the user reselects it.
     } finally {
       setMessagesLoading(false);
     }
@@ -336,6 +415,56 @@ const AiChatPage: React.FC = () => {
       : m));
   }, []);
 
+  const recoverRecentImageThread = useCallback(async (prompt: string) => {
+    const normalizedPrompt = String(prompt || '').trim();
+    if (!normalizedPrompt) return null;
+    const data = await invokeAi({ action: 'list_threads', limit: 12 });
+    const candidates = Array.isArray(data?.threads) ? data.threads : [];
+    for (const thread of candidates) {
+      const threadId = String(thread?.id || '').trim();
+      if (!threadId) continue;
+      const threadData = await invokeAi({ action: 'get_thread', threadId });
+      const serverMessages = Array.isArray(threadData?.messages) ? threadData.messages as AiMessage[] : [];
+      const hasPrompt = serverMessages.some((item) =>
+        item.role === 'user'
+        && String(item.content || '').trim() === normalizedPrompt
+        && String(item.metadata?.input_kind || '') === 'image_prompt'
+      );
+      if (hasPrompt) {
+        return {
+          threadId,
+          messages: serverMessages,
+          thread: threadData?.thread || thread,
+        };
+      }
+    }
+    return null;
+  }, [invokeAi]);
+
+  const activateGenerationThread = useCallback(async (
+    threadId: string,
+    fallbackMessages?: AiMessage[],
+  ) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId) return;
+    creatingForcedThreadRef.current = false;
+    protectedActiveThreadIdRef.current = normalizedThreadId;
+    skipNextThreadMessageLoadRef.current = normalizedThreadId;
+    setActiveThreadId(normalizedThreadId);
+    if (Array.isArray(fallbackMessages)) {
+      mergeThreadMessages(fallbackMessages);
+    } else {
+      const data = await invokeAi({ action: 'get_thread', threadId: normalizedThreadId });
+      mergeThreadMessages(Array.isArray(data?.messages) ? data.messages as AiMessage[] : []);
+      if (data?.thread?.id) {
+        setThreads((prev) =>
+          prev.map((item) => String(item.id) === String(data.thread.id) ? { ...item, ...data.thread } : item)
+        );
+      }
+    }
+    void loadThreads(normalizedThreadId);
+  }, [invokeAi, loadThreads, mergeThreadMessages]);
+
   // Re-check a pending generation/analysis WITHOUT re-triggering it: poll the job
   // (video) or reload the thread and adopt the result the server already produced.
   // This fixes the "error toast, then the message shows up a few seconds later".
@@ -345,6 +474,22 @@ const AiChatPage: React.FC = () => {
     const threadId = activeThreadId;
     setRecheckingId(item.id);
     try {
+      if (kind === 'image_generation') {
+        const messageId = String(item?.metadata?.server_message_id || item?.id || '').trim();
+        if (messageId && !messageId.startsWith('pending-')) {
+          const poll = await invokeAi({ action: 'get_image_status', messageId, threadId });
+          if (poll?.message && typeof poll.message === 'object') {
+            resolvePendingMessage(item.id, poll.message);
+            return;
+          }
+          if (poll?.status === 'failed') {
+            setMessages((prev) => prev.map((m) => m.id === item.id
+              ? { ...m, content: String(poll?.message || 'ساخت تصویر ناموفق بود.'), metadata: { ...m.metadata, pending_status: false, failed: true } }
+              : m));
+            return;
+          }
+        }
+      }
       if (kind === 'video_generation') {
         let videoId = String(item?.metadata?.video_id || '').trim();
         if (!videoId && threadId) {
@@ -416,12 +561,21 @@ const AiChatPage: React.FC = () => {
   }, [invokeAi]);
 
   useEffect(() => {
+    if (creatingForcedThreadRef.current) return;
     if (activeThreadId && skipNextThreadMessageLoadRef.current === activeThreadId) {
       skipNextThreadMessageLoadRef.current = null;
       return;
     }
     void loadThreadMessages(activeThreadId);
   }, [activeThreadId, loadThreadMessages]);
+
+  useEffect(() => {
+    if (creatingForcedThreadRef.current) return;
+    setGeneratingImage(false);
+    setGeneratingVoiceOutput(false);
+    setGeneratingVideo(false);
+    setGeneratingDocument(false);
+  }, [activeThreadId]);
 
   useEffect(() => {
     const incomingContext = (location.state as any)?.assistantContext;
@@ -460,6 +614,11 @@ const AiChatPage: React.FC = () => {
       created_at: new Date().toISOString(),
       metadata: { pending_status: true, capabilities: effectiveCapabilities },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setInput('');
     setPendingAiAction(null);
     setMessages((prev) => [...prev, optimistic, thinking]);
@@ -512,6 +671,8 @@ const AiChatPage: React.FC = () => {
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       const nextThreadId = String(data?.thread?.id || data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
         setMessages((prev) => {
@@ -541,10 +702,38 @@ const AiChatPage: React.FC = () => {
         void loadThreads(nextThreadId);
       }
     } catch (error: any) {
-      setMessages((prev) => prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id));
+      const errorText = toFaErrorMessage(error, 'ارسال پیام به هوش مصنوعی ناموفق بود');
+      const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
+      const payloadThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
+      const serverMessages = Array.isArray(payload?.messages) ? payload.messages as AiMessage[] : [];
+      if (payloadThreadId && serverMessages.length) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = payloadThreadId;
+        skipNextThreadMessageLoadRef.current = payloadThreadId;
+        setActiveThreadId(payloadThreadId);
+        setMessages((prev) => [
+          ...prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id),
+          ...serverMessages,
+        ]);
+        void loadThreads(payloadThreadId);
+        setInput(text);
+        message.error(errorText);
+        return;
+      }
+      setMessages((prev) => [
+        ...prev.filter((item) => item.id !== thinking.id),
+        {
+          id: `assistant-error-${Date.now()}`,
+          role: 'assistant',
+          content: errorText,
+          created_at: new Date().toISOString(),
+          metadata: { failed: true, capability: effectiveProcessOperationMode ? 'process_operation' : effectiveRecordCreationSchema ? 'record_creation' : 'chat' },
+        },
+      ]);
       setInput(text);
-      message.error(toFaErrorMessage(error, 'ارسال پیام به هوش مصنوعی ناموفق بود'));
+      message.error(errorText);
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setSending(false);
     }
   }, [activeThread, activeThreadId, chatContext, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, message, processOperationMode, recordCreationSchema, selectedCapabilities, sending]);
@@ -555,9 +744,8 @@ const AiChatPage: React.FC = () => {
     const prompt = String(params.get('prompt') || '').trim();
     if (!prompt) return;
     autoPromptHandledRef.current = true;
-    void submitMessage(prompt, true).then(() => {
-      navigate('/ai', { replace: true });
-    });
+    void submitMessage(prompt, true);
+    navigate('/ai', { replace: true });
   }, [location.search, navigate, submitMessage]);
 
   const submitVoice = useCallback(async (voice: RecordedVoice) => {
@@ -587,6 +775,7 @@ const AiChatPage: React.FC = () => {
     rawText?: string,
     forceNewThread = false,
     contextOverride?: Record<string, any>,
+    options?: SubmitMediaOptions,
   ) => {
     const text = String(rawText ?? input).trim();
     if (!text || generatingImage || sending) return;
@@ -608,26 +797,68 @@ const AiChatPage: React.FC = () => {
       created_at: new Date().toISOString(),
       metadata: { pending_status: true, capabilities: ['image_generation'], kind: 'image_generation', started_at: Date.now(), prompt: text },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setInput('');
     setMessages((prev) => [...prev, optimistic, thinking]);
     setGeneratingImage(true);
+    const effectiveSettings = options?.mediaSettings || mediaSettings;
+    const effectiveSourceImages = options?.mediaSourceImages || mediaSourceImages;
     try {
-      const data = await invokeAi({
+      const data = await withClientTimeout(invokeAi({
         action: 'generate_image',
         prompt: text,
         threadId: forceNewThread ? null : activeThreadId,
         forceNewThread,
         context: contextOverride || chatContext,
         modelOverride: modelOverrideRef.current,
-        settings: mediaSettings,
-        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        settings: effectiveSettings,
+        sourceImages: effectiveSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
         sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
-      });
+      }), IMAGE_GENERATION_CLIENT_TIMEOUT_MS, 'زمان انتظار ساخت تصویر تمام شد.');
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
+      if (data?.pending) {
+        const serverMessages = Array.isArray(data?.messages) ? data.messages as AiMessage[] : [];
+        if (nextThreadId) {
+          creatingForcedThreadRef.current = false;
+          protectedActiveThreadIdRef.current = nextThreadId;
+          skipNextThreadMessageLoadRef.current = nextThreadId;
+          setActiveThreadId(nextThreadId);
+        }
+        if (serverMessages.length) {
+          setMessages((prev) => [
+            ...prev.filter((item) => item.id !== optimistic.id && item.id !== thinking.id),
+            ...serverMessages.map((item) => item.id === data.messageId
+              ? { ...item, metadata: { ...(item.metadata || {}), server_message_id: data.messageId } }
+              : item),
+          ]);
+        } else {
+          setMessages((prev) => prev.map((item) => {
+            if (item.id === optimistic.id) return { ...item, id: data.userMessageId || item.id };
+            if (item.id === thinking.id) {
+              return {
+                ...item,
+                id: data.messageId || item.id,
+                provider: data.provider || null,
+                model: data.model || null,
+                metadata: { ...(item.metadata || {}), server_message_id: data.messageId || null },
+              };
+            }
+            return item;
+          }));
+        }
+        if (nextThreadId) void loadThreads(nextThreadId);
+        return;
+      }
       // Continue editing: the new output becomes the source for the next refinement.
       const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
       if (newImageUrl) setImageEditSourceUrl(newImageUrl);
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
         setMessages((prev) => [
@@ -652,11 +883,32 @@ const AiChatPage: React.FC = () => {
       }
     } catch (error: any) {
       // Keep the pending card; the server may still finish. Re-check resolves it.
-      markPendingError(thinking.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت…'));
+      const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
+      const payloadThreadId = String(payload?.threadId || '').trim();
+      try {
+        if (payloadThreadId) {
+          const threadData = await invokeAi({ action: 'get_thread', threadId: payloadThreadId });
+          await activateGenerationThread(
+            payloadThreadId,
+            Array.isArray(threadData?.messages) ? threadData.messages as AiMessage[] : undefined,
+          );
+        } else if (forceNewThread) {
+          const recovered = await recoverRecentImageThread(text);
+          if (recovered?.threadId) {
+            await activateGenerationThread(recovered.threadId, recovered.messages);
+          }
+        }
+      } catch {
+        // If recovery fails, keep the visible pending card and let manual recheck handle it.
+      } finally {
+        creatingForcedThreadRef.current = false;
+      }
+      markPendingError(thinking.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ وضعیت همین گفتگوی تصویر حفظ شد. دوباره تلاش کنید یا نتیجه را بررسی کنید.'));
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setGeneratingImage(false);
     }
-  }, [activeThread, activeThreadId, chatContext, generatingImage, imageEditSourceUrl, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, markPendingError, mediaSettings, mediaSourceImages, message, sending]);
+  }, [activeThread, activeThreadId, activateGenerationThread, chatContext, generatingImage, imageEditSourceUrl, input, invokeAi, isActiveOwner, loadThreads, markPendingError, mediaSettings, mediaSourceImages, message, recoverRecentImageThread, sending]);
 
   const handleEditImage = useCallback((url: string) => {
     const clean = String(url || '').trim();
@@ -670,6 +922,7 @@ const AiChatPage: React.FC = () => {
     rawText?: string,
     forceNewThread = false,
     contextOverride?: Record<string, any>,
+    options?: SubmitMediaOptions,
   ) => {
     const text = String(rawText ?? input).trim();
     if (!text || generatingVoiceOutput || sending) return;
@@ -691,9 +944,15 @@ const AiChatPage: React.FC = () => {
       created_at: new Date().toISOString(),
       metadata: { pending_status: true, capabilities: ['voice_output'], kind: 'voice_output', started_at: Date.now(), prompt: text },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setInput('');
     setMessages((prev) => [...prev, optimistic, thinking]);
     setGeneratingVoiceOutput(true);
+    const effectiveSettings = options?.mediaSettings || mediaSettings;
     try {
       const data = await invokeAi({
         action: 'generate_voice_output',
@@ -702,10 +961,12 @@ const AiChatPage: React.FC = () => {
         forceNewThread,
         context: contextOverride || chatContext,
         modelOverride: modelOverrideRef.current,
-        settings: mediaSettings,
+        settings: effectiveSettings,
       });
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
         setMessages((prev) => [
@@ -731,6 +992,7 @@ const AiChatPage: React.FC = () => {
     } catch (error: any) {
       markPendingError(thinking.id, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت تولید صدا…'));
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setGeneratingVoiceOutput(false);
     }
   }, [activeThread, activeThreadId, chatContext, generatingVoiceOutput, input, invokeAi, isActiveOwner, loadThreads, markPendingError, mediaSettings, message, sending]);
@@ -739,6 +1001,7 @@ const AiChatPage: React.FC = () => {
     rawText?: string,
     forceNewThread = false,
     contextOverride?: Record<string, any>,
+    options?: SubmitMediaOptions,
   ) => {
     const text = String(rawText ?? input).trim();
     if (!text || generatingVideo || sending) return;
@@ -761,10 +1024,17 @@ const AiChatPage: React.FC = () => {
       created_at: new Date().toISOString(),
       metadata: { pending_status: true, capabilities: ['video_generation'], kind: 'video_generation', started_at: Date.now(), prompt: text },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setInput('');
     setMessages((prev) => [...prev, optimistic, thinking]);
     setGeneratingVideo(true);
     const effectiveContext = contextOverride || chatContext;
+    const effectiveSettings = options?.mediaSettings || mediaSettings;
+    const effectiveSourceImages = options?.mediaSourceImages || mediaSourceImages;
     try {
       // Create the async job, then hand off to the pending card's auto-poll
       // (recheckPending → get_video_status), so the UI isn't blocked for minutes.
@@ -775,11 +1045,13 @@ const AiChatPage: React.FC = () => {
         forceNewThread,
         context: effectiveContext,
         modelOverride: modelOverrideRef.current,
-        settings: mediaSettings,
-        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        settings: effectiveSettings,
+        sourceImages: effectiveSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
       });
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
       }
@@ -792,6 +1064,7 @@ const AiChatPage: React.FC = () => {
     } catch (error: any) {
       markPendingError(thinkingId, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت ویدیو…'));
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setGeneratingVideo(false);
     }
   }, [activeThread, activeThreadId, chatContext, generatingVideo, input, invokeAi, isActiveOwner, markPendingError, mediaSettings, mediaSourceImages, message, sending]);
@@ -800,6 +1073,7 @@ const AiChatPage: React.FC = () => {
     rawText?: string,
     forceNewThread = false,
     contextOverride?: Record<string, any>,
+    options?: SubmitMediaOptions,
   ) => {
     const text = String(rawText ?? input).trim();
     if (!text || generatingDocument || sending) return;
@@ -807,7 +1081,8 @@ const AiChatPage: React.FC = () => {
       message.warning('این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.');
       return;
     }
-    const format = String(mediaSettings.format || 'docx');
+    const effectiveSettings = options?.mediaSettings || mediaSettings;
+    const format = String(effectiveSettings.format || 'docx');
     const optimistic: AiMessage = { id: `pending-doc-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: 'document_prompt' } };
     const thinkingId = `pending-assistant-doc-${Date.now()}`;
     const thinking: AiMessage = {
@@ -817,6 +1092,11 @@ const AiChatPage: React.FC = () => {
       created_at: new Date().toISOString(),
       metadata: { pending_status: true, capabilities: ['document_generation'], kind: 'document_generation', started_at: Date.now(), prompt: text },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setInput('');
     setMessages((prev) => [...prev, optimistic, thinking]);
     setGeneratingDocument(true);
@@ -829,10 +1109,12 @@ const AiChatPage: React.FC = () => {
         forceNewThread,
         context: contextOverride || chatContext,
         modelOverride: modelOverrideRef.current,
-        settings: mediaSettings,
+        settings: effectiveSettings,
       });
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
         setMessages((prev) => [
@@ -854,6 +1136,7 @@ const AiChatPage: React.FC = () => {
     } catch (error: any) {
       markPendingError(thinkingId, toFaErrorMessage(error, 'ارتباط قطع شد؛ در حال بررسی وضعیت ساخت فایل…'));
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setGeneratingDocument(false);
     }
   }, [activeThread, activeThreadId, chatContext, generatingDocument, input, invokeAi, isActiveOwner, loadThreads, markPendingError, mediaSettings, message, sending]);
@@ -891,6 +1174,11 @@ const AiChatPage: React.FC = () => {
         ? { pending_status: true, capabilities: effectiveCapabilities, kind: 'document_analysis', started_at: Date.now() }
         : { pending_status: true, capabilities: effectiveCapabilities },
     };
+    const protectsPendingThread = forceNewThread || !activeThreadId;
+    if (protectsPendingThread) {
+      creatingForcedThreadRef.current = true;
+      protectedActiveThreadIdRef.current = null;
+    }
     setMessages((prev) => [...prev, optimistic, thinking]);
     setPendingAiAction(null);
     setFileSending(true);
@@ -971,6 +1259,8 @@ const AiChatPage: React.FC = () => {
       setInput('');
       const nextThreadId = String(data?.threadId || activeThreadId || '').trim() || null;
       if (nextThreadId) {
+        creatingForcedThreadRef.current = false;
+        protectedActiveThreadIdRef.current = nextThreadId;
         skipNextThreadMessageLoadRef.current = nextThreadId;
         setActiveThreadId(nextThreadId);
         setMessages((prev) => [
@@ -1002,6 +1292,7 @@ const AiChatPage: React.FC = () => {
         message.error(toFaErrorMessage(error, 'ارسال فایل به هوش مصنوعی ناموفق بود'));
       }
     } finally {
+      if (protectsPendingThread) creatingForcedThreadRef.current = false;
       setFileSending(false);
     }
   }, [activeThread, activeThreadId, chatContext, fileSending, input, invokeAi, isActiveOwner, loadThreadMessages, loadThreads, markPendingError, message, processOperationMode, recordCreationSchema, selectedCapabilities, sending]);
@@ -1046,6 +1337,9 @@ const AiChatPage: React.FC = () => {
       };
       aiInitialCapabilities?: string[];
       aiInitialRecordCreationTargetModuleId?: string | null;
+      aiInitialModelOverride?: string | null;
+      aiInitialMediaSettings?: AiMediaSettings;
+      aiInitialMediaSourceImages?: AiMediaSourceImage[];
       forceNewThread?: boolean;
     };
     const initialFile = state.aiInitialFile;
@@ -1070,6 +1364,14 @@ const AiChatPage: React.FC = () => {
       .map((item) => String(item || '').trim())
       .filter((item): item is AiComposerCapability => allowedCapabilities.has(item));
     const initialRecordCreationTargetModuleId = String(state.aiInitialRecordCreationTargetModuleId || '').trim() || null;
+    const initialModelOverride = String(state.aiInitialModelOverride || '').trim() || null;
+    const initialMediaSettings = state.aiInitialMediaSettings && typeof state.aiInitialMediaSettings === 'object'
+      ? state.aiInitialMediaSettings
+      : {};
+    const initialMediaSourceImages = Array.isArray(state.aiInitialMediaSourceImages)
+      ? state.aiInitialMediaSourceImages.filter((item) => String(item?.data || '').trim())
+      : [];
+    modelOverrideRef.current = initialModelOverride;
     const initialProcessOperationMode = initialCapabilities.includes('process_operation');
     const initialRecordCreationSchema = initialCapabilities.includes('record_creation') && initialRecordCreationTargetModuleId
       ? buildAiRecordCreationSchema(initialRecordCreationTargetModuleId)
@@ -1077,6 +1379,13 @@ const AiChatPage: React.FC = () => {
     if (initialCapabilities.length > 0) setSelectedCapabilities(initialCapabilities);
     setProcessOperationMode(initialProcessOperationMode);
     setRecordCreationTargetModuleId(initialRecordCreationTargetModuleId);
+    setMediaSettings(initialMediaSettings);
+    setMediaSourceImages(initialMediaSourceImages);
+    if (state.forceNewThread !== false) {
+      creatingForcedThreadRef.current = true;
+      setActiveThreadId(null);
+      setMessages([]);
+    }
     if (initialFile?.prompt) {
       void submitUploadedFile({
         fileName: String(initialFile.fileName || 'فایل پیوست'),
@@ -1094,42 +1403,48 @@ const AiChatPage: React.FC = () => {
         capabilities: initialCapabilities,
         processOperationMode: initialProcessOperationMode,
         recordCreationSchema: initialRecordCreationSchema,
-      }).finally(() => {
-        navigate('/ai', { replace: true });
       });
+      navigate('/ai', { replace: true });
       return;
     }
     if (initialCapabilities.includes('voice_output')) {
-      void submitVoiceOutputPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
-        navigate('/ai', { replace: true });
+      void submitVoiceOutputPrompt(initialPrompt, state.forceNewThread !== false, initialContext, {
+        mediaSettings: initialMediaSettings,
+        mediaSourceImages: initialMediaSourceImages,
       });
+      navigate('/ai', { replace: true });
       return;
     }
     if (initialCapabilities.includes('image_generation')) {
-      void submitImagePrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
-        navigate('/ai', { replace: true });
+      void submitImagePrompt(initialPrompt, state.forceNewThread !== false, initialContext, {
+        mediaSettings: initialMediaSettings,
+        mediaSourceImages: initialMediaSourceImages,
       });
+      navigate('/ai', { replace: true });
       return;
     }
     if (initialCapabilities.includes('video_generation')) {
-      void submitVideoPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
-        navigate('/ai', { replace: true });
+      void submitVideoPrompt(initialPrompt, state.forceNewThread !== false, initialContext, {
+        mediaSettings: initialMediaSettings,
+        mediaSourceImages: initialMediaSourceImages,
       });
+      navigate('/ai', { replace: true });
       return;
     }
     if (initialCapabilities.includes('document_generation')) {
-      void submitDocumentPrompt(initialPrompt, state.forceNewThread !== false, initialContext).then(() => {
-        navigate('/ai', { replace: true });
+      void submitDocumentPrompt(initialPrompt, state.forceNewThread !== false, initialContext, {
+        mediaSettings: initialMediaSettings,
+        mediaSourceImages: initialMediaSourceImages,
       });
+      navigate('/ai', { replace: true });
       return;
     }
     void submitMessage(initialPrompt, state.forceNewThread !== false, String(state.aiInitialInputKind || 'text'), initialContext, {
       capabilities: initialCapabilities,
       processOperationMode: initialProcessOperationMode,
       recordCreationSchema: initialRecordCreationSchema,
-    }).then(() => {
-      navigate('/ai', { replace: true });
     });
+    navigate('/ai', { replace: true });
   }, [input, location.state, navigate, submitDocumentPrompt, submitImagePrompt, submitMessage, submitUploadedFile, submitVideoPrompt, submitVoiceOutputPrompt]);
 
   const loadShareOptions = useCallback(async () => {
@@ -1228,13 +1543,15 @@ const AiChatPage: React.FC = () => {
 
   const filteredThreads = useMemo(() => {
     const query = threadSearch.trim().toLocaleLowerCase('fa-IR');
-    if (!query) return threads;
-    return threads.filter((thread) =>
+    const visibleThreads = threads.filter((thread) => !isHiddenAssistantThread(thread));
+    if (!query) return visibleThreads;
+    return visibleThreads.filter((thread) =>
       String(thread.title || 'گفتگوی بدون عنوان').toLocaleLowerCase('fa-IR').includes(query)
     );
   }, [threadSearch, threads]);
 
   const startNewChat = () => {
+    protectedActiveThreadIdRef.current = null;
     setActiveThreadId(null);
     setMessages([]);
     setInput('');
@@ -1277,19 +1594,23 @@ const AiChatPage: React.FC = () => {
         ) : (
           filteredThreads.map((thread) => {
             const active = String(thread.id) === String(activeThreadId);
+            const threadSwitchBlocked = creatingForcedThreadRef.current && generatingImage;
             return (
               <button
                 key={thread.id}
                 type="button"
                 onClick={() => {
+                  if (threadSwitchBlocked) return;
+                  protectedActiveThreadIdRef.current = null;
                   setActiveThreadId(thread.id);
                   setThreadDrawerOpen(false);
                 }}
+                disabled={threadSwitchBlocked}
                 className={`w-full rounded-lg border px-3 py-3 text-right transition ${
                   active
                     ? 'border-leather-400 bg-leather-50 text-leather-800 dark:border-leather-500 dark:bg-leather-900/20 dark:text-leather-100'
                     : 'border-gray-200 bg-white hover:border-gray-300 dark:border-dark-border dark:bg-dark-surface'
-                }`}
+                } ${threadSwitchBlocked ? 'cursor-wait opacity-70' : ''}`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <span className="line-clamp-2 text-sm font-semibold">
@@ -1308,23 +1629,27 @@ const AiChatPage: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 dark:bg-dark-bg md:p-6" dir="rtl">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4 md:flex-row-reverse">
-        <aside className="hidden w-full md:block md:w-80">
+    <div className="relative z-[1] min-h-screen w-full overflow-x-hidden bg-gray-50 p-3 dark:bg-dark-bg md:p-4" dir="rtl">
+      <div className="flex w-full min-w-0 flex-col gap-4 md:flex-row-reverse">
+        <aside className="hidden w-full shrink-0 md:block md:w-80">
           {renderThreadsPanel()}
         </aside>
 
-        <main className="min-h-[calc(100vh-48px)] flex-1 rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-border dark:bg-dark-surface">
-          <div className="flex min-h-[calc(100vh-48px)] flex-col">
+        <main className="h-[calc(100vh-24px)] min-h-0 min-w-0 flex-1 rounded-lg border border-gray-200 bg-white shadow-sm dark:border-dark-border dark:bg-dark-surface md:h-[calc(100vh-32px)]">
+          <div className="flex h-full min-h-0 flex-col">
             <header className="flex flex-col gap-3 border-b border-gray-100 p-4 dark:border-dark-border md:flex-row md:items-center md:justify-between">
               <div className="flex min-w-0 items-center gap-3">
                 <Button
-                  className="md:hidden"
+                  className="inline-flex !h-9 !w-9 shrink-0 items-center justify-center !p-0 md:hidden"
                   icon={<MenuUnfoldOutlined />}
                   onClick={() => setThreadDrawerOpen(true)}
                   aria-label="باز کردن لیست گفتگوها"
                 />
-                <Avatar icon={<AiSparkleIcon className="h-4 w-4" />} className="bg-leather-500" />
+                <Avatar
+                  size={36}
+                  icon={<span className="inline-flex h-full w-full items-center justify-center"><AiSparkleIcon className="h-4 w-4 shrink-0" /></span>}
+                  className="shrink-0 bg-leather-500"
+                />
                 <div className="min-w-0">
                   <Typography.Title level={4} className="!mb-0 truncate">
                     {activeThread?.title || 'هوش مصنوعی تازه سیستم'}
@@ -1364,8 +1689,8 @@ const AiChatPage: React.FC = () => {
               </Space>
             </header>
 
-            <section className="flex-1 overflow-auto p-4">
-              {messagesLoading ? (
+            <section className="min-h-0 flex-1 overflow-auto p-4">
+              {messagesLoading && messages.length === 0 ? (
                 <div className="py-16 text-center"><Spin /></div>
               ) : messages.length === 0 ? (
                 <div className="flex h-full min-h-[360px] items-center justify-center">
@@ -1376,6 +1701,13 @@ const AiChatPage: React.FC = () => {
                 </div>
               ) : (
                 <div className="mx-auto max-w-3xl space-y-4">
+                  {messagesLoading ? (
+                    <div className="sticky top-0 z-10 flex justify-center">
+                      <div className="rounded-full border border-gray-200 bg-white/90 px-3 py-1 text-[11px] text-gray-500 shadow-sm dark:border-dark-border dark:bg-dark-surface/90">
+                        در حال همگام‌سازی گفتگو...
+                      </div>
+                    </div>
+                  ) : null}
                   {messages.map((item) => {
                     const isUser = item.role === 'user';
                     const isAssistant = item.role === 'assistant';
@@ -1386,7 +1718,13 @@ const AiChatPage: React.FC = () => {
                     const pendingKind = getPendingGenerationKind(item);
                     return (
                       <div key={item.id} className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
-                        {!isUser ? <Avatar icon={<AiSparkleIcon className="h-4 w-4" />} className="mt-1 bg-leather-500" /> : null}
+                        {!isUser ? (
+                          <Avatar
+                            size={32}
+                            icon={<span className="inline-flex h-full w-full items-center justify-center"><AiSparkleIcon className="h-4 w-4 shrink-0" /></span>}
+                            className="mt-1 shrink-0 bg-leather-500"
+                          />
+                        ) : null}
                         <div className={`flex max-w-[85%] flex-col ${isUser ? 'items-end' : 'items-start'}`}>
                           {pendingKind ? (
                             <AiGenerationStatusCard
@@ -1441,7 +1779,7 @@ const AiChatPage: React.FC = () => {
               )}
             </section>
 
-            <footer className="border-t border-gray-100 p-4 dark:border-dark-border">
+            <footer className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-gray-100 p-3 dark:border-dark-border md:p-4">
               {activeThread && !isActiveOwner ? (
                 <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-100">
                   این گفتگو توسط همکار شما به اشتراک گذاشته شده و فقط قابل مشاهده است.
@@ -1470,9 +1808,9 @@ const AiChatPage: React.FC = () => {
                   <Button type="text" size="small" onClick={() => setImageEditSourceUrl(null)}>شروع از نو</Button>
                 </div>
               ) : null}
-              <div className="flex gap-2">
+              <div className="flex items-end gap-2">
                 <Input.TextArea
-                  autoSize={{ minRows: 1, maxRows: 5 }}
+                  autoSize={{ minRows: 1, maxRows: 4 }}
                   placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
                   value={input}
                   disabled={Boolean(activeThread && !isActiveOwner)}
@@ -1508,6 +1846,7 @@ const AiChatPage: React.FC = () => {
                 <Button
                   type="primary"
                   icon={<SendOutlined />}
+                  className="shrink-0"
                   loading={documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : sending}
                   disabled={!input.trim() || Boolean(activeThread && !isActiveOwner)}
                   onClick={() => void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitMessage())}
@@ -1575,6 +1914,21 @@ const AiChatPage: React.FC = () => {
       </Modal>
     </div>
   );
+};
+
+const AiChatPage: React.FC = () => {
+  const location = useLocation();
+  const useOmnichannelPrototype = new URLSearchParams(location.search).get('prototype') === 'omni';
+
+  if (useOmnichannelPrototype) {
+    return (
+      <React.Suspense fallback={null}>
+        <AiChatSurfacePrototype />
+      </React.Suspense>
+    );
+  }
+
+  return <AiChatPageRuntime />;
 };
 
 export default AiChatPage;

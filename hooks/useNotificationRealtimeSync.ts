@@ -154,6 +154,9 @@ export const useNotificationRealtimeSync = ({
             const row = payload?.new || payload?.old || {};
             if (String(row?.channel_type || '').trim() === 'sms') scheduleLiveRefreshRef.current('sms_messages');
           })
+          .on('postgres_changes', buildOrgScopedChange('sms_delivery_reports', '*'), () => {
+            scheduleLiveRefreshRef.current('sms_messages');
+          })
           .on('postgres_changes', buildOrgScopedChange('voip_call_logs', 'INSERT'), (payload: any) => {
             if (hasVoipCallMatchRef.current(payload?.new)) onVoipUpsertRef.current(payload.new);
           })

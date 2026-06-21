@@ -43,6 +43,7 @@ interface HeroSectionProps {
   isFieldVisible?: (field: any) => boolean;
   canViewFilesManager?: boolean;
   canEditFilesManager?: boolean;
+  canUploadFilesManager?: boolean;
   canDeleteFilesManager?: boolean;
   recordTitleFieldKey?: string | null;
   renderRecordTitle?: () => React.ReactNode;
@@ -70,6 +71,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   isFieldVisible,
   canViewFilesManager = true,
   canEditFilesManager = true,
+  canUploadFilesManager,
   canDeleteFilesManager = true,
   recordTitleFieldKey,
   renderRecordTitle,
@@ -173,9 +175,10 @@ const HeroSection: React.FC<HeroSectionProps> = ({
               canEdit={!!canEditModule}
               canViewFilesManager={!!canViewFilesManager}
               canEditFilesManager={!!canEditFilesManager && !!canEditModule}
+              canUploadFilesManager={canUploadFilesManager}
               canDeleteFilesManager={!!canDeleteFilesManager}
-              onImageUpdate={onImageUpdate}
-              onMainImageChange={onMainImageChange}
+              onImageUpdate={canEditModule ? onImageUpdate : undefined}
+              onMainImageChange={canEditModule ? onMainImageChange : undefined}
               openFilesManagerByDefault={shouldOpenGalleryFromQuery}
               highlightFileId={highlightFileId}
               onFilesManagerClose={handleCloseFilesManager}

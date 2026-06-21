@@ -593,7 +593,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     && quickCreateTargetModule.disableCreate !== true
     && quickCreateTargetModule.systemManaged !== true
     && relationConfigAny?.disableQuickCreate !== true;
-  const relationTargetNeedsFullCreate = !!quickCreateTargetModule?.blocks?.some((block: any) => (
+  const relationTargetNeedsFullCreate = quickCreateTargetModuleId !== 'tasks' && !!quickCreateTargetModule?.blocks?.some((block: any) => (
     block?.type === BlockType.TABLE
     || block?.type === BlockType.GRID_TABLE
     || (Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
@@ -3758,5 +3758,717 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         ) : null}
       </Form>
     </Modal>
+  );
+};
+
+export interface RelationQuickCreateHostProps {
+  open: boolean;
+  targetModuleId?: string | null;
+  label?: string;
+  initialValues?: Record<string, any>;
+  targetField?: string | null;
+  quickCreateFieldKeys?: string[];
+  forceInline?: boolean;
+  onCancel: () => void;
+  onCreated?: (record: { id?: string | number | null; values?: Record<string, any> }) => void | Promise<void>;
+  overlayZIndexBase?: number;
+  fullCreateOverlayZIndex?: number;
+}
+
+export const RelationQuickCreateHost: React.FC<RelationQuickCreateHostProps> = ({
+  open,
+  targetModuleId,
+  label,
+  initialValues = {},
+  targetField,
+  quickCreateFieldKeys = [],
+  forceInline = false,
+  onCancel,
+  onCreated,
+  overlayZIndexBase = 12600,
+  fullCreateOverlayZIndex,
+}) => {
+  const { message: msg } = App.useApp();
+  const [quickCreateForm] = Form.useForm();
+  const [quickCreateLoading, setQuickCreateLoading] = useState(false);
+  const [quickCreateRelationOptions, setQuickCreateRelationOptions] = useState<Record<string, any[]>>({});
+  const [quickCreateDynamicOptions, setQuickCreateDynamicOptions] = useState<Record<string, any[]>>({});
+
+  const quickCreateTargetModuleId = String(targetModuleId || '').trim();
+  const quickCreateTargetModule = quickCreateTargetModuleId ? MODULES[quickCreateTargetModuleId] : undefined;
+  const canUseRelationQuickCreate = !!quickCreateTargetModuleId
+    && !!quickCreateTargetModule
+    && quickCreateTargetModule.disableCreate !== true
+    && quickCreateTargetModule.systemManaged !== true;
+  const relationTargetNeedsFullCreate = !forceInline
+    && quickCreateTargetModuleId !== 'tasks'
+    && !!quickCreateTargetModule?.blocks?.some((block: any) => (
+      block?.type === BlockType.TABLE
+      || block?.type === BlockType.GRID_TABLE
+      || (Array.isArray(block?.tableColumns) && block.tableColumns.length > 0)
+    ));
+  const configuredQuickCreateKeys = useMemo(
+    () => (Array.isArray(quickCreateFieldKeys) ? quickCreateFieldKeys : [])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean),
+    [quickCreateFieldKeys]
+  );
+  const configuredQuickCreateDefaults = useMemo(
+    () => (initialValues && typeof initialValues === 'object' ? initialValues : {}),
+    [initialValues]
+  );
+  const quickCreateTargetField = useMemo(() => {
+    const configured = String(targetField || '').trim();
+    if (configured) return getPreferredRelationTargetField(quickCreateTargetModuleId, configured);
+    const moduleFields = quickCreateTargetModule?.fields || [];
+    const keyField = moduleFields.find((f: any) => f?.isKey);
+    if (keyField?.key) return String(keyField.key);
+    const headerField = moduleFields.find((f: any) => f?.location === 'header');
+    if (headerField?.key) return String(headerField.key);
+    return getPreferredRelationTargetField(quickCreateTargetModuleId, null);
+  }, [quickCreateTargetModuleId, targetField, quickCreateTargetModule]);
+  const quickCreateAutoNameToggleField = useMemo(
+    () => quickCreateTargetModule?.fields?.find((f: any) => String(f?.key || '') === 'auto_name_enabled') as ModuleField | undefined,
+    [quickCreateTargetModule]
+  );
+  const quickCreateHasAutoNameToggle = !!quickCreateAutoNameToggleField
+    && (quickCreateTargetModuleId === 'products' || quickCreateTargetModuleId === 'production_orders' || quickCreateTargetModuleId === 'customers');
+
+  const quickCreateFields = useMemo(() => {
+    const moduleFields = quickCreateTargetModule?.fields || [];
+    const unsupported = new Set<string>([
+      FieldType.IMAGE,
+      FieldType.PROGRESS_STAGES,
+      FieldType.JSON,
+      FieldType.READONLY_LOOKUP,
+    ]);
+
+    const writableFields = moduleFields
+      .filter((f: any) => !!f?.key)
+      .filter((f: any) => f?.nature !== FieldNature.SYSTEM)
+      .filter((f: any) => !['id', 'created_at', 'updated_at', 'created_by', 'updated_by'].includes(String(f?.key || '')))
+      .filter((f: any) => !unsupported.has(String(f?.type || '')));
+
+    const selected = writableFields
+      .filter((f: any) => {
+        if (f?.type === FieldType.TAGS) return true;
+        if (configuredQuickCreateKeys.includes(String(f?.key || ''))) return true;
+        const isHeader = f?.location === 'header';
+        const isRequiredField = f?.validation?.required === true;
+        const isKeyField = f?.isKey === true;
+        const isTableColumn = f?.isTableColumn === true;
+        const isTargetField = String(f?.key || '') === quickCreateTargetField;
+        return isHeader || isRequiredField || isKeyField || isTableColumn || isTargetField;
+      })
+      .sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
+
+    const map = new Map<string, ModuleField>();
+    writableFields.forEach((f: any) => map.set(String(f.key), f as ModuleField));
+    selected.forEach((f: any) => map.set(String(f.key), f as ModuleField));
+
+    if (!map.has(quickCreateTargetField)) {
+      const existing = moduleFields.find((f: any) => String(f?.key || '') === quickCreateTargetField);
+      if (existing && existing.nature !== FieldNature.SYSTEM) {
+        map.set(quickCreateTargetField, existing as ModuleField);
+      } else {
+        map.set(quickCreateTargetField, {
+          key: quickCreateTargetField,
+          type: FieldType.TEXT,
+          labels: { fa: quickCreateTargetField, en: quickCreateTargetField },
+          validation: { required: true },
+        } as ModuleField);
+      }
+    }
+
+    return Array.from(map.values()).sort((a: any, b: any) => (a?.order || 0) - (b?.order || 0));
+  }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
+
+  const quickCreatePrimaryFieldKeys = useMemo(() => {
+    const moduleFields = quickCreateTargetModule?.fields || [];
+    const keys = new Set<string>();
+    moduleFields.forEach((f: any) => {
+      const key = String(f?.key || '');
+      if (!key) return;
+      if (f?.type === FieldType.TAGS) {
+        keys.add(key);
+        return;
+      }
+      if (configuredQuickCreateKeys.includes(key)) {
+        keys.add(key);
+        return;
+      }
+      const isHeader = f?.location === 'header';
+      const isRequiredField = f?.validation?.required === true;
+      const isKeyField = f?.isKey === true;
+      const isTableColumn = f?.isTableColumn === true;
+      const isTargetField = key === quickCreateTargetField;
+      if (isHeader || isRequiredField || isKeyField || isTableColumn || isTargetField) {
+        keys.add(key);
+      }
+    });
+    keys.add(quickCreateTargetField);
+    return Array.from(keys);
+  }, [configuredQuickCreateKeys, quickCreateTargetField, quickCreateTargetModule]);
+
+  const getQuickCreateFieldValueLabel = (fieldKey: string, rawValue: any) => {
+    if (rawValue === undefined || rawValue === null) return '';
+    const targetFieldDef = quickCreateTargetModule?.fields?.find((item: any) => String(item?.key || '') === fieldKey);
+    if (!targetFieldDef) return String(rawValue);
+
+    const resolveOptionLabel = (singleValue: any) => {
+      if (singleValue === undefined || singleValue === null) return '';
+      let matchedOption = (targetFieldDef.options || []).find((item: any) => item?.value === singleValue);
+      if (matchedOption) return formatDisplayText(matchedOption.label, '');
+      if (targetFieldDef.dynamicOptionsCategory) {
+        matchedOption = (quickCreateDynamicOptions[targetFieldDef.dynamicOptionsCategory] || []).find((item: any) => item?.value === singleValue);
+        if (matchedOption) return formatDisplayText(matchedOption.label, '');
+      }
+      if (targetFieldDef.type === FieldType.RELATION) {
+        const matchedRelation = (quickCreateRelationOptions[fieldKey] || []).find((item: any) => item?.value === singleValue);
+        if (matchedRelation) return formatDisplayText(matchedRelation.label, '');
+      }
+      return String(singleValue);
+    };
+
+    if (Array.isArray(rawValue)) {
+      return rawValue.map((item) => resolveOptionLabel(item)).filter(Boolean).join('، ');
+    }
+    return resolveOptionLabel(rawValue);
+  };
+
+  const buildQuickCreateAutoProductName = (values: any) => {
+    const parts: string[] = [];
+    const addPart = (part?: string) => {
+      if (!part) return;
+      const trimmed = String(part).trim();
+      if (trimmed) parts.push(trimmed);
+    };
+    const normalizeDimension = (raw: any) => {
+      if (raw === null || raw === undefined) return '';
+      const text = String(raw).trim();
+      if (!text) return '';
+      const numeric = parseFloat(text);
+      if (!Number.isFinite(numeric)) return text;
+      return String(numeric).replace(/\.0+$/, '');
+    };
+
+    const productType = String(values?.product_type || '').trim().toLowerCase();
+    if (productType === 'goods') {
+      addPart(getQuickCreateFieldValueLabel('category', values?.category));
+      addPart(getQuickCreateFieldValueLabel('goods_subgroup', values?.goods_subgroup));
+    } else if (productType === 'service') {
+      addPart(getQuickCreateFieldValueLabel('product_category', values?.product_category));
+      addPart(getQuickCreateFieldValueLabel('service_subgroup', values?.service_subgroup));
+    } else {
+      addPart(getQuickCreateFieldValueLabel('category', values?.category));
+      addPart(getQuickCreateFieldValueLabel('product_category', values?.product_category));
+    }
+
+    addPart(getQuickCreateFieldValueLabel('material_type', values?.material_type));
+    addPart(getQuickCreateFieldValueLabel('brand_name', values?.brand_name));
+    addPart(getQuickCreateFieldValueLabel('color_name', values?.color_name));
+    addPart(getQuickCreateFieldValueLabel('feature_name', values?.feature_name));
+    addPart(getQuickCreateFieldValueLabel('quality_level', values?.quality_level));
+
+    const explicitSize = getQuickCreateFieldValueLabel('size_value', values?.size_value);
+    const lengthValue = normalizeDimension(values?.length_value);
+    const widthValue = normalizeDimension(values?.width_value);
+    if (lengthValue && widthValue) {
+      addPart(`${lengthValue}X${widthValue}`);
+    } else if (lengthValue) {
+      addPart(`طول ${lengthValue}`);
+    } else if (widthValue) {
+      addPart(`عرض ${widthValue}`);
+    } else {
+      addPart(explicitSize);
+    }
+
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  };
+  const buildQuickCreateAutoCustomerName = (values: any) => {
+    const normalize = (input: any) => String(input ?? '').replace(/\s+/g, ' ').trim();
+    const businessName = normalize(values?.business_name);
+    const personType = normalize(values?.person_type).toLowerCase();
+
+    if (personType === 'legal') {
+      const legalName = normalize(values?.legal_name);
+      if (legalName && businessName) return `${legalName} - ${businessName}`;
+      return legalName || businessName;
+    }
+
+    const realName = [values?.prefix, values?.first_name, values?.last_name]
+      .map((item) => normalize(item))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (realName && businessName) return `${realName} - ${businessName}`;
+    return realName || businessName;
+  };
+  const buildQuickCreateAutoEmployeeName = (values: any) => {
+    const normalize = (input: any) => String(input ?? '').replace(/\s+/g, ' ').trim();
+    return [values?.prefix, values?.first_name, values?.last_name]
+      .map((item) => normalize(item))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  const buildQuickCreateAutoProductionOrderName = (values: any) => {
+    const parts: string[] = [];
+    const addPart = (part?: string) => {
+      if (!part) return;
+      const trimmed = String(part).trim();
+      if (trimmed) parts.push(trimmed);
+    };
+    const bomLabelRaw = getQuickCreateFieldValueLabel('bom_id', values?.bom_id);
+    const bomLabelClean = String(bomLabelRaw || '').replace(/\s*\([^()]*\)\s*$/, '').trim();
+    addPart(bomLabelClean);
+    addPart(getQuickCreateFieldValueLabel('color', values?.color));
+    return parts.join(' ');
+  };
+  const applyQuickCreateAutoNaming = (rawValues: any) => {
+    const nextValues = { ...(rawValues || {}) };
+
+    if (quickCreateTargetModuleId === 'products' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
+      const nextName = buildQuickCreateAutoProductName(nextValues);
+      if (nextName) nextValues.name = nextName;
+    }
+    if (quickCreateTargetModuleId === 'production_orders' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
+      const nextName = buildQuickCreateAutoProductionOrderName(nextValues);
+      if (nextName) nextValues.name = nextName;
+    }
+    if (quickCreateTargetModuleId === 'customers' && isAutoNameEnabled(nextValues.auto_name_enabled)) {
+      const nextFullName = buildQuickCreateAutoCustomerName(nextValues);
+      if (nextFullName) nextValues.full_name = nextFullName;
+    }
+    if (quickCreateTargetModuleId === 'employees') {
+      const nextFullName = buildQuickCreateAutoEmployeeName(nextValues);
+      if (nextFullName) nextValues.full_name = nextFullName;
+    }
+
+    return nextValues;
+  };
+
+  const closeQuickCreate = () => {
+    quickCreateForm.resetFields();
+    setQuickCreateRelationOptions({});
+    setQuickCreateDynamicOptions({});
+    onCancel();
+  };
+
+  useEffect(() => {
+    if (!open || relationTargetNeedsFullCreate) return;
+    const defaults: Record<string, any> = {};
+    quickCreateFields.forEach((f: any) => {
+      if (f?.defaultValue !== undefined) defaults[f.key] = resolveConfiguredDefaultValue(f.defaultValue);
+    });
+    Object.entries(configuredQuickCreateDefaults).forEach(([key, val]) => {
+      defaults[key] = resolveConfiguredDefaultValue(val);
+    });
+    if (
+      quickCreateHasAutoNameToggle
+      && quickCreateAutoNameToggleField?.key
+      && defaults[quickCreateAutoNameToggleField.key] === undefined
+    ) {
+      defaults[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(false, false);
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      quickCreateForm.setFieldsValue(defaults);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    configuredQuickCreateDefaults,
+    open,
+    relationTargetNeedsFullCreate,
+    quickCreateFields,
+    quickCreateForm,
+    quickCreateHasAutoNameToggle,
+    quickCreateAutoNameToggleField,
+  ]);
+
+  useEffect(() => {
+    if (!open || relationTargetNeedsFullCreate) return;
+    const nextValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
+    const computedEntries = Object.entries(nextValues).filter(([key, value]) => {
+      if (quickCreateTargetModuleId === 'customers' && key === 'full_name') {
+        return value && value !== quickCreateForm.getFieldValue('full_name');
+      }
+      if (quickCreateTargetModuleId === 'employees' && key === 'full_name') {
+        return value && value !== quickCreateForm.getFieldValue('full_name');
+      }
+      if ((quickCreateTargetModuleId === 'products' || quickCreateTargetModuleId === 'production_orders') && key === 'name') {
+        return value && value !== quickCreateForm.getFieldValue('name');
+      }
+      return false;
+    });
+    if (computedEntries.length === 0) return;
+    quickCreateForm.setFieldsValue(Object.fromEntries(computedEntries));
+  }, [
+    quickCreateForm,
+    open,
+    relationTargetNeedsFullCreate,
+    quickCreateTargetModuleId,
+    quickCreateRelationOptions,
+    quickCreateDynamicOptions,
+  ]);
+
+  useEffect(() => {
+    if (!open || relationTargetNeedsFullCreate || quickCreateFields.length === 0) return;
+    let cancelled = false;
+
+    const loadOptions = async () => {
+      const relationMap: Record<string, any[]> = {};
+      const dynamicMap: Record<string, any[]> = {};
+
+      for (const quickField of quickCreateFields) {
+        if (!quickField?.key) continue;
+
+        if (quickField.dynamicOptionsCategory) {
+          try {
+            dynamicMap[quickField.dynamicOptionsCategory] = await fetchDynamicOptionsByCategory(
+              supabase,
+              quickField.dynamicOptionsCategory
+            );
+          } catch (err) {
+            console.warn('Failed loading dynamic options:', quickField.dynamicOptionsCategory, err);
+          }
+        }
+
+        if (quickField.type === FieldType.RELATION && quickField.relationConfig?.targetModule) {
+          const relationTargetModule = quickField.relationConfig.targetModule;
+          const relationTargetTable = MODULES[relationTargetModule]?.table || relationTargetModule;
+          const relationTargetField = getPreferredRelationTargetField(relationTargetModule, (quickField.relationConfig as any)?.targetField);
+          const isShelvesTarget = relationTargetModule === 'shelves';
+          const includeSystemCode = relationTargetModule !== 'cheques' && supportsSystemCode(relationTargetModule);
+          const extraSelect = isShelvesTarget ? ', shelf_number' : '';
+          try {
+            const selectVariants = Array.from(
+              new Set(
+                [
+                  `id, ${relationTargetField}${includeSystemCode ? ', system_code' : ''}${extraSelect}`,
+                  `id, ${relationTargetField}${extraSelect}`,
+                  `id, ${relationTargetField}`,
+                ].map((item) => item.replace(/,\s*,/g, ',').replace(/\s+/g, ' ').trim())
+              )
+            );
+            let data: any[] = [];
+            let lastError: any = null;
+            for (const selectExpr of selectVariants) {
+              const result = await supabase
+                .from(relationTargetTable)
+                .select(selectExpr)
+                .limit(200);
+              if (!result.error) {
+                data = (result.data || []) as any[];
+                lastError = null;
+                break;
+              }
+              const errorCode = String((result.error as any)?.code || '').toUpperCase();
+              const errorText = String((result.error as any)?.message || (result.error as any)?.details || '').toLowerCase();
+              const isMissingColumn = errorCode === '42703' || errorCode === 'PGRST204' || errorText.includes('column');
+              if (!isMissingColumn) {
+                lastError = result.error;
+                break;
+              }
+              lastError = result.error;
+            }
+            if (lastError && data.length === 0) throw lastError;
+            relationMap[quickField.key] = (data || []).map((item: any) => ({
+              label: item.system_code
+                ? `${item[relationTargetField] || item.shelf_number || item.system_code || item.id} (${item.system_code})`
+                : (item[relationTargetField] || item.shelf_number || item.id),
+              value: item.id,
+            }));
+          } catch (err) {
+            console.warn('Failed loading relation options:', quickField.key, err);
+          }
+        }
+      }
+
+      if (!cancelled) {
+        setQuickCreateRelationOptions(relationMap);
+        setQuickCreateDynamicOptions(dynamicMap);
+      }
+    };
+
+    void loadOptions();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, relationTargetNeedsFullCreate, quickCreateFields]);
+
+  const normalizeQuickCreatePayload = (rawPayload: Record<string, any>) => {
+    const payload = { ...(rawPayload || {}) };
+
+    if (quickCreateTargetModuleId === 'customers') {
+      const personType = String(payload?.person_type || 'real').trim().toLowerCase();
+      const referrerModule = String(payload?.referrer_module || '').trim().toLowerCase();
+
+      if (personType === 'real') {
+        payload.legal_name = null;
+        payload.national_id = null;
+        payload.registration_number = null;
+      } else if (personType === 'legal') {
+        payload.prefix = null;
+        payload.birth_date = null;
+        payload.national_code = null;
+      }
+
+      if (!payload?.is_employee) {
+        payload.related_employee_id = null;
+      }
+      if (referrerModule !== 'customers') {
+        payload.referrer_customer_id = null;
+      }
+      if (referrerModule !== 'employees') {
+        payload.referrer_employee_id = null;
+      }
+      if (referrerModule !== 'suppliers') {
+        payload.referrer_supplier_id = null;
+      }
+      if (!payload?.portal_enabled) {
+        payload.portal_status = payload.portal_status || 'disabled';
+        if (payload.portal_permissions_override === '') {
+          delete payload.portal_permissions_override;
+        }
+      }
+    }
+
+    if (quickCreateTargetModuleId === 'suppliers' && Array.isArray(payload?.rank)) {
+      payload.rank = payload.rank.map((item: any) => String(item || '').trim()).filter(Boolean).join(',');
+    }
+
+    if (quickCreateTargetModuleId === 'products') {
+      delete payload.product_inventory;
+    }
+
+    if (quickCreateTargetModuleId === 'shelves') {
+      delete payload.shelf_inventory;
+      delete payload.shelf_stock_movements;
+      delete payload.task_shelf_inventory;
+      delete payload.task_shelf_stock_movements;
+    }
+
+    if (quickCreateTargetModuleId === 'tasks') {
+      return normalizeTaskSourceValues(payload);
+    }
+
+    return payload;
+  };
+
+  const insertQuickCreatePayload = async (initialPayload: Record<string, any>) => {
+    const targetTable = quickCreateTargetModule?.table || quickCreateTargetModuleId;
+    if (!targetTable) throw createQuickCreateUserError('ماژول مقصد برای افزودن سریع مشخص نیست.');
+
+    let userId: string | null = null;
+    try {
+      const snapshot = await fetchSessionBootstrap(supabase);
+      userId = snapshot?.user?.id || null;
+    } catch {
+      userId = null;
+    }
+
+    const withAuditFields = (payload: Record<string, any>) => {
+      if (!userId) return { ...payload };
+      return {
+        ...payload,
+        created_by: payload.created_by ?? userId,
+        updated_by: payload.updated_by ?? userId,
+      };
+    };
+
+    const insertWithColumnFallback = async (payload: Record<string, any>) => {
+      let writablePayload = { ...payload };
+      let auditedPayload = withAuditFields(writablePayload);
+      let insertResult = await supabase
+        .from(targetTable)
+        .insert(auditedPayload)
+        .select('id')
+        .single();
+
+      if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+        insertResult = await supabase
+          .from(targetTable)
+          .insert(writablePayload)
+          .select('id')
+          .single();
+      }
+
+      while (insertResult.error && isMissingColumnLikeError(insertResult.error)) {
+        const missingColumn = extractMissingColumnName(insertResult.error);
+        const nextPayload = omitColumnIfPresent(writablePayload, missingColumn);
+        if (nextPayload === writablePayload) break;
+
+        writablePayload = nextPayload;
+        auditedPayload = withAuditFields(writablePayload);
+        insertResult = await supabase
+          .from(targetTable)
+          .insert(auditedPayload)
+          .select('id')
+          .single();
+
+        if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
+          insertResult = await supabase
+            .from(targetTable)
+            .insert(writablePayload)
+            .select('id')
+            .single();
+        }
+      }
+
+      return { insertResult, writablePayload };
+    };
+
+    let { insertResult, writablePayload } = await insertWithColumnFallback(initialPayload);
+
+    for (
+      let attempt = 0;
+      insertResult.error
+      && supportsSystemCode(quickCreateTargetModuleId)
+      && (isDuplicateSystemCodeError(insertResult.error) || isStatementTimeoutError(insertResult.error))
+      && attempt < 3;
+      attempt += 1
+    ) {
+      const fallbackSystemCode = await buildClientFallbackSystemCode(
+        supabase,
+        quickCreateTargetModuleId,
+        targetTable
+      );
+      ({ insertResult, writablePayload } = await insertWithColumnFallback({
+        ...writablePayload,
+        system_code: fallbackSystemCode,
+      }));
+    }
+
+    if (insertResult.error && quickCreateTargetModuleId === 'suppliers') {
+      const minimalPayload = buildMinimalSupplierPayload(writablePayload);
+      const minimalResult = await insertWithColumnFallback(minimalPayload);
+      if (!minimalResult.insertResult.error) {
+        insertResult = minimalResult.insertResult;
+        writablePayload = minimalResult.writablePayload;
+      }
+    }
+
+    return insertResult;
+  };
+
+  const handleQuickCreate = async () => {
+    if (!quickCreateTargetModuleId) return;
+    setQuickCreateLoading(true);
+    try {
+      const draftValues = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
+      quickCreateForm.setFieldsValue(draftValues);
+      await quickCreateForm.validateFields();
+      const values = applyQuickCreateAutoNaming(quickCreateForm.getFieldsValue(true));
+      const payload: Record<string, any> = { ...configuredQuickCreateDefaults };
+      const tagsFieldKey = quickCreateFields.find((f: any) => f?.type === FieldType.TAGS)?.key || null;
+      const selectedTags = tagsFieldKey && Array.isArray(values?.[tagsFieldKey]) ? values[tagsFieldKey] : [];
+
+      quickCreateFields.forEach((f: any) => {
+        if (!f?.key) return;
+        if (f.type === FieldType.TAGS) return;
+        let nextValue = values?.[f.key];
+        if (nextValue === undefined) return;
+        if (typeof nextValue === 'string') nextValue = nextValue.trim();
+        if (nextValue === '') nextValue = null;
+        payload[f.key] = nextValue;
+      });
+
+      ['assignee_id', 'assignee_type', 'assignee_role_id'].forEach((key) => {
+        if (!(key in values)) return;
+        const nextValue = values?.[key];
+        payload[key] = nextValue === '' ? null : nextValue;
+      });
+      if (quickCreateHasAutoNameToggle && quickCreateAutoNameToggleField?.key) {
+        payload[quickCreateAutoNameToggleField.key] = normalizeAutoNameEnabled(
+          values?.[quickCreateAutoNameToggleField.key],
+          false
+        );
+      }
+
+      const quickCreateTargetValue = payload[quickCreateTargetField];
+      if (
+        quickCreateTargetValue === undefined
+        || quickCreateTargetValue === null
+        || (typeof quickCreateTargetValue === 'string' && quickCreateTargetValue.trim() === '')
+      ) {
+        throw createQuickCreateUserError(`فیلد "${quickCreateTargetField}" الزامی است.`);
+      }
+
+      const normalizedPayload = normalizeQuickCreatePayload(payload);
+      if (supportsSystemCode(quickCreateTargetModuleId) && !payload.system_code) {
+        normalizedPayload.system_code = await buildClientFallbackSystemCode(
+          supabase,
+          quickCreateTargetModuleId,
+          quickCreateTargetModule?.table || quickCreateTargetModuleId
+        );
+      }
+      const insertResult = await insertQuickCreatePayload(normalizedPayload);
+      if (insertResult.error) throw insertResult.error;
+      const insertedRow: any = insertResult.data as any;
+      if (tagsFieldKey && insertedRow?.id) {
+        await syncRecordTags(supabase, quickCreateTargetModuleId, String(insertedRow.id), selectedTags);
+      }
+
+      msg.success('رکورد جدید ایجاد شد');
+      quickCreateForm.resetFields();
+      setQuickCreateRelationOptions({});
+      setQuickCreateDynamicOptions({});
+      await onCreated?.({ id: insertedRow?.id ?? null, values: normalizedPayload });
+      onCancel();
+    } catch (err: any) {
+      if (Array.isArray(err?.errorFields)) return;
+      const userMessage = err?.userFacing
+        ? String(err.message || 'افزودن سریع انجام نشد.')
+        : toFaErrorMessage(err, 'افزودن سریع انجام نشد. لطفاً فیلدهای ضروری را بررسی کنید و دوباره تلاش کنید.');
+      msg.error(userMessage);
+      if (!err?.userFacing) {
+        console.warn('Quick create failed:', {
+          moduleId: quickCreateTargetModuleId,
+          error: err,
+        });
+      }
+    } finally {
+      setQuickCreateLoading(false);
+    }
+  };
+
+  if (!open || !canUseRelationQuickCreate || !quickCreateTargetModule) return null;
+
+  if (relationTargetNeedsFullCreate) {
+    return (
+      <React.Suspense fallback={null}>
+        <SmartFormLazy
+          module={quickCreateTargetModule as any}
+          visible={open}
+          initialValues={configuredQuickCreateDefaults}
+          onCancel={closeQuickCreate}
+          title={`افزودن ${quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'} جدید`}
+          overlayZIndex={fullCreateOverlayZIndex || overlayZIndexBase + 20}
+          onPersisted={async ({ id, values }: any) => {
+            await onCreated?.({ id: id ?? null, values });
+          }}
+        />
+      </React.Suspense>
+    );
+  }
+
+  return (
+    <RelationQuickCreateInline
+      open={open}
+      label={label || quickCreateTargetModule.titles?.faSingular || quickCreateTargetModule.titles?.fa || 'رکورد'}
+      moduleId={quickCreateTargetModuleId}
+      fields={quickCreateFields}
+      primaryFieldKeys={quickCreatePrimaryFieldKeys}
+      form={quickCreateForm}
+      loading={quickCreateLoading}
+      relationOptions={quickCreateRelationOptions}
+      dynamicOptions={quickCreateDynamicOptions}
+      onCancel={closeQuickCreate}
+      onOk={handleQuickCreate}
+      overlayZIndexBase={overlayZIndexBase}
+    />
   );
 };

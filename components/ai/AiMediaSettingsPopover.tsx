@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { App, Button, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
+import { App, Button, Checkbox, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
 
@@ -15,6 +15,12 @@ export type AiMediaSettings = {
   size?: string;
   quality?: string;
   n?: number;
+  persianText?: boolean;
+  persianDigits?: boolean;
+  rtlText?: boolean;
+  orientationHorizontal?: boolean;
+  orientationVertical?: boolean;
+  useOrganizationContext?: boolean;
   // voice
   voice?: string;
   speed?: number;
@@ -52,9 +58,10 @@ const VOICE_OPTIONS = [
 ];
 
 const IMAGE_SIZE_OPTIONS = [
+  { value: 'auto', label: 'خودکار' },
   { value: '1024x1024', label: 'مربع (۱۰۲۴×۱۰۲۴)' },
-  { value: '1024x1792', label: 'عمودی (۱۰۲۴×۱۷۹۲)' },
-  { value: '1792x1024', label: 'افقی (۱۷۹۲×۱۰۲۴)' },
+  { value: '1024x1536', label: 'عمودی (۱۰۲۴×۱۵۳۶)' },
+  { value: '1536x1024', label: 'افقی (۱۵۳۶×۱۰۲۴)' },
 ];
 
 const IMAGE_QUALITY_OPTIONS = [
@@ -97,6 +104,22 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
 
   const update = (patch: AiMediaSettings) => onSettingsChange({ ...settings, ...patch });
 
+  const updateImageOrientation = (orientation: 'horizontal' | 'vertical', checked: boolean) => {
+    if (orientation === 'horizontal') {
+      update({
+        orientationHorizontal: checked,
+        orientationVertical: checked ? false : settings.orientationVertical,
+        size: checked ? '1536x1024' : settings.orientationVertical ? '1024x1536' : settings.size,
+      });
+      return;
+    }
+    update({
+      orientationVertical: checked,
+      orientationHorizontal: checked ? false : settings.orientationHorizontal,
+      size: checked ? '1024x1536' : settings.orientationHorizontal ? '1536x1024' : settings.size,
+    });
+  };
+
   const handlePickFiles = async (files: FileList | null) => {
     if (!files || !onSourceImagesChange) return;
     const room = Math.max(0, maxSourceImages - sourceImages.length);
@@ -135,6 +158,14 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
     <div className="w-72 space-y-3" dir="rtl">
       {capability === 'image_generation' ? (
         <>
+          <div className="rounded-lg border border-gray-100 p-2 dark:border-white/10">
+            <Checkbox
+              checked={settings.useOrganizationContext !== false}
+              onChange={(event) => update({ useOrganizationContext: event.target.checked })}
+            >
+              استفاده از اطلاعات سازمان
+            </Checkbox>
+          </div>
           <div>
             <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">ابعاد تصویر</div>
             <Select
@@ -164,6 +195,26 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
               options={[1, 2, 3, 4].map((n) => ({ value: n, label: n.toLocaleString('fa-IR') }))}
               onChange={(value) => update({ n: Number(value) })}
             />
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">راهنمای نوشته و جهت</div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 dark:text-gray-300">
+              <Checkbox checked={settings.persianText === true} onChange={(event) => update({ persianText: event.target.checked })}>
+                متن فارسی
+              </Checkbox>
+              <Checkbox checked={settings.persianDigits === true} onChange={(event) => update({ persianDigits: event.target.checked })}>
+                اعداد فارسی
+              </Checkbox>
+              <Checkbox checked={settings.rtlText === true} onChange={(event) => update({ rtlText: event.target.checked })}>
+                نوشته‌ها راست‌چین
+              </Checkbox>
+              <Checkbox checked={settings.orientationHorizontal === true} onChange={(event) => updateImageOrientation('horizontal', event.target.checked)}>
+                افقی
+              </Checkbox>
+              <Checkbox checked={settings.orientationVertical === true} onChange={(event) => updateImageOrientation('vertical', event.target.checked)}>
+                عمودی
+              </Checkbox>
+            </div>
           </div>
         </>
       ) : null}

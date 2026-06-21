@@ -214,6 +214,8 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
         variable_target: 'message',
       };
     case 'update_record':
+    case 'lock_record':
+      return { target_scope: 'current_record', relation_field_key: '', stage_node_key: '', reason: '' };
     case 'send_to_next_stages':
       return { field: '', value_mode: 'static', value: null, source_field: '' };
     case 'send_to_specific_stage':
@@ -895,6 +897,27 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       ).values()
     );
   }, [currentModuleId, relationSourceModuleOptions]);
+
+  const processLockLinkedRecordOptions = useMemo(() => {
+    const baseOptions = relationSourceModuleOptions && relationSourceModuleOptions.length > 0
+      ? relationSourceModuleOptions
+      : [];
+    return Array.from(
+      new Map(
+        baseOptions
+          .map((item) => {
+            const moduleId = String(item?.value || '').trim();
+            if (!moduleId || !MODULES[moduleId]) return null;
+            const moduleTitle = String(item?.label || MODULES[moduleId]?.titles?.faSingular || MODULES[moduleId]?.titles?.fa || moduleId).trim() || moduleId;
+            return [moduleId, {
+              label: `رکورد لینک‌شده ${moduleTitle}`,
+              value: createProcessLinkedFieldKey(moduleId, 'id'),
+            }] as const;
+          })
+          .filter(Boolean) as Array<readonly [string, { label: string; value: string }]>
+      ).values()
+    );
+  }, [relationSourceModuleOptions]);
 
   const processTemplateOptions = relationOptions.process_template_id || [];
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
@@ -1791,7 +1814,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
     if (actionType === 'run_ai_prompt') {
       const outputMode = String(config.output_mode || 'text');
-      const targetModuleId = String(config.target_module_id || '');
+      const targetModuleId = outputMode === 'update_record'
+        ? currentModuleId
+        : String(config.target_module_id || '');
       const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
       const targetFields = (targetModule?.fields || []).filter(
         (field) => !!field?.key && field?.nature !== 'system' && field?.readonly !== true
@@ -1846,11 +1871,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       };
       const updateRecordCreationSchema = (nextModuleId: string, nextAllowedFieldKeys?: string[]) => {
         const allowedKeys = Array.isArray(nextAllowedFieldKeys) ? nextAllowedFieldKeys : [];
+        const schemaAllowedKeys = outputMode === 'update_record' && allowedKeys.length === 0
+          ? ['__no_ai_update_fields_selected__']
+          : allowedKeys;
         updateActionConfig(action.id, {
           target_module_id: nextModuleId,
           allowed_field_keys: allowedKeys,
           relation_field_key: '',
-          record_creation_schema: nextModuleId ? buildAiRecordCreationSchema(nextModuleId, allowedKeys) : null,
+          record_creation_schema: nextModuleId ? buildAiRecordCreationSchema(nextModuleId, schemaAllowedKeys) : null,
         });
       };
       return (
@@ -1876,30 +1904,54 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               options={[
                 { label: 'فقط پیام/تحلیل', value: 'text' },
                 { label: 'ساخت رکورد جدید', value: 'create_record' },
+                { label: 'ویرایش رکورد جاری', value: 'update_record' },
                 { label: 'اجرای/ساخت فرآیند و فعالیت', value: 'process_operation' },
               ]}
-              onChange={(nextVal) => updateActionConfig(action.id, { output_mode: nextVal })}
+              onChange={(nextVal) => {
+                if (nextVal === 'update_record') {
+                  const schema = buildAiRecordCreationSchema(currentModuleId, ['__no_ai_update_fields_selected__']);
+                  updateActionConfig(action.id, {
+                    output_mode: nextVal,
+                    target_module_id: currentModuleId,
+                    allowed_field_keys: [],
+                    relation_field_key: '',
+                    record_creation_schema: schema,
+                  });
+                  return;
+                }
+                updateActionConfig(action.id, { output_mode: nextVal });
+              }}
               placeholder="نوع خروجی"
             />
             <Select
               {...commonSelectProps}
-              value={config.target_module_id || undefined}
+              value={targetModuleId || undefined}
               disabled={disabled || outputMode !== 'create_record'}
               options={moduleOptions}
               onChange={(nextVal) => updateRecordCreationSchema(String(nextVal || ''), [])}
-              placeholder="ماژول رکورد جدید"
+              placeholder={outputMode === 'update_record' ? 'ماژول رکورد جاری' : 'ماژول رکورد جدید'}
             />
             <Select
               {...commonSelectProps}
               mode="multiple"
               value={Array.isArray(config.allowed_field_keys) ? config.allowed_field_keys : []}
-              disabled={disabled || outputMode !== 'create_record' || !targetModuleId}
+              disabled={disabled || !['create_record', 'update_record'].includes(outputMode) || !targetModuleId}
               options={targetWritableOptions}
               onChange={(nextVal) => updateRecordCreationSchema(targetModuleId, nextVal.map((item: any) => String(item)))}
-              placeholder="فیلدهایی که AI اجازه پر کردن دارد"
+              placeholder={outputMode === 'update_record'
+                ? 'فیلدهایی که AI اجازه ویرایش دارد'
+                : 'فیلدهایی که AI اجازه پر کردن دارد'}
               maxTagCount="responsive"
             />
           </div>
+          {outputMode === 'update_record'
+            && (!Array.isArray(config.allowed_field_keys) || config.allowed_field_keys.length === 0) ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="برای ویرایش رکورد، حداقل یک فیلد مجاز را انتخاب کنید."
+              />
+            ) : null}
 
           <div className="space-y-1">
             <div className="text-xs text-gray-500">کانال‌های اطلاع‌رسانی خروجی AI</div>
@@ -2388,6 +2440,72 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         </div>
       );
     }
+    if (actionType === 'lock_record') {
+      const relationLockOptions = [
+        ...currentModuleFields
+        .filter((field: any) => String(field?.relationConfig?.targetModule || '').trim() && !parseProcessLinkedFieldKey(String(field?.key || '')))
+        .map((field: any) => ({
+          label: `${getFieldLabel(field)} (${MODULES[String(field.relationConfig.targetModule)]?.titles?.faSingular || MODULES[String(field.relationConfig.targetModule)]?.titles?.fa || field.relationConfig.targetModule})`,
+          value: String(field.key),
+        })),
+        ...processLockLinkedRecordOptions,
+      ];
+      const hasProcessTaskTargets = processStageOptions.length > 0;
+      const lockTargetOptions = [
+        { label: 'رکورد جاری', value: 'current_record' },
+        { label: 'رکورد مرتبط', value: 'related_record' },
+        ...(hasProcessTaskTargets ? [
+          { label: 'فعالیت فعلی', value: 'process_current_task' },
+          { label: 'فعالیت قبلی', value: 'process_previous_task' },
+          { label: 'فعالیت خاص', value: 'process_specific_task' },
+        ] : []),
+      ];
+      const selectedTargetScope = String(config.target_scope || 'current_record').trim();
+      return (
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-12">
+          <div className="space-y-1 md:col-span-5">
+            <div className="text-xs text-gray-500">هدف قفل</div>
+            <Select
+              {...commonSelectProps}
+              value={selectedTargetScope || 'current_record'}
+              disabled={disabled}
+              options={lockTargetOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, {
+                target_scope: nextVal,
+                relation_field_key: '',
+                stage_node_key: '',
+              })}
+              placeholder="هدف قفل"
+            />
+          </div>
+          <div className="space-y-1 md:col-span-4">
+            <div className="text-xs text-gray-500">رکورد مرتبط</div>
+            <AdaptiveSelectField
+              {...commonSelectProps}
+              value={config.relation_field_key || undefined}
+              disabled={disabled || selectedTargetScope !== 'related_record' || relationLockOptions.length === 0}
+              options={relationLockOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { relation_field_key: nextVal })}
+              placeholder={relationLockOptions.length > 0 ? 'انتخاب رابطه' : 'رابطه‌ای در این ماژول پیدا نشد'}
+              pickerTitle="رکورد مرتبط برای قفل"
+            />
+          </div>
+          <div className="space-y-1 md:col-span-3">
+            <div className="text-xs text-gray-500">فعالیت خاص</div>
+            <AdaptiveSelectField
+              {...commonSelectProps}
+              value={config.stage_node_key || undefined}
+              disabled={disabled || selectedTargetScope !== 'process_specific_task' || processStageOptions.length === 0}
+              options={processStageOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { stage_node_key: nextVal })}
+              placeholder={processStageOptions.length > 0 ? 'انتخاب فعالیت' : 'فعالیتی پیدا نشد'}
+              pickerTitle="فعالیت خاص برای قفل"
+            />
+          </div>
+        </div>
+      );
+    }
+
     if (
       actionType === 'update_record'
       || actionType === 'send_to_next_stages'

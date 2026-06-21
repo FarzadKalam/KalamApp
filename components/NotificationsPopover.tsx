@@ -33,7 +33,7 @@ import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 import { selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
-import { resolveVoipAccessPermissions } from '../utils/permissions';
+import { canUseRecordLockPermission, resolveVoipAccessPermissions, type PermissionMap } from '../utils/permissions';
 import {
   buildNoteConversations,
   buildSmsThreads,
@@ -931,7 +931,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [panelVisibleCounts, setPanelVisibleCounts] = useState({ tasks: MAX_ITEMS, responsibilities: MAX_ITEMS });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
-  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
+  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean; software_role?: string | null }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
+  const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
 
   // ── Activity & Responsibility hooks (optimized: cache + efficient queries) ──
   const detailRuntimeEnabled = variant === 'alerts' && (standalone || open);
@@ -2178,6 +2179,7 @@ useEffect(() => {
       const snapshot = await fetchSessionBootstrap(supabase);
       if (!snapshot.user?.id) return;
       const voipAccess = resolveVoipAccessPermissions((snapshot.permissions || null) as any);
+      setCurrentPermissionMap((snapshot.permissions || null) as PermissionMap | null);
       setProfile({
         id: snapshot.user.id,
         role_id: snapshot.roleId || null,
@@ -2186,6 +2188,7 @@ useEffect(() => {
         avatar_url: snapshot.profile?.avatar_url || snapshot.user?.user_metadata?.avatar_url || null,
         voip_extension: snapshot.profile?.voip_extension ? String(snapshot.profile.voip_extension) : null,
         can_view_all_calls: voipAccess.canViewAllCallNotifications,
+        software_role: snapshot.profile?.role ? String(snapshot.profile.role) : null,
       });
     };
     loadProfile();
@@ -8371,6 +8374,8 @@ useEffect(() => {
       handleTaskProducedQtyChange={handleTaskProducedQtyChange}
       profile={{ id: String(profile.id || '') }}
       maxItems={MAX_ITEMS}
+      canLockTaskRecord={canUseRecordLockPermission(currentPermissionMap, 'tasks', 'lock', profile.software_role)}
+      canUnlockTaskRecord={canUseRecordLockPermission(currentPermissionMap, 'tasks', 'unlock', profile.software_role)}
     />
   );
 
@@ -8397,6 +8402,8 @@ useEffect(() => {
       createdByNameMap={createdByNameMap}
       handleClose={handleClose}
       maxItems={MAX_ITEMS}
+      canLockModuleRecord={(moduleId) => canUseRecordLockPermission(currentPermissionMap, moduleId, 'lock', profile.software_role)}
+      canUnlockModuleRecord={(moduleId) => canUseRecordLockPermission(currentPermissionMap, moduleId, 'unlock', profile.software_role)}
     />
   );
 

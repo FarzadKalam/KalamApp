@@ -3561,8 +3561,8 @@ export const usePrintManager = ({
   }, [data?.customer_id, data?.id, data?.supplier_id, isPrintModalOpen, moduleId, printMode]);
 
   const printSignatureQuickAddOptions = useMemo(
-    () => getPrintSignatureQuickAddOptions({ canUseCeoSignature }),
-    [canUseCeoSignature]
+    () => getPrintSignatureQuickAddOptions({ canUseCeoSignature, companyInfo: sellerInfo }),
+    [canUseCeoSignature, sellerInfo?.manager_title]
   );
 
   return {

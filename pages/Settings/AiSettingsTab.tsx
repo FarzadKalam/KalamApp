@@ -56,92 +56,6 @@ const CAPABILITIES: Array<{
   { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
 ];
 
-// Mirrors DEFAULT_CAPABILITY_MODELS in the Edge Function
-const DEFAULT_MODELS: Record<AiCapabilityKey | 'embedding', string> = {
-  // ── Chat / reasoning ──────────────────────────────────────────────────
-  dashboard_chat: 'gemini-3.1-flash-lite',
-  record_chat: 'gemini-3.1-flash-lite',
-  customer_reply_suggestion: 'qwen3.6-flash',
-  document_analysis: 'gemini-3.1-pro-preview',
-  workflow_ai_prompt: 'qwen3.6-flash',
-  deep_reasoning: 'grok-4.20-reasoning',
-  legal_assistant: 'grok-4.20-reasoning',
-  voip_auto_reply: 'qwen3.6-flash',
-  // ── Web search ─────────────────────────────────────────────────────────
-  web_search: 'serper-search',              // $0.001/query — cheapest Google search
-  // ── Voice ──────────────────────────────────────────────────────────────
-  voice_input: 'scribe_v2',                 // AvalAI STT via /v1/audio/transcriptions
-  voice_output: 'eleven-v3',                // ElevenLabs TTS via /v1/audio/speech
-  // ── Media generation ───────────────────────────────────────────────────
-  image_generation: 'gemini-2.5-flash-image',
-  video_generation: 'sora-2',
-  // ── Embeddings ─────────────────────────────────────────────────────────
-  embedding: 'text-embedding-3-small',      // keep for pgvector compatibility
-};
-
-const FALLBACK_MODEL_OPTIONS: Partial<Record<AiCapabilityKey, Array<{ label: string; value: string }>>> = {
-  dashboard_chat: [
-    { label: 'Gemini 3.1 Flash Lite', value: 'gemini-3.1-flash-lite' },
-    { label: 'Qwen 3.6 Flash', value: 'qwen3.6-flash' },
-    { label: 'GPT-5.4 Mini', value: 'gpt-5.4-mini' },
-  ],
-  record_chat: [
-    { label: 'Gemini 3.1 Flash Lite', value: 'gemini-3.1-flash-lite' },
-    { label: 'Qwen 3.6 Flash', value: 'qwen3.6-flash' },
-    { label: 'GPT-5.4 Mini', value: 'gpt-5.4-mini' },
-  ],
-  document_analysis: [
-    { label: 'Gemini 3.1 Pro Preview', value: 'gemini-3.1-pro-preview' },
-    { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
-    { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6' },
-  ],
-  deep_reasoning: [
-    { label: 'Grok 4.20 Reasoning', value: 'grok-4.20-reasoning' },
-    { label: 'DeepSeek V4 Pro', value: 'deepseek-v4-pro' },
-    { label: 'GPT-5', value: 'gpt-5' },
-  ],
-  legal_assistant: [
-    { label: 'Grok 4.20 Reasoning + جستجوی وب', value: 'grok-4.20-reasoning' },
-    { label: 'Gemini 3.1 Pro Preview + جستجوی وب', value: 'gemini-3.1-pro-preview' },
-    { label: 'Claude Sonnet 4.6 + جستجوی وب', value: 'claude-sonnet-4-6' },
-  ],
-  voice_input: [
-    { label: 'Scribe v2', value: 'scribe_v2' },
-    { label: 'Groq Whisper Large v3', value: 'groq.whisper-large-v3' },
-    { label: 'Whisper 1', value: 'whisper-1' },
-  ],
-  image_generation: [
-    { label: 'Nano Banana اقتصادی - Gemini 2.5 Flash Image', value: 'gemini-2.5-flash-image' },
-    { label: 'Nano Banana 2 - Gemini 3.1 Flash Image', value: 'gemini-3.1-flash-image' },
-    { label: 'Nano Banana Pro - Gemini 3 Pro Image', value: 'gemini-3-pro-image' },
-    { label: 'Qwen Image 2.0 Pro', value: 'qwen-image-2.0-pro' },
-    { label: 'GPT Image 2', value: 'gpt-image-2' },
-  ],
-  web_search: [
-    { label: 'Serper Search', value: 'serper-search' },
-    { label: 'Tavily Search Advanced', value: 'tavily-search-advanced' },
-    { label: 'Perplexity Search', value: 'perplexity-search' },
-    { label: 'Google PSE Search', value: 'google_pse-search' },
-  ],
-  voice_output: [
-    { label: 'Eleven v3', value: 'eleven-v3' },
-    { label: 'Eleven Multilingual v2', value: 'eleven-multilingual-v2' },
-    { label: 'Eleven Turbo v2.5', value: 'eleven-turbo-v2-5' },
-  ],
-  video_generation: [
-    { label: 'Sora 2', value: 'sora-2' },
-    { label: 'Sora 2 Pro', value: 'sora-2-pro' },
-    { label: 'Veo', value: 'veo' },
-    { label: 'Runway', value: 'runway' },
-  ],
-  voip_auto_reply: [
-    { label: 'Qwen 3.6 Flash', value: 'qwen3.6-flash' },
-    { label: 'Gemini 3.1 Flash Lite', value: 'gemini-3.1-flash-lite' },
-    { label: 'MiniMax M2.7 Highspeed', value: 'minimax-m2.7-highspeed' },
-    { label: 'GPT-5.4 Nano', value: 'gpt-5.4-nano' },
-  ],
-};
-
 const formatUnit = (value: unknown) =>
   Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 8 });
 
@@ -164,10 +78,7 @@ const AiSettingsTab: React.FC = () => {
     try {
       const data = await callAssistant({ action: 'get_ai_overview' });
       setOverview(data);
-      const selectedModels = {
-        ...DEFAULT_MODELS,
-        ...(data?.settings?.selected_models || {}),
-      };
+      const selectedModels = data?.settings?.selected_models || {};
       form.setFieldsValue({
         selected_models: selectedModels,
         feature_flags: {
@@ -197,20 +108,13 @@ const AiSettingsTab: React.FC = () => {
       const options = models
         .filter((model) => {
           const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
-          return model?.is_coming_soon !== true && (tags.includes(capability.key) || String(model?.id || '') === DEFAULT_MODELS[capability.key]);
+          return model?.is_coming_soon !== true && tags.includes(capability.key);
         })
         .map((model) => ({
           label: String(model?.display_name_fa || model?.label || model?.id || '').trim(),
           value: String(model?.id || '').trim(),
         }))
         .filter((item) => item.value);
-      const fallback = DEFAULT_MODELS[capability.key];
-      if (fallback && !options.some((item) => item.value === fallback)) {
-        options.unshift({ label: fallback, value: fallback });
-      }
-      (FALLBACK_MODEL_OPTIONS[capability.key] || []).forEach((option) => {
-        if (!options.some((item) => item.value === option.value)) options.push(option);
-      });
       result[capability.key] = options;
     });
     return result;
@@ -224,7 +128,6 @@ const AiSettingsTab: React.FC = () => {
         action: 'save_ai_settings',
         settings: {
           selected_models: {
-            ...DEFAULT_MODELS,
             ...(values.selected_models || {}),
           },
           feature_flags: values.feature_flags || {},

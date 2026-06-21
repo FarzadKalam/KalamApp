@@ -27,6 +27,9 @@ import {
 } from '../../utils/taxpayerSystem';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import ApiIntegrationSection from '../../components/ApiIntegrationSection';
+import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
+import { loadScopedCompanySettings } from '../../utils/companySettings';
+import { normalizeCurrencyConfig } from '../../utils/currency';
 
 type ConnectionType =
   | 'sms'
@@ -36,7 +39,8 @@ type ConnectionType =
   | 'telegram_bot'
   | 'bale_bot'
   | 'rubika_bot'
-  | 'portal';
+  | 'portal'
+  | 'payment_gateway';
 
 type ConnectionRecord = {
   id?: string;
@@ -143,6 +147,18 @@ type FormValues = {
     allow_ticketing?: boolean;
     is_active?: boolean;
   };
+  payment_gateway: {
+    provider?: string;
+    gateway_scope?: 'system' | 'org';
+    mode?: 'production' | 'sandbox';
+    payment_domain?: string;
+    callback_path?: string;
+    merchant_id?: string;
+    title?: string;
+    default_description?: string;
+    online_invoice_payments_enabled?: boolean;
+    is_active?: boolean;
+  };
   taxpayer_system: {
     integration_mode?: TaxpayerIntegrationMode;
     fiscal_id?: string;
@@ -165,6 +181,7 @@ const CONNECTION_TYPES: ConnectionType[] = [
   'bale_bot',
   'rubika_bot',
   'portal',
+  'payment_gateway',
 ];
 
 const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
@@ -177,6 +194,7 @@ const CONNECTION_PANEL_SEARCH_TEXT: Record<string, string> = {
   bale_bot: 'بات بله bale chat id',
   rubika_bot: 'بات روبیکا rubika chat id',
   portal: 'پورتال مشتریان portal',
+  payment_gateway: 'درگاه پرداخت آنلاین زرین پال zarinpal pay payment gateway فاکتور آنلاین اشتراک شارژ',
 };
 
 const normalizeConnectionSearchText = (value: string) =>
@@ -263,6 +281,18 @@ const DEFAULT_VALUES: FormValues = {
     allow_ticketing: false,
     is_active: false,
   },
+  payment_gateway: {
+    provider: 'zarinpal',
+    gateway_scope: 'system',
+    mode: 'production',
+    payment_domain: 'https://tazesystem.ir',
+    callback_path: '/payment/callback',
+    merchant_id: '',
+    title: 'درگاه پرداخت آنلاین تازه سیستم',
+    default_description: 'پرداخت آنلاین از طریق زرین‌پال',
+    online_invoice_payments_enabled: false,
+    is_active: false,
+  },
   taxpayer_system: {
     integration_mode: 'certificate_v2',
     fiscal_id: '',
@@ -344,6 +374,7 @@ const ConnectionsTab: React.FC = () => {
   const [connectionSearch, setConnectionSearch] = useState('');
   const [activePanelKeys, setActivePanelKeys] = useState<string[]>([]);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [isSaasAdminOrg, setIsSaasAdminOrg] = useState(false);
   const smsWebhookSecret = Form.useWatch(['sms', 'webhook_secret'], form);
   const voipWebhookSecret = Form.useWatch(['voip', 'webhook_secret'], form);
 
@@ -392,10 +423,44 @@ const ConnectionsTab: React.FC = () => {
 
   useEffect(() => {
     void fetchData();
-    void fetchSessionBootstrap(supabase).then((snapshot) => {
-      setCurrentOrgId(snapshot.orgId || snapshot.profile?.org_id || null);
-    }).catch(() => setCurrentOrgId(null));
+    void fetchSessionBootstrap(supabase).then(async (snapshot) => {
+      const orgId = snapshot.orgId || snapshot.profile?.org_id || null;
+      setCurrentOrgId(orgId);
+      setIsSaasAdminOrg(orgId ? await resolveIsSaasAdminOrg(orgId) : false);
+    }).catch(() => {
+      setCurrentOrgId(null);
+      setIsSaasAdminOrg(false);
+    });
   }, []);
+
+  const resolveIsSaasAdminOrg = async (orgId: string) => {
+    const normalizedOrgId = String(orgId || '').trim();
+    if (!normalizedOrgId) return false;
+
+    const { data, error } = await supabase
+      .from('org_roles')
+      .select('permissions')
+      .eq('org_id', normalizedOrgId)
+      .limit(200);
+
+    if (error || !Array.isArray(data)) return false;
+
+    return data.some((role: any) => {
+      const saasAdminPermissions = role?.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+      return saasAdminPermissions.view === true
+        || saasAdminPermissions.edit === true
+        || Object.values(saasAdminPermissions.fields || {}).some((value) => value === true);
+    });
+  };
+
+  const resolveCompanyPaymentCurrencyCode = async (): Promise<'IRR' | 'IRT'> => {
+    const { data } = await loadScopedCompanySettings(supabase);
+    const currency = normalizeCurrencyConfig({
+      code: data?.currency_code,
+      label: data?.currency_label,
+    });
+    return currency.code === 'IRR' ? 'IRR' : 'IRT';
+  };
 
   const smsProviderOptions = useMemo(
     () => [{ label: 'ملی پیامک', value: 'meli_payamak' }],
@@ -443,6 +508,27 @@ const ConnectionsTab: React.FC = () => {
 
   const portalProviderOptions = useMemo(
     () => [{ label: 'Customer Portal', value: 'customer_portal' }],
+    []
+  );
+
+  const paymentGatewayProviderOptions = useMemo(
+    () => [{ label: 'زرین‌پال', value: 'zarinpal' }],
+    []
+  );
+
+  const paymentGatewayScopeOptions = useMemo(
+    () => [
+      { label: 'درگاه مرکزی تازه سیستم', value: 'system' },
+      { label: 'درگاه اختصاصی همین سازمان', value: 'org' },
+    ],
+    []
+  );
+
+  const paymentGatewayModeOptions = useMemo(
+    () => [
+      { label: 'واقعی', value: 'production' },
+      { label: 'آزمایشی', value: 'sandbox' },
+    ],
     []
   );
 
@@ -585,6 +671,7 @@ const ConnectionsTab: React.FC = () => {
         bale_bot: byType.bale_bot?.id,
         rubika_bot: byType.rubika_bot?.id,
         portal: byType.portal?.id,
+        payment_gateway: byType.payment_gateway?.id,
       });
 
       const nextValues: FormValues = {
@@ -638,6 +725,12 @@ const ConnectionsTab: React.FC = () => {
           provider: String(byType.portal?.provider || DEFAULT_VALUES.portal.provider),
           ...(byType.portal?.settings || {}),
           is_active: byType.portal?.is_active ?? DEFAULT_VALUES.portal.is_active,
+        },
+        payment_gateway: {
+          ...DEFAULT_VALUES.payment_gateway,
+          provider: String(byType.payment_gateway?.provider || DEFAULT_VALUES.payment_gateway.provider),
+          ...(byType.payment_gateway?.settings || {}),
+          is_active: byType.payment_gateway?.is_active ?? DEFAULT_VALUES.payment_gateway.is_active,
         },
         taxpayer_system: DEFAULT_VALUES.taxpayer_system,
       };
@@ -698,6 +791,20 @@ const ConnectionsTab: React.FC = () => {
         ...(form.getFieldValue('taxpayer_system') || {}),
         ...(values.taxpayer_system || {}),
       };
+      const currentPaymentGatewayValues = {
+        ...(form.getFieldValue('payment_gateway') || {}),
+        ...(values.payment_gateway || {}),
+      };
+      const normalizedPaymentGatewayScope = isSaasAdminOrg
+        ? (currentPaymentGatewayValues.gateway_scope === 'org' ? 'org' : 'system')
+        : 'org';
+      const normalizedPaymentGatewayMode = isSaasAdminOrg && currentPaymentGatewayValues.mode === 'sandbox'
+        ? 'sandbox'
+        : 'production';
+      const normalizedPaymentGatewayCallbackPath = isSaasAdminOrg
+        ? (String(currentPaymentGatewayValues.callback_path || '/payment/callback').trim() || '/payment/callback')
+        : '/payment/callback';
+      const companyPaymentCurrencyCode = await resolveCompanyPaymentCurrencyCode();
       const normalizedRubikaValues = {
         ...(values.rubika_bot || {}),
         api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
@@ -820,6 +927,23 @@ const ConnectionsTab: React.FC = () => {
             allow_ticketing: currentPortalValues.allow_ticketing === true,
           },
           is_active: values.portal?.is_active === true,
+        },
+        {
+          id: rowIds.payment_gateway,
+          connection_type: 'payment_gateway',
+          provider: 'zarinpal',
+          settings: {
+            gateway_scope: normalizedPaymentGatewayScope,
+            mode: normalizedPaymentGatewayMode,
+            payment_domain: String(currentPaymentGatewayValues.payment_domain || '').replace(/\/+$/, ''),
+            callback_path: normalizedPaymentGatewayCallbackPath,
+            currency: companyPaymentCurrencyCode,
+            merchant_id: String(currentPaymentGatewayValues.merchant_id || '').trim(),
+            title: String(currentPaymentGatewayValues.title || '').trim(),
+            default_description: String(currentPaymentGatewayValues.default_description || '').trim(),
+            online_invoice_payments_enabled: currentPaymentGatewayValues.online_invoice_payments_enabled === true,
+          },
+          is_active: currentPaymentGatewayValues.is_active === true,
         },
       ];
 
@@ -1628,6 +1752,60 @@ const ConnectionsTab: React.FC = () => {
                   <Form.Item label="فعال" name={['site', 'is_active']} valuePropName="checked">
                     <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
                   </Form.Item>
+                </div>
+              ),
+            },
+            {
+              key: 'payment_gateway',
+              label: 'درگاه پرداخت آنلاین',
+              children: (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {isSaasAdminOrg ? (
+                      <Form.Item label="ارائه‌دهنده" name={['payment_gateway', 'provider']}>
+                        <Select options={paymentGatewayProviderOptions} disabled />
+                      </Form.Item>
+                    ) : null}
+                    <Form.Item
+                      label={isSaasAdminOrg ? 'دامنه درگاه' : 'دامنه سایت متصل به درگاه'}
+                      name={['payment_gateway', 'payment_domain']}
+                      className={isSaasAdminOrg ? 'md:col-span-2' : 'md:col-span-3'}
+                    >
+                      <Input dir="ltr" placeholder={isSaasAdminOrg ? 'https://tazesystem.ir' : 'https://example.ir'} />
+                    </Form.Item>
+                    <Form.Item label="فعال" name={['payment_gateway', 'is_active']} valuePropName="checked">
+                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+                    <Form.Item label="فعال برای فاکتور آنلاین" name={['payment_gateway', 'online_invoice_payments_enabled']} valuePropName="checked">
+                      <Switch checkedChildren="فعال" unCheckedChildren="غیرفعال" />
+                    </Form.Item>
+                    {isSaasAdminOrg ? (
+                      <>
+                        <Form.Item label="نوع درگاه" name={['payment_gateway', 'gateway_scope']}>
+                          <Select options={paymentGatewayScopeOptions} />
+                        </Form.Item>
+                        <Form.Item label="محیط" name={['payment_gateway', 'mode']}>
+                          <Select options={paymentGatewayModeOptions} />
+                        </Form.Item>
+                        <Form.Item label="مسیر Callback" name={['payment_gateway', 'callback_path']}>
+                          <Input dir="ltr" placeholder="/payment/callback" />
+                        </Form.Item>
+                      </>
+                    ) : null}
+                    <Form.Item label="Merchant ID زرین‌پال" name={['payment_gateway', 'merchant_id']} className="md:col-span-3">
+                      <Input.Password
+                        dir="ltr"
+                        placeholder={isSaasAdminOrg ? 'برای درگاه مرکزی خالی بماند؛ فقط برای درگاه اختصاصی سازمان وارد شود.' : 'Merchant ID دریافتی از زرین‌پال'}
+                        autoComplete="off"
+                      />
+                    </Form.Item>
+                    <Form.Item label="عنوان نمایشی" name={['payment_gateway', 'title']} className="md:col-span-3">
+                      <Input placeholder="درگاه پرداخت آنلاین تازه سیستم" />
+                    </Form.Item>
+                    <Form.Item label="توضیح پیش‌فرض پرداخت" name={['payment_gateway', 'default_description']} className="md:col-span-3">
+                      <Input.TextArea rows={2} placeholder="پرداخت آنلاین از طریق زرین‌پال" />
+                    </Form.Item>
+                  </div>
                 </div>
               ),
             },

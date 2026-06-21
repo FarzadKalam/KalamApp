@@ -660,6 +660,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
+      { key: '/ai?prototype=omni', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'هوش مصنوعی (نسخه ۲)', disabled: !communicationsAccess.canUseWorkspace },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,
@@ -799,6 +800,8 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             icon: <ReadOutlined />,
             label: 'مدیریت محتوا',
             children: [
+              { key: '/taze-system/landing', label: 'صفحه اصلی سایت' },
+              { key: '/cms_pages', label: 'صفحات سایت' },
               { key: '/cms_blog_posts', label: 'پست‌های بلاگ' },
               { key: '/cms_tutorial_posts', label: 'آموزش‌ها' },
               { key: '/cms_tutorial_series', label: 'دوره‌های آموزشی' },
@@ -830,6 +833,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/customer-club':
           return canViewCustomerClub;
         case '/messages':
+        case '/ai?prototype=omni':
           return communicationsAccess.canUseWorkspace;
         case '/gallery':
           return filesAccess.canViewGallery;
@@ -946,6 +950,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const menuItems = useMemo<MenuProps['items']>(() => {
     return mapSidebarMenuItems(visibleRawMenuItems);
   }, [visibleRawMenuItems]);
+  const selectedSidebarKey = useMemo(() => {
+    if (location.pathname === '/ai' && new URLSearchParams(location.search).get('prototype') === 'omni') {
+      return '/ai?prototype=omni';
+    }
+    return location.pathname;
+  }, [location.pathname, location.search]);
 
   const searchableGlobalSearchModules = useMemo(
     () => buildGlobalSearchModules(MODULES, rolePermissions),
@@ -982,7 +992,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, []);
 
   useEffect(() => {
-    const matchedPath = findMenuPath(rawMenuItems, location.pathname);
+    const matchedPath = findMenuPath(rawMenuItems, selectedSidebarKey);
     const parentKeys = matchedPath.slice(0, -1);
     setOpenMenuKeys((prev) => {
       if (prev.length === parentKeys.length && prev.every((key, index) => key === parentKeys[index])) {
@@ -990,7 +1000,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       }
       return parentKeys;
     });
-  }, [findMenuPath, location.pathname, rawMenuItems]);
+  }, [findMenuPath, rawMenuItems, selectedSidebarKey]);
 
   useEffect(() => {
     const term = globalSearch.trim();
@@ -1358,7 +1368,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             mode="inline"
             direction="rtl"
             inlineCollapsed={!isMobile && collapsed}
-            selectedKeys={[location.pathname]}
+            selectedKeys={[selectedSidebarKey]}
             openKeys={collapsed && !isMobile ? undefined : openMenuKeys}
             onOpenChange={(keys) => setOpenMenuKeys(keys as string[])}
             triggerSubMenuAction="click"

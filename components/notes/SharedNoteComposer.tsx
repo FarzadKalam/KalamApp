@@ -45,6 +45,7 @@ interface SharedNoteComposerProps {
   onSmsNotificationChange?: (value: boolean) => void;
   extraActions?: React.ReactNode;
   enableImagePasteAndDrop?: boolean;
+  surfaceVariant?: 'default' | 'omni';
 }
 
 type PendingFilePrompt = {
@@ -129,6 +130,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   onSmsNotificationChange,
   extraActions,
   enableImagePasteAndDrop = false,
+  surfaceVariant = 'default',
 }) => {
   const lastExternalValueRef = useRef(value);
   const [pendingPrompts, setPendingPrompts] = useState<PendingFilePrompt[]>([]);
@@ -141,6 +143,25 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   const [recordingDurationMs, setRecordingDurationMs] = useState(0);
   const [recordingLevels, setRecordingLevels] = useState<number[]>(() => Array.from({ length: 20 }, () => 0.16));
   const [pendingVoiceClip, setPendingVoiceClip] = useState<PendingVoiceClip | null>(null);
+  const isOmniSurface = surfaceVariant === 'omni';
+  const shellClassName = isOmniSurface
+    ? 'border-t border-slate-200/55 bg-[rgba(248,250,252,0.78)] px-3 py-2.5 pb-[max(10px,env(safe-area-inset-bottom))] backdrop-blur-xl dark:border-white/[0.06] dark:!bg-[rgba(21,23,26,0.96)]'
+    : 'border-t border-slate-200/45 bg-white/82 px-2.5 py-2 dark:border-white/[0.07] dark:bg-[#1a1518]/95';
+  const panelClassName = isOmniSurface
+    ? 'rounded-2xl bg-white/95 p-2.5 shadow-[0_16px_38px_rgba(15,23,42,0.10)] dark:!bg-[rgba(28,33,40,0.96)] dark:shadow-[0_16px_38px_rgba(0,0,0,0.30)]'
+    : 'rounded-[0.95rem] border border-slate-200/60 bg-white/90 p-2 shadow-[0_4px_14px_rgba(15,23,42,0.045)] dark:border-white/[0.09] dark:bg-white/[0.035] dark:shadow-[0_4px_14px_rgba(0,0,0,0.18)]';
+  const inputClassName = isOmniSurface
+    ? '!border-0 !bg-transparent !px-1 !text-[13px] !leading-6 !shadow-none placeholder:!text-slate-400 dark:placeholder:!text-slate-500'
+    : '!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none';
+  const controlRailClassName = isOmniSurface
+    ? 'mt-2 flex items-center justify-between gap-2 rounded-xl bg-slate-50/82 px-1.5 py-1 dark:!bg-[rgba(8,13,20,0.42)]'
+    : 'mt-2 flex items-center justify-between gap-2';
+  const iconButtonClassName = isOmniSurface
+    ? '!h-8 !w-8 !min-w-8 !rounded-full !text-slate-600 hover:!bg-white hover:!text-slate-900 dark:!text-slate-300 dark:hover:!bg-white/[0.08] dark:hover:!text-white'
+    : undefined;
+  const submitButtonClassName = isOmniSurface
+    ? '!h-8 !min-w-8 !rounded-full !px-3 shadow-[0_8px_18px_rgba(var(--brand-700-rgb),0.18)]'
+    : 'shrink-0';
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
@@ -392,10 +413,10 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
   return (
     <>
-      <div className="border-t border-slate-200/45 bg-white/82 px-2.5 py-2 dark:border-white/[0.07] dark:bg-[#1a1518]/95">
+      <div className={shellClassName}>
         {header ? <div className="mb-1.5">{header}</div> : null}
 
-        <div className="rounded-[0.95rem] border border-slate-200/60 bg-white/90 p-2 shadow-[0_4px_14px_rgba(15,23,42,0.045)] dark:border-white/[0.09] dark:bg-white/[0.035] dark:shadow-[0_4px_14px_rgba(0,0,0,0.18)]">
+        <div className={panelClassName}>
           <Input.TextArea
             placeholder={placeholder}
             value={draftValue}
@@ -425,7 +446,7 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               handleFilesPicked(imageFiles);
             }}
             autoSize={{ minRows: 1, maxRows: 12 }}
-            className="!border-0 !bg-transparent !text-[12px] !leading-5 !shadow-none"
+            className={inputClassName}
           />
 
           {allowMentions && mentionPickerOpen ? (
@@ -560,22 +581,30 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
             </div>
           ) : null}
 
-          <div className="mt-2 flex items-center justify-between gap-2">
+          <div className={controlRailClassName}>
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
               {allowMentions ? (
                 <Button
                   type={mentionPickerOpen || mentionValues.length > 0 ? 'primary' : 'text'}
                   size="small"
+                  shape={isOmniSurface ? 'circle' : undefined}
                   icon={<span className="text-sm font-bold leading-none">@</span>}
                   onClick={onToggleMentionPicker}
+                  aria-label="منشن عضو یا نقش"
+                  title="منشن عضو یا نقش"
+                  className={iconButtonClassName}
                 />
               ) : null}
               {allowAttachments ? (
                 <Button
                   type={attachmentLabel.length > 0 ? 'primary' : 'text'}
                   size="small"
+                  shape={isOmniSurface ? 'circle' : undefined}
                   icon={<PaperClipOutlined />}
                   onClick={() => setFilePickerOpen(true)}
+                  aria-label="افزودن پیوست"
+                  title="افزودن پیوست"
+                  className={iconButtonClassName}
                 />
               ) : null}
               {allowAttachments ? (
@@ -583,8 +612,12 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
                   type={recordingAudio ? 'primary' : 'text'}
                   danger={recordingAudio}
                   size="small"
+                  shape={isOmniSurface ? 'circle' : undefined}
                   icon={<AudioOutlined />}
                   onClick={() => void startAudioRecording()}
+                  aria-label="ضبط صدا"
+                  title="ضبط صدا"
+                  className={iconButtonClassName}
                 />
               ) : null}
               {extraActions}
@@ -606,7 +639,9 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
               loading={submitLoading}
               disabled={submitDisabled}
               size="small"
-              className="shrink-0"
+              className={submitButtonClassName}
+              aria-label="ارسال پیام"
+              title="ارسال پیام"
             >
               {submitText}
             </Button>

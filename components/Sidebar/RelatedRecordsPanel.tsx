@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Input, List, Spin, Tag } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
-import { Link, useNavigate } from 'react-router-dom';
+import { App, Button, Empty, Input, List, Spin, Tag } from 'antd';
+import { MessageOutlined, PhoneOutlined, PlusOutlined } from '@ant-design/icons';
+import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import RelatedRecordCard from './RelatedRecordCard';
@@ -24,11 +24,18 @@ import {
   OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL,
   OPERATIONAL_FINANCIAL_STATUS_LABEL,
 } from '../../utils/operationalFinancialOverview';
+import { RelationQuickCreateHost } from '../SmartFieldRenderer';
+import MessageComposerModal from '../MessageComposerModal';
+import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
+import { getPrimaryRecordPhone } from '../../utils/recordMessaging';
+import { buildVoipFallbackUrl, requestVoipSmartCall } from '../../utils/voipGateway';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
   currentRecordId: string;
   currentModuleId: string;
+  currentRecord?: Record<string, any> | null;
 }
 
 const SALES_PRODUCT_STATUSES = new Set(['confirmed', 'final', 'settled', 'completed']);
@@ -140,8 +147,13 @@ const resolveStatusMeta = (item: any, moduleId: string) => {
     : null;
 };
 
-const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentRecordId, currentModuleId }) => {
-  const navigate = useNavigate();
+const openExternalLink = (url: string) => {
+  if (!url || typeof window === 'undefined') return;
+  window.location.href = url;
+};
+
+const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentRecordId, currentModuleId, currentRecord = null }) => {
+  const { message } = App.useApp();
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchValue, setSearchValue] = useState('');
@@ -150,6 +162,10 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
   const [sourceFieldLoading, setSourceFieldLoading] = useState(false);
   const [relationValueMap, setRelationValueMap] = useState<RelationValueMap>({});
   const [paymentRelationValueMap, setPaymentRelationValueMap] = useState<RelationValueMap>({});
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false);
+  const [smsComposerOpen, setSmsComposerOpen] = useState(false);
+  const [callStarting, setCallStarting] = useState(false);
+  const [refreshSignal, setRefreshSignal] = useState(0);
   const targetConfig = tab.targetModule ? MODULES[tab.targetModule] : undefined;
   const sourceConfig = MODULES[currentModuleId];
   const paymentModuleId = tab.relationType === 'supplier_payments' ? 'purchase_invoices' : 'invoices';
@@ -547,7 +563,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     };
 
     void fetchRelated();
-  }, [tab, currentRecordId, currentModuleId, sourceFieldValue]);
+  }, [tab, currentRecordId, currentModuleId, sourceFieldValue, refreshSignal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -655,9 +671,6 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     });
   }, [items, searchValue, tab.relationType, targetConfig]);
 
-  if (loading || sourceFieldLoading) return <div className="flex justify-center p-10"><Spin /></div>;
-  if (!filteredItems.length) return <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-
   const buildInitialValues = () => {
     const filterInitialValues = (tab.filters || []).reduce<Record<string, any>>((acc, filter) => {
       if (String(filter?.operator || 'eq').trim() !== 'eq') return acc;
@@ -666,6 +679,9 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
       acc[fieldKey] = filter.value;
       return acc;
     }, {});
+    if (tab.targetModule === 'tasks') {
+      return { ...filterInitialValues, ...buildTaskSourceInitialValues(currentModuleId, currentRecordId) };
+    }
     if (tab.relationType === 'fk' && tab.foreignKey) {
       return { ...filterInitialValues, [tab.foreignKey]: currentRecordId };
     }
@@ -681,9 +697,66 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     return filterInitialValues;
   };
 
-  const canCreate = Boolean(tab.targetModule)
+  const isSmsRelatedTab = tab.relationType === 'phone_directory' && tab.targetModule === 'sms_delivery_reports';
+  const isVoipRelatedTab = tab.relationType === 'phone_directory' && tab.targetModule === 'voip_call_reports';
+  const isOperationalOverviewTab = OPERATIONAL_FINANCIAL_RELATION_TYPES.has(String(tab.relationType || ''));
+  const canQuickCreateRelated = Boolean(tab.targetModule)
     && !PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''))
+    && !isOperationalOverviewTab
     && tab.disableCreate !== true;
+  const canCreate = isSmsRelatedTab || isVoipRelatedTab || canQuickCreateRelated;
+  const addButtonLabel = isSmsRelatedTab ? 'ارسال پیامک' : isVoipRelatedTab ? 'تماس' : 'افزودن';
+  const addButtonIcon = isSmsRelatedTab ? <MessageOutlined /> : isVoipRelatedTab ? <PhoneOutlined /> : <PlusOutlined />;
+  const primaryPhone = getPrimaryRecordPhone(currentModuleId, currentRecord);
+
+  const handleStartCall = async () => {
+    if (callStarting) return;
+    const phone = primaryPhone;
+    if (!phone) {
+      message.warning('شماره تماس برای این رکورد ثبت نشده است.');
+      return;
+    }
+    const title = getRecordDisplayLabel(currentRecord || {}, currentModuleId, { fallback: '' });
+    const fallbackUrl = buildVoipFallbackUrl(phone, 'tel_link');
+    try {
+      setCallStarting(true);
+      const result = await requestVoipSmartCall({
+        phone,
+        moduleId: currentModuleId,
+        recordId: currentRecordId,
+        title,
+      });
+      if (result.started) {
+        message.success(result.message || 'تماس VoIP آغاز شد.');
+        setRefreshSignal((prev) => prev + 1);
+        return;
+      }
+      openExternalLink(result.fallbackUrl || fallbackUrl);
+    } catch (error: any) {
+      message.warning(toFaErrorMessage(error, 'تماس VoIP در دسترس نیست؛ مسیر تماس معمولی باز شد.'));
+      openExternalLink(fallbackUrl);
+    } finally {
+      setCallStarting(false);
+    }
+  };
+
+  const handleAddClick = () => {
+    if (isSmsRelatedTab) {
+      if (!primaryPhone) {
+        message.warning('شماره موبایل یا تلفن برای این رکورد ثبت نشده است.');
+        return;
+      }
+      setSmsComposerOpen(true);
+      return;
+    }
+    if (isVoipRelatedTab) {
+      void handleStartCall();
+      return;
+    }
+    setQuickCreateOpen(true);
+  };
+
+  if (loading || sourceFieldLoading) return <div className="flex justify-center p-10"><Spin /></div>;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -692,10 +765,11 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         {canCreate && (
           <Button
             size="small"
-            icon={<PlusOutlined />}
-            onClick={() => navigate(`/${tab.targetModule}/create`, { state: { initialValues: buildInitialValues() } })}
+            icon={addButtonIcon}
+            loading={isVoipRelatedTab && callStarting}
+            onClick={handleAddClick}
           >
-            افزودن
+            {addButtonLabel}
           </Button>
         )}
       </div>
@@ -706,7 +780,9 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         className="mb-4 rounded-lg"
       />
 
-      {PAYMENT_RELATION_TYPES.has(String(tab.relationType || '')) ? (
+      {!filteredItems.length ? (
+        <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : PAYMENT_RELATION_TYPES.has(String(tab.relationType || '')) ? (
         <List
           dataSource={filteredItems}
           renderItem={(item: any) => {
@@ -876,6 +952,34 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           )}
         />
       )}
+      {tab.targetModule ? (
+        <RelationQuickCreateHost
+          open={quickCreateOpen}
+          targetModuleId={tab.targetModule}
+          label={targetConfig?.titles?.faSingular || targetConfig?.titles?.fa || tab.title}
+          forceInline={tab.targetModule === 'tasks'}
+          initialValues={buildInitialValues()}
+          onCancel={() => setQuickCreateOpen(false)}
+          onCreated={async () => {
+            setQuickCreateOpen(false);
+            setRefreshSignal((prev) => prev + 1);
+          }}
+          overlayZIndexBase={12600}
+        />
+      ) : null}
+      {isSmsRelatedTab ? (
+        <MessageComposerModal
+          open={smsComposerOpen}
+          mode="sms"
+          moduleId={currentModuleId}
+          record={{ ...(currentRecord || {}), id: currentRecordId }}
+          initialPhone={primaryPhone}
+          onCancel={() => {
+            setSmsComposerOpen(false);
+            setRefreshSignal((prev) => prev + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
 };

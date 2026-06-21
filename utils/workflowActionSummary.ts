@@ -108,6 +108,16 @@ export const getWorkflowActionSummaryFa = (action: WorkflowAction | null | undef
       const text = excerpt(config.prompt_template);
       return text ? `«${text}»` : 'پاسخ متنی';
     }
+    case 'lock_record':
+      if (config.target_scope === 'related_record') {
+        return config.relation_field_key ? `قفل رکورد مرتبط «${config.relation_field_key}»` : 'رکورد مرتبط انتخاب نشده';
+      }
+      if (config.target_scope === 'process_current_task') return 'قفل فعالیت فعلی';
+      if (config.target_scope === 'process_previous_task') return 'قفل فعالیت قبلی';
+      if (config.target_scope === 'process_specific_task') {
+        return config.stage_node_key ? 'قفل فعالیت خاص' : 'فعالیت خاص انتخاب نشده';
+      }
+      return 'قفل رکورد جاری';
     case 'update_record':
     case 'send_to_next_stages':
     case 'send_to_specific_stage': {

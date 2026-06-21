@@ -8,6 +8,7 @@ import { resolveTaskSourceLink } from './taskMeta';
 import { syncProcessRunStageFromTask } from './processRunRuntime';
 import { getMissingRequiredProcessTaskCustomFields } from './processTaskCustomFields';
 import { runWorkflowsForEvent } from './workflowRuntime';
+import { createRecordLockedError, fetchRecordLockState, getRecordLockStateFromRecord } from './recordLockRuntime';
 
 type TaskAutomationActor = {
   id?: string | null;
@@ -127,6 +128,16 @@ const updateTaskWithRuntimeFallback = async (taskId: string, payload: Record<str
   throw lastError || new Error('به‌روزرسانی فعالیت ناموفق بود.');
 };
 
+const assertTaskIsNotLocked = async (taskId: string, task?: Record<string, any> | null) => {
+  if (getRecordLockStateFromRecord(task).isLocked) {
+    throw createRecordLockedError('این فعالیت قفل شده و قابل تغییر نیست.');
+  }
+  const lockState = await fetchRecordLockState('tasks', taskId);
+  if (lockState.isLocked) {
+    throw createRecordLockedError('این فعالیت قفل شده و قابل تغییر نیست.');
+  }
+};
+
 export const updateTaskStatusWithAutomation = async ({
   taskId,
   nextStatus,
@@ -144,6 +155,7 @@ export const updateTaskStatusWithAutomation = async ({
   if (!currentTask) {
     throw new Error('فعالیت موردنظر پیدا نشد.');
   }
+  await assertTaskIsNotLocked(taskId, currentTask);
 
   if (String(currentTask?.status || '').trim() === String(nextStatus || '').trim()) {
     return currentTask;
@@ -246,6 +258,7 @@ export const updateTaskDueDateWithAutomation = async ({
   if (!currentTask) {
     throw new Error('فعالیت موردنظر پیدا نشد.');
   }
+  await assertTaskIsNotLocked(taskId, currentTask);
 
   const payload = attachTaskCompletionIfNeeded({
     due_date: nextDueDate,

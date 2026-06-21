@@ -1,5 +1,5 @@
-import React, { lazy, Suspense, useMemo, useState } from 'react';
-import { Button, Checkbox, Popover, Select, Space, Tag, Tooltip } from 'antd';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { Button, Checkbox, Drawer, Grid, Popover, Select, Space, Tag, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import {
   AudioOutlined,
@@ -114,6 +114,8 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 }) => {
   const [open, setOpen] = useState(false);
   const [promptModalOpen, setPromptModalOpen] = useState(false);
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   // Only one media-generation capability is active at a time.
   const activeMediaCapability = selectedSet.has('image_generation')
@@ -126,6 +128,10 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           ? 'voice_output' as const
           : null;
   const mediaSupportsSources = activeMediaCapability === 'image_generation' || activeMediaCapability === 'video_generation';
+
+  useEffect(() => {
+    if (disabled || loading) setOpen(false);
+  }, [disabled, loading]);
 
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
     let next = checked
@@ -145,10 +151,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       onRecordCreationTargetModuleChange?.(null);
     }
     onChange(next);
+    setOpen(false);
   };
 
   const content = (
-    <div className="w-72 space-y-2" dir="rtl">
+    <div className="w-full space-y-2 md:grid md:w-[min(92vw,640px)] md:grid-cols-2 md:gap-2 md:space-y-0" dir="rtl">
       {CAPABILITY_META.map((item) => {
         const usable = isCapabilityUsable(capabilityAvailability, item.key);
         const checked = selectedSet.has(item.key);
@@ -177,19 +184,42 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     </div>
   );
 
+  const triggerButton = (
+    <Tooltip title="انتخاب عملکرد هوش مصنوعی">
+      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => setOpen(true)} />
+    </Tooltip>
+  );
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        placement="topRight"
-        trigger="click"
-        content={content}
-      >
-        <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-          <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} />
-        </Tooltip>
-      </Popover>
+      {isMobile ? (
+        <>
+          {triggerButton}
+          <Drawer
+            title="عملکردهای هوش مصنوعی"
+            open={open}
+            onClose={() => setOpen(false)}
+            placement="bottom"
+            height="min(82vh, 620px)"
+            classNames={{ body: '!p-3' }}
+          >
+            {content}
+          </Drawer>
+        </>
+      ) : (
+        <Popover
+          open={open}
+          onOpenChange={setOpen}
+          placement="top"
+          trigger="click"
+          content={content}
+          getPopupContainer={() => document.body}
+          autoAdjustOverflow
+          overlayStyle={{ maxWidth: 'calc(100vw - 24px)' }}
+        >
+          {triggerButton}
+        </Popover>
+      )}
 
       <Space size={[4, 4]} wrap>
         {selected

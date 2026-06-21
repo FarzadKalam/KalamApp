@@ -1,6 +1,7 @@
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRoleContext } from './permissions';
 import {
+  getInitialProcessStageNodeKeys,
   getNextProcessStages,
   getProcessStageNodeKey,
   getProcessStagesByLane,
@@ -67,6 +68,27 @@ const loadProcessRunStages = async (processRunId: string) => {
     .order('sort_order', { ascending: true });
   if (fallback.error) throw fallback.error;
   return fallback.data || [];
+};
+
+export const activateInitialProcessRunNodes = async ({
+  processRunId,
+  actorUserId,
+}: {
+  processRunId: string;
+  actorUserId?: string | null;
+}) => {
+  const normalizedRunId = normalizeText(processRunId);
+  if (!normalizedRunId) {
+    return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
+  }
+  const stages = await loadProcessRunStages(normalizedRunId);
+  const materialized = materializeLegacyProcessGraph(stages);
+  const nodeKeys = getInitialProcessStageNodeKeys(materialized.stages, materialized.graph);
+  return activateProcessRunNodes({
+    processRunId: normalizedRunId,
+    nodeKeys,
+    actorUserId,
+  });
 };
 
 export const activateProcessStageAction = async ({

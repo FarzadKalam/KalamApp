@@ -6,6 +6,7 @@ import {
 import { MODULES } from '../moduleRegistry';
 import { WORKFLOW_OPERATORS } from './filterUtils';
 import { actionTypeOptions, triggerTypeOptions } from './workflowTypes';
+import type { AssigneeDirectory } from './referenceData';
 
 type ProcessGuideStageSummary = {
   id: string | null;
@@ -16,6 +17,8 @@ type ProcessGuideStageSummary = {
     type: 'user' | 'role' | null;
     id: string | null;
     summary: string | null;
+    name?: string | null;
+    role_name?: string | null;
   };
   linked_task: {
     exists: boolean;
@@ -33,6 +36,8 @@ type ProcessGuideStageSummary = {
       type: 'user' | 'role' | null;
       id: string | null;
       summary: string | null;
+      name?: string | null;
+      role_name?: string | null;
     };
   };
   execution_state: 'draft_not_assigned' | 'real_task_role_assigned' | 'real_task_user_assigned' | 'real_task_unassigned';
@@ -145,27 +150,61 @@ const buildProcessLabel = (stage: any, fallbackIndex: number, sourceKind: 'templ
   String(stage?.process_group_name || stage?.source_template_name || '').trim()
   || (sourceKind === 'template' ? 'الگوی فرآیند فعلی' : sourceKind === 'run' ? 'اجرای فرآیند فعلی' : `فرآیند ${fallbackIndex + 1}`);
 
-const summarizeAssignee = (stage: any) => {
+const buildAssigneeLookup = (directory?: AssigneeDirectory | null) => {
+  const usersById = new Map((directory?.users || []).map((user) => [String(user?.id || '').trim(), user]));
+  const rolesById = new Map((directory?.roles || []).map((role) => [String(role?.id || '').trim(), role]));
+  return { usersById, rolesById };
+};
+
+const resolveAssigneeSummary = (
+  type: 'user' | 'role',
+  id: string,
+  lookup: ReturnType<typeof buildAssigneeLookup>,
+) => {
+  if (type === 'role') {
+    const role = lookup.rolesById.get(id);
+    const title = String(role?.title || '').trim();
+    return {
+      name: title || null,
+      role_name: title || null,
+      summary: title ? `نقش/تیم: ${title}` : 'نقش مشخص',
+    };
+  }
+  const user = lookup.usersById.get(id);
+  const name = String(user?.display_name || user?.full_name || user?.email || '').trim();
+  const roleName = String(user?.role_id ? lookup.rolesById.get(String(user.role_id))?.title || '' : '').trim();
+  return {
+    name: name || null,
+    role_name: roleName || null,
+    summary: [name ? `کاربر: ${name}` : 'کاربر مشخص', roleName ? `نقش: ${roleName}` : ''].filter(Boolean).join('، '),
+  };
+};
+
+const summarizeAssignee = (stage: any, lookup: ReturnType<typeof buildAssigneeLookup>) => {
   const roleId = String(stage?.assignee_role_id || stage?.default_assignee_role_id || '').trim() || null;
   if (roleId) {
+    const resolved = resolveAssigneeSummary('role', roleId, lookup);
     return {
       type: 'role' as const,
       id: roleId,
-      summary: 'تیم/نقش مشخص',
+      ...resolved,
     };
   }
   const userId = String(stage?.assignee_id || stage?.default_assignee_id || '').trim() || null;
   if (userId) {
+    const resolved = resolveAssigneeSummary('user', userId, lookup);
     return {
       type: 'user' as const,
       id: userId,
-      summary: 'کاربر مشخص',
+      ...resolved,
     };
   }
   return {
     type: null,
     id: null,
     summary: null,
+    name: null,
+    role_name: null,
   };
 };
 
@@ -272,17 +311,33 @@ const getTaskStatusLabel = (task: any) => {
   return TASK_STATUS_LABELS[status] || formatConditionValueLabel('status', status) || status;
 };
 
+const getFieldOptionLabel = (field: any, value: any) => {
+  const options = Array.isArray(field?.options) ? field.options : [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => options.find((option: any) => String(option?.value) === String(item))?.label || String(item))
+      .join('، ');
+  }
+  return options.find((option: any) => String(option?.value) === String(value))?.label || null;
+};
+
 const summarizeTaskFieldValues = (task: any | null | undefined) => {
   if (!task) return [];
+  const recurrence = task?.recurrence_info && typeof task.recurrence_info === 'object' ? task.recurrence_info : {};
+  const customFields = Array.isArray(recurrence?.process_task_custom_fields) ? recurrence.process_task_custom_fields : [];
+  const customValues = recurrence?.process_task_custom_field_values && typeof recurrence.process_task_custom_field_values === 'object'
+    ? recurrence.process_task_custom_field_values
+    : {};
+  const statusOptions = Array.isArray(recurrence?.process_task_status_options) ? recurrence.process_task_status_options : [];
   const entries = [
-    ['status', task?.status, getTaskStatusLabel(task)],
+    ['status', task?.status, getTaskStatusLabel(task) || getFieldOptionLabel({ options: statusOptions }, task?.status)],
     ['task_type', task?.task_type, formatConditionValueLabel('task_type', task?.task_type)],
     ['due_date', task?.due_date, null],
     ['start_date', task?.start_date, null],
     ['completed_at', task?.completed_at, null],
     ['assignee_id', task?.assignee_id || task?.assignee_role_id, task?.assignee_role_id ? 'نقش/تیم' : task?.assignee_id ? 'کاربر مشخص' : null],
   ] as const;
-  return entries
+  const baseEntries = entries
     .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
     .map(([field, value, valueLabel]) => ({
       field,
@@ -290,30 +345,61 @@ const summarizeTaskFieldValues = (task: any | null | undefined) => {
       value,
       value_label: valueLabel,
     }));
+  const customEntries = customFields
+    .map((field: any) => {
+      const key = String(field?.key || '').trim();
+      if (!key || customValues[key] === undefined || customValues[key] === null || String(customValues[key]).trim() === '') return null;
+      return {
+        field: key,
+        field_label: String(field?.labels?.fa || field?.labelFa || key).trim() || key,
+        value: customValues[key],
+        value_label: getFieldOptionLabel(field, customValues[key]),
+      };
+    })
+    .filter(Boolean);
+  const statusOptionEntries = statusOptions.length > 0 ? [{
+    field: 'status_options',
+    field_label: 'وضعیت‌های اختصاصی فعالیت',
+    value: statusOptions.map((option: any) => option?.value ?? option?.label).filter((item: any) => item !== undefined && item !== null),
+    value_label: statusOptions.map((option: any) => String(option?.label ?? option?.value ?? '').trim()).filter(Boolean).join('، ') || null,
+  }] : [];
+  const customFieldCatalogEntry = customFields.length > 0 ? [{
+    field: 'custom_fields',
+    field_label: 'فیلدهای اختصاصی فعالیت',
+    value: customFields.map((field: any) => String(field?.key || '').trim()).filter(Boolean),
+    value_label: customFields.map((field: any) => String(field?.labels?.fa || field?.labelFa || field?.key || '').trim()).filter(Boolean).join('، ') || null,
+  }] : [];
+  return [...baseEntries, ...customFieldCatalogEntry, ...statusOptionEntries, ...customEntries];
 };
 
-const summarizeTaskAssignee = (task: any | null | undefined) => {
-  if (!task) return { type: null, id: null, summary: null };
+const summarizeTaskAssignee = (task: any | null | undefined, lookup: ReturnType<typeof buildAssigneeLookup>) => {
+  if (!task) return { type: null, id: null, summary: null, name: null, role_name: null };
   const roleId = String(task?.assignee_role_id || '').trim();
   if (roleId) {
+    const resolved = resolveAssigneeSummary('role', roleId, lookup);
     return {
       type: 'role' as const,
       id: roleId,
-      summary: 'فعالیت واقعی به نقش/تیم ارجاع شده و هنوز شخص مشخص ندارد.',
+      ...resolved,
+      summary: `${resolved.summary}؛ فعالیت واقعی به نقش/تیم ارجاع شده و هنوز شخص مشخص ندارد.`,
     };
   }
   const userId = String(task?.assignee_id || '').trim();
   if (userId) {
+    const resolved = resolveAssigneeSummary('user', userId, lookup);
     return {
       type: 'user' as const,
       id: userId,
-      summary: 'فعالیت واقعی به کاربر مشخص ارجاع شده است.',
+      ...resolved,
+      summary: `${resolved.summary}؛ فعالیت واقعی به کاربر مشخص ارجاع شده است.`,
     };
   }
   return {
     type: null,
     id: null,
     summary: 'فعالیت واقعی مسئول مشخص ندارد.',
+    name: null,
+    role_name: null,
   };
 };
 
@@ -379,15 +465,20 @@ const buildSyntheticStageFromTask = (task: any) => ({
   _synthetic_from_task: true,
 });
 
-const summarizeStage = (stage: any, index: number, linkedTask: any | null): ProcessGuideStageSummary => {
+const summarizeStage = (
+  stage: any,
+  index: number,
+  linkedTask: any | null,
+  lookup: ReturnType<typeof buildAssigneeLookup>,
+): ProcessGuideStageSummary => {
   const automationRules = normalizeProcessAutomationRules(
     Array.isArray(stage?.automation_rules)
       ? stage.automation_rules
       : stage?.metadata?.automation_rules
   );
   const knownGaps: string[] = [];
-  const assignee = summarizeAssignee(stage);
-  const taskAssignee = summarizeTaskAssignee(linkedTask);
+  const assignee = summarizeAssignee(stage, lookup);
+  const taskAssignee = summarizeTaskAssignee(linkedTask, lookup);
   if (!assignee.id) knownGaps.push('مسئول این مرحله مشخص نشده است.');
   if (!linkedTask) knownGaps.push('برای این مرحله هنوز فعالیت واقعی ساخته/ارجاع نشده است.');
   if (linkedTask && taskAssignee.type === 'role') knownGaps.push('فعالیت واقعی به نام نقش/تیم است و هنوز به شخص مشخص اختصاص داده نشده است.');
@@ -437,6 +528,7 @@ export const buildProcessGuideContext = ({
   stages,
   tasks = [],
   selectedProcessId = null,
+  assigneeDirectory = null,
 }: {
   moduleId?: string | null;
   recordId?: string | null;
@@ -444,9 +536,11 @@ export const buildProcessGuideContext = ({
   stages: any[];
   tasks?: any[];
   selectedProcessId?: string | null;
+  assigneeDirectory?: AssigneeDirectory | null;
 }): ProcessGuideContext => {
   const grouped = new Map<string, { label: string; templateId: string | null; templateName: string | null; stages: any[] }>();
   const sourceKind = detectSourceKind(moduleId, fieldKey);
+  const assigneeLookup = buildAssigneeLookup(assigneeDirectory);
 
   (Array.isArray(stages) ? stages : [])
     .slice()
@@ -481,11 +575,22 @@ export const buildProcessGuideContext = ({
     grouped.set(processId, current);
   });
 
+  if (grouped.size === 0) {
+    const id = sourceKind === 'template' ? 'current_process_template' : sourceKind === 'run' ? 'current_process_run' : 'default_process_group';
+    grouped.set(id, {
+      label: sourceKind === 'template' ? 'الگوی فرآیند فعلی' : sourceKind === 'run' ? 'اجرای فرآیند فعلی' : 'فرآیند فعلی',
+      templateId: null,
+      templateName: null,
+      stages: [],
+    });
+  }
+
   const processes: ProcessGuideProcessSummary[] = Array.from(grouped.entries()).map(([id, group]) => {
     const stageSummaries = group.stages.map((stage, index) => summarizeStage(
       stage,
       index,
-      findLinkedTaskForStage(stage, index, Array.isArray(tasks) ? tasks : [], sourceKind)
+      findLinkedTaskForStage(stage, index, Array.isArray(tasks) ? tasks : [], sourceKind),
+      assigneeLookup,
     ));
     const automationRules = group.stages.flatMap((stage, index) => {
       const stageName = normalizeStageName(stage?.name || stage?.stage_name || stage?.title, index);
@@ -499,6 +604,7 @@ export const buildProcessGuideContext = ({
       ...stageSummaries.flatMap((stage) => stage.known_gaps),
       ...automationRules.flatMap((rule) => rule.known_gaps),
       ...(automationRules.length === 0 ? ['برای این فرآیند اتوماسیون مشخصی پیدا نشد.'] : []),
+      ...(stageSummaries.length === 0 ? ['برای این فرآیند هنوز مرحله‌ای ثبت نشده است.'] : []),
     ]));
     return {
       id,

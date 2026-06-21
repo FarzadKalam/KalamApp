@@ -16,7 +16,9 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-06-02-01';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-06-17-ai-auto-reply';
+const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
+const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -1818,6 +1820,272 @@ const sendBotConnectionConfirmation = async ({
   }
 };
 
+const sendBotTextMessage = async ({
+  channel,
+  settings,
+  chatId,
+  text,
+}: {
+  channel: BotChannel;
+  settings: IntegrationSettings;
+  chatId: string;
+  text: string;
+}) => {
+  const normalizedSettings = normalizeBotSettings(channel, settings);
+  const token = String(normalizedSettings?.bot_token || '').trim();
+  const normalizedText = String(text || '').trim();
+  if (!token || !chatId || !normalizedText) return null;
+  const baseUrl = String(normalizedSettings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const sendPath = String(normalizedSettings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
+
+  const response = await fetch(buildSendMessageUrl(baseUrl, token, sendPath), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: normalizedText,
+      ...(channel === 'rubika' ? {} : { parse_mode: 'HTML' }),
+    }),
+  });
+  const raw = await response.text();
+  let parsed: any = null;
+  try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = { raw }; }
+  if (!response.ok) {
+    throw new Error(String(parsed?.description || parsed?.message || raw || 'Could not send bot text message'));
+  }
+  return parsed;
+};
+
+const normalizeAiBaseUrl = (value: any) => {
+  const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
+  if (!raw) return DEFAULT_AI_BASE_URL;
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+};
+
+const botAiBaseUrls = () => {
+  const primary = Deno.env.get('AVALAI_BASE_URL') || Deno.env.get('AI_BASE_URL') || DEFAULT_AI_BASE_URL;
+  const fallbackRaw = Deno.env.get('AVALAI_FALLBACK_BASE_URLS')
+    || Deno.env.get('AI_FALLBACK_BASE_URLS')
+    || Deno.env.get('AVALAI_FALLBACK_BASE_URL')
+    || DEFAULT_AI_FALLBACK_BASE_URL;
+  const seen = new Set<string>();
+  return [primary, ...String(fallbackRaw).split(',')]
+    .map(normalizeAiBaseUrl)
+    .filter((item) => {
+      const key = item.toLowerCase();
+      if (!item || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const isRetryableAiStatus = (status: number) =>
+  status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+
+const restSelectRows = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  table: string,
+  params: Record<string, string | number | boolean | null | undefined>
+) => {
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${table}`);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+  });
+  const response = await fetch(url.toString(), { method: 'GET', headers: getServiceHeaders(serviceRoleKey) });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(raw || `Could not select ${table}`);
+  const parsed = raw ? JSON.parse(raw) : [];
+  return Array.isArray(parsed) ? parsed : [];
+};
+
+const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return null;
+  const [settingsRows, catalogRows] = await Promise.all([
+    restSelectRows(supabaseUrl, serviceRoleKey, 'org_ai_settings', {
+      org_id: `eq.${normalizedOrgId}`,
+      select: 'selected_models,feature_flags',
+      limit: 1,
+    }).catch(() => []),
+    restSelectRows(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      select: 'id,provider,capability_tags,is_active,is_coming_soon',
+      limit: 500,
+    }).catch(() => []),
+  ]);
+  const settings = settingsRows[0] || {};
+  const flags = settings?.feature_flags && typeof settings.feature_flags === 'object' ? settings.feature_flags : {};
+  if (flags?.customer_reply_suggestion === false) return null;
+  const selected = settings?.selected_models && typeof settings.selected_models === 'object' ? settings.selected_models : {};
+  const requested = String(selected.customer_reply_suggestion || '').trim();
+  const allowed = (catalogRows || []).filter((model: any) => {
+    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    return model?.is_active !== false
+      && model?.is_coming_soon !== true
+      && tags.includes('customer_reply_suggestion')
+      && String(model?.id || '').trim();
+  });
+  if (allowed.length === 0) return null;
+  const allowedById = new Map(allowed.map((model: any) => [String(model?.id || '').trim(), model]));
+  const resolved = allowedById.get(requested) || allowed[0];
+  return {
+    provider: String(resolved?.provider || 'avalai').trim() || 'avalai',
+    model: String(resolved?.id || '').trim(),
+    apiKey: String(Deno.env.get('AVALAI_API_KEY') || Deno.env.get('AI_API_KEY') || Deno.env.get('OPENAI_API_KEY') || '').trim(),
+  };
+};
+
+const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, any>) => {
+  if (!providerConfig?.model) throw new Error('مدل پاسخ خودکار بات تنظیم نشده است.');
+  if (!providerConfig?.apiKey) throw new Error('کلید مرکزی AI برای پاسخ خودکار بات تنظیم نشده است.');
+  const model = String(providerConfig.model || '').trim();
+  const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((pattern) => pattern.test(model));
+  const requestBody: Record<string, any> = {
+    model,
+    messages: [
+      {
+        role: 'system',
+        content: 'شما دستیار پاسخگویی خودکار سازمانی هستید. فقط متن قابل ارسال به مشتری را بنویس. پاسخ فارسی، کوتاه، حرفه‌ای و محتاط باشد. اگر اطلاعات کافی نیست، سوال کوتاه بپرس. هیچ توضیح فرایندی، Markdown یا عنوان ننویس.',
+      },
+      {
+        role: 'user',
+        content: JSON.stringify(payload),
+      },
+    ],
+  };
+  if (isReasoningModel) {
+    requestBody.max_completion_tokens = 1200;
+  } else {
+    requestBody.temperature = 0.22;
+    requestBody.max_tokens = 520;
+  }
+  let response: Response | null = null;
+  let raw = '';
+  // Keep bot auto-replies within the worker budget. Retrying another base URL
+  // after a provider timeout can exceed the supervisor limit and lose the reply.
+  const baseUrls = botAiBaseUrls().slice(0, 1);
+  for (const baseUrl of baseUrls) {
+    try {
+      const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${providerConfig.apiKey}`,
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(45000),
+      });
+      response = nextResponse;
+      raw = await nextResponse.text();
+      if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;
+    } catch (error: any) {
+      const text = `${String(error?.name || '')} ${String(error?.message || error || '')}`;
+      if (/abort|timeout|timed out|upstream server is timing out|request has been cancelled/i.test(text)) {
+        throw new Error('سرویس هوش مصنوعی در زمان مناسب پاسخ نداد.');
+      }
+      if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
+    }
+  }
+  if (!response) throw new Error('اتصال به AvalAI برقرار نشد.');
+  let parsed: any = {};
+  try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = { raw }; }
+  if (!response.ok) throw new Error(String(parsed?.error?.message || parsed?.message || raw || `AI request failed: ${response.status}`));
+  return {
+    text: String(parsed?.choices?.[0]?.message?.content || '').replace(/^["'`]+|["'`]+$/g, '').trim(),
+    usage: parsed?.usage || null,
+    requestId: response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null,
+  };
+};
+
+const maybeSendBotAiAutoReply = async ({
+  supabaseUrl,
+  serviceRoleKey,
+  integration,
+  channel,
+  contact,
+  matchedGroup,
+  inboundText,
+}: {
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  integration: any;
+  channel: BotChannel;
+  contact: any;
+  matchedGroup: any;
+  inboundText: string | null;
+}) => {
+  const orgId = String(integration?.org_id || '').trim();
+  const groupId = String(matchedGroup?.id || '').trim();
+  const chatId = String(contact?.chatId || '').trim();
+  const text = String(inboundText || '').trim();
+  const metadata = matchedGroup?.metadata && typeof matchedGroup.metadata === 'object' ? matchedGroup.metadata : {};
+  if (!orgId || !groupId || !chatId || !text || contact?.isGroup !== true || metadata?.ai_auto_reply_enabled !== true) return;
+  const providerConfig = await loadBotAiProviderConfig(supabaseUrl, serviceRoleKey, orgId);
+  if (!providerConfig?.model) return;
+  const recentRows = await loadConversationCounterpartyBotMessages(supabaseUrl, serviceRoleKey, {
+    orgId,
+    botGroupId: groupId,
+    channel,
+    chatId,
+    limit: 18,
+  });
+  const counterpartyLabel = await loadCounterpartyLabel(supabaseUrl, serviceRoleKey, matchedGroup).catch(() => '');
+  const conversation = (recentRows || [])
+    .slice()
+    .reverse()
+    .map((row: any, index: number) => ({
+      index: index + 1,
+      role: String(row?.direction || '').trim() === 'outbound' ? 'organization' : 'customer',
+      text: String(row?.content_text || '').trim() || (String(row?.file_name || '').trim() ? `فایل: ${String(row.file_name || '').trim()}` : ''),
+      created_at: row?.created_at || null,
+    }))
+    .filter((row: any) => row.text);
+  const aiResult = await callBotAutoReplyAi(providerConfig, {
+    channel,
+    counterparty: {
+      label: counterpartyLabel || null,
+      target_type: matchedGroup?.target_type || null,
+      group_title: matchedGroup?.group_title || null,
+    },
+    guide: String(metadata?.ai_counterparty_guide || '').trim() || null,
+    latest_message: text,
+    conversation,
+  });
+  const replyText = String(aiResult?.text || '').trim();
+  if (!replyText) return;
+  const sent = await sendBotTextMessage({
+    channel,
+    settings: (integration?.settings || {}) as IntegrationSettings,
+    chatId,
+    text: replyText,
+  });
+  await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+    org_id: orgId,
+    bot_group_id: groupId,
+    channel_type: channel,
+    direction: 'outbound',
+    message_type: 'text',
+    chat_id: chatId,
+    provider_message_id: pick(sent?.result?.message_id, sent?.message_id, sent?.data?.message_id) || null,
+    content_text: replyText,
+    payload: {
+      source: 'ai_auto_reply',
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      avalai_request_id: aiResult.requestId,
+      usage: aiResult.usage || null,
+    },
+  });
+  await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, groupId, {
+    metadata: {
+      ...metadata,
+      last_ai_auto_reply_at: new Date().toISOString(),
+      last_ai_auto_reply_model: providerConfig.model,
+      last_ai_auto_reply_request_id: aiResult.requestId || null,
+    },
+  }).catch(() => null);
+};
+
 const insertCounterpartyBotMessage = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -2728,6 +2996,19 @@ Deno.serve(async (req) => {
           last_inbound_at: new Date().toISOString(),
           last_message_at: new Date().toISOString(),
           last_message_preview: baseContentText || String(primaryAttachment?.name || '').trim() || null,
+        });
+      }
+      if (!isDirectConversation && matchedGroup?.id) {
+        await maybeSendBotAiAutoReply({
+          supabaseUrl,
+          serviceRoleKey,
+          integration,
+          channel,
+          contact,
+          matchedGroup,
+          inboundText: baseContentText,
+        }).catch((error) => {
+          console.warn('[bot-webhook] AI auto reply skipped:', String(error?.message || error));
         });
       }
     } catch (error) {

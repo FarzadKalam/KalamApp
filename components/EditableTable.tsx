@@ -1843,6 +1843,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const removeRow = (index: number) => {
     if (isReadOnly) return;
     if (isProductStockMovements && tempData[index]?._readonly) return;
+    if (isOperationalPayments) {
+      const row = tempData[index];
+      if (
+        row?._readonly === true
+        || row?._lockedByGateway === true
+        || row?.locked === true
+        || String(row?.source || '').trim() === 'online_gateway'
+        || String(row?.gateway_transaction_id || '').trim() !== ''
+      ) return;
+    }
     const newData = normalizePaymentRows([...tempData]);
     newData.splice(index, 1);
     setTempData(newData);
@@ -1868,6 +1878,16 @@ const EditableTable: React.FC<EditableTableProps> = ({
     const sourceRow = source[index];
     if (!sourceRow) return;
     if (isProductStockMovements && sourceRow?._readonly) return;
+    if (
+      isOperationalPayments
+      && (
+        sourceRow?._readonly === true
+        || sourceRow?._lockedByGateway === true
+        || sourceRow?.locked === true
+        || String(sourceRow?.source || '').trim() === 'online_gateway'
+        || String(sourceRow?.gateway_transaction_id || '').trim() !== ''
+      )
+    ) return;
 
     const copiedRow = {
       ...sourceRow,
@@ -4372,6 +4392,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     const baseReadonly = Boolean(col.readonly)
       && !(isAnyInvoiceItems && col.key === 'sub_quantity' && isManualSubUnit(record?.sub_unit));
+    const gatewayLockedPaymentRow =
+      isOperationalPayments
+      && (
+        (record as any)?._readonly === true
+        || (record as any)?._lockedByGateway === true
+        || (record as any)?.locked === true
+        || String((record as any)?.source || '').trim() === 'online_gateway'
+        || String((record as any)?.gateway_transaction_id || '').trim() !== ''
+      );
 
     return {
       key: col.key,
@@ -4381,6 +4410,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       relationConfig,
       dynamicOptionsCategory: col.dynamicOptionsCategory,
       readonly: baseReadonly
+        || gatewayLockedPaymentRow
         || (isProductStockMovements && (record as any)?._readonly)
         || (isProductStockMovements && ['invoice_id', 'production_order_id', 'created_by_name', 'created_at', 'main_unit', 'sub_unit'].includes(col.key))
         || (isProductStockMovements && col.key === 'source' && (record as any)?._readonly)
@@ -4885,6 +4915,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
     }
     return col?.title;
   };
+  const isPaymentsTable = block?.id === 'payments' && isOperationalPayments;
+  const paymentsActionNounFa = isInvoicePayments ? 'دریافت' : 'پرداخت';
+  const isGatewayLockedPaymentRow = (row: any) =>
+    isPaymentsTable
+    && (
+      row?._readonly === true
+      || row?._lockedByGateway === true
+      || row?.locked === true
+      || String(row?.source || '').trim() === 'online_gateway'
+      || String(row?.gateway_transaction_id || '').trim() !== ''
+    );
 
   const columns = [
     ...(canReorderRows
@@ -4940,7 +4981,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                     type="text"
                     icon={<CopyOutlined />}
                     onClick={() => copyRow(i)}
-                    disabled={isProductStockMovements && row?._readonly}
+                    disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                   />
                 ) : null}
                 <Button
@@ -4948,7 +4989,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   type="text"
                   icon={<DeleteOutlined />}
                   onClick={() => removeRow(i)}
-                  disabled={isProductStockMovements && row?._readonly}
+                  disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                 />
               </Space>
             ),
@@ -4968,8 +5009,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
     onInvoiceGlobalDiscountChange?.({ type: nextType, amount: nextAmount });
   };
   const hasPersistedRows = Array.isArray(data) && data.length > 0;
-  const isPaymentsTable = block?.id === 'payments' && isOperationalPayments;
-  const paymentsActionNounFa = isInvoicePayments ? 'دریافت' : 'پرداخت';
   const resolveTableRowKey = (record: any) => ensureStableTableRowKey(record);
   const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
@@ -5201,7 +5240,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                             type="text"
                             icon={<CopyOutlined />}
                             onClick={() => copyRow(rowIndex)}
-                            disabled={isProductStockMovements && row?._readonly}
+                            disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                           />
                         ) : null}
                         <Button
@@ -5209,7 +5248,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                           type="text"
                           icon={<DeleteOutlined />}
                           onClick={() => removeRow(rowIndex)}
-                          disabled={isProductStockMovements && row?._readonly}
+                          disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                         />
                       </Space>
                     )}

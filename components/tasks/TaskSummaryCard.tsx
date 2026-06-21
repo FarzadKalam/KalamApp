@@ -9,6 +9,8 @@ import { getTaskStatusOptions } from '../../utils/processTaskStatusOptions';
 import TaskActionButtons from './TaskActionButtons';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
 import ResilientImage from '../common/ResilientImage';
+import RecordLockControl from '../recordLocks/RecordLockControl';
+import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
 
 const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
@@ -24,6 +26,8 @@ interface TaskSummaryCardProps {
   onProducedQtyChange?: (taskId: string, value: number | null) => void | Promise<void>;
   onTaskUpdated?: (task: any) => void | Promise<void>;
   currentUser?: { id?: string | null; fullName?: string | null } | null;
+  canLockRecord?: boolean;
+  canUnlockRecord?: boolean;
 }
 
 const processRecordKeyByModule: Record<string, string> = {
@@ -60,39 +64,51 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   onProducedQtyChange,
   onTaskUpdated,
   currentUser = null,
+  canLockRecord = false,
+  canUnlockRecord = false,
 }) => {
-  const sourceLink = resolveTaskSourceLink(task);
-  const resolvedStatusOptions = getTaskStatusOptions(task, statusOptions);
+  const [lockPatch, setLockPatch] = React.useState<Record<string, any>>({});
+  React.useEffect(() => {
+    setLockPatch({});
+  }, [task?.id, task?.updated_at]);
+  const effectiveTask = { ...(task || {}), ...lockPatch };
+  const lockState = getRecordLockStateFromRecord(effectiveTask);
+  const isLocked = lockState.isLocked;
+  const handleLockChanged = React.useCallback((nextLockState: RecordLockState) => {
+    setLockPatch((prev) => mergeRecordLockIntoRecord(prev, nextLockState));
+  }, []);
+  const sourceLink = resolveTaskSourceLink(effectiveTask);
+  const resolvedStatusOptions = getTaskStatusOptions(effectiveTask, statusOptions);
   const relatedModuleId = String(sourceLink.moduleId || '');
   const relatedRecordId = sourceLink.recordId;
 
-  const statusColor = task.status === 'done'
+  const statusColor = effectiveTask.status === 'done'
     ? 'border-green-300'
-    : task.status === 'canceled'
+    : effectiveTask.status === 'canceled'
       ? 'border-red-300'
-      : task.status === 'review'
+      : effectiveTask.status === 'review'
         ? 'border-orange-300'
         : 'border-[rgba(var(--brand-200-rgb),0.6)] dark:border-[rgba(var(--brand-300-rgb),0.3)]';
 
   const isProductionTask = (
     relatedModuleId === 'production_orders'
-    && task?.related_production_order
-    && task?.production_line_id
+    && effectiveTask?.related_production_order
+    && effectiveTask?.production_line_id
   );
 
   const relatedProcessRecordKey = processRecordKeyByModule[relatedModuleId];
-  const relatedProcessRecordId = relatedProcessRecordKey ? task?.[relatedProcessRecordKey] : null;
+  const relatedProcessRecordId = relatedProcessRecordKey ? effectiveTask?.[relatedProcessRecordKey] : null;
   const isExecutionProcessTask = (
     !isProductionTask
     && !!relatedProcessRecordId
     && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedModuleId)
   );
 
-  const canEditProducedQty = !['todo', 'pending'].includes(String(task?.status || '').toLowerCase());
-  const taskMainFileUrl = String(task?.image_url || '').trim();
+  const canEditProducedQty = !isLocked && !['todo', 'pending'].includes(String(effectiveTask?.status || '').toLowerCase());
+  const taskMainFileUrl = String(effectiveTask?.image_url || '').trim();
   const taskMainFileName = taskMainFileUrl.split('?')[0].split('/').pop() || 'file';
-  const assigneeId = String(getResolvedAssigneeId(task) || '');
-  const assigneeLabel = task.assignee_type === 'role'
+  const assigneeId = String(getResolvedAssigneeId(effectiveTask) || '');
+  const assigneeLabel = effectiveTask.assignee_type === 'role'
     ? (roleNameMap[assigneeId] || 'نقش')
     : (assigneeNameMap[assigneeId] || 'کاربر');
 
@@ -104,25 +120,36 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
             type="button"
             className="w-full text-right text-sm font-bold leading-5 text-gray-800 hover:underline line-clamp-2 break-words overflow-hidden dark:text-gray-200"
             onClick={() => {
-              openTaskProcessModal({ task });
+              openTaskProcessModal({ task: effectiveTask });
               onClose?.();
             }}
           >
-            {toPersianNumber(String(task.name || 'بدون عنوان'))}
+            {toPersianNumber(String(effectiveTask.name || 'بدون عنوان'))}
           </button>
           <div className="flex flex-wrap items-center justify-end gap-1">
+            <RecordLockControl
+              moduleId="tasks"
+              recordId={String(effectiveTask?.id || '')}
+              lockState={lockState}
+              canLock={canLockRecord}
+              canUnlock={canUnlockRecord}
+              onChanged={handleLockChanged}
+            />
             <TaskActionButtons
-              task={task}
+              task={effectiveTask}
+              disabled={isLocked}
               currentUser={currentUser}
               onTaskUpdated={onTaskUpdated}
             />
             {onStatusChange ? (
               <Select
                 size="small"
-                value={task.status}
+                value={effectiveTask.status}
                 onChange={(value) => {
-                  void onStatusChange(String(task.id), String(value));
+                  if (isLocked) return;
+                  void onStatusChange(String(effectiveTask.id), String(value));
                 }}
+                disabled={isLocked}
                 options={resolvedStatusOptions.map((option) => ({ label: option.label, value: option.value }))}
                 style={{ minWidth: 120 }}
               />
@@ -131,14 +158,14 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         </div>
 
         <div className="flex flex-wrap gap-2 mt-2">
-          {task.priority ? (
+          {effectiveTask.priority ? (
             <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-              {resolveOptionLabel(task.priority, priorityOptions) || task.priority}
+              {resolveOptionLabel(effectiveTask.priority, priorityOptions) || effectiveTask.priority}
             </span>
           ) : null}
-          {task.due_date ? (
+          {effectiveTask.due_date ? (
             <span className="text-[11px] bg-[rgba(var(--brand-50-rgb),0.9)] dark:bg-[rgba(var(--brand-700-rgb),0.26)] text-gray-700 dark:text-gray-200 px-2 py-0.5 rounded-full">
-              موعد: {safeJalaliFormat(task.due_date, 'YYYY/MM/DD HH:mm')}
+              موعد: {safeJalaliFormat(effectiveTask.due_date, 'YYYY/MM/DD HH:mm')}
             </span>
           ) : null}
         </div>
@@ -153,7 +180,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
                 controls
               />
             ) : isImageUrl(taskMainFileUrl) ? (
-              <ResilientImage src={taskMainFileUrl} preset="card" alt={String(task?.name || 'task-image')} className="h-full w-full object-cover" loading="lazy" />
+              <ResilientImage src={taskMainFileUrl} preset="card" alt={String(effectiveTask?.name || 'task-image')} className="h-full w-full object-cover" loading="lazy" />
             ) : (
               <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-gray-50 to-gray-200 text-gray-600 dark:from-gray-800 dark:to-gray-900 dark:text-gray-200">
                 <FileOutlined className="text-xl opacity-70" />
@@ -175,12 +202,13 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
             <InputNumber
               size="small"
               min={0}
-              value={toNumber(task?.produced_qty)}
+              value={toNumber(effectiveTask?.produced_qty)}
               disabled={!canEditProducedQty || !onProducedQtyChange}
               className="w-28 persian-number"
               onChange={(value) => {
                 if (!onProducedQtyChange) return;
-                void onProducedQtyChange(String(task.id), value);
+                if (isLocked) return;
+                void onProducedQtyChange(String(effectiveTask.id), value);
               }}
             />
           </div>
@@ -196,7 +224,7 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
             </span>
           ) : <span />}
           <span className="flex items-center gap-1 shrink-0">
-            {task.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
+            {effectiveTask.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
             {toPersianNumber(String(assigneeLabel))}
           </span>
         </div>
@@ -205,14 +233,14 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
           <div className="mt-3">
             <React.Suspense fallback={null}>
               <ProductionStagesField
-                recordId={String(task.related_production_order)}
+                recordId={String(effectiveTask.related_production_order)}
                 moduleId="production_orders"
                 readOnly
                 compact
                 cardCompact
                 allowReportEditInReadOnly
                 lazyLoad
-                onlyLineId={String(task.production_line_id)}
+                onlyLineId={String(effectiveTask.production_line_id)}
               />
             </React.Suspense>
           </div>

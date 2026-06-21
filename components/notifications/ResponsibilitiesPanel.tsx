@@ -4,6 +4,7 @@ import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { FieldType } from '../../types';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { fetchRecordLockMap, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
 import RenderCardItem from '../moduleList/RenderCardItem';
 
 type CreatedSortDirection = 'desc' | 'asc';
@@ -42,6 +43,8 @@ type ResponsibilitiesPanelProps = {
   createdByNameMap: Record<string, string>;
   handleClose: () => void;
   maxItems: number;
+  canLockModuleRecord?: (moduleId: string) => boolean;
+  canUnlockModuleRecord?: (moduleId: string) => boolean;
 };
 
 const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
@@ -63,9 +66,66 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   formatRecordLabel,
   handleClose,
   maxItems,
+  canLockModuleRecord,
+  canUnlockModuleRecord,
 }) => {
-  const data = filteredResponsibilities.slice(0, visibleCount);
-  const remainingCount = Math.max(0, filteredResponsibilities.length - data.length);
+  const [recordLockMapByKey, setRecordLockMapByKey] = React.useState<Map<string, RecordLockState>>(() => new Map());
+  const responsibilityIdsSignature = React.useMemo(
+    () => filteredResponsibilities
+      .map((item: any) => `${String(item?.module_id || '').trim()}:${String(item?.id || '').trim()}`)
+      .filter((key) => !key.endsWith(':') && !key.startsWith(':'))
+      .join('|'),
+    [filteredResponsibilities]
+  );
+  React.useEffect(() => {
+    const entriesByModule = new Map<string, string[]>();
+    filteredResponsibilities.forEach((item: any) => {
+      const moduleId = String(item?.module_id || '').trim();
+      const recordId = String(item?.id || '').trim();
+      if (!moduleId || !recordId) return;
+      const current = entriesByModule.get(moduleId) || [];
+      current.push(recordId);
+      entriesByModule.set(moduleId, current);
+    });
+    if (entriesByModule.size === 0) {
+      setRecordLockMapByKey(new Map());
+      return;
+    }
+    let cancelled = false;
+    Promise.all(
+      Array.from(entriesByModule.entries()).map(async ([moduleId, recordIds]) => ({
+        moduleId,
+        lockMap: await fetchRecordLockMap(moduleId, recordIds),
+      }))
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const next = new Map<string, RecordLockState>();
+        results.forEach(({ moduleId, lockMap }) => {
+          lockMap.forEach((lockState, recordId) => {
+            next.set(`${moduleId}:${recordId}`, lockState);
+          });
+        });
+        setRecordLockMapByKey(next);
+      })
+      .catch(() => {
+        if (!cancelled) setRecordLockMapByKey(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredResponsibilities, responsibilityIdsSignature]);
+
+  const lockedResponsibilities = React.useMemo(
+    () => filteredResponsibilities.map((item: any) => {
+      const lockState = recordLockMapByKey.get(`${String(item?.module_id || '').trim()}:${String(item?.id || '').trim()}`);
+      return lockState ? mergeRecordLockIntoRecord(item, lockState) : item;
+    }),
+    [filteredResponsibilities, recordLockMapByKey]
+  );
+
+  const data = lockedResponsibilities.slice(0, visibleCount);
+  const remainingCount = Math.max(0, lockedResponsibilities.length - data.length);
   const canShowLess = visibleCount > maxItems;
 
   const renderCreatedAtSortControls = () => (
@@ -155,6 +215,8 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
                   canViewField={() => true}
                   hideSelection
                   moduleBadgeLabel={moduleConfig.titles?.fa || item.module_title || item.module_id}
+                  canLockRecord={canLockModuleRecord?.(item.module_id) || false}
+                  canUnlockRecord={canUnlockModuleRecord?.(item.module_id) || false}
                 />
               );
             })}
@@ -199,6 +261,8 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
                   hideSelection
                   minimal
                   moduleBadgeLabel={moduleBadgeLabel}
+                  canLockRecord={canLockModuleRecord?.(item.module_id) || false}
+                  canUnlockRecord={canUnlockModuleRecord?.(item.module_id) || false}
                 />
               );
             })}
@@ -206,7 +270,7 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
         </div>
       )}
 
-      {filteredResponsibilities.length > maxItems ? (
+      {lockedResponsibilities.length > maxItems ? (
         <div className="flex items-center justify-between gap-2">
           {canShowLess ? (
             <Button type="link" onClick={onShowLess}>

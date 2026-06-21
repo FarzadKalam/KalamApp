@@ -445,13 +445,13 @@ const SaasAdminAiSettings: React.FC = () => {
         <Form form={form} layout="vertical" size="small">
           <div className="grid grid-cols-2 gap-x-3">
             <Form.Item name="id" label="شناسه مدل (ID)" rules={[{ required: true }]}>
-              <Input placeholder="gpt-4o" disabled={!!editModel} />
+              <Input placeholder="شناسه دریافتی از provider" disabled={!!editModel} />
             </Form.Item>
             <Form.Item name="provider" label="Provider">
-              <Input placeholder="openai / elevenlabs / serper" />
+              <Input placeholder="نام provider" />
             </Form.Item>
             <Form.Item name="display_name_fa" label="نام فارسی" className="col-span-2">
-              <Input placeholder="GPT-4o پیشرفته" />
+              <Input placeholder="نام نمایشی مدل" />
             </Form.Item>
             <Form.Item name="capability_tags" label="ویژگی‌ها (Capabilities)" className="col-span-2">
               <Select

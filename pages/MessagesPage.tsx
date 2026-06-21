@@ -1,17 +1,17 @@
-import React, { Suspense, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import type { AssistantContext } from '../utils/aiAssistantEvents';
 
-const NotificationsPopover = React.lazy(() => import('../components/NotificationsPopover'));
+const MessagingSurfacePrototype = React.lazy(() => import('../components/notifications/messaging/MessagingSurfacePrototype'));
 
 type MessagesTab = 'notes' | 'bot_messages' | 'bot_direct_messages' | 'sms_messages' | 'voip_calls';
+type MessagesInitialFilter = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 const MESSAGE_TABS = new Set<MessagesTab>(['notes', 'bot_messages', 'bot_direct_messages', 'sms_messages', 'voip_calls']);
 
 const MessagesPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const requestedTab = useMemo(() => {
     const tab = String(searchParams.get('tab') || '').trim();
     return MESSAGE_TABS.has(tab as MessagesTab) ? tab as MessagesTab : undefined;
@@ -19,13 +19,19 @@ const MessagesPage: React.FC = () => {
   const requestedConversationKey = String(searchParams.get('conversation') || '').trim() || undefined;
   const requestedBotGroupId = String(searchParams.get('botGroup') || '').trim() || undefined;
   const requestedBotDirectThreadId = String(searchParams.get('botDirectThread') || '').trim() || undefined;
-
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
+  const initialFilter = useMemo<MessagesInitialFilter>(() => {
+    if (requestedTab === 'bot_messages') return 'bot_group';
+    if (requestedTab === 'bot_direct_messages') return 'bot_direct';
+    if (requestedTab === 'sms_messages') return 'sms';
+    if (requestedTab === 'voip_calls') return 'call';
+    return 'internal';
+  }, [requestedTab]);
+  const initialConversationKey = useMemo(() => {
+    if (requestedConversationKey) return `live:internal:${requestedConversationKey}`;
+    if (requestedBotGroupId) return `live:bot_group:${requestedBotGroupId}`;
+    if (requestedBotDirectThreadId) return `live:bot_direct:${requestedBotDirectThreadId}`;
+    return null;
+  }, [requestedBotDirectThreadId, requestedBotGroupId, requestedConversationKey]);
 
   useEffect(() => {
     const context = (location.state as { assistantContext?: AssistantContext } | null)?.assistantContext;
@@ -50,16 +56,7 @@ const MessagesPage: React.FC = () => {
   return (
     <div className="messages-page-root" style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <Suspense fallback={null}>
-        <NotificationsPopover
-          isMobile={isMobile}
-          variant="chat"
-          standalone
-          managedByRuntime
-          requestedTab={requestedTab}
-          requestedConversationKey={requestedConversationKey}
-          requestedBotGroupId={requestedBotGroupId}
-          requestedBotDirectThreadId={requestedBotDirectThreadId}
-        />
+        <MessagingSurfacePrototype initialFilter={initialFilter} initialConversationKey={initialConversationKey} />
       </Suspense>
     </div>
   );

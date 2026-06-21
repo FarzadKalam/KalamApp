@@ -44,6 +44,12 @@ type NotificationRuntimeValue = {
   revisions: RuntimeRevisions;
   refreshSummary: () => Promise<void>;
   refreshOverlay: () => Promise<void>;
+  markEntriesRead: (entries: Array<{ section: RuntimeSection; sourceType: string; sourceId: string }>) => Promise<void>;
+  markCommunicationRead: (
+    channel: 'internal' | 'bot',
+    conversationKey: string,
+    rows: Array<{ id?: unknown; created_at?: unknown }>,
+  ) => Promise<boolean>;
 };
 
 type OverlayFeedRow = {
@@ -97,7 +103,35 @@ const EMPTY_REVISIONS: RuntimeRevisions = {
   responsibilities: 0,
 };
 
+const toReadStateSection = (section: RuntimeSection) => (
+  section === 'sms_messages' ? 'sms' : section
+);
+
+const toSummarySection = (section: RuntimeSection): NotificationUnreadSection | null => {
+  if (section === 'bot_direct_messages') return 'bot_messages';
+  if (
+    section === 'notes'
+    || section === 'bot_messages'
+    || section === 'sms_messages'
+    || section === 'voip_calls'
+    || section === 'tasks'
+    || section === 'responsibilities'
+  ) return section;
+  return null;
+};
+
 const NotificationRuntimeContext = createContext<NotificationRuntimeValue | null>(null);
+const NOOP_NOTIFICATION_RUNTIME: NotificationRuntimeValue = {
+  ready: false,
+  summary: EMPTY_NOTIFICATION_UNREAD_SUMMARY,
+  communicationUnread: 0,
+  alertsUnread: 0,
+  revisions: EMPTY_REVISIONS,
+  refreshSummary: async () => undefined,
+  refreshOverlay: async () => undefined,
+  markEntriesRead: async () => undefined,
+  markCommunicationRead: async () => false,
+};
 
 const mapRealtimeSection = (table: string, row: Record<string, any>): RuntimeSection | null => {
   if (table === 'notes') return 'notes';
@@ -440,6 +474,79 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       }
     }
   }, [identity.orgId, identity.userId, loadBotDirectOverlayData]);
+
+  const markCommunicationRead = useCallback(async (
+    channel: 'internal' | 'bot',
+    conversationKey: string,
+    rows: Array<{ id?: unknown; created_at?: unknown }>,
+  ) => {
+    const normalizedConversationKey = String(conversationKey || '').trim();
+    if (!normalizedConversationKey || !Array.isArray(rows) || rows.length === 0) return false;
+    const latest = rows.reduce<{ id: string; createdAt: string; createdAtMs: number } | null>((result, row) => {
+      const id = String(row?.id || '').trim();
+      const createdAt = String(row?.created_at || '').trim();
+      const createdAtMs = new Date(createdAt).getTime();
+      if (!id || !createdAt || !Number.isFinite(createdAtMs)) return result;
+      if (!result || createdAtMs > result.createdAtMs || (createdAtMs === result.createdAtMs && id > result.id)) {
+        return { id, createdAt, createdAtMs };
+      }
+      return result;
+    }, null);
+    if (!latest) return false;
+    const { data, error } = await supabase.rpc('mark_communication_read', {
+      p_channel: channel,
+      p_conversation_key: normalizedConversationKey,
+      p_read_through_at: latest.createdAt,
+      p_read_through_id: latest.id,
+    });
+    if (error) {
+      if (!isMissingRpcError(error)) {
+        console.warn('Could not persist communication read cursor', error);
+      }
+      return false;
+    }
+    void refreshSummary();
+    return data !== false;
+  }, [refreshSummary]);
+
+  const markEntriesRead = useCallback(async (entries: Array<{ section: RuntimeSection; sourceType: string; sourceId: string }>) => {
+    if (!identity.orgId || !identity.userId || !Array.isArray(entries) || entries.length === 0) return;
+    const readAt = new Date().toISOString();
+    const deduped = new Map<string, any>();
+    entries.forEach((entry) => {
+      const section = String(entry?.section || '').trim() as RuntimeSection;
+      const sourceType = String(entry?.sourceType || '').trim();
+      const sourceId = String(entry?.sourceId || '').trim();
+      if (!section || !sourceType || !sourceId) return;
+      deduped.set(`${section}:${sourceType}:${sourceId}`, {
+        org_id: identity.orgId,
+        user_id: identity.userId,
+        section: toReadStateSection(section),
+        source_type: sourceType,
+        source_id: sourceId,
+        read_at: readAt,
+        snoozed_until: null,
+      });
+    });
+    if (deduped.size === 0) return;
+    setSummary((current) => {
+      const next = { ...current };
+      deduped.forEach((row) => {
+        const summarySection = toSummarySection(row.section === 'sms' ? 'sms_messages' : row.section);
+        if (summarySection) next[summarySection] = Math.max(0, Number(next[summarySection] || 0) - 1);
+      });
+      return next;
+    });
+    const { error } = await supabase
+      .from('notification_read_states')
+      .upsert(Array.from(deduped.values()), { onConflict: 'org_id,user_id,source_type,source_id' });
+    if (error) {
+      console.warn('Could not persist notification read states', error);
+      await refreshSummary();
+      return;
+    }
+    void refreshSummary();
+  }, [identity.orgId, identity.userId, refreshSummary]);
 
   const openOverlayRow = useCallback((row: OverlayFeedRow) => {
     if (row.section === 'notes') {
@@ -977,7 +1084,9 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     revisions,
     refreshSummary,
     refreshOverlay,
-  }), [ready, refreshOverlay, refreshSummary, revisions, summary]);
+    markEntriesRead,
+    markCommunicationRead,
+  }), [markCommunicationRead, markEntriesRead, ready, refreshOverlay, refreshSummary, revisions, summary]);
 
   return (
     <NotificationRuntimeContext.Provider value={value}>
@@ -990,4 +1099,8 @@ export const useNotificationRuntime = () => {
   const value = useContext(NotificationRuntimeContext);
   if (!value) throw new Error('useNotificationRuntime must be used inside NotificationRuntimeProvider');
   return value;
+};
+
+export const useOptionalNotificationRuntime = () => {
+  return useContext(NotificationRuntimeContext) || NOOP_NOTIFICATION_RUNTIME;
 };

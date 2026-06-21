@@ -26,6 +26,7 @@ interface HeaderActionsProps {
   onCopy?: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  lockControl?: React.ReactNode;
   refreshLoading?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
@@ -49,6 +50,7 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
   onCopy,
   onEdit,
   onDelete,
+  lockControl = null,
   refreshLoading = false,
   canEdit = true,
   canDelete = true,
@@ -173,15 +175,18 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({
         )}
       </div>
 
-      <Tooltip title="بازگشت">
-        <Button
-          icon={<ArrowRightOutlined />}
-          onClick={onBack}
-          shape="circle"
-          size="middle"
-          className="border-none shadow-sm"
-        />
-      </Tooltip>
+      <div className="flex items-center gap-2">
+        <Tooltip title="بازگشت">
+          <Button
+            icon={<ArrowRightOutlined />}
+            onClick={onBack}
+            shape="circle"
+            size="middle"
+            className="border-none shadow-sm"
+          />
+        </Tooltip>
+        {lockControl}
+      </div>
     </div>
   );
 };

@@ -110,12 +110,15 @@ const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
+const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 const loadSaasAdminAiSettings = () => import("./pages/SaasAdmin/SaasAdminAiSettings");
 const loadCmsPostEditor = () => import("./pages/SaasAdmin/CmsPostEditor");
+const loadLandingPageEditor = () => import("./pages/SaasAdmin/LandingPageEditor");
+const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
 const loadApiDocsPage = () => import("./pages/ApiDocsPage");
 const loadMessagesPage = () => import("./pages/MessagesPage");
 const loadLayout = () => import("./components/Layout");
@@ -157,12 +160,15 @@ const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
+const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const SaasAdminAiSettings = lazy(loadSaasAdminAiSettings);
 const CmsPostEditor = lazy(loadCmsPostEditor);
+const LandingPageEditor = lazy(loadLandingPageEditor);
+const CmsPageEditor = lazy(loadCmsPageEditor);
 const ApiDocsPage = lazy(loadApiDocsPage);
 const MessagesPage = lazy(loadMessagesPage);
 const Layout = lazy(loadLayout);
@@ -322,6 +328,7 @@ const MarketingSiteHostApp: React.FC = () => {
             <Routes>
               <Route path="/i/:code" element={<InvoicePublicPage />} />
               <Route path="/d/:code" element={<DeliveryPublicPage />} />
+              <Route path="/payment/callback" element={<PaymentCallbackPage />} />
               <Route path="/*" element={<PublicSite />} />
             </Routes>
           </LazyRouteBoundary>
@@ -459,7 +466,7 @@ function App() {
   }, [branding]);
 
   useEffect(() => {
-    const publicPaths = saasAppHost ? ["/", "/login", "/inquiry", "/i"] : ["/inquiry", "/i", "/login", "/tazesystem"];
+    const publicPaths = saasAppHost ? ["/", "/login", "/inquiry", "/i", "/payment/callback"] : ["/inquiry", "/i", "/login", "/tazesystem", "/payment/callback"];
 
     const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
       const eventName = String(event);
@@ -712,6 +719,7 @@ function App() {
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
           <Route path="/i/:code" element={<LazyRouteBoundary><InvoicePublicPage /></LazyRouteBoundary>} />
           <Route path="/d/:code" element={<LazyRouteBoundary><DeliveryPublicPage /></LazyRouteBoundary>} />
+          <Route path="/payment/callback" element={<LazyRouteBoundary><PaymentCallbackPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 
           <Route
@@ -785,6 +793,7 @@ function App() {
             <Route path="/taze-system/requests" element={<Navigate to="/saas_demo_requests" replace />} />
             <Route path="/taze-system/announcements" element={<Navigate to="/saas_user_announcements" replace />} />
             <Route path="/taze-system/plans" element={<SaasAdminPlans />} />
+            <Route path="/taze-system/landing" element={<LandingPageEditor />} />
             <Route path="/taze-system/api-docs" element={<ApiDocsPage isAdmin />} />
             <Route path="/taze-system/ai-settings" element={<SaasAdminAiSettings />} />
             {/* CMS — blog */}
@@ -793,6 +802,9 @@ function App() {
             {/* CMS — tutorials */}
             <Route path="/taze-system/tutorials/new" element={<CmsPostEditor />} />
             <Route path="/taze-system/tutorials/:id" element={<CmsPostEditor />} />
+            {/* CMS — static pages */}
+            <Route path="/taze-system/page/new" element={<CmsPageEditor />} />
+            <Route path="/taze-system/page/:id" element={<CmsPageEditor />} />
 
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<ErrorComponent />} />

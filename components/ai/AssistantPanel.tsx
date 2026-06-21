@@ -96,6 +96,10 @@ const parseRouteContext = (pathname: string, search: string): AssistantContext =
 };
 
 const buildClientContextKey = (context: AssistantContext) => {
+  if (context.intent === 'process_guide' && context.moduleId) {
+    const processId = context.selectedProcessId || context.selectedProcessGroupId || 'unknown';
+    return `process_guide:${context.moduleId}:${context.recordId || 'page'}:${context.processFieldKey || 'process'}:${processId}`;
+  }
   if (context.mode === 'record' && context.moduleId && context.recordId) return `record:${context.moduleId}:${context.recordId}`;
   if (context.route) return `route:${context.route}`;
   if (context.moduleId) return `${context.mode || 'page'}:${context.moduleId}`;
@@ -333,7 +337,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const callAssistant = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
     if (error) throw error;
-    if (!data?.success) throw new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
+    if (!data?.success) {
+      const nextError: any = new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
+      nextError.payload = data;
+      throw nextError;
+    }
     return data;
   }, []);
 
@@ -362,6 +370,22 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
     const currentThreadId = threadId;
     setRecheckingId(item.id);
     try {
+      if (kind === 'image_generation') {
+        const messageId = String(item?.metadata?.server_message_id || item?.id || '').trim();
+        if (messageId && !messageId.startsWith('assistant-image-pending')) {
+          const poll = await callAssistant({ action: 'get_image_status', messageId, threadId: currentThreadId });
+          if (poll?.message && typeof poll.message === 'object') {
+            resolvePendingMessage(item.id, poll.message);
+            return;
+          }
+          if (poll?.status === 'failed') {
+            setMessages((prev) => prev.map((m) => m.id === item.id
+              ? { ...m, content: String(poll?.message || 'ساخت تصویر ناموفق بود.'), metadata: { ...m.metadata, pending_status: false, failed: true } }
+              : m));
+            return;
+          }
+        }
+      }
       if (kind === 'video_generation') {
         let videoId = String(item?.metadata?.video_id || '').trim();
         if (!videoId && currentThreadId) {
@@ -533,6 +557,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
+    const shouldStartProcessGuideThread = contextWithSelection.intent === 'process_guide' && !threadId;
     if (rawText === undefined) setInput('');
     setPendingAiAction(null);
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: inputKind } };
@@ -552,7 +577,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         capabilities: selectedCapabilities,
         message: text,
         inputKind,
-        threadId,
+        threadId: shouldStartProcessGuideThread ? null : threadId,
+        forceNewThread: shouldStartProcessGuideThread,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         previewOnly: true,
@@ -562,7 +588,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         capabilities: selectedCapabilities,
         message: text,
         inputKind,
-        threadId,
+        threadId: shouldStartProcessGuideThread ? null : threadId,
+        forceNewThread: shouldStartProcessGuideThread,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         recordCreation: recordCreationSchema,
@@ -579,7 +606,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         capabilities: selectedCapabilities,
         message: text,
         inputKind,
-        threadId,
+        threadId: shouldStartProcessGuideThread ? null : threadId,
+        forceNewThread: shouldStartProcessGuideThread,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
       });
@@ -601,13 +629,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         },
       ]);
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.'));
+      const errorText = toFaErrorMessage(error, 'ارتباط با دستیار ناموفق بود.');
+      message.error(errorText);
+      const payload = error?.payload && typeof error.payload === 'object' ? error.payload : null;
+      const payloadThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
+      const serverMessages = Array.isArray(payload?.messages) ? payload.messages as ChatMessage[] : [];
+      if (payloadThreadId && serverMessages.length) {
+        setThreadId(payloadThreadId);
+        setMessages((prev) => [
+          ...prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id),
+          ...serverMessages,
+        ]);
+        return;
+      }
       setMessages((prev) => [
         ...prev.filter((item) => item.id !== thinkingMessage.id),
         {
           id: `assistant-error-${Date.now()}`,
           role: 'assistant',
-          content: 'در حال حاضر نتوانستم پاسخ را دریافت کنم. تنظیمات provider و کلید AI را بررسی کنید.',
+          content: errorText,
+          metadata: { failed: true },
+          created_at: new Date().toISOString(),
         },
       ]);
     } finally {
@@ -664,6 +706,32 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
       });
       if (data.threadId) setThreadId(String(data.threadId));
+      if (data?.pending) {
+        const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
+        if (serverMessages.length) {
+          setMessages((prev) => [
+            ...prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id),
+            ...serverMessages.map((item) => item.id === data.messageId
+              ? { ...item, metadata: { ...(item.metadata || {}), server_message_id: data.messageId } }
+              : item),
+          ]);
+        } else {
+          setMessages((prev) => prev.map((item) => {
+            if (item.id === userMessage.id) return { ...item, id: data.userMessageId || item.id };
+            if (item.id === thinkingMessage.id) {
+              return {
+                ...item,
+                id: data.messageId || item.id,
+                provider: data.provider || null,
+                model: data.model || null,
+                metadata: { ...(item.metadata || {}), server_message_id: data.messageId || null },
+              };
+            }
+            return item;
+          }));
+        }
+        return;
+      }
       const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
       if (newImageUrl) setImageEditSourceUrl(newImageUrl);
       setMessages((prev) => [
@@ -1110,7 +1178,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         </Space>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {loadingThread && messages.length === 0 ? (
           <div className="flex justify-center py-10">
             <Spin />
@@ -1133,7 +1201,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
         )}
       </div>
 
-      <div className="border-t border-gray-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]">
+      <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-gray-200 bg-white px-4 py-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]">
         {context.intent === 'process_guide' ? (
           <div className="mb-3">
             <Alert
@@ -1191,7 +1259,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             }
           }}
           placeholder="سوال خود را بنویسید..."
-          autoSize={{ minRows: 2, maxRows: 5 }}
+          autoSize={{ minRows: 1, maxRows: 3 }}
           className="!text-[12px] !leading-5"
           disabled={context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId}
         />
@@ -1202,7 +1270,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
             onModelOverrideChange={(model) => { modelOverrideRef.current = model; }}
           />
         </div>
-        <div className="mt-2 flex items-center justify-end gap-2">
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
           <AiCapabilityComposerActions
             selected={selectedCapabilities}
             onChange={handleComposerCapabilitiesChange}
@@ -1227,6 +1295,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, openCreateActiv
           <Button
             type="primary"
             icon={<SendOutlined />}
+            className="shrink-0"
             loading={documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
             disabled={!input.trim() || (context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId)}
             onClick={() => void (documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}

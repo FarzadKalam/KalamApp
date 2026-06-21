@@ -1,25 +1,8 @@
-import React, { FormEvent, useEffect, useMemo, useState } from 'react';
-import { App } from 'antd';
-import {
-  ApiOutlined,
-  ArrowLeftOutlined,
-  BarChartOutlined,
-  CheckCircleOutlined,
-  CloudServerOutlined,
-  DatabaseOutlined,
-  DownOutlined,
-  FolderOpenOutlined,
-  MailOutlined,
-  MessageOutlined,
-  NodeIndexOutlined,
-  PhoneOutlined,
-  SafetyCertificateOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-  UpOutlined,
-} from '@ant-design/icons';
+import React, { useEffect, useMemo, useState } from 'react';
+import { CheckCircleOutlined, EnvironmentOutlined, MailOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
+import BlockRenderer from '../components/cms/BlockRenderer';
 import SeoHead from '../components/cms/SeoHead';
 import { buildHomeSeo } from '../utils/seoHelpers';
 import {
@@ -28,20 +11,23 @@ import {
   TutorialIndexPage,
   TutorialPostPage,
 } from '../components/cms/PublicCmsPages';
-import { getMarketingPanelUrl, getMarketingSiteBasePath } from '../utils/hostRouting';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
-import AiSparkleIcon from '../components/ai/AiSparkleIcon';
+import LandingRenderer from '../components/publicSite/LandingRenderer';
+import PricingSection from '../components/publicSite/shared/PricingSection';
+import DemoForm from '../components/publicSite/shared/DemoForm';
+import { PANEL_URL, DEMO_URL, sitePath } from '../components/publicSite/siteLinks';
 
-type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo';
+type PublicPage = 'home' | 'features' | 'pricing' | 'blog' | 'blog-post' | 'learn' | 'learn-post' | 'updates' | 'about' | 'contact' | 'demo' | 'privacy' | 'terms' | 'rules' | 'sla';
 
-const PANEL_URL = getMarketingPanelUrl();
-const SITE_BASE = getMarketingSiteBasePath();
-const sitePath = (path = '/') => {
-  const normalized = path.startsWith('/') ? path : `/${path}`;
-  if (!SITE_BASE) return normalized;
-  return normalized === '/' ? SITE_BASE : `${SITE_BASE}${normalized}`;
+type FooterConfig = {
+  tagline?: string;
+  phone?: string;
+  phoneHref?: string;
+  email?: string;
+  address?: string;
+  copyright?: string;
 };
 
 const nav = [
@@ -53,77 +39,22 @@ const nav = [
   ['مستندات API', '/tazesystem/developers'],
 ] as const;
 
-const featureCards = [
-  ['هوش مصنوعی سازمانی', 'دستیار هوشمند کنار رکورد، لیست و دانش سازمانی می‌نشیند و برای خلاصه، پاسخ و پیشنهاد اقدام کمک می‌کند.', <AiSparkleIcon className="h-4 w-4" />],
-  ['الگوهای فرآیند', 'مسیرهایی مثل جذب مشتری، اجرای کمپین، تایید هزینه و تحویل پروژه را به الگوی قابل اجرا تبدیل کنید.', <NodeIndexOutlined />],
-  ['چت داخلی و پیام روی رکورد', 'گفت‌وگو، فایل و تصمیم‌های مربوط به مشتری یا پروژه همان‌جا ثبت می‌شود که کار انجام می‌شود.', <MessageOutlined />],
-  ['فایل‌ها و دانش سازمان', 'پیوست‌ها، تصاویر، اسناد و فایل‌های کاری از حالت پراکنده خارج می‌شوند و به رکوردها وصل می‌شوند.', <FolderOpenOutlined />],
-  ['بات، پیامک و VoIP', 'ارتباط با مشتری از کانال‌های بیرونی وارد سیستم می‌شود و گزارش تماس‌ها و پیام‌ها قابل پیگیری است.', <ApiOutlined />],
-  ['داشبورد مدیریتی', 'مدیر از وضعیت سرنخ‌ها، پروژه‌ها، فعالیت‌ها، فاکتورها، هزینه‌ها و اجرای فرآیندها تصویر یکپارچه می‌گیرد.', <BarChartOutlined />],
-] as const;
-
-type PublicPlan = {
-  id: string;
-  code: string | null;
-  title: string;
-  short_description: string | null;
-  price_monthly: number;
-  price_yearly: number | null;
-  included_users: number;
-  extra_user_price: number;
-  max_users: number | null;
-  storage_gb: number | null;
-  highlight_tag: string | null;
-  custom_price_label: string | null;
-  display_features: Array<string | { text: string; featured?: boolean | null }>;
-  trial_days: number;
-};
-
-type PublicPlanFeature = {
-  text: string;
-  featured: boolean;
-};
-
-const parsePublicPlanFeatures = (raw: PublicPlan['display_features']): PublicPlanFeature[] => {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item, index) => {
-      if (typeof item === 'string') {
-        return {
-          text: item.trim(),
-          featured: index < 6,
-        };
-      }
-      return {
-        text: String(item?.text ?? '').trim(),
-        featured: Boolean(item?.featured),
-      };
-    })
-    .filter((item) => item.text);
-};
-
-const faq = [
-  ['آیا تازه سیستم جایگزین CRM است؟', 'بله، اما فقط CRM نیست. مشتری، سرنخ، پروژه، فعالیت، فرآیند، فایل، ارتباطات و گزارش مدیریتی کنار هم قرار می‌گیرند.'],
-  ['آیا جایگزین حسابداری هم می‌شود؟', 'برای عملیات مالی، فاکتور، هزینه، نقد و بانک و حسابداری دوبل آماده شده است؛ مهاجرت رسمی بعد از بررسی وضعیت حسابداری انجام می‌شود.'],
-  ['نسخه لوکال دارید؟', 'بله. نسخه لوکال برای سازمان‌هایی است که نصب روی سرور خودشان، کنترل کامل داده و قرارداد اختصاصی می‌خواهند.'],
-  ['هزینه AI و پیامک چطور محاسبه می‌شود؟', 'مصرف سرویس‌های بیرونی مثل پیامک، تماس، فضای اضافه و AI مازاد جدا از اشتراک نرم‌افزار محاسبه می‌شود.'],
-  ['مهاجرت از CRM قبلی ممکن است؟', 'بله. داده‌های مشتریان، سرنخ‌ها و فایل‌های ساختارمند پس از بررسی کیفیت داده منتقل می‌شوند.'],
-  ['داده‌ها کجا نگهداری می‌شوند؟', 'در نسخه ابری روی زیرساخت مدیریت‌شده تازه سیستم و در نسخه لوکال روی زیرساخت سازمان شما نگهداری می‌شود.'],
-] as const;
+const ENAMAD_TRUST_SEAL_HTML =
+  "<a referrerpolicy='origin' target='_blank' href='https://trustseal.enamad.ir/?id=746313&Code=7CboRX8cGQ2wJ4c6glCuftng2zueoJS3'><img referrerpolicy='origin' src='https://trustseal.enamad.ir/logo.aspx?id=746313&Code=7CboRX8cGQ2wJ4c6glCuftng2zueoJS3' alt='' style='cursor:pointer' code='7CboRX8cGQ2wJ4c6glCuftng2zueoJS3'></a>";
 
 const SectionTitle = ({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) => (
   <div className="mx-auto mb-10 max-w-3xl text-center">
-    <div className="text-sm font-black text-teal-700">{eyebrow}</div>
+    <div className="text-sm font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>{eyebrow}</div>
     <h2 className="mt-3 text-3xl font-black leading-tight text-zinc-950 md:text-4xl">{title}</h2>
     <p className="mt-4 text-base leading-8 text-zinc-600">{text}</p>
   </div>
 );
 
 const Header = () => (
-  <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/95 backdrop-blur">
+  <header className="sticky top-0 z-40 border-b border-zinc-200 bg-white/90 backdrop-blur-xl">
     <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-5">
       <Link to={sitePath('/')} className="flex items-center gap-3 text-zinc-950">
-        <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-lg object-contain" />
+        <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-xl object-contain" />
         <div className="leading-tight">
           <div className="text-lg font-black">تازه سیستم</div>
           <div className="text-xs font-medium text-zinc-500">TazeSystem</div>
@@ -133,40 +64,11 @@ const Header = () => (
         {nav.map(([label, href]) => <Link key={href} to={href} className="hover:text-zinc-950">{label}</Link>)}
       </nav>
       <div className="flex items-center gap-2">
-        <a href={PANEL_URL} className="hidden rounded-lg px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-100 sm:inline-flex">ورود به پنل</a>
-        <a href="https://app.tazesystem.ir/demo" className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-black text-white hover:bg-zinc-800">شروع رایگان</a>
+        <a href={PANEL_URL} className="hidden rounded-xl px-4 py-2 text-sm font-bold text-zinc-700 hover:bg-zinc-100 sm:inline-flex">ورود به پنل</a>
+        <a href={DEMO_URL} className="rounded-xl px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:opacity-90" style={{ background: 'rgb(var(--brand-600-rgb))' }}>شروع رایگان</a>
       </div>
     </div>
   </header>
-);
-
-const Footer = () => (
-  <footer className="border-t border-zinc-200 bg-white">
-    <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 md:grid-cols-[1.4fr_1fr_1fr_1.1fr]">
-      <div>
-        <Link to={sitePath('/')} className="inline-flex items-center gap-3 text-zinc-950">
-          <img src="/tazesystem_logo.png" alt="تازه سیستم" className="h-10 w-10 rounded-lg object-contain" />
-          <span className="text-lg font-black">تازه سیستم</span>
-        </Link>
-        <p className="mt-4 max-w-sm text-sm leading-7 text-zinc-600">نرم‌افزار یکپارچه مدیریت عملیات سازمان؛ از مشتری و پروژه تا فرآیند، فایل، چت، مالی و گزارش مدیریتی.</p>
-        <div className="mt-5 flex flex-wrap gap-2">
-          {['اینماد', 'ساماندهی', 'درگاه پرداخت'].map((item) => <span key={item} className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">{item}: در حال دریافت</span>)}
-        </div>
-      </div>
-      <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', 'https://app.tazesystem.ir/demo'], ['ورود به پنل', PANEL_URL]]} />
-      <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['مستندات API', '/tazesystem/developers'], ['درباره ما', sitePath('/about')]]} />
-      <div>
-        <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
-        <div className="mt-4 grid gap-3 text-sm text-zinc-600">
-          <Link to={sitePath('/contact')}>تماس با ما</Link>
-          <a href="mailto:hello@tazesystem.ir">hello@tazesystem.ir</a>
-          <a href="tel:+982100000000">۰۲۱-۰۰۰۰۰۰۰۰</a>
-          <span>حریم خصوصی | شرایط استفاده | SLA</span>
-        </div>
-      </div>
-    </div>
-    <div className="border-t border-zinc-100 px-5 py-5 text-center text-xs text-zinc-500">© {new Date().getFullYear()} TazeSystem. تمام حقوق برای تازه سیستم محفوظ است.</div>
-  </footer>
 );
 
 const FooterColumn = ({ title, items }: { title: string; items: ReadonlyArray<readonly [string, string]> }) => (
@@ -178,392 +80,278 @@ const FooterColumn = ({ title, items }: { title: string; items: ReadonlyArray<re
   </div>
 );
 
-const ProductMockup = () => (
-  <div className="relative mx-auto max-w-2xl rounded-lg border border-zinc-200 bg-white p-3 shadow-[0_22px_70px_rgba(24,24,27,0.13)]">
-    <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-3">
-      <div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-rose-500" /><span className="h-3 w-3 rounded-full bg-amber-400" /><span className="h-3 w-3 rounded-full bg-teal-500" /></div>
-      <span className="rounded-lg bg-zinc-100 px-3 py-1 text-xs font-bold text-zinc-600">داشبورد عملیات</span>
-    </div>
-    <div className="grid gap-3 p-3 lg:grid-cols-[1.1fr_.9fr]">
-      <div className="space-y-3">
-        <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
-          <div className="mb-4 flex items-center justify-between"><span className="text-sm font-black text-zinc-950">مسیر اجرای کمپین</span><span className="rounded-lg bg-teal-100 px-2 py-1 text-xs font-bold text-teal-800">۷۲٪ پیشرفت</span></div>
-          {['دریافت brief', 'تایید طرح', 'اجرای رسانه', 'تحویل گزارش'].map((item, index) => (
-            <div key={item} className="mb-3 flex items-center gap-3">
-              <span className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${index < 3 ? 'bg-zinc-950 text-white' : 'bg-white text-zinc-500 ring-1 ring-zinc-200'}`}>{index + 1}</span>
-              <div className="h-2 flex-1 rounded-full bg-zinc-200"><div className={`${index < 3 ? 'w-full bg-teal-500' : 'w-1/3 bg-amber-400'} h-2 rounded-full`} /></div>
-              <span className="w-24 text-xs font-bold text-zinc-600">{item}</span>
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          {[['سرنخ جدید', '۲۴'], ['پروژه فعال', '۱۲'], ['فاکتور ماه', '۸۴۰م']].map(([label, value]) => <div key={label} className="rounded-lg border border-zinc-200 bg-white p-3"><div className="text-xs text-zinc-500">{label}</div><div className="mt-2 text-xl font-black text-zinc-950">{value}</div></div>)}
-        </div>
-      </div>
-      <div className="space-y-3">
-        <div className="rounded-lg border border-zinc-200 bg-white p-4">
-          <div className="flex items-center gap-2 text-sm font-black text-zinc-950"><AiSparkleIcon className="h-4 w-4 text-rose-600" />دستیار هوشمند</div>
-          <p className="mt-3 rounded-lg bg-zinc-100 p-3 text-sm leading-7 text-zinc-700">این مشتری دو پیگیری عقب‌افتاده دارد. پیشنهاد: تماس امروز و ارسال پروپوزال اصلاح‌شده.</p>
-        </div>
-        <div className="rounded-lg border border-zinc-200 bg-zinc-950 p-4 text-white">
-          <div className="text-sm font-black">گفت‌وگوی تیم پروژه</div>
-          <div className="mt-3 space-y-2 text-xs leading-6 text-zinc-200"><p>فایل طرح نهایی روی رکورد پروژه ثبت شد.</p><p className="rounded-lg bg-white/10 p-2">تایید مدیر رسانه برای مرحله بعد گرفته شد.</p></div>
-        </div>
-      </div>
-    </div>
-  </div>
-);
-
-const DemoForm = ({ dark = false }: { dark?: boolean }) => {
-  const { message } = App.useApp();
-  const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ fullName: '', phone: '', company: '', users: '', need: '' });
-  const inputClass = 'rounded-lg border border-zinc-300 px-4 py-3 outline-none transition focus:border-zinc-950';
-  const set = (key: keyof typeof form, value: string) => setForm((prev) => ({ ...prev, [key]: value }));
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!form.fullName.trim() || !form.phone.trim()) {
-      message.warning('نام و موبایل را وارد کنید.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const { error } = await supabase.from('marketing_leads').insert({
-        name: `درخواست دمو تازه سیستم - ${form.company || form.fullName}`,
-        business_name: form.company || null,
-        first_name: form.fullName,
-        mobile: form.phone,
-        status: 'new',
-        lead_type: 'new_lead',
-        source: 'website',
-        description: [form.need, form.users ? `تعداد کاربر: ${form.users}` : ''].filter(Boolean).join('\n'),
-      });
-      if (error) throw error;
-      message.success('درخواست شما ثبت شد. برای هماهنگی دمو با شما تماس می‌گیریم.');
-      setForm({ fullName: '', phone: '', company: '', users: '', need: '' });
-    } catch {
-      message.info('درخواست آماده شد. اگر ثبت مستقیم فعال نبود، از تماس یا ایمیل سایت استفاده کنید.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-  return (
-    <form onSubmit={submit} className={`rounded-lg border p-5 shadow-sm md:p-7 ${dark ? 'border-white/10 bg-white text-zinc-950' : 'border-zinc-200 bg-white'}`}>
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="grid gap-2 text-sm font-bold text-zinc-700">نام و نام خانوادگی<input value={form.fullName} onChange={(e) => set('fullName', e.target.value)} className={inputClass} placeholder="مثلاً علی رضایی" /></label>
-        <label className="grid gap-2 text-sm font-bold text-zinc-700">موبایل<input value={form.phone} onChange={(e) => set('phone', e.target.value)} className={inputClass} placeholder="۰۹۱۲..." /></label>
-        <label className="grid gap-2 text-sm font-bold text-zinc-700">نام شرکت<input value={form.company} onChange={(e) => set('company', e.target.value)} className={inputClass} placeholder="نام سازمان" /></label>
-        <label className="grid gap-2 text-sm font-bold text-zinc-700">تعداد کاربران<input value={form.users} onChange={(e) => set('users', e.target.value)} className={inputClass} placeholder="مثلاً ۱۰ نفر" /></label>
-      </div>
-      <label className="mt-4 grid gap-2 text-sm font-bold text-zinc-700">نیاز اصلی شما<textarea value={form.need} onChange={(e) => set('need', e.target.value)} className={`${inputClass} min-h-28`} placeholder="CRM، پروژه، فرآیند، حسابداری، نسخه لوکال..." /></label>
-      <button disabled={submitting} className="mt-5 inline-flex w-full items-center justify-center rounded-lg bg-zinc-950 px-5 py-3 text-sm font-black text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60">{submitting ? 'در حال ثبت...' : 'ثبت درخواست دمو'}</button>
-    </form>
-  );
-};
-
-const usePricingPlans = () => {
-  const [plans, setPlans] = useState<PublicPlan[]>([]);
-  const [loaded, setLoaded] = useState(false);
-
+const Footer = () => {
+  const [f, setF] = useState<FooterConfig | null>(null);
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
       try {
-        const { data } = await supabase.rpc('get_public_plans');
-        if (Array.isArray(data) && data.length > 0) {
-          setPlans(data as PublicPlan[]);
-        }
-      } catch {
-        // fallback: بدون پلن نمایش می‌دهیم
-      } finally {
-        setLoaded(true);
-      }
+        const { data } = await supabase.rpc('get_site_footer');
+        if (!cancelled && data && typeof data === 'object') setF(data as FooterConfig);
+      } catch { /* fallback به پیش‌فرض */ }
     })();
+    return () => { cancelled = true; };
   }, []);
 
-  return { plans, loaded };
-};
+  const tagline = f?.tagline || 'نرم‌افزار یکپارچه مدیریت عملیات سازمان؛ از مشتری و پروژه تا فرآیند، فایل، چت، مالی و گزارش مدیریتی.';
+  const phone = f?.phone || '۰۲۱-۰۰۰۰۰۰۰۰';
+  const phoneHref = f?.phoneHref || 'tel:+982100000000';
+  const email = f?.email || 'hello@tazesystem.ir';
+  const address = f?.address || '';
+  const copyright = f?.copyright || `© ${new Date().getFullYear()} TazeSystem. تمام حقوق برای تازه سیستم محفوظ است.`;
 
-const formatPriceFA = (n: number) =>
-  n.toLocaleString('fa-IR');
-
-const PricingSection = ({ detailed = false }: { detailed?: boolean }) => {
-  const { plans, loaded } = usePricingPlans();
-  const [expandedPlanIds, setExpandedPlanIds] = useState<Set<string>>(() => new Set());
-
-  const togglePlanFeatures = (planId: string) => {
-    setExpandedPlanIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(planId)) {
-        next.delete(planId);
-      } else {
-        next.add(planId);
-      }
-      return next;
-    });
-  };
+  const legal: ReadonlyArray<readonly [string, string]> = [
+    ['حریم خصوصی', sitePath('/privacy')],
+    ['شرایط استفاده', sitePath('/terms')],
+    ['قوانین و مقررات', sitePath('/rules')],
+    ['SLA', sitePath('/sla')],
+  ];
 
   return (
-    <section className="bg-white px-5 py-20">
-      <div className="mx-auto max-w-7xl">
-        <SectionTitle
-          eyebrow="تعرفه‌ها"
-          title="پلنی انتخاب کنید که با تیم شما رشد کند"
-          text="مدل قیمت‌گذاری تازه سیستم ترکیبی از هزینه پایه پکیج و کاربر اضافه است تا رشد تیم قابل پیش‌بینی بماند."
-        />
-
-        {!loaded ? (
-          <div className="grid gap-5 lg:grid-cols-3">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="animate-pulse rounded-lg border border-zinc-200 bg-zinc-100 h-96" />
-            ))}
+    <footer className="border-t border-zinc-200 bg-white">
+      <div className="mx-auto grid max-w-7xl gap-10 px-5 py-12 md:grid-cols-[1.4fr_1fr_1fr_1.1fr]">
+        <div>
+          <Link to={sitePath('/')} className="inline-flex items-center gap-3 text-zinc-950">
+            <img src="/tazesystem_logo.png" alt="تازه سیستم" className="h-10 w-10 rounded-xl object-contain" />
+            <span className="text-lg font-black">تازه سیستم</span>
+          </Link>
+          <p className="mt-4 max-w-sm text-sm leading-7 text-zinc-600">{tagline}</p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div
+              className="rounded-lg border border-zinc-200 bg-zinc-50 p-2"
+              dangerouslySetInnerHTML={{ __html: ENAMAD_TRUST_SEAL_HTML }}
+            />
+            {['ساماندهی', 'درگاه پرداخت'].map((item) => <span key={item} className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">{item}: در حال دریافت</span>)}
           </div>
-        ) : (
-          <div className={`grid gap-5 ${plans.length === 3 ? 'lg:grid-cols-3' : plans.length === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
-            {plans.map((plan) => {
-              const highlighted = !!plan.highlight_tag;
-              const normalizedFeatures = parsePublicPlanFeatures(plan.display_features);
-              const primaryFeatures = normalizedFeatures.filter((item) => item.featured);
-              const extraFeatures = normalizedFeatures.filter((item) => !item.featured);
-              const expanded = expandedPlanIds.has(plan.id);
-              const features = expanded ? [...primaryFeatures, ...extraFeatures] : primaryFeatures;
-              return (
-                <div
-                  key={plan.id}
-                  className={`rounded-lg border p-6 ${highlighted ? 'border-zinc-950 bg-zinc-950 text-white shadow-xl' : 'border-zinc-200 bg-white text-zinc-950'}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xl font-black">{plan.title}</h3>
-                    {plan.highlight_tag && (
-                      <span className="rounded-lg bg-teal-400 px-3 py-1 text-xs font-black text-zinc-950">
-                        {plan.highlight_tag}
-                      </span>
-                    )}
-                  </div>
-                  <p className={`mt-3 text-sm leading-7 ${highlighted ? 'text-zinc-200' : 'text-zinc-600'}`}>
-                    {plan.short_description}
-                  </p>
-
-                  {/* قیمت */}
-                  <div className="mt-6">
-                    {plan.custom_price_label ? (
-                      <span className="text-2xl font-black">{plan.custom_price_label}</span>
-                    ) : (
-                      <>
-                        <span className="text-4xl font-black">{formatPriceFA(plan.price_monthly)}</span>
-                        <span className={`mr-2 text-sm ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>تومان / ماه</span>
-                      </>
-                    )}
-                  </div>
-
-                  <div className={`mt-3 text-sm font-bold ${highlighted ? 'text-zinc-200' : 'text-zinc-700'}`}>
-                    {plan.included_users} کاربر شامل
-                  </div>
-                  {plan.extra_user_price > 0 && (
-                    <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                      کاربر اضافه: {formatPriceFA(plan.extra_user_price)} تومان
-                    </div>
-                  )}
-                  {plan.storage_gb && (
-                    <div className={`mt-1 text-xs ${highlighted ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                      {plan.storage_gb}GB فضای ذخیره‌سازی
-                    </div>
-                  )}
-                  {plan.trial_days > 0 && (
-                    <div className={`mt-1 text-xs font-bold ${highlighted ? 'text-teal-300' : 'text-teal-600'}`}>
-                      {plan.trial_days} روز آزمایشی رایگان
-                    </div>
-                  )}
-
-                  {features.length > 0 && (
-                    <ul className="mt-6 space-y-3">
-                      {features.map((item, idx) => (
-                        <li key={idx} className="flex items-center gap-2 text-sm">
-                          <CheckCircleOutlined className={highlighted ? 'text-teal-300' : 'text-teal-600'} />
-                          <span>{item.text}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-
-                  {extraFeatures.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => togglePlanFeatures(plan.id)}
-                      className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-black transition ${
-                        highlighted
-                          ? 'border-white/20 text-white hover:bg-white/10'
-                          : 'border-zinc-200 text-zinc-800 hover:border-zinc-950 hover:bg-zinc-50'
-                      }`}
-                      aria-expanded={expanded}
-                    >
-                      {expanded ? 'مشاهده کمتر' : `مشاهده ${extraFeatures.length.toLocaleString('fa-IR')} ویژگی دیگر`}
-                      {expanded ? <UpOutlined /> : <DownOutlined />}
-                    </button>
-                  )}
-
-                  <a
-                    href="https://app.tazesystem.ir/demo"
-                    className={`mt-7 inline-flex w-full items-center justify-center rounded-lg px-4 py-3 text-sm font-black ${
-                      highlighted
-                        ? 'bg-white text-zinc-950 hover:bg-zinc-100'
-                        : 'bg-zinc-950 text-white hover:bg-zinc-800'
-                    }`}
-                  >
-                    شروع رایگان
-                  </a>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="mt-5 rounded-lg border border-zinc-200 bg-zinc-50 p-6 lg:flex lg:items-center lg:justify-between">
-          <div>
-            <h3 className="text-xl font-black text-zinc-950">نسخه لوکال کامل</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-zinc-600">
-              نصب روی سرور سازمان شما، همه ماژول‌ها، کنترل کامل داده، قرارداد اختصاصی و پشتیبانی سالانه. قیمت پیشنهادی از ۲۹۰ میلیون تومان شروع می‌شود.
-            </p>
-          </div>
-          <a
-            href="https://app.tazesystem.ir/demo"
-            className="mt-5 inline-flex rounded-lg border border-zinc-950 px-5 py-3 text-sm font-black text-zinc-950 hover:bg-zinc-950 hover:text-white lg:mt-0"
-          >
-            مشاوره نسخه لوکال
-          </a>
         </div>
-        <p className="mt-5 text-center text-sm leading-7 text-zinc-500">
-          هزینه پیامک، VoIP، مصرف AI مازاد، فضای اضافه، مهاجرت داده و توسعه اختصاصی جداگانه محاسبه می‌شود.
-        </p>
-        {!detailed && (
-          <div className="mt-6 text-center">
-            <Link to={sitePath('/pricing')} className="inline-flex items-center gap-2 text-sm font-black text-zinc-950">
-              مقایسه کامل پلن‌ها <ArrowLeftOutlined />
-            </Link>
+        <FooterColumn title="محصول" items={[['امکانات', sitePath('/features')], ['تعرفه‌ها', sitePath('/pricing')], ['شروع رایگان', DEMO_URL], ['ورود به پنل', PANEL_URL]]} />
+        <FooterColumn title="منابع" items={[['بلاگ', sitePath('/blog')], ['آموزش‌ها', sitePath('/learn')], ['تازه‌های محصول', sitePath('/updates')], ['مستندات API', '/tazesystem/developers'], ['درباره ما', sitePath('/about')]]} />
+        <div>
+          <h3 className="text-sm font-bold text-zinc-950">ارتباط</h3>
+          <div className="mt-4 grid gap-3 text-sm text-zinc-600">
+            <Link to={sitePath('/contact')}>تماس با ما</Link>
+            <a className="flex items-center gap-2" href={`mailto:${email}`}><MailOutlined />{email}</a>
+            <a className="flex items-center gap-2" href={phoneHref}><PhoneOutlined />{phone}</a>
+            {address && <span className="flex items-start gap-2"><EnvironmentOutlined className="mt-1" />{address}</span>}
           </div>
-        )}
+        </div>
       </div>
-    </section>
+      <div className="border-t border-zinc-100 px-5 py-5">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 text-xs text-zinc-500 md:flex-row">
+          <span>{copyright}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            {legal.map(([label, href]) => <Link key={href} to={href} className="hover:text-zinc-800">{label}</Link>)}
+          </div>
+        </div>
+      </div>
+    </footer>
   );
 };
 
 const HomePage = () => (
   <>
     <SeoHead {...buildHomeSeo()} />
-    <section className="bg-[linear-gradient(180deg,#ffffff_0%,#f4f4f5_100%)] px-5 py-16 md:py-24">
-      <div className="mx-auto grid max-w-7xl items-center gap-12 lg:grid-cols-[.95fr_1.05fr]">
-        <div>
-          <div className="inline-flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-black text-teal-800"><ThunderboltOutlined />تازه سیستم فقط CRM نیست</div>
-          <h1 className="mt-6 max-w-2xl text-4xl font-black leading-[1.35] text-zinc-950 md:text-6xl">سیستم عامل هوشمند کسب‌وکار شما</h1>
-          <p className="mt-5 max-w-xl text-lg leading-9 text-zinc-600">مشتری، پروژه، فرآیند، چت، فایل، فاکتور، منابع انسانی و گزارش مدیریتی را در یک پنل فارسی و قابل سفارشی‌سازی مدیریت کنید.</p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <a href="https://app.tazesystem.ir/demo" className="rounded-lg bg-zinc-950 px-6 py-3.5 text-sm font-black text-white hover:bg-zinc-800">شروع رایگان</a>
-            <Link to={sitePath('/features')} className="rounded-lg border border-zinc-300 bg-white px-6 py-3.5 text-sm font-black text-zinc-950 hover:border-zinc-950">مشاهده امکانات</Link>
-          </div>
-          <div className="mt-8 grid max-w-xl gap-3 sm:grid-cols-3">
-            {['۱ پنل برای CRM، پروژه و مالی', '۴ مسیر ابری و لوکال', 'AI-ready برای دانش سازمان'].map((item) => <div key={item} className="rounded-lg border border-zinc-200 bg-white p-4 text-sm font-bold leading-7 text-zinc-700">{item}</div>)}
-          </div>
-        </div>
-        <ProductMockup />
-      </div>
-    </section>
-
-    <section className="px-5 py-20">
-      <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.85fr_1.15fr]">
-        <div>
-          <div className="text-sm font-black text-rose-700">مسئله بازار</div>
-          <h2 className="mt-3 text-3xl font-black leading-tight text-zinc-950 md:text-4xl">مدیریت واقعی وقتی ابزارها از هم جدا باشند سخت می‌شود</h2>
-          <p className="mt-4 text-base leading-8 text-zinc-600">تازه سیستم برای سازمان‌هایی ساخته شده که نمی‌خواهند مشتری، پروژه، مالی، فایل و ارتباطاتشان در چند ابزار جدا از هم گم شود.</p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {['CRM جدا، حسابداری جدا و پیگیری‌ها در واتساپ', 'فایل‌های پروژه بین افراد، گروه‌ها و درایوها پخش می‌شود', 'مدیر برای دیدن وضعیت واقعی، باید از چند نفر گزارش بگیرد', 'فرآیندهای تکراری هر بار از اول و با خطای انسانی اجرا می‌شوند'].map((item) => <div key={item} className="rounded-lg border border-zinc-200 bg-white p-5 text-sm font-bold leading-7 text-zinc-700">{item}</div>)}
-        </div>
-      </div>
-    </section>
-
-    <section className="bg-zinc-950 px-5 py-20 text-white">
-      <div className="mx-auto max-w-7xl">
-        <div className="mx-auto mb-10 max-w-3xl text-center">
-          <div className="text-sm font-black text-teal-300">مزیت رقابتی</div>
-          <h2 className="mt-3 text-3xl font-black leading-tight md:text-4xl">یکپارچگی که از فروش شروع می‌شود و به عملیات واقعی می‌رسد</h2>
-          <p className="mt-4 text-base leading-8 text-zinc-300">تازه سیستم CRM، فرآیند، همکاری تیمی، فایل، ارتباطات، مالی و AI را در یک تجربه محصول کنار هم قرار می‌دهد.</p>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {featureCards.map(([title, text, icon]) => <div key={title} className="rounded-lg border border-white/10 bg-white/[0.04] p-6"><div className="mb-5 inline-flex h-11 w-11 items-center justify-center rounded-lg bg-white text-lg text-zinc-950">{icon}</div><h3 className="text-lg font-black">{title}</h3><p className="mt-3 text-sm leading-8 text-zinc-300">{text}</p></div>)}
-        </div>
-      </div>
-    </section>
-
-    <section className="bg-white px-5 py-20">
-      <div className="mx-auto max-w-7xl">
-        <SectionTitle eyebrow="سناریوی محصول" title="از اولین تماس تا گزارش مدیر، یک مسیر قابل پیگیری" text="هر مرحله صاحب، وضعیت، فایل، پیام، وظیفه و گزارش خودش را دارد؛ بدون اینکه تیم بین چند ابزار جابه‌جا شود." />
-        <div className="grid gap-3 md:grid-cols-7">
-          {['سرنخ', 'مشتری', 'پروژه', 'فرآیند', 'وظیفه', 'فاکتور', 'گزارش'].map((step, index) => <div key={step} className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-950 text-sm font-black text-white">{index + 1}</div><div className="mt-3 text-sm font-black text-zinc-950">{step}</div></div>)}
-        </div>
-      </div>
-    </section>
-
-    <PricingSection />
-
-    <section className="px-5 py-20">
-      <div className="mx-auto max-w-7xl">
-        <SectionTitle eyebrow="اعتمادسازی" title="برای استقرار واقعی در شرکت ایرانی طراحی شده است" text="فقط نمایش امکانات کافی نیست؛ استقرار، آموزش، خروجی داده و کنترل دسترسی از ابتدا در مدل محصول دیده شده است." />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {[
-            ['مناسب شرکت‌های ایرانی', 'فارسی، تقویم شمسی، نقش‌ها، پیامک داخلی و نیازهای عملیاتی ایران.', <SafetyCertificateOutlined />],
-            ['ابری یا لوکال', 'شروع سریع ابری یا نصب کامل روی زیرساخت سازمان شما.', <CloudServerOutlined />],
-            ['مالکیت و خروجی داده', 'داده‌های سازمان باید قابل خروج، قابل کنترل و قابل توسعه باقی بماند.', <DatabaseOutlined />],
-            ['راه‌اندازی با آموزش', 'تمرکز فقط فروش نرم‌افزار نیست؛ مسیر استقرار و پذیرش تیم هم دیده می‌شود.', <TeamOutlined />],
-          ].map(([title, text, icon]) => <div key={String(title)} className="rounded-lg border border-zinc-200 bg-white p-5"><div className="mb-4 text-2xl text-teal-700">{icon}</div><h3 className="font-black text-zinc-950">{title}</h3><p className="mt-2 text-sm leading-7 text-zinc-600">{text}</p></div>)}
-        </div>
-      </div>
-    </section>
-
-    <section className="bg-zinc-50 px-5 py-20">
-      <div className="mx-auto max-w-7xl">
-        <SectionTitle eyebrow="نظر کاربران" title="بازخوردهایی از مسیر راه‌اندازی" text="این بخش با نمونه‌های واقعی مشتریان تکمیل می‌شود؛ ساختار آن از ابتدا برای اعتمادسازی محصول آماده است." />
-        <div className="grid gap-4 md:grid-cols-3">
-          {[
-            ['مدیر عملیات', 'شرکت تبلیغاتی', 'برای ما مهم بود کار از لحظه ورود سرنخ تا اجرای پروژه و فاکتور، از هم جدا نباشد.'],
-            ['مدیر فروش', 'شرکت خدماتی', 'پیگیری‌ها از چت و حافظه افراد بیرون آمد و هر مشتری مسئول، وضعیت و قدم بعدی مشخص دارد.'],
-            ['مدیر مالی', 'سازمان متوسط', 'اتصال فروش، هزینه و گزارش مدیریتی باعث شد نگاه عملیاتی و مالی از هم جدا نماند.'],
-          ].map(([name, role, text]) => <div key={name} className="rounded-lg border border-zinc-200 bg-white p-6"><p className="text-sm leading-8 text-zinc-700">«{text}»</p><div className="mt-5 border-t border-zinc-100 pt-4"><div className="font-black text-zinc-950">{name}</div><div className="text-sm text-zinc-500">{role}</div></div></div>)}
-        </div>
-      </div>
-    </section>
-
-    <section className="bg-white px-5 py-20">
-      <div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.9fr_1.1fr]">
-        <div><div className="text-sm font-black text-teal-700">سوالات پرتکرار</div><h2 className="mt-3 text-3xl font-black text-zinc-950">قبل از درخواست دمو</h2><p className="mt-4 text-base leading-8 text-zinc-600">پاسخ‌های کوتاه برای تصمیم اولیه. جزئیات در جلسه نیازسنجی بررسی می‌شود.</p></div>
-        <div className="grid gap-3">{faq.map(([q, a]) => <details key={q} className="rounded-lg border border-zinc-200 bg-zinc-50 p-5"><summary className="cursor-pointer text-sm font-black text-zinc-950">{q}</summary><p className="mt-3 text-sm leading-8 text-zinc-600">{a}</p></details>)}</div>
-      </div>
-    </section>
-
-    <section className="bg-zinc-950 px-5 py-20 text-white">
-      <div className="mx-auto grid max-w-7xl items-center gap-8 lg:grid-cols-[.9fr_1.1fr]">
-        <div><div className="text-sm font-black text-teal-300">درخواست دمو</div><h2 className="mt-3 text-3xl font-black leading-tight md:text-4xl">ببینید تازه سیستم چطور با فرآیند شرکت شما می‌نشیند</h2><p className="mt-4 text-base leading-8 text-zinc-300">در دمو، مسیر واقعی شما را از سرنخ تا پروژه، فرآیند، فاکتور و گزارش مرور می‌کنیم.</p></div>
-        <DemoForm dark />
-      </div>
-    </section>
+    <LandingRenderer slug="home" />
   </>
 );
 
 const FeaturesPage = () => {
   const items = ['مدیریت مشتریان و سرنخ‌های بازاریابی', 'پروژه‌ها، وظایف، مسئول و زمان پیگیری', 'فرآیندها، الگوهای فرآیند و گزارش اجرا', 'چت داخلی، گروه‌ها و پیام روی رکوردها', 'فایل‌ها، پیوست‌ها و گالری اسناد', 'بات‌های تلگرام، بله و روبیکا', 'پیامک، VoIP و گزارش ارتباطات', 'فاکتور، هزینه، نقد و بانک و حسابداری', 'منابع انسانی، حضور، مرخصی و ماموریت', 'داشبورد، گزارش‌ساز و خروجی مدیریتی', 'نقش‌ها، دسترسی رکورد و دسترسی فیلد', 'وب‌فرم‌ها، فرم درخواست و مسیرهای عمومی'];
-  return <main className="px-5 py-20"><div className="mx-auto max-w-7xl"><SectionTitle eyebrow="امکانات" title="ماژول‌هایی برای اداره عملیات روزانه" text="نسخه اول سایت، فهرست امکانات را خلاصه و واضح نشان می‌دهد؛ جزئیات هر ماژول در فاز بعدی به صفحه اختصاصی تبدیل می‌شود." /><div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">{items.map((item) => <div key={item} className="rounded-lg border border-zinc-200 bg-white p-5 text-sm font-bold leading-7 text-zinc-700"><CheckCircleOutlined className="ml-2 text-teal-700" />{item}</div>)}</div></div></main>;
+  return <main className="px-5 py-20"><div className="mx-auto max-w-7xl"><SectionTitle eyebrow="امکانات" title="ماژول‌هایی برای اداره عملیات روزانه" text="نسخه اول سایت، فهرست امکانات را خلاصه و واضح نشان می‌دهد؛ جزئیات هر ماژول در فاز بعدی به صفحه اختصاصی تبدیل می‌شود." /><div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">{items.map((item) => <div key={item} className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm font-bold leading-7 text-zinc-700"><CheckCircleOutlined className="ml-2" style={{ color: 'rgb(var(--brand-600-rgb))' }} />{item}</div>)}</div></div></main>;
 };
 
+type ProductUpdate = {
+  version: string;
+  title: string;
+  summary: string;
+  details: string[];
+};
+
+const recentProductUpdates: ProductUpdate[] = [
+  {
+    version: '2.15.0.3.3',
+    title: 'تکمیل دکمه‌های پیام‌رسانی جدید',
+    summary: 'دکمه‌های اصلی هدر گفتگو در پیام‌رسانی جدید کامل‌تر شدند تا جستجو، تماس و ویرایش گروه داخلی از همان صفحه انجام شود.',
+    details: [
+      'جستجوی داخل هر گفتگو به‌صورت سبک و مستقیم از هدر باز می‌شود.',
+      'در گفتگوهای تماس، دکمه تماس شماره همان گفتگو را برای تماس آماده می‌کند.',
+      'گروه‌های داخلی از هدر گفتگو قابل ویرایش هستند.',
+    ],
+  },
+  {
+    version: '2.15.0.3.2',
+    title: 'پیام‌رسانی یکپارچه جدید',
+    summary: 'نمای جدید پیام‌رسانی جایگزین صفحه قبلی شد تا پیام‌های داخلی، بات، پیامک و تماس‌ها در یک تجربه سبک‌تر و منظم‌تر مدیریت شوند.',
+    details: [
+      'شمار پیام‌های خوانده‌نشده در منو، تب‌ها و گفتگوها از منطق یکپارچه‌تری استفاده می‌کند.',
+      'باز کردن هر گفتگو وضعیت خوانده‌شدن همان پیام‌ها را به‌روز می‌کند.',
+      'ظاهر برچسب‌های داخلی با رنگ برند هماهنگ‌تر و فشرده‌تر شد.',
+    ],
+  },
+  {
+    version: '2.15.0.0.0',
+    title: 'قفل کردن رکوردها',
+    summary: 'برای رکوردهای نهایی یا حساس می‌توان حالت فقط مشاهده فعال کرد تا تغییر دستی یا خودکار روی آن‌ها انجام نشود.',
+    details: [
+      'اجازه قفل و باز کردن برای هر نقش و هر بخش جداگانه تنظیم می‌شود.',
+      'وضعیت قفل در فهرست‌ها، کارت‌ها، صفحه رکورد، فعالیت‌ها و بخش‌های مالی دیده می‌شود.',
+      'روی رکورد قفل‌شده هنوز می‌توان فایل جدید اضافه کرد، اما فایل‌های قبلی حذف نمی‌شوند.',
+    ],
+  },
+  {
+    version: '2.14.0.2.9',
+    title: 'پرداخت آنلاین فاکتور فروش',
+    summary: 'فاکتور آنلاین به مسیر پرداخت سریع وصل شد تا مشتری بتواند مبلغ قابل پرداخت را مستقیم از همان صفحه پرداخت کند.',
+    details: [
+      'مدیر سازمان می‌تواند اتصال زرین‌پال را در تنظیمات فعال کند.',
+      'پرداخت موفق به‌صورت خودکار در دریافت‌های فاکتور ثبت می‌شود.',
+      'دریافت‌های آنلاین برای حفظ صحت مالی قابل حذف یا ویرایش دستی نیستند.',
+    ],
+  },
+  {
+    version: '2.14.0.2.9',
+    title: 'قابلیت‌های تازه برای پلن‌ها',
+    summary: 'مدیریت پلن‌ها برای امکانات اشتراکی دقیق‌تر شد و چند قابلیت قابل کنترل به پلن‌ها اضافه شد.',
+    details: [
+      'دامنه اختصاصی و درگاه اختصاصی سازمان می‌تواند در سطح پلن مدیریت شود.',
+      'تمدید اشتراک، شارژ هوش مصنوعی و شارژ پیامک به قابلیت‌های قابل تعریف پلن اضافه شد.',
+      'این امکانات از مسیر داده قابل مدیریت هستند و به تنظیمات ثابت داخل کد محدود نیستند.',
+    ],
+  },
+  {
+    version: '2.14.0.2.0',
+    title: 'تحلیل مالی با دستیار هوش مصنوعی',
+    summary: 'دستیار هوشمند می‌تواند پرسش‌های مدیریتی درباره فروش، هزینه و سود و زیان را با بازه زمانی مشخص پاسخ دهد.',
+    details: [
+      'تحلیل‌ها فقط از داده‌های مجاز همان سازمان استفاده می‌کنند.',
+      'اعداد قطعی حسابداری از شاخص‌های عملیاتی تقریبی جدا نمایش داده می‌شوند.',
+      'اگر ثبت‌های دوره ناقص باشد، موضوع در پاسخ به کاربر اعلام می‌شود.',
+    ],
+  },
+  {
+    version: '2.14.0.2.1',
+    title: 'اجرای کامل‌تر الگوهای فرآیند',
+    summary: 'فعال‌سازی فرآیندها مرحله‌های آغازین و فعالیت‌های اولیه را خودکار آماده می‌کند تا شروع کار دستی و پراکنده نباشد.',
+    details: [
+      'گردش‌کارهای زمان‌بندی‌شده رکوردهای هدف را صفحه‌به‌صفحه بررسی می‌کنند.',
+      'خطاهای موقت اقدام‌های امن به‌صورت کنترل‌شده دوباره امتحان می‌شوند.',
+      'پرامپت هوش مصنوعی می‌تواند با محدودیت فیلدهای تعیین‌شده، رکورد جاری را ویرایش کند.',
+    ],
+  },
+  {
+    version: '2.14.0.2.5',
+    title: 'افزودن سریع فعالیت و ارتباط از کنار رکورد',
+    summary: 'در تب‌های مرتبط هر رکورد، ثبت فعالیت، پیامک یا تماس سریع‌تر و نزدیک‌تر به همان رکورد انجام می‌شود.',
+    details: [
+      'پنجره افزودن سریع فعالیت با مسئول، وضعیت و فیلدهای بیشتر در دسترس است.',
+      'از تب پیامک و تماس می‌توان همان‌جا ارسال پیامک یا شروع تماس را انجام داد.',
+      'افزودن مورد مرتبط مستقیم از همان پنجره کنار رکورد کامل‌تر شده است.',
+    ],
+  },
+  {
+    version: '2.14.0.0.0',
+    title: 'باشگاه مشتریان',
+    summary: 'برای مدیریت طرح‌های تشویقی، سطح‌بندی، کدهای تخفیف و اعتبار مشتریان یک بخش مستقل اضافه شد.',
+    details: [
+      'اعتبار مشتریان قابل ثبت، مصرف در فاکتور فروش و پیگیری در دفتر اعتبار است.',
+      'اطلاعات خرید و مانده سیستم قبلی مشتری در آمار مالی او لحاظ می‌شود.',
+      'وضعیت مالی مشتریان پیش‌پرداخت‌ها و اطلاعات قبلی را هم در محاسبات در نظر می‌گیرد.',
+    ],
+  },
+  {
+    version: '2.13.0.0.0',
+    title: 'شرط‌های پیشرفته برای نقش‌ها',
+    summary: 'دسترسی نقش‌ها می‌تواند با شرط‌های دقیق‌تری روی رکوردها و رکوردهای مرتبط کنترل شود.',
+    details: [
+      'شرط‌ها از دو بخش «همه شرط‌ها» و «یکی از شرط‌ها» پشتیبانی می‌کنند.',
+      'فیلدهای رکورد، فیلدهای رکورد مرتبط و مسئول رکورد در شرط‌ها قابل بررسی هستند.',
+      'شرط‌ها هنگام ذخیره دسترسی حفظ می‌شوند و در فهرست‌ها و انتخاب گروهی رکوردها اعمال می‌شوند.',
+    ],
+  },
+  {
+    version: '2.12.0.0.0',
+    title: 'فرم‌های تحویل آنلاین',
+    summary: 'برای فرم‌های تحویل، لینک آنلاین امن ساخته می‌شود تا طرف‌های تحویل بتوانند اطلاعات، فایل‌ها و اقلام را ببینند و تایید کنند.',
+    details: [
+      'تحویل‌دهنده و تحویل‌گیرنده می‌توانند داخلی، مشتری، تامین‌کننده یا شخص بیرونی باشند.',
+      'تایید هر طرف با کد پیامکی انجام می‌شود و زمان تایید خودکار ثبت می‌شود.',
+      'دبیرخانه و فرم‌های تحویل از تصویر یا فایل اصلی متصل به مدیریت فایل‌ها پشتیبانی می‌کنند.',
+    ],
+  },
+];
+
 const ResourcesPage = ({ kind }: { kind: 'blog' | 'learn' | 'updates' }) => {
+  if (kind === 'updates') {
+    return (
+      <main className="px-5 py-20" dir="rtl">
+        <div className="mx-auto max-w-6xl">
+          <SectionTitle
+            eyebrow="تازه‌های محصول"
+            title="مسیر رشد تازه سیستم"
+            text='"تازه سیستم" دائما در حال تازه تر شدن است.'
+          />
+          <div className="grid gap-5 md:grid-cols-2">
+            {recentProductUpdates.map((item) => (
+              <article key={`${item.version}-${item.title}`} className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-black text-zinc-600">نسخه {item.version}</span>
+                  <span className="text-xs font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>ویژگی جدید</span>
+                </div>
+                <h2 className="mt-4 text-xl font-black leading-8 text-zinc-950">{item.title}</h2>
+                <p className="mt-3 text-sm leading-8 text-zinc-600">{item.summary}</p>
+                <ul className="mt-5 grid gap-3 text-sm leading-7 text-zinc-700">
+                  {item.details.map((detail) => (
+                    <li key={detail} className="flex gap-2">
+                      <CheckCircleOutlined className="mt-1 flex-shrink-0" style={{ color: 'rgb(var(--brand-600-rgb))' }} />
+                      <span>{detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   const box = {
     blog: ['بلاگ', 'مقاله‌هایی برای مدیران در حال رشد', 'محتوای این بخش برای CRM، ERP، اتوماسیون، AI و مدیریت پروژه تکمیل می‌شود.', ['چرا CRM به‌تنهایی کافی نیست؟', 'مدیریت پروژه در شرکت تبلیغاتی', 'هوش مصنوعی در عملیات سازمانی']],
     learn: ['آموزش‌ها', 'راهنمای شروع و استفاده از محصول', 'آموزش‌های متنی و تصویری برای کاهش زمان راه‌اندازی و پشتیبانی.', ['شروع سریع با مشتریان', 'ساخت الگوی فرآیند', 'ثبت فایل و پیام روی رکورد']],
-    updates: ['تازه‌های محصول', 'مسیر رشد تازه سیستم', 'قابلیت‌های جدید، بهبودها و تغییرات مهم محصول در این بخش منتشر می‌شود.', ['دستیار هوشمند کنار رکوردها', 'گروه‌های چت داخلی', 'گزارش اجرای فرآیندها']],
   }[kind] as [string, string, string, string[]];
-  return <main className="px-5 py-20"><div className="mx-auto max-w-5xl"><SectionTitle eyebrow={box[0]} title={box[1]} text={box[2]} /><div className="grid gap-4">{box[3].map((item) => <article key={item} className="rounded-lg border border-zinc-200 bg-white p-6"><div className="text-xs font-black text-teal-700">{box[0]}</div><h2 className="mt-2 text-xl font-black text-zinc-950">{item}</h2><p className="mt-3 text-sm leading-8 text-zinc-600">این محتوا در نسخه عمومی سایت تکمیل می‌شود و فعلاً زیرساخت انتشار آن آماده است.</p></article>)}</div></div></main>;
+  return <main className="px-5 py-20"><div className="mx-auto max-w-5xl"><SectionTitle eyebrow={box[0]} title={box[1]} text={box[2]} /><div className="grid gap-4">{box[3].map((item) => <article key={item} className="rounded-2xl border border-zinc-200 bg-white p-6"><div className="text-xs font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>{box[0]}</div><h2 className="mt-2 text-xl font-black text-zinc-950">{item}</h2><p className="mt-3 text-sm leading-8 text-zinc-600">این محتوا در نسخه عمومی سایت تکمیل می‌شود و فعلاً زیرساخت انتشار آن آماده است.</p></article>)}</div></div></main>;
 };
 
-const AboutPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.85fr_1.15fr]"><div><div className="text-sm font-black text-teal-700">درباره تازه سیستم</div><h1 className="mt-3 text-4xl font-black leading-tight text-zinc-950">نرم‌افزاری برای یکپارچه کردن کار واقعی شرکت‌ها</h1></div><div className="rounded-lg border border-zinc-200 bg-white p-7 text-base leading-9 text-zinc-600">تازه سیستم برای سازمان‌هایی ساخته می‌شود که بین CRM، حسابداری، فایل، پیام‌رسان، اکسل و پیگیری‌های دستی پراکنده شده‌اند. هدف ما ساخت محیطی است که مدیر، تیم فروش، پروژه، مالی و منابع انسانی تصویر مشترک و قابل اتکا داشته باشند.</div></div></main>;
+// رندر صفحات ثابت CMS (درباره ما، حریم خصوصی، شرایط، قوانین، SLA)
+const CmsStaticPage = ({ slug, fallbackTitle }: { slug: string; fallbackTitle: string }) => {
+  const [page, setPage] = useState<{ title?: string; content_blocks?: any[] } | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await supabase.rpc('get_cms_page_by_slug', { p_slug: slug });
+        if (!cancelled) { setPage(data as any); setLoaded(true); }
+      } catch { if (!cancelled) setLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [slug]);
+  const blocks = page?.content_blocks ?? [];
+  return (
+    <main className="px-5 py-20" dir="rtl">
+      <div className="mx-auto max-w-3xl">
+        <h1 className="mb-8 text-3xl font-black leading-tight text-zinc-950 md:text-4xl">{page?.title || fallbackTitle}</h1>
+        {blocks.length > 0 ? (
+          <BlockRenderer blocks={blocks} className="text-zinc-700" />
+        ) : (
+          <p className="text-base leading-8 text-zinc-500">{loaded ? 'محتوای این صفحه به‌زودی از پنل مدیریت تکمیل می‌شود.' : 'در حال بارگذاری...'}</p>
+        )}
+      </div>
+    </main>
+  );
+};
 
-const ContactPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.8fr_1.2fr]"><div><div className="text-sm font-black text-teal-700">تماس با ما</div><h1 className="mt-3 text-4xl font-black text-zinc-950">برای دمو، همکاری یا پشتیبانی پیام بدهید</h1><div className="mt-8 grid gap-3 text-sm text-zinc-600"><a className="flex items-center gap-3" href="tel:+982100000000"><PhoneOutlined /> ۰۲۱-۰۰۰۰۰۰۰۰</a><a className="flex items-center gap-3" href="mailto:hello@tazesystem.ir"><MailOutlined /> hello@tazesystem.ir</a></div></div><DemoForm /></div></main>;
+const ContactPage = () => <main className="px-5 py-20"><div className="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[.8fr_1.2fr]"><div><div className="text-sm font-black" style={{ color: 'rgb(var(--brand-600-rgb))' }}>تماس با ما</div><h1 className="mt-3 text-4xl font-black text-zinc-950">برای دمو، همکاری یا پشتیبانی پیام بدهید</h1><div className="mt-8 grid gap-3 text-sm text-zinc-600"><a className="flex items-center gap-3" href="tel:+982100000000"><PhoneOutlined /> ۰۲۱-۰۰۰۰۰۰۰۰</a><a className="flex items-center gap-3" href="mailto:hello@tazesystem.ir"><MailOutlined /> hello@tazesystem.ir</a></div></div><DemoForm /></div></main>;
 
 const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
   const location = useLocation();
@@ -579,6 +367,10 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
     if (path === '/updates') return 'updates';
     if (path === '/about') return 'about';
     if (path === '/contact') return 'contact';
+    if (path === '/privacy') return 'privacy';
+    if (path === '/terms') return 'terms';
+    if (path === '/rules') return 'rules';
+    if (path === '/sla') return 'sla';
     if (path === '/demo') return 'demo';
     return 'home';
   }, [location.pathname, page]);
@@ -606,7 +398,11 @@ const PublicSite: React.FC<{ page?: PublicPage }> = ({ page = 'home' }) => {
       {resolvedPage === 'learn' && <TutorialIndexPage />}
       {resolvedPage === 'learn-post' && <TutorialPostPage />}
       {resolvedPage === 'updates' && <ResourcesPage kind="updates" />}
-      {resolvedPage === 'about' && <AboutPage />}
+      {resolvedPage === 'about' && <CmsStaticPage slug="about" fallbackTitle="دربارهٔ ما" />}
+      {resolvedPage === 'privacy' && <CmsStaticPage slug="privacy" fallbackTitle="حریم خصوصی" />}
+      {resolvedPage === 'terms' && <CmsStaticPage slug="terms" fallbackTitle="شرایط استفاده" />}
+      {resolvedPage === 'rules' && <CmsStaticPage slug="rules" fallbackTitle="قوانین و مقررات" />}
+      {resolvedPage === 'sla' && <CmsStaticPage slug="sla" fallbackTitle="توافق‌نامهٔ سطح خدمات (SLA)" />}
       {(resolvedPage === 'contact' || resolvedPage === 'demo') && <ContactPage />}
       <Footer />
       <UserAnnouncementsPopupHost

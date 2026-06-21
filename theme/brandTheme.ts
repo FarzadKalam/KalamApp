@@ -198,11 +198,9 @@ export const mergeBrandingConfig = (
   };
 };
 
-export const applyBrandCssVariables = (branding: BrandingConfig) => {
-  if (typeof document === 'undefined') return;
-  const root = document.documentElement;
-  const { palette } = branding;
-
+// Build the full set of brand CSS variables from a palette. Reusable for both
+// the global document (applyBrandCssVariables) and scoped containers (landing page theme).
+export const buildBrandCssVars = (palette: BrandingPalette): Record<string, string> => {
   // Build a full scale from primary+secondary so Tailwind classes stay consistent even with custom colors.
   const shades = {
     50: mixColors(palette.primary, '#FFFFFF', 0.92),
@@ -217,7 +215,7 @@ export const applyBrandCssVariables = (branding: BrandingConfig) => {
     900: palette.darkBg,
   };
 
-  const cssVars: Record<string, string> = {
+  return {
     '--brand-50-rgb': toRgbChannels(shades[50]),
     '--brand-100-rgb': toRgbChannels(shades[100]),
     '--brand-200-rgb': toRgbChannels(shades[200]),
@@ -233,7 +231,12 @@ export const applyBrandCssVariables = (branding: BrandingConfig) => {
     '--app-dark-surface-rgb': toRgbChannels(palette.darkSurface),
     '--app-dark-border-rgb': toRgbChannels(palette.darkBorder),
   };
+};
 
+export const applyBrandCssVariables = (branding: BrandingConfig) => {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const cssVars = buildBrandCssVars(branding.palette);
   Object.entries(cssVars).forEach(([key, value]) => {
     root.style.setProperty(key, value);
   });

@@ -2,6 +2,7 @@ import { MODULES } from '../moduleRegistry';
 import { FieldType, ModuleField } from '../types';
 import { getAssigneeLabel } from './assigneeLabel';
 import { supportsGlobalAssignee } from './assigneeSupport';
+import { getFieldLabelFa } from './fieldLabel';
 import { isSaasAdminModuleId } from './permissions';
 import {
   getProcessTargetModuleFields,
@@ -60,6 +61,28 @@ const buildSyntheticAssigneeField = (moduleId: string): ModuleField => ({
   ...( { workflowOptionScopeModuleId: moduleId } as any ),
 });
 
+const getAssigneeProfileFields = (sourceModuleId: string, assigneeFieldKey = 'assignee_id'): ModuleField[] => {
+  if (!sourceModuleId || !supportsGlobalAssignee(sourceModuleId)) return [];
+  const assigneeLabel = getAssigneeLabel(sourceModuleId);
+  return getVisibleWorkflowModuleFields('profiles')
+    .filter((field) => {
+      const key = String(field?.key || '').trim();
+      return key && key !== 'assignee_id' && key !== 'tags' && key !== 'org_id';
+    })
+    .map((field) => {
+      const profileFieldLabel = getFieldLabelFa(field, { moduleId: 'profiles', fallback: field.key });
+      return {
+        ...field,
+        ...( { workflowOptionScopeModuleId: 'profiles' } as any ),
+        key: createWorkflowRelatedFieldKey(assigneeFieldKey, 'profiles', field.key),
+        labels: {
+          ...field.labels,
+          fa: `${assigneeLabel}: ${profileFieldLabel}`,
+        },
+      };
+    });
+};
+
 export const getSyntheticWorkflowAssigneeField = (moduleId: string) =>
   supportsGlobalAssignee(moduleId) ? buildSyntheticAssigneeField(moduleId) : null;
 
@@ -74,6 +97,7 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
 
   if (supportsGlobalAssignee(moduleId)) {
     result.push(buildSyntheticAssigneeField(moduleId));
+    result.push(...getAssigneeProfileFields(moduleId));
   }
 
   currentFields

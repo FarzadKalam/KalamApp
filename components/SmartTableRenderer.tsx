@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
-import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, LockOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
 import { toPersianNumber, formatPersianPrice, fromPersianNumber } from '../utils/persianNumberFormatter';
@@ -1374,8 +1374,27 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     });
   }
 
+    const hasLockedRows = data.some((record: any) => Boolean(record?.is_locked || record?.locked_at));
+    if (hasLockedRows) {
+      cols.unshift({
+        key: '__record_lock_state',
+        dataIndex: '__record_lock_state',
+        width: 34,
+        fixed: isMobileViewport ? undefined : 'left',
+        className: 'smart-table-lock-cell',
+        render: (_value: any, record: any) => (
+          record?.is_locked || record?.locked_at ? (
+            <Tooltip title="قفل شده">
+              <LockOutlined className="text-red-600" />
+            </Tooltip>
+          ) : null
+        ),
+      });
+    }
+
     return cols;
   }, [
+    data,
     tableFields,
     primaryTitleField,
     tagsField,

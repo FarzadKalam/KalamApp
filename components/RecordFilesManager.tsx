@@ -111,6 +111,7 @@ interface RecordFilesManagerProps {
   mainImage?: string | null;
   onMainImageChange?: (url: string | null) => void | Promise<void>;
   canEdit?: boolean;
+  canUpload?: boolean;
   canDelete?: boolean;
   highlightFileId?: string | null;
 }
@@ -211,6 +212,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   mainImage,
   onMainImageChange,
   canEdit = true,
+  canUpload,
   canDelete,
   highlightFileId,
 }) => {
@@ -259,6 +261,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const [folderNameValue, setFolderNameValue] = useState('');
   const [folderSaving, setFolderSaving] = useState(false);
   const [recordDisplayTitle, setRecordDisplayTitle] = useState('');
+  const canUploadFiles = canUpload ?? canEdit;
   const canDeleteFiles = canDelete ?? canEdit;
   const currentScopeKey = `${String(moduleId || '').trim()}:${String(recordId || '').trim()}`;
   const browserReady = !recordId || loadedScopeKey === currentScopeKey;
@@ -2253,7 +2256,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
       </div>
 
       <div className="mt-4 flex items-center justify-between">
-        <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canEdit} fileList={[]}>
+        <Upload showUploadList={false} beforeUpload={handleBeforeUpload} disabled={!recordId || !canUploadFiles} fileList={[]}>
           <Button icon={<UploadOutlined />}>افزودن فایل (عکس، فیلم، فایل)</Button>
         </Upload>
         <div className="flex items-center gap-2 text-xs text-gray-400 dark:text-gray-500">

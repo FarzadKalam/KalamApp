@@ -46,6 +46,26 @@ export const syncProcessTemplateTargetModules = <T extends Record<string, any>>(
   } as T & { module_ids: string[]; module_id: string };
 };
 
+export const resolveProcessActivatorTriggerModuleIds = (
+  rawModuleIds: unknown,
+  fallbackModuleIds: unknown,
+  fallbackModuleId?: unknown,
+): string[] => {
+  const selectedModuleIds = normalizeProcessTargetModuleIds(rawModuleIds);
+  if (selectedModuleIds.length > 0) return selectedModuleIds;
+  return normalizeProcessTargetModuleIds(fallbackModuleIds, fallbackModuleId);
+};
+
+export const normalizeProcessActivatorTriggerModuleIds = (
+  rawModuleIds: unknown,
+  allowedModuleIds: unknown,
+): string[] => {
+  const allowed = new Set(normalizeProcessTargetModuleIds(allowedModuleIds));
+  const selected = normalizeProcessTargetModuleIds(rawModuleIds);
+  if (allowed.size === 0) return selected;
+  return selected.filter((moduleId) => allowed.has(moduleId));
+};
+
 export const doesProcessTemplateSupportModule = (
   template: Record<string, any> | null | undefined,
   moduleId?: string | null,

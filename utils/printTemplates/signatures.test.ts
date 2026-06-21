@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
+  getPrintSignatureQuickAddOptions,
   materializePrintSignatureStates,
   stripLegacyPrintSignatureTokens,
 } from './signatures';
@@ -21,7 +22,7 @@ describe('print signatures', () => {
         customer_id: 'customer-1',
       },
       currentUserId: 'user-current',
-      companyInfo: { ceo_name: 'مدیر عامل' },
+      companyInfo: { ceo_name: 'مدیر نمونه', manager_title: 'مدیرمسئول' },
       canUseCeoSignature: true,
     });
 
@@ -46,7 +47,8 @@ describe('print signatures', () => {
       },
       record: { customer_id: 'customer-1' },
       companyInfo: {
-        ceo_name: 'مدیرعامل نمونه',
+        ceo_name: 'مدیر نمونه',
+        manager_title: 'مدیرمسئول',
         signature_image_url: 'https://cdn.example.com/signature.png',
         stamp_image_url: 'https://cdn.example.com/stamp.png',
       },
@@ -60,8 +62,8 @@ describe('print signatures', () => {
       },
     });
 
-    expect(states[0].subtitleValue).toBe('امضای مدیرعامل');
-    expect(states[0].nameValue).toBe('مدیرعامل نمونه');
+    expect(states[0].subtitleValue).toBe('امضای مدیرمسئول');
+    expect(states[0].nameValue).toBe('مدیر نمونه');
     expect(states[0].signatureImageUrl).toContain('signature.png');
     expect(states[0].stampImageUrl).toContain('stamp.png');
     expect(states[0].showCompanyAssets).toBe(true);
@@ -72,16 +74,25 @@ describe('print signatures', () => {
 
   it('hides ceo rows when the role permission is disabled', () => {
     const states = materializePrintSignatureStates({
-      configs: [{ id: 'ceo', kind: 'ceo', automatic: false, nameOverride: 'مدیرعامل', subtitleOverride: 'امضای مدیرعامل' }],
+      configs: [{ id: 'ceo', kind: 'ceo', automatic: false, nameOverride: 'مدیر نمونه', subtitleOverride: 'امضای مدیرمسئول' }],
       scope: 'record',
       moduleConfig: { fields: [] },
-      companyInfo: { ceo_name: 'مدیرعامل نمونه', signature_image_url: 'https://cdn.example.com/signature.png' },
+      companyInfo: { ceo_name: 'مدیر نمونه', manager_title: 'مدیرمسئول', signature_image_url: 'https://cdn.example.com/signature.png' },
       canUseCeoSignature: false,
     });
 
     expect(states[0].nameValue).toBe('');
     expect(states[0].subtitleValue).toBe('');
     expect(states[0].showCompanyAssets).toBe(false);
+  });
+
+  it('uses the organization manager title in signature actions', () => {
+    const options = getPrintSignatureQuickAddOptions({
+      canUseCeoSignature: true,
+      companyInfo: { manager_title: 'مدیرمسئول' },
+    });
+
+    expect(options.find((option) => option.key === 'ceo')?.label).toBe('امضای مدیرمسئول');
   });
 
   it('strips legacy signature placeholders and renders new band html', () => {

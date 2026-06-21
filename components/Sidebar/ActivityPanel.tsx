@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { App, Button, Checkbox, Empty, Form, List, Spin, Tag, Timeline } from 'antd';
+import React, { useEffect, useState } from 'react';
+import { App, Button, Checkbox, Empty, List, Spin, Tag, Timeline } from 'antd';
 import DateObject from 'react-date-object';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
@@ -14,10 +14,9 @@ import { parseNoteContent, serializeNoteContent } from '../../utils/noteContent'
 import type { NoteAttachment } from '../../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../utils/noteAttachments';
 import { normalizeNoteScope } from '../../utils/noteScope';
-import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
-import { RelationQuickCreateInline } from '../SmartFieldRenderer';
-import { attachTaskCompletionIfNeeded } from '../../utils/taskCompletion';
+import { RelationQuickCreateHost } from '../SmartFieldRenderer';
 import { applyTaskSourceRecordFilter, buildTaskSourceInitialValues } from '../../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import TaskSummaryCard from '../tasks/TaskSummaryCard';
@@ -81,23 +80,13 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [authorNameMap, setAuthorNameMap] = useState<Record<string, string>>({});
   const [authorAvatarMap, setAuthorAvatarMap] = useState<Record<string, string | null>>({});
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
-  const [quickTaskLoading, setQuickTaskLoading] = useState(false);
-  const [quickTaskDynamicOptions, setQuickTaskDynamicOptions] = useState<Record<string, any[]>>({});
   const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
   const [changeRelationValueMap, setChangeRelationValueMap] = useState<RelationValueMap>({});
-  const [quickTaskForm] = Form.useForm();
 
   const tasksModuleConfig = MODULES.tasks;
   const statusOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'status')?.options || [];
   const priorityOptions = tasksModuleConfig?.fields?.find((field: any) => field.key === 'priority')?.options || [];
-  const quickTaskFields = useMemo(
-    () => (tasksModuleConfig?.fields || []).filter((field: any) => (
-      ['name', 'status', 'priority', 'task_type', 'due_date', 'description',
-        'meeting_employee_ids', 'meeting_customer_ids', 'meeting_supplier_ids'].includes(String(field?.key || ''))
-    )),
-    [tasksModuleConfig],
-  );
 
   const formatPersianDate = (value: unknown, format: string) => {
     if (!value) return '-';
@@ -312,43 +301,6 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
     }
     void loadProfiles();
   }, [mentionRoles, mentionUsers, view]);
-
-  useEffect(() => {
-    if (!quickTaskOpen) return;
-    quickTaskForm.setFieldsValue({
-      status: 'todo',
-      priority: 'medium',
-    });
-  }, [quickTaskForm, quickTaskOpen]);
-
-  useEffect(() => {
-    if (!quickTaskOpen) return;
-    let cancelled = false;
-
-    const loadQuickTaskOptions = async () => {
-      const nextDynamicOptions: Record<string, any[]> = {};
-      for (const field of quickTaskFields) {
-        if (!field?.dynamicOptionsCategory) continue;
-        try {
-          nextDynamicOptions[field.dynamicOptionsCategory] = await fetchDynamicOptionsByCategory(
-            supabase,
-            field.dynamicOptionsCategory,
-          );
-        } catch (err) {
-          console.warn('Failed loading quick task options', field.dynamicOptionsCategory, err);
-        }
-      }
-
-      if (!cancelled) {
-        setQuickTaskDynamicOptions(nextDynamicOptions);
-      }
-    };
-
-    void loadQuickTaskOptions();
-    return () => {
-      cancelled = true;
-    };
-  }, [quickTaskFields, quickTaskOpen]);
 
   useEffect(() => {
     if (view !== 'tasks') return;
@@ -679,48 +631,6 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
     } catch (err: any) {
       console.error(err);
       message.error('حذف با خطا مواجه شد');
-    }
-  };
-
-  const handleQuickTaskCreate = async () => {
-    setQuickTaskLoading(true);
-    try {
-      await quickTaskForm.validateFields();
-      const values = quickTaskForm.getFieldsValue(true);
-      const { assignee_combo, ...persistedValues } = values;
-      const payload = attachTaskCompletionIfNeeded({
-        ...buildTaskInitialValues(),
-        ...persistedValues,
-      });
-
-      const { error } = await supabase.from('tasks').insert([payload]);
-      if (error) throw error;
-      await logAndTouchRecord({
-        supabase,
-        moduleId,
-        recordId,
-        action: 'task_created',
-        fieldName: 'tasks',
-        fieldLabel: 'فعالیت‌ها',
-        oldValue: null,
-        newValue: payload?.name || 'فعالیت جدید',
-        userId: currentUser.id,
-        metadata: {
-          changeKind: 'task_created',
-          summary: 'فعالیت جدیدی برای این رکورد ایجاد شد',
-        },
-      });
-
-      message.success('فعالیت ثبت شد');
-      setQuickTaskOpen(false);
-      quickTaskForm.resetFields();
-      await fetchData();
-    } catch (err: any) {
-      if (Array.isArray(err?.errorFields)) return;
-      console.error(err);
-      message.error('ایجاد فعالیت ناموفق بود');
-    } finally {
-      setQuickTaskLoading(false);
     }
   };
 
@@ -1101,20 +1011,31 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       </div>
 
       {view === 'tasks' ? (
-        <RelationQuickCreateInline
+        <RelationQuickCreateHost
           open={quickTaskOpen}
+          targetModuleId="tasks"
           label="فعالیت"
-          moduleId="tasks"
-          fields={quickTaskFields as any}
-          form={quickTaskForm}
-          loading={quickTaskLoading}
-          relationOptions={{}}
-          dynamicOptions={quickTaskDynamicOptions}
-          onCancel={() => {
-            setQuickTaskOpen(false);
-            quickTaskForm.resetFields();
+          forceInline
+          initialValues={buildTaskInitialValues()}
+          onCancel={() => setQuickTaskOpen(false)}
+          onCreated={async ({ values }) => {
+            await logAndTouchRecord({
+              supabase,
+              moduleId,
+              recordId,
+              action: 'task_created',
+              fieldName: 'tasks',
+              fieldLabel: 'فعالیت‌ها',
+              oldValue: null,
+              newValue: values?.name || 'فعالیت جدید',
+              userId: currentUser.id,
+              metadata: {
+                changeKind: 'task_created',
+                summary: 'فعالیت جدیدی برای این رکورد ایجاد شد',
+              },
+            });
+            await fetchData();
           }}
-          onOk={() => void handleQuickTaskCreate()}
         />
       ) : null}
     </div>

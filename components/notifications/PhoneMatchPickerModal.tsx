@@ -37,9 +37,11 @@ const PHONE_BIND_MODAL_Z_INDEX = 15220;
 const PHONE_BIND_SELECT_Z_INDEX = 15320;
 
 const resolveStatusLabel = (value: string | null | undefined) => {
-  if (value === 'ambiguous') return 'این شماره هنوز به مخاطب اصلی وصل نشده است.';
-  if (value === 'unknown') return 'این شماره در مخاطبین سیستم شناخته نشده است.';
-  if (value === 'manual') return 'این شماره قبلا به صورت دستی متصل شده است.';
+  const normalized = String(value || '').trim();
+  if (normalized === 'ambiguous') return 'این شماره هنوز به مخاطب اصلی وصل نشده است.';
+  if (normalized === 'unknown' || normalized === 'unknown_delivery') return 'این شماره در مخاطبین سیستم شناخته نشده است.';
+  if (normalized === 'manual') return 'این شماره قبلا به صورت دستی متصل شده است.';
+  if (normalized === 'matched' || normalized === 'bound' || normalized === 'connected') return 'این شماره به مخاطب وصل است.';
   return '';
 };
 

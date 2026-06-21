@@ -42,9 +42,11 @@ import { shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolic
 import { syncCustomerLevelsByInvoiceCustomers } from '../utils/customerLeveling';
 import {
   canAccessAssignedRecord,
+  canUseRecordLockPermission,
   fetchCurrentUserRecordAccessContext,
   isSaasAdminModuleId,
   SAAS_ADMIN_PERMISSION_KEY,
+  type PermissionMap,
   type RecordScope,
 } from '../utils/permissions';
 import { normalizeAutoNameEnabled } from '../utils/autoName';
@@ -110,6 +112,13 @@ import {
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
 import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
+import RecordLockControl from '../components/recordLocks/RecordLockControl';
+import {
+  fetchRecordLockState,
+  getRecordLockStateFromRecord,
+  mergeRecordLockIntoRecord,
+  type RecordLockState,
+} from '../utils/recordLockRuntime';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
 const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
@@ -464,6 +473,53 @@ const ModuleShow: React.FC = () => {
     () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
     [data, moduleId]
   );
+  const recordLockState = useMemo(() => getRecordLockStateFromRecord(data), [data]);
+  const isRecordLocked = recordLockState.isLocked;
+  const handleRecordLockChanged = useCallback((nextLockState: RecordLockState) => {
+    setData((prev: any) => {
+      if (!prev) return prev;
+      const nextRecord = mergeRecordLockIntoRecord(prev, nextLockState);
+      const cacheKey = `${moduleId}:${id || ''}`;
+      const cachedSnapshot = moduleShowSnapshotCache.get(cacheKey);
+      if (cachedSnapshot) {
+        moduleShowSnapshotCache.set(cacheKey, {
+          ...cachedSnapshot,
+          record: nextRecord,
+          cachedAt: Date.now(),
+        });
+      }
+      return nextRecord;
+    });
+  }, [id, moduleId]);
+
+  useEffect(() => {
+    if (!moduleId || !id) return;
+    let cancelled = false;
+    fetchRecordLockState(moduleId, id)
+      .then((nextLockState) => {
+        if (cancelled) return;
+        setData((prev: any) => {
+          if (!prev) return prev;
+          const nextRecord = mergeRecordLockIntoRecord(prev, nextLockState);
+          const cacheKey = `${moduleId}:${id || ''}`;
+          const cachedSnapshot = moduleShowSnapshotCache.get(cacheKey);
+          if (cachedSnapshot) {
+            moduleShowSnapshotCache.set(cacheKey, {
+              ...cachedSnapshot,
+              record: nextRecord,
+              cachedAt: Date.now(),
+            });
+          }
+          return nextRecord;
+        });
+      })
+      .catch((error) => {
+        console.warn('Could not load record lock state', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id, moduleId]);
   useEffect(() => {
     if (moduleId !== 'attendance_logs' || !id || !data) return;
     if (displayData?.presence_minutes !== null && displayData?.presence_minutes !== undefined && displayData?.presence_minutes !== '') return;
@@ -534,6 +590,8 @@ const ModuleShow: React.FC = () => {
   const skipNextOptionsFetchRef = useRef(false);
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean; record_scope?: RecordScope }>({});
+  const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
+  const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
   const [isCreateOrderOpen, setIsCreateOrderOpen] = useState(false);
   const [autoSyncedBomId, setAutoSyncedBomId] = useState<string | null>(null);
   const [autoSyncedProcessTemplateId, setAutoSyncedProcessTemplateId] = useState<string | null>(null);
@@ -1420,6 +1478,13 @@ const ModuleShow: React.FC = () => {
         if (moduleId === 'surveys') {
           nextRecord = mergeSurveyTemplateValuesIntoRecord(nextRecord) || nextRecord;
         }
+        try {
+          const nextLockState = await fetchRecordLockState(moduleId, id);
+          nextRecord = mergeRecordLockIntoRecord(nextRecord, nextLockState);
+        } catch (lockError) {
+          console.warn('Could not load record lock state', lockError);
+          nextRecord = mergeRecordLockIntoRecord(nextRecord, null);
+        }
         if (activeRecordRequestRef.current !== requestId) return;
         skipNextOptionsFetchRef.current = true;
         setData(nextRecord);
@@ -1801,11 +1866,15 @@ const ModuleShow: React.FC = () => {
       if (!context.roleId) {
         setFieldPermissions({});
         setModulePermissions({});
+        setCurrentPermissionMap(context.permissions || null);
+        setCurrentSoftwareRole(context.softwareRole || null);
         setCanIssueAccountingEntry(true);
         return;
       }
 
       const permissions = context.permissions || {};
+      setCurrentPermissionMap(permissions);
+      setCurrentSoftwareRole(context.softwareRole || null);
       const journalPerms = permissions?.journal_entries || {};
 
       // برای ماژول‌های SaaS Admin، دسترسی edit از __saas_admin sub-field خوانده می‌شود
@@ -1844,6 +1913,8 @@ const ModuleShow: React.FC = () => {
     } catch (err) {
       if (String((err as any)?.name || '') === 'AbortError') return;
       console.warn('Could not fetch field permissions:', err);
+      setCurrentPermissionMap(null);
+      setCurrentSoftwareRole(null);
       setCanIssueAccountingEntry(true);
     }
   }, [moduleId]);
@@ -1862,8 +1933,12 @@ const ModuleShow: React.FC = () => {
     [fieldPermissions]
   );
 
-  const canEditModule = modulePermissions.edit !== false;
-  const canDeleteModule = modulePermissions.delete !== false;
+  const baseCanEditModule = modulePermissions.edit !== false;
+  const baseCanDeleteModule = modulePermissions.delete !== false;
+  const canLockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'lock', currentSoftwareRole);
+  const canUnlockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'unlock', currentSoftwareRole);
+  const canEditModule = baseCanEditModule && !isRecordLocked;
+  const canDeleteModule = baseCanDeleteModule && !isRecordLocked;
 
 
 
@@ -5617,8 +5692,9 @@ const ModuleShow: React.FC = () => {
               canEdit={canEditModule}
               canViewFilesManager={true}
               canEditFilesManager={canEditModule}
+              canUploadFilesManager={baseCanEditModule}
               canDeleteFilesManager={canEditModule}
-              onImageUpdate={() => false}
+              onImageUpdate={canEditModule ? () => false : undefined}
               filesButtonLabel="فایل‌ها و تصاویر"
             />
           </div>
@@ -5648,7 +5724,7 @@ const ModuleShow: React.FC = () => {
       );
     }
     return content;
-  }, [canEditModule, data, id, moduleId, projectProcessLinkedFields, relationOptions]);
+  }, [baseCanEditModule, canEditModule, data, id, moduleId, projectProcessLinkedFields, relationOptions]);
 
   if (accessDenied) {
     return (
@@ -5815,8 +5891,10 @@ const ModuleShow: React.FC = () => {
             imageUrl={resolvedAttachmentUrl}
             compact
             canEdit={canEditModule}
-            onImageUpdate={handleImageUpdate}
-            onMainImageChange={handleMainImageChange}
+            canUploadFilesManager={baseCanEditModule}
+            canDeleteFilesManager={canEditModule}
+            onImageUpdate={canEditModule ? handleImageUpdate : undefined}
+            onMainImageChange={canEditModule ? handleMainImageChange : undefined}
           />
         </div>
       );
@@ -6059,6 +6137,7 @@ const ModuleShow: React.FC = () => {
           moduleConfig={moduleConfig}
           recordId={id!}
           recordName={resolvedRecordTitle}
+          currentRecord={{ ...displayData, id }}
           mentionUsers={allUsers}
           mentionRoles={allRoles}
         />
@@ -6077,6 +6156,19 @@ const ModuleShow: React.FC = () => {
         refreshLoading={loading}
         onEdit={() => setIsEditDrawerOpen(true)}
         onDelete={handleDelete}
+        lockControl={
+          <RecordLockControl
+            moduleId={moduleId}
+            recordId={id}
+            lockState={recordLockState}
+            canLock={canLockCurrentRecord}
+            canUnlock={canUnlockCurrentRecord}
+            showUnlocked
+            showLockedLabel
+            size="middle"
+            onChanged={handleRecordLockChanged}
+          />
+        }
         canEdit={canEditModule}
         canDelete={canDeleteModule}
         extraActions={headerActions}
@@ -6100,6 +6192,8 @@ const ModuleShow: React.FC = () => {
         onMainImageChange={handleMainImageChange}
         canViewField={canViewField}
         canEditModule={canEditModule}
+        canUploadFilesManager={baseCanEditModule}
+        canDeleteFilesManager={canEditModule}
         checkVisibility={checkVisibility}
         isFieldVisible={conditionalFieldRuntime.isFieldVisible}
         recordTitleFieldKey={recordTitleField?.key || null}

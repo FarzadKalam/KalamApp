@@ -15,6 +15,8 @@ import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
 import ResilientImage from "../common/ResilientImage";
 import AssigneeAvatarDisplay from "../common/AssigneeAvatarDisplay";
+import RecordLockControl from "../recordLocks/RecordLockControl";
+import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from "../../utils/recordLockRuntime";
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
 
@@ -40,6 +42,8 @@ export interface RenderCardItemProps {
   dragHandleTitle?: string;
   onDragHandlePointerDown?: (item: any, event: React.PointerEvent<HTMLButtonElement>) => void;
   moduleBadgeLabel?: string | null;
+  canLockRecord?: boolean;
+  canUnlockRecord?: boolean;
 }
 
 const getAdaptiveCardTitleClassName = (value: unknown, minimal = false) => {
@@ -77,14 +81,34 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   dragHandleTitle = "جابجایی کارت",
   onDragHandlePointerDown,
   moduleBadgeLabel,
+  canLockRecord = false,
+  canUnlockRecord = false,
 }) => {
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
+  const [recordPatch, setRecordPatch] = React.useState<Record<string, any>>({});
   const isSelected = selectedRowKeys.includes(item.id);
   const isTasks = moduleId === 'tasks';
   React.useEffect(() => {
     setTaskPatch({});
+    setRecordPatch({});
   }, [item?.id, item?.updated_at]);
-  const cardItem = isTasks ? { ...item, ...taskPatch } : item;
+  const cardItem = isTasks ? { ...item, ...taskPatch, ...recordPatch } : { ...item, ...recordPatch };
+  const lockState = getRecordLockStateFromRecord(cardItem);
+  const isLocked = lockState.isLocked;
+  const shouldShowLockControl = isLocked || canLockRecord;
+  const handleLockChanged = React.useCallback((nextLockState: RecordLockState) => {
+    setRecordPatch((prev) => mergeRecordLockIntoRecord(prev, nextLockState));
+  }, []);
+  const lockControl = (
+    <RecordLockControl
+      moduleId={moduleId}
+      recordId={String(cardItem?.id || '')}
+      lockState={lockState}
+      canLock={canLockRecord}
+      canUnlock={canUnlockRecord}
+      onChanged={handleLockChanged}
+    />
+  );
   const conditionalDisplaySettings = React.useMemo(
     () => getResolvedModuleConditionalDisplay(moduleConfig?.id),
     [moduleConfig?.id]
@@ -257,7 +281,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     setSelectedRowKeys(newSelected);
   };
   const renderDragHandle = () => {
-    if (!showDragHandle || !onDragHandlePointerDown) return null;
+    if (isLocked || !showDragHandle || !onDragHandlePointerDown) return null;
     return (
       <button
         type="button"
@@ -351,8 +375,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             <Checkbox checked={isSelected} onChange={toggleSelect} />
           </div>
         )}
+        <div className="absolute left-3 top-3 z-10" onClick={(e) => e.stopPropagation()}>
+          {lockControl}
+        </div>
         {moduleBadgeLabel ? (
-          <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200">
+          <div className={`absolute top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200 ${shouldShowLockControl ? 'left-12' : 'left-3'}`}>
             {moduleBadgeLabel}
           </div>
         ) : null}
@@ -504,8 +531,11 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Checkbox checked={isSelected} onChange={toggleSelect} />
         </div>
       )}
+      <div className="absolute left-3 top-3 z-10" onClick={(e) => e.stopPropagation()}>
+        {lockControl}
+      </div>
       {moduleBadgeLabel ? (
-        <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200">
+        <div className={`absolute top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200 ${shouldShowLockControl ? 'left-12' : 'left-3'}`}>
           {moduleBadgeLabel}
         </div>
       ) : null}
@@ -576,6 +606,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
               {isTasks ? (
                 <TaskActionButtons
                   task={cardItem}
+                  disabled={isLocked}
                   onTaskUpdated={async (updatedTask) => {
                     setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
                   }}

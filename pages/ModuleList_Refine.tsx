@@ -19,6 +19,7 @@ import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import {
   canAccessAssignedRecord,
+  canUseRecordLockPermission,
   fetchCurrentUserRecordAccessContext,
   GOALS_PERMISSION_KEY,
   hasViewConditionGroupConditions,
@@ -28,6 +29,7 @@ import {
   SAAS_ADMIN_PERMISSION_KEY,
   WORKFLOWS_PERMISSION_KEY,
   type ViewConditionGroup,
+  type PermissionMap,
   type RecordScope,
 } from "../utils/permissions";
 import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
@@ -80,6 +82,12 @@ import {
   normalizeSurveyTemplateSnapshot,
 } from "../utils/surveyTemplates";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
+import {
+  fetchRecordLockMap,
+  getRecordLockStateFromRecord,
+  mergeRecordLockIntoRecord,
+  type RecordLockState,
+} from "../utils/recordLockRuntime";
 
 const MapView = React.lazy(() => import("../components/moduleList/MapView"));
 const SmartForm = React.lazy(() => import("../components/SmartForm"));
@@ -753,6 +761,11 @@ export const ModuleListRefine: React.FC<{
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
+  const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
+  const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
+  const [recordLockMap, setRecordLockMap] = useState<Map<string, RecordLockState>>(() => new Map());
+  const [recordLockMapLoading, setRecordLockMapLoading] = useState(false);
+  const [loadedRecordLockIdsSignature, setLoadedRecordLockIdsSignature] = useState("");
   const [allowedRoleIds, setAllowedRoleIds] = useState<string[]>([]);
   const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
   const [isBulkProductsModalOpen, setIsBulkProductsModalOpen] = useState(false);
@@ -928,6 +941,15 @@ export const ModuleListRefine: React.FC<{
         .map((key) => selectedRowsMap[String(key)])
         .filter(Boolean),
     [selectedRowKeys, selectedRowsMap]
+  );
+  const isRecordIdLocked = useCallback((recordId?: string | null, fallbackRecord?: any) => {
+    const normalizedId = String(recordId || fallbackRecord?.id || "").trim();
+    if (!normalizedId) return false;
+    return recordLockMap.has(normalizedId) || getRecordLockStateFromRecord(fallbackRecord).isLocked;
+  }, [recordLockMap]);
+  const hasLockedSelectedRows = useMemo(
+    () => selectedRowKeys.some((key) => isRecordIdLocked(String(key), selectedRowsMap[String(key)])),
+    [isRecordIdLocked, selectedRowKeys, selectedRowsMap]
   );
   const allSelectedPendingInProductionOrders = useMemo(() => {
     if (resolvedModuleId !== 'production_orders') return false;
@@ -1538,6 +1560,8 @@ export const ModuleListRefine: React.FC<{
       setCurrentUserId(context.userId);
       setCurrentUserRoleId(context.roleId);
       setCurrentOrgId(context.orgId);
+      setCurrentPermissionMap(context.permissions || null);
+      setCurrentSoftwareRole(context.softwareRole || null);
       setAllowedRoleIds(context.allowedRoleIds);
       setAllowedUserIds(context.allowedUserIds);
 
@@ -1727,6 +1751,8 @@ export const ModuleListRefine: React.FC<{
   const canViewModule = modulePermissions.view !== false || recordScope !== 'all';
   const canEditModule = modulePermissions.edit !== false;
   const canDeleteModule = modulePermissions.delete !== false;
+  const canLockRecords = canUseRecordLockPermission(currentPermissionMap, resolvedModuleId, "lock", currentSoftwareRole);
+  const canUnlockRecords = canUseRecordLockPermission(currentPermissionMap, resolvedModuleId, "unlock", currentSoftwareRole);
   const canOpenModuleSettings = modulePermissions.view !== false && fieldPermissions.__module_settings !== false;
   const isSystemManagedModule = moduleConfig?.systemManaged === true;
   const allowSystemManagedDelete = resolvedModuleId === "saas_user_announcements";
@@ -1934,15 +1960,59 @@ export const ModuleListRefine: React.FC<{
     if (resolvedModuleId !== "cash_bank_operations") return accessibleData;
     return accessibleData.map((record: any) => normalizeModuleFormValues(resolvedModuleId, record));
   }, [accessibleData, resolvedModuleId]);
+  const normalizedAccessibleRecordIds = useMemo(
+    () => normalizedAccessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
+    [normalizedAccessibleData]
+  );
+  const normalizedAccessibleRecordIdsSignature = useMemo(
+    () => normalizedAccessibleRecordIds.join("|"),
+    [normalizedAccessibleRecordIds]
+  );
+
+  useEffect(() => {
+    if (!resolvedModuleId || normalizedAccessibleRecordIds.length === 0) {
+      setRecordLockMap(new Map());
+      setLoadedRecordLockIdsSignature("");
+      setRecordLockMapLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRecordLockMapLoading(true);
+    fetchRecordLockMap(resolvedModuleId, normalizedAccessibleRecordIds)
+      .then((nextMap) => {
+        if (!cancelled) {
+          setRecordLockMap(nextMap);
+          setLoadedRecordLockIdsSignature(normalizedAccessibleRecordIdsSignature);
+        }
+      })
+      .catch((error) => {
+        console.warn("Could not load record locks for list", error);
+        if (!cancelled) {
+          setRecordLockMap(new Map());
+          setLoadedRecordLockIdsSignature(normalizedAccessibleRecordIdsSignature);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRecordLockMapLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedAccessibleRecordIdsSignature, resolvedModuleId]);
 
   const enrichedData = useMemo(() => {
-    if (!tagsField) return normalizedAccessibleData;
+    const lockMergedData = normalizedAccessibleData.map((record: any) => {
+      const recordId = String(record?.id || "").trim();
+      const lockState = recordId ? recordLockMap.get(recordId) : null;
+      return lockState ? mergeRecordLockIntoRecord(record, lockState) : mergeRecordLockIntoRecord(record, null);
+    });
+    if (!tagsField) return lockMergedData;
     const tf: string = tagsField;
-    return normalizedAccessibleData.map(record => ({
+    return lockMergedData.map(record => ({
       ...record,
       [tf]: tagsMap[record.id as string] || (Array.isArray(record?.[tf]) ? record[tf] : [])
     }));
-  }, [normalizedAccessibleData, tagsMap, tagsField]);
+  }, [normalizedAccessibleData, recordLockMap, tagsMap, tagsField]);
   const accessibleRecordIds = useMemo(
     () => normalizedAccessibleData.map((record: any) => String(record?.id || "")).filter(Boolean),
     [normalizedAccessibleData]
@@ -2004,8 +2074,13 @@ export const ModuleListRefine: React.FC<{
     resolvedModuleId === "tasks" &&
     taskRelationLabelRequestsSignature.length > 0 &&
     loadedTaskRelationOptionsSignature !== taskRelationLabelRequestsSignature;
+  const shouldWaitForRecordLocks =
+    normalizedAccessibleRecordIdsSignature.length > 0 &&
+    loadedRecordLockIdsSignature !== normalizedAccessibleRecordIdsSignature;
   const deferredListDataLoading = viewMode === ViewMode.LIST && !queryPending && (
     !optionsReady ||
+    recordLockMapLoading ||
+    shouldWaitForRecordLocks ||
     tagsLoading ||
     shouldWaitForTags ||
     taskRelationOptionsLoading ||
@@ -3582,6 +3657,10 @@ export const ModuleListRefine: React.FC<{
 
   const handleBulkDelete = () => {
     if (selectedRowKeys.length === 0) return;
+    if (hasLockedSelectedRows) {
+      showListMessage("warning", "در میان رکوردهای انتخاب‌شده، رکورد قفل‌شده وجود دارد و قابل حذف نیست.");
+      return;
+    }
     if (isSystemManagedModule && !allowSystemManagedDelete) {
       showListMessage("warning", "رکوردهای سیستمی قابل حذف نیستند.");
       return;
@@ -3624,6 +3703,10 @@ export const ModuleListRefine: React.FC<{
   };
 
   const handleBulkEditOpen = () => {
+      if (hasLockedSelectedRows) {
+        showListMessage("warning", "در میان رکوردهای انتخاب‌شده، رکورد قفل‌شده وجود دارد و قابل ویرایش نیست.");
+        return;
+      }
       if (isSystemManagedModule && !allowSystemManagedFullBulkEdit) {
         if (!tagsField) {
           showListMessage("warning", "برای این گزارش فیلد برچسب فعال نیست.");
@@ -4063,6 +4146,10 @@ export const ModuleListRefine: React.FC<{
       const shouldUpdateRecordPayload = Object.keys(normalizedChanges).length > 0 && !isSystemManagedModule;
       const selectedIds = selectedRowKeys.map((id) => String(id)).filter(Boolean);
       if (!selectedIds.length) return;
+      if (selectedIds.some((selectedId) => isRecordIdLocked(selectedId, selectedRowsMap[selectedId]))) {
+        showListMessage('warning', 'در میان رکوردهای انتخاب‌شده، رکورد قفل‌شده وجود دارد و قابل بروزرسانی نیست.');
+        return;
+      }
 
       const hide = showListMessage('loading', 'در حال بروزرسانی موارد انتخاب‌شده...', 0);
       try {
@@ -4101,6 +4188,10 @@ export const ModuleListRefine: React.FC<{
       showListMessage("warning", "شما دسترسی ویرایش این کارت را ندارید.");
       return;
     }
+    if (isRecordIdLocked(String(record?.id || ""), record)) {
+      showListMessage("warning", "این کارت قفل شده و قابل جابجایی نیست.");
+      return;
+    }
 
     const targetOption = groupField.options?.find((option) => String(option?.value ?? "") === String(targetColumnKey));
     const nextValue = targetOption?.value ?? targetColumnKey;
@@ -4126,7 +4217,7 @@ export const ModuleListRefine: React.FC<{
     } finally {
       hide?.();
     }
-  }, [canEditModule, canViewField, kanbanGroupBy, moduleConfig, resolvedModuleId, showListMessage, tableQueryResult]);
+  }, [canEditModule, canViewField, isRecordIdLocked, kanbanGroupBy, moduleConfig, resolvedModuleId, showListMessage, tableQueryResult]);
 
   const handleKanbanDragHandlePointerDown = useCallback((
     record: any,
@@ -4141,6 +4232,10 @@ export const ModuleListRefine: React.FC<{
 
     if (!canEditModule || groupField.readonly || (canViewField ? canViewField(kanbanGroupBy) === false : false)) {
       showListMessage("warning", "شما دسترسی ویرایش این کارت را ندارید.");
+      return;
+    }
+    if (isRecordIdLocked(String(record?.id || ""), record)) {
+      showListMessage("warning", "این کارت قفل شده و قابل جابجایی نیست.");
       return;
     }
 
@@ -4195,7 +4290,7 @@ export const ModuleListRefine: React.FC<{
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
     window.addEventListener("pointercancel", handlePointerCancel, { once: true });
-  }, [canEditModule, canViewField, handleKanbanRecordMove, kanbanGroupBy, moduleConfig, showListMessage]);
+  }, [canEditModule, canViewField, handleKanbanRecordMove, isRecordIdLocked, kanbanGroupBy, moduleConfig, showListMessage]);
 
   const handleExport = handleExportExcel;
 
@@ -4686,6 +4781,8 @@ export const ModuleListRefine: React.FC<{
                               allUsers={allUsers}
                               allRoles={allRoles}
                               relationOptions={effectiveRelationOptions}
+                              canLockRecord={canLockRecords}
+                              canUnlockRecord={canUnlockRecords}
                             />
                   </React.Suspense>
                             
@@ -4773,12 +4870,14 @@ export const ModuleListRefine: React.FC<{
                               allUsers={allUsers}
                               allRoles={allRoles}
                               relationOptions={effectiveRelationOptions}
-                              showDragHandle={canEditModule && !!kanbanGroupBy}
+                              showDragHandle={canEditModule && !!kanbanGroupBy && !getRecordLockStateFromRecord(item).isLocked}
                               isDragActive={kanbanDraggingRecordId === String(item?.id || "")}
                               dragHandleTitle="جابجایی کارت"
                               onDragHandlePointerDown={(cardItem, event) =>
                                 handleKanbanDragHandlePointerDown(cardItem, columnKey, event)
                               }
+                              canLockRecord={canLockRecords}
+                              canUnlockRecord={canUnlockRecords}
                             />
                           ))}
                         </div>

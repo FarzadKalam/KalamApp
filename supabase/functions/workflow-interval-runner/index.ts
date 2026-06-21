@@ -3,7 +3,7 @@
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-14-weekly-schedules';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-18-process-workflow-hardening';
 const MAX_WORKFLOWS = 30;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
@@ -13,7 +13,7 @@ const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
-const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
+const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CALENDAR_PUBLIC_BASE_URL = String(
   Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
   || Deno.env.get('PUBLIC_APP_URL')
@@ -961,8 +961,19 @@ async function clearServerQueued(url: string, key: string, workflowId: string): 
   await dbPatch(url, key, 'workflows', `id=eq.${workflowId}`, { server_queued_at: null }).catch(() => {});
 }
 
-async function fetchModuleRecords(url: string, key: string, table: string, orgId: string, batchSize: number): Promise<any[]> {
-  return await dbGet(url, key, `${table}?org_id=eq.${orgId}&limit=${batchSize}`);
+async function fetchModuleRecordsPage(
+  url: string,
+  key: string,
+  table: string,
+  orgId: string,
+  pageSize: number,
+  offset: number,
+): Promise<any[]> {
+  return await dbGet(
+    url,
+    key,
+    `${table}?org_id=eq.${orgId}&select=*&order=id.asc&limit=${pageSize}&offset=${offset}`,
+  );
 }
 
 async function insertWorkflowLog(url: string, key: string, log: {
@@ -1151,7 +1162,7 @@ async function resolveAssigneesToBotChatIds(
     if (token?.kind === 'role') { roleIds.add(token.id); return; }
     if (token?.kind === 'chat_group') { groupIds.add(token.id); return; }
     const v = String(entry ?? '').trim();
-    if (v) directChatIds.push(v);
+    if (v && !UUID_LIKE_REGEX.test(v)) directChatIds.push(v);
   };
 
   (Array.isArray(recipientAssignees) ? recipientAssignees : []).forEach(processEntry);
@@ -1179,6 +1190,64 @@ async function resolveAssigneesToBotChatIds(
   }
 
   return Array.from(new Set(chatIds.filter(Boolean)));
+}
+
+async function resolveCounterpartyBotTargets(
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId: string,
+  record: Record<string, any>,
+  recipientFields: any[],
+  explicitChannel?: string | null,
+): Promise<Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string }>> {
+  const customerIds = new Set<string>();
+  const supplierIds = new Set<string>();
+  const addUuid = (target: Set<string>, value: any) => {
+    const normalized = String(value || '').trim();
+    if (UUID_LIKE_REGEX.test(normalized)) target.add(normalized);
+  };
+
+  if (moduleId === 'customers') addUuid(customerIds, record?.id);
+  if (moduleId === 'suppliers') addUuid(supplierIds, record?.id);
+  addUuid(customerIds, record?.customer_id || record?.related_customer);
+  addUuid(supplierIds, record?.supplier_id || record?.related_supplier);
+
+  for (const fieldKey of (Array.isArray(recipientFields) ? recipientFields : [])) {
+    const normalizedFieldKey = String(fieldKey || '').trim();
+    const value = await resolveWorkflowFieldValue(url, key, normalizedFieldKey, record);
+    const values = Array.isArray(value) ? value : [value];
+    const targetSet = /supplier/i.test(normalizedFieldKey) ? supplierIds : customerIds;
+    values.forEach((item) => addUuid(targetSet, item));
+  }
+
+  const select = 'customer_id,supplier_id,bot_chat_id,channel_type,status';
+  const [customerRows, supplierRows] = await Promise.all([
+    customerIds.size > 0
+      ? dbGet(
+          url,
+          key,
+          `counterparty_bot_groups?org_id=eq.${orgId}&customer_id=in.(${Array.from(customerIds).join(',')})&status=eq.active&select=${select}`,
+        ).catch(() => [])
+      : Promise.resolve([]),
+    supplierIds.size > 0
+      ? dbGet(
+          url,
+          key,
+          `counterparty_bot_groups?org_id=eq.${orgId}&supplier_id=in.(${Array.from(supplierIds).join(',')})&status=eq.active&select=${select}`,
+        ).catch(() => [])
+      : Promise.resolve([]),
+  ]);
+  const normalizedExplicitChannel = String(explicitChannel || '').trim().toLowerCase();
+  return [...customerRows, ...supplierRows]
+    .map((row: any) => {
+      const channel = String(row?.channel_type || '').trim().toLowerCase();
+      const chatId = String(row?.bot_chat_id || '').trim();
+      if (!chatId || !['bale', 'telegram', 'rubika'].includes(channel)) return null;
+      if (normalizedExplicitChannel && channel !== normalizedExplicitChannel) return null;
+      return { channel: channel as 'bale' | 'telegram' | 'rubika', chatId };
+    })
+    .filter(Boolean) as Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string }>;
 }
 
 // ── SMS sending ────────────────────────────────────────────────────────────────
@@ -1354,11 +1423,20 @@ function getModuleTable(moduleId: string): string {
   return TABLE_MAP[moduleId] || moduleId;
 }
 
-async function updateRecord(url: string, key: string, moduleId: string, recordId: string, patch: Record<string, any>, actorUserId: string | null = null): Promise<void> {
+async function updateRecord(
+  url: string,
+  key: string,
+  moduleId: string,
+  recordId: string,
+  patch: Record<string, any>,
+  actorUserId: string | null = null,
+  orgId?: string | null,
+): Promise<void> {
   const table = getModuleTable(moduleId);
   const payload = { ...patch, updated_at: new Date().toISOString() };
   if (actorUserId) payload.updated_by = actorUserId;
-  await dbPatch(url, key, table, `id=eq.${recordId}`, payload);
+  const filter = orgId ? `id=eq.${recordId}&org_id=eq.${orgId}` : `id=eq.${recordId}`;
+  await dbPatch(url, key, table, filter, payload);
 }
 
 async function createRecord(url: string, key: string, moduleId: string, orgId: string, payload: Record<string, any>, actorUserId: string | null = null): Promise<any> {
@@ -1446,7 +1524,64 @@ async function loadWorkflowAiModel(url: string, key: string, orgId: string): Pro
   const selected = rows?.[0]?.selected_models && typeof rows[0].selected_models === 'object'
     ? rows[0].selected_models
     : {};
-  return String(selected.workflow_ai_prompt || Deno.env.get('AI_MODEL') || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
+  const requested = String(selected.workflow_ai_prompt || '').trim();
+  const catalogRows = await dbGet(url, key, 'ai_model_catalog?select=id,provider,capability_tags,is_active,is_coming_soon&limit=500').catch(() => []);
+  const allowed = (catalogRows || []).filter((model: any) => {
+    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    return model?.is_active !== false
+      && model?.is_coming_soon !== true
+      && tags.includes('workflow_ai_prompt')
+      && String(model?.id || '').trim();
+  });
+  if (allowed.length === 0) {
+    throw new Error('برای اجرای پرامپت گردش کار، مدل فعال در تنظیمات هوش مصنوعی سازمان پیدا نشد.');
+  }
+  const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()));
+  return allowedIds.has(requested) ? requested : String(allowed[0]?.id || '').trim();
+}
+
+const truthyPlanFeature = (value: any) => {
+  if (value === true) return true;
+  if (typeof value === 'string') {
+    return ['true', 'enabled', 'full', 'limited'].includes(value.trim().toLowerCase());
+  }
+  return Boolean(value && typeof value === 'object' && (value.enabled === true || value.available === true));
+};
+
+async function assertWorkflowAiEnabled(url: string, key: string, orgId: string): Promise<void> {
+  const orgRows = await dbGet(
+    url,
+    key,
+    `saas_org_settings?org_id=eq.${orgId}&select=plan_code,feature_overrides,status,is_readonly&limit=1`,
+  ).catch(() => []);
+  const orgSettings = orgRows[0] || null;
+  if (!orgSettings) throw new Error('تنظیمات پلن سازمان برای اجرای هوش مصنوعی پیدا نشد.');
+  const planCode = String(orgSettings?.plan_code || '').trim();
+  const planRows = planCode
+    ? await dbGet(url, key, `saas_plans?code=eq.${encodeURIComponent(planCode)}&select=enabled_features,is_active&limit=1`).catch(() => [])
+    : [];
+  const plan = planRows[0] || null;
+  if (!plan || plan?.is_active === false) {
+    throw new Error('پلن فعال سازمان برای اجرای هوش مصنوعی پیدا نشد.');
+  }
+  const features = {
+    ...(plan?.enabled_features && typeof plan.enabled_features === 'object' ? plan.enabled_features : {}),
+    ...(orgSettings?.feature_overrides && typeof orgSettings.feature_overrides === 'object' ? orgSettings.feature_overrides : {}),
+  };
+  if (!truthyPlanFeature(features.ai_chat) && !truthyPlanFeature(features.ai_knowledge)) {
+    throw new Error('قابلیت هوش مصنوعی گردش کار در پلن فعلی سازمان فعال نیست.');
+  }
+  const aiSettingsRows = await dbGet(
+    url,
+    key,
+    `org_ai_settings?org_id=eq.${orgId}&select=feature_flags&limit=1`,
+  ).catch(() => []);
+  const flags = aiSettingsRows[0]?.feature_flags && typeof aiSettingsRows[0].feature_flags === 'object'
+    ? aiSettingsRows[0].feature_flags
+    : {};
+  if (flags.workflow_ai_prompt === false) {
+    throw new Error('پرامپت هوش مصنوعی در تنظیمات سازمان غیرفعال است.');
+  }
 }
 
 function normalizeAiBaseUrl(value: string): string {
@@ -1496,8 +1631,20 @@ function extractJsonObjectFromText(value: any): Record<string, any> | null {
 }
 
 function sanitizeAiRecordPayload(rawPayload: any, schema: any): Record<string, any> {
+  const blockedKeys = new Set([
+    'id',
+    'org_id',
+    'system_code',
+    'created_at',
+    'updated_at',
+    'created_by',
+    'updated_by',
+    'deleted_at',
+  ]);
   const allowedFields = Array.isArray(schema?.fields)
-    ? schema.fields.map((field: any) => String(field?.key || '').trim()).filter(Boolean)
+    ? schema.fields
+        .map((field: any) => String(field?.key || '').trim())
+        .filter((fieldKey: string) => fieldKey && !blockedKeys.has(fieldKey))
     : [];
   const allowed = new Set(allowedFields);
   const rawFields = rawPayload?.fields && typeof rawPayload.fields === 'object' ? rawPayload.fields : rawPayload;
@@ -1825,6 +1972,7 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     || ''
   ).trim();
   if (!apiKey) throw new Error('کلید مرکزی AI برای workflow interval تنظیم نشده است.');
+  await assertWorkflowAiEnabled(url, key, orgId);
   const model = await loadWorkflowAiModel(url, key, orgId);
   const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((p) => p.test(model));
   const schema = options?.recordCreationSchema && typeof options.recordCreationSchema === 'object'
@@ -1833,6 +1981,7 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
   const processOperationContext = options?.processOperationContext && typeof options.processOperationContext === 'object'
     ? options.processOperationContext
     : null;
+  const mutationMode = String(options?.mutationMode || 'create_record').trim();
   const fieldLines = schema && Array.isArray(schema.fields)
     ? schema.fields.map((field: any) => `- ${field.key}: ${field.label || field.key} (${field.type || 'text'}${field.required ? '، ضروری' : ''})`).join('\n')
     : '';
@@ -1850,7 +1999,10 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
           ? [
               'شما دستیار هوش مصنوعی تازه سیستم برای اجرای خودکار گردش کار هستید.',
               'خروجی فقط JSON معتبر باشد و متن اضافی ننویس.',
-              'فقط کلیدهای مجاز schema را در fields برگردان. org_id، id، system_code و UUID خام نساز.',
+              'فقط کلیدهای مجاز schema را در fields برگردان. org_id، id، system_code، created_at، updated_at، created_by و updated_by را برنگردان.',
+              mutationMode === 'update_record'
+                ? 'فقط فیلدهایی را برگردان که بر اساس درخواست باید در رکورد جاری تغییر کنند.'
+                : 'فیلدهای لازم برای ساخت رکورد جدید را برگردان.',
               `ماژول مقصد: ${schema.moduleLabel || schema.moduleId || ''}`,
               'فیلدهای مجاز:',
               fieldLines,
@@ -1862,14 +2014,16 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     ],
   };
   if (isReasoningModel) {
-    requestBody.max_completion_tokens = 8000;
+    requestBody.max_completion_tokens = 2500;
   } else {
     requestBody.temperature = 0.2;
     requestBody.max_tokens = 2000;
   }
   let response: Response | null = null;
   let usedBaseUrl = '';
-  const baseUrls = workflowAiBaseUrls();
+  // Do not chain fallback requests for long-running AI actions. On self-hosted
+  // Supabase this can exceed the supervisor timeout and cancel the worker.
+  const baseUrls = workflowAiBaseUrls().slice(0, 1);
   for (const baseUrl of baseUrls) {
     try {
       const nextResponse = await fetch(`${baseUrl}/chat/completions`, {
@@ -1884,7 +2038,11 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
       response = nextResponse;
       usedBaseUrl = baseUrl;
       if (nextResponse.ok || !isRetryableAiStatus(nextResponse.status) || baseUrl === baseUrls[baseUrls.length - 1]) break;
-    } catch (error) {
+    } catch (error: any) {
+      const text = `${String(error?.name || '')} ${String(error?.message || error || '')}`;
+      if (/abort|timeout|timed out|upstream server is timing out|request has been cancelled/i.test(text)) {
+        throw new Error('سرویس هوش مصنوعی در زمان مناسب پاسخ نداد.');
+      }
       if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
     }
   }
@@ -1903,6 +2061,64 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
     answer: String(parsed?.choices?.[0]?.message?.content || '').trim(),
     usage: parsed?.usage || null,
   };
+}
+
+function getInitialProcessRunNodeKeys(stages: any[]): string[] {
+  const rows = Array.isArray(stages) ? stages : [];
+  const nodeKeyOf = (stage: any) => String(
+    stage?.process_node_key || stage?.metadata?.process_node_key || '',
+  ).trim();
+  const laneKeyOf = (stage: any) => String(
+    stage?.process_lane_key || stage?.metadata?.process_lane_key || 'lane_1',
+  ).trim() || 'lane_1';
+  const graph = rows.find((stage: any) => stage?.metadata?.process_graph)?.metadata?.process_graph || {};
+  const rootLaneKeys = new Set(
+    (Array.isArray(graph?.lanes) ? graph.lanes : [])
+      .filter((lane: any) => !String(lane?.parentTriggerKey || lane?.parent_trigger_key || '').trim())
+      .map((lane: any) => String(lane?.key || '').trim())
+      .filter(Boolean),
+  );
+  if (rootLaneKeys.size === 0) {
+    const firstLaneKey = rows
+      .slice()
+      .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0))
+      .map(laneKeyOf)
+      .find(Boolean);
+    if (firstLaneKey) rootLaneKeys.add(firstLaneKey);
+  }
+
+  return Array.from(rootLaneKeys)
+    .map((laneKey) => rows
+      .filter((stage: any) => laneKeyOf(stage) === laneKey)
+      .sort((left: any, right: any) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0))[0])
+    .filter(Boolean)
+    .map(nodeKeyOf)
+    .filter(Boolean);
+}
+
+async function activateInitialProcessRunNodes(
+  url: string,
+  key: string,
+  orgId: string,
+  processRunId: string,
+  actorUserId: string | null,
+): Promise<Record<string, any>> {
+  const stages = await dbGet(
+    url,
+    key,
+    `process_run_stages?process_run_id=eq.${processRunId}&select=id,sort_order,process_node_key,process_lane_key,metadata&order=sort_order.asc`,
+  ).catch(() => []);
+  const nodeKeys = getInitialProcessRunNodeKeys(stages);
+  if (nodeKeys.length === 0) {
+    return { created_task_ids: [], existing_task_ids: [], process_node_keys: [] };
+  }
+  const result = await callRpc(url, key, 'activate_process_run_nodes', {
+    p_org_id: orgId,
+    p_process_run_id: processRunId,
+    p_node_keys: nodeKeys,
+    p_actor_user_id: actorUserId || null,
+  });
+  return { ...(result || {}), process_node_keys: nodeKeys };
 }
 
 // ── Action execution ───────────────────────────────────────────────────────────
@@ -1949,17 +2165,36 @@ async function executeAction(
     if (!prompt) return actionResult(action, 'skipped', 'پرامپت هوش مصنوعی خالی است.');
     if (!recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای پیشنهاد AI مشخص نیست.');
     const outputMode = String(config.output_mode || 'text').trim();
-    const targetModuleId = String(config.target_module_id || '').trim();
-    const recordCreationSchema = outputMode === 'create_record'
+    const targetModuleId = outputMode === 'update_record'
+      ? moduleId
+      : String(config.target_module_id || '').trim();
+    const allowedFieldKeys = Array.isArray(config.allowed_field_keys)
+      ? config.allowed_field_keys.map((item: any) => String(item || '').trim()).filter(Boolean)
+      : [];
+    if (outputMode === 'update_record' && allowedFieldKeys.length === 0) {
+      return actionResult(action, 'skipped', 'برای ویرایش رکورد با AI هیچ فیلد مجازی انتخاب نشده است.');
+    }
+    const recordCreationSchema = outputMode === 'create_record' || outputMode === 'update_record'
       ? (config.record_creation_schema && typeof config.record_creation_schema === 'object' ? config.record_creation_schema : null)
       : null;
+    if (
+      outputMode === 'update_record'
+      && String(recordCreationSchema?.moduleId || '').trim() !== moduleId
+    ) {
+      return actionResult(action, 'skipped', 'ساختار فیلدهای مجاز ویرایش AI با ماژول جاری هماهنگ نیست.');
+    }
     const processOperationContext = outputMode === 'process_operation'
       ? await loadWorkflowProcessContext(url, key, orgId, moduleId, recordId)
       : null;
-    const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt, { recordCreationSchema, processOperationContext });
+    const aiResult = await callWorkflowAiPrompt(url, key, orgId, prompt, {
+      recordCreationSchema,
+      processOperationContext,
+      mutationMode: outputMode,
+    });
     if (!aiResult.answer) return actionResult(action, 'skipped', 'پاسخ هوش مصنوعی خالی بود.');
     let answer = aiResult.answer;
     const createdRecords: any[] = [];
+    const updatedRecords: any[] = [];
     const executedProcessOperations: any[] = [];
     if (outputMode === 'create_record') {
       if (!targetModuleId || !recordCreationSchema) return actionResult(action, 'skipped', 'تنظیمات ساخت رکورد با AI کامل نیست.');
@@ -1982,6 +2217,25 @@ async function executeAction(
         || (createdRecords.length > 0
           ? `${recordCreationSchema?.moduleLabel || targetModuleId} با اطلاعات استخراج‌شده ساخته شد.`
           : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.');
+    }
+    if (outputMode === 'update_record') {
+      if (!recordCreationSchema) return actionResult(action, 'skipped', 'تنظیمات ویرایش رکورد با AI کامل نیست.');
+      const parsed = extractJsonObjectFromText(aiResult.answer) || {};
+      const recordDraft = parsed?.record || parsed;
+      const payload = sanitizeAiRecordPayload(recordDraft, recordCreationSchema);
+      if (Object.keys(payload).length > 0) {
+        await updateRecord(url, key, moduleId, recordId, payload, actorUserId, orgId);
+        updatedRecords.push({
+          module_id: moduleId,
+          id: recordId,
+          title: buildAiRecordTitle({ ...record, ...payload }, recordCreationSchema?.moduleLabel || moduleId),
+          fields: Object.keys(payload),
+        });
+      }
+      answer = String(parsed?.reply || '').trim()
+        || (updatedRecords.length > 0
+          ? `${recordCreationSchema?.moduleLabel || moduleId} با اطلاعات استخراج‌شده به‌روزرسانی شد.`
+          : 'اطلاعات کافی برای ویرایش رکورد پیدا نشد.');
     }
     if (outputMode === 'process_operation') {
       const parsed = extractJsonObjectFromText(aiResult.answer) || {};
@@ -2027,7 +2281,13 @@ async function executeAction(
       actionId: action.id || null,
       sharedUserIds,
       sharedRoleIds,
-      metadata: { output_mode: outputMode, target_module_id: targetModuleId || null, created_records: createdRecords, process_operations: executedProcessOperations },
+      metadata: {
+        output_mode: outputMode,
+        target_module_id: targetModuleId || null,
+        created_records: createdRecords,
+        updated_records: updatedRecords,
+        process_operations: executedProcessOperations,
+      },
     }).catch((error: any) => {
       console.warn('[workflow-runner] workflow AI thread insert skipped:', error?.message || error);
       return null;
@@ -2055,6 +2315,7 @@ async function executeAction(
         usage: aiResult.usage,
         avalai_request_id: aiResult.requestId,
         created_records: createdRecords,
+        updated_records: updatedRecords,
         process_operations: executedProcessOperations,
       },
       avalai_request_id: aiResult.requestId,
@@ -2064,6 +2325,7 @@ async function executeAction(
       ...record,
       ai_answer: answer,
       ai_created_record_title: createdRecords[0]?.title || '',
+      ai_updated_record_title: updatedRecords[0]?.title || '',
       ai_process_operation_count: String(executedProcessOperations.length || ''),
     };
     for (const channel of deliveryChannels) {
@@ -2084,8 +2346,14 @@ async function executeAction(
       }
     }
     return actionResult(action, 'success', undefined, {
-      affected_count: 1 + createdRecords.length + executedProcessOperations.length,
-      details: { model: aiResult.model, avalai_request_id: aiResult.requestId, created_records: createdRecords, process_operations: executedProcessOperations },
+      affected_count: 1 + createdRecords.length + updatedRecords.length + executedProcessOperations.length,
+      details: {
+        model: aiResult.model,
+        avalai_request_id: aiResult.requestId,
+        created_records: createdRecords,
+        updated_records: updatedRecords,
+        process_operations: executedProcessOperations,
+      },
     });
   }
 
@@ -2173,21 +2441,53 @@ async function executeAction(
   // ── send_bale_bot ─────────────────────────────────────────────────────
   if (action.type === 'send_bale_bot' || action.type === 'send_telegram_bot' || action.type === 'send_bot_message') {
     const configuredChannel = String(config.channel || config.platform || '').trim().toLowerCase();
-    const channel = action.type === 'send_telegram_bot'
+    const explicitChannel = action.type === 'send_telegram_bot'
       ? 'telegram'
       : configuredChannel === 'telegram' || configuredChannel === 'bale' || configuredChannel === 'rubika'
         ? configuredChannel
-        : 'bale';
+        : '';
+    const directChannel = (explicitChannel || 'bale') as 'bale' | 'telegram' | 'rubika';
     const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیام بات خالی است.');
-    const botSettings = await getOrgBotSettings(url, key, orgId, channel);
-    if (!botSettings) return actionResult(action, 'skipped', `تنظیمات ${channel} فعال نیست.`);
-    const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, channel);
-    if (chatIds.length === 0) return actionResult(action, 'skipped', 'گیرنده بات پیدا نشد.', { recipient_count: 0 });
-    for (const chatId of chatIds) {
-      await sendBotMessage(chatId, text, botSettings, channel);
+    const [directChatIds, counterpartyTargets] = await Promise.all([
+      resolveAssigneesToBotChatIds(
+        url,
+        key,
+        orgId,
+        config.recipient_assignees || [],
+        config.recipient_fields || [],
+        record,
+        directChannel,
+      ),
+      resolveCounterpartyBotTargets(
+        url,
+        key,
+        orgId,
+        moduleId,
+        record,
+        config.recipient_fields || [],
+        explicitChannel || null,
+      ),
+    ]);
+    const targets = Array.from(new Map([
+      ...directChatIds.map((chatId) => [`${directChannel}:${chatId}`, { channel: directChannel, chatId }] as const),
+      ...counterpartyTargets.map((target) => [`${target.channel}:${target.chatId}`, target] as const),
+    ]).values());
+    if (targets.length === 0) return actionResult(action, 'skipped', 'گیرنده بات پیدا نشد.', { recipient_count: 0 });
+
+    const settingsByChannel = new Map<string, any>();
+    let sentCount = 0;
+    for (const target of targets) {
+      if (!settingsByChannel.has(target.channel)) {
+        settingsByChannel.set(target.channel, await getOrgBotSettings(url, key, orgId, target.channel));
+      }
+      const botSettings = settingsByChannel.get(target.channel);
+      if (!botSettings) continue;
+      await sendBotMessage(target.chatId, text, botSettings, target.channel);
+      sentCount += 1;
     }
-    return actionResult(action, 'success', undefined, { recipient_count: chatIds.length });
+    if (sentCount === 0) return actionResult(action, 'skipped', 'تنظیمات بات برای گیرنده‌های پیدا شده فعال نیست.', { recipient_count: 0 });
+    return actionResult(action, 'success', undefined, { recipient_count: sentCount });
   }
 
   // ── send_rubika_bot ───────────────────────────────────────────────────
@@ -2394,7 +2694,19 @@ async function executeAction(
       await dbPatch(url, key, 'process_runs', `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
       await dbPatch(url, key, 'process_run_stages', `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
     }
-    return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
+    const activation = processRunId
+      ? await activateInitialProcessRunNodes(url, key, orgId, processRunId, actorUserId)
+      : null;
+    return actionResult(action, 'success', undefined, {
+      affected_count: Math.max(1, Array.isArray(activation?.created_task_ids) ? activation.created_task_ids.length : 0),
+      details: {
+        template_id: templateId,
+        process_run_id: processRunId,
+        process_node_keys: activation?.process_node_keys || [],
+        created_task_ids: activation?.created_task_ids || [],
+        existing_task_ids: activation?.existing_task_ids || [],
+      },
+    });
   }
 
   // ── copy_process_template ─────────────────────────────────────────────
@@ -2540,6 +2852,48 @@ async function executeAction(
   return actionResult(action, 'skipped', `نوع اقدام پشتیبانی نمی‌شود: ${action.type}`);
 }
 
+const RETRYABLE_IDEMPOTENT_ACTIONS = new Set([
+  'update_record',
+  'activate_next_process_stage',
+  'activate_specific_process_stage',
+]);
+
+const isTransientWorkflowError = (error: any) => {
+  const text = `${String(error?.name || '')} ${String(error?.message || error || '')}`.toLowerCase();
+  return /timeout|timed out|abort|temporar|connection|network|fetch failed|status 5\d\d|gateway|rate limit|429|502|503|504/.test(text);
+};
+
+async function executeActionWithRetry(
+  action: WorkflowAction,
+  record: Record<string, any>,
+  moduleId: string,
+  orgId: string,
+  url: string,
+  key: string,
+  actorUserId: string | null,
+): Promise<ActionExecutionResult> {
+  const maxAttempts = RETRYABLE_IDEMPOTENT_ACTIONS.has(String(action?.type || '')) ? 3 : 1;
+  let lastError: any = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await executeAction(action, record, moduleId, orgId, url, key, actorUserId);
+      return {
+        ...result,
+        details: {
+          ...(result.details || {}),
+          retry_attempts: attempt - 1,
+        },
+      };
+    } catch (error: any) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isTransientWorkflowError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt === 1 ? 250 : 750));
+    }
+  }
+  throw lastError;
+}
+
 // ── Main execution loop ─────────────────────────────────────���──────────────────
 
 async function runIntervalTick(url: string, key: string): Promise<Record<string, any>> {
@@ -2569,7 +2923,9 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
     if (!claimed) continue;
     stats.claimedWorkflows++;
 
-    const batchSize = Math.max(10, Math.min(5000, Number(workflow.batch_size || DEFAULT_BATCH_SIZE)));
+    const configuredRecordLimit = Number(workflow.batch_size) > 0
+      ? Math.max(1, Math.min(50000, Number(workflow.batch_size)))
+      : Number.POSITIVE_INFINITY;
     const conditionsAll = (Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [])
       .filter((c) => !['changed', 'changed_from', 'changed_to'].includes(String(c?.operator || '')));
     const conditionsAny = (Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [])
@@ -2587,81 +2943,109 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
 
     for (const targetModuleId of targetModuleIds) {
       const targetTable = getModuleTable(targetModuleId);
-      const records = await fetchModuleRecords(url, key, targetTable, workflow.org_id, batchSize).catch((e) => {
-        console.error('[workflow-runner] Record fetch failed:', e.message); return [];
-      });
-      let executedRecordIds: Set<string> | null = null;
+      let offset = 0;
+      let processedForModule = 0;
+      while (processedForModule < configuredRecordLimit) {
+        const remaining = Number.isFinite(configuredRecordLimit)
+          ? configuredRecordLimit - processedForModule
+          : DEFAULT_BATCH_SIZE;
+        const pageSize = Math.max(1, Math.min(DEFAULT_BATCH_SIZE, remaining));
+        const records = await fetchModuleRecordsPage(
+          url,
+          key,
+          targetTable,
+          workflow.org_id,
+          pageSize,
+          offset,
+        ).catch((e) => {
+          console.error('[workflow-runner] Record page fetch failed:', e.message);
+          return [];
+        });
+        if (records.length === 0) break;
+        offset += records.length;
+        processedForModule += records.length;
 
-      if (executionMode === 'first_match' && records.length > 0) {
-        const recordIds = records.map((r: any) => String(r?.id || '')).filter(Boolean);
-        if (recordIds.length > 0) {
-          const idList = recordIds.join(',');
-          const logs = await dbGet(url, key,
-            `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${targetModuleId}&status=eq.success&record_id=in.(${idList})&select=record_id`
-          ).catch(() => []);
-          executedRecordIds = new Set(logs.map((l: any) => String(l?.record_id || '')));
-        }
-      }
-
-      for (const record of records) {
-        stats.processedRecords++;
-        const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
-        if (!matched) continue;
-
-        const recordId = String(record?.id || '').trim();
-        if (executionMode === 'first_match' && recordId && executedRecordIds?.has(recordId)) continue;
-
-        const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-        const errors: string[] = [];
-        const actionResults: ActionExecutionResult[] = [];
-
-        for (const action of actions) {
-          try {
-            const result = await executeAction(action as WorkflowAction, record, targetModuleId, workflow.org_id, url, key, actorUserId);
-            actionResults.push(result);
-            if (result.status === 'success') stats.executedActions++;
-            if (result.status === 'failed') {
-              errors.push(result.message || String(action.type || 'action failed'));
-              stats.failedRuns++;
-            }
-          } catch (e: any) {
-            const errorMessage = String(e?.message || action.type || 'action failed');
-            errors.push(errorMessage);
-            actionResults.push({
-              action_type: String((action as any)?.type || ''),
-              action_id: (action as any)?.id || null,
-              status: 'failed',
-              message: errorMessage,
-            });
-            console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
-            stats.failedRuns++;
+        let executedRecordIds: Set<string> | null = null;
+        if (executionMode === 'first_match') {
+          const recordIds = records.map((r: any) => String(r?.id || '')).filter(Boolean);
+          if (recordIds.length > 0) {
+            const logs = await dbGet(url, key,
+              `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${targetModuleId}&status=eq.success&record_id=in.(${recordIds.join(',')})&select=record_id`
+            ).catch(() => []);
+            executedRecordIds = new Set(logs.map((l: any) => String(l?.record_id || '')));
           }
         }
 
-        if (recordId) {
-          const hasFailedAction = actionResults.some((result) => result.status === 'failed');
-          const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
-          const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
-          const skippedMessage = !hasSuccessfulAction && errors.length === 0
-            ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
-            : undefined;
-          await insertWorkflowLog(url, key, {
-            workflow_id: workflow.id, org_id: workflow.org_id,
-            module_id: targetModuleId, record_id: recordId,
-            run_type: 'scheduled',
-            status: runStatus,
-            message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
-            details: {
-              workflow_name: workflow.name,
-              action_count: actions.length,
-              action_results: actionResults,
-              timezone: 'Asia/Tehran',
-              scheduled_due_at: scheduledDueAt.toISOString(),
-              runner_build: FUNCTION_BUILD,
-            },
-          });
-          if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
+        for (const record of records) {
+          stats.processedRecords++;
+          const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
+          if (!matched) continue;
+
+          const recordId = String(record?.id || '').trim();
+          if (executionMode === 'first_match' && recordId && executedRecordIds?.has(recordId)) continue;
+
+          const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+          const errors: string[] = [];
+          const actionResults: ActionExecutionResult[] = [];
+
+          for (const action of actions) {
+            try {
+              const result = await executeActionWithRetry(
+                action as WorkflowAction,
+                record,
+                targetModuleId,
+                workflow.org_id,
+                url,
+                key,
+                actorUserId,
+              );
+              actionResults.push(result);
+              if (result.status === 'success') stats.executedActions++;
+              if (result.status === 'failed') {
+                errors.push(result.message || String(action.type || 'action failed'));
+                stats.failedRuns++;
+              }
+            } catch (e: any) {
+              const errorMessage = String(e?.message || action.type || 'action failed');
+              errors.push(errorMessage);
+              actionResults.push({
+                action_type: String((action as any)?.type || ''),
+                action_id: (action as any)?.id || null,
+                status: 'failed',
+                message: errorMessage,
+              });
+              console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
+              stats.failedRuns++;
+            }
+          }
+
+          if (recordId) {
+            const hasFailedAction = actionResults.some((result) => result.status === 'failed');
+            const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
+            const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
+            const skippedMessage = !hasSuccessfulAction && errors.length === 0
+              ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
+              : undefined;
+            await insertWorkflowLog(url, key, {
+              workflow_id: workflow.id, org_id: workflow.org_id,
+              module_id: targetModuleId, record_id: recordId,
+              run_type: 'scheduled',
+              status: runStatus,
+              message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
+              details: {
+                workflow_name: workflow.name,
+                action_count: actions.length,
+                action_results: actionResults,
+                timezone: 'Asia/Tehran',
+                scheduled_due_at: scheduledDueAt.toISOString(),
+                runner_build: FUNCTION_BUILD,
+                page_offset: offset - records.length,
+              },
+            });
+            if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
+          }
         }
+        if (records.length < pageSize) break;
       }
     }
   }

@@ -11,6 +11,7 @@ import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../../utils/processTemplateStages';
 import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
 import { buildProcessGuideContext } from '../../utils/processGuideContext';
+import { fetchAssigneeDirectory, type AssigneeDirectory } from '../../utils/referenceData';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
@@ -54,6 +55,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
 
   const [externalTables, setExternalTables] = useState<Record<string, any[]>>({});
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  const [assigneeDirectory, setAssigneeDirectory] = useState<AssigneeDirectory | null>(null);
 
   const externalBlocks = useMemo(
     () => module.blocks?.filter((b: any) => b.type === 'table' && b.externalDataConfig) || [],
@@ -156,6 +158,26 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
     .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
 
+  useEffect(() => {
+    let cancelled = false;
+    if (progressFields.length === 0) {
+      setAssigneeDirectory(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    fetchAssigneeDirectory(supabase)
+      .then((directory) => {
+        if (!cancelled) setAssigneeDirectory(directory);
+      })
+      .catch(() => {
+        if (!cancelled) setAssigneeDirectory(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [progressFields.length]);
+
   return (
     <div className="tables-section space-y-6 md:space-y-8">
 
@@ -178,6 +200,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 fieldKey,
                 stages: Array.isArray(stageDraftValue) ? stageDraftValue : [],
                 tasks: processGuideTasks,
+                assigneeDirectory,
               })
             : null;
           const availableProcesses = Array.isArray(processGuideContext?.available_processes)
@@ -246,7 +269,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>
                 {field.labels.fa}
               </h3>
-              {isProcessStagesField && availableProcesses.length > 0 ? (
+              {isProcessStagesField ? (
                 <Tooltip title="راهنمای هوشمند فرآیند">
                   <Button
                     type="text"

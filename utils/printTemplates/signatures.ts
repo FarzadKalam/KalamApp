@@ -1,4 +1,5 @@
 import { FieldType } from '../../types';
+import { resolveManagerTitle } from '../companySettings';
 import { resolvePrintAssigneeLabel } from './assigneeDisplay';
 
 export type PrintSignatureScope = 'record' | 'list';
@@ -403,9 +404,10 @@ export const materializePrintSignatureStates = ({
     if (config.automatic && canRenderCeoSignature) {
       switch (config.kind) {
         case 'ceo': {
+          const managerTitle = resolveManagerTitle(companyInfo);
           derivedName = normalizeText(companyInfo?.ceo_name);
-          derivedSubtitle = buildSignatureRoleLine('مدیرعامل');
-          sourceDescription = 'مدیرعامل سازمان';
+          derivedSubtitle = buildSignatureRoleLine(managerTitle);
+          sourceDescription = `${managerTitle} سازمان`;
           break;
         }
         case 'current_user': {
@@ -557,11 +559,13 @@ export const buildPrintSignatureBandHtml = (rows: PrintSignatureDerivedState[]) 
 
 export const getPrintSignatureQuickAddOptions = ({
   canUseCeoSignature,
+  companyInfo = null,
 }: {
   canUseCeoSignature: boolean;
+  companyInfo?: any;
 }): PrintSignatureQuickAddOption[] => [
   { key: 'current_user', label: 'امضای من' },
-  { key: 'ceo', label: 'امضای مدیرعامل', disabled: !canUseCeoSignature },
+  { key: 'ceo', label: `امضای ${resolveManagerTitle(companyInfo)}`, disabled: !canUseCeoSignature },
   { key: 'record_assignee', label: 'امضای مسئول' },
   { key: 'selected_signer', label: 'امضای انتخابی' },
   { key: 'manual', label: 'امضای دستی' },

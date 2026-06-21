@@ -22,6 +22,7 @@ import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
 import TaskActionButtons from './tasks/TaskActionButtons';
+import RecordLockControl from './recordLocks/RecordLockControl';
 import ProfileAvatar from './common/ProfileAvatar';
 import type { StageHandoverConfirm, StageHandoverGroup, StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import type {
@@ -93,6 +94,7 @@ import {
 import WorkflowIntervalScheduleFields, {
   type WorkflowIntervalFieldNames,
 } from './workflows/WorkflowIntervalScheduleFields';
+import { fetchRecordLockState, getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from '../utils/recordLockRuntime';
 import HelpHint from './HelpHint';
 import {
   buildProcessLinkMapFromRecord,
@@ -101,6 +103,7 @@ import {
   extractProcessLinkMapFromStages,
   getProcessTargetModuleFields,
   mergeProcessLinkMaps,
+  normalizeProcessActivatorTriggerModuleIds,
   normalizeProcessTargetModuleIds,
   parseProcessLinkMap,
   syncProcessTemplateTargetModules,
@@ -148,7 +151,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import { getRecordTitle } from '../utils/recordTitle';
-import { fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
+import { canUseRecordLockPermission, fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
 import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { assignProcessTemplateModuleAliases, resolveProcessTemplateTokenValue } from '../utils/processTemplateContext';
@@ -240,6 +243,7 @@ interface ProductionStagesFieldProps {
 
 const PROCESS_STAGE_TIP_WIDTH = 18;
 const PROCESS_STAGE_NOTCH_WIDTH = 14;
+const CARD_COMPACT_PROCESS_STAGE_MIN_WIDTH = 104;
 
 const DraftProcessStageOutline: React.FC<{ hasRightNotch: boolean }> = ({ hasRightNotch }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -954,8 +958,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const isBom = moduleId === 'production_boms';
   const isProcessTemplateModule = moduleId === 'process_templates';
   const isDraftOnlyModule = isBom || isProcessTemplateModule;
-  const [currentUser, setCurrentUser] = useState<{ id: string | null; roleId: string | null; fullName: string }>({ id: null, roleId: null, fullName: 'کاربر' });
+  const [currentUser, setCurrentUser] = useState<{ id: string | null; roleId: string | null; fullName: string; softwareRole?: string | null }>({ id: null, roleId: null, fullName: 'کاربر', softwareRole: null });
   const [rolePermissions, setRolePermissions] = useState<PermissionMap | null>(null);
+  const [taskLockPatches, setTaskLockPatches] = useState<Record<string, Record<string, any>>>({});
   const [relatedRecordTitleMap, setRelatedRecordTitleMap] = useState<Record<string, string>>({});
   const [processTemplateNameMap, setProcessTemplateNameMap] = useState<Record<string, string>>({});
   const [handoverTask, setHandoverTask] = useState<any | null>(null);
@@ -1043,12 +1048,30 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const activeTaskQuickModalTask = useMemo(() => {
     if (!openTaskPopoverId) return null;
     const fromTasks = tasks.find((task: any) => String(task?.id || '') === String(openTaskPopoverId));
-    if (fromTasks) return fromTasks;
+    const patch = taskLockPatches[String(openTaskPopoverId)] || {};
+    if (fromTasks) return { ...fromTasks, ...patch };
     if (autoOpenTask && String(autoOpenTask?.id || '') === String(openTaskPopoverId)) {
-      return autoOpenTask;
+      return { ...autoOpenTask, ...patch };
     }
     return null;
-  }, [openTaskPopoverId, tasks, autoOpenTask]);
+  }, [openTaskPopoverId, tasks, autoOpenTask, taskLockPatches]);
+  useEffect(() => {
+    const taskId = String(openTaskPopoverId || '').trim();
+    if (!taskId) return;
+    let cancelled = false;
+    fetchRecordLockState('tasks', taskId)
+      .then((nextLockState) => {
+        if (cancelled) return;
+        setTaskLockPatches((prev) => ({
+          ...prev,
+          [taskId]: mergeRecordLockIntoRecord(prev[taskId] || {}, nextLockState),
+        }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [openTaskPopoverId]);
   const resetHandoverState = useCallback(() => {
     handoverFormsHistoryRef.current = null;
     handoverEditorHistoryRef.current = null;
@@ -2658,6 +2681,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         id: String(userId),
         roleId: profile?.role_id ? String(profile.role_id) : (roleContext?.roleId ? String(roleContext.roleId) : null),
         fullName: String(profile?.full_name || snapshot?.user?.user_metadata?.full_name || 'کاربر'),
+        softwareRole: roleContext?.softwareRole ? String(roleContext.softwareRole) : (profile?.role ? String(profile.role) : null),
       });
     } catch (err) {
       if (String((err as any)?.name || '') === 'AbortError') return;
@@ -2904,6 +2928,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const rawRows = (Array.isArray(rows) ? rows : []).map((row: any) => withProcessTaskCustomFieldValues(row));
     const needsNameResolution = rawRows.some((row: any) => String(row?.name || '').includes('{{'));
     if (!needsNameResolution) return rawRows;
+
+    if (readOnly && (compact || cardCompact) && !autoOpenTaskId) {
+      return rawRows.map((row: any) => {
+        const rawName = String(row?.name || '').trim();
+        if (!rawName.includes('{{')) return row;
+        const compactName = rawName
+          .replace(/\{\{[^}]+\}\}/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return compactName ? { ...row, name: compactName, title: compactName } : row;
+      });
+    }
 
     const firstProcessLinks = rawRows
       .map((row: any) => row?.recurrence_info?.process_links)
@@ -5232,7 +5268,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }, Math.max(0, stageCount - 1) * 2 + 8);
 
     if (estimatedRequiredWidth <= resolvedWidth) return 'full';
-    if (stageCount >= 9 || (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.summary && stageCount >= 4)) {
+    if (!cardCompact && (stageCount >= 9 || (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.summary && stageCount >= 4))) {
       return 'summary';
     }
     if (resolvedWidth <= PROCESS_BAR_BREAKPOINTS.dense || stageCount >= 5) {
@@ -5772,6 +5808,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       || ''
     ).trim();
     const relatedRows = getRelatedTaskRecordRows(task);
+    const taskLockState = getRecordLockStateFromRecord(task);
+    const isTaskLocked = taskLockState.isLocked;
+    const canLockTaskRecord = canUseRecordLockPermission(rolePermissions, 'tasks', 'lock', currentUser.softwareRole);
+    const canUnlockTaskRecord = canUseRecordLockPermission(rolePermissions, 'tasks', 'unlock', currentUser.softwareRole);
+    const handleTaskLockChanged = (nextLockState: RecordLockState) => {
+      setTaskLockPatches((prev) => ({
+        ...prev,
+        [String(task?.id || '')]: mergeRecordLockIntoRecord(prev[String(task?.id || '')] || {}, nextLockState),
+      }));
+    };
 
 
     return (
@@ -5784,7 +5830,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           padding: '0.75rem',
         }}
       >
-        <div className="mb-3 flex items-start justify-between border-b border-[rgba(var(--brand-200-rgb),0.45)] pb-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
+        <div className="mb-3 flex items-start justify-between gap-3 border-b border-[rgba(var(--brand-200-rgb),0.45)] pb-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
           <div className="space-y-2">
             <h4 className="m-0 text-sm font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100 line-clamp-2">{task.title || task.name}</h4>
             {(taskStatusLabel || taskTypeValue) ? (
@@ -5794,6 +5840,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </div>
             ) : null}
           </div>
+          <div className="shrink-0" onClick={(event) => event.stopPropagation()}>
+            <RecordLockControl
+              moduleId="tasks"
+              recordId={String(task?.id || '')}
+              lockState={taskLockState}
+              canLock={canLockTaskRecord}
+              canUnlock={canUnlockTaskRecord}
+              showUnlocked={canLockTaskRecord}
+              showLockedLabel
+              onChanged={handleTaskLockChanged}
+            />
+          </div>
         </div>
 
         <div className="mb-3">
@@ -5801,12 +5859,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             moduleId="tasks"
             recordId={String(task?.id || '')}
             imageUrl={task?.image_url || null}
-            canEdit={canManageTaskFiles}
+            canEdit={canManageTaskFiles && !isTaskLocked}
             canViewFilesManager={filesAccess.canViewRecordFilesManager}
-            canEditFilesManager={canManageTaskFiles}
-            canDeleteFilesManager={canDeleteTaskFiles}
-            onImageUpdate={(file) => handleTaskImageUpload(task, file)}
-            onMainImageChange={(url) => { void handleTaskMainImageChange(task, url); }}
+            canEditFilesManager={canManageTaskFiles && !isTaskLocked}
+            canUploadFilesManager={canManageTaskFiles}
+            canDeleteFilesManager={canDeleteTaskFiles && !isTaskLocked}
+            onImageUpdate={isTaskLocked ? undefined : (file) => handleTaskImageUpload(task, file)}
+            onMainImageChange={isTaskLocked ? undefined : (url) => { void handleTaskMainImageChange(task, url); }}
           />
           {canEditTaskStatus ? (
             <div className="mt-2 flex justify-center">
@@ -5818,6 +5877,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 }}
                 onTaskUpdated={handleHandoverTaskUpdated}
                 size="middle"
+                disabled={isTaskLocked}
                 showReview
                 modalZIndex={15120}
               />
@@ -5835,7 +5895,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   value={currentAssigneeCombo}
                   onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
                   className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
-                  disabled={!canEditTaskAssignee}
+                  disabled={!canEditTaskAssignee || isTaskLocked}
                   allowClear
                   showSearch
                   optionFilterProp="label"
@@ -5880,7 +5940,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   value={task.status}
                   onChange={(val) => { void handleStatusChange(task.id, val); }}
                   className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
-                  disabled={!canEditTaskStatus}
+                  disabled={!canEditTaskStatus || isTaskLocked}
                   getPopupContainer={resolveSelectPopupContainer}
                   styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 180, zIndex: 12050, maxWidth: 'calc(100vw - 1rem)' }) } }}
                   options={taskStatusOptions.map((option) => ({
@@ -8233,6 +8293,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       manualEnabled: true,
       sortOrder: (draftGraphSnapshot.graph.triggers.length + 1) * 10,
     };
+    const initialWorkflowTriggerModuleIds = normalizeProcessActivatorTriggerModuleIds(
+      nextTrigger.workflowTriggerModuleIds,
+      automationScopeModuleIds,
+    );
     setProcessTriggerEditor({ trigger: nextTrigger, sourceStage });
     processTriggerForm.setFieldsValue({
       name: nextTrigger.name,
@@ -8254,7 +8318,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       workflow_interval_days_after_holiday: null,
       workflow_batch_size: null,
       workflow_is_active: true,
-      workflow_trigger_module_ids: automationScopeModuleIds,
+      workflow_trigger_module_ids: initialWorkflowTriggerModuleIds,
     });
     setProcessActivatorWorkflowRecord(null);
     setProcessActivatorConditionsAll([]);
@@ -8285,6 +8349,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (cancelled) return;
         const workflow = (data || null) as WorkflowRecord | null;
         setProcessActivatorWorkflowRecord(workflow);
+        const workflowModuleIds = normalizeProcessActivatorTriggerModuleIds(
+          workflow?.module_ids,
+          automationScopeModuleIds,
+        );
+        const workflowPrimaryModuleIds = normalizeProcessActivatorTriggerModuleIds(
+          workflow?.module_id ? [workflow.module_id] : [],
+          automationScopeModuleIds,
+        );
+        const triggerModuleIds = normalizeProcessActivatorTriggerModuleIds(
+          processTriggerEditor.trigger.workflowTriggerModuleIds,
+          automationScopeModuleIds,
+        );
         processTriggerForm.setFieldsValue({
           workflow_description: workflow?.description || '',
           workflow_trigger_type: workflow?.trigger_type || 'on_upsert',
@@ -8301,10 +8377,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           workflow_interval_days_after_holiday: workflow?.interval_days_after_holiday ?? null,
           workflow_batch_size: workflow?.batch_size || null,
           workflow_is_active: workflow?.is_active !== false,
-          workflow_trigger_module_ids: normalizeProcessTargetModuleIds(
-            workflow?.module_ids,
-            workflow?.module_id
-          ),
+          workflow_trigger_module_ids: workflowModuleIds.length > 0
+            ? workflowModuleIds
+            : (workflowPrimaryModuleIds.length > 0 ? workflowPrimaryModuleIds : triggerModuleIds),
         });
         setProcessActivatorConditionsAll(
           (Array.isArray(workflow?.conditions_all) ? workflow.conditions_all : []).filter(
@@ -8330,14 +8405,27 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const handleSaveProcessTrigger = useCallback(async () => {
     if (!processTriggerEditor) return null;
     const values = await processTriggerForm.validateFields();
+    const isProcessStartTrigger = String(values?.source_node_key || '').trim() === '__process_start__';
+    const workflowTriggerType = String(values?.workflow_trigger_type || 'on_upsert');
+    const requiresTriggerModuleSelection = isProcessStartTrigger && workflowTriggerType !== 'interval';
+    const selectedWorkflowTriggerModuleIds = isProcessStartTrigger
+      ? (requiresTriggerModuleSelection ? normalizeProcessActivatorTriggerModuleIds(
+          values?.workflow_trigger_module_ids,
+          automationScopeModuleIds,
+        ) : [])
+      : [];
+    if (requiresTriggerModuleSelection && selectedWorkflowTriggerModuleIds.length === 0) {
+      throw new Error('حداقل یک ماژول محرک را انتخاب کنید.');
+    }
     const triggerBase: ProcessTriggerDefinition = {
       ...processTriggerEditor.trigger,
       name: String(values?.name || '').trim() || 'فعال‌کننده فرآیند',
-      sourceNodeKey: String(values?.source_node_key || '').trim() === '__process_start__'
+      sourceNodeKey: isProcessStartTrigger
         ? null
         : String(values?.source_node_key || '').trim() || null,
       manualEnabled: values?.manual_enabled !== false,
       targetLaneKeys: Array.isArray(values?.target_lane_keys) ? values.target_lane_keys : [],
+      workflowTriggerModuleIds: selectedWorkflowTriggerModuleIds,
     };
     if (isProcessGraphConnectionCyclic(
       draftGraphSnapshot.graph,
@@ -8352,16 +8440,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (recordId) {
       const { data: authData } = await supabase.auth.getUser();
       const userId = authData?.user?.id || null;
-      const workflowTriggerType = String(values?.workflow_trigger_type || 'on_upsert');
       const isInterval = workflowTriggerType === 'interval';
       const selectedTriggerModuleIds = triggerBase.sourceNodeKey
         ? ['tasks']
         : (isInterval
             ? automationScopeModuleIds
-            : (() => {
-                const selectedModuleIds = normalizeProcessTargetModuleIds(values?.workflow_trigger_module_ids);
-                return selectedModuleIds.length > 0 ? selectedModuleIds : automationScopeModuleIds;
-              })());
+            : selectedWorkflowTriggerModuleIds);
       const lockedConditions = triggerBase.sourceNodeKey
         ? [{
             id: PROCESS_ACTIVATOR_SOURCE_NODE_CONDITION_ID,
@@ -8452,8 +8536,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     await persistProcessGraph(nextGraph);
     if (savedWorkflowId) {
       setProcessActivatorWorkflowRecord((current) => current
-        ? { ...current, id: savedWorkflowId!, name: trigger.name }
-        : ({ id: savedWorkflowId, name: trigger.name } as WorkflowRecord));
+        ? {
+            ...current,
+            id: savedWorkflowId!,
+            name: trigger.name,
+            module_id: (trigger.workflowTriggerModuleIds || [])[0] || current.module_id,
+            module_ids: trigger.workflowTriggerModuleIds || current.module_ids,
+          }
+        : ({
+            id: savedWorkflowId,
+            name: trigger.name,
+            module_id: (trigger.workflowTriggerModuleIds || [])[0] || null,
+            module_ids: trigger.workflowTriggerModuleIds || [],
+          } as WorkflowRecord));
     }
     setProcessTriggerEditor({ ...processTriggerEditor, trigger });
     message.success('فعال‌کننده فرآیند ذخیره شد');
@@ -9400,6 +9495,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             : naturalDisplayMode;
           const useVerticalMainLayout = false;
           const forceCompactProcessBar = isMobileProcessViewport || displayMode === 'dense' || isBarExpanded;
+          const compactProcessStageMinWidth = cardCompact
+            ? CARD_COMPACT_PROCESS_STAGE_MIN_WIDTH
+            : 76;
           const shouldCompactSegments = !isBarExpanded && displayMode !== 'summary' && cardCompact && segments.length > 5;
           const displaySegments = shouldCompactSegments ? segments.slice(0, 5) : segments;
           const hiddenCount = shouldCompactSegments ? Math.max(0, segments.length - displaySegments.length) : 0;
@@ -9458,7 +9556,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   ...getProcessStageShapeStyle(index),
                   zIndex: Math.max(1, 1000 - index),
                   backgroundColor: segmentColor,
-                  minWidth: forceCompactProcessBar ? 76 : undefined,
+                  minWidth: forceCompactProcessBar ? compactProcessStageMinWidth : undefined,
                   width: isBarExpanded ? getExpandedProcessSegmentWidth(segmentLabel) : undefined,
                   minHeight: forceCompactProcessBar ? 44 : undefined,
                   boxShadow: isAssignedToCurrent
@@ -9613,7 +9711,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       ? `w-full ${index !== 0 ? 'mt-1.5' : ''}`
                       : `min-w-0 ${isBarExpanded ? 'flex-none' : 'flex-1 basis-0'} ${index !== 0 ? (compact || cardCompact ? 'mr-px' : 'mr-0.5') : ''}`}`
                 }
-                style={{ zIndex: Math.max(1, 1000 - index) }}
+                style={{
+                  zIndex: Math.max(1, 1000 - index),
+                  minWidth: !summary && forceCompactProcessBar ? compactProcessStageMinWidth : undefined,
+                  width: !summary && isBarExpanded ? getExpandedProcessSegmentWidth(segment.label) : undefined,
+                }}
               >
                 <button
                   type="button"
@@ -9624,8 +9726,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   }
                   style={{
                     ...getProcessStageShapeStyle(index, { summary }),
-                    minWidth: !summary && forceCompactProcessBar ? 76 : undefined,
-                    width: !summary && isBarExpanded ? getExpandedProcessSegmentWidth(segment.label) : undefined,
+                    minWidth: !summary && forceCompactProcessBar ? compactProcessStageMinWidth : undefined,
                     minHeight: !summary && forceCompactProcessBar ? 44 : undefined,
                   }}
                 >
@@ -9698,7 +9799,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     className={`${useVerticalMainLayout ? 'relative flex w-full items-stretch' : `relative flex min-w-0 ${isBarExpanded ? 'flex-none' : 'flex-1 basis-0'} items-stretch`} ${isOver ? 'brightness-95' : ''}`}
                     style={{
                       ...dragStyle,
-                      minWidth: forceCompactProcessBar ? 76 : undefined,
+                      minWidth: forceCompactProcessBar ? compactProcessStageMinWidth : undefined,
                       width: isBarExpanded ? getExpandedProcessSegmentWidth(segment?.title || segment?.name || segment?.label) : undefined,
                     }}
                   >

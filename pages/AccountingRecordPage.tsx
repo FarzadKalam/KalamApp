@@ -34,7 +34,7 @@ import AdaptiveSelectField from '../components/AdaptiveSelectField';
 import RecordImageBox from '../components/RecordImageBox';
 import TagInput from '../components/TagInput';
 import { supabase } from '../supabaseClient';
-import { fetchCurrentUserRolePermissions } from '../utils/permissions';
+import { canUseRecordLockPermission, fetchCurrentUserRoleContext, type PermissionMap } from '../utils/permissions';
 import { isAccountingMinimalModule } from '../utils/accountingModules';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import {
@@ -51,6 +51,13 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 import { resolveSelectPopupContainer } from '../utils/popupContainer';
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from '../utils/cashBankLegacyAccountKeys';
+import RecordLockControl from '../components/recordLocks/RecordLockControl';
+import {
+  fetchRecordLockState,
+  getRecordLockStateFromRecord,
+  mergeRecordLockIntoRecord,
+  type RecordLockState,
+} from '../utils/recordLockRuntime';
 
 const sortByOrder = (a: ModuleField, b: ModuleField) => (a.order || 0) - (b.order || 0);
 type FieldOption = { value: string; label: string; color?: string; module?: string };
@@ -134,6 +141,8 @@ const AccountingRecordPage: React.FC = () => {
   const [canView, setCanView] = useState(true);
   const [canEdit, setCanEdit] = useState(true);
   const [canDelete, setCanDelete] = useState(true);
+  const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
+  const [currentSoftwareRole, setCurrentSoftwareRole] = useState<string | null>(null);
   const [fieldPerms, setFieldPerms] = useState<Record<string, boolean>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, FieldOption[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, FieldOption[]>>({});
@@ -151,6 +160,16 @@ const AccountingRecordPage: React.FC = () => {
       }
     >
   >({});
+  const recordLockState = useMemo(() => getRecordLockStateFromRecord(record || formData), [formData, record]);
+  const isRecordLocked = recordLockState.isLocked;
+  const canLockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'lock', currentSoftwareRole);
+  const canUnlockCurrentRecord = canUseRecordLockPermission(currentPermissionMap, moduleId, 'unlock', currentSoftwareRole);
+  const effectiveCanEdit = canEdit && !isRecordLocked;
+  const effectiveCanDelete = canDelete && !isRecordLocked;
+  const handleRecordLockChanged = useCallback((nextLockState: RecordLockState) => {
+    setRecord((prev) => prev ? mergeRecordLockIntoRecord(prev, nextLockState) : prev);
+    setFormData((prev) => mergeRecordLockIntoRecord(prev || {}, nextLockState));
+  }, []);
 
   const visibleFields = useMemo(() => {
     if (!moduleConfig) return [] as ModuleField[];
@@ -503,7 +522,10 @@ const AccountingRecordPage: React.FC = () => {
 
     setLoading(true);
     try {
-      const permissions = await fetchCurrentUserRolePermissions(supabase);
+      const context = await fetchCurrentUserRoleContext(supabase);
+      const permissions = context.permissions || {};
+      setCurrentPermissionMap(permissions);
+      setCurrentSoftwareRole(context.softwareRole || null);
       const modulePerms = permissions?.[moduleId] || {};
       setCanView(modulePerms.view !== false);
       setCanEdit(modulePerms.edit !== false);
@@ -596,9 +618,11 @@ const AccountingRecordPage: React.FC = () => {
         : moduleId === 'cash_bank_operations'
           ? normalizeModuleFormValues(moduleId, row)
           : row;
-      setRecord(normalizedRow);
-      setFormData(normalizedRow);
-      form.setFieldsValue(normalizedRow);
+      const lockState = await fetchRecordLockState(moduleId, id);
+      const lockedRow = mergeRecordLockIntoRecord(normalizedRow, lockState);
+      setRecord(lockedRow);
+      setFormData(lockedRow);
+      form.setFieldsValue(lockedRow);
 
       const userIds = Array.from(
         new Set(
@@ -879,6 +903,11 @@ const AccountingRecordPage: React.FC = () => {
 
   const handleSave = async () => {
     if (!moduleId || !moduleConfig) return;
+    if (!effectiveCanEdit) {
+      if (isRecordLocked) message.error('این رکورد قفل شده و قابل تغییر نیست.');
+      else message.error('دسترسی ویرایش ندارید');
+      return;
+    }
     if (!canEdit) {
       message.error('دسترسی ویرایش ندارید');
       return;
@@ -981,6 +1010,11 @@ const AccountingRecordPage: React.FC = () => {
 
   const handleDelete = async () => {
     if (!moduleId || !moduleConfig || !id) return;
+    if (!effectiveCanDelete) {
+      if (isRecordLocked) message.error('این رکورد قفل شده و قابل حذف نیست.');
+      else message.error('دسترسی حذف ندارید');
+      return;
+    }
     if (!canDelete) {
       message.error('دسترسی حذف ندارید');
       return;
@@ -1003,7 +1037,7 @@ const AccountingRecordPage: React.FC = () => {
   };
 
   const renderEditControl = (field: ModuleField) => {
-    const disabled = !canEdit || field.readonly === true || field.nature === FieldNature.SYSTEM;
+    const disabled = !effectiveCanEdit || field.readonly === true || field.nature === FieldNature.SYSTEM;
     const options = getFieldOptions(field) as Array<{ value: string; label: string }>;
 
     switch (field.type) {
@@ -1204,19 +1238,32 @@ const AccountingRecordPage: React.FC = () => {
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="flex items-center gap-2">
             <Button icon={<ArrowRightOutlined />} type="text" onClick={() => navigate(`/${moduleId}`)} />
+            {!isCreate && id ? (
+              <RecordLockControl
+                moduleId={String(moduleId || '')}
+                recordId={id}
+                lockState={recordLockState}
+                canLock={canLockCurrentRecord}
+                canUnlock={canUnlockCurrentRecord}
+                showUnlocked
+                showLockedLabel
+                size="middle"
+                onChanged={handleRecordLockChanged}
+              />
+            ) : null}
             <h1 className="text-xl md:text-2xl font-black m-0 text-gray-800 dark:text-white">
               {recordTitle}
             </h1>
           </div>
 
           <div className="flex items-center gap-2">
-            {!isCreate && !isEditMode && canEdit && id && (
+            {!isCreate && !isEditMode && effectiveCanEdit && id && (
               <Button icon={<EditOutlined />} onClick={() => navigate(`/${moduleId}/${id}/edit`)}>
                 ویرایش
               </Button>
             )}
 
-            {isEditMode && canEdit && (
+            {isEditMode && effectiveCanEdit && (
               <Button
                 type="primary"
                 icon={isCreate ? <PlusOutlined /> : <SaveOutlined />}
@@ -1228,7 +1275,7 @@ const AccountingRecordPage: React.FC = () => {
               </Button>
             )}
 
-            {!isCreate && canDelete && (
+            {!isCreate && effectiveCanDelete && (
               <Popconfirm
                 title="حذف رکورد"
                 description="از حذف این رکورد مطمئن هستید؟"
@@ -1296,11 +1343,12 @@ const AccountingRecordPage: React.FC = () => {
                 moduleId={String(moduleId || '')}
                 recordId={id || null}
                 imageUrl={imageField ? (currentRecordValues?.[imageField.key] || null) : null}
-                canEdit={!!canEdit && !!id}
+                canEdit={!!effectiveCanEdit && !!id}
                 canViewFilesManager={!!id}
-                canEditFilesManager={!!canEdit && !!id}
-                canDeleteFilesManager={!!canEdit && !!id}
-                onMainImageChange={handleHeaderImageChange}
+                canEditFilesManager={!!effectiveCanEdit && !!id}
+                canUploadFilesManager={!!canEdit && !!id}
+                canDeleteFilesManager={!!effectiveCanEdit && !!id}
+                onMainImageChange={effectiveCanEdit ? handleHeaderImageChange : undefined}
                 filesButtonLabel="فایل ها"
               />
               {!isCreate && (
@@ -1310,7 +1358,7 @@ const AccountingRecordPage: React.FC = () => {
                     moduleId={String(moduleId || '')}
                     initialTags={currentTags}
                     onChange={(tags) => setCurrentTags(tags || [])}
-                    disabled={!canEdit}
+                    disabled={!effectiveCanEdit}
                   />
                 </div>
               )}

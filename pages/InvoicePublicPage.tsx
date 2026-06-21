@@ -28,6 +28,7 @@ import {
   SendOutlined,
   ShareAltOutlined,
   ShopOutlined,
+  CreditCardOutlined,
   UploadOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -184,6 +185,17 @@ type InvoiceData = {
   online_config: OnlineConfig;
 };
 
+type PublicInvoicePaymentState = {
+  available?: boolean;
+  reason?: string;
+  provider?: string;
+  gateway_scope?: 'system' | 'org';
+  amount?: number;
+  currency?: 'IRR' | 'IRT';
+  payment_domain?: string;
+  callback_path?: string;
+};
+
 type OnlineConfig = {
   enabled?: boolean;
   showItemsTable?: boolean;
@@ -288,6 +300,8 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
   const [pendingAttachments, setPendingAttachments] = useState<UploadingReceipt[]>([]);
   const [receiptUploading, setReceiptUploading] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
+  const [paymentState, setPaymentState] = useState<PublicInvoicePaymentState | null>(null);
+  const [paymentStarting, setPaymentStarting] = useState(false);
 
   // ── load invoice ──────────────────────────────────────────────────────────
 
@@ -320,6 +334,23 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
         const invData = result as InvoiceData;
         setData(invData);
         setNotes(invData.notes || []);
+        setPaymentState(null);
+        if (moduleId === 'invoices') {
+          void Promise.resolve(
+            anonClient.rpc('get_public_invoice_payment_state', {
+              p_system_code: code,
+              p_module: moduleId,
+            })
+          )
+            .then(({ data: paymentResult }: any) => {
+              if (!cancelled && paymentResult && typeof paymentResult === 'object') {
+                setPaymentState(paymentResult as PublicInvoicePaymentState);
+              }
+            })
+            .catch(() => {
+              if (!cancelled) setPaymentState(null);
+            });
+        }
 
         const bs = invData.branding?.branding_settings as Record<string, any> | undefined;
         const cs = invData.branding?.company_settings as Record<string, any> | undefined;
@@ -851,6 +882,33 @@ ${invoice.description ? `
   const canConfirm = ['created', 'proforma'].includes(invoiceStatus);
   const confirmedAt = isSales ? invoice.customer_confirmed_at : invoice.supplier_confirmed_at;
   const confirmerName = isSales ? invoice.customer_confirmer_name : invoice.supplier_confirmer_name;
+  const payableAmount = Math.max(0, Number(paymentState?.amount ?? invoice.remaining_balance ?? 0) || 0);
+  const onlinePaymentAvailable = isSales && paymentState?.available === true && payableAmount > 0;
+
+  const handleStartOnlinePayment = async () => {
+    if (!code || !onlinePaymentAvailable) return;
+    setPaymentStarting(true);
+    try {
+      const { data: paymentResult, error: paymentError } = await anonClient.functions.invoke('payment-gateway', {
+        body: {
+          action: 'create_invoice_payment',
+          system_code: code,
+          module: moduleId,
+          return_origin: window.location.origin,
+        },
+      });
+      if (paymentError || paymentResult?.success === false) {
+        throw new Error(String(paymentResult?.message || 'شروع پرداخت آنلاین ناموفق بود.'));
+      }
+      const paymentUrl = String(paymentResult?.payment_url || paymentResult?.start_url || '').trim();
+      if (!paymentUrl) throw new Error('آدرس پرداخت از درگاه دریافت نشد.');
+      window.location.assign(paymentUrl);
+    } catch (err: any) {
+      antMessage.error(err?.message || 'شروع پرداخت آنلاین ناموفق بود.');
+    } finally {
+      setPaymentStarting(false);
+    }
+  };
 
   // ── shared style helpers ──────────────────────────────────────────────────
 
@@ -939,6 +997,7 @@ ${invoice.description ? `
         minHeight: '100vh',
         background: token.colorBgLayout,
         fontFamily: 'Vazirmatn, sans-serif',
+        paddingBottom: onlinePaymentAvailable ? 92 : 0,
       }}
     >
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -1811,6 +1870,50 @@ ${invoice.description ? `
         </Modal>
 
       </div>
+      {onlinePaymentAvailable ? (
+        <div
+          style={{
+            position: 'fixed',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 1000,
+            background: token.colorBgContainer,
+            borderTop: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: '0 -12px 32px rgba(15,23,42,0.14)',
+            padding: '10px 14px calc(10px + env(safe-area-inset-bottom, 0px))',
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 760,
+              margin: '0 auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 11, color: token.colorTextTertiary }}>مبلغ قابل پرداخت</div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: token.colorText }}>
+                {formatPrice(payableAmount, currencyLabel)}
+              </div>
+            </div>
+            <Button
+              type="primary"
+              size="large"
+              icon={<CreditCardOutlined />}
+              loading={paymentStarting}
+              onClick={handleStartOnlinePayment}
+              style={{ minWidth: 180, fontWeight: 800, background: primaryColor }}
+            >
+              پرداخت سریع
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

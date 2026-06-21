@@ -34,6 +34,7 @@ export type CurrentUserRoleContext = {
   userId: string | null;
   roleId: string | null;
   orgId: string | null;
+  softwareRole?: string | null;
   permissions: PermissionMap | null;
 };
 
@@ -59,6 +60,14 @@ export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_u
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
 export const isSaasAdminModuleId = (moduleId?: string | null) =>
   SAAS_ADMIN_MODULE_ID_SET.has(String(moduleId || '').trim());
+export const RECORD_LOCK_PERMISSION_KEYS = {
+  lock: '__record_lock',
+  unlock: '__record_unlock',
+} as const;
+export const RECORD_LOCK_PERMISSION_FIELDS = [
+  { key: RECORD_LOCK_PERMISSION_KEYS.lock, label: 'قفل کردن رکورد' },
+  { key: RECORD_LOCK_PERMISSION_KEYS.unlock, label: 'باز کردن رکورد' },
+] as const;
 export const SAAS_ADMIN_PERMISSION_FIELDS = [
   { key: 'demo_override', label: 'override حد دمو برای شماره‌ها' },
   { key: 'edit_orgs', label: 'ویرایش سازمان‌ها' },
@@ -87,7 +96,7 @@ export const SETTINGS_TAB_PERMISSIONS = [
 ];
 
 export const PRINT_SIGNATURE_PERMISSION_FIELDS = [
-  { key: 'ceo_signature', label: 'استفاده از امضای مدیرعامل در چاپ' },
+  { key: 'ceo_signature', label: 'استفاده از امضای مدیر سازمان در چاپ' },
 ] as const;
 
 export const DASHBOARD_WIDGET_PERMISSIONS = [
@@ -277,6 +286,10 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
     ensureField(fieldMap, item.key, item.label);
   });
 
+  RECORD_LOCK_PERMISSION_FIELDS.forEach((item) => {
+    ensureField(fieldMap, item.key, item.label);
+  });
+
   return Array.from(fieldMap.entries()).map(([key, label]) => ({ key, label }));
 };
 
@@ -343,12 +356,15 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
 
   Object.values(modules).forEach((module) => {
     if (isSaasAdminModuleId(module.id)) return;
+    const fields = createFieldsMap(collectModulePermissionFields(module));
+    fields[RECORD_LOCK_PERMISSION_KEYS.lock] = false;
+    fields[RECORD_LOCK_PERMISSION_KEYS.unlock] = false;
     defaults[module.id] = {
       view: true,
       edit: true,
       delete: true,
       record_scope: 'all',
-      fields: createFieldsMap(collectModulePermissionFields(module)),
+      fields,
     };
   });
 
@@ -657,6 +673,32 @@ globalPermissionsCache.__kalamPermissionsCacheStore = permissionsCacheStore;
 
 const { currentUserRoleContextCache, currentUserRoleContextPromiseCache } = permissionsCacheStore;
 
+const normalizeRoleToken = (value: unknown) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_\-\u200c]+/g, '');
+
+const RECORD_LOCK_BYPASS_SOFTWARE_ROLE_TOKENS = new Set(['superadmin', 'admin', 'مدیرارشد', 'مدیرسیستم']);
+
+export const hasRecordLockSystemBypass = (softwareRole?: unknown) =>
+  RECORD_LOCK_BYPASS_SOFTWARE_ROLE_TOKENS.has(normalizeRoleToken(softwareRole));
+
+export const canUseRecordLockPermission = (
+  permissions: PermissionMap | null | undefined,
+  moduleId?: string | null,
+  action: 'lock' | 'unlock' = 'lock',
+  softwareRole?: unknown
+) => {
+  if (hasRecordLockSystemBypass(softwareRole)) return true;
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) return false;
+  const modulePerms = permissions?.[normalizedModuleId];
+  if (!modulePerms || modulePerms.view === false) return false;
+  const key = action === 'unlock' ? RECORD_LOCK_PERMISSION_KEYS.unlock : RECORD_LOCK_PERMISSION_KEYS.lock;
+  return modulePerms.fields?.[key] === true;
+};
+
 export const clearCurrentUserRoleContextCache = (userId?: string | null) => {
   clearSessionBootstrapCache();
   if (userId) {
@@ -689,7 +731,13 @@ export const fetchCurrentUserRoleContext = async (
 
     const pending = (async (): Promise<CurrentUserRoleContext> => {
       if (!snapshot.roleId) {
-        const result = { userId: user.id, roleId: null, orgId: snapshot.orgId || null, permissions: null };
+        const result = {
+          userId: user.id,
+          roleId: null,
+          orgId: snapshot.orgId || null,
+          softwareRole: snapshot.profile?.role ? String(snapshot.profile.role) : null,
+          permissions: null,
+        };
         currentUserRoleContextCache.set(cacheKey, result);
         return result;
       }
@@ -698,6 +746,7 @@ export const fetchCurrentUserRoleContext = async (
         userId: user.id,
         roleId: snapshot.roleId,
         orgId: snapshot.orgId || null,
+        softwareRole: snapshot.profile?.role ? String(snapshot.profile.role) : null,
         permissions: (snapshot.permissions || null) as PermissionMap | null,
       };
       currentUserRoleContextCache.set(cacheKey, result);

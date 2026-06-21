@@ -6,7 +6,11 @@ import { BRAND_PALETTE_PRESETS, BRANDING_UPDATED_EVENT, DEFAULT_BRANDING } from 
 import { CURRENCY_OPTIONS, DEFAULT_CURRENCY, normalizeCurrencyConfig, persistCurrencyConfig } from '../../utils/currency';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
-import { getResolvedCurrentOrgId, loadScopedCompanySettings } from '../../utils/companySettings';
+import {
+  DEFAULT_MANAGER_TITLE,
+  getResolvedCurrentOrgId,
+  loadScopedCompanySettings,
+} from '../../utils/companySettings';
 import ResilientImage from '../../components/common/ResilientImage';
 import PrintLetterheadDesignerModal from '../../components/settings/PrintLetterheadDesignerModal';
 import {
@@ -28,6 +32,7 @@ const CompanyTab: React.FC = () => {
   const [stampUrl, setStampUrl] = useState<string | null>(null);
   const [printLetterheads, setPrintLetterheads] = useState<PrintLetterheadConfig[]>(normalizePrintLetterheads([]));
   const [editingLetterheadSlotId, setEditingLetterheadSlotId] = useState<PrintLetterheadSlotId | null>(null);
+  const managerTitle = String(Form.useWatch('manager_title', form) || '').trim() || DEFAULT_MANAGER_TITLE;
 
   useEffect(() => {
     fetchData();
@@ -80,6 +85,7 @@ const CompanyTab: React.FC = () => {
       palette_key: DEFAULT_BRANDING.paletteKey,
       qr_scan_enabled: false,
       currency_code: DEFAULT_CURRENCY.code,
+      manager_title: DEFAULT_MANAGER_TITLE,
     });
     setPrintLetterheads(normalizePrintLetterheads([]));
     persistCurrencyConfig(DEFAULT_CURRENCY);
@@ -162,6 +168,7 @@ const CompanyTab: React.FC = () => {
         palette_key,
         currency_code,
         slogan,
+        manager_title,
         ...rest
       } = values;
 
@@ -177,6 +184,7 @@ const CompanyTab: React.FC = () => {
         trade_name: tradeName,
         company_name_en: englishName || null,
         slogan: String(slogan || '').trim() || null,
+        manager_title: String(manager_title || '').trim() || DEFAULT_MANAGER_TITLE,
         brand_palette_key: palette_key || DEFAULT_BRANDING.paletteKey,
         currency_code: currency.code,
         currency_label: currency.label,
@@ -251,7 +259,7 @@ const CompanyTab: React.FC = () => {
             {
               key: 'signature',
               title: 'امضای سازمانی',
-              description: 'نمایش کنار امضای مدیرعامل در چاپ',
+              description: `نمایش کنار امضای ${managerTitle} در چاپ`,
               image: signatureUrl,
               icon: <CloudUploadOutlined className="text-2xl text-gray-300" />,
               onUpload: (file: File) => handleAssetUpload(file, 'signature'),
@@ -259,7 +267,7 @@ const CompanyTab: React.FC = () => {
             {
               key: 'stamp',
               title: 'مهر سازمانی',
-              description: 'نمایش کنار امضای مدیرعامل در چاپ',
+              description: `نمایش کنار امضای ${managerTitle} در چاپ`,
               image: stampUrl,
               icon: <CloudUploadOutlined className="text-2xl text-gray-300" />,
               onUpload: (file: File) => handleAssetUpload(file, 'stamp'),
@@ -356,7 +364,16 @@ const CompanyTab: React.FC = () => {
           <Checkbox className="dark:text-gray-300">اسکن qr فعال باشد</Checkbox>
         </Form.Item>
 
-        <Form.Item label={<span className="dark:text-gray-300">نام مدیرعامل</span>} name="ceo_name">
+        <Form.Item
+          label={<span className="dark:text-gray-300">عنوان مدیر</span>}
+          name="manager_title"
+        >
+          <Input
+            className="dark:bg-white/5 dark:border-gray-700 dark:text-white"
+            placeholder="مثل مدیرعامل، مدیرمسئول و..."
+          />
+        </Form.Item>
+        <Form.Item label={<span className="dark:text-gray-300">نام {managerTitle}</span>} name="ceo_name">
           <Input className="dark:bg-white/5 dark:border-gray-700 dark:text-white" />
         </Form.Item>
         <Form.Item label={<span className="dark:text-gray-300">شناسه ملی / کد اقتصادی</span>} name="national_id">

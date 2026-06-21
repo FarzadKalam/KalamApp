@@ -7,6 +7,7 @@ import { getTaskRelationFieldKey, resolveTaskSourceLink } from '../../utils/task
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { buildRecordReferenceKey } from '../../utils/recordReference';
 import { openTaskProcessModal } from '../../utils/taskProcessModalEvents';
+import { fetchRecordLockMap, mergeRecordLockIntoRecord, type RecordLockState } from '../../utils/recordLockRuntime';
 import TaskSummaryCard from '../tasks/TaskSummaryCard';
 import RenderCardItem from '../moduleList/RenderCardItem';
 
@@ -47,6 +48,8 @@ type TasksPanelProps = {
   handleTaskProducedQtyChange: (taskId: string, value: number | null) => Promise<void>;
   profile: { id: string };
   maxItems: number;
+  canLockTaskRecord?: boolean;
+  canUnlockTaskRecord?: boolean;
 };
 
 const TasksPanel: React.FC<TasksPanelProps> = ({
@@ -76,13 +79,47 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
   handleTaskProducedQtyChange,
   profile,
   maxItems,
+  canLockTaskRecord = false,
+  canUnlockTaskRecord = false,
 }) => {
+  const [taskLockMap, setTaskLockMap] = React.useState<Map<string, RecordLockState>>(() => new Map());
   const tasksConfig = MODULES['tasks'];
   const statusOptions = tasksConfig?.fields?.find((f: any) => f.key === 'status')?.options || [];
   const priorityOptions = tasksConfig?.fields?.find((f: any) => f.key === 'priority')?.options || [];
 
-  const data = filteredTasks.slice(0, visibleCount);
-  const remainingCount = Math.max(0, filteredTasks.length - data.length);
+  const taskIdsSignature = React.useMemo(
+    () => filteredTasks.map((task: any) => String(task?.id || '').trim()).filter(Boolean).join('|'),
+    [filteredTasks]
+  );
+  React.useEffect(() => {
+    const taskIds = taskIdsSignature.split('|').map((id) => id.trim()).filter(Boolean);
+    if (taskIds.length === 0) {
+      setTaskLockMap(new Map());
+      return;
+    }
+    let cancelled = false;
+    fetchRecordLockMap('tasks', taskIds)
+      .then((nextMap) => {
+        if (!cancelled) setTaskLockMap(nextMap);
+      })
+      .catch(() => {
+        if (!cancelled) setTaskLockMap(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [taskIdsSignature]);
+
+  const lockedFilteredTasks = React.useMemo(
+    () => filteredTasks.map((task: any) => {
+      const lockState = taskLockMap.get(String(task?.id || '').trim());
+      return lockState ? mergeRecordLockIntoRecord(task, lockState) : task;
+    }),
+    [filteredTasks, taskLockMap]
+  );
+
+  const data = lockedFilteredTasks.slice(0, visibleCount);
+  const remainingCount = Math.max(0, lockedFilteredTasks.length - data.length);
   const canShowLess = visibleCount > maxItems;
 
   const relationOptionsByField = tasks.reduce<Record<string, Array<{ label: string; value: string }>>>((acc, task: any) => {
@@ -197,6 +234,8 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
                 canViewField={() => true}
                 relationOptions={relationOptionsByField}
                 hideSelection
+                canLockRecord={canLockTaskRecord}
+                canUnlockRecord={canUnlockTaskRecord}
               />
             ))}
           </div>
@@ -263,6 +302,8 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
                     id: profile.id,
                     fullName: createdByNameMap[String(profile.id || '')] || null,
                   }}
+                  canLockRecord={canLockTaskRecord}
+                  canUnlockRecord={canUnlockTaskRecord}
                 />
               );
             }}
@@ -270,7 +311,7 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
         )}
       </div>
 
-      {filteredTasks.length > maxItems ? (
+      {lockedFilteredTasks.length > maxItems ? (
         <div className="flex items-center justify-between gap-2">
           {canShowLess ? (
             <Button type="link" onClick={onShowLess}>

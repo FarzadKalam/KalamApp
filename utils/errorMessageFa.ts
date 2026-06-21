@@ -35,6 +35,22 @@ export const toFaErrorMessage = (error: ErrorLike | string | null | undefined, f
   ) {
     return 'درخواست پیش از دریافت پاسخ متوقف شد. دوباره تلاش کنید.';
   }
+  if (
+    contains(normalized, 'upstream server is timing out')
+    || contains(normalized, 'workerrequestcancelled')
+    || contains(normalized, 'request has been cancelled by supervisor')
+    || contains(normalized, 'gateway timeout')
+  ) {
+    return 'سرویس هوش مصنوعی در زمان مناسب پاسخ نداد. چند لحظه بعد دوباره تلاش کنید یا مدل سریع‌تری انتخاب کنید.';
+  }
+  if (
+    contains(normalized, 'credit has been exhausted')
+    || contains(normalized, "don't have enough credit")
+    || contains(normalized, 'not enough credit')
+    || contains(normalized, 'top up your account')
+  ) {
+    return 'اعتبار حساب Avalai تمام شده یا برای این درخواست کافی نیست. اعتبار پنل Avalai را شارژ کنید و دوباره تلاش کنید.';
+  }
   if (status === 401 || contains(normalized, 'unauthorized') || contains(normalized, 'missing bearer token') || contains(normalized, 'invalid token')) {
     return 'نشست شما معتبر نیست. دوباره وارد حساب کاربری شوید.';
   }

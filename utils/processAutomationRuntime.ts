@@ -1023,6 +1023,7 @@ export const runProcessAutomationsForTaskEvent = async ({
             'send_to_specific_stage',
             'activate_next_process_stage',
             'activate_specific_process_stage',
+            'lock_record',
           ].includes(actionType);
           if ((!sourceContext?.moduleId || !sourceContext?.record) && !canRunWithoutSourceRecord) continue;
 
@@ -1078,10 +1079,16 @@ export const runProcessAutomationsForTaskEvent = async ({
             }
           }
 
+          const processAction = {
+            ...(action as any),
+            config: {
+              ...((action as any)?.config || {}),
+              ...directConfigPatch,
+              source_type: 'process_automation',
+            },
+          };
           await executeWorkflowAction(
-            Object.keys(directConfigPatch).length > 0
-              ? { ...(action as any), config: { ...((action as any)?.config || {}), ...directConfigPatch } }
-              : (action as any),
+            processAction as any,
             sourceContext?.moduleId || 'tasks',
             actionRecord
           );

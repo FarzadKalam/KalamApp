@@ -38,12 +38,13 @@ import { shortenAttachmentsForExternalShare } from './fileShortLinks';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
-import { activateProcessStageAction } from './processStageActivation';
+import { activateInitialProcessRunNodes, activateProcessStageAction } from './processStageActivation';
 import { loadProcessTemplateStages as loadProcessTemplateStagesShared } from './processTemplateStages';
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 import { buildAiRecordCreationSchema } from './aiRecordCreation';
 import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
+import { lockRecord } from './recordLockRuntime';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -718,6 +719,38 @@ const resolveConditionFieldValue = async (
 ): Promise<any> => {
   if (!record) return null;
 
+  const resolveRelatedFieldValue = async (
+    sourceRecord: Record<string, any> | null | undefined,
+    relatedFieldMeta: NonNullable<ReturnType<typeof parseWorkflowRelatedFieldKey>>
+  ) => {
+    if (!sourceRecord) return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
+    const relationId = String(sourceRecord?.[relatedFieldMeta.relationFieldKey] || '').trim();
+    if (!relationId) {
+      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    const relatedRecord = await fetchRelatedRecord(
+      relatedFieldMeta.targetModuleId,
+      relationId,
+      context
+    );
+    if (!relatedRecord) {
+      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
+    }
+
+    if (relatedFieldMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
+      return buildResolvedAssigneeCombo(relatedRecord);
+    }
+
+    if (relatedFieldMeta.targetFieldKey === 'tags') {
+      const relatedRecordId = String(relatedRecord?.id || '').trim();
+      if (!relatedRecordId) return [];
+      return fetchRecordTags(relatedFieldMeta.targetModuleId, relatedRecordId, context);
+    }
+
+    return relatedRecord?.[relatedFieldMeta.targetFieldKey];
+  };
+
   if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
     return buildResolvedAssigneeCombo(record);
   }
@@ -753,6 +786,11 @@ const resolveConditionFieldValue = async (
       return fetchRecordTags(processLinkedMeta.moduleId, linkedRecordId, context);
     }
 
+    const linkedRelatedFieldMeta = parseWorkflowRelatedFieldKey(processLinkedMeta.targetFieldKey);
+    if (linkedRelatedFieldMeta) {
+      return resolveRelatedFieldValue(linkedRecord, linkedRelatedFieldMeta);
+    }
+
     return linkedRecord?.[processLinkedMeta.targetFieldKey];
   }
 
@@ -777,31 +815,7 @@ const resolveConditionFieldValue = async (
 
   const relatedFieldMeta = parseWorkflowRelatedFieldKey(fieldKey);
   if (relatedFieldMeta) {
-    const relationId = String(record?.[relatedFieldMeta.relationFieldKey] || '').trim();
-    if (!relationId) {
-      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
-    }
-
-    const relatedRecord = await fetchRelatedRecord(
-      relatedFieldMeta.targetModuleId,
-      relationId,
-      context
-    );
-    if (!relatedRecord) {
-      return relatedFieldMeta.targetFieldKey === 'tags' ? [] : null;
-    }
-
-    if (relatedFieldMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
-      return buildResolvedAssigneeCombo(relatedRecord);
-    }
-
-    if (relatedFieldMeta.targetFieldKey === 'tags') {
-      const relatedRecordId = String(relatedRecord?.id || '').trim();
-      if (!relatedRecordId) return [];
-      return fetchRecordTags(relatedFieldMeta.targetModuleId, relatedRecordId, context);
-    }
-
-    return relatedRecord?.[relatedFieldMeta.targetFieldKey];
+    return resolveRelatedFieldValue(record, relatedFieldMeta);
   }
 
   const surveyTemplateFieldKey = parseSurveyTemplateFieldKey(fieldKey);
@@ -2073,6 +2087,21 @@ const resolveNextStageTargetTask = async (
   return sorted[currentIndex + offset] || null;
 };
 
+const resolvePreviousStageTargetTask = async (
+  moduleId: string,
+  currentRecord: Record<string, any>
+) => {
+  const taskId = resolveCurrentTaskIdForNextStageAction(moduleId, currentRecord);
+  if (!taskId) return null;
+
+  const rows = await fetchProcessTransferTasks(moduleId, currentRecord);
+  if (rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
+  const currentIndex = sorted.findIndex((row) => String(row?.id || '').trim() === taskId);
+  if (currentIndex <= 0) return null;
+  return sorted[currentIndex - 1] || null;
+};
+
 const resolveSpecificStageTargetTask = async (
   moduleId: string,
   currentRecord: Record<string, any>,
@@ -2256,15 +2285,26 @@ export const executeWorkflowAction = async (
     if (!prompt) return;
     const orgId = await resolveWorkflowOrgId(currentRecord);
     const outputMode = String(config.output_mode || 'text').trim();
-    const targetModuleId = String(config.target_module_id || '').trim();
+    const targetModuleId = outputMode === 'update_record'
+      ? moduleId
+      : String(config.target_module_id || '').trim();
     const allowedFieldKeys = asArray(config.allowed_field_keys).map((item) => String(item || '').trim()).filter(Boolean);
-    const recordCreationSchema = outputMode === 'create_record' && targetModuleId
-      ? (config.record_creation_schema || buildAiRecordCreationSchema(targetModuleId, allowedFieldKeys))
+    if (outputMode === 'update_record' && allowedFieldKeys.length === 0) {
+      throw new Error('برای ویرایش رکورد با هوش مصنوعی، حداقل یک فیلد مجاز انتخاب کنید.');
+    }
+    const configuredRecordSchema = config.record_creation_schema
+      && String(config.record_creation_schema?.moduleId || '').trim() === targetModuleId
+      ? config.record_creation_schema
+      : null;
+    const recordCreationSchema = (outputMode === 'create_record' || outputMode === 'update_record') && targetModuleId
+      ? (configuredRecordSchema || buildAiRecordCreationSchema(targetModuleId, allowedFieldKeys))
       : null;
     const { data, error } = await supabase.functions.invoke('ai-assistant', {
       body: {
         action: outputMode === 'create_record'
           ? 'create_record_from_prompt'
+          : outputMode === 'update_record'
+            ? 'update_record_from_prompt'
           : outputMode === 'process_operation'
             ? 'process_operation_from_prompt'
             : 'workflow_ai_prompt',
@@ -2306,6 +2346,7 @@ export const executeWorkflowAction = async (
         source: 'workflow_runtime',
         model: (data as any)?.model || null,
         created_records: Array.isArray((data as any)?.createdRecords) ? (data as any).createdRecords : [],
+        updated_records: Array.isArray((data as any)?.updatedRecords) ? (data as any).updatedRecords : [],
       },
       executed_at: new Date().toISOString(),
     }]);
@@ -2315,6 +2356,9 @@ export const executeWorkflowAction = async (
       ai_answer: answer,
       ai_created_record_title: Array.isArray((data as any)?.createdRecords) && (data as any).createdRecords[0]?.title
         ? String((data as any).createdRecords[0].title)
+        : '',
+      ai_updated_record_title: Array.isArray((data as any)?.updatedRecords) && (data as any).updatedRecords[0]?.title
+        ? String((data as any).updatedRecords[0].title)
         : '',
     };
     const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
@@ -2798,6 +2842,53 @@ export const executeWorkflowAction = async (
     return;
   }
 
+  if (action.type === 'lock_record') {
+    const targetScope = String(config.target_scope || 'current_record').trim();
+    let targetModuleId = moduleId;
+    let targetRecordId = String(currentRecord?.id || '').trim();
+
+    if (targetScope === 'related_record') {
+      const relationFieldKey = String(config.relation_field_key || '').trim();
+      const processLinkedMeta = parseProcessLinkedFieldKey(relationFieldKey);
+      if (processLinkedMeta) {
+        const processLinks = getProcessLinkMapFromRecord(currentRecord);
+        targetModuleId = processLinkedMeta.moduleId;
+        targetRecordId = String(processLinks?.[processLinkedMeta.moduleId] || currentRecord?.[relationFieldKey] || '').trim();
+      } else {
+        const relationField = (MODULES[moduleId]?.fields || []).find((field: any) => String(field?.key || '').trim() === relationFieldKey) as any;
+        const relationModuleId = String(relationField?.relationConfig?.targetModule || '').trim();
+        const relationRecordId = String(currentRecord?.[relationFieldKey] || '').trim();
+        targetModuleId = relationModuleId;
+        targetRecordId = relationRecordId;
+      }
+    } else if (targetScope === 'process_current_task') {
+      targetModuleId = 'tasks';
+      targetRecordId = resolveCurrentTaskIdForNextStageAction(moduleId, currentRecord);
+    } else if (targetScope === 'process_previous_task') {
+      const targetTask = await resolvePreviousStageTargetTask(moduleId, currentRecord);
+      targetModuleId = 'tasks';
+      targetRecordId = String(targetTask?.id || '').trim();
+    } else if (targetScope === 'process_specific_task') {
+      const targetTask = await resolveSpecificStageTargetTask(
+        moduleId,
+        currentRecord,
+        String(config.stage_node_key || '').trim(),
+      );
+      targetModuleId = 'tasks';
+      targetRecordId = String(targetTask?.id || '').trim();
+    }
+
+    if (!targetModuleId || !targetRecordId) return;
+    await lockRecord({
+      moduleId: targetModuleId,
+      recordId: targetRecordId,
+      reason: String(config.reason || '').trim() || null,
+      sourceType: String(config.source_type || '').trim() === 'process_automation' ? 'process_automation' : 'workflow',
+      sourceId: String(action.id || '').trim() || null,
+    });
+    return;
+  }
+
   if (action.type === 'update_record') {
     const fieldKey = String(config.field || '').trim();
     if (!fieldKey || !currentRecord?.id) return;
@@ -3037,7 +3128,7 @@ export const executeWorkflowAction = async (
       throw new Error('org_id for process execution is missing');
     }
 
-    const { error } = await supabase.rpc('create_process_run_from_template', {
+    const { data: processRunId, error } = await supabase.rpc('create_process_run_from_template', {
       p_org_id: orgId,
       p_template_id: templateId,
       p_module_id: moduleId,
@@ -3046,6 +3137,10 @@ export const executeWorkflowAction = async (
       p_copied_mode: 'auto',
     });
     if (error) throw error;
+    const normalizedProcessRunId = String(processRunId || '').trim();
+    if (normalizedProcessRunId) {
+      await activateInitialProcessRunNodes({ processRunId: normalizedProcessRunId });
+    }
   }
 };
 

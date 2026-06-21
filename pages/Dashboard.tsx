@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Card, Col, Empty, Grid, Input, Row, Spin, Statistic, Table, Tag, message } from 'antd';
 import {
   AppstoreOutlined,
@@ -53,6 +53,8 @@ import ResilientImage from '../components/common/ResilientImage';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
 import AiCapabilityComposerActions, { type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
+import AiComposeModelBar from '../components/ai/AiComposeModelBar';
+import type { AiMediaSettings, AiMediaSourceImage } from '../components/ai/AiMediaSettingsPopover';
 import { notifyStorySms } from '../utils/storyNotification';
 import type { OrgStoryWithMeta, OrgStory } from '../components/stories/storyTypes';
 import { fetchActiveOrgStoriesWithMeta } from '../utils/orgStories';
@@ -986,6 +988,9 @@ const Dashboard: React.FC = () => {
   const [dashboardAiCapabilities, setDashboardAiCapabilities] = useState<AiComposerCapability[]>([]);
   const [dashboardAiCapabilityAvailability, setDashboardAiCapabilityAvailability] = useState<Record<string, any>>({});
   const [dashboardRecordCreationTargetModuleId, setDashboardRecordCreationTargetModuleId] = useState<string | null>(null);
+  const [dashboardMediaSettings, setDashboardMediaSettings] = useState<AiMediaSettings>({});
+  const [dashboardMediaSourceImages, setDashboardMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
+  const dashboardModelOverrideRef = useRef<string | null>(null);
 
   // ─── استوری‌ها ───────────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
@@ -1141,10 +1146,13 @@ const Dashboard: React.FC = () => {
         aiInitialPrompt: question,
         aiInitialCapabilities: dashboardAiCapabilities,
         aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+        aiInitialModelOverride: dashboardModelOverrideRef.current,
+        aiInitialMediaSettings: dashboardMediaSettings,
+        aiInitialMediaSourceImages: dashboardMediaSourceImages,
         forceNewThread: true,
       },
     });
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
     if (dashboardVoiceSending) return;
@@ -1171,6 +1179,9 @@ const Dashboard: React.FC = () => {
           aiInitialInputKind: 'voice',
           aiInitialCapabilities: Array.from(new Set<AiComposerCapability>([...dashboardAiCapabilities, 'voice_input'])),
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+          aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialMediaSettings: dashboardMediaSettings,
+          aiInitialMediaSourceImages: dashboardMediaSourceImages,
           forceNewThread: true,
         },
       });
@@ -1179,7 +1190,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardVoiceSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, navigate]);
+  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, navigate]);
 
   const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
     if (dashboardFileSending) return;
@@ -1206,6 +1217,9 @@ const Dashboard: React.FC = () => {
           },
           aiInitialCapabilities: fileCapabilities,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+          aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialMediaSettings: dashboardMediaSettings,
+          aiInitialMediaSourceImages: dashboardMediaSourceImages,
           forceNewThread: true,
         },
       });
@@ -1213,7 +1227,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardFileSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardRecordCreationTargetModuleId, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, navigate]);
 
   // ─── handler‌های استوری ───────────────────────
   const handleOpenStory = useCallback((story: OrgStoryWithMeta, allStories: OrgStoryWithMeta[]) => {
@@ -1349,37 +1363,53 @@ const Dashboard: React.FC = () => {
                   boxShadow: '0 0 22px rgba(99, 102, 241, 0.28), 0 0 28px rgba(20, 184, 166, 0.18)',
                 }}
               >
-                <div className="flex items-center gap-2 rounded-lg bg-white p-2 dark:bg-dark-surface">
-                  <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
-                  <Input
-                    bordered={false}
-                    value={dashboardAiQuestion}
-                    onChange={(event) => setDashboardAiQuestion(event.target.value)}
-                    onPressEnter={handleSubmitDashboardAiQuestion}
-                    placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
-                  />
-                  <Button
-                    type="primary"
-                    shape="circle"
-                    icon={<SendOutlined />}
-                    disabled={dashboardAiSendDisabled}
-                    onClick={handleSubmitDashboardAiQuestion}
-                    aria-label={dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
-                  />
-                  <AiCapabilityComposerActions
-                    selected={dashboardAiCapabilities}
-                    onChange={handleDashboardCapabilitiesChange}
-                    capabilityAvailability={dashboardAiCapabilityAvailability}
-                    moduleId={null}
-                    recordId={null}
-                    onVoiceSend={handleSubmitDashboardVoice}
-                    onFilePrepared={handleSubmitDashboardFile}
-                    voiceLoading={dashboardVoiceSending}
-                    fileLoading={dashboardFileSending}
-                    recordCreationModuleOptions={dashboardRecordCreationModuleOptions}
-                    recordCreationTargetModuleId={dashboardRecordCreationTargetModuleId}
-                    onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
-                  />
+                <div className="rounded-lg bg-white p-2 dark:bg-dark-surface">
+                  <div className="flex items-center gap-2">
+                    <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
+                    <Input
+                      bordered={false}
+                      value={dashboardAiQuestion}
+                      onChange={(event) => setDashboardAiQuestion(event.target.value)}
+                      onPressEnter={(event) => {
+                        if (event.shiftKey) return;
+                        handleSubmitDashboardAiQuestion();
+                      }}
+                      placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
+                    />
+                    <Button
+                      type="primary"
+                      shape="circle"
+                      icon={<SendOutlined />}
+                      disabled={dashboardAiSendDisabled}
+                      onClick={handleSubmitDashboardAiQuestion}
+                      aria-label={dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
+                    />
+                    <AiCapabilityComposerActions
+                      selected={dashboardAiCapabilities}
+                      onChange={handleDashboardCapabilitiesChange}
+                      capabilityAvailability={dashboardAiCapabilityAvailability}
+                      moduleId={null}
+                      recordId={null}
+                      onVoiceSend={handleSubmitDashboardVoice}
+                      onFilePrepared={handleSubmitDashboardFile}
+                      voiceLoading={dashboardVoiceSending}
+                      fileLoading={dashboardFileSending}
+                      recordCreationModuleOptions={dashboardRecordCreationModuleOptions}
+                      recordCreationTargetModuleId={dashboardRecordCreationTargetModuleId}
+                      onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
+                      mediaSettings={dashboardMediaSettings}
+                      onMediaSettingsChange={setDashboardMediaSettings}
+                      mediaSourceImages={dashboardMediaSourceImages}
+                      onMediaSourceImagesChange={setDashboardMediaSourceImages}
+                    />
+                  </div>
+                  <div className="mt-1 px-7">
+                    <AiComposeModelBar
+                      selectedCapabilities={dashboardAiCapabilities}
+                      contextMode="dashboard"
+                      onModelOverrideChange={(model) => { dashboardModelOverrideRef.current = model; }}
+                    />
+                  </div>
                 </div>
               </div>
             </div>

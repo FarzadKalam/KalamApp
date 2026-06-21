@@ -13,6 +13,7 @@ import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { parseProcessLinkMap } from '../../utils/processTargets';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { fetchProcessWorkItems } from '../../utils/processWorkItems';
 
 const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
@@ -295,6 +296,13 @@ const OurProcessesWidget: React.FC = () => {
       }
 
       setCanViewWidget(true);
+      const rpcItems = await fetchProcessWorkItems(supabase, access, { limit: nextVisibleLimit + 1 });
+      if (rpcItems) {
+        setItems(rpcItems.slice(0, nextVisibleLimit));
+        setCanLoadMore(rpcItems.length > nextVisibleLimit);
+        return;
+      }
+
       const candidateMap = new Map<string, ProcessWidgetItem>();
       const taskFetchLimit = Math.min(
         MAX_TASK_FETCH_LIMIT,

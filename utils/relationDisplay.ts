@@ -57,6 +57,7 @@ export const getRelationDisplayFields = (moduleId: string, targetField: string) 
       [
         String(resolvedTargetField || '').trim(),
         ...templateKeys,
+        ...(normalizedModuleId === 'customers' && moduleFieldKeys.has('auto_name_enabled') ? ['auto_name_enabled'] : []),
         ...(moduleFieldKeys.has('system_code') ? ['system_code'] : []),
       ].filter(Boolean)
     )
@@ -178,6 +179,11 @@ export const buildRelationDisplayLabel = (moduleId: string, row: any, targetFiel
   const resolvedTargetField = getPreferredRelationTargetField(normalizedModuleId, targetField);
   const displayConfig = getRelationDisplayConfig(normalizedModuleId);
   const template = String(displayConfig?.labelTemplate || '').trim();
+
+  if (normalizedModuleId === 'customers' && row?.auto_name_enabled === true) {
+    const autoName = cleanText(row?.full_name);
+    if (autoName) return autoName;
+  }
 
   if (template) {
     const rendered = buildTemplateLabel(normalizedModuleId, row, template);

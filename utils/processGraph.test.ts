@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PROCESS_DEFAULT_LANE_KEY,
   attachProcessGraphToStages,
+  getInitialProcessStageNodeKeys,
   getNextProcessStages,
   getPreviousProcessStage,
   getProcessStagesByLane,
@@ -54,6 +55,35 @@ describe('processGraph legacy compatibility', () => {
 
     expect(getPreviousProcessStage(attached, 'c', graph)?.process_node_key).toBe('b');
     expect(getNextProcessStages(attached, 'b', graph).map((stage) => stage.process_node_key)).toEqual(['c']);
+    expect(getInitialProcessStageNodeKeys(attached, graph)).toEqual(['a']);
+  });
+
+  it('returns the first stage of every root lane', () => {
+    const stages = [
+      { process_node_key: 'a', process_lane_key: 'lane_1', sort_order: 10 },
+      { process_node_key: 'b', process_lane_key: 'lane_1', sort_order: 20 },
+      { process_node_key: 'c', process_lane_key: 'lane_2', sort_order: 10 },
+      { process_node_key: 'd', process_lane_key: 'lane_3', sort_order: 10 },
+    ];
+    const graph: ProcessGraphDefinition = {
+      version: 2,
+      lanes: [
+        { key: 'lane_1', name: 'اول', sortOrder: 10, parentTriggerKey: null },
+        { key: 'lane_2', name: 'دوم', sortOrder: 20, parentTriggerKey: null },
+        { key: 'lane_3', name: 'شاخه', sortOrder: 30, parentTriggerKey: 'trigger_1' },
+      ],
+      triggers: [{
+        key: 'trigger_1',
+        name: 'شاخه',
+        sourceNodeKey: 'b',
+        targetLaneKeys: ['lane_3'],
+        workflowId: null,
+        manualEnabled: true,
+        sortOrder: 10,
+      }],
+    };
+
+    expect(getInitialProcessStageNodeKeys(stages, graph)).toEqual(['a', 'c']);
   });
 
   it('keeps a newly added empty lane when the graph is stored on existing stages', () => {

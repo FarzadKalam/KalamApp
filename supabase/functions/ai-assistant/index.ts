@@ -7,6 +7,7 @@ type AssistantAction =
   | 'upload_file'
   | 'send_file'
   | 'create_record_from_prompt'
+  | 'update_record_from_prompt'
   | 'process_operation_from_prompt'
   | 'workflow_ai_prompt'
   | 'get_thread'
@@ -27,6 +28,7 @@ type AssistantAction =
   | 'transcribe_voice'
   | 'generate_voice_output'
   | 'generate_image'
+  | 'get_image_status'
   | 'embed_document_chunks'
   | 'saas_ai';
 
@@ -57,42 +59,22 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-06-15-02';
+const FUNCTION_BUILD = 'ai-assistant-2026-06-18-04';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
-const DEFAULT_AI_MODEL = 'gpt-4.1-mini';
+const DEFAULT_AI_MODEL = '';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
+const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
+const IMAGE_PROVIDER_TIMEOUT_MS = 35000;
+const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
+const IMAGE_STATUS_STALE_MS = 180000;
+const IMAGE_PROMPT_MAX_CHARS = 4000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
 const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
 const AI_AUTHOR_NAME = 'دستیار هوشمند';
 const MAX_PAGE_CONTEXT_RECORDS = 10;
 const MAX_RETRIEVED_CONTEXTS = 4;
-
-// Default models per capability — provider-neutral fallbacks based on AvalAI model catalog.
-// Admins can override per-capability in org_ai_settings.selected_models.
-const DEFAULT_CAPABILITY_MODELS: Record<string, string> = {
-  // ── Chat / reasoning ───────────────────────────────────────────────────
-  dashboard_chat: 'gemini-3.1-flash-lite',
-  record_chat: 'gemini-3.1-flash-lite',
-  customer_reply_suggestion: 'qwen3.6-flash',
-  document_analysis: 'gemini-3.1-pro-preview',
-  workflow_ai_prompt: 'qwen3.6-flash',
-  deep_reasoning: 'grok-4.20-reasoning',
-  legal_assistant: 'grok-4.20-reasoning',
-  voip_auto_reply: 'qwen3.6-flash',
-  // ── Web search ─────────────────────────────────────────────────────────
-  web_search: 'serper-search',               // $0.001/query — cheapest Google
-  // ── Embeddings ─────────────────────────────────────────────────────────
-  embedding: DEFAULT_EMBEDDING_MODEL,        // text-embedding-3-small (pgvector compat)
-  // ── Voice ──────────────────────────────────────────────────────────────
-  voice_input: 'gpt-4o-transcribe',          // OpenAI STT via /v1/audio/transcriptions (scribe_v2 is NOT served here)
-  voice_output: 'eleven_v3',                 // AvalAI ElevenLabs ids use underscores (eleven_v3, eleven_flash_v2_5, eleven_multilingual_v2)
-  // ── Media generation ───────────────────────────────────────────────────
-  image_generation: 'gpt-image-2', // newest, best for posters/print & text-in-image; handler falls back to gpt-image-1 on failure
-  video_generation: 'sora-2',
-  // ── Document/file generation (AI drafts structured content, server builds the file) ──
-  document_generation: 'gemini-3.1-pro-preview',
-};
+const KNOWLEDGE_MATCH_THRESHOLD = 0.52;
 
 const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   dashboard_chat: 'ai_chat',
@@ -460,13 +442,18 @@ const getEnvProviderConfig = () => ({
 
 const isRetryableProviderStatus = (status: number) => status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 
+const isProviderTimeoutError = (error: any) => {
+  const text = `${String(error?.name || '')} ${String(error?.message || error || '')}`;
+  return /abort|timeout|timed out|upstream server is timing out|request has been cancelled/i.test(text);
+};
+
 const requestAvalaiWithFallback = async (
   providerConfig: any,
   path: string,
   init: RequestInit,
-  options?: { stripVersionForPath?: boolean },
+  options?: { stripVersionForPath?: boolean; disableFallback?: boolean },
 ) => {
-  const baseUrls = uniqueBaseUrls(
+  const baseUrls = options?.disableFallback ? [providerConfig?.baseUrl || DEFAULT_AI_BASE_URL] : uniqueBaseUrls(
     [providerConfig?.baseUrl || DEFAULT_AI_BASE_URL],
     Array.isArray(providerConfig?.fallbackBaseUrls) ? providerConfig.fallbackBaseUrls : [],
   );
@@ -485,6 +472,9 @@ const requestAvalaiWithFallback = async (
       lastError = new Error(`AvalAI retryable status ${response.status} from ${baseUrl}`);
     } catch (error) {
       lastError = error;
+      if (isProviderTimeoutError(error)) {
+        throw new Error('سرویس هوش مصنوعی در زمان مناسب پاسخ نداد. درخواست متوقف شد تا سرور دچار timeout نشود؛ چند لحظه بعد دوباره تلاش کنید یا مدل سریع‌تری انتخاب کنید.');
+      }
       if (baseUrl === baseUrls[baseUrls.length - 1]) throw error;
     }
   }
@@ -861,8 +851,7 @@ const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogR
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     const planAvailable = isAiCapabilityPlanAvailable(planContext, capability);
     const hasReadyModel = capability === 'embedding' || (catalogByCapability.get(capability) || [])
-      .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true)
-      || Boolean(DEFAULT_CAPABILITY_MODELS[capability]);
+      .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
     const tenantReady = TENANT_READY_AI_CAPABILITIES.has(capability);
     const orgEnabled = selected?.[capability] !== false;
     result[capability] = {
@@ -903,18 +892,18 @@ const filterSelectableAiModels = (models: any[], capability: string) =>
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
-      && (tags.includes(capability) || String(model?.id || '') === DEFAULT_CAPABILITY_MODELS[capability]);
+      && tags.includes(capability);
   });
 
 const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<string, any>) => {
   const next: Record<string, string> = {};
-  Object.keys(DEFAULT_CAPABILITY_MODELS).forEach((capability) => {
-    const requested = String(selectedModels?.[capability] || DEFAULT_CAPABILITY_MODELS[capability] || '').trim();
+  Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
+    if (capability === 'embedding') return;
+    const requested = String(selectedModels?.[capability] || '').trim();
     const allowed = filterSelectableAiModels(models, capability);
     const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
-    next[capability] = allowedIds.has(requested)
-      ? requested
-      : (allowed[0]?.id || DEFAULT_CAPABILITY_MODELS[capability]);
+    const resolved = allowedIds.has(requested) ? requested : String(allowed[0]?.id || requested || '').trim();
+    if (resolved) next[capability] = resolved;
   });
   return next;
 };
@@ -943,11 +932,41 @@ const loadOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, au
   }
 };
 
-const getCapabilityModel = (settings: any, capability: string, fallback = DEFAULT_AI_MODEL) => {
+const listActiveAiModels = async (supabaseUrl: string, serviceRoleKey: string) =>
+  safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+    is_active: 'eq.true',
+    select: 'id,capability_tags,is_coming_soon',
+    order: 'id.asc',
+    limit: 500,
+  }).catch(() => []);
+
+const pickCapabilityModelFromCatalog = (
+  settings: any,
+  capability: string,
+  catalogRows: any[],
+  requestedOverride?: string | null,
+) => {
   const selected = settings?.selected_models && typeof settings.selected_models === 'object'
     ? settings.selected_models
     : {};
-  return String(selected?.[capability] || DEFAULT_CAPABILITY_MODELS[capability] || fallback || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL;
+  const requested = String(requestedOverride || selected?.[capability] || '').trim();
+  const allowed = filterSelectableAiModels(catalogRows, capability);
+  const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
+  if (requested && allowedIds.has(requested)) return requested;
+  return String(allowed[0]?.id || '').trim();
+};
+
+const resolveOrgCapabilityModel = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  settings: any,
+  capability: string,
+  requestedOverride?: string | null,
+) => {
+  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+  const model = pickCapabilityModelFromCatalog(settings, capability, catalogRows, requestedOverride);
+  if (model) return model;
+  throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال و قابل استفاده در تنظیمات سازمان پیدا نشد.');
 };
 
 const getCentralProviderConfig = () => {
@@ -972,22 +991,13 @@ const resolveProviderConfig = async (
 ) => {
   const centralConfig = getCentralProviderConfig();
   const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-  let model = getCapabilityModel(settings, capability, centralConfig.model);
-  // Per-message model override: only honored when the model is active in the
-  // catalog AND tagged for this capability (prevents arbitrary/invalid ids).
-  const override = String(options?.modelOverride || '').trim();
-  if (override && override !== model) {
-    const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
-      id: `eq.${override}`,
-      is_active: 'eq.true',
-      select: 'id,capability_tags',
-      limit: 1,
-    }).catch(() => []);
-    const row = rows?.[0];
-    if (row && Array.isArray(row.capability_tags) && row.capability_tags.includes(capability)) {
-      model = override;
-    }
-  }
+  const model = await resolveOrgCapabilityModel(
+    supabaseUrl,
+    serviceRoleKey,
+    settings,
+    capability,
+    options?.modelOverride,
+  );
   return {
     ...centralConfig,
     model,
@@ -1105,12 +1115,11 @@ const normalizeIds = (ids: any[]) => Array.from(
 
 const buildContextKey = (rawContext: RequestContext) => {
   const context = normalizeContext(rawContext);
-  if (context.mode === 'record' && context.moduleId && context.recordId) return `record:${context.moduleId}:${context.recordId}`;
   if (context.intent === 'process_guide' && context.moduleId) {
     const processId = context.selectedProcessId || context.selectedProcessGroupId || 'unknown';
-    const recordId = context.recordId || 'page';
-    return `process_guide:${context.moduleId}:${recordId}:${processId}`;
+    return `process_guide:${context.moduleId}:${context.recordId || 'page'}:${context.processFieldKey || 'process'}:${processId}`;
   }
+  if (context.mode === 'record' && context.moduleId && context.recordId) return `record:${context.moduleId}:${context.recordId}`;
   const route = String(context.route || '').split('#')[0].trim();
   if (route) return `route:${route}`;
   if (context.moduleId) return `${context.mode || 'page'}:${context.moduleId}`;
@@ -1537,6 +1546,226 @@ const fetchRelevantModuleContexts = async (
   return contexts;
 };
 
+const normalizeFaDigits = (value: string) => String(value || '')
+  .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+  .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+
+const dateOnlyFromUtc = (value: Date) => value.toISOString().slice(0, 10);
+
+const getTehranToday = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`;
+};
+
+const parseDateOnlyUtc = (value: string) => new Date(`${value}T00:00:00.000Z`);
+
+const PERSIAN_MONTH_COUNTS: Record<string, number> = {
+  یک: 1,
+  دو: 2,
+  سه: 3,
+  چهار: 4,
+  پنج: 5,
+  شش: 6,
+  هفت: 7,
+  هشت: 8,
+  نه: 9,
+  ده: 10,
+  یازده: 11,
+  دوازده: 12,
+};
+
+const extractRequestedMonthCount = (message: string) => {
+  const normalized = normalizeFaDigits(message).toLowerCase();
+  const numeric = normalized.match(/(\d{1,2})\s*ماه/);
+  if (numeric) return Math.max(1, Math.min(24, Number(numeric[1]) || 1));
+  for (const [word, count] of Object.entries(PERSIAN_MONTH_COUNTS)) {
+    if (normalized.includes(`${word} ماه`)) return count;
+  }
+  return 1;
+};
+
+const resolveFinancialPeriod = (message: string) => {
+  const normalized = normalizeFaDigits(message).toLowerCase();
+  const todayIso = getTehranToday();
+  const today = parseDateOnlyUtc(todayIso);
+  const currentMonthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+  const requestedMonthCount = extractRequestedMonthCount(normalized);
+
+  if (/(سال گذشته|سال قبل|previous year|last year)/i.test(normalized)) {
+    const year = today.getUTCFullYear() - 1;
+    return {
+      label: 'سال گذشته',
+      dateFrom: dateOnlyFromUtc(new Date(Date.UTC(year, 0, 1))),
+      dateTo: dateOnlyFromUtc(new Date(Date.UTC(year, 11, 31))),
+    };
+  }
+
+  if (/(امسال|سال جاری|this year|current year)/i.test(normalized)) {
+    return {
+      label: 'سال جاری تا امروز',
+      dateFrom: dateOnlyFromUtc(new Date(Date.UTC(today.getUTCFullYear(), 0, 1))),
+      dateTo: todayIso,
+    };
+  }
+
+  if (/(هفته گذشته|هفته قبل|previous week|last week)/i.test(normalized)) {
+    const currentWeekStart = new Date(today);
+    const daysSinceSaturday = (today.getUTCDay() + 1) % 7;
+    currentWeekStart.setUTCDate(today.getUTCDate() - daysSinceSaturday);
+    const previousWeekStart = new Date(currentWeekStart);
+    previousWeekStart.setUTCDate(previousWeekStart.getUTCDate() - 7);
+    const previousWeekEnd = new Date(currentWeekStart);
+    previousWeekEnd.setUTCDate(previousWeekEnd.getUTCDate() - 1);
+    return {
+      label: 'هفته گذشته',
+      dateFrom: dateOnlyFromUtc(previousWeekStart),
+      dateTo: dateOnlyFromUtc(previousWeekEnd),
+    };
+  }
+
+  if (
+    requestedMonthCount > 1
+    && /(گذشته|اخیر|قبل|recent|last)/i.test(normalized)
+  ) {
+    const start = new Date(Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth() - (requestedMonthCount - 1),
+      1,
+    ));
+    return {
+      label: `${requestedMonthCount} ماه اخیر تا امروز`,
+      dateFrom: dateOnlyFromUtc(start),
+      dateTo: todayIso,
+    };
+  }
+
+  if (/(ماه گذشته|ماه قبل|previous month|last month)/i.test(normalized)) {
+    const start = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+    const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+    return {
+      label: 'ماه گذشته',
+      dateFrom: dateOnlyFromUtc(start),
+      dateTo: dateOnlyFromUtc(end),
+    };
+  }
+
+  return {
+    label: 'ماه جاری تا امروز',
+    dateFrom: dateOnlyFromUtc(currentMonthStart),
+    dateTo: todayIso,
+  };
+};
+
+const detectFinancialAnalyticsIntent = (message: string) => {
+  const text = String(message || '').trim().toLowerCase();
+  if (!text) return null;
+  if (/(سود\s*و\s*زیان|سود|زیان|حاشیه سود|profit|loss|margin)/i.test(text)) return 'profit_loss';
+  if (/(وضعیت مالی|عملکرد مالی|گزارش مالی|financial performance|financial status)/i.test(text)) return 'financial_overview';
+  if (/(فروش|درآمد|revenue|sales)/i.test(text)) return 'sales_overview';
+  if (/(هزینه|مخارج|خرید|expense|cost|purchase)/i.test(text)) return 'cost_overview';
+  return null;
+};
+
+const canReadAggregateFields = (perm: any, requiredFields: string[]) => {
+  if (!canViewModule(perm) || getRecordScope(perm) !== 'all') return false;
+  const fields = perm?.fields && typeof perm.fields === 'object' ? perm.fields : {};
+  return requiredFields.every((field) => fields?.[field] !== false);
+};
+
+const fetchFinancialAnalyticsContext = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  message: string,
+) => {
+  const intent = detectFinancialAnalyticsIntent(message);
+  if (!intent || !authContext?.orgId) return null;
+
+  const period = resolveFinancialPeriod(message);
+  const permissions = authContext?.permissions && typeof authContext.permissions === 'object'
+    ? authContext.permissions
+    : {};
+  const accountingPerm = permissions?.__accounting || {};
+  const accountingFields = accountingPerm?.fields && typeof accountingPerm.fields === 'object'
+    ? accountingPerm.fields
+    : {};
+  const includeAccounting = accountingPerm?.view !== false
+    && accountingFields?.dashboard_page !== false
+    && accountingFields?.reports_hub !== false
+    && accountingFields?.journal_entry_lines_view !== false
+    && canViewModule(getModulePermission(permissions, 'journal_entries'))
+    && canViewModule(getModulePermission(permissions, 'chart_of_accounts'));
+  const includeSales = canReadAggregateFields(
+    getModulePermission(permissions, 'invoices'),
+    ['invoice_date', 'status', 'total_invoice_amount'],
+  );
+  const includePurchases = canReadAggregateFields(
+    getModulePermission(permissions, 'purchase_invoices'),
+    ['invoice_date', 'status', 'total_invoice_amount'],
+  );
+  const includeExpenses = canReadAggregateFields(
+    getModulePermission(permissions, 'expense_documents'),
+    ['expense_date', 'status', 'total_amount'],
+  );
+  const permissionScope = {
+    accounting: includeAccounting,
+    sales: includeSales,
+    purchases: includePurchases,
+    expenses: includeExpenses,
+  };
+
+  if (!Object.values(permissionScope).some(Boolean)) {
+    return {
+      kind: 'financial_snapshot',
+      intent,
+      period,
+      available: false,
+      reason: 'permission_denied',
+      permission_scope: permissionScope,
+    };
+  }
+
+  try {
+    const snapshot = await restRpc(supabaseUrl, serviceRoleKey, 'get_ai_financial_snapshot', {
+      p_org_id: authContext.orgId,
+      p_date_from: period.dateFrom,
+      p_date_to: period.dateTo,
+      p_include_accounting: includeAccounting,
+      p_include_sales: includeSales,
+      p_include_purchases: includePurchases,
+      p_include_expenses: includeExpenses,
+    });
+    const accountingAvailable = snapshot?.accounting?.available === true;
+    const unpostedCount = Number(snapshot?.accounting?.unposted_entry_count || 0);
+    return {
+      ...snapshot,
+      intent,
+      period,
+      available: true,
+      permission_scope: permissionScope,
+      data_quality: accountingAvailable
+        ? (unpostedCount > 0 ? 'posted_ledger_with_unposted_entries' : 'posted_ledger')
+        : 'operational_only',
+    };
+  } catch (error) {
+    console.warn('Financial analytics context unavailable', error);
+    return {
+      kind: 'financial_snapshot',
+      intent,
+      period,
+      available: false,
+      reason: 'financial_snapshot_unavailable',
+      permission_scope: permissionScope,
+    };
+  }
+};
+
 const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, query: string) => {
   if (!authContext.orgId) return [];
   const instructionRowsFor = (rows: any[]) => rows.filter((row: any) =>
@@ -1569,14 +1798,31 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
       const providerConfig = getCentralProviderConfig();
       if (providerConfig.apiKey) {
         const embeddingResult = await callEmbeddings(providerConfig, queryText.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
-        const vectorRows = await restRpc(supabaseUrl, serviceRoleKey, 'match_ai_document_chunks', {
-          p_org_id: authContext.orgId,
-          p_user_id: authContext.userId || null,
-          p_role_id: authContext.roleId || null,
-          p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
-          p_match_count: 6,
-        });
+        let vectorRows: any[] = [];
+        try {
+          vectorRows = await restRpc(supabaseUrl, serviceRoleKey, 'match_ai_document_chunks_hybrid', {
+            p_org_id: authContext.orgId,
+            p_user_id: authContext.userId || null,
+            p_role_id: authContext.roleId || null,
+            p_query_text: queryText.slice(0, 2000),
+            p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
+            p_match_count: 6,
+            p_match_threshold: KNOWLEDGE_MATCH_THRESHOLD,
+            p_full_text_weight: 1.15,
+            p_semantic_weight: 1,
+            p_rrf_k: 50,
+          });
+        } catch {
+          vectorRows = await restRpc(supabaseUrl, serviceRoleKey, 'match_ai_document_chunks', {
+            p_org_id: authContext.orgId,
+            p_user_id: authContext.userId || null,
+            p_role_id: authContext.roleId || null,
+            p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
+            p_match_count: 6,
+          });
+        }
         const filteredVectorRows = (vectorRows || [])
+          .filter((row: any) => Number(row?.similarity || 0) >= KNOWLEDGE_MATCH_THRESHOLD)
           .filter((row: any) => !instructionRows.some((item: any) => String(item.id) === String(row.id)))
           .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
         if (filteredVectorRows.length > 0) {
@@ -1798,7 +2044,12 @@ const buildPromptMessages = (
   retrievedContexts: any[],
   historyRows: any[] = [],
   webSearchResults: any[] = [],
-  options: { legalMode?: boolean; deepReasoning?: boolean; selectedCapabilities?: string[] } = {},
+  options: {
+    legalMode?: boolean;
+    deepReasoning?: boolean;
+    selectedCapabilities?: string[];
+    businessAnalytics?: any;
+  } = {},
 ) => {
   const knowledge = knowledgeChunks.map((chunk, index) => ({
     index: index + 1,
@@ -1838,6 +2089,7 @@ const buildPromptMessages = (
         }
       : null,
     retrieved_permitted_contexts: retrievedContexts,
+    business_analytics: options.businessAnalytics || null,
     web_search_results: webSearchResults.length ? webSearchResults : undefined,
     selected_ai_capabilities: options.selectedCapabilities || [],
     ai_instructions: aiInstructions,
@@ -1859,7 +2111,7 @@ const buildPromptMessages = (
 
   const systemContent = pageContext.intent === 'process_guide'
     ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -2057,6 +2309,12 @@ const isReasoningModel = (model: string) =>
 // Cloudflare page). Turn that into a short, readable Persian message.
 const shortenProviderError = (raw: any) => {
   const text = String(raw || '').trim();
+  if (/credit has been exhausted|don't have enough credit|not enough credit|top up your account|ava\.al\/billing/i.test(text)) {
+    return 'اعتبار حساب Avalai تمام شده یا برای این درخواست کافی نیست. اعتبار پنل Avalai را شارژ کنید و دوباره تلاش کنید.';
+  }
+  if (/upstream server is timing out|workerrequestcancelled|request has been cancelled|gateway.*time-?out|timed out|timeout/i.test(text)) {
+    return 'سرویس هوش مصنوعی در زمان مناسب پاسخ نداد. چند لحظه بعد دوباره تلاش کنید یا برای این درخواست مدل سریع‌تری انتخاب کنید.';
+  }
   const isHtml = /<html|<!doctype/i.test(text);
   if (isHtml && /gateway timeout|error\s*504|خطای ۵۰۴|\b504\b/i.test(text)) {
     return 'سرویس هوش مصنوعی موقتاً پاسخ نداد (Gateway Timeout). چند لحظه بعد دوباره تلاش کنید.';
@@ -2068,12 +2326,12 @@ const shortenProviderError = (raw: any) => {
   return text.length > 400 ? `${text.slice(0, 400)}…` : text;
 };
 
-const CHAT_COMPLETIONS_TIMEOUT_MS = 120000;
+const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
 
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: any }>,
-  options?: { temperature?: number; maxTokens?: number; safetyIdentifier?: string }
+  options?: { temperature?: number; maxTokens?: number; maxCompletionTokens?: number; safetyIdentifier?: string; timeoutMs?: number }
 ) => {
   if (providerConfig?.isActive === false) {
     throw new Error('اتصال AI برای این سازمان غیرفعال است.');
@@ -2082,11 +2340,9 @@ const callChatCompletions = async (
     throw new Error('کلید مرکزی AI تنظیم نشده است. مقدار AI_API_KEY یا AVALAI_API_KEY را در Edge Function secrets ثبت کنید.');
   }
 
-  const primaryModel = String(providerConfig.model || '').trim() || DEFAULT_AI_MODEL;
-  // If the selected model's gateway is timing out (504) or erroring (5xx), retry
-  // once with a fast, stable fallback model so chat/document features stay usable.
-  const fallbackModel = DEFAULT_AI_MODEL;
-  const modelsToTry = primaryModel === fallbackModel ? [primaryModel] : [primaryModel, fallbackModel];
+  const primaryModel = String(providerConfig.model || '').trim();
+  if (!primaryModel) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
+  const modelsToTry = [primaryModel];
 
   let lastErrorMessage = '';
   for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
@@ -2098,7 +2354,7 @@ const callChatCompletions = async (
       safety_identifier: options?.safetyIdentifier || undefined,
     };
     if (reasoning) {
-      requestBody.max_completion_tokens = 8000;
+      requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
     } else {
       requestBody.temperature = options?.temperature ?? 0.2;
       requestBody.max_tokens = options?.maxTokens ?? 2000;
@@ -2114,12 +2370,11 @@ const callChatCompletions = async (
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(CHAT_COMPLETIONS_TIMEOUT_MS),
-      });
+        signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
+      }, { disableFallback: true });
       response = result.response;
       baseUrl = result.baseUrl;
     } catch (error: any) {
-      // Network error / timeout — try the fallback model on the next attempt.
       lastErrorMessage = String(error?.message || 'اتصال به سرویس هوش مصنوعی برقرار نشد.');
       continue;
     }
@@ -2130,8 +2385,6 @@ const callChatCompletions = async (
     if (!response.ok) {
       const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
       lastErrorMessage = String(message);
-      // Retry with fallback model only for gateway/server errors (5xx incl. 504).
-      if (response.status >= 500 && attempt < modelsToTry.length - 1) continue;
       throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
     }
 
@@ -2255,8 +2508,22 @@ const normalizeAiRecordValue = (value: any, field: any) => {
 };
 
 const sanitizeAiRecordPayload = (rawPayload: any, schema: any) => {
+  const blockedKeys = new Set([
+    'id',
+    'org_id',
+    'system_code',
+    'created_at',
+    'updated_at',
+    'created_by',
+    'updated_by',
+    'deleted_at',
+  ]);
   const fields = Array.isArray(schema?.fields) ? schema.fields : [];
-  const allowed = new Map(fields.map((field: any) => [String(field?.key || '').trim(), field]).filter(([key]: any) => key));
+  const allowed = new Map(
+    fields
+      .map((field: any) => [String(field?.key || '').trim(), field] as const)
+      .filter(([key]) => key && !blockedKeys.has(key)),
+  );
   const rawFields = rawPayload?.fields && typeof rawPayload.fields === 'object' ? rawPayload.fields : rawPayload;
   const payload: Record<string, any> = {};
   Object.entries(rawFields || {}).forEach(([key, value]) => {
@@ -2345,7 +2612,7 @@ const shouldTriggerWebSearch = (message: string) =>
 const callWebSearch = async (
   providerConfig: any,
   query: string,
-  model = 'serper-search',
+  model = '',
   numResults = 5,
   required = false,
 ): Promise<{ results: any[]; requestId: string | null }> => {
@@ -2395,6 +2662,51 @@ const callWebSearch = async (
 // ai_model_catalog.metadata.api_route (see database_v1_phase260).
 const isGeminiImageModel = (model: string) => /^gemini[-.\d]*.*image/i.test(String(model || '').trim());
 
+const buildImagePromptWithSettings = (prompt: string, settings: any = {}) => {
+  const instructions: string[] = [];
+  if (settings?.persianText === true) {
+    instructions.push('اگر تصویر شامل نوشته، تیتر، تابلو، پوستر یا عدد است، متن‌ها را فارسی و طبیعی بنویس.');
+  }
+  if (settings?.persianDigits === true) {
+    instructions.push('همه عددهای قابل مشاهده داخل تصویر را با ارقام فارسی ۰۱۲۳۴۵۶۷۸۹ نمایش بده.');
+  }
+  if (settings?.rtlText === true) {
+    instructions.push('چیدمان نوشته‌ها باید راست‌به‌چپ، راست‌چین و مناسب زبان فارسی باشد.');
+  }
+  if (settings?.orientationHorizontal === true) {
+    instructions.push('کادر نهایی افقی باشد.');
+  } else if (settings?.orientationVertical === true) {
+    instructions.push('کادر نهایی عمودی باشد.');
+  }
+  if (!instructions.length) return prompt;
+  return `${prompt}\n\nالزامات خروجی تصویر:\n${instructions.map((item) => `- ${item}`).join('\n')}`;
+};
+
+const clampImagePrompt = (value: string) => {
+  const text = String(value || '').trim();
+  if (text.length <= IMAGE_PROMPT_MAX_CHARS) return text;
+  return text.slice(0, IMAGE_PROMPT_MAX_CHARS).trim();
+};
+
+const appendImageContextToPrompt = (prompt: string, args: { companyContext?: any; pageSummary?: string | null; knowledgeChunks?: any[] }) => {
+  const contextLines: string[] = [];
+  const company = args.companyContext || {};
+  const companyName = String(company.trade_name || company.company_name || company.organization_name || '').trim();
+  if (companyName) contextLines.push(`نام سازمان/برند: ${companyName}`);
+  if (company.company_name_en) contextLines.push(`نام انگلیسی برند: ${company.company_name_en}`);
+  if (company.website) contextLines.push(`وب‌سایت: ${company.website}`);
+  if (args.pageSummary) contextLines.push(`زمینه صفحه: ${String(args.pageSummary).slice(0, 300)}`);
+  const knowledge = (args.knowledgeChunks || [])
+    .map((item: any) => String(item?.content || item?.text || '').trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  if (knowledge.length) {
+    contextLines.push(`دانش سازمانی مرتبط:\n${knowledge.map((item) => `- ${item.replace(/\s+/g, ' ').slice(0, 240)}`).join('\n')}`);
+  }
+  if (!contextLines.length) return prompt;
+  return clampImagePrompt(`${prompt}\n\nزمینه مجاز سازمان برای استفاده در تصویر:\n${contextLines.join('\n')}`);
+};
+
 // Gemini image (Nano Banana) models are served via the native Gemini endpoint
 // (/v1beta/models/{id}:generateContent), NOT the OpenAI /v1/images/generations route.
 // Calling them on /images/generations hangs and returns a 504 gateway timeout.
@@ -2404,16 +2716,20 @@ const callGeminiImageGenerate = async (
   options: { sourceImages?: Array<{ data: string; mimeType?: string }>; extraConfig?: Record<string, any> } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
-  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.image_generation).trim();
+  const model = String(providerConfig.model || '').trim();
+  if (!model) throw new Error('برای تولید تصویر، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const parts: any[] = [{ text: prompt }];
   for (const src of (options.sourceImages || [])) {
     const data = String(src?.data || '').replace(/^data:[^;]+;base64,/, '').trim();
     if (data) parts.push({ inline_data: { mime_type: src?.mimeType || 'image/png', data } });
   }
-  const body: Record<string, any> = { contents: [{ parts }] };
-  if (options.extraConfig && typeof options.extraConfig === 'object') {
-    body.generationConfig = options.extraConfig;
-  }
+  const body: Record<string, any> = {
+    contents: [{ parts }],
+    generationConfig: {
+      responseModalities: ['TEXT', 'IMAGE'],
+      ...(options.extraConfig && typeof options.extraConfig === 'object' ? options.extraConfig : {}),
+    },
+  };
   // Gemini native endpoint lives at /v1beta (strip the /v1 suffix from the base url).
   const { response, baseUrl } = await requestAvalaiWithFallback(
     providerConfig,
@@ -2422,9 +2738,9 @@ const callGeminiImageGenerate = async (
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(110000),
+      signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
     },
-    { stripVersionForPath: true },
+    { stripVersionForPath: true, disableFallback: true },
   );
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const parsed = parseJsonSafe(await response.text());
@@ -2476,13 +2792,9 @@ const callAudioTranscription = async (
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const bytes = base64ToUint8Array(audioBase64);
   if (!bytes.length) throw new Error('فایل صوتی معتبر نیست.');
-  // Candidate STT models served on /v1/audio/transcriptions (per AvalAI docs).
-  const candidateModels = Array.from(new Set([
-    String(providerConfig.model || '').trim(),
-    DEFAULT_CAPABILITY_MODELS.voice_input,   // gpt-4o-transcribe
-    'whisper-1',
-    'groq.whisper-large-v3-turbo',
-  ].filter(Boolean)));
+  // Use only the organization's selected STT model; do not silently switch engines.
+  const candidateModels = Array.from(new Set([String(providerConfig.model || '').trim()].filter(Boolean)));
+  if (candidateModels.length === 0) throw new Error('برای تبدیل صوت به متن، مدل فعال در تنظیمات سازمان پیدا نشد.');
   let lastMessage = '';
 
   for (const model of candidateModels) {
@@ -2493,8 +2805,8 @@ const callAudioTranscription = async (
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
       body: formData,
-      signal: AbortSignal.timeout(90000),
-    });
+      signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
+    }, { disableFallback: true });
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
     const parsed = parseJsonSafe(await response.text());
     if (response.ok) {
@@ -2531,7 +2843,8 @@ const callAudioSpeech = async (
   options: { voice?: string; speed?: number; responseFormat?: string } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
-  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.voice_output || 'eleven_v3').trim();
+  const model = String(providerConfig.model || '').trim();
+  if (!model) throw new Error('برای تولید صدا، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const requestedVoice = String(options.voice || '').trim().toLowerCase();
   const voice = AUDIO_SPEECH_VOICES.has(requestedVoice) ? requestedVoice : 'alloy';
   const requestedFormat = String(options.responseFormat || '').trim().toLowerCase();
@@ -2552,8 +2865,8 @@ const callAudioSpeech = async (
       response_format: responseFormat,
       ...(speed !== undefined ? { speed } : {}),
     }),
-    signal: AbortSignal.timeout(110000),
-  });
+    signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
+  }, { disableFallback: true });
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const contentType = response.headers.get('content-type') || 'audio/mpeg';
   if (!response.ok) {
@@ -2593,7 +2906,8 @@ const callImageGeneration = async (
   } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
-  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.image_generation).trim();
+  const model = String(providerConfig.model || '').trim();
+  if (!model) throw new Error('برای تولید تصویر، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const sourceImages = Array.isArray(options.sourceImages)
     ? options.sourceImages.filter((src) => String(src?.data || '').trim())
     : [];
@@ -2607,7 +2921,7 @@ const callImageGeneration = async (
     });
   }
 
-  const allowedSizes = new Set(['1024x1024', '1024x1792', '1792x1024', 'auto']);
+  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', 'auto']);
   const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
   const n = Math.min(4, Math.max(1, Number(options.n) || 1));
 
@@ -2622,7 +2936,7 @@ const callImageGeneration = async (
       const bytes = base64ToUint8Array(src.data);
       const mime = src.mimeType || 'image/png';
       const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
-      formData.append('image[]', new Blob([bytes], { type: mime }), src.filename || `source_${index}.${ext}`);
+      formData.append('image', new Blob([bytes], { type: mime }), src.filename || `source_${index}.${ext}`);
     });
     if (options.extraBody && typeof options.extraBody === 'object') {
       Object.entries(options.extraBody).forEach(([key, value]) => {
@@ -2633,8 +2947,8 @@ const callImageGeneration = async (
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
       body: formData,
-      signal: AbortSignal.timeout(110000),
-    });
+      signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
+    }, { disableFallback: true });
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
     const parsed = parseJsonSafe(await response.text());
     if (!response.ok) {
@@ -2660,18 +2974,18 @@ const callImageGeneration = async (
       Authorization: `Bearer ${providerConfig.apiKey}`,
       'Content-Type': 'application/json',
     },
-    signal: AbortSignal.timeout(110000),
+    signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
     body: JSON.stringify({
       model,
       prompt,
-      ...(options.quality ? { quality: options.quality } : {}),
+      ...(options.quality && String(options.quality) !== 'auto' ? { quality: options.quality } : {}),
       ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
       n,
       size,
       // gpt-image-* always return b64_json and REJECT the response_format param.
       ...(/^gpt-image/i.test(model) ? {} : { response_format: 'b64_json' }),
     }),
-  });
+  }, { disableFallback: true });
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) {
@@ -2700,7 +3014,8 @@ const callVideoCreate = async (
   options: { seconds?: number; size?: string; inputReference?: { data: string; mimeType?: string } } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
-  const model = String(providerConfig.model || DEFAULT_CAPABILITY_MODELS.video_generation).trim();
+  const model = String(providerConfig.model || '').trim();
+  if (!model) throw new Error('برای تولید ویدیو، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const seconds = String(Math.min(20, Math.max(1, Number(options.seconds) || 4)));
   const size = String(options.size || '720x1280').trim();
   const safetyIdentifier = `org_${providerConfig.orgId || ''}_video`.slice(0, 256);
@@ -2716,16 +3031,16 @@ const callVideoCreate = async (
     const mime = options.inputReference.mimeType || 'image/png';
     const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
     formData.append('input_reference', new Blob([base64ToUint8Array(options.inputReference.data)], { type: mime }), `reference.${ext}`);
-    init = { method: 'POST', headers: { Authorization: `Bearer ${providerConfig.apiKey}` }, body: formData, signal: AbortSignal.timeout(60000) };
+    init = { method: 'POST', headers: { Authorization: `Bearer ${providerConfig.apiKey}` }, body: formData, signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS) };
   } else {
     init = {
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, safety_identifier: safetyIdentifier }),
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
     };
   }
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/videos', init);
+  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/videos', init, { disableFallback: true });
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const parsed = parseJsonSafe(await response.text());
   if (!response.ok) {
@@ -2770,8 +3085,8 @@ const callVideoContent = async (providerConfig: any, videoId: string) => {
   const { response } = await requestAvalaiWithFallback(providerConfig, `/videos/${encodeURIComponent(videoId)}/content`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
-    signal: AbortSignal.timeout(120000),
-  });
+    signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
+  }, { disableFallback: true });
   if (!response.ok) {
     const message = parseJsonSafe(await response.text());
     throw new Error(`دانلود ویدیو ناموفق بود: ${typeof message === 'string' ? message : JSON.stringify(message || {})}`);
@@ -3197,12 +3512,24 @@ const insertAiMessage = async (
   return rows[0] || null;
 };
 
+const runBackgroundTask = (task: Promise<any>) => {
+  const guarded = task.catch((error) => console.error('ai-assistant background task failed', error));
+  const runtime = (globalThis as any)?.EdgeRuntime;
+  if (runtime && typeof runtime.waitUntil === 'function') {
+    runtime.waitUntil(guarded);
+  } else {
+    void guarded;
+  }
+};
+
 const ensureOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
   const existing = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
   if (existing) return existing;
+  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+  const selectedModels = sanitizeTenantSelectedModels(catalogRows, {});
   const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_settings', [{
     org_id: authContext.orgId,
-    selected_models: DEFAULT_CAPABILITY_MODELS,
+    selected_models: selectedModels,
     feature_flags: {
       dashboard_chat: true,
       record_chat: true,
@@ -3268,7 +3595,7 @@ const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string,
     ? incoming.selected_models
     : incoming.selectedModels && typeof incoming.selectedModels === 'object'
     ? incoming.selectedModels
-    : existing?.selected_models || DEFAULT_CAPABILITY_MODELS;
+    : existing?.selected_models || {};
   const featureFlags = incoming.feature_flags && typeof incoming.feature_flags === 'object'
     ? incoming.feature_flags
     : incoming.featureFlags && typeof incoming.featureFlags === 'object'
@@ -3380,22 +3707,19 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
     return String(row?.display_name_fa || id || '').trim() || id;
   };
   const capabilities: Record<string, any> = {};
-  Object.keys(DEFAULT_CAPABILITY_MODELS).forEach((capability) => {
+  Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
-    const resolved = getCapabilityModel(settings, capability);
     const selectable = models
       .filter((m: any) => {
         const tags = Array.isArray(m?.capability_tags) ? m.capability_tags : [];
-        return tags.includes(capability) || String(m?.id || '') === resolved;
+        return tags.includes(capability);
       })
       .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
       .filter((opt: any) => opt.value);
-    if (!selectable.some((opt: any) => opt.value === resolved)) {
-      selectable.unshift({ value: resolved, label: labelOf(resolved) });
-    }
+    const resolved = pickCapabilityModelFromCatalog(settings, capability, models);
     capabilities[capability] = {
       model: resolved,
-      modelLabel: labelOf(resolved),
+      modelLabel: resolved ? labelOf(resolved) : 'مدل فعال ندارد',
       selectable,
       available: availability?.[capability] ? availability[capability].planAvailable !== false
         && availability[capability].tenantReady !== false
@@ -3438,6 +3762,24 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
   });
 };
 
+const isHiddenAssistantThread = (thread: any) => {
+  const metadata = thread?.metadata && typeof thread.metadata === 'object' ? thread.metadata : {};
+  const contextKey = String(thread?.context_key || metadata?.context_key || '').trim();
+  const lastActivityKind = String(metadata?.last_activity_kind || '').trim();
+  const replyChannel = String(metadata?.reply_channel || '').trim();
+  const source = String(metadata?.source || metadata?.context?.source || '').trim();
+  const capability = String(metadata?.capability || '').trim();
+  return contextKey.startsWith('reply:sms:')
+    || contextKey.startsWith('reply:bot:')
+    || lastActivityKind === 'reply_suggestion'
+    || replyChannel === 'sms'
+    || replyChannel === 'bot'
+    || source === 'reply_suggestion'
+    || source === 'notifications_chat_reply_suggest'
+    || capability === 'customer_reply_suggestion'
+    || metadata?.customer_reply_suggestion === true;
+};
+
 const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const search = String(body?.search || '').trim();
   const baseSelect = 'id,org_id,title,context_type,context_key,module_id,record_id,provider,model,metadata,created_at,updated_at,pinned_at,is_shared,shared_user_ids,shared_role_ids,user_id';
@@ -3478,6 +3820,7 @@ const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, au
   ]);
   const rows = Array.from(new Map([...ownRows, ...sharedUserRows, ...sharedRoleRows]
     .filter((row: any) => canAccessThreadRow(row, authContext))
+    .filter((row: any) => !isHiddenAssistantThread(row))
     .map((row: any) => [String(row.id), {
       ...row,
       is_owner: normalizeId(row.user_id) === normalizeId(authContext.userId),
@@ -3621,15 +3964,21 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
   ]);
-  const retrievedContexts = await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext);
+  const [retrievedContexts, businessAnalytics] = await Promise.all([
+    fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
+    fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
+  ]);
 
   // Web search: call only when feature is enabled and query looks like it needs external/current info
   const orgAiSettings = providerConfig.orgAiSettings;
   const webSearchEnabled = orgAiSettings?.feature_flags?.web_search === true
     && isAiCapabilityPlanAvailable(planContext, 'web_search');
-  const webSearchModel = getCapabilityModel(orgAiSettings, 'web_search', 'serper-search');
   const forceWebSearch = selectedCapabilitySet.has('web_search') || selectedCapabilitySet.has('legal_assistant');
-  const webSearchResults = webSearchEnabled && (forceWebSearch || shouldTriggerWebSearch(message))
+  const shouldSearchWeb = webSearchEnabled && (forceWebSearch || shouldTriggerWebSearch(message));
+  const webSearchModel = shouldSearchWeb
+    ? await resolveOrgCapabilityModel(supabaseUrl, serviceRoleKey, orgAiSettings, 'web_search')
+    : '';
+  const webSearchResults = shouldSearchWeb
     ? await callWebSearch(providerConfig, message, webSearchModel, 5, forceWebSearch).then((r) => r.results)
     : [];
 
@@ -3669,7 +4018,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     },
   });
 
-  const aiResult = await callChatCompletions(providerConfig, buildPromptMessages(
+  const promptMessages = buildPromptMessages(
     message,
     pageContext,
     knowledgeChunks,
@@ -3683,10 +4032,90 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       legalMode: selectedCapabilitySet.has('legal_assistant'),
       deepReasoning: selectedCapabilitySet.has('deep_reasoning') || capability === 'deep_reasoning',
       selectedCapabilities,
+      businessAnalytics,
     },
-  ), {
-    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
-  });
+  );
+  let aiResult: any;
+  try {
+    aiResult = await callChatCompletions(providerConfig, promptMessages, {
+      safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+    });
+  } catch (error: any) {
+    const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
+    const failedContent = providerFailure.startsWith('خطای provider')
+      ? providerFailure
+      : `پاسخ هوش مصنوعی ناموفق بود: ${providerFailure}`;
+    const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+      thread_id: thread.id,
+      role: 'assistant',
+      content: failedContent,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      metadata: {
+        context_summary: pageContext.summary,
+        context_key: contextKey,
+        company_currency_label: companyContext?.currency_label || null,
+        knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
+        retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
+        web_search_used: webSearchResults.length > 0,
+        capabilities: selectedCapabilities,
+        capability,
+        business_analytics: businessAnalytics ? {
+          intent: businessAnalytics.intent || null,
+          period: businessAnalytics.period || null,
+          available: businessAnalytics.available === true,
+          data_quality: businessAnalytics.data_quality || null,
+          reason: businessAnalytics.reason || null,
+        } : null,
+        failed: true,
+        status: 'failed',
+        error: providerFailure,
+      },
+    });
+    const inputKind = String(body?.inputKind || body?.input_kind || 'text').trim() || 'text';
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+      updated_at: new Date().toISOString(),
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      context_type: getContextKind(pageContext.context || {}),
+      module_id: pageContext.moduleId || null,
+      record_id: pageContext.recordId || null,
+      metadata: {
+        ...(thread?.metadata || {}),
+        route: pageContext.context?.route || null,
+        summary: pageContext.summary || null,
+        context_kind: getContextKind(pageContext.context || {}),
+        context_label: buildThreadContextLabel(pageContext),
+        context: pageContext.context || null,
+        module_id: pageContext.moduleId || null,
+        record_id: pageContext.recordId || null,
+        intent: pageContext.intent || pageContext.context?.intent || null,
+        selected_process_id: pageContext.selectedProcessId || pageContext.context?.selectedProcessId || pageContext.context?.selectedProcessGroupId || null,
+        last_activity_kind: `${inputKind}_failed`,
+        last_message_preview: failedContent.slice(0, 300),
+      },
+    }).catch(() => []);
+    return json(200, {
+      success: false,
+      thread,
+      threadId: thread.id,
+      userMessageId: userMessage?.id || null,
+      messageId: assistantMessage?.id || null,
+      message: failedContent,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      messages: [userMessage, assistantMessage].filter(Boolean),
+      contextSummary: pageContext.summary,
+      retrievedContextModules: retrievedContexts.map((ctx) => ctx.moduleId),
+      businessAnalytics,
+      knowledgeSources: knowledgeChunks.map((chunk) => ({
+        id: chunk.id,
+        documentId: chunk.document_id,
+        title: chunk?.metadata?.document_title || null,
+        chunkIndex: chunk.chunk_index,
+      })),
+    });
+  }
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
@@ -3704,6 +4133,13 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
       capability,
+      business_analytics: businessAnalytics ? {
+        intent: businessAnalytics.intent || null,
+        period: businessAnalytics.period || null,
+        available: businessAnalytics.available === true,
+        data_quality: businessAnalytics.data_quality || null,
+        reason: businessAnalytics.reason || null,
+      } : null,
     },
   });
 
@@ -3760,6 +4196,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     ledger,
     contextSummary: pageContext.summary,
     retrievedContextModules: retrievedContexts.map((ctx) => ctx.moduleId),
+    businessAnalytics,
     knowledgeSources: knowledgeChunks.map((chunk) => ({
       id: chunk.id,
       documentId: chunk.document_id,
@@ -3887,9 +4324,72 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     };
   }
 
-  const aiResult = await callChatCompletions(providerConfig, promptMessages, {
-    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
-  });
+  let aiResult: any;
+  try {
+    aiResult = await callChatCompletions(providerConfig, promptMessages, {
+      safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
+    });
+  } catch (error: any) {
+    const providerFailure = shortenProviderError(String(error?.message || error || 'file_chat_failed'));
+    const failedContent = providerFailure.startsWith('خطای provider')
+      ? providerFailure
+      : `تحلیل فایل با هوش مصنوعی ناموفق بود: ${providerFailure}`;
+    const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+      thread_id: thread.id,
+      role: 'assistant',
+      content: failedContent,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      metadata: {
+        context_summary: pageContext.summary,
+        context_key: contextKey,
+        company_currency_label: companyContext?.currency_label || null,
+        knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
+        retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
+        capability,
+        failed: true,
+        status: 'failed',
+        error: providerFailure,
+        file: {
+          filename,
+          mime_type: mimeType,
+        },
+      },
+    });
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+      updated_at: new Date().toISOString(),
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      context_type: getContextKind(pageContext.context || {}),
+      module_id: pageContext.moduleId || null,
+      record_id: pageContext.recordId || null,
+      metadata: {
+        ...(thread?.metadata || {}),
+        route: pageContext.context?.route || null,
+        summary: pageContext.summary || null,
+        context_kind: getContextKind(pageContext.context || {}),
+        context_label: buildThreadContextLabel(pageContext),
+        context: pageContext.context || null,
+        module_id: pageContext.moduleId || null,
+        record_id: pageContext.recordId || null,
+        last_activity_kind: 'file_failed',
+        last_message_preview: failedContent.slice(0, 300),
+      },
+    }).catch(() => []);
+    return json(200, {
+      success: false,
+      thread,
+      threadId: thread.id,
+      userMessageId: userMessage?.id || null,
+      messageId: assistantMessage?.id || null,
+      message: failedContent,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      messages: [userMessage, assistantMessage].filter(Boolean),
+      contextSummary: pageContext.summary,
+      retrievedContextModules: retrievedContexts.map((ctx) => ctx.moduleId),
+    });
+  }
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
@@ -3971,25 +4471,37 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   });
 };
 
-const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const isUpdate = String(body?.action || '').trim() === 'update_record_from_prompt'
+    || String(body?.outputMode || body?.output_mode || '').trim() === 'update_record';
+  const mutationAction = isUpdate ? 'update_record_from_prompt' : 'create_record_from_prompt';
+  const mutationVerb = isUpdate ? 'ویرایش' : 'ساخت';
   const prompt = String(body?.message || body?.prompt || '').trim();
-  if (!prompt) return json(400, { success: false, message: 'متن درخواست ساخت رکورد خالی است.' });
+  if (!prompt) return json(400, { success: false, message: `متن درخواست ${mutationVerb} رکورد خالی است.` });
 
   const schema = body?.recordCreation || body?.record_creation || {};
   const targetModuleId = String(schema?.moduleId || body?.targetModuleId || body?.target_module_id || '').trim();
   if (!targetModuleId || !ALLOWED_MODULES.has(targetModuleId)) {
-    return json(400, { success: false, message: 'ماژول مقصد برای ساخت رکورد معتبر نیست.' });
+    return json(400, { success: false, message: `ماژول مقصد برای ${mutationVerb} رکورد معتبر نیست.` });
   }
-  const fields = Array.isArray(schema?.fields) ? schema.fields : [];
-  if (fields.length === 0) return json(400, { success: false, message: 'فیلدهای مجاز برای ساخت رکورد مشخص نیست.' });
+  const requestedFields = Array.isArray(schema?.fields) ? schema.fields : [];
   const targetTable = getModuleTable(targetModuleId);
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(targetTable)) {
     return json(400, { success: false, message: 'جدول مقصد برای ساخت رکورد معتبر نیست.' });
   }
   const targetPerm = getModulePermission(authContext.permissions, targetModuleId);
-  if (!canCreateModule(targetPerm)) {
-    return json(403, { success: false, message: 'شما دسترسی ساخت رکورد در این ماژول را ندارید.' });
+  if (isUpdate ? targetPerm?.edit === false || targetPerm?.view === false : !canCreateModule(targetPerm)) {
+    return json(403, { success: false, message: `شما دسترسی ${mutationVerb} رکورد در این ماژول را ندارید.` });
   }
+  const permissionFields = targetPerm?.fields && typeof targetPerm.fields === 'object'
+    ? targetPerm.fields
+    : {};
+  const fields = requestedFields.filter((field: any) => {
+    const fieldKey = String(field?.key || '').trim();
+    return fieldKey && permissionFields[fieldKey] !== false;
+  });
+  if (fields.length === 0) return json(400, { success: false, message: `فیلدهای مجاز برای ${mutationVerb} رکورد مشخص نیست.` });
+  const effectiveSchema = { ...schema, fields };
 
   const rawContext = normalizeContext(body?.context || {});
   const capability = String(body?.capability || 'workflow_ai_prompt').trim() || 'workflow_ai_prompt';
@@ -3997,6 +4509,9 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  if (isUpdate && (!pageContext?.recordId || pageContext?.moduleId !== targetModuleId)) {
+    return json(400, { success: false, message: 'برای ویرایش با هوش مصنوعی باید رکورد جاری همان ماژول مشخص باشد.' });
+  }
   const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
   const file = body?.file || body?.attachment || null;
   const filePrompt = file ? [
@@ -4015,12 +4530,12 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
   }).join('\n');
 
   const systemPrompt = [
-    'شما دستیار ساخت رکورد در یک نرم‌افزار SaaS سازمانی هستید.',
+    `شما دستیار ${mutationVerb} رکورد در یک نرم‌افزار SaaS سازمانی هستید.`,
     'فقط از اطلاعاتی که کاربر داده استفاده کن.',
-    'اگر برای ساخت رکورد قابل اتکا اطلاعات کافی نیست، یا برای خواسته کاربر ابهام مهمی وجود دارد، رکورد نساز و needs_clarification=true بده.',
+    `اگر برای ${mutationVerb} قابل اتکا اطلاعات کافی نیست، یا برای خواسته کاربر ابهام مهمی وجود دارد، تغییری ایجاد نکن و needs_clarification=true بده.`,
     'سوال‌ها را فقط به اطلاعات لازم برای تکمیل همان درخواست محدود کن؛ فقط به فیلدهای اجباری اکتفا نکن و داده‌های مهم کسب‌وکاری را هم بسنج.',
     'خروجی باید فقط JSON معتبر باشد؛ هیچ متن اضافی قبل یا بعد JSON ننویس.',
-    'کلیدهای fields فقط باید از فهرست فیلدهای مجاز باشند. ستون org_id، id، system_code، created_at و UUID خام نساز.',
+    'کلیدهای fields فقط باید از فهرست فیلدهای مجاز باشند. ستون org_id، id، system_code، created_at، updated_at، created_by و updated_by را برنگردان.',
     '',
     `ماژول مقصد: ${moduleLabel}`,
     'فیلدهای مجاز:',
@@ -4032,7 +4547,7 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
 
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
-    title: `${moduleLabel}: ${prompt}`.slice(0, 90),
+    title: `${mutationVerb} ${moduleLabel}: ${prompt}`.slice(0, 90),
     pageContext,
     contextKey,
     provider: providerConfig.provider,
@@ -4050,7 +4565,7 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
       context: pageContext.context,
       context_key: contextKey,
       input_kind: String(body?.inputKind || body?.input_kind || (file ? 'file' : 'text')).trim() || 'text',
-      action: 'create_record_from_prompt',
+      action: mutationAction,
       target_module_id: targetModuleId,
     },
   });
@@ -4064,18 +4579,23 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
         : filePrompt,
     },
   ], {
-    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_create_record`,
+    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
   });
 
   const parsed = extractJsonObjectFromText(aiResult.content) || {};
   const clarificationQuestions = normalizeAiClarificationQuestions(parsed?.questions);
   const needsClarification = parsed?.needs_clarification === true || parsed?.needsClarification === true || clarificationQuestions.length > 0;
   const recordDraft = parsed?.record || (Array.isArray(parsed?.records) ? parsed.records[0] : null) || parsed;
-  const payload = sanitizeAiRecordPayload(recordDraft, schema);
+  const payload = sanitizeAiRecordPayload(recordDraft, effectiveSchema);
   const relationFieldKey = String(schema?.relationFieldKey || schema?.relation_field_key || body?.relationFieldKey || body?.relation_field_key || '').trim();
   if (relationFieldKey && pageContext?.recordId) payload[relationFieldKey] = pageContext.recordId;
   const generatedReply = String(parsed?.reply || '').trim();
-  const previewOnly = body?.previewOnly === true || body?.preview_only === true || body?.autoExecute === false || body?.auto_execute === false;
+  const previewOnly = !isUpdate && (
+    body?.previewOnly === true
+    || body?.preview_only === true
+    || body?.autoExecute === false
+    || body?.auto_execute === false
+  );
 
   if (previewOnly || needsClarification) {
     const hasPayload = !needsClarification && Object.keys(payload).length > 0;
@@ -4116,7 +4636,7 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
         target_module_id: targetModuleId,
         target_table: targetTable,
         module_label: moduleLabel,
-        record_creation_schema: schema,
+        record_creation_schema: effectiveSchema,
         payload,
         relation_field_key: relationFieldKey || null,
         context: pageContext.context || null,
@@ -4188,26 +4708,49 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
   }
 
   const createdRecords: any[] = [];
+  const updatedRecords: any[] = [];
   if (Object.keys(payload).length > 0) {
-    const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, [{
-      org_id: authContext.orgId,
-      ...payload,
-    }]);
-    const created = rows[0] || null;
-    if (created) {
-      createdRecords.push({
+    if (isUpdate) {
+      await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
+        id: `eq.${pageContext.recordId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        ...payload,
+        updated_by: authContext.userId || null,
+        updated_at: new Date().toISOString(),
+      });
+      const currentRecord = pageContext.records?.[0] || {};
+      updatedRecords.push({
         module_id: targetModuleId,
         table: targetTable,
-        id: created.id || null,
-        title: buildAiRecordTitle(created, moduleLabel),
+        id: pageContext.recordId,
+        title: buildAiRecordTitle({ ...currentRecord, ...payload }, moduleLabel),
       });
+    } else {
+      const rows = await restInsert(supabaseUrl, serviceRoleKey, targetTable, [{
+        org_id: authContext.orgId,
+        ...payload,
+      }]);
+      const created = rows[0] || null;
+      if (created) {
+        createdRecords.push({
+          module_id: targetModuleId,
+          table: targetTable,
+          id: created.id || null,
+          title: buildAiRecordTitle(created, moduleLabel),
+        });
+      }
     }
   }
 
   const reply = generatedReply
-    || (createdRecords.length > 0
-      ? `${moduleLabel} با اطلاعات استخراج‌شده ساخته شد.`
-      : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.');
+    || (isUpdate
+      ? (updatedRecords.length > 0
+          ? `${moduleLabel} با اطلاعات استخراج‌شده به‌روزرسانی شد.`
+          : 'اطلاعات کافی برای ویرایش رکورد پیدا نشد.')
+      : (createdRecords.length > 0
+          ? `${moduleLabel} با اطلاعات استخراج‌شده ساخته شد.`
+          : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.'));
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
@@ -4219,9 +4762,10 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
       capability,
-      action: 'create_record_from_prompt',
+      action: mutationAction,
       target_module_id: targetModuleId,
       created_records: createdRecords,
+      updated_records: updatedRecords,
       raw_ai_json: parsed,
     },
   });
@@ -4235,10 +4779,11 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
     model: aiResult.model,
     usageMetadata: aiResult.usageMetadata,
     metadata: {
-      source: 'create_record_from_prompt',
+      source: mutationAction,
       context_key: contextKey,
       target_module_id: targetModuleId,
       created_count: createdRecords.length,
+      updated_count: updatedRecords.length,
     },
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
@@ -4249,8 +4794,8 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
     message_id: assistantMessage?.id || null,
     module_id: pageContext.moduleId || targetModuleId,
     record_id: pageContext.recordId || createdRecords[0]?.id || null,
-    action_type: 'create_record_from_prompt',
-    status: createdRecords.length > 0 ? 'executed' : 'skipped',
+    action_type: mutationAction,
+    status: createdRecords.length > 0 || updatedRecords.length > 0 ? 'executed' : 'skipped',
     proposed_payload: {
       prompt,
       target_module_id: targetModuleId,
@@ -4259,12 +4804,13 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
     result_payload: {
       reply,
       created_records: createdRecords,
+      updated_records: updatedRecords,
       model: aiResult.model,
     },
     avalai_request_id: aiResult.requestId || null,
     created_by: authContext.userId || null,
     executed_at: new Date().toISOString(),
-  }]).catch((error: any) => console.warn('AI create record action log skipped', error));
+  }]).catch((error: any) => console.warn('AI record mutation action log skipped', error));
 
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
     updated_at: new Date().toISOString(),
@@ -4282,9 +4828,10 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
       context: pageContext.context || null,
       module_id: pageContext.moduleId || targetModuleId,
       record_id: pageContext.recordId || createdRecords[0]?.id || null,
-      last_activity_kind: 'create_record',
+      last_activity_kind: isUpdate ? 'update_record' : 'create_record',
       last_message_preview: prompt.slice(0, 300),
       last_created_records: createdRecords,
+      last_updated_records: updatedRecords,
     },
   });
 
@@ -4295,6 +4842,7 @@ const handleCreateRecordFromPrompt = async (supabaseUrl: string, serviceRoleKey:
     messageId: assistantMessage?.id || null,
     answer: reply,
     createdRecords,
+    updatedRecords,
     provider: aiResult.provider,
     model: aiResult.model,
     usage: withCustomerBilling(aiResult.usageMetadata, ledger),
@@ -5314,8 +5862,15 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'image_generation', { modelOverride: body?.modelOverride });
-  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
+  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const useOrganizationContext = imageSettings.useOrganizationContext !== false;
+  const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const [companyContext, knowledgeChunks] = await Promise.all([
+    useOrganizationContext ? loadCompanyContext(supabaseUrl, serviceRoleKey, authContext) : Promise.resolve(null),
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt) : Promise.resolve([]),
+  ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: prompt.slice(0, 90),
@@ -5339,7 +5894,10 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       capability: 'image_generation',
     },
   });
-  const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const providerPrompt = clampImagePrompt(appendImageContextToPrompt(
+    buildImagePromptWithSettings(prompt, imageSettings),
+    { companyContext, pageSummary: pageContext.summary || null, knowledgeChunks },
+  ));
   const rawSources = Array.isArray(body?.sourceImages) ? body.sourceImages
     : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
     : [];
@@ -5376,78 +5934,47 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     n: imageSettings.n || body?.n,
     extraBody: imageSettings.extraBody || imageSettings.extra_body,
   };
-  // On failure (e.g. a model that is slow/unavailable on the gateway), retry once
-  // with a stable image model so poster/image generation stays usable.
-  let imageResult: any;
-  try {
-    imageResult = await callImageGeneration(providerConfig, prompt, imageCallOptions);
-  } catch (error) {
-    const fallbackImageModel = 'gpt-image-1';
-    if (String(providerConfig.model || '').trim() !== fallbackImageModel) {
-      imageResult = await callImageGeneration({ ...providerConfig, model: fallbackImageModel }, prompt, imageCallOptions);
-    } else {
-      throw error;
-    }
-  }
-  const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
-  let fileManagerResult: any = null;
+  const promptSettings = {
+    persianText: imageSettings.persianText === true,
+    persianDigits: imageSettings.persianDigits === true,
+    rtlText: imageSettings.rtlText === true,
+    orientationHorizontal: imageSettings.orientationHorizontal === true,
+    orientationVertical: imageSettings.orientationVertical === true,
+    useOrganizationContext,
+  };
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
-    content: 'تصویر آماده شد.',
-    provider: imageResult.provider,
-    model: imageResult.model,
+    content: 'در حال ساخت تصویر...',
+    provider: providerConfig.provider,
+    model: providerConfig.model,
     metadata: {
       capability: 'image_generation',
+      capabilities: ['image_generation'],
+      kind: 'image_generation',
+      pending_status: true,
+      recheckable: true,
+      status: 'processing',
+      started_at: Date.now(),
       prompt,
-      image: storedImage,
-      usage: imageResult.usageMetadata,
-      avalai_request_id: imageResult.requestId || null,
+      provider_prompt: providerPrompt,
+      prompt_settings: promptSettings,
+      context: pageContext.context,
+      context_key: contextKey,
+      context_summary: pageContext.summary,
+      image_call_options: {
+        size: imageCallOptions.size || null,
+        quality: imageCallOptions.quality || null,
+        n: imageCallOptions.n || null,
+        extraBody: imageCallOptions.extraBody || null,
+        hasSourceImages: sourceImages.length > 0,
+      },
     },
   });
-  fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedImage, {
-    displayName: `تصویر هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.png`,
-    fileType: 'image',
-    threadId: thread.id,
-    messageId: assistantMessage?.id || null,
-    prompt,
-  }).catch((error) => {
-    console.warn('Could not register generated image in file manager', error);
-    return null;
-  });
-  if (assistantMessage?.id && fileManagerResult) {
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
-      id: `eq.${assistantMessage.id}`,
-      org_id: `eq.${authContext.orgId}`,
-    }, {
-      metadata: {
-        prompt,
-        image: {
-          ...storedImage,
-          asset_id: fileManagerResult?.asset?.id || null,
-          entry_id: fileManagerResult?.entry?.id || null,
-          folder_id: fileManagerResult?.folder?.id || null,
-        },
-        usage: imageResult.usageMetadata,
-        avalai_request_id: imageResult.requestId || null,
-      },
-    }).catch(() => []);
-  }
-  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
-    threadId: thread.id,
-    messageId: assistantMessage?.id || null,
-    requestId: imageResult.requestId,
-    capability: 'image_generation',
-    provider: imageResult.provider,
-    model: imageResult.model,
-    usageMetadata: imageResult.usageMetadata,
-    metadata: { source: 'image_generation', user_message_id: userMessage?.id || null, storage_path: storedImage.path },
-  });
-  await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, imageResult.usageMetadata, ledger);
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
     updated_at: new Date().toISOString(),
-    provider: imageResult.provider,
-    model: imageResult.model,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
     context_type: getContextKind(pageContext.context || {}),
     module_id: pageContext.moduleId || null,
     record_id: pageContext.recordId || null,
@@ -5460,25 +5987,202 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       context: pageContext.context || null,
       module_id: pageContext.moduleId || null,
       record_id: pageContext.recordId || null,
-      last_activity_kind: 'image_generation',
+      last_activity_kind: 'image_generation_pending',
       last_message_preview: prompt.slice(0, 300),
-      last_image_path: storedImage.path,
-      last_file_asset_id: fileManagerResult?.asset?.id || null,
-      last_file_entry_id: fileManagerResult?.entry?.id || null,
-      ai_files_folder_id: fileManagerResult?.folder?.id || null,
+      pending_message_id: assistantMessage?.id || null,
     },
-  });
+  }).catch(() => []);
+
+  runBackgroundTask((async () => {
+    try {
+      const imageResult = await callImageGeneration(providerConfig, providerPrompt, imageCallOptions);
+      const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
+      const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedImage, {
+        displayName: `تصویر هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.png`,
+        fileType: 'image',
+        threadId: thread.id,
+        messageId: assistantMessage?.id || null,
+        prompt,
+      }).catch((error) => {
+        console.warn('Could not register generated image in file manager', error);
+        return null;
+      });
+      const finalImage = fileManagerResult ? {
+        ...storedImage,
+        asset_id: fileManagerResult?.asset?.id || null,
+        entry_id: fileManagerResult?.entry?.id || null,
+        folder_id: fileManagerResult?.folder?.id || null,
+      } : storedImage;
+      const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        threadId: thread.id,
+        messageId: assistantMessage?.id || null,
+        requestId: imageResult.requestId,
+        capability: 'image_generation',
+        provider: imageResult.provider,
+        model: imageResult.model,
+        usageMetadata: imageResult.usageMetadata,
+        metadata: { source: 'image_generation', user_message_id: userMessage?.id || null, storage_path: storedImage.path },
+      });
+      await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, imageResult.usageMetadata, ledger);
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${assistantMessage.id}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        content: 'تصویر آماده شد.',
+        provider: imageResult.provider,
+        model: imageResult.model,
+        created_at: assistantMessage?.created_at || new Date().toISOString(),
+        metadata: {
+          capability: 'image_generation',
+          capabilities: ['image_generation'],
+          kind: 'image_generation',
+          pending_status: false,
+          status: 'completed',
+          prompt,
+          provider_prompt: providerPrompt,
+          prompt_settings: promptSettings,
+          image: finalImage,
+          usage: withCustomerBilling(imageResult.usageMetadata, ledger),
+          avalai_request_id: imageResult.requestId || null,
+        },
+      }).catch(() => []);
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+        updated_at: new Date().toISOString(),
+        provider: imageResult.provider,
+        model: imageResult.model,
+        context_type: getContextKind(pageContext.context || {}),
+        module_id: pageContext.moduleId || null,
+        record_id: pageContext.recordId || null,
+        metadata: {
+          ...(thread?.metadata || {}),
+          route: pageContext.context?.route || null,
+          summary: pageContext.summary || null,
+          context_kind: getContextKind(pageContext.context || {}),
+          context_label: buildThreadContextLabel(pageContext),
+          context: pageContext.context || null,
+          module_id: pageContext.moduleId || null,
+          record_id: pageContext.recordId || null,
+          last_activity_kind: 'image_generation',
+          last_message_preview: prompt.slice(0, 300),
+          last_image_path: storedImage.path,
+          last_file_asset_id: fileManagerResult?.asset?.id || null,
+          last_file_entry_id: fileManagerResult?.entry?.id || null,
+          ai_files_folder_id: fileManagerResult?.folder?.id || null,
+        },
+      }).catch(() => []);
+    } catch (error: any) {
+      const rawFailure = shortenProviderError(String(error?.message || error || 'image_generation_failed'));
+      const failureMessage = `ساخت تصویر ناموفق بود. سرویس هوش مصنوعی در زمان مناسب پاسخ نداد یا خطا داد. چند لحظه بعد دوباره تلاش کنید.${rawFailure ? `\nجزئیات: ${rawFailure}` : ''}`;
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${assistantMessage?.id}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        content: failureMessage,
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        metadata: {
+          capability: 'image_generation',
+          capabilities: ['image_generation'],
+          kind: 'image_generation',
+          pending_status: false,
+          status: 'failed',
+          failed: true,
+          prompt,
+          provider_prompt: providerPrompt,
+          prompt_settings: promptSettings,
+          error: rawFailure || 'image_generation_failed',
+          failed_note: failureMessage,
+        },
+      }).catch(() => []);
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+        updated_at: new Date().toISOString(),
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        context_type: getContextKind(pageContext.context || {}),
+        module_id: pageContext.moduleId || null,
+        record_id: pageContext.recordId || null,
+        metadata: {
+          ...(thread?.metadata || {}),
+          route: pageContext.context?.route || null,
+          summary: pageContext.summary || null,
+          context_kind: getContextKind(pageContext.context || {}),
+          context_label: buildThreadContextLabel(pageContext),
+          context: pageContext.context || null,
+          module_id: pageContext.moduleId || null,
+          record_id: pageContext.recordId || null,
+          last_activity_kind: 'image_generation_failed',
+          last_message_preview: failureMessage.slice(0, 300),
+        },
+      }).catch(() => []);
+    }
+  })());
+
   return json(200, {
     success: true,
+    pending: true,
     threadId: thread.id,
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
-    answer: 'تصویر آماده شد.',
-    image: storedImage,
-    provider: imageResult.provider,
-    model: imageResult.model,
-    usage: withCustomerBilling(imageResult.usageMetadata, ledger),
-    ledger,
+    answer: 'درخواست ساخت تصویر ثبت شد.',
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    messages: [userMessage, assistantMessage].filter(Boolean),
+  });
+};
+
+const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const messageId = normalizeId(body?.messageId);
+  if (!messageId) return json(400, { success: false, message: 'شناسه پیام تصویر ارسال نشده است.' });
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_messages', {
+    id: `eq.${messageId}`,
+    org_id: `eq.${authContext.orgId}`,
+    select: 'id,thread_id,role,content,provider,model,metadata,created_at',
+    limit: '1',
+  });
+  const msg = rows[0] || null;
+  if (!msg) return json(404, { success: false, message: 'پیام ساخت تصویر پیدا نشد.' });
+  const metadata = msg.metadata || {};
+  if (metadata.pending_status === true) {
+    const startedAt = Number(metadata.started_at || 0);
+    const elapsedMs = startedAt ? Date.now() - startedAt : 0;
+    if (startedAt && elapsedMs > IMAGE_STATUS_STALE_MS) {
+      const failureMessage = 'ساخت تصویر در زمان مورد انتظار کامل نشد. درخواست و کارت گفتگو حفظ شد؛ لطفاً چند لحظه بعد دوباره تلاش کنید یا وضعیت worker سرور را بررسی کنید.';
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${messageId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        content: failureMessage,
+        metadata: {
+          ...metadata,
+          pending_status: false,
+          status: 'failed',
+          failed: true,
+          failed_note: failureMessage,
+          error: 'image_generation_worker_timeout',
+        },
+      }).catch(() => []);
+      return json(200, { success: true, status: 'failed', message: failureMessage, messageId, threadId: msg.thread_id });
+    }
+    return json(200, {
+      success: true,
+      status: 'processing',
+      messageId,
+      threadId: msg.thread_id,
+      message: msg,
+      provider: msg.provider,
+      model: msg.model,
+    });
+  }
+  return json(200, {
+    success: true,
+    status: metadata.failed || metadata.status === 'failed' ? 'failed' : 'completed',
+    messageId,
+    threadId: msg.thread_id,
+    message: msg,
+    image: metadata.image || null,
+    usage: metadata.usage || null,
+    provider: msg.provider,
+    model: msg.model,
   });
 };
 
@@ -5602,7 +6306,7 @@ const renderPdfViaService = async (supabaseUrl: string, serviceRoleKey: string, 
     method: 'POST',
     headers: { Authorization: `Bearer ${serviceRoleKey}`, apikey: serviceRoleKey, 'Content-Type': 'application/json' },
     body: JSON.stringify({ documentHtml: html, title, filename: title }),
-    signal: AbortSignal.timeout(110000),
+    signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -6102,6 +6806,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'customer_reply_suggestion'),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'customer_reply_suggestion');
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: channel === 'sms' ? 'پیشنهاد پاسخ پیامک' : 'پیشنهاد پاسخ بات',
@@ -6445,8 +7150,8 @@ const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, aut
   if (!providerConfig.apiKey) {
     return json(200, {
       success: true,
-      models: Object.values(DEFAULT_CAPABILITY_MODELS).map((id) => ({ id, label: id })),
-      warning: 'کلید مرکزی AI تنظیم نشده است؛ لیست پیش‌فرض نمایش داده شد.',
+      models: [],
+      warning: 'کلید مرکزی AI تنظیم نشده است و catalog مدل‌ها هم خالی است.',
     });
   }
   const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/models', {
@@ -6458,8 +7163,8 @@ const handleListModels = async (supabaseUrl: string, serviceRoleKey: string, aut
   if (!response.ok) {
     return json(200, {
       success: true,
-      models: Object.values(DEFAULT_CAPABILITY_MODELS).map((id) => ({ id, label: id })),
-      warning: 'Provider لیست مدل‌ها را از مسیر OpenAI-compatible /models برنگرداند؛ لیست پیشنهادی نمایش داده شد.',
+      models: [],
+      warning: 'Provider لیست مدل‌ها را از مسیر OpenAI-compatible /models برنگرداند و catalog مدل‌ها هم خالی است.',
       raw: parsed,
     });
   }
@@ -7160,17 +7865,22 @@ Deno.serve(async (req: Request) => {
     if (action === 'transcribe_voice') return await handleTranscribeVoice(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_voice_output') return await handleGenerateVoiceOutput(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_image') return await handleGenerateImage(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'get_image_status') return await handleGetImageStatus(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_video') return await handleGenerateVideo(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_video_status') return await handleGetVideoStatus(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
-    if (action === 'create_record_from_prompt') return await handleCreateRecordFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'create_record_from_prompt' || action === 'update_record_from_prompt') {
+      return await handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
+    }
     if (action === 'process_operation_from_prompt') return await handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'workflow_ai_prompt') {
       const outputMode = String(body?.outputMode || body?.output_mode || '').trim();
-      if (outputMode === 'create_record') return await handleCreateRecordFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
+      if (outputMode === 'create_record' || outputMode === 'update_record') {
+        return await handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
+      }
       if (outputMode === 'process_operation') return await handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, { ...body, autoExecute: true });
       return await handleChat(supabaseUrl, serviceRoleKey, authContext, { ...body, action: 'chat', capability: 'workflow_ai_prompt', forceNewThread: body?.forceNewThread !== false });
     }
@@ -7185,7 +7895,7 @@ Deno.serve(async (req: Request) => {
 
     return json(400, { success: false, message: 'اقدام درخواستی پشتیبانی نمی‌شود.' });
   } catch (error: any) {
-    const message = String(error?.message || 'خطای ناشناخته');
+    const message = shortenProviderError(String(error?.message || 'خطای ناشناخته'));
     const status = message === 'Unauthorized' ? 401 : 500;
     console.error('ai-assistant failed', error);
     return json(status, { success: false, message });

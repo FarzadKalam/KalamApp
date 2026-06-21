@@ -19,6 +19,8 @@ import ResilientImage from './common/ResilientImage';
 import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import PhoneMatchPickerModal from './notifications/PhoneMatchPickerModal';
 import VoipRecordingPlayer from './notifications/VoipRecordingPlayer';
+import { fetchRecordLockState, getRecordLockStateFromRecord, mergeRecordLockIntoRecord } from '../utils/recordLockRuntime';
+import RecordLockControl from './recordLocks/RecordLockControl';
 import {
   buildPhoneTargetDisplayName,
   MANUAL_PHONE_BINDING_SOURCE_FIELD,
@@ -227,7 +229,9 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
     [editableFieldKeys, fields]
   );
 
-  const canEditModule = moduleConfig ? rolePermissions?.[moduleId]?.edit !== false : false;
+  const lockState = useMemo(() => getRecordLockStateFromRecord(record), [record]);
+  const isRecordLocked = lockState.isLocked;
+  const canEditModule = moduleConfig ? rolePermissions?.[moduleId]?.edit !== false && !isRecordLocked : false;
   const canEditField = (field: any) => {
     const fieldKey = String(field?.key || '').trim();
     if (!fieldKey || !editableFieldKeys.has(fieldKey)) return false;
@@ -542,6 +546,10 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
             [tagsField.key]: tagsMap[String(recordId)] || [],
           };
         }
+        if (nextRecord) {
+          const lockState = await fetchRecordLockState(moduleId, recordId);
+          nextRecord = mergeRecordLockIntoRecord(nextRecord, lockState);
+        }
         if (cancelled) return;
         setRecord(nextRecord);
         setDraftRecord(nextRecord);
@@ -663,6 +671,10 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
 
   const handleSaveQuickPreview = async () => {
     if (!moduleConfig || !record || !draftRecord || !canEditModule) return;
+    if (isRecordLocked) {
+      message.error('این رکورد قفل شده و قابل تغییر نیست.');
+      return;
+    }
     const patch: Record<string, any> = {};
     editableFields.forEach((field: any) => {
       const fieldKey = String(field?.key || '').trim();
@@ -860,6 +872,11 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
         {(!loading && record) ? (
           <div className="pt-2 mt-2 flex items-center justify-between gap-2 border-t border-gray-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
+              <RecordLockControl
+                moduleId={moduleId}
+                recordId={recordId}
+                lockState={lockState}
+              />
               {supportsPhoneIdentityBinding && previewPhoneValue ? (
                 <Button
                   size="small"
@@ -880,7 +897,7 @@ const RelatedRecordPopover: React.FC<RelatedRecordPopoverProps> = ({
                     size="small"
                     type="primary"
                     loading={savingQuickPreview}
-                    disabled={!canEditModule || !hasDirtyQuickPreview}
+                    disabled={!canEditModule || isRecordLocked || !hasDirtyQuickPreview}
                     onClick={handleSaveQuickPreview}
                   >
                     ذخیره

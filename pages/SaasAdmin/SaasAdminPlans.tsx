@@ -150,6 +150,13 @@ const FEATURE_OPTIONS = [
   { id: 'advanced_reports', label: 'گزارش‌ساز پیشرفته' },
   { id: 'multi_lane_processes', label: 'فرآیندهای چندردیفه و فعال‌کننده‌ها' },
   { id: 'white_label', label: 'White Label' },
+  { id: 'custom_domain', label: 'دامنه اختصاصی' },
+  { id: 'own_payment_gateway', label: 'درگاه پرداخت اختصاصی سازمان' },
+  { id: 'online_invoice_payment', label: 'پرداخت آنلاین فاکتورهای عمومی' },
+  { id: 'saas_account_billing', label: 'مدیریت حساب و اشتراک' },
+  { id: 'ai_credit_topup', label: 'شارژ اعتبار هوش مصنوعی' },
+  { id: 'sms_credit_topup', label: 'شارژ اعتبار پیامک' },
+  { id: 'extra_users_purchase', label: 'خرید کاربر اضافه' },
 ];
 
 type PlanRow = {

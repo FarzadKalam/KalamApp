@@ -1,4 +1,5 @@
 import React from 'react';
+import { resolveManagerTitle } from '../../companySettings';
 import { buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../../invoicePresentation';
 
 interface InvoiceCardProps {
@@ -73,6 +74,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
   const sellerWebsite = sellerInfo.website;
   const sellerEmail = sellerInfo.email;
   const sellerCeoName = sellerInfo.ceo_name;
+  const sellerManagerTitle = resolveManagerTitle(sellerInfo);
   const sellerContactSummary = [sellerMobile, sellerPhone].filter(Boolean).join(' - ');
   const currencyLabel = String(data?.company_settings?.currency_label || sellerInfo?.currency_label || 'ریال').trim() || 'ریال';
 
@@ -264,7 +266,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
                   </tr>
                   {sellerCeoName && (
                     <tr>
-                      <td style={{ fontWeight: 'bold', padding: isMobilePrint ? '1px' : '2px' }}>مدیرعامل:</td>
+                      <td style={{ fontWeight: 'bold', padding: isMobilePrint ? '1px' : '2px' }}>{sellerManagerTitle}:</td>
                       <td style={{ paddingRight: isMobilePrint ? '2px' : '4px', padding: isMobilePrint ? '1px' : '2px' }}>
                         {sellerCeoName}
                       </td>

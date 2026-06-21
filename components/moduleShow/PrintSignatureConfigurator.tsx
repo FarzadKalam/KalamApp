@@ -35,10 +35,10 @@ const SIGNER_MODULE_OPTIONS = [
   { label: 'تامین‌کننده', value: 'suppliers' },
 ] as const;
 
-const getSourceTag = (kind: PrintSignatureKind) => {
-  switch (kind) {
+const getSourceTag = (row: PrintSignatureDerivedState) => {
+  switch (row.kind) {
     case 'ceo':
-      return 'مدیرعامل';
+      return row.sourceDescription.replace(/\s+سازمان$/, '') || 'مدیر سازمان';
     case 'current_user':
       return 'کاربر جاری';
     case 'record_assignee':
@@ -96,7 +96,7 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
               <div className="print-signature-card-header">
                 <div className="print-signature-card-meta">
                   <span className="print-signature-card-index">{index + 1}</span>
-                  <Tag color={row.automatic ? 'blue' : 'default'}>{getSourceTag(row.kind)}</Tag>
+                  <Tag color={row.automatic ? 'blue' : 'default'}>{getSourceTag(row)}</Tag>
                   {row.sourceDescription ? <span className="print-signature-card-source">{row.sourceDescription}</span> : null}
                   {row.unresolved ? <Tag color="orange">بدون مقدار</Tag> : null}
                 </div>
@@ -155,7 +155,7 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
                     <Input
                       value={row.subtitleValue}
                       onChange={(event) => onChangeSubtitle(row.id, event.target.value)}
-                      placeholder="مثلاً: امضای مدیرعامل"
+                      placeholder="مثلاً: امضای مدیر سازمان"
                     />
                   </div>
                   <div>
