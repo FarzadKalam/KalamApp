@@ -29,10 +29,11 @@ import {
   SnippetsOutlined,
   SoundOutlined,
   TeamOutlined,
+  UserAddOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { App, Avatar, Badge, Button, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
-import { getBotPlatformAvatarSrc } from '../../../utils/botPlatform';
+import { App, Avatar, Badge, Button, Checkbox, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
+import { BOT_CHANNEL_LABELS_FA, BOT_CHANNELS, getBotPlatformAvatarSrc, isBotTargetModuleId, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
 import { MODULES } from '../../../moduleRegistry';
 import { useMessagingOmniLiveData } from './useMessagingOmniLiveData';
@@ -48,6 +49,7 @@ import {
   syncPhoneIdentityBinding,
   type PhoneBindTargetModuleId,
 } from '../../../utils/phoneIdentityBindings';
+import { syncBotDirectChatIdForTarget } from '../../../utils/botIdentityBindings';
 import { toFaErrorMessage } from '../../../utils/errorMessageFa';
 import { sendSmsViaGateway } from '../../../utils/smsGateway';
 import SharedNoteComposer from '../../notes/SharedNoteComposer';
@@ -55,7 +57,7 @@ import { fetchAssigneeDirectory, type AssigneeDirectory } from '../../../utils/r
 import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { parseNoteContent, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../../utils/noteAttachments';
-import { insertNotesWithFallback } from '../../../utils/noteDispatch';
+import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../../utils/noteDispatch';
 import { shortenAttachmentsForExternalShare } from '../../../utils/fileShortLinks';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../../../utils/recordReference';
 import { likeReceiptMapFromBox, readReceiptMapFromBox } from '../../../utils/messageReceipts';
@@ -89,6 +91,7 @@ import FileExtensionTile from '../../files/FileExtensionTile';
 const ForwardMessageModalRuntime = React.lazy(() => import('../ForwardMessageModalRuntime'));
 const SmartForm = React.lazy(() => import('../../SmartForm'));
 const MessageComposerModal = React.lazy(() => import('../../MessageComposerModal'));
+const BotChatIdentityBindModal = React.lazy(() => import('../BotChatIdentityBindModal'));
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 type EventKind = 'message' | 'sms' | 'call';
@@ -151,6 +154,12 @@ type TimelineEvent = {
   mentionUsers?: string[];
   mentionRoles?: string[];
   avatarUrl?: string | null;
+  botSenderChannel?: BotChannel | null;
+  botSenderChatId?: string | null;
+  botSenderDisplayName?: string | null;
+  botSenderUsername?: string | null;
+  botSenderPhoneNumber?: string | null;
+  botSenderBound?: boolean;
   unread?: boolean;
   liked?: boolean;
   seenAt?: string;
@@ -171,6 +180,7 @@ type ComposerSendPayload = {
   attachments?: File[];
   linkedAttachments?: NoteAttachment[];
   replyTo?: string | null;
+  smsNotificationEnabled?: boolean;
 };
 
 type MessagingSurfacePrototypeProps = {
@@ -444,6 +454,52 @@ const normalizeIdArray = (value: any): string[] => {
       .filter(Boolean);
   }
   return [];
+};
+
+const normalizeIranMobileForSms = (value: unknown) => {
+  let digits = String(value || '')
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0098')) digits = `0${digits.slice(4)}`;
+  else if (digits.startsWith('98')) digits = `0${digits.slice(2)}`;
+  else if (digits.length === 10 && digits.startsWith('9')) digits = `0${digits}`;
+  return /^09\d{9}$/.test(digits) ? digits : '';
+};
+
+const buildBotSmsNotificationText = (orgName: string, platformLabel: string) => {
+  const safeOrgName = String(orgName || '').trim() || 'سازمان';
+  const safePlatformLabel = String(platformLabel || '').trim() || 'پیام‌رسان';
+  return `سلام، یک پیام جدید از طرف ${safeOrgName} در ${safePlatformLabel} برای شما ارسال شد.\nلطفاً پیام‌رسان خود را بررسی کنید.`;
+};
+
+const BotSmsNotificationConfirmContent: React.FC<{
+  initialText: string;
+  onChange: (value: { text: string; remember: boolean }) => void;
+}> = ({ initialText, onChange }) => {
+  const [text, setText] = useState(initialText);
+  const [remember, setRemember] = useState(false);
+  const update = (nextText: string, nextRemember: boolean) => {
+    setText(nextText);
+    setRemember(nextRemember);
+    onChange({ text: nextText, remember: nextRemember });
+  };
+  return (
+    <div className="space-y-3" dir="rtl">
+      <div className="text-xs leading-6 text-slate-500 dark:text-slate-300">
+        متن پیامک اطلاع‌رسانی قبل از ارسال پیام بات برای مخاطب ارسال می‌شود.
+      </div>
+      <Input.TextArea
+        value={text}
+        onChange={(event) => update(event.target.value, remember)}
+        autoSize={{ minRows: 3, maxRows: 6 }}
+      />
+      <Checkbox checked={remember} onChange={(event) => update(text, event.target.checked)}>
+        از این به بعد از همین متن برای اطلاع‌رسانی پیامکی به این کاربر استفاده کن
+      </Checkbox>
+    </div>
+  );
 };
 
 const isInternalSystemNote = (note: any) =>
@@ -997,7 +1053,8 @@ const TimelineEventCard: React.FC<{
   onCreateActivity?: (item: TimelineEvent) => void;
   onToggleLike?: (item: TimelineEvent) => void;
   onShowReceipts?: (item: TimelineEvent) => void;
-}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts }) => {
+  onBindBotSender?: (item: TimelineEvent) => void;
+}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender }) => {
   const { message } = App.useApp();
   const outgoing = item.direction === 'outbound';
   const isCall = item.kind === 'call';
@@ -1163,6 +1220,9 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('reply') ? <TimelineIconButton title="پاسخ" icon={<RollbackOutlined />} inverse={outgoing} onClick={() => onReply?.(item)} /> : null}
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
+          {!outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && item.botSenderChatId && !item.botSenderBound ? (
+            <TimelineIconButton title="اتصال فرستنده به مخاطب" icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
+          ) : null}
           <TimelineIconButton title="کپی متن" icon={<CopyOutlined />} inverse={outgoing} onClick={() => void copyMessageText()} />
           <TimelineIconButton title={item.liked ? 'پسندیده شده' : 'پسندیدن'} icon={<LikeOutlined />} active={Boolean(item.liked)} activeTone="like" inverse={outgoing} onClick={() => onToggleLike?.(item)} />
           {item.seenAt ? (
@@ -1304,6 +1364,7 @@ const MessagingComposerDock: React.FC<{
   const [attachments, setAttachments] = useState<File[]>([]);
   const [linkedAttachments, setLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [readyTextsOpen, setReadyTextsOpen] = useState(false);
+  const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
   useEffect(() => {
     setDraft('');
     setRecording(false);
@@ -1313,6 +1374,7 @@ const MessagingComposerDock: React.FC<{
     setAttachments([]);
     setLinkedAttachments([]);
     setReadyTextsOpen(false);
+    setSmsNotificationEnabled(false);
   }, [conversation.key]);
   const applyReadyText = (value: string) => {
     const text = String(value || '').trim();
@@ -1358,6 +1420,7 @@ const MessagingComposerDock: React.FC<{
           attachments,
           linkedAttachments,
           replyTo: replyTarget?.sourceRow?.id ? String(replyTarget.sourceRow.id) : null,
+          smsNotificationEnabled,
         });
         if (sent) {
           setDraft('');
@@ -1417,6 +1480,8 @@ const MessagingComposerDock: React.FC<{
           enableImagePasteAndDrop
           replyActive={Boolean(replyTarget)}
           onClearReply={onClearReply}
+          smsNotificationEnabled={smsNotificationEnabled}
+          onSmsNotificationChange={conversation.channel === 'internal' || conversation.channel === 'bot_group' || conversation.channel === 'bot_direct' ? setSmsNotificationEnabled : undefined}
           surfaceVariant="omni"
           extraActions={!disabled ? (
             <>
@@ -1502,6 +1567,23 @@ type PhoneBindDraft = {
   existingBindingLabel: string | null;
 };
 
+type BotIdentityBindingRow = {
+  target_module_id?: BotTargetModuleId | string | null;
+  target_record_id?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  phone_number?: string | null;
+};
+
+type BotIdentityBindDraft = {
+  channel: BotChannel;
+  chatId: string;
+  displayName: string;
+  username: string;
+  phoneNumber: string;
+  existingBinding: BotIdentityBindingRow | null;
+};
+
 type MessageActivityDraft = {
   initialValues: Record<string, any>;
   attachments: NoteAttachment[];
@@ -1532,6 +1614,18 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [phoneBindTargetRecordId, setPhoneBindTargetRecordId] = useState<string | null>(null);
   const [phoneBindSearch, setPhoneBindSearch] = useState('');
   const [phoneBindOptions, setPhoneBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
+  const [botIdentityBindOpen, setBotIdentityBindOpen] = useState(false);
+  const [botIdentityBindLoading, setBotIdentityBindLoading] = useState(false);
+  const [botIdentityBindSaving, setBotIdentityBindSaving] = useState(false);
+  const [botIdentityBindDraft, setBotIdentityBindDraft] = useState<BotIdentityBindDraft | null>(null);
+  const [botIdentityBindTargetModuleId, setBotIdentityBindTargetModuleId] = useState<BotTargetModuleId>('customers');
+  const [botIdentityBindTargetRecordId, setBotIdentityBindTargetRecordId] = useState<string | null>(null);
+  const [botIdentityBindSearch, setBotIdentityBindSearch] = useState('');
+  const [botIdentityBindOptions, setBotIdentityBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
+  const [botIdentityAllowedUserIds, setBotIdentityAllowedUserIds] = useState<string[]>([]);
+  const [botIdentityAllowedRoleIds, setBotIdentityAllowedRoleIds] = useState<string[]>([]);
+  const [botIdentityAiAutoReplyEnabled, setBotIdentityAiAutoReplyEnabled] = useState(false);
+  const [botIdentityAiCounterpartyGuide, setBotIdentityAiCounterpartyGuide] = useState('');
   const [replyTarget, setReplyTarget] = useState<TimelineEvent | null>(null);
   const [conversationSearchOpen, setConversationSearchOpen] = useState(false);
   const [conversationSearchValue, setConversationSearchValue] = useState('');
@@ -1543,6 +1637,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [messageActivityDraft, setMessageActivityDraft] = useState<MessageActivityDraft | null>(null);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
+  const [orgDisplayName, setOrgDisplayName] = useState('');
   const [reelBootstrapped, setReelBootstrapped] = useState(false);
   const [localReadThroughByConversation, setLocalReadThroughByConversation] = useState<Record<string, string>>({});
   const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
@@ -1579,13 +1674,20 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   useEffect(() => {
     if (!liveData.profile.orgId) {
       setOrgLogoUrl(null);
+      setOrgDisplayName('');
       return;
     }
     let disposed = false;
     void loadScopedCompanySettings(supabase).then(({ data }) => {
-      if (!disposed) setOrgLogoUrl(String(data?.logo_url || '').trim() || null);
+      if (!disposed) {
+        setOrgLogoUrl(String(data?.logo_url || '').trim() || null);
+        setOrgDisplayName(String(data?.trade_name || data?.company_full_name || '').trim());
+      }
     }).catch(() => {
-      if (!disposed) setOrgLogoUrl(null);
+      if (!disposed) {
+        setOrgLogoUrl(null);
+        setOrgDisplayName('');
+      }
     });
     return () => {
       disposed = true;
@@ -2160,6 +2262,184 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     };
   }, [message, phoneBindOpen, phoneBindSearch, phoneBindTargetModuleId, phoneBindTargetRecordId]);
 
+  const closeBotIdentityBindModal = () => {
+    setBotIdentityBindOpen(false);
+    setBotIdentityBindLoading(false);
+    setBotIdentityBindSaving(false);
+    setBotIdentityBindDraft(null);
+    setBotIdentityBindTargetModuleId('customers');
+    setBotIdentityBindTargetRecordId(null);
+    setBotIdentityBindSearch('');
+    setBotIdentityBindOptions([]);
+    setBotIdentityAllowedUserIds([]);
+    setBotIdentityAllowedRoleIds([]);
+    setBotIdentityAiAutoReplyEnabled(false);
+    setBotIdentityAiCounterpartyGuide('');
+  };
+
+  const openBotIdentityBindModalForMessage = async (item: TimelineEvent) => {
+    const channel = item.botSenderChannel || activeConversation?.platform || null;
+    const chatId = String(item.botSenderChatId || '').trim();
+    if (!channel || !BOT_CHANNELS.includes(channel) || !chatId) {
+      message.warning('برای این پیام chat id یکتای فرستنده پیدا نشد.');
+      return;
+    }
+    setBotIdentityBindOpen(true);
+    setBotIdentityBindLoading(true);
+    try {
+      const orgId = String(liveData.profile.orgId || '').trim();
+      const [bindingResult, threadResult] = await Promise.all([
+        supabase
+          .from('bot_chat_identity_bindings')
+          .select('target_module_id,target_record_id,display_name,username,phone_number')
+          .eq('org_id', orgId)
+          .eq('channel_type', channel)
+          .eq('chat_id', chatId)
+          .maybeSingle(),
+        supabase
+          .from('counterparty_bot_direct_threads')
+          .select('metadata,display_name,username,phone_number,target_module_id,target_record_id')
+          .eq('org_id', orgId)
+          .eq('channel_type', channel)
+          .eq('chat_id', chatId)
+          .maybeSingle(),
+      ]);
+      if (bindingResult.error) throw bindingResult.error;
+      if (threadResult.error) throw threadResult.error;
+      const existingBinding = (bindingResult.data || null) as BotIdentityBindingRow | null;
+      const threadRow = (threadResult.data || null) as Record<string, any> | null;
+      const metadata = threadRow?.metadata && typeof threadRow.metadata === 'object' ? threadRow.metadata : {};
+      const initialTargetModuleId = isBotTargetModuleId(String(existingBinding?.target_module_id || '').trim())
+        ? String(existingBinding?.target_module_id || '').trim() as BotTargetModuleId
+        : isBotTargetModuleId(String(threadRow?.target_module_id || '').trim())
+          ? String(threadRow?.target_module_id || '').trim() as BotTargetModuleId
+          : 'customers';
+      const initialTargetRecordId = String(existingBinding?.target_record_id || threadRow?.target_record_id || '').trim() || null;
+      const initialDisplayName = String(item.botSenderDisplayName || existingBinding?.display_name || threadRow?.display_name || item.author || '').trim();
+      setBotIdentityBindDraft({
+        channel,
+        chatId,
+        displayName: initialDisplayName,
+        username: String(item.botSenderUsername || existingBinding?.username || threadRow?.username || '').trim().replace(/^@+/, ''),
+        phoneNumber: String(item.botSenderPhoneNumber || existingBinding?.phone_number || threadRow?.phone_number || '').trim(),
+        existingBinding,
+      });
+      setBotIdentityBindTargetModuleId(initialTargetModuleId);
+      setBotIdentityBindTargetRecordId(initialTargetRecordId);
+      setBotIdentityBindSearch('');
+      setBotIdentityBindOptions(initialTargetRecordId && initialDisplayName ? [{
+        value: initialTargetRecordId,
+        label: initialDisplayName,
+      }] : []);
+      setBotIdentityAllowedUserIds(Array.isArray((metadata as any)?.allowed_user_ids) ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : []);
+      setBotIdentityAllowedRoleIds(Array.isArray((metadata as any)?.allowed_role_ids) ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : []);
+      setBotIdentityAiAutoReplyEnabled(Boolean((metadata as any)?.ai_auto_reply_enabled));
+      setBotIdentityAiCounterpartyGuide(String((metadata as any)?.ai_counterparty_guide || '').trim());
+    } catch (error: any) {
+      setBotIdentityBindOpen(false);
+      message.error(toFaErrorMessage(error, 'خواندن اتصال فرستنده بات ناموفق بود.'));
+    } finally {
+      setBotIdentityBindLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!botIdentityBindOpen) return;
+    let disposed = false;
+    setBotIdentityBindLoading(true);
+    void searchPhoneBindingTargets({
+      client: supabase,
+      moduleId: botIdentityBindTargetModuleId,
+      search: botIdentityBindSearch,
+      limit: 20,
+    }).then((options) => {
+      if (disposed) return;
+      setBotIdentityBindOptions((prev) => {
+        const map = new Map<string, { value: string; label: string; meta?: string | null }>();
+        prev.forEach((item) => {
+          if (item.value === botIdentityBindTargetRecordId) map.set(item.value, item);
+        });
+        options.forEach((item) => map.set(item.value, item));
+        return Array.from(map.values());
+      });
+    }).catch((error: any) => {
+      if (!disposed) message.error(toFaErrorMessage(error, 'جستجوی مخاطب بات ناموفق بود.'));
+    }).finally(() => {
+      if (!disposed) setBotIdentityBindLoading(false);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [botIdentityBindOpen, botIdentityBindSearch, botIdentityBindTargetModuleId, botIdentityBindTargetRecordId, message]);
+
+  const saveBotIdentityBind = async () => {
+    const draft = botIdentityBindDraft;
+    const orgId = String(liveData.profile.orgId || '').trim();
+    const targetRecordId = String(botIdentityBindTargetRecordId || '').trim();
+    if (!draft || !orgId) {
+      message.error('اطلاعات لازم برای اتصال فرستنده بات کامل نیست.');
+      return;
+    }
+    if (!targetRecordId) {
+      message.warning('مخاطب مقصد را انتخاب کنید.');
+      return;
+    }
+    setBotIdentityBindSaving(true);
+    try {
+      const previousModuleId = String(draft.existingBinding?.target_module_id || '').trim();
+      const previousRecordId = String(draft.existingBinding?.target_record_id || '').trim();
+      if (
+        isBotTargetModuleId(previousModuleId)
+        && previousRecordId
+        && (previousModuleId !== botIdentityBindTargetModuleId || previousRecordId !== targetRecordId)
+      ) {
+        await syncBotDirectChatIdForTarget({
+          client: supabase,
+          orgId,
+          moduleId: previousModuleId,
+          recordId: previousRecordId,
+          channel: draft.channel,
+          chatId: null,
+          previousChatId: draft.chatId,
+        });
+      }
+      await syncBotDirectChatIdForTarget({
+        client: supabase,
+        orgId,
+        moduleId: botIdentityBindTargetModuleId,
+        recordId: targetRecordId,
+        channel: draft.channel,
+        chatId: draft.chatId,
+        previousChatId: draft.chatId,
+        username: draft.username || null,
+        phoneNumber: draft.phoneNumber || null,
+        displayName: draft.displayName || null,
+      });
+      const { error: threadError } = await supabase
+        .from('counterparty_bot_direct_threads')
+        .update({
+          metadata: {
+            allowed_user_ids: botIdentityAllowedUserIds,
+            allowed_role_ids: botIdentityAllowedRoleIds,
+            ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
+            ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
+          },
+          last_seen_at: new Date().toISOString(),
+        })
+        .eq('org_id', orgId)
+        .eq('channel_type', draft.channel)
+        .eq('chat_id', draft.chatId);
+      if (threadError) throw threadError;
+      await liveData.refresh();
+      message.success('اتصال فرستنده بات ذخیره شد.');
+      closeBotIdentityBindModal();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره اتصال فرستنده بات ناموفق بود.'));
+    } finally {
+      setBotIdentityBindSaving(false);
+    }
+  };
+
   const savePhoneBind = async () => {
     const draft = phoneBindDraft;
     const orgId = String(liveData.profile.orgId || '').trim();
@@ -2359,6 +2639,119 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       return;
     }
     await liveData.refresh();
+  };
+
+  const confirmBotSmsNotificationText = (initialText: string) => new Promise<{ text: string; remember: boolean } | null>((resolve) => {
+    let latest = { text: initialText, remember: false };
+    Modal.confirm({
+      title: 'تأیید اطلاع‌رسانی پیامکی',
+      okText: 'تأیید و ارسال',
+      cancelText: 'انصراف',
+      width: 560,
+      content: (
+        <BotSmsNotificationConfirmContent
+          initialText={initialText}
+          onChange={(value) => {
+            latest = value;
+          }}
+        />
+      ),
+      onOk: () => {
+        if (!String(latest.text || '').trim()) {
+          message.warning('متن پیامک اطلاع‌رسانی خالی است.');
+          return Promise.reject(new Error('empty sms notification text'));
+        }
+        resolve({ text: String(latest.text || '').trim(), remember: latest.remember });
+        return undefined;
+      },
+      onCancel: () => resolve(null),
+    });
+  });
+
+  const getBotConversationRow = (conversation: Conversation) => {
+    if (conversation.channel === 'bot_group') {
+      const groupId = String(conversation.key || '').replace(/^live:bot_group:/, '');
+      return {
+        table: 'counterparty_bot_groups' as const,
+        id: groupId,
+        row: (liveData.botGroups || []).find((item: any) => String(item?.id || '') === groupId) || null,
+      };
+    }
+    if (conversation.channel === 'bot_direct') {
+      const threadId = String(conversation.key || '').replace(/^live:bot_direct:/, '');
+      return {
+        table: 'counterparty_bot_direct_threads' as const,
+        id: threadId,
+        row: (liveData.botDirectThreads || []).find((item: any) => String(item?.id || '') === threadId) || null,
+      };
+    }
+    return null;
+  };
+
+  const getBotSmsTemplateFromConversation = (conversation: Conversation) => {
+    const rowInfo = getBotConversationRow(conversation);
+    const metadata = rowInfo?.row?.metadata && typeof rowInfo.row.metadata === 'object' ? rowInfo.row.metadata : {};
+    return String((metadata as any)?.sms_notification_template || '').trim();
+  };
+
+  const persistBotSmsNotificationTemplate = async (conversation: Conversation, text: string) => {
+    const rowInfo = getBotConversationRow(conversation);
+    if (!rowInfo?.id || !rowInfo.row) return;
+    const metadata = rowInfo.row.metadata && typeof rowInfo.row.metadata === 'object' ? rowInfo.row.metadata : {};
+    const { error } = await supabase
+      .from(rowInfo.table)
+      .update({
+        metadata: {
+          ...metadata,
+          sms_notification_template: String(text || '').trim() || null,
+          sms_notification_template_updated_at: new Date().toISOString(),
+        },
+      })
+      .eq('id', rowInfo.id);
+    if (error) throw error;
+  };
+
+  const resolveBotSmsRecipient = async (conversation: Conversation) => {
+    const moduleId = String(conversation.relatedModuleId || '').trim() as PhoneBindTargetModuleId;
+    const recordId = String(conversation.relatedRecordId || '').trim();
+    if (!PHONE_BIND_TARGET_MODULES.includes(moduleId) || !recordId) {
+      throw new Error('برای ارسال اطلاع‌رسانی پیامکی، گفتگوی بات باید به یک مخاطب، تأمین‌کننده یا کارمند متصل باشد.');
+    }
+    const select = moduleId === 'customers'
+      ? 'id, full_name, business_name, legal_name, system_code, first_name, last_name, mobile_1, mobile_2, phone'
+      : moduleId === 'suppliers'
+        ? 'id, business_name, first_name, last_name, system_code, mobile_1, mobile_2, phone'
+        : 'id, full_name, first_name, last_name, system_code, legacy_system_code, mobile_1, mobile_2, phone';
+    const { data, error } = await supabase
+      .from(moduleId)
+      .select(select)
+      .eq('id', recordId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('مخاطب متصل به گفتگوی بات پیدا نشد.');
+    const phone = [
+      (data as any)?.mobile_1,
+      (data as any)?.mobile_2,
+      (data as any)?.phone,
+    ].map(normalizeIranMobileForSms).find(Boolean) || '';
+    if (!phone) throw new Error('برای مخاطب متصل به گفتگوی بات، شماره موبایل معتبر ثبت نشده است.');
+    return {
+      phone,
+      moduleId,
+      recordId,
+      title: buildPhoneTargetDisplayName(moduleId, data) || conversation.title,
+    };
+  };
+
+  const prepareBotSmsNotification = async (conversation: Conversation) => {
+    const recipient = await resolveBotSmsRecipient(conversation);
+    const savedText = getBotSmsTemplateFromConversation(conversation);
+    const platformLabel = conversation.platform ? BOT_CHANNEL_LABELS_FA[conversation.platform] : channelMeta[conversation.channel].label;
+    const text = savedText || buildBotSmsNotificationText(orgDisplayName, platformLabel);
+    if (savedText) return { ...recipient, text, remember: false };
+    const confirmed = await confirmBotSmsNotificationText(text);
+    if (!confirmed) return null;
+    return { ...recipient, text: confirmed.text, remember: confirmed.remember };
   };
 
   const sendTextToBotGroup = async (group: any, text: string, options?: Record<string, any>) => {
@@ -2719,6 +3112,15 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           author_name: directoryUserMap[authorId]?.display_name || null,
           metadata,
         }]);
+        if (payload.smsNotificationEnabled && (finalMentionUserIds.length > 0 || finalMentionRoleIds.length > 0)) {
+          await sendNoteSmsNotifications({
+            authorName: directoryUserMap[authorId]?.display_name || 'کاربر',
+            noteText: normalizedText || (mergedAttachments.length > 0 ? 'فایل یا تصویر پیوست' : ''),
+            mentionUserIds: finalMentionUserIds,
+            mentionRoleIds: finalMentionRoleIds,
+            title: 'اطلاع‌رسانی پیام داخلی',
+          });
+        }
         await Promise.all([
           refreshInternalConversations({ force: true }),
           refreshInternalTimeline({ force: true }),
@@ -2732,6 +3134,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     }
     if ((conversation.channel === 'bot_group' || conversation.channel === 'bot_direct') && conversation.key.startsWith('live:')) {
       try {
+        const botSmsNotification = payload.smsNotificationEnabled
+          ? await prepareBotSmsNotification(conversation)
+          : null;
+        if (payload.smsNotificationEnabled && !botSmsNotification) return false;
         const uploadedAttachments = attachments.length > 0
           ? await uploadNoteAttachments(null, null, attachments)
           : [];
@@ -2784,7 +3190,31 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           });
         }
         await liveData.refresh();
-        message.success('پیام بات ارسال شد.');
+        if (botSmsNotification) {
+          try {
+            await sendSmsViaGateway({
+              to: [botSmsNotification.phone],
+              text: botSmsNotification.text,
+              title: 'اطلاع‌رسانی پیام بات',
+              moduleId: botSmsNotification.moduleId,
+              recordId: botSmsNotification.recordId,
+              customerId: botSmsNotification.moduleId === 'customers' ? botSmsNotification.recordId : undefined,
+              metadata: {
+                source_type: 'bot_message_sms_notification',
+                channel: conversation.platform || conversation.channel,
+                conversation_key: conversation.key,
+              },
+            });
+            if (botSmsNotification.remember) {
+              await persistBotSmsNotificationTemplate(conversation, botSmsNotification.text);
+            }
+            message.success('پیام بات و اطلاع‌رسانی پیامکی ارسال شد.');
+          } catch (smsError: any) {
+            message.warning(toFaErrorMessage(smsError, 'پیام بات ارسال شد، اما اطلاع‌رسانی پیامکی ناموفق بود.'));
+          }
+        } else {
+          message.success('پیام بات ارسال شد.');
+        }
         return true;
       } catch (error: any) {
         message.error(toFaErrorMessage(error, 'ارسال پیام بات ناموفق بود.'));
@@ -2923,6 +3353,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                       onCreateActivity={openCreateActivityFromMessage}
                       onToggleLike={toggleMessageLike}
                       onShowReceipts={showMessageReceipts}
+                      onBindBotSender={openBotIdentityBindModalForMessage}
                     />
                   ))}
                 </div>
@@ -2960,6 +3391,55 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         onClose={closePhoneBindModal}
         onSave={savePhoneBind}
       />
+      {botIdentityBindOpen && botIdentityBindDraft ? (
+        <React.Suspense fallback={null}>
+          <BotChatIdentityBindModal
+            open={botIdentityBindOpen}
+            loading={botIdentityBindLoading}
+            saving={botIdentityBindSaving}
+            channelLabel={BOT_CHANNEL_LABELS_FA[botIdentityBindDraft.channel] || botIdentityBindDraft.channel}
+            chatId={botIdentityBindDraft.chatId}
+            displayName={botIdentityBindDraft.displayName}
+            username={botIdentityBindDraft.username}
+            phoneNumber={botIdentityBindDraft.phoneNumber}
+            existingBindingLabel={
+              isBotTargetModuleId(String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim())
+                ? `${String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim() === 'customers' ? 'مشتری' : String(botIdentityBindDraft.existingBinding?.target_module_id || '').trim() === 'suppliers' ? 'تأمین‌کننده' : 'کارمند'} ${String(botIdentityBindDraft.existingBinding?.display_name || '').trim() || ''}`.trim()
+                : null
+            }
+            targetModuleId={botIdentityBindTargetModuleId}
+            onChangeTargetModuleId={(value) => {
+              setBotIdentityBindTargetModuleId(value);
+              setBotIdentityBindTargetRecordId(null);
+              setBotIdentityBindOptions([]);
+            }}
+            targetRecordId={botIdentityBindTargetRecordId}
+            onChangeTargetRecordId={setBotIdentityBindTargetRecordId}
+            targetOptions={botIdentityBindOptions}
+            searchValue={botIdentityBindSearch}
+            onChangeSearchValue={setBotIdentityBindSearch}
+            userOptions={internalGroupUserOptions}
+            roleOptions={internalGroupRoleOptions}
+            allowedUserIds={botIdentityAllowedUserIds}
+            onChangeAllowedUserIds={setBotIdentityAllowedUserIds}
+            allowedRoleIds={botIdentityAllowedRoleIds}
+            onChangeAllowedRoleIds={setBotIdentityAllowedRoleIds}
+            aiAutoReplyEnabled={botIdentityAiAutoReplyEnabled}
+            onChangeAiAutoReplyEnabled={setBotIdentityAiAutoReplyEnabled}
+            aiCounterpartyGuide={botIdentityAiCounterpartyGuide}
+            onChangeAiCounterpartyGuide={setBotIdentityAiCounterpartyGuide}
+            memberGroups={activeConversation.channel === 'bot_group' ? [{
+              id: String(activeConversation.key || '').trim(),
+              title: activeConversation.title,
+              channelLabel: `گروه بات ${activeConversation.platform ? BOT_CHANNEL_LABELS_FA[activeConversation.platform] : ''}`.trim(),
+              statusLabel: activeConversation.status || null,
+              lastActivityAt: activeConversation.time || null,
+            }] : []}
+            onClose={closeBotIdentityBindModal}
+            onSave={saveBotIdentityBind}
+          />
+        </React.Suspense>
+      ) : null}
       <Modal
         open={internalGroupModalOpen}
         title={editingInternalGroupId ? 'ویرایش گروه داخلی' : 'ایجاد گروه داخلی جدید'}

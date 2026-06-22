@@ -13,7 +13,7 @@ import {
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../../../utils/recordReference';
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { BOT_CHANNEL_LABELS_FA, isBotChannel } from '../../../utils/botPlatform';
+import { BOT_CHANNEL_LABELS_FA, isBotChannel, type BotChannel, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { extractBotMessageAttachments } from '../../../utils/messageAttachments';
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
@@ -69,6 +69,12 @@ export type MessagingOmniTimelineEvent = {
   status?: string;
   attachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null }>;
   avatarUrl?: string | null;
+  botSenderChannel?: BotChannel | null;
+  botSenderChatId?: string | null;
+  botSenderDisplayName?: string | null;
+  botSenderUsername?: string | null;
+  botSenderPhoneNumber?: string | null;
+  botSenderBound?: boolean;
   liked?: boolean;
   seenAt?: string;
   replyTo?: string | null;
@@ -137,6 +143,16 @@ type BotDirectThreadRow = {
   last_message_at?: string | null;
   last_message_preview?: string | null;
   metadata?: Record<string, any> | null;
+};
+
+type BotIdentityBindingRow = {
+  channel_type?: BotChannel | string | null;
+  chat_id?: string | null;
+  target_module_id?: BotTargetModuleId | string | null;
+  target_record_id?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  phone_number?: string | null;
 };
 
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
@@ -286,6 +302,31 @@ const resolveBotSenderTarget = (row: any) => {
   return { moduleId: '', recordId: '' };
 };
 
+const resolveBotSenderChatId = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
+  const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
+  const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
+  return String(
+    payload?.sender_id
+    || payload?.sender_chat_id
+    || payload?.user_id
+    || payload?.object_guid
+    || payload?.from_id
+    || payload?.author_id
+    || sender?.id
+    || sender?.chat_id
+    || sender?.user_id
+    || from?.id
+    || from?.chat_id
+    || from?.user_id
+    || user?.id
+    || user?.chat_id
+    || user?.user_id
+    || ''
+  ).trim();
+};
+
 const collectBotSenderRecordReferences = (rows: any[]) =>
   (rows || []).map(resolveBotSenderTarget)
     .filter((item) => item.moduleId && item.recordId)
@@ -295,16 +336,36 @@ const resolveBotSenderLabel = (
   row: any,
   recordTitleMap: Record<string, string>,
   fallback: string,
+  binding?: BotIdentityBindingRow | null,
 ) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  if (binding?.target_module_id && binding?.target_record_id) {
+    const bindingTitle = getRecordLabel(recordTitleMap, String(binding.target_module_id), String(binding.target_record_id), binding.display_name);
+    if (bindingTitle) return bindingTitle;
+  }
   const senderTarget = resolveBotSenderTarget(row);
   const senderTitle = getRecordLabel(recordTitleMap, senderTarget.moduleId, senderTarget.recordId);
   if (senderTitle) return senderTitle;
   const username = String(payload?.username || payload?.sender_username || '').trim();
   const displayName = String(payload?.sender_display_name || payload?.display_name || '').trim();
   const phoneNumber = String(payload?.phone_number || payload?.sender_phone_number || '').trim();
-  const senderId = String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim();
+  const senderId = resolveBotSenderChatId(row);
   return displayName || (username ? `@${username.replace(/^@+/, '')}` : '') || phoneNumber || senderId || fallback;
+};
+
+const resolveBotSenderUsername = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  return String(payload?.username || payload?.sender_username || '').trim().replace(/^@+/, '') || null;
+};
+
+const resolveBotSenderDisplayName = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  return String(payload?.sender_display_name || payload?.display_name || '').trim() || null;
+};
+
+const resolveBotSenderPhoneNumber = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  return String(payload?.phone_number || payload?.sender_phone_number || '').trim() || null;
 };
 
 const resolveBotSenderAvatarUrl = (row: any) => {
@@ -317,6 +378,80 @@ const resolveBotSenderAvatarUrl = (row: any) => {
     || ''
   ).trim() || null;
 };
+
+const buildBotIdentityBindingKey = (channel: string | null | undefined, chatId: string | null | undefined) =>
+  `${String(channel || '').trim()}:${String(chatId || '').trim()}`;
+
+const buildBotIdentityBindingMap = (rows: BotIdentityBindingRow[]) => {
+  const map = new Map<string, BotIdentityBindingRow>();
+  (rows || []).forEach((row) => {
+    const key = buildBotIdentityBindingKey(row?.channel_type, row?.chat_id);
+    if (key !== ':') map.set(key, row);
+  });
+  return map;
+};
+
+const resolveBotSenderBinding = (
+  row: BotMessageRow,
+  channel: string | null | undefined,
+  bindingMap: Map<string, BotIdentityBindingRow>,
+) => {
+  const chatId = resolveBotSenderChatId(row);
+  if (!chatId) return { chatId: '', binding: null as BotIdentityBindingRow | null };
+  return {
+    chatId,
+    binding: bindingMap.get(buildBotIdentityBindingKey(channel, chatId)) || null,
+  };
+};
+
+const collectBotSenderBindingRequests = (
+  rows: BotMessageRow[],
+  botGroups: BotGroupRow[],
+  botDirectThreads: BotDirectThreadRow[],
+) => {
+  const requests = new Map<string, { channel: BotChannel; chatId: string }>();
+  (rows || []).forEach((row) => {
+    const groupId = String(row?.bot_group_id || '').trim();
+    const threadId = String(row?.direct_thread_id || '').trim();
+    const group = groupId ? botGroups.find((item) => String(item.id) === groupId) : null;
+    const thread = threadId ? botDirectThreads.find((item) => String(item.id) === threadId) : null;
+    const rawChannel = String(group?.channel_type || thread?.channel_type || '').trim();
+    if (!isBotChannel(rawChannel)) return;
+    const chatId = resolveBotSenderChatId(row);
+    if (!chatId) return;
+    requests.set(buildBotIdentityBindingKey(rawChannel, chatId), { channel: rawChannel, chatId });
+  });
+  return Array.from(requests.values());
+};
+
+const fetchBotSenderBindings = async (
+  rows: BotMessageRow[],
+  botGroups: BotGroupRow[],
+  botDirectThreads: BotDirectThreadRow[],
+) => {
+  const requests = collectBotSenderBindingRequests(rows, botGroups, botDirectThreads);
+  const chatIds = Array.from(new Set(requests.map((item) => item.chatId))).filter(Boolean);
+  if (!chatIds.length) return [];
+  const { data, error } = await supabase
+    .from('bot_chat_identity_bindings')
+    .select('channel_type,chat_id,target_module_id,target_record_id,display_name,username,phone_number')
+    .in('chat_id', chatIds)
+    .limit(500);
+  if (error) {
+    if (isMissingTableLikeError(error)) return [];
+    throw error;
+  }
+  const requestedKeys = new Set(requests.map((item) => buildBotIdentityBindingKey(item.channel, item.chatId)));
+  return ((data || []) as BotIdentityBindingRow[]).filter((row) => requestedKeys.has(buildBotIdentityBindingKey(row?.channel_type, row?.chat_id)));
+};
+
+const collectBotBindingRecordReferences = (rows: BotIdentityBindingRow[]) =>
+  (rows || [])
+    .map((row) => ({
+      module_id: String(row?.target_module_id || '').trim(),
+      record_id: String(row?.target_record_id || '').trim(),
+    }))
+    .filter((item) => item.module_id && item.record_id);
 
 const canSeeRestrictedBotRow = (row: any, profile: LiveProfile) => {
   const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -697,8 +832,10 @@ const buildBotGroupLiveModels = (
   botMessages: BotMessageRow[],
   recordTitleMap: Record<string, string>,
   readStateKeys: Set<string>,
+  botSenderBindings: BotIdentityBindingRow[],
 ) => {
   const isNotificationRead = createNotificationReadChecker(readStateKeys);
+  const botSenderBindingMap = buildBotIdentityBindingMap(botSenderBindings);
   const messagesByGroup = new Map<string, BotMessageRow[]>();
   botMessages.forEach((message) => {
     const groupId = String(message?.bot_group_id || '').trim();
@@ -746,7 +883,9 @@ const buildBotGroupLiveModels = (
     const group = botGroups.find((item) => String(item.id) === groupId);
     const target = resolveBotTarget(group || {});
     const relatedTitle = getRecordLabel(recordTitleMap, target.moduleId, target.recordId, group?.group_title);
-    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, group?.group_title || 'عضو گروه بات');
+    const channel: BotChannel | null = isBotChannel(group?.channel_type) ? group!.channel_type as BotChannel : null;
+    const senderIdentity = resolveBotSenderBinding(row, channel, botSenderBindingMap);
+    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, group?.group_title || 'عضو گروه بات', senderIdentity.binding);
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const attachments = extractBotMessageAttachments(row).map((attachment) => ({
       name: attachment.name || 'فایل',
@@ -767,6 +906,12 @@ const buildBotGroupLiveModels = (
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
       avatarUrl: resolveBotSenderAvatarUrl(row),
+      botSenderChannel: channel,
+      botSenderChatId: direction === 'inbound' ? senderIdentity.chatId || null : null,
+      botSenderDisplayName: direction === 'inbound' ? resolveBotSenderDisplayName(row) : null,
+      botSenderUsername: direction === 'inbound' ? resolveBotSenderUsername(row) : null,
+      botSenderPhoneNumber: direction === 'inbound' ? resolveBotSenderPhoneNumber(row) : null,
+      botSenderBound: direction === 'inbound' ? Boolean(senderIdentity.binding?.target_module_id && senderIdentity.binding?.target_record_id) : true,
       relatedRecordLabel: relatedTitle || undefined,
     };
   });
@@ -779,8 +924,10 @@ const buildBotDirectLiveModels = (
   botDirectMessages: BotMessageRow[],
   recordTitleMap: Record<string, string>,
   readStateKeys: Set<string>,
+  botSenderBindings: BotIdentityBindingRow[],
 ) => {
   const isNotificationRead = createNotificationReadChecker(readStateKeys);
+  const botSenderBindingMap = buildBotIdentityBindingMap(botSenderBindings);
   const messagesByThread = new Map<string, BotMessageRow[]>();
   botDirectMessages.forEach((message) => {
     const threadId = String(message?.direct_thread_id || '').trim();
@@ -828,7 +975,9 @@ const buildBotDirectLiveModels = (
     const thread = botDirectThreads.find((item) => String(item.id) === threadId);
     const target = resolveBotTarget(thread || {});
     const relatedTitle = getRecordLabel(recordTitleMap, target.moduleId, target.recordId, thread?.display_name);
-    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, thread?.display_name || 'مخاطب بات');
+    const channel: BotChannel | null = isBotChannel(thread?.channel_type) ? thread!.channel_type as BotChannel : null;
+    const senderIdentity = resolveBotSenderBinding(row, channel, botSenderBindingMap);
+    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, thread?.display_name || 'مخاطب بات', senderIdentity.binding);
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const attachments = extractBotMessageAttachments(row).map((attachment) => ({
       name: attachment.name || 'فایل',
@@ -849,6 +998,12 @@ const buildBotDirectLiveModels = (
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
       avatarUrl: resolveBotSenderAvatarUrl(row),
+      botSenderChannel: channel,
+      botSenderChatId: direction === 'inbound' ? senderIdentity.chatId || null : null,
+      botSenderDisplayName: direction === 'inbound' ? resolveBotSenderDisplayName(row) : null,
+      botSenderUsername: direction === 'inbound' ? resolveBotSenderUsername(row) : null,
+      botSenderPhoneNumber: direction === 'inbound' ? resolveBotSenderPhoneNumber(row) : null,
+      botSenderBound: direction === 'inbound' ? Boolean(senderIdentity.binding?.target_module_id && senderIdentity.binding?.target_record_id) : true,
       relatedRecordLabel: relatedTitle || undefined,
     };
   });
@@ -870,6 +1025,7 @@ export const useMessagingOmniLiveData = () => {
   const [botGroupMessages, setBotGroupMessages] = useState<BotMessageRow[]>([]);
   const [botDirectThreads, setBotDirectThreads] = useState<BotDirectThreadRow[]>([]);
   const [botDirectMessages, setBotDirectMessages] = useState<BotMessageRow[]>([]);
+  const [botSenderBindings, setBotSenderBindings] = useState<BotIdentityBindingRow[]>([]);
   const [recordTitleMap, setRecordTitleMap] = useState<Record<string, string>>({});
   const [readStateKeys, setReadStateKeys] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
@@ -938,6 +1094,12 @@ export const useMessagingOmniLiveData = () => {
       ]);
       setBotGroupMessages(botMessageRows || []);
       setBotDirectMessages(botDirectMessageRows || []);
+      const bindingRows = await safeLiveFetch(
+        'bot-sender-bindings',
+        () => fetchBotSenderBindings([...(botMessageRows || []), ...(botDirectMessageRows || [])], botGroupRows || [], botDirectThreadRows || []),
+        [] as BotIdentityBindingRow[],
+      );
+      setBotSenderBindings(bindingRows || []);
       const labels = await safeLiveFetch('record-labels', () => fetchRecordReferenceLabels(supabase, [
           ...collectRecordReferences(smsRows || []),
           ...collectRecordReferences(callRows || []),
@@ -945,6 +1107,7 @@ export const useMessagingOmniLiveData = () => {
           ...collectBotRecordReferences(botDirectThreadRows || []),
           ...collectBotSenderRecordReferences(botMessageRows || []),
           ...collectBotSenderRecordReferences(botDirectMessageRows || []),
+          ...collectBotBindingRecordReferences(bindingRows || []),
         ]), {} as Record<string, string>);
       setRecordTitleMap((prev) => ({ ...prev, ...labels }));
     } finally {
@@ -985,6 +1148,9 @@ export const useMessagingOmniLiveData = () => {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_direct_threads', filter }, () => {
         void refresh();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bot_chat_identity_bindings', filter }, () => {
+        void refresh();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_direct_messages', filter }, () => {
         void refresh();
       })
@@ -1005,8 +1171,8 @@ export const useMessagingOmniLiveData = () => {
   return useMemo(() => {
     const smsModels = buildSmsLiveModels(smsMessages, recordTitleMap, readStateKeys);
     const voipModels = buildVoipLiveModels(voipCalls, recordTitleMap, readStateKeys);
-    const botGroupModels = buildBotGroupLiveModels(botGroups, botGroupMessages, recordTitleMap, readStateKeys);
-    const botDirectModels = buildBotDirectLiveModels(botDirectThreads, botDirectMessages, recordTitleMap, readStateKeys);
+    const botGroupModels = buildBotGroupLiveModels(botGroups, botGroupMessages, recordTitleMap, readStateKeys, botSenderBindings);
+    const botDirectModels = buildBotDirectLiveModels(botDirectThreads, botDirectMessages, recordTitleMap, readStateKeys, botSenderBindings);
     return {
       loading,
       hasLiveSms: smsModels.conversations.length > 0,
@@ -1027,5 +1193,5 @@ export const useMessagingOmniLiveData = () => {
       ].filter(Boolean).join('، '),
       getModuleLabel,
     };
-  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, loading, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls]);
+  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, loading, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls]);
 };
