@@ -29,6 +29,7 @@ type AssistantAction =
   | 'generate_voice_output'
   | 'generate_image'
   | 'get_image_status'
+  | 'run_task_bundle'
   | 'embed_document_chunks'
   | 'saas_ai';
 
@@ -59,15 +60,15 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-06-18-04';
+const FUNCTION_BUILD = 'ai-assistant-2026-06-22-05';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
-const IMAGE_PROVIDER_TIMEOUT_MS = 35000;
+const IMAGE_PROVIDER_TIMEOUT_MS = 120000;
 const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
-const IMAGE_STATUS_STALE_MS = 180000;
+const IMAGE_STATUS_STALE_MS = 900000;
 const IMAGE_PROMPT_MAX_CHARS = 4000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
 const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
@@ -75,6 +76,26 @@ const AI_AUTHOR_NAME = 'دستیار هوشمند';
 const MAX_PAGE_CONTEXT_RECORDS = 10;
 const MAX_RETRIEVED_CONTEXTS = 4;
 const KNOWLEDGE_MATCH_THRESHOLD = 0.52;
+const PRIMARY_AI_MODEL_KEY = '__primary_model';
+
+const PRIMARY_MODEL_CAPABILITIES = new Set([
+  'dashboard_chat',
+  'record_chat',
+  'customer_reply_suggestion',
+  'document_analysis',
+  'workflow_ai_prompt',
+  'deep_reasoning',
+  'legal_assistant',
+  'web_search',
+]);
+
+const PRIMARY_MODEL_PREFERRED_IDS = [
+  'gemini-3.1-flash-lite',
+  'gpt-5.4-mini',
+  'gpt-5-mini',
+  'gpt-4.1-mini',
+  'gpt-4o-mini',
+];
 
 const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   dashboard_chat: 'ai_chat',
@@ -895,14 +916,55 @@ const filterSelectableAiModels = (models: any[], capability: string) =>
       && tags.includes(capability);
   });
 
+const pickPreferredPrimaryAiModel = (models: any[]) => {
+  const candidates = (models || []).filter((model: any) => {
+    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    return model?.is_active !== false
+      && model?.is_coming_soon !== true
+      && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
+  });
+  const byId = new Map(candidates.map((model: any) => [String(model?.id || '').trim(), model]).filter(([id]) => id));
+  for (const preferredId of PRIMARY_MODEL_PREFERRED_IDS) {
+    if (byId.has(preferredId)) return preferredId;
+  }
+  const scored = candidates
+    .map((model: any) => {
+      const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+      const coverage = tags.filter((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim())).length;
+      const tier = String(model?.metadata?.tier || '').toLowerCase();
+      const economyBonus = tier === 'economy' ? 4 : tier === 'balanced' ? 2 : 0;
+      const inputCost = Number(model?.input_usd_per_1m || 0);
+      const outputCost = Number(model?.output_usd_per_1m || 0);
+      const costPenalty = Number.isFinite(inputCost + outputCost) ? Math.min(5, (inputCost + outputCost) / 2) : 2;
+      return { id: String(model?.id || '').trim(), score: coverage + economyBonus - costPenalty };
+    })
+    .filter((item: any) => item.id)
+    .sort((a: any, b: any) => b.score - a.score);
+  return scored[0]?.id || '';
+};
+
 const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<string, any>) => {
   const next: Record<string, string> = {};
+  const primaryCandidates = (models || []).filter((model: any) => {
+    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    return model?.is_active !== false
+      && model?.is_coming_soon !== true
+      && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
+  });
+  const requestedPrimary = String(selectedModels?.[PRIMARY_AI_MODEL_KEY] || '').trim();
+  const primaryIds = new Set(primaryCandidates.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
+  const primaryModel = primaryIds.has(requestedPrimary)
+    ? requestedPrimary
+    : pickPreferredPrimaryAiModel(primaryCandidates);
+  if (primaryModel) next[PRIMARY_AI_MODEL_KEY] = primaryModel;
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
     const requested = String(selectedModels?.[capability] || '').trim();
     const allowed = filterSelectableAiModels(models, capability);
     const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
-    const resolved = allowedIds.has(requested) ? requested : String(allowed[0]?.id || requested || '').trim();
+    const resolved = PRIMARY_MODEL_CAPABILITIES.has(capability) && primaryModel && allowedIds.has(primaryModel)
+      ? primaryModel
+      : allowedIds.has(requested) ? requested : String(allowed[0]?.id || requested || '').trim();
     if (resolved) next[capability] = resolved;
   });
   return next;
@@ -949,9 +1011,10 @@ const pickCapabilityModelFromCatalog = (
   const selected = settings?.selected_models && typeof settings.selected_models === 'object'
     ? settings.selected_models
     : {};
-  const requested = String(requestedOverride || selected?.[capability] || '').trim();
   const allowed = filterSelectableAiModels(catalogRows, capability);
   const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
+  const primaryModel = String(selected?.[PRIMARY_AI_MODEL_KEY] || '').trim();
+  const requested = String(requestedOverride || (PRIMARY_MODEL_CAPABILITIES.has(capability) && allowedIds.has(primaryModel) ? primaryModel : selected?.[capability]) || '').trim();
   if (requested && allowedIds.has(requested)) return requested;
   return String(allowed[0]?.id || '').trim();
 };
@@ -2110,7 +2173,7 @@ const buildPromptMessages = (
     : '';
 
   const systemContent = pageContext.intent === 'process_guide'
-    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) برای هر مرحله بگویید اگر انجام شود چه پیام، اعلان یا اقدام خودکاری رخ می‌دهد و مخاطب آن کیست 5) شرط‌ها، فیلدها و اکشن‌ها را با label فارسی موجود در context توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
+    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
     : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
@@ -2331,7 +2394,14 @@ const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
 const callChatCompletions = async (
   providerConfig: any,
   messages: Array<{ role: string; content: any }>,
-  options?: { temperature?: number; maxTokens?: number; maxCompletionTokens?: number; safetyIdentifier?: string; timeoutMs?: number }
+  options?: {
+    temperature?: number;
+    maxTokens?: number;
+    maxCompletionTokens?: number;
+    safetyIdentifier?: string;
+    timeoutMs?: number;
+    responseFormat?: Record<string, any> | null;
+  }
 ) => {
   if (providerConfig?.isActive === false) {
     throw new Error('اتصال AI برای این سازمان غیرفعال است.');
@@ -2353,6 +2423,9 @@ const callChatCompletions = async (
       messages,
       safety_identifier: options?.safetyIdentifier || undefined,
     };
+    if (options?.responseFormat && typeof options.responseFormat === 'object') {
+      requestBody.response_format = options.responseFormat;
+    }
     if (reasoning) {
       requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
     } else {
@@ -4580,6 +4653,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     },
   ], {
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
+    responseFormat: { type: 'json_object' },
   });
 
   const parsed = extractJsonObjectFromText(aiResult.content) || {};
@@ -4850,6 +4924,325 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   });
 };
 
+const normalizeTaskBundleInputs = (body: any) => {
+  const bundle = body?.bundle && typeof body.bundle === 'object' ? body.bundle : {};
+  const rawInputs = [
+    ...(Array.isArray(bundle?.inputs) ? bundle.inputs : []),
+    ...(Array.isArray(body?.inputs) ? body.inputs : []),
+  ];
+  return rawInputs
+    .map((input: any, index: number) => {
+      const type = String(input?.type || input?.kind || '').trim() || 'text';
+      const file = input?.file || input?.attachment || input;
+      const filename = String(file?.filename || file?.fileName || file?.name || input?.label || '').trim();
+      const mimeType = String(file?.mimeType || file?.mime_type || file?.type || input?.mimeType || '').trim();
+      return {
+        id: String(input?.id || `bundle-input-${index + 1}`),
+        type,
+        label: String(input?.label || filename || type).trim(),
+        text: String(input?.text || input?.prompt || input?.transcript || '').trim(),
+        file: ['file', 'image', 'document', 'attachment'].includes(type) ? {
+          filename: filename || 'فایل پیوست',
+          mimeType,
+          size: numberFrom(file?.size || file?.fileSize || 0, 0) || null,
+          text: String(file?.text || file?.prompt || input?.text || '').trim(),
+          data: file?.data || file?.base64 || file?.file_data || null,
+          url: file?.url || file?.file_url || null,
+          assetId: file?.assetId || file?.asset_id || null,
+          entryId: file?.entryId || file?.entry_id || null,
+          moduleId: file?.moduleId || file?.module_id || null,
+          recordId: file?.recordId || file?.record_id || null,
+        } : null,
+        audio: type === 'voice' || type === 'audio' ? {
+          data: input?.audio?.data || input?.data || input?.base64 || '',
+          mimeType: input?.audio?.mimeType || input?.audio?.mime_type || input?.mimeType || 'audio/webm',
+          durationMs: numberFrom(input?.audio?.durationMs || input?.audio?.duration_ms || input?.durationMs, 0),
+          filename: String(input?.audio?.filename || input?.filename || 'voice.webm').trim() || 'voice.webm',
+        } : null,
+      };
+    })
+    .filter((input: any) => input.text || input.file || input.audio);
+};
+
+const transcribeTaskBundleVoices = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  inputs: any[],
+) => {
+  const voiceInputs = inputs.filter((input) => input.audio?.data);
+  if (!voiceInputs.length) return [];
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_input');
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'voice_input');
+  const transcripts: any[] = [];
+  for (const input of voiceInputs.slice(0, 3)) {
+    const result = await callAudioTranscription(
+      providerConfig,
+      String(input.audio.data || ''),
+      String(input.audio.mimeType || 'audio/webm'),
+      String(input.audio.filename || 'voice.webm'),
+    );
+    transcripts.push({ inputId: input.id, label: input.label || 'ویس', transcript: result.transcript });
+    await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+      capability: 'voice_input',
+      provider: result.provider,
+      model: result.model,
+      requestId: result.requestId,
+      usageMetadata: result.usageMetadata,
+      metadata: {
+        source: 'task_bundle_voice_transcription',
+        bundle_input_id: input.id,
+        mime_type: input.audio.mimeType || 'audio/webm',
+        duration_ms: input.audio.durationMs || 0,
+      },
+    });
+  }
+  return transcripts;
+};
+
+const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], previousContext: any = null) => {
+  const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
+  const previousSummary = String(previousContext?.summary || previousContext?.analysis || previousContext?.text || '').trim();
+  const textParts = inputs
+    .filter((input) => input.text && !input.audio)
+    .map((input) => `متن ${input.label || input.type}:\n${input.text}`);
+  const voiceParts = transcripts.map((item) => `متن تبدیل‌شده از ${item.label || 'ویس'}:\n${item.transcript}`);
+  const fileParts = inputs
+    .filter((input) => input.file)
+    .map((input) => {
+      const file = input.file || {};
+      return [
+        `پیوست: ${file.filename || input.label || 'فایل'}`,
+        file.mimeType ? `نوع: ${file.mimeType}` : '',
+        file.text ? `متن/داده استخراج‌شده:\n${file.text}` : '',
+      ].filter(Boolean).join('\n');
+    });
+  return [
+    baseMessage || 'این ورودی‌ها را بررسی کن و مطابق عملگرهای انتخاب‌شده اقدام پیشنهادی بده.',
+    previousSummary ? `زمینه ذخیره‌شده از مرحله قبل همین گفتگو:\n${previousSummary}` : '',
+    '',
+    ...textParts,
+    ...voiceParts,
+    ...fileParts,
+  ].filter(Boolean).join('\n\n').trim();
+};
+
+const parseAssistantJsonResponse = async (response: Response) => {
+  const text = await response.text();
+  const parsed = parseJsonSafe(text);
+  return parsed && typeof parsed === 'object' ? parsed : { success: false, message: String(text || '').slice(0, 500) };
+};
+
+const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
+    ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : []));
+  const selectedCapabilitySet = new Set(selectedCapabilities);
+  if ((body?.recordCreation || body?.record_creation) && !selectedCapabilitySet.has('record_creation')) {
+    selectedCapabilities.push('record_creation');
+    selectedCapabilitySet.add('record_creation');
+  }
+  const inputs = normalizeTaskBundleInputs(body);
+  const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
+  if (!baseMessage && inputs.length === 0) {
+    return json(400, { success: false, message: 'متن یا ورودی برای اجرای باندل هوش مصنوعی ارسال نشده است.' });
+  }
+
+  for (const selectedCapability of selectedCapabilities) {
+    if (AI_CAPABILITY_FEATURE_KEYS[selectedCapability]) {
+      const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, selectedCapability, { modelOverride: body?.modelOverride });
+      await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, selectedCapability);
+    }
+  }
+
+  const existingThread = body?.threadId ? await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, String(body.threadId)) : null;
+  const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
+    ? existingThread.metadata.task_bundle_context
+    : null;
+  const transcripts = await transcribeTaskBundleVoices(supabaseUrl, serviceRoleKey, authContext, inputs);
+  const prompt = buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext);
+  const files = inputs.map((input) => input.file).filter(Boolean);
+  const firstFile = files[0] || null;
+  const bundleMeta = {
+    input_count: inputs.length,
+    input_types: inputs.map((input) => input.type),
+    file_count: files.length,
+    voice_count: transcripts.length,
+    capabilities: selectedCapabilities,
+  };
+  const collectedMessages: any[] = [];
+  const collectedResults: any[] = [];
+  let workingThreadId = String(body?.threadId || '').trim() || null;
+  let provider: string | null = null;
+  let model: string | null = null;
+  let finalAnswerParts: string[] = [];
+  let proposedAction: any = null;
+  let usage: any = null;
+  let ledger: any = null;
+
+  const runStep = async (stepName: string, promise: Promise<Response>) => {
+    const data = await parseAssistantJsonResponse(await promise);
+    if (data?.threadId) workingThreadId = String(data.threadId);
+    if (data?.provider) provider = data.provider;
+    if (data?.model) model = data.model;
+    if (data?.usage) usage = data.usage;
+    if (data?.ledger) ledger = data.ledger;
+    if (Array.isArray(data?.messages)) collectedMessages.push(...data.messages);
+    if (data?.messageId && workingThreadId) {
+      const threadMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, workingThreadId, 20);
+      const message = threadMessages.find((item: any) => String(item.id) === String(data.messageId));
+      if (message) collectedMessages.push(message);
+    }
+    if (data?.proposedAction && !proposedAction) proposedAction = data.proposedAction;
+    collectedResults.push({ step: stepName, ...data });
+    return data;
+  };
+
+  const shouldRunAnalysis = selectedCapabilitySet.has('document_analysis')
+    || files.length > 0
+    || transcripts.length > 0
+    || !!previousTaskContext;
+
+  let analysisText = String(previousTaskContext?.summary || previousTaskContext?.analysis || '').trim();
+  if (shouldRunAnalysis) {
+    const analysisPrompt = [
+      'این مرحله تحلیل مشترک باندل است. همه ورودی‌ها و زمینه قبلی همین گفتگو را یکپارچه کن.',
+      'اگر اطلاعات برای عملگرهای بعدی مثل ساخت رکورد یا ساخت فایل کافی نیست، دقیق و کوتاه سوال تکمیلی بپرس؛ ولی داده‌های استخراج‌شده را هم در پاسخ نگه دار.',
+      prompt,
+    ].join('\n\n');
+    const analysisData = await runStep('document_analysis', firstFile
+      ? handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, {
+        ...body,
+        action: 'chat_with_file',
+        capability: 'document_analysis',
+        capabilities: selectedCapabilities,
+        message: analysisPrompt,
+        inputKind: 'task_bundle_analysis',
+        file: firstFile,
+        threadId: workingThreadId,
+        metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      })
+      : handleChat(supabaseUrl, serviceRoleKey, authContext, {
+        ...body,
+        action: 'chat',
+        capability: 'document_analysis',
+        capabilities: selectedCapabilities,
+        message: analysisPrompt,
+        inputKind: 'task_bundle_analysis',
+        threadId: workingThreadId,
+        metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      }));
+    if (analysisData?.success === false) {
+      return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: collectedMessages });
+    }
+    analysisText = String(analysisData?.answer || analysisData?.message || analysisText || '').trim();
+    if (analysisText) finalAnswerParts.push(analysisText);
+  }
+
+  const sharedPrompt = [
+    prompt,
+    analysisText ? `\nتحلیل مشترک قابل استفاده برای عملگرهای بعدی:\n${analysisText}` : '',
+  ].filter(Boolean).join('\n\n').trim();
+
+  if (selectedCapabilitySet.has('record_creation')) {
+    const data = await runStep('record_creation', handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+      ...body,
+      action: 'create_record_from_prompt',
+      capability: body?.capability || (body?.context?.mode === 'record' ? 'record_chat' : 'dashboard_chat'),
+      message: sharedPrompt,
+      inputKind: 'task_bundle',
+      file: firstFile,
+      threadId: workingThreadId,
+      previewOnly: true,
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+    }));
+    if (data?.answer) finalAnswerParts.push(String(data.answer));
+  }
+
+  if (selectedCapabilitySet.has('process_operation')) {
+    const data = await runStep('process_operation', handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, {
+      ...body,
+      action: 'process_operation_from_prompt',
+      message: sharedPrompt,
+      inputKind: 'task_bundle',
+      file: firstFile,
+      threadId: workingThreadId,
+      previewOnly: true,
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+    }));
+    if (data?.answer) finalAnswerParts.push(String(data.answer));
+  }
+
+  if (selectedCapabilitySet.has('document_generation')) {
+    const documentPrompt = [
+      'بر اساس تحلیل مشترک و ورودی‌های همین باندل، یک فایل کاربردی و رسمی بساز.',
+      'اگر موضوع، سند پرداخت/رسید/هزینه است، جدول داده‌های استخراج‌شده، ابهام‌ها و پیشنهاد ثبت را هم بیاور.',
+      sharedPrompt,
+    ].join('\n\n');
+    const data = await runStep('document_generation', handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, {
+      ...body,
+      action: 'generate_document',
+      message: documentPrompt,
+      prompt: documentPrompt,
+      inputKind: 'task_bundle_document',
+      threadId: workingThreadId,
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+    }));
+    if (data?.answer) finalAnswerParts.push(String(data.answer));
+  }
+
+  if (!collectedResults.length) {
+    const data = await runStep('chat', handleChat(supabaseUrl, serviceRoleKey, authContext, {
+      ...body,
+      action: 'chat',
+      message: sharedPrompt || prompt,
+      inputKind: 'task_bundle',
+      threadId: workingThreadId,
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+    }));
+    if (data?.answer) finalAnswerParts.push(String(data.answer));
+  }
+
+  if (workingThreadId) {
+    const threadForPatch = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, workingThreadId);
+    const taskContext = {
+      summary: analysisText || sharedPrompt.slice(0, 4000),
+      last_prompt: baseMessage || null,
+      capabilities: selectedCapabilities,
+      inputs: bundleMeta,
+      updated_at: new Date().toISOString(),
+    };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${workingThreadId}`, org_id: `eq.${authContext.orgId}` }, {
+      metadata: {
+        ...(threadForPatch?.metadata || {}),
+        task_bundle_context: taskContext,
+        last_activity_kind: 'task_bundle',
+        last_message_preview: (baseMessage || analysisText || 'باندل هوش مصنوعی').slice(0, 300),
+      },
+      updated_at: new Date().toISOString(),
+    }).catch(() => []);
+  }
+
+  const threadMessages = workingThreadId
+    ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, workingThreadId, 200)
+    : [];
+
+  return json(200, {
+    success: true,
+    threadId: workingThreadId,
+    messageId: collectedResults[collectedResults.length - 1]?.messageId || null,
+    answer: finalAnswerParts.filter(Boolean).join('\n\n') || 'نتیجه باندل آماده شد.',
+    proposedAction,
+    provider,
+    model,
+    usage,
+    ledger,
+    taskBundle: bundleMeta,
+    results: collectedResults,
+    messages: threadMessages.length ? threadMessages : collectedMessages,
+  });
+};
+
 const PROCESS_TASK_CUSTOM_FIELDS_KEY = 'process_task_custom_fields';
 const PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY = 'process_task_custom_field_values';
 const PROCESS_TASK_STATUS_OPTIONS_KEY = 'process_task_status_options';
@@ -5099,7 +5492,11 @@ const buildAiProcessOperationPrompt = (input: any) => [
   'سوال‌ها باید بر اساس هدف کاربر و مسیر واقعی فرآیند باشد، نه فقط فیلدهای اجباری.',
   'حذف مرحله واقعی مجاز نیست؛ برای حذف/کم کردن مرحله واقعی از cancel_stage_task استفاده کن.',
   'برای ساخت فرآیند خام، stages را کامل و مرتب بده. وضعیت فعالیت باید یکی از todo/planned/in_progress/review/done/canceled باشد.',
-  'برای وضعیت‌ها و فیلدهای اختصاصی هر فعالیت، از status_options و custom_fields/custom_values داخل stage استفاده کن.',
+  'برای وضعیت‌ها و فیلدهای اختصاصی هر فعالیت، از status_options و custom_fields/custom_values داخل stage استفاده کن؛ فیلدهای عمومی فعالیت مثل status، task_type، due_date، start_date و completed_at را هم جداگانه در نظر بگیر.',
+  'process_context شامل templates، runs، stages و tasks مجاز همین رکورد است. ترتیب فعالیت‌ها را از sort_order/source_stage_sort_order بخوان و بدون داده واقعی حدس نزن.',
+  'شرط‌های اجرای اتوماسیون‌ها conditions_all و conditions_any هستند؛ همه شرط‌ها را قبل از پیشنهاد اکشن بررسی کن و اگر شرط نامشخص است، آن را به‌عنوان ابهام برگردان.',
+  'اکشن‌های اجرای اتوماسیون‌ها در automation_rules.actions هستند؛ نوع اکشن، گیرنده‌ها، پیام/یادداشت/فیلد هدف و تنظیمات زمان‌بندی یا تاخیر را حفظ کن و در operationهای پیشنهادی از دست نده.',
+  'زمان‌ها و موعدها را از due_date، planned_due_at، started_at، completed_at، duration_value، duration_unit و duration_from بخوان.',
   '',
   'operationهای مجاز:',
   '- materialize_template_to_tasks: کپی الگوی موجود و ساخت task واقعی برای مرحله‌ها',
@@ -7869,6 +8266,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'generate_video') return await handleGenerateVideo(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_video_status') return await handleGetVideoStatus(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'run_task_bundle') return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);

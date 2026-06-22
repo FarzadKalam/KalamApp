@@ -1420,8 +1420,68 @@ html.dark .smarttable-shell.smarttable-single-scroll .ant-table-thead > tr > th 
   border-end-start-radius: 0;
 }
 
+.module-list-toolbar__search.ant-input-affix-wrapper {
+  direction: rtl;
+  height: 40px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(148, 163, 184, 0.34);
+}
+
+html.dark .module-list-toolbar__search.ant-input-affix-wrapper {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.module-list-toolbar__search.ant-input-affix-wrapper .ant-input {
+  direction: rtl;
+  text-align: right;
+  font-size: 12px;
+  background: transparent;
+}
+
+.module-list-toolbar__search-suffix {
+  direction: ltr;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 6px;
+}
+
+.module-list-toolbar__search-suffix .ant-btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 10px;
+  color: rgba(71, 85, 105, 0.86);
+}
+
+.module-list-toolbar__search-suffix .ant-btn:hover {
+  color: var(--primary-color);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+html.dark .module-list-toolbar__search-suffix .ant-btn {
+  color: rgba(226, 232, 240, 0.86);
+}
+
+.module-list-toolbar__ai-toggle {
+  min-width: 58px;
+  justify-content: center;
+  background: rgba(148, 163, 184, 0.11);
+}
+
+html.dark .module-list-toolbar__ai-toggle {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .module-list-toolbar--compact .module-list-toolbar__compact-search .ant-input-affix-wrapper,
 .module-list-toolbar--compact .module-list-toolbar__compact-search .ant-input-search-button {
+  height: 38px;
+}
+
+.module-list-toolbar--compact .module-list-toolbar__compact-search.ant-input-affix-wrapper {
   height: 38px;
 }
 
@@ -1492,6 +1552,11 @@ html.dark .smarttable-shell .ant-table-tbody > tr:nth-child(even) > td {
   .module-list-toolbar--compact .module-list-toolbar__compact-search .ant-input-search-button,
   .module-list-toolbar__compact-icon.ant-btn {
     height: 36px;
+  }
+
+  .module-list-toolbar--compact .module-list-toolbar__compact-search.ant-input-affix-wrapper {
+    height: 36px;
+    border-radius: 14px;
   }
 
   .module-list-toolbar__search.ant-input-search .ant-input-group .ant-input-affix-wrapper {

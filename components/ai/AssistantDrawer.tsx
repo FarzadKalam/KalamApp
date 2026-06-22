@@ -2,6 +2,7 @@
 import { Drawer } from 'antd';
 import AiSparkleIcon from './AiSparkleIcon';
 import AssistantPanel from './AssistantPanel';
+import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 interface AssistantDrawerProps {
   open: boolean;
@@ -28,8 +29,11 @@ const AssistantDrawer: React.FC<AssistantDrawerProps> = ({ open, onClose, isMobi
       width={isMobile ? '100%' : 460}
       placement="left"
       classNames={{ body: '!p-0' }}
-      destroyOnHidden={false}
+      destroyOnHidden
       getContainer={typeof document === 'undefined' ? undefined : () => document.body}
+      afterOpenChange={(nextOpen) => {
+        if (!nextOpen) scheduleOverlayLockRelease();
+      }}
     >
       <AssistantPanel active={open} />
     </Drawer>

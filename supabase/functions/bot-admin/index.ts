@@ -45,7 +45,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_ADMIN_BUILD = 'bot-admin-2026-05-26-01';
+const BOT_ADMIN_BUILD = 'bot-admin-2026-06-22-02';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
   telegram: 'https://api.telegram.org',
@@ -791,6 +791,45 @@ const ensureRubikaSuccess = (payload: any) => {
   }
 };
 
+function createBotAdminError(
+  message: string,
+  options: {
+    errorCode?: string;
+    retryable?: boolean;
+    details?: Record<string, any>;
+  } = {}
+) {
+  const error = new Error(String(message || 'خطا در عملیات بات'));
+  (error as any).errorCode = String(options.errorCode || 'bot_admin_error').trim() || 'bot_admin_error';
+  (error as any).retryable = options.retryable === true;
+  (error as any).details = options.details || null;
+  return error;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isTransientProviderStatus = (status: number | null | undefined) => {
+  const normalized = Number(status || 0);
+  return normalized === 408 || normalized === 425 || normalized === 429 || normalized === 500 || normalized === 502 || normalized === 503 || normalized === 504;
+};
+
+const summarizeProviderPayload = (payload: any, fallback: string) => {
+  if (typeof payload === 'string') {
+    const text = payload.trim();
+    if (!text) return fallback;
+    if (text.includes('<!DOCTYPE html') || text.toLowerCase().includes('<html')) return fallback;
+    return text.slice(0, 500);
+  }
+  return String(
+    payload?.message
+    || payload?.description
+    || payload?.data?.message
+    || payload?.data?.description
+    || payload?.data?.status
+    || fallback
+  );
+};
+
 const disableTelegramLikeWebhook = async (
   channel: 'telegram' | 'bale',
   settings: Record<string, any>
@@ -1250,6 +1289,31 @@ const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefi
   return 'file';
 };
 
+const pickDeepStringByKey = (node: any, acceptedKeys: string[]) => {
+  const accepted = new Set(acceptedKeys.map((item) => String(item || '').toLowerCase()));
+  const seen = new Set<any>();
+  const stack = [node];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || seen.has(current)) continue;
+    if (typeof current === 'string') continue;
+    if (typeof current !== 'object') continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      current.forEach((item) => stack.push(item));
+      continue;
+    }
+    for (const [key, value] of Object.entries(current)) {
+      const normalizedKey = String(key || '').toLowerCase();
+      if (accepted.has(normalizedKey) && typeof value === 'string' && value.trim()) {
+        return value.trim();
+      }
+      if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+  return '';
+};
+
 const resolveRubikaUploadFileType = (attachment: Record<string, any> | null | undefined) => {
   const kind = normalizeAttachmentKind(attachment);
   if (kind === 'image') return 'Image';
@@ -1275,11 +1339,28 @@ const requestRubikaSendFileUploadUrl = async (
   });
   const payload = await parseResponse(response);
   if (!response.ok) {
-    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`));
+    throw createBotAdminError(
+      typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`),
+      { errorCode: 'rubika_request_send_file_failed', retryable: true, details: { http_status: response.status, file_type: type } }
+    );
   }
   ensureRubikaSuccess(payload);
-  const uploadUrl = pick(payload?.upload_url, payload?.data?.upload_url, payload?.result?.upload_url);
-  if (!uploadUrl) throw new Error('Rubika requestSendFile آدرس آپلود برنگرداند.');
+  const uploadUrl = pick(
+    payload?.upload_url,
+    payload?.uploadUrl,
+    payload?.data?.upload_url,
+    payload?.data?.uploadUrl,
+    payload?.result?.upload_url,
+    payload?.result?.uploadUrl,
+    pickDeepStringByKey(payload, ['upload_url', 'uploadUrl'])
+  );
+  if (!uploadUrl) {
+    throw createBotAdminError('Rubika requestSendFile آدرس آپلود برنگرداند.', {
+      errorCode: 'rubika_upload_url_missing',
+      retryable: true,
+      details: { file_type: type, provider_result: payload },
+    });
+  }
   return {
     uploadUrl,
     providerResult: payload,
@@ -1291,28 +1372,148 @@ const uploadRubikaFileBytes = async ({
   bytes,
   fileName,
   contentType,
+  maxAttempts = 3,
 }: {
   uploadUrl: string;
   bytes: Uint8Array;
   fileName: string;
   contentType: string;
+  maxAttempts?: number;
 }) => {
-  const form = new FormData();
-  form.append('file', new File([bytes], fileName, { type: contentType || 'application/octet-stream' }));
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    body: form,
-  });
-  const payload = await parseResponse(response);
-  if (!response.ok) {
-    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || `HTTP ${response.status}`));
+  const attempts: Array<Record<string, any>> = [];
+  const normalizedAttempts = Math.min(Math.max(Number(maxAttempts || 3), 1), 5);
+
+  for (let attempt = 1; attempt <= normalizedAttempts; attempt += 1) {
+    try {
+      const form = new FormData();
+      form.append('file', new File([bytes], fileName, { type: contentType || 'application/octet-stream' }));
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        body: form,
+      });
+      const payload = await parseResponse(response);
+      if (!response.ok) {
+        const transient = isTransientProviderStatus(response.status);
+        attempts.push({
+          attempt,
+          http_status: response.status,
+          retryable: transient,
+          message: summarizeProviderPayload(payload, `HTTP ${response.status}`),
+        });
+        if (transient && attempt < normalizedAttempts) {
+          await sleep(450 * attempt);
+          continue;
+        }
+        throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+          errorCode: 'rubika_upload_failed',
+          retryable: transient,
+          details: { attempts },
+        });
+      }
+      const fileId = pick(
+        payload?.file_id,
+        payload?.fileId,
+        payload?.data?.file_id,
+        payload?.data?.fileId,
+        payload?.result?.file_id,
+        payload?.result?.fileId,
+        pickDeepStringByKey(payload, ['file_id', 'fileId'])
+      );
+      if (!fileId) {
+        throw createBotAdminError('Rubika upload فایل، file_id برنگرداند.', {
+          errorCode: 'rubika_upload_file_id_missing',
+          retryable: true,
+          details: { attempts, provider_result: payload },
+        });
+      }
+      return {
+        fileId,
+        providerResult: payload,
+        attempts,
+      };
+    } catch (error: any) {
+      if (error?.errorCode) throw error;
+      attempts.push({
+        attempt,
+        http_status: null,
+        retryable: true,
+        message: String(error?.message || error || 'upload_failed').slice(0, 500),
+      });
+      if (attempt < normalizedAttempts) {
+        await sleep(450 * attempt);
+        continue;
+      }
+      throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+        errorCode: 'rubika_upload_failed',
+        retryable: true,
+        details: { attempts },
+      });
+    }
   }
-  const fileId = pick(payload?.file_id, payload?.data?.file_id, payload?.result?.file_id);
-  if (!fileId) throw new Error('Rubika upload فایل، file_id برنگرداند.');
-  return {
-    fileId,
-    providerResult: payload,
+
+  throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+    errorCode: 'rubika_upload_failed',
+    retryable: true,
+    details: { attempts },
+  });
+};
+
+const sendRubikaFileById = async ({
+  settings,
+  chatId,
+  fileId,
+  text,
+}: {
+  settings: Record<string, any>;
+  chatId: string;
+  fileId: string;
+  text?: string;
+}) => {
+  const requestBody: Record<string, any> = {
+    chat_id: chatId,
+    file_id: fileId,
   };
+  const normalizedText = String(text || '').trim();
+  if (normalizedText) requestBody.text = normalizedText;
+
+  const attempts: Array<Record<string, any>> = [];
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const response = await fetch(buildProviderMethodUrl('rubika', settings, 'sendFile'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+    const payload = await parseResponse(response);
+    if (!response.ok) {
+      const transient = isTransientProviderStatus(response.status);
+      attempts.push({
+        attempt,
+        http_status: response.status,
+        retryable: transient,
+        message: summarizeProviderPayload(payload, `HTTP ${response.status}`),
+      });
+      if (transient && attempt < 3) {
+        await sleep(500 * attempt);
+        continue;
+      }
+      throw createBotAdminError('ارسال فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+        errorCode: 'rubika_send_file_failed',
+        retryable: transient,
+        details: { attempts },
+      });
+    }
+    ensureRubikaSuccess(payload);
+    return {
+      payload,
+      attempts,
+    };
+  }
+
+  throw createBotAdminError('ارسال فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+    errorCode: 'rubika_send_file_failed',
+    retryable: true,
+    details: { attempts },
+  });
 };
 
 const sendRubikaAttachmentMessage = async ({
@@ -1329,36 +1530,75 @@ const sendRubikaAttachmentMessage = async ({
   const attachmentUrl = String(attachment?.url || '').trim();
   if (!attachmentUrl) throw new Error('آدرس فایل برای ارسال به روبیکا خالی است.');
   const downloaded = await downloadBinaryFromUrl(attachmentUrl);
-  if (!downloaded?.bytes?.length) {
-    throw new Error(`دانلود فایل برای ارسال به روبیکا ناموفق بود: ${String(attachment?.name || attachmentUrl)}`);
+  if (downloaded?.ok !== true || !downloaded?.bytes?.length) {
+    throw createBotAdminError(`دانلود فایل برای ارسال به روبیکا ناموفق بود: ${String(attachment?.name || 'فایل')}`, {
+      errorCode: 'rubika_attachment_download_failed',
+      retryable: true,
+      details: {
+        http_status: downloaded?.status ?? null,
+        content_type: downloaded?.contentType || null,
+        error_message: downloaded?.errorMessage || null,
+      },
+    });
   }
 
   const uploadType = resolveRubikaUploadFileType(attachment);
-  const requestInfo = await requestRubikaSendFileUploadUrl(settings, uploadType);
-  const uploadInfo = await uploadRubikaFileBytes({
-    uploadUrl: requestInfo.uploadUrl,
-    bytes: downloaded.bytes,
-    fileName: safeFileName(String(attachment?.name || 'file').trim() || 'file'),
-    contentType: String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream'),
-  });
+  const fileName = safeFileName(String(attachment?.name || 'file').trim() || 'file');
+  const contentType = String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream');
+  const uploadRounds: Array<Record<string, any>> = [];
+  let requestInfo: { uploadUrl: string; providerResult: any } | null = null;
+  let uploadInfo: { fileId: string; providerResult: any; attempts?: Array<Record<string, any>> } | null = null;
 
-  const requestBody: Record<string, any> = {
-    chat_id: chatId,
-    file_id: uploadInfo.fileId,
-  };
-  const normalizedText = String(text || '').trim();
-  if (normalizedText) requestBody.text = normalizedText;
-
-  const response = await fetch(buildProviderMethodUrl('rubika', settings, 'sendFile'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-  });
-  const payload = await parseResponse(response);
-  if (!response.ok) {
-    throw new Error(typeof payload === 'string' ? payload : String(payload?.message || payload?.description || payload?.data?.status || `HTTP ${response.status}`));
+  for (let round = 1; round <= 3; round += 1) {
+    try {
+      requestInfo = await requestRubikaSendFileUploadUrl(settings, uploadType);
+      uploadInfo = await uploadRubikaFileBytes({
+        uploadUrl: requestInfo.uploadUrl,
+        bytes: downloaded.bytes,
+        fileName,
+        contentType,
+        maxAttempts: 2,
+      });
+      uploadRounds.push({
+        round,
+        success: true,
+        upload_attempts: uploadInfo.attempts || [],
+      });
+      break;
+    } catch (error: any) {
+      uploadRounds.push({
+        round,
+        success: false,
+        error_code: String(error?.errorCode || 'rubika_upload_failed'),
+        retryable: Boolean(error?.retryable),
+        details: error?.details || null,
+        message: String(error?.message || error || 'rubika upload failed').slice(0, 500),
+      });
+      if (!error?.retryable || round >= 3) {
+        throw createBotAdminError(String(error?.message || 'آپلود فایل در روبیکا ناموفق بود.'), {
+          errorCode: String(error?.errorCode || 'rubika_upload_failed'),
+          retryable: Boolean(error?.retryable),
+          details: { upload_rounds: uploadRounds },
+        });
+      }
+      await sleep(700 * round);
+    }
   }
-  ensureRubikaSuccess(payload);
+
+  if (!requestInfo || !uploadInfo?.fileId) {
+    throw createBotAdminError('آپلود فایل در روبیکا ناموفق بود.', {
+      errorCode: 'rubika_upload_failed',
+      retryable: true,
+      details: { upload_rounds: uploadRounds },
+    });
+  }
+
+  const sentFile = await sendRubikaFileById({
+    settings,
+    chatId,
+    fileId: uploadInfo.fileId,
+    text,
+  });
   return {
     kind: uploadType === 'Voice' ? 'voice' : normalizeAttachmentKind(attachment),
     file_id: uploadInfo.fileId,
@@ -1367,7 +1607,9 @@ const sendRubikaAttachmentMessage = async ({
     mime_type: String(attachment?.mimeType || attachment?.mime_type || downloaded.contentType || '').trim() || null,
     request_send_file_result: requestInfo.providerResult,
     upload_result: uploadInfo.providerResult,
-    send_result: payload,
+    upload_attempts: uploadRounds,
+    send_attempts: sentFile.attempts,
+    send_result: sentFile.payload,
   };
 };
 
@@ -1970,21 +2212,6 @@ const inferRubikaMediaKind = ({
   if (normalizedMime.startsWith('video/') || normalizedType === 'video') return 'video';
   if (normalizedMime.startsWith('audio/') || normalizedType === 'audio' || normalizedType === 'voice') return 'audio';
   return 'file';
-};
-
-const createBotAdminError = (
-  message: string,
-  options: {
-    errorCode?: string;
-    retryable?: boolean;
-    details?: Record<string, any>;
-  } = {}
-) => {
-  const error = new Error(String(message || 'خطا در عملیات بات'));
-  (error as any).errorCode = String(options.errorCode || 'bot_admin_error').trim() || 'bot_admin_error';
-  (error as any).retryable = options.retryable === true;
-  (error as any).details = options.details || null;
-  return error;
 };
 
 const classifyRubikaImportFailure = (
@@ -2640,23 +2867,35 @@ Deno.serve(async (req) => {
       if (!text && attachments.length === 0) {
         return json(400, { success: false, message: 'text یا attachment الزامی است.' });
       }
-      const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
-        skipLog: body?.skipLog === true,
-        fallbackText: String(body?.fallbackText || '').trim() || undefined,
-        extraPayload: body?.extraPayload && typeof body.extraPayload === 'object'
-          ? body.extraPayload
-          : undefined,
-        attachments,
-      });
-      return json(200, {
-        success: true,
-        channel,
-        message_sent: true,
-        provider_result: payload?.provider_result || null,
-        provider_messages: Array.isArray(payload?.provider_messages) ? payload.provider_messages : [],
-        delivered_text: payload?.delivered_text || '',
-        fallback_used: payload?.fallback_used === true,
-      });
+      try {
+        const payload = await sendTestMessage(supabaseUrl, serviceRoleKey, integration, channel, chatId, text, {
+          skipLog: body?.skipLog === true,
+          fallbackText: String(body?.fallbackText || '').trim() || undefined,
+          extraPayload: body?.extraPayload && typeof body.extraPayload === 'object'
+            ? body.extraPayload
+            : undefined,
+          attachments,
+        });
+        return json(200, {
+          success: true,
+          channel,
+          message_sent: true,
+          provider_result: payload?.provider_result || null,
+          provider_messages: Array.isArray(payload?.provider_messages) ? payload.provider_messages : [],
+          delivered_text: payload?.delivered_text || '',
+          fallback_used: payload?.fallback_used === true,
+        });
+      } catch (error: any) {
+        return json(200, {
+          success: false,
+          channel,
+          message_sent: false,
+          retryable: Boolean(error?.retryable),
+          error_code: String(error?.errorCode || (attachments.length > 0 ? `${channel}_attachment_send_failed` : `${channel}_message_send_failed`)),
+          details: error?.details || null,
+          message: String(error?.message || 'ارسال پیام بات ناموفق بود.'),
+        });
+      }
     }
 
     if (action === 'edit_message' || action === 'delete_message') {

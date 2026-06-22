@@ -3451,7 +3451,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           setInternalGroupModalOpen(false);
           setEditingInternalGroupId(null);
         }}
-        destroyOnClose
+        destroyOnHidden
       >
         <div className="space-y-3" dir="rtl">
           <div>

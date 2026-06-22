@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { App, Button, Checkbox, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
+import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiMediaSourceImage = {
   data: string;       // base64 (no data: prefix)
@@ -364,9 +365,21 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   ), [capability, settings, sourceImages, maxSourceImages, supportsSourceImages]);
 
   const badge = sourceImages.length > 0 ? sourceImages.length.toLocaleString('fa-IR') : null;
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) scheduleOverlayLockRelease();
+  };
 
   return (
-    <Popover open={open} onOpenChange={setOpen} placement="topRight" trigger="click" content={content}>
+    <Popover
+      open={open}
+      onOpenChange={handleOpenChange}
+      placement="topRight"
+      trigger="click"
+      content={content}
+      getPopupContainer={() => document.body}
+      destroyTooltipOnHide
+    >
       <Tooltip title="تنظیمات تولید رسانه">
         <Button size={size} disabled={disabled} icon={<SettingOutlined />}>
           {badge ? <Space size={2}>{badge}</Space> : null}

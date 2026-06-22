@@ -440,7 +440,7 @@ const SaasAdminAiSettings: React.FC = () => {
         okText="ذخیره"
         cancelText="انصراف"
         width={600}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" size="small">
           <div className="grid grid-cols-2 gap-x-3">

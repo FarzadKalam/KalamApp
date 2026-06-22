@@ -538,7 +538,7 @@ const WebhooksSection: React.FC = () => {
         cancelText="انصراف"
         confirmLoading={saving}
         width={560}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" requiredMark="optional">
           <Form.Item label="نام توضیحی" name="name">

@@ -198,7 +198,7 @@ const BotChatIdPickerModal: React.FC<Props> = ({
       title={`شناسایی مخاطب برای شناسه: ${chatId}`}
       footer={null}
       width={460}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">
         با انتخاب یک رکورد، این شناسه به آن مخاطب متصل می‌شود و پیام‌های بعدی با نام ایشان نمایش داده می‌شوند.

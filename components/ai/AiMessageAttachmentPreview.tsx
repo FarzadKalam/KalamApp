@@ -15,6 +15,7 @@ type AiAttachmentLike = {
   fileName?: string | null;
   filename?: string | null;
   name?: string | null;
+  data?: string | null;
 };
 
 const normalizeStoragePublicUrl = (url: string) => {
@@ -41,7 +42,7 @@ export const resolveAiAttachmentUrl = (attachment: AiAttachmentLike | null | und
   if (bucket && path) {
     return normalizeStoragePublicUrl(supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl || '');
   }
-  return normalizeStoragePublicUrl(String(attachment?.url || '').trim());
+  return normalizeStoragePublicUrl(String(attachment?.url || attachment?.data || '').trim());
 };
 
 const getAttachmentName = (attachment: AiAttachmentLike, fallback: string) =>

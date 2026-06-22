@@ -95,7 +95,7 @@ const InvoicePaymentAllocationModal: React.FC<Props> = ({
           .filter(([, amount]) => Number(amount) > 0)
           .map(([invoiceId, amount]) => ({ invoiceId, amount: Number(amount) }))
       )}
-      destroyOnClose
+      destroyOnHidden
     >
       <Alert
         type="warning"

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Drawer, Tooltip } from 'antd';
 import {
     FileTextOutlined, CheckSquareOutlined, HistoryOutlined,
@@ -9,11 +9,17 @@ import {
 } from '@ant-design/icons';
 import ActivityPanel from './ActivityPanel';
 import RelatedRecordsPanel from './RelatedRecordsPanel';
-import { ModuleDefinition, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
+import AssistantPanel from '../ai/AssistantPanel';
+import AiSparkleIcon from '../ai/AiSparkleIcon';
+import { FieldType, ModuleDefinition, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { applyTaskSourceRecordFilter } from '../../utils/taskMeta';
 import { MODULES } from '../../moduleRegistry';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
+import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
+import { buildProcessGuideContext, type ProcessGuideContext } from '../../utils/processGuideContext';
+import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
+import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 // نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
 const iconMap: Record<string, React.ReactNode> = {
@@ -44,6 +50,7 @@ interface RelatedSidebarProps {
   currentRecord?: Record<string, any> | null;
     mentionUsers?: any[];
     mentionRoles?: any[];
+    processRuntimeSnapshot?: ProcessRuntimeSnapshot | null;
 }
 
 const applyTabFilters = (query: any, filters?: RelatedTabFilterConfig[]) => {
@@ -148,7 +155,36 @@ const getModuleTableName = (moduleId?: string | null) => {
   return MODULES[normalized]?.table || normalized;
 };
 
-const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId, recordName = '', currentRecord = null, mentionUsers = [], mentionRoles = [] }) => {
+const PROCESS_STAGE_FIELD_KEYS = new Set([
+  'execution_process_draft',
+  'marketing_process_draft',
+  'template_stages_preview',
+  'run_stages_preview',
+]);
+
+const buildMentionAssigneeDirectory = (mentionUsers: any[], mentionRoles: any[]) => ({
+  users: (Array.isArray(mentionUsers) ? mentionUsers : []).map((user) => ({
+    id: String(user?.id || '').trim(),
+    display_name: String(user?.display_name || user?.name || user?.full_name || user?.email || '').trim(),
+    full_name: String(user?.full_name || user?.name || user?.display_name || '').trim(),
+    email: String(user?.email || '').trim(),
+    role_id: String(user?.role_id || user?.roleId || '').trim() || null,
+  })).filter((user) => user.id),
+  roles: (Array.isArray(mentionRoles) ? mentionRoles : []).map((role) => ({
+    id: String(role?.id || '').trim(),
+    title: String(role?.title || role?.name || role?.label || '').trim(),
+  })).filter((role) => role.id),
+});
+
+const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
+  moduleConfig,
+  recordId,
+  recordName = '',
+  currentRecord = null,
+  mentionUsers = [],
+  mentionRoles = [],
+  processRuntimeSnapshot = null,
+}) => {
   const DESKTOP_TAB_RAIL_LEFT_OFFSET = 12;
   const DESKTOP_TAB_RAIL_WIDTH = 56;
   const DESKTOP_TAB_RAIL_GAP = 12;
@@ -158,6 +194,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
     const [unreadMap, setUnreadMap] = useState<Record<string, boolean>>({});
 
   const fixedTabs = [
+      { key: 'ai_assistant', icon: <AiSparkleIcon className="h-5 w-5" />, label: 'هوش مصنوعی', color: 'text-fuchsia-500' },
       { key: 'notes', icon: <FileTextOutlined />, label: 'یادداشت‌ها', color: 'text-blue-500' },
       { key: 'tasks', icon: <CheckSquareOutlined />, label: 'فعالیت ها', color: 'text-green-500' },
       { key: 'changelogs', icon: <HistoryOutlined />, label: 'تغییرات', color: 'text-orange-500' }
@@ -175,6 +212,48 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
     }));
 
     const allTabs = [...fixedTabs, ...relatedTabs].filter((tab) => String(tab?.key || '') !== 'processes');
+
+    const processGuideBundle = useMemo<{
+        fieldKey: string | null;
+        context: ProcessGuideContext;
+    } | null>(() => {
+        const moduleId = String(moduleConfig?.id || '').trim();
+        const normalizedRecordId = String(recordId || '').trim();
+        const runtimeTasks = (
+            processRuntimeSnapshot?.loaded
+            && processRuntimeSnapshot.moduleId === moduleId
+            && processRuntimeSnapshot.recordId === normalizedRecordId
+        ) ? (processRuntimeSnapshot.tasks || []) : [];
+        const processFields = (moduleConfig?.fields || []).filter((field: any) => (
+            field?.type === FieldType.PROGRESS_STAGES
+            || PROCESS_STAGE_FIELD_KEYS.has(String(field?.key || ''))
+        ));
+        const firstFieldWithStages = processFields.find((field: any) => {
+            const value = currentRecord?.[String(field?.key || '')];
+            return Array.isArray(value) && value.length > 0;
+        });
+        const selectedField = firstFieldWithStages || processFields[0] || null;
+        if (!selectedField && runtimeTasks.length === 0) return null;
+
+        const fieldKey = String(selectedField?.key || 'process_runtime').trim();
+        const stages = selectedField && Array.isArray(currentRecord?.[fieldKey])
+            ? currentRecord?.[fieldKey]
+            : [];
+        if (!Array.isArray(stages) && runtimeTasks.length === 0) return null;
+
+        const context = buildProcessGuideContext({
+            moduleId,
+            recordId: normalizedRecordId || null,
+            fieldKey,
+            stages: Array.isArray(stages) ? stages : [],
+            tasks: runtimeTasks,
+            assigneeDirectory: buildMentionAssigneeDirectory(mentionUsers, mentionRoles),
+        });
+        const hasMeaningfulProcessData = (Array.isArray(stages) && stages.length > 0) || runtimeTasks.length > 0;
+        const availableCount = Array.isArray(context.available_processes) ? context.available_processes.length : 0;
+        if (!hasMeaningfulProcessData || availableCount === 0) return null;
+        return { fieldKey, context };
+    }, [currentRecord, mentionRoles, mentionUsers, moduleConfig?.fields, moduleConfig?.id, processRuntimeSnapshot, recordId]);
 
     const loadUnreadMap = async () => {
         try {
@@ -495,7 +574,50 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
         loadUnreadMap();
     }, [moduleConfig.id, recordId]);
 
+    const dispatchAiContext = () => {
+        if (typeof window === 'undefined') return;
+        const availableProcesses = Array.isArray(processGuideBundle?.context.available_processes)
+            ? processGuideBundle.context.available_processes
+            : [];
+        const processPayload = processGuideBundle && availableProcesses.length > 0
+            ? {
+                intent: 'process_guide' as const,
+                processFieldKey: processGuideBundle.fieldKey,
+                selectedProcessId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
+                selectedProcessGroupId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
+                availableProcesses: availableProcesses.map((process) => ({
+                    id: process.id,
+                    label: process.label,
+                    templateId: process.templateId,
+                    templateName: process.templateName,
+                    stageCount: process.stageCount,
+                })),
+                processGuideContext: processGuideBundle.context,
+            }
+            : {};
+        const detail: AssistantContext = {
+            mode: 'record',
+            moduleId: moduleConfig.id,
+            recordId,
+            route: `${window.location.pathname}${window.location.search || ''}`,
+            ...processPayload,
+        };
+        window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, {
+            detail,
+        }));
+    };
+
+    useEffect(() => {
+        if (activeKey === 'ai_assistant') {
+            dispatchAiContext();
+        }
+    }, [activeKey, processGuideBundle]);
+
     const toggleTab = async (key: string) => {
+        if (key === 'ai_assistant' && activeKey !== key) {
+            dispatchAiContext();
+            if (typeof window !== 'undefined') window.setTimeout(dispatchAiContext, 0);
+        }
         setActiveKey(prev => prev === key ? null : key);
 
         try {
@@ -571,6 +693,10 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
                     styles={{ body: { padding: '12px' } }}
                     style={{ left: -16 }}
                     rootStyle={{ zIndex: 2100 }}
+                    destroyOnHidden
+                    afterOpenChange={(nextOpen) => {
+                        if (!nextOpen) scheduleOverlayLockRelease();
+                    }}
                 >
                     <div className="flex flex-col gap-2">
                         {allTabs.map(tab => {
@@ -597,17 +723,24 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({ moduleConfig, recordId,
         <Drawer
             title={allTabs.find(t => t.key === activeKey)?.label}
             placement="left"
-            width={360}
+            width={activeKey === 'ai_assistant' ? 'min(92vw, 440px)' : 360}
             onClose={() => setActiveKey(null)}
             open={!!activeKey}
             getContainer={typeof document === 'undefined' ? undefined : () => document.body}
             mask={false}
-            styles={{ body: { padding: 0 }, header: { padding: '16px 24px' } }}
+            styles={{ body: { padding: 0 }, header: { padding: activeKey === 'ai_assistant' ? '12px 16px' : '16px 24px' } }}
             className="shadow-2xl"
             style={typeof window !== 'undefined' && window.innerWidth >= 768 ? { left: DESKTOP_DRAWER_LEFT_OFFSET } : undefined}
             rootStyle={{ zIndex: 2000 }}
+            destroyOnHidden
+            afterOpenChange={(nextOpen) => {
+                if (!nextOpen) scheduleOverlayLockRelease();
+            }}
         >
-            <div className="h-full p-4 bg-gray-50 dark:bg-[#121212]">
+            <div className={activeKey === 'ai_assistant' ? 'h-full bg-slate-100 dark:bg-[#101113]' : 'h-full p-4 bg-gray-50 dark:bg-[#121212]'}>
+                {activeKey === 'ai_assistant' && (
+                    <AssistantPanel active={activeKey === 'ai_assistant'} />
+                )}
                 {(activeKey === 'notes' || activeKey === 'tasks' || activeKey === 'changelogs') && (
                     <ActivityPanel
                         moduleId={moduleConfig.id}

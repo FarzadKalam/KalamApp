@@ -27,7 +27,13 @@ const KIND_HINT: Record<AiGenerationKind, string> = {
 
 const RECHECK_ENABLE_MS = 5000;     // manual button becomes active after 5s
 const AUTO_POLL_MS = 5000;          // background re-check cadence
-const AUTO_POLL_MAX_MS = 240000;    // stop background polling after 4 min (manual button stays)
+const AUTO_POLL_MAX_MS_BY_KIND: Record<AiGenerationKind, number> = {
+  image_generation: 900000,
+  voice_output: 180000,
+  video_generation: 900000,
+  document_generation: 300000,
+  document_analysis: 300000,
+};
 
 const formatElapsed = (ms: number) => {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -72,11 +78,12 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
   useEffect(() => {
     if (!autoPoll) return undefined;
     const id = window.setInterval(() => {
-      if (Date.now() - startedAtMs > AUTO_POLL_MAX_MS) { window.clearInterval(id); return; }
+      const maxMs = AUTO_POLL_MAX_MS_BY_KIND[kind] || 300000;
+      if (Date.now() - startedAtMs > maxMs) { window.clearInterval(id); return; }
       void recheckRef.current();
     }, AUTO_POLL_MS);
     return () => window.clearInterval(id);
-  }, [autoPoll, startedAtMs]);
+  }, [autoPoll, kind, startedAtMs]);
 
   const elapsed = now - startedAtMs;
   const canRecheck = elapsed >= RECHECK_ENABLE_MS && !checking;

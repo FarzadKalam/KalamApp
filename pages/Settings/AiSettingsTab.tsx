@@ -56,6 +56,26 @@ const CAPABILITIES: Array<{
   { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
 ];
 
+const PRIMARY_MODEL_KEY = '__primary_model';
+const PRIMARY_MODEL_CAPABILITIES = new Set([
+  'dashboard_chat',
+  'record_chat',
+  'customer_reply_suggestion',
+  'document_analysis',
+  'workflow_ai_prompt',
+  'deep_reasoning',
+  'legal_assistant',
+  'web_search',
+]);
+
+const PRIMARY_MODEL_PREFERRED_IDS = [
+  'gemini-3.1-flash-lite',
+  'gpt-5.4-mini',
+  'gpt-5-mini',
+  'gpt-4.1-mini',
+  'gpt-4o-mini',
+];
+
 const formatUnit = (value: unknown) =>
   Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 8 });
 
@@ -119,6 +139,26 @@ const AiSettingsTab: React.FC = () => {
     });
     return result;
   }, [models]);
+  const primaryModelOptions = useMemo(() => models
+    .filter((model) => {
+      const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+      return model?.is_coming_soon !== true && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
+    })
+    .sort((a, b) => {
+      const aIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(a?.id || ''));
+      const bIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(b?.id || ''));
+      if (aIndex !== -1 || bIndex !== -1) return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+      const aTags = Array.isArray(a?.capability_tags) ? a.capability_tags : [];
+      const bTags = Array.isArray(b?.capability_tags) ? b.capability_tags : [];
+      const aCoverage = aTags.filter((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim())).length;
+      const bCoverage = bTags.filter((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim())).length;
+      return bCoverage - aCoverage;
+    })
+    .map((model) => ({
+      label: String(model?.display_name_fa || model?.label || model?.id || '').trim(),
+      value: String(model?.id || '').trim(),
+    }))
+    .filter((item) => item.value), [models]);
 
   const handleSave = async () => {
     try {
@@ -229,6 +269,22 @@ const AiSettingsTab: React.FC = () => {
               ),
               children: (
                 <div className="space-y-3">
+                  <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.65)] p-3 dark:border-white/10 dark:bg-white/5">
+                    <div className="mb-2">
+                      <div className="font-semibold text-gray-800 dark:text-gray-100">مدل اصلی سازمان</div>
+                      <div className="text-xs leading-5 text-gray-500">
+                        برای گفتگو، تحلیل اسناد، ساخت رکورد و عملگرهای متنی استفاده می‌شود؛ موتورهای تخصصی مثل تصویر، ویدیو، صدا و ساخت فایل جدا تنظیم می‌شوند.
+                      </div>
+                    </div>
+                    <Form.Item name={['selected_models', PRIMARY_MODEL_KEY]} className="m-0 max-w-xl">
+                      <Select
+                        showSearch
+                        optionFilterProp="label"
+                        options={primaryModelOptions}
+                        placeholder="انتخاب مدل اصلی"
+                      />
+                    </Form.Item>
+                  </div>
                   {CAPABILITIES.map((capability) => (
                     (() => {
                       const availability = capabilityAvailability[capability.key] || {};

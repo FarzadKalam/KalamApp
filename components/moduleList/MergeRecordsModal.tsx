@@ -119,7 +119,7 @@ const MergeRecordsModal: React.FC<MergeRecordsModalProps> = ({
       confirmLoading={submitting}
       okButtonProps={{ disabled: !canSubmit }}
       width={Math.min(1120, Math.max(760, 300 + records.length * 220))}
-      destroyOnClose
+      destroyOnHidden
       className="kalam-merge-records-modal"
     >
       <div className="space-y-3" dir="rtl">
@@ -200,4 +200,3 @@ const MergeRecordsModal: React.FC<MergeRecordsModalProps> = ({
 };
 
 export default MergeRecordsModal;
-

@@ -1,0 +1,244 @@
+import React from 'react';
+import { App } from 'antd';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import AssistantPanel from './AssistantPanel';
+
+const invokeMock = vi.fn();
+
+vi.mock('../../supabaseClient', () => ({
+  SUPABASE_URL: 'https://example.test',
+  SUPABASE_ANON_KEY: 'anon-test-key',
+  supabase: {
+    functions: {
+      invoke: (...args: any[]) => invokeMock(...args),
+    },
+    from: vi.fn(() => ({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn(async () => ({ data: [], error: null })),
+    })),
+  },
+}));
+
+vi.mock('../../utils/sessionCache', () => ({
+  fetchSessionBootstrap: vi.fn(async () => ({
+    user: { id: 'user-1', email: 'user@example.test' },
+    profile: { full_name: 'کاربر تست', avatar_url: null },
+  })),
+}));
+
+vi.mock('../../utils/blobBase64', () => ({
+  blobToBase64: vi.fn(async () => 'voice-base64'),
+}));
+
+vi.mock('../../utils/aiRecordCreation', () => ({
+  buildAiRecordModuleOptions: vi.fn(() => [{ label: 'مشتریان', value: 'customers' }]),
+  buildAiRecordCreationSchema: vi.fn((moduleId: string) => ({ moduleId, fields: [{ key: 'name', label: 'نام' }] })),
+}));
+
+vi.mock('./AiCapabilityComposerActions', async () => {
+  const React = await import('react');
+  const button = (label: string, onClick: () => void) =>
+    React.createElement('button', { type: 'button', onClick }, label);
+  const MockActions = (props: any) => React.createElement(
+    'div',
+    { 'data-testid': 'ai-operator-actions' },
+    React.createElement('div', { 'data-testid': 'selected-capabilities' }, (props.selected || []).join(',')),
+    button('cap-web_search', () => props.onChange(['web_search'])),
+    button('cap-deep_reasoning', () => props.onChange(['deep_reasoning'])),
+    button('cap-legal_assistant', () => props.onChange(['legal_assistant', 'web_search', 'deep_reasoning'])),
+    button('cap-image_generation', () => props.onChange(['image_generation'])),
+    button('cap-voice_output', () => props.onChange(['voice_output'])),
+    button('cap-video_generation', () => props.onChange(['video_generation'])),
+    button('cap-document_generation', () => props.onChange(['document_generation'])),
+    button('cap-process_operation', () => props.onChange([...(props.selected || []), 'process_operation'])),
+    button('cap-record_creation', () => {
+      props.onChange([...(props.selected || []), 'record_creation']);
+      props.onRecordCreationTargetModuleChange?.('customers');
+    }),
+    button('cap-document_analysis', () => props.onChange([...(props.selected || []), 'document_analysis'])),
+    button('cap-voice_input', () => props.onChange([...(props.selected || []), 'voice_input'])),
+    button('send-file', () => props.onFilePrepared({
+      fileName: 'proposal.pdf',
+      mimeType: 'application/pdf',
+      size: 2400,
+      prompt: 'متن استخراج شده فایل',
+      data: 'data:application/pdf;base64,AAAA',
+      inputKind: 'file',
+    })),
+    button('send-voice', () => props.onVoiceSend({
+      blob: new Blob(['voice'], { type: 'audio/webm' }),
+      mimeType: 'audio/webm',
+      durationMs: 1200,
+      filename: 'voice.webm',
+    })),
+  );
+  return { default: MockActions };
+});
+
+const getBodies = () => invokeMock.mock.calls.map((call) => call[1]?.body).filter(Boolean);
+const findBody = (action: string) => getBodies().find((body) => body?.action === action);
+
+const waitForBootstrap = async () => {
+  await waitFor(() => expect(findBody('get_ai_overview')).toBeTruthy());
+  invokeMock.mockClear();
+};
+
+const renderPanel = async () => {
+  render(
+    <App>
+      <MemoryRouter initialEntries={['/dashboard']}>
+        <AssistantPanel active />
+      </MemoryRouter>
+    </App>,
+  );
+  await waitForBootstrap();
+};
+
+const findButtonByVisibleName = (name: string | RegExp) => {
+  const buttons = screen.getAllByRole('button');
+  const matcher = typeof name === 'string'
+    ? (value: string) => value.includes(name)
+    : (value: string) => name.test(value);
+  const match = buttons.find((button) => matcher(String(button.textContent || '').trim()));
+  if (!match) throw new Error(`Button not found: ${String(name)}`);
+  return match;
+};
+
+const typeAndSend = async (text: string, buttonName: string | RegExp = 'ارسال') => {
+  fireEvent.change(screen.getByPlaceholderText('سوال خود را بنویسید...'), { target: { value: text } });
+  fireEvent.click(findButtonByVisibleName(buttonName));
+};
+
+describe('AssistantPanel AI operators', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockImplementation(async (_functionName: string, options?: any) => {
+      const action = options?.body?.action;
+      if (action === 'get_ai_overview') {
+        return { data: { success: true, capabilityAvailability: {} }, error: null };
+      }
+      if (action === 'get_thread') {
+        return { data: { success: true, threadId: 'thread-1', messages: [] }, error: null };
+      }
+      if (action === 'transcribe_voice') {
+        return { data: { success: true, transcript: 'متن ویس تست' }, error: null };
+      }
+      if (action === 'generate_image') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'img-1', answer: 'تصویر آماده شد.', image: { url: 'https://example.test/image.png' } }, error: null };
+      }
+      if (action === 'generate_voice_output') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'voice-out-1', answer: 'صدا آماده شد.', file: { url: 'https://example.test/voice.mp3' } }, error: null };
+      }
+      if (action === 'generate_video') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'video-1', videoId: 'video-job-1' }, error: null };
+      }
+      if (action === 'generate_document') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'doc-1', answer: 'فایل آماده شد.', file: { url: 'https://example.test/doc.docx' }, format: 'docx' }, error: null };
+      }
+      if (action === 'process_operation_from_prompt') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'process-1', answer: 'اقدام پیشنهادی آماده شد.', proposedAction: { id: 'action-1' } }, error: null };
+      }
+      if (action === 'create_record_from_prompt') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'record-1', answer: 'پیشنهاد ساخت آماده شد.', createdRecords: [{ id: 'record-1' }] }, error: null };
+      }
+      if (action === 'chat_with_file') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'file-1', answer: 'تحلیل فایل آماده شد.' }, error: null };
+      }
+      if (action === 'run_task_bundle') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'bundle-1', answer: 'باندل پردازش شد.', proposedAction: options?.body?.capabilities?.includes('record_creation') ? { id: 'bundle-action-1' } : null }, error: null };
+      }
+      if (action === 'chat') {
+        return { data: { success: true, threadId: 'thread-1', messageId: 'chat-1', answer: 'پاسخ تست' }, error: null };
+      }
+      return { data: { success: true }, error: null };
+    });
+  });
+
+  it.each([
+    ['web_search', 'cap-web_search', 'chat', 'dashboard_chat', 'ارسال'],
+    ['deep_reasoning', 'cap-deep_reasoning', 'chat', 'deep_reasoning', 'ارسال'],
+    ['legal_assistant', 'cap-legal_assistant', 'chat', 'legal_assistant', 'ارسال'],
+    ['process_operation', 'cap-process_operation', 'process_operation_from_prompt', 'record_chat', 'پیشنهاد اقدام'],
+    ['record_creation', 'cap-record_creation', 'create_record_from_prompt', 'dashboard_chat', 'پیشنهاد ساخت'],
+  ])('sends the %s operator through the expected assistant action', async (_name, capabilityButton, expectedAction, expectedCapability, sendButtonName) => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText(capabilityButton)[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent(String(capabilityButton).replace('cap-', '')));
+    await typeAndSend('درخواست تست عملگر', sendButtonName);
+    await waitFor(() => expect(findBody(expectedAction)).toBeTruthy());
+    const body = findBody(expectedAction);
+    expect(body?.capability).toBe(expectedCapability);
+    expect(body?.message).toContain('درخواست تست عملگر');
+    if (expectedAction === 'create_record_from_prompt') {
+      expect(body?.recordCreation?.moduleId).toBe('customers');
+      expect(body?.previewOnly).toBe(true);
+    }
+    if (expectedAction === 'process_operation_from_prompt') {
+      expect(body?.previewOnly).toBe(true);
+    }
+  });
+
+  it.each([
+    ['image_generation', 'cap-image_generation', 'generate_image', /ساخت تصویر/],
+    ['voice_output', 'cap-voice_output', 'generate_voice_output', /تولید صدا/],
+    ['video_generation', 'cap-video_generation', 'generate_video', /ساخت ویدیو/],
+    ['document_generation', 'cap-document_generation', 'generate_document', /ساخت فایل/],
+  ])('runs the %s generation operator with its dedicated action', async (_name, capabilityButton, expectedAction, sendButtonName) => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText(capabilityButton)[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent(String(capabilityButton).replace('cap-', '')));
+    await typeAndSend('متن تولید تست', sendButtonName);
+    await waitFor(() => expect(findBody(expectedAction)).toBeTruthy());
+    expect(findBody(expectedAction)?.prompt || findBody(expectedAction)?.text).toContain('متن تولید تست');
+  });
+
+  it('runs document_analysis through file upload and keeps the file payload visible to the assistant', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('cap-document_analysis')[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('document_analysis'));
+    fireEvent.click(screen.getAllByText('send-file')[0]);
+    expect(screen.getAllByText(/proposal\.pdf/).length).toBeGreaterThan(0);
+    await typeAndSend('این فایل را بررسی کن', 'اجرای باندل');
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.capabilities).toContain('document_analysis');
+    expect(body?.bundle?.inputs?.[0]?.file?.filename).toBe('proposal.pdf');
+    expect(body?.bundle?.inputs?.[0]?.file?.data).toContain('data:application/pdf');
+  });
+
+  it('queues voice_input and sends it through task bundle', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('cap-voice_input')[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('voice_input'));
+    fireEvent.click(screen.getAllByText('send-voice')[0]);
+    expect(screen.getAllByText(/ویس/).length).toBeGreaterThan(0);
+    await typeAndSend('این ویس را بررسی کن', 'اجرای باندل');
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.bundle?.inputs?.[0]?.type).toBe('voice');
+    expect(body?.bundle?.inputs?.[0]?.audio?.data).toBe('voice-base64');
+  });
+
+  it('sends image/file and voice together for record creation as one task bundle', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('cap-record_creation')[0]);
+    fireEvent.click(screen.getAllByText('cap-voice_input')[0]);
+    fireEvent.click(screen.getAllByText('send-file')[0]);
+    fireEvent.click(screen.getAllByText('send-voice')[0]);
+    await typeAndSend('این را به عنوان مشتری ثبت کن', 'اجرای باندل');
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.capabilities).toContain('record_creation');
+    expect(body?.recordCreation?.moduleId).toBe('customers');
+    expect(body?.bundle?.inputs).toHaveLength(2);
+    expect(body?.bundle?.inputs?.map((item: any) => item.type)).toEqual(['file', 'voice']);
+  });
+});

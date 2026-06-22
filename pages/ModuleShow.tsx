@@ -6140,6 +6140,7 @@ const ModuleShow: React.FC = () => {
           currentRecord={{ ...displayData, id }}
           mentionUsers={allUsers}
           mentionRoles={allRoles}
+          processRuntimeSnapshot={processRuntimeSnapshot}
         />
       </div>
 

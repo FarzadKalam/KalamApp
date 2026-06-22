@@ -46,6 +46,12 @@ type ProcessGuideStageSummary = {
     unit: string | null;
     from: string | null;
   };
+  timing: {
+    planned_due_at: string | null;
+    due_date: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+  };
   automation_count: number;
   automation_rule_ids: string[];
   known_gaps: string[];
@@ -63,6 +69,7 @@ type ProcessGuideAutomationSummary = {
     label: string;
     template: string | null;
     summary: string;
+    config_summary: string[];
   }>;
   conditions_all: Array<{
     field: string;
@@ -269,20 +276,60 @@ const summarizeActionTemplate = (action: any) =>
     || ''
   ).trim() || null;
 
+const summarizeActionConfig = (action: any) => {
+  const config = action?.config && typeof action.config === 'object' ? action.config : {};
+  const parts: string[] = [];
+  const pushPrimitive = (key: string, label: string) => {
+    const value = config?.[key];
+    if (value === null || value === undefined || value === '') return;
+    if (typeof value === 'object') return;
+    parts.push(`${label}: ${String(value).slice(0, 180)}`);
+  };
+  pushPrimitive('field', 'فیلد هدف');
+  pushPrimitive('target_field', 'فیلد مقصد');
+  pushPrimitive('status', 'وضعیت');
+  pushPrimitive('task_status', 'وضعیت فعالیت');
+  pushPrimitive('due_days', 'مهلت روز');
+  pushPrimitive('delay_days', 'تاخیر روز');
+  pushPrimitive('duration_value', 'مدت');
+  pushPrimitive('duration_unit', 'واحد مدت');
+  pushPrimitive('duration_from', 'مبنای مدت');
+  pushPrimitive('module_id', 'ماژول');
+  pushPrimitive('message', 'پیام');
+  pushPrimitive('message_text', 'متن پیام');
+  pushPrimitive('note_text', 'متن یادداشت');
+  pushPrimitive('prompt_template', 'قالب پرامپت');
+
+  if (Array.isArray(config?.recipient_fields) && config.recipient_fields.length > 0) {
+    parts.push(`فیلدهای گیرنده: ${config.recipient_fields.map((field: any) => getAnyFieldLabel(String(field || ''))).filter(Boolean).join('، ')}`);
+  }
+  if (Array.isArray(config?.fields) && config.fields.length > 0) {
+    parts.push(`فیلدها: ${config.fields.map((field: any) => getAnyFieldLabel(String(field || ''))).filter(Boolean).join('، ')}`);
+  }
+  if (config?.payload && typeof config.payload === 'object') {
+    const keys = Object.keys(config.payload).filter(Boolean).slice(0, 12);
+    if (keys.length) parts.push(`کلیدهای داده ارسالی: ${keys.join('، ')}`);
+  }
+  return parts;
+};
+
 const summarizeAction = (action: any) => {
   const type = String(action?.type || '').trim() || 'unknown';
   const label = ACTION_LABEL_MAP.get(type as any) || type;
   const template = summarizeActionTemplate(action);
+  const configSummary = summarizeActionConfig(action);
   const recipientFields = Array.isArray(action?.config?.recipient_fields) ? action.config.recipient_fields.length : 0;
   const summaryParts = [label];
   if (recipientFields > 0) summaryParts.push(`گیرنده از ${recipientFields} فیلد`);
   if (action?.config?.field) summaryParts.push(`فیلد: ${getAnyFieldLabel(action.config.field)}`);
   if (template) summaryParts.push(`متن: ${template.slice(0, 180)}`);
+  if (configSummary.length) summaryParts.push(configSummary.slice(0, 4).join('؛ '));
   return {
     type,
     label,
     template,
     summary: summaryParts.join(' | '),
+    config_summary: configSummary,
   };
 };
 
@@ -508,6 +555,12 @@ const summarizeStage = (
       value: Number.isFinite(Number(stage?.duration_value)) ? Number(stage?.duration_value) : null,
       unit: String(stage?.duration_unit || '').trim() || null,
       from: String(stage?.duration_from || '').trim() || null,
+    },
+    timing: {
+      planned_due_at: String(stage?.planned_due_at || stage?.metadata?.planned_due_at || '').trim() || null,
+      due_date: String(linkedTask?.due_date || stage?.due_date || stage?.metadata?.due_date || '').trim() || null,
+      started_at: String(stage?.started_at || linkedTask?.start_date || linkedTask?.started_at || '').trim() || null,
+      completed_at: String(stage?.completed_at || linkedTask?.completed_at || '').trim() || null,
     },
     automation_count: automationRules.length,
     automation_rule_ids: automationRules.map((rule) => String(rule?.id || '').trim()).filter(Boolean),

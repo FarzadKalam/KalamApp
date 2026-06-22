@@ -18,6 +18,7 @@ import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadBut
 const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
 import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
+import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiComposerCapability =
   | 'document_analysis'
@@ -133,6 +134,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     if (disabled || loading) setOpen(false);
   }, [disabled, loading]);
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) scheduleOverlayLockRelease();
+  };
+
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
     let next = checked
       ? normalizeSelected([...selected, key])
@@ -140,18 +146,10 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     if (key === 'legal_assistant' && checked) {
       next = normalizeSelected([...next, 'web_search', 'deep_reasoning']);
     }
-    if (key === 'record_creation' && checked) {
-      next = next.filter((item) => item !== 'process_operation');
-    }
-    if (key === 'process_operation' && checked) {
-      next = next.filter((item) => item !== 'record_creation');
-      onRecordCreationTargetModuleChange?.(null);
-    }
     if (key === 'record_creation' && !checked) {
       onRecordCreationTargetModuleChange?.(null);
     }
     onChange(next);
-    setOpen(false);
   };
 
   const content = (
@@ -198,10 +196,15 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           <Drawer
             title="عملکردهای هوش مصنوعی"
             open={open}
-            onClose={() => setOpen(false)}
+            onClose={() => handleOpenChange(false)}
             placement="bottom"
             height="min(82vh, 620px)"
             classNames={{ body: '!p-3' }}
+            destroyOnHidden
+            getContainer={typeof document === 'undefined' ? undefined : () => document.body}
+            afterOpenChange={(nextOpen) => {
+              if (!nextOpen) scheduleOverlayLockRelease();
+            }}
           >
             {content}
           </Drawer>
@@ -209,11 +212,12 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : (
         <Popover
           open={open}
-          onOpenChange={setOpen}
+          onOpenChange={handleOpenChange}
           placement="top"
           trigger="click"
           content={content}
           getPopupContainer={() => document.body}
+          destroyTooltipOnHide
           autoAdjustOverflow
           overlayStyle={{ maxWidth: 'calc(100vw - 24px)' }}
         >

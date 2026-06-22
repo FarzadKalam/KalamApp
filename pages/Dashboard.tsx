@@ -1406,7 +1406,6 @@ const Dashboard: React.FC = () => {
                   <div className="mt-1 px-7">
                     <AiComposeModelBar
                       selectedCapabilities={dashboardAiCapabilities}
-                      contextMode="dashboard"
                       onModelOverrideChange={(model) => { dashboardModelOverrideRef.current = model; }}
                     />
                   </div>

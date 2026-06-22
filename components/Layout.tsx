@@ -660,7 +660,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
-      { key: '/ai?prototype=omni', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'هوش مصنوعی (نسخه ۲)', disabled: !communicationsAccess.canUseWorkspace },
+      { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'هوش مصنوعی تازه سیستم', disabled: !communicationsAccess.canUseWorkspace },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,
@@ -833,7 +833,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/customer-club':
           return canViewCustomerClub;
         case '/messages':
-        case '/ai?prototype=omni':
+        case '/ai':
           return communicationsAccess.canUseWorkspace;
         case '/gallery':
           return filesAccess.canViewGallery;
@@ -952,7 +952,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   }, [visibleRawMenuItems]);
   const selectedSidebarKey = useMemo(() => {
     if (location.pathname === '/ai' && new URLSearchParams(location.search).get('prototype') === 'omni') {
-      return '/ai?prototype=omni';
+      return '/ai';
     }
     return location.pathname;
   }, [location.pathname, location.search]);

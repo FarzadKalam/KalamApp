@@ -1,17 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Tooltip } from 'antd';
 import EditableTable from '../EditableTable.tsx';
 import GridTable from '../GridTable';
 import SummaryCard from '../SummaryCard';
-import AiSparkleIcon from '../ai/AiSparkleIcon';
 import { calculateSummary } from '../../utils/calculations';
 import { SummaryCalculationType, FieldType } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../../utils/processTemplateStages';
-import { AI_CONTEXT_EVENT, AI_OPEN_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
-import { buildProcessGuideContext } from '../../utils/processGuideContext';
-import { fetchAssigneeDirectory, type AssigneeDirectory } from '../../utils/referenceData';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
@@ -48,14 +43,12 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   onDataUpdate,
   focusBlockId,
   focusRowKey,
-  processRuntimeSnapshot,
   onProcessRuntimeSnapshot,
 }) => {
   if (!module || !data) return null;
 
   const [externalTables, setExternalTables] = useState<Record<string, any[]>>({});
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
-  const [assigneeDirectory, setAssigneeDirectory] = useState<AssigneeDirectory | null>(null);
 
   const externalBlocks = useMemo(
     () => module.blocks?.filter((b: any) => b.type === 'table' && b.externalDataConfig) || [],
@@ -143,11 +136,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     'template_stages_preview',
     'run_stages_preview',
   ]), []);
-  const processGuideTasks = (
-    processRuntimeSnapshot?.loaded
-    && processRuntimeSnapshot.moduleId === String(module?.id || '')
-    && processRuntimeSnapshot.recordId === String(data?.id || '')
-  ) ? processRuntimeSnapshot.tasks : [];
   const syncProcessTemplateStages = useCallback(
     (templateId: string, rawStages: any[]) =>
       syncProcessTemplateStagesShared(supabase, templateId, rawStages),
@@ -157,26 +145,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     .filter((f: any) => f.type === FieldType.PROGRESS_STAGES || processStageFieldKeys.has(String(f?.key || '')))
     .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
     .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
-
-  useEffect(() => {
-    let cancelled = false;
-    if (progressFields.length === 0) {
-      setAssigneeDirectory(null);
-      return () => {
-        cancelled = true;
-      };
-    }
-    fetchAssigneeDirectory(supabase)
-      .then((directory) => {
-        if (!cancelled) setAssigneeDirectory(directory);
-      })
-      .catch(() => {
-        if (!cancelled) setAssigneeDirectory(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [progressFields.length]);
 
   return (
     <div className="tables-section space-y-6 md:space-y-8">
@@ -193,46 +161,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           const stageDraftValue = isProcessStagesField
             ? (Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [])
             : (data?.production_stages_draft || []);
-          const processGuideContext = isProcessStagesField
-            ? buildProcessGuideContext({
-                moduleId: module?.id,
-                recordId: String(data?.id || '').trim() || null,
-                fieldKey,
-                stages: Array.isArray(stageDraftValue) ? stageDraftValue : [],
-                tasks: processGuideTasks,
-                assigneeDirectory,
-              })
-            : null;
-          const availableProcesses = Array.isArray(processGuideContext?.available_processes)
-            ? processGuideContext.available_processes
-            : [];
-          const handleOpenProcessGuide = () => {
-            if (typeof window === 'undefined' || !processGuideContext || availableProcesses.length === 0) return;
-            const detail: AssistantContext = {
-              mode: 'record',
-              moduleId: String(module?.id || '').trim() || null,
-              recordId: String(data?.id || '').trim() || null,
-              route: `${window.location.pathname}${window.location.search || ''}`,
-              intent: 'process_guide',
-              processFieldKey: fieldKey,
-              selectedProcessId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
-              selectedProcessGroupId: availableProcesses.length === 1 ? availableProcesses[0].id : null,
-              availableProcesses: availableProcesses.map((process) => ({
-                id: process.id,
-                label: process.label,
-                templateId: process.templateId,
-                templateName: process.templateName,
-                stageCount: process.stageCount,
-              })),
-              processGuideContext: processGuideContext,
-            };
-            window.dispatchEvent(new CustomEvent(AI_OPEN_EVENT, {
-              detail: {
-                context: detail,
-              },
-            }));
-            window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail }));
-          };
           const handleDraftStagesChange = async (nextStages: any[]) => {
             if (!onDataUpdate) return;
             if (isTemplatePreviewField && module.id === 'process_templates' && data?.id) {
@@ -269,17 +197,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 <span className="w-1 h-6 bg-leather-500 rounded-full inline-block"></span>
                 {field.labels.fa}
               </h3>
-              {isProcessStagesField ? (
-                <Tooltip title="راهنمای هوشمند فرآیند">
-                  <Button
-                    type="text"
-                    size="small"
-                    onClick={handleOpenProcessGuide}
-                    className="inline-flex items-center justify-center !text-[rgb(var(--brand-700-rgb))] dark:!text-[rgb(var(--brand-300-rgb))]"
-                    icon={<AiSparkleIcon className="h-4 w-4" />}
-                  />
-                </Tooltip>
-              ) : null}
             </div>
             <React.Suspense fallback={null}>
               <ProductionStagesField

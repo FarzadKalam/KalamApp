@@ -617,6 +617,22 @@ const LIKES_KEY = 'likes';
 const EMPTY_READ_FALLBACK_SET = new Set<string>();
 const EMPTY_STABLE_ARRAY: any[] = [];
 
+const isRpcSchemaCompatibilityError = (error: any) => {
+  const code = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.statusCode || 0);
+  const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  return (
+    isMissingRpcError(error)
+    || status >= 500
+    || code === '42703'
+    || code === 'PGRST204'
+    || code === 'PGRST301'
+    || message.includes('schema cache')
+    || message.includes('failed to fetch')
+    || (message.includes('column') && message.includes('does not exist'))
+  );
+};
+
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
   { key: 'overdue', label: 'سررسیدگذشته‌ها' },
@@ -3449,7 +3465,7 @@ useEffect(() => {
   const fetchSmsMessages = async () => {
     const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
     if (!rpcResult.error) return rpcResult.data || [];
-    if (!isMissingRpcError(rpcResult.error)) throw rpcResult.error;
+    if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
 
     const { data, error } = await supabase
       .from('sms_delivery_reports')

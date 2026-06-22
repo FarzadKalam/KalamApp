@@ -7,7 +7,7 @@ import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
 import { GLOBAL_ASSIGNEE_MODULES } from "../utils/assigneeSupport";
-import { App, Badge, Button, Dropdown, Empty, Skeleton } from "antd";
+import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
 import { AppstoreAddOutlined, AppstoreOutlined, BranchesOutlined, CalendarOutlined, ColumnWidthOutlined, EllipsisOutlined, EnvironmentOutlined, FileExcelOutlined, FilePdfOutlined, MessageOutlined, PlusOutlined, ReloadOutlined, SettingOutlined, TableOutlined, TagsOutlined } from "@ant-design/icons";
@@ -15,6 +15,7 @@ import AdaptivePickerSurface from "../components/AdaptivePickerSurface";
 import ViewManager from "../components/ViewManager";
 import { supabase } from "../supabaseClient";
 import Toolbar from "../components/moduleList/Toolbar";
+import AssistantPanel from "../components/ai/AssistantPanel";
 import BulkActionsBar from "../components/moduleList/BulkActionsBar";
 import ViewWrapper from "../components/moduleList/ViewWrapper";
 import {
@@ -773,6 +774,9 @@ export const ModuleListRefine: React.FC<{
   const [isGoalsModalOpen, setIsGoalsModalOpen] = useState(false);
   const [isExcelImportModalOpen, setIsExcelImportModalOpen] = useState(false);
   const [isBulkSmsComposerOpen, setIsBulkSmsComposerOpen] = useState(false);
+  const [isListAiDrawerOpen, setIsListAiDrawerOpen] = useState(false);
+  const [isListAiModeEnabled, setIsListAiModeEnabled] = useState(false);
+  const [listAiInitialPrompt, setListAiInitialPrompt] = useState("");
   const [voipCallSyncing, setVoipCallSyncing] = useState(false);
   const [bulkSmsRecipients, setBulkSmsRecipients] = useState<string[]>([]);
   const [bulkSmsSourceRecord, setBulkSmsSourceRecord] = useState<Record<string, any> | null>(null);
@@ -2043,6 +2047,31 @@ export const ModuleListRefine: React.FC<{
       },
     }));
   }, [accessibleRecordIds, listVisibleRowKeys, resolvedModuleId, selectedRowKeys]);
+
+  const dispatchListAiContext = useCallback(() => {
+    if (typeof window === "undefined" || !resolvedModuleId) return;
+    const visibleRecordIds = (listVisibleRowKeys || accessibleRecordIds)
+      .map((key) => String(key || "").trim())
+      .filter(Boolean);
+    window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, {
+      detail: {
+        mode: "list",
+        moduleId: resolvedModuleId,
+        recordId: null,
+        visibleRecordIds,
+        selectedRecordIds: selectedRowKeys.map((key) => String(key || "").trim()).filter(Boolean),
+        route: `${window.location.pathname}${window.location.search || ""}`,
+      },
+    }));
+  }, [accessibleRecordIds, listVisibleRowKeys, resolvedModuleId, selectedRowKeys]);
+
+  const openListAiDrawer = useCallback((question?: string) => {
+    const normalizedQuestion = String(question || "").trim();
+    setListAiInitialPrompt(normalizedQuestion);
+    dispatchListAiContext();
+    setIsListAiDrawerOpen(true);
+    if (typeof window !== "undefined") window.setTimeout(dispatchListAiContext, 0);
+  }, [dispatchListAiContext]);
   const taskRelationLabelRequests = useMemo(() => {
     if (resolvedModuleId !== "tasks" || !enrichedData.length) return [];
     const requests = new Map<string, { fieldKey: string; moduleId: string; recordId: string }>();
@@ -4580,6 +4609,9 @@ export const ModuleListRefine: React.FC<{
           calendarDateFieldOptions={calendarDateFieldOptions}
           onCalendarDateFieldChange={setCalendarDateField}
           onViewModeLauncherClick={() => setIsMobileViewModeSheetOpen(true)}
+          aiModeEnabled={isListAiModeEnabled}
+          onAiModeToggle={setIsListAiModeEnabled}
+          onAiSubmit={(question) => openListAiDrawer(question)}
           mobileTrailingContent={
             isMobileViewport ? (
               <ViewManager
@@ -5054,6 +5086,21 @@ export const ModuleListRefine: React.FC<{
         />
         </React.Suspense>
       ) : null}
+      <Drawer
+        open={isListAiDrawerOpen}
+        onClose={() => {
+          setIsListAiDrawerOpen(false);
+          setListAiInitialPrompt("");
+        }}
+        placement="left"
+        width="min(92vw, 440px)"
+        title="هوش مصنوعی تازه سیستم"
+        classNames={{ body: "!p-0" }}
+        destroyOnHidden
+        getContainer={typeof document === "undefined" ? undefined : () => document.body}
+      >
+        <AssistantPanel active={isListAiDrawerOpen} initialPrompt={listAiInitialPrompt} />
+      </Drawer>
       {saasUserDrawerRecord && useSaasUserDrawer ? (
         <React.Suspense fallback={null}>
           <SaasUserAdminDrawer

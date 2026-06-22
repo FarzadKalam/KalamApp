@@ -509,12 +509,16 @@ const fetchNotificationReadStateKeys = async (profile: LiveProfile) => {
 
 const isRpcSchemaCompatibilityError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.statusCode || 0);
   const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   return (
     isMissingRpcError(error)
+    || status >= 500
     || code === '42703'
     || code === 'PGRST204'
+    || code === 'PGRST301'
     || message.includes('schema cache')
+    || message.includes('failed to fetch')
     || (message.includes('column') && message.includes('does not exist'))
   );
 };
@@ -1126,9 +1130,6 @@ export const useMessagingOmniLiveData = () => {
     const filter = `org_id=eq.${profile.orgId}`;
     let channel: RealtimeChannel | null = supabase
       .channel(`messaging-v2-live-${profile.orgId}-${profile.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'sms_delivery_reports', filter }, () => {
-        void refresh();
-      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'outbound_messages', filter }, (payload: any) => {
         const row = payload?.new || payload?.old || {};
         if (String(row?.channel_type || '').trim() === 'sms') void refresh();
