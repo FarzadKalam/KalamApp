@@ -133,6 +133,7 @@ export const sendBotMessageViaGateway = async ({
   if (!messageText && normalizedAttachments.length === 0) {
     throw new Error('متن پیام بات خالی است.');
   }
+  const effectiveText = messageText || String(fallbackText || '').trim() || (normalizedAttachments.length > 0 ? String(normalizedAttachments[0]?.name || 'فایل').trim() || 'فایل' : '');
 
   const activeSettings = overrideSettings && Object.keys(overrideSettings).length > 0
     ? overrideSettings
@@ -158,7 +159,7 @@ export const sendBotMessageViaGateway = async ({
     customerId,
     recipient,
     title,
-    messageText,
+    messageText: effectiveText,
     metadata: {
       channel,
     },
@@ -176,7 +177,7 @@ export const sendBotMessageViaGateway = async ({
           channel,
           connectionId,
           chatId: recipient,
-          text: messageText,
+          text: effectiveText,
           skipLog: false,
           extraPayload,
           fallbackText,
@@ -221,11 +222,11 @@ export const sendBotMessageViaGateway = async ({
         ...(channel === 'rubika'
           ? {
               chat_id: recipient,
-              text: messageText,
+              text: effectiveText,
             }
           : {
               chat_id: recipient,
-              text: messageText,
+              text: effectiveText,
               parse_mode: 'HTML',
             }),
       }),
@@ -285,8 +286,17 @@ export const sendCounterpartyBotGroupMessage = async ({
     throw new Error('برای این گروه chat id بات ثبت نشده است.');
   }
 
+  const normalizedAttachments = (attachments || [])
+    .map((item) => ({
+      url: String(item?.url || '').trim(),
+      name: String(item?.name || '').trim() || null,
+      mimeType: String(item?.mimeType || '').trim() || null,
+      fileType: String(item?.fileType || '').trim() || null,
+    }))
+    .filter((item) => item.url);
   const messageText = String(text || '').trim();
-  if (!messageText) {
+  const effectiveText = messageText || String(fallbackText || '').trim() || (normalizedAttachments.length > 0 ? String(normalizedAttachments[0]?.name || 'فایل').trim() || 'فایل' : '');
+  if (!effectiveText && normalizedAttachments.length === 0) {
     throw new Error('متن پیام بات خالی است.');
   }
 
@@ -302,18 +312,11 @@ export const sendCounterpartyBotGroupMessage = async ({
       channel,
       connectionId,
       chatId,
-      text: messageText,
+      text: effectiveText,
       skipLog: false,
       extraPayload,
       fallbackText,
-      attachments: (attachments || [])
-        .map((item) => ({
-          url: String(item?.url || '').trim(),
-          name: String(item?.name || '').trim() || null,
-          mimeType: String(item?.mimeType || '').trim() || null,
-          fileType: String(item?.fileType || '').trim() || null,
-        }))
-        .filter((item) => item.url),
+      attachments: normalizedAttachments,
     },
   });
   if (proxyError) throw proxyError;
@@ -376,7 +379,7 @@ export const sendCounterpartyBotGroupMessage = async ({
         || providerMessageId
         || ''
       ) || null,
-      content_text: String(providerItem?.content_text ?? messageText ?? '').trim() || null,
+      content_text: String(providerItem?.content_text ?? messageText ?? effectiveText ?? '').trim() || null,
       file_url: String(providerItem?.file_url || attachment?.url || '').trim() || null,
       file_name: String(providerItem?.file_name || attachment?.name || '').trim() || null,
       mime_type: String(providerItem?.mime_type || attachment?.mime_type || attachment?.mimeType || '').trim() || null,

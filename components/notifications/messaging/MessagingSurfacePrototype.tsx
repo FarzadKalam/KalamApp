@@ -37,6 +37,7 @@ import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberF
 import { MODULES } from '../../../moduleRegistry';
 import { useMessagingOmniLiveData } from './useMessagingOmniLiveData';
 import PhoneMatchPickerModal from '../PhoneMatchPickerModal';
+import VoipRecordingPlayer from '../VoipRecordingPlayer';
 import { supabase } from '../../../supabaseClient';
 import {
   buildPhoneTargetDisplayName,
@@ -537,15 +538,15 @@ const ConversationAvatarStack: React.FC<{ conversation: Conversation; size: numb
     <Badge count={formatBadgeCount(conversation.unread)} size="small" color="#c0392b">
       <ConversationAvatar conversation={conversation} size={size} />
     </Badge>
-    <Tag
-      color={conversation.channel === 'internal' ? undefined : channelMeta[conversation.channel].color}
-      className={`!m-0 !flex max-w-[54px] !items-center !justify-center !rounded-full !px-1.5 !py-0.5 text-center !font-semibold !leading-3 ${
-        compact ? '!text-[7.5px]' : '!text-[8px]'
-      } ${getChannelTagClassName(conversation.channel)}`}
-      title={getConversationBadgeLabel(conversation)}
-    >
-      <span className="line-clamp-2">{getConversationBadgeLabel(conversation)}</span>
-    </Tag>
+    {!compact ? (
+      <Tag
+        color={conversation.channel === 'internal' ? undefined : channelMeta[conversation.channel].color}
+        className={`!m-0 !flex max-w-[54px] !items-center !justify-center !rounded-full !px-1.5 !py-0.5 text-center !text-[8px] !font-semibold !leading-3 ${getChannelTagClassName(conversation.channel)}`}
+        title={getConversationBadgeLabel(conversation)}
+      >
+        <span className="line-clamp-2">{getConversationBadgeLabel(conversation)}</span>
+      </Tag>
+    ) : null}
   </span>
 );
 
@@ -724,9 +725,10 @@ const MessagingConversationList: React.FC<{
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
-  initialFilter?: ChannelKind | 'all';
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, initialFilter = 'internal' }) => (
-  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} initialFilter={initialFilter} />
+  activeFilter: ChannelKind | 'all';
+  onChangeFilter: (value: ChannelKind | 'all') => void;
+}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter }) => (
+  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} />
 );
 
 const MessagingConversationListInner: React.FC<{
@@ -737,15 +739,12 @@ const MessagingConversationListInner: React.FC<{
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
-  initialFilter?: ChannelKind | 'all';
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, initialFilter = 'internal' }) => {
-  const [activeFilter, setActiveFilter] = useState<ChannelKind | 'all'>(initialFilter);
+  activeFilter: ChannelKind | 'all';
+  onChangeFilter: (value: ChannelKind | 'all') => void;
+}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const normalizedSearch = String(searchValue || '').trim().toLocaleLowerCase('fa');
-  useEffect(() => {
-    setActiveFilter(initialFilter);
-  }, [initialFilter]);
   const savedConversation = conversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'saved');
   const systemConversation = conversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
   const channelFilteredConversations = activeFilter === 'all'
@@ -856,7 +855,7 @@ const MessagingConversationListInner: React.FC<{
               <button
                 type="button"
                 key={filter.key}
-                onClick={() => setActiveFilter(filter.key)}
+                onClick={() => onChangeFilter(filter.key)}
                 className={`inline-flex h-8 min-w-0 items-center justify-center gap-1 rounded-full border px-1.5 text-[10.5px] font-semibold transition ${
                   active
                     ? 'border-[rgba(var(--brand-500-rgb),0.32)] bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-800-rgb))] dark:border-[rgba(var(--brand-300-rgb),0.28)] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-white'
@@ -1145,7 +1144,11 @@ const TimelineEventCard: React.FC<{
             ))}
           </div>
         ) : null}
-        {item.attachments?.length ? <MediaAttachmentPreview attachments={item.attachments} call={isCall} /> : null}
+        {isCall && item.sourceRow ? (
+          <div className="mt-2">
+            <VoipRecordingPlayer call={item.sourceRow} compact />
+          </div>
+        ) : item.attachments?.length ? <MediaAttachmentPreview attachments={item.attachments} call={isCall} /> : null}
         {item.relatedRecordLabel ? (
           <button
             type="button"
@@ -1179,7 +1182,6 @@ const TimelineEventCard: React.FC<{
 
 const MessagingHeader: React.FC<{
   conversation: Conversation;
-  onOpenConversations: () => void;
   onBindPhone?: (conversation: Conversation) => void;
   onSearch?: () => void;
   onStartCall?: (conversation: Conversation) => void;
@@ -1189,7 +1191,6 @@ const MessagingHeader: React.FC<{
   onSearchValueChange?: (value: string) => void;
 }> = ({
   conversation,
-  onOpenConversations,
   onBindPhone,
   onSearch,
   onStartCall,
@@ -1217,14 +1218,6 @@ const MessagingHeader: React.FC<{
     <div className="border-b border-slate-200/65 bg-white/90 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#17191c]/95">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <Button
-            type="text"
-            size="small"
-            icon={<MenuOutlined />}
-            className="md:!hidden"
-            onClick={onOpenConversations}
-            aria-label="باز کردن فهرست گفتگوها"
-          />
           <ConversationAvatar conversation={conversation} size={38} />
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
@@ -1529,6 +1522,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const { message } = App.useApp();
   const notificationRuntime = useOptionalNotificationRuntime();
   const [selectedKey, setSelectedKey] = useState(() => String(initialConversationKey || '').trim());
+  const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all'>(initialFilter);
   const [conversationListOpen, setConversationListOpen] = useState(false);
   const [phoneBindOpen, setPhoneBindOpen] = useState(false);
   const [phoneBindLoading, setPhoneBindLoading] = useState(false);
@@ -1622,9 +1616,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     void (async () => {
       try {
         const attempts = [
-          { select: 'id,name,user_ids,role_ids,metadata', orderByName: true },
           { select: 'id,name,user_ids,role_ids', orderByName: true },
-          { select: 'id,user_ids,role_ids,metadata', orderByName: false },
           { select: 'id,user_ids,role_ids', orderByName: false },
         ];
         let loadedRows: any[] | null = null;
@@ -2033,6 +2025,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     setConversationSearchOpen(false);
     setConversationSearchValue('');
     setConversationListOpen(false);
+  };
+
+  const changeConversationFilter = (value: ChannelKind | 'all') => {
+    setConversationFilter(value);
   };
 
   const toggleConversationSearch = () => {
@@ -2844,7 +2840,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             onRefresh={() => void refreshMessagingSurface()}
             refreshing={refreshingMessages}
             onCreateInternalGroup={openCreateInternalGroupModal}
-            initialFilter={initialFilter}
+            activeFilter={conversationFilter}
+            onChangeFilter={changeConversationFilter}
           />
         </aside>
         <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] md:hidden">
@@ -2852,7 +2849,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
               <Button block type="text" icon={<MenuOutlined />} onClick={() => setConversationListOpen(true)} aria-label="باز کردن فهرست گفتگوها" />
             </div>
-            <MessagingConversationList conversations={displayConversations} selectedKey={selectedKey} onSelect={selectConversation} compact />
+            <MessagingConversationList
+              conversations={displayConversations}
+              selectedKey={selectedKey}
+              onSelect={selectConversation}
+              compact
+              activeFilter={conversationFilter}
+              onChangeFilter={changeConversationFilter}
+            />
           </div>
         </aside>
         {conversationListOpen ? (
@@ -2869,7 +2873,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 onRefresh={() => void refreshMessagingSurface()}
                 refreshing={refreshingMessages}
                 onCreateInternalGroup={openCreateInternalGroupModal}
-                initialFilter={initialFilter}
+                activeFilter={conversationFilter}
+                onChangeFilter={changeConversationFilter}
               />
             </div>
           </div>
@@ -2886,7 +2891,6 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             <>
               <MessagingHeader
                 conversation={activeConversation}
-                onOpenConversations={() => setConversationListOpen(true)}
                 onBindPhone={openPhoneBindModal}
                 onSearch={toggleConversationSearch}
                 onStartCall={startConversationCall}

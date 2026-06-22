@@ -49,6 +49,21 @@ describe('extractBotMessageAttachments', () => {
     expect(attachments[0]?.url).toContain('img-1.jpg');
   });
 
+  it('reads Rubika-style media urls from alternate payload fields', () => {
+    const attachments = extractBotMessageAttachments({
+      message_type: 'image',
+      payload: {
+        download_url: 'https://api.tazesystem.ir/storage/v1/object/public/bot-media/rubika/photo.webp',
+        filename: 'photo.webp',
+        media_type: 'image',
+      },
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.name).toBe('photo.webp');
+    expect(attachments[0]?.fileType).toBe('image');
+  });
+
   it('keeps regular mp3 attachments as audio unless voice is explicit', () => {
     expect(resolveNoteAttachmentFileType({
       name: 'track.mp3',

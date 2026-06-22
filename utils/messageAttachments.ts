@@ -10,14 +10,17 @@ type BotMessageLike = {
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 const normalizeAttachment = (value: any): NoteAttachment | null => {
-  const url = normalizeText(value?.url || value?.file_url);
+  const url = normalizeText(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url);
   if (!url) return null;
   const fallbackName = normalizeText(url.split('?')[0].split('#')[0].split('/').pop()) || 'فایل';
   return {
-    name: normalizeText(value?.name || value?.file_name) || fallbackName,
+    name: normalizeText(value?.name || value?.file_name || value?.fileName || value?.filename || value?.original_name || value?.title) || fallbackName,
     url,
     mimeType: normalizeText(value?.mimeType || value?.mime_type) || null,
-    fileType: resolveNoteAttachmentFileType(value),
+    fileType: resolveNoteAttachmentFileType({
+      ...value,
+      fileType: value?.fileType || value?.file_type || value?.media_type || value?.kind || value?.type,
+    }),
     assetId: normalizeText(value?.assetId || value?.asset_id) || null,
     entryId: normalizeText(value?.entryId || value?.entry_id) || null,
     moduleId: normalizeText(value?.moduleId || value?.module_id) || null,
@@ -101,10 +104,10 @@ export const extractBotMessageAttachments = (row: BotMessageLike | null | undefi
 
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
   list.push(normalizeAttachment({
-    url: (payload as any)?.media_url || (payload as any)?.file_url,
-    name: (payload as any)?.file_name || row?.file_name,
+    url: (payload as any)?.media_url || (payload as any)?.file_url || (payload as any)?.download_url || (payload as any)?.link_url,
+    name: (payload as any)?.file_name || (payload as any)?.fileName || (payload as any)?.filename || (payload as any)?.original_name || row?.file_name,
     mimeType: (payload as any)?.mime_type || row?.mime_type,
-    fileType: (payload as any)?.file_type || (row as any)?.message_type,
+    fileType: (payload as any)?.file_type || (payload as any)?.media_type || (payload as any)?.kind || (payload as any)?.type || (row as any)?.message_type,
   }));
 
   const payloadAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];

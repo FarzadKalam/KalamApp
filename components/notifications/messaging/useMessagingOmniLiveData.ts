@@ -68,6 +68,7 @@ export type MessagingOmniTimelineEvent = {
   time: string;
   status?: string;
   attachments?: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null }>;
+  avatarUrl?: string | null;
   liked?: boolean;
   seenAt?: string;
   replyTo?: string | null;
@@ -260,6 +261,62 @@ const collectBotRecordReferences = (rows: any[]) =>
   (rows || []).map(resolveBotTarget)
     .filter((item) => item.moduleId && item.recordId)
     .map((item) => ({ module_id: item.moduleId, record_id: item.recordId }));
+
+const resolveBotSenderTarget = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const moduleId = String(
+    payload?.sender_target_module_id
+    || payload?.target_module_id
+    || row?.target_module_id
+    || ''
+  ).trim();
+  const recordId = String(
+    payload?.sender_target_record_id
+    || payload?.target_record_id
+    || row?.target_record_id
+    || ''
+  ).trim();
+  if (moduleId && recordId) return { moduleId, recordId };
+  const customerId = String(row?.customer_id || payload?.customer_id || '').trim();
+  if (customerId) return { moduleId: 'customers', recordId: customerId };
+  const supplierId = String(row?.supplier_id || payload?.supplier_id || '').trim();
+  if (supplierId) return { moduleId: 'suppliers', recordId: supplierId };
+  const employeeId = String(row?.employee_id || payload?.employee_id || '').trim();
+  if (employeeId) return { moduleId: 'employees', recordId: employeeId };
+  return { moduleId: '', recordId: '' };
+};
+
+const collectBotSenderRecordReferences = (rows: any[]) =>
+  (rows || []).map(resolveBotSenderTarget)
+    .filter((item) => item.moduleId && item.recordId)
+    .map((item) => ({ module_id: item.moduleId, record_id: item.recordId }));
+
+const resolveBotSenderLabel = (
+  row: any,
+  recordTitleMap: Record<string, string>,
+  fallback: string,
+) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const senderTarget = resolveBotSenderTarget(row);
+  const senderTitle = getRecordLabel(recordTitleMap, senderTarget.moduleId, senderTarget.recordId);
+  if (senderTitle) return senderTitle;
+  const username = String(payload?.username || payload?.sender_username || '').trim();
+  const displayName = String(payload?.sender_display_name || payload?.display_name || '').trim();
+  const phoneNumber = String(payload?.phone_number || payload?.sender_phone_number || '').trim();
+  const senderId = String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim();
+  return displayName || (username ? `@${username.replace(/^@+/, '')}` : '') || phoneNumber || senderId || fallback;
+};
+
+const resolveBotSenderAvatarUrl = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  return String(
+    payload?.sender_avatar_url
+    || payload?.avatar_url
+    || payload?.profile_photo_url
+    || payload?.photo_url
+    || ''
+  ).trim() || null;
+};
 
 const canSeeRestrictedBotRow = (row: any, profile: LiveProfile) => {
   const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -689,6 +746,7 @@ const buildBotGroupLiveModels = (
     const group = botGroups.find((item) => String(item.id) === groupId);
     const target = resolveBotTarget(group || {});
     const relatedTitle = getRecordLabel(recordTitleMap, target.moduleId, target.recordId, group?.group_title);
+    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, group?.group_title || 'عضو گروه بات');
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const attachments = extractBotMessageAttachments(row).map((attachment) => ({
       name: attachment.name || 'فایل',
@@ -702,12 +760,13 @@ const buildBotGroupLiveModels = (
       conversationKey: `live:bot_group:${groupId}`,
       kind: 'message' as const,
       direction,
-      author: direction === 'outbound' ? 'کاربر سازمان' : (relatedTitle || group?.group_title || 'مخاطب بات'),
+      author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
       text: String(row?.content_text || '').trim() || (attachments.length ? '' : 'پیام بات'),
       time: formatTime(row?.created_at),
       status: direction === 'outbound' ? 'ارسال شده' : undefined,
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
+      avatarUrl: resolveBotSenderAvatarUrl(row),
       relatedRecordLabel: relatedTitle || undefined,
     };
   });
@@ -769,6 +828,7 @@ const buildBotDirectLiveModels = (
     const thread = botDirectThreads.find((item) => String(item.id) === threadId);
     const target = resolveBotTarget(thread || {});
     const relatedTitle = getRecordLabel(recordTitleMap, target.moduleId, target.recordId, thread?.display_name);
+    const senderTitle = resolveBotSenderLabel(row, recordTitleMap, thread?.display_name || 'مخاطب بات');
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const attachments = extractBotMessageAttachments(row).map((attachment) => ({
       name: attachment.name || 'فایل',
@@ -782,12 +842,13 @@ const buildBotDirectLiveModels = (
       conversationKey: `live:bot_direct:${threadId}`,
       kind: 'message' as const,
       direction,
-      author: direction === 'outbound' ? 'کاربر سازمان' : (relatedTitle || thread?.display_name || 'مخاطب بات'),
+      author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
       text: String(row?.content_text || '').trim() || (attachments.length ? '' : 'پیام بات'),
       time: formatTime(row?.created_at),
       status: direction === 'outbound' ? 'ارسال شده' : undefined,
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
+      avatarUrl: resolveBotSenderAvatarUrl(row),
       relatedRecordLabel: relatedTitle || undefined,
     };
   });
@@ -839,29 +900,51 @@ export const useMessagingOmniLiveData = () => {
     refreshInFlightRef.current = true;
     setLoading(true);
     try {
-      const [smsRows, callRows, botGroupRows, botDirectThreadRows, nextReadStateKeys] = await Promise.all([
-        safeLiveFetch('sms', fetchSmsMessages, [] as any[]),
-        safeLiveFetch('voip', () => fetchVoipCalls(profile), [] as any[]),
-        safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[]),
-        safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[]),
-        safeLiveFetch('read-states', () => fetchNotificationReadStateKeys(profile), new Set<string>()),
+      const readStatePromise = safeLiveFetch('read-states', () => fetchNotificationReadStateKeys(profile), new Set<string>())
+        .then((nextReadStateKeys) => {
+          setReadStateKeys(nextReadStateKeys || new Set());
+          return nextReadStateKeys;
+        });
+      const smsPromise = safeLiveFetch('sms', fetchSmsMessages, [] as any[])
+        .then((rows) => {
+          setSmsMessages(rows || []);
+          return rows || [];
+        });
+      const callPromise = safeLiveFetch('voip', () => fetchVoipCalls(profile), [] as any[])
+        .then((rows) => {
+          setVoipCalls(rows || []);
+          return rows || [];
+        });
+      const botGroupPromise = safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[])
+        .then((rows) => {
+          setBotGroups(rows || []);
+          return rows || [];
+        });
+      const botDirectThreadPromise = safeLiveFetch('bot-direct-threads', () => fetchBotDirectThreads(profile), [] as BotDirectThreadRow[])
+        .then((rows) => {
+          setBotDirectThreads(rows || []);
+          return rows || [];
+        });
+      const [smsRows, callRows, botGroupRows, botDirectThreadRows] = await Promise.all([
+        smsPromise,
+        callPromise,
+        botGroupPromise,
+        botDirectThreadPromise,
       ]);
+      await readStatePromise;
       const [botMessageRows, botDirectMessageRows] = await Promise.all([
         safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[]),
         safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[]),
       ]);
-      setSmsMessages(smsRows || []);
-      setVoipCalls(callRows || []);
-      setBotGroups(botGroupRows || []);
       setBotGroupMessages(botMessageRows || []);
-      setBotDirectThreads(botDirectThreadRows || []);
       setBotDirectMessages(botDirectMessageRows || []);
-      setReadStateKeys(nextReadStateKeys || new Set());
       const labels = await safeLiveFetch('record-labels', () => fetchRecordReferenceLabels(supabase, [
           ...collectRecordReferences(smsRows || []),
           ...collectRecordReferences(callRows || []),
           ...collectBotRecordReferences(botGroupRows || []),
           ...collectBotRecordReferences(botDirectThreadRows || []),
+          ...collectBotSenderRecordReferences(botMessageRows || []),
+          ...collectBotSenderRecordReferences(botDirectMessageRows || []),
         ]), {} as Record<string, string>);
       setRecordTitleMap((prev) => ({ ...prev, ...labels }));
     } finally {
