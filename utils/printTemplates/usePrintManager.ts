@@ -99,10 +99,10 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
-const PRINT_BODY_FOOTER_SAFETY_PX = 0;
+const PRINT_BODY_FOOTER_SAFETY_PX = 18;
 const PRINT_BODY_PAGE_STEP_PX = 28;
 const PRINT_BODY_EDGE_GUARD_PX = 28;
-const PRINT_SECTION_CONTENT_PADDING = '2px 10px';
+const PRINT_SECTION_CONTENT_PADDING = '6px 10px';
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -180,6 +180,8 @@ const snapPrintBodyHeightPx = (value: number) =>
   Math.max(80, Math.floor(Math.max(80, value) / PRINT_BODY_PAGE_STEP_PX) * PRINT_BODY_PAGE_STEP_PX);
 const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
   Math.max(80, snapPrintBodyHeightPx(pageBodyHeightPx - PRINT_BODY_EDGE_GUARD_PX));
+const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
+  Math.min(pageBodyHeightPx, Math.max(1, Math.ceil(effectiveBodyStepPx)));
 
 const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
   const rootRect = bodyMeasure.getBoundingClientRect();
@@ -2981,7 +2983,7 @@ export const usePrintManager = ({
             const effectiveBodyStepPx = nextPageStartOffset !== undefined
               ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
               : pageBodyStepPx;
-            const perPageGuardHeightCss = toCssMm(bodyHeightPx - effectiveBodyStepPx);
+            const bodyViewportHeightCss = toCssMm(getPrintBodyViewportHeightPx(bodyHeightPx, effectiveBodyStepPx));
 
             return React.createElement(
               'div',
@@ -3029,32 +3031,46 @@ export const usePrintManager = ({
                     zIndex: 4,
                     overflow: 'hidden',
                     direction: 'rtl',
+                    display: 'flex',
+                    flexDirection: 'column',
                   },
                 },
                 React.createElement(
                   'div',
                   {
-                    className: 'print-template-body-segment',
-                    style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                    className: 'print-template-body-viewport',
+                    style: {
+                      width: '100%',
+                      flex: `0 0 ${bodyViewportHeightCss}`,
+                      height: bodyViewportHeightCss,
+                      maxHeight: bodyViewportHeightCss,
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      position: 'relative',
+                      boxSizing: 'border-box',
+                    },
                   },
-                  React.createElement('div', {
-                    className: 'print-template-body-inner',
-                    style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
-                    dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
-                  }),
+                  React.createElement(
+                    'div',
+                    {
+                      className: 'print-template-body-segment',
+                      style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                    },
+                    React.createElement('div', {
+                      className: 'print-template-body-inner',
+                      style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
+                      dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+                    }),
+                  ),
                 ),
                 React.createElement('div', {
                   'aria-hidden': true,
-                  className: 'print-template-body-edge-guard',
+                  className: 'print-template-body-page-remainder',
                   style: {
-                    position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: perPageGuardHeightCss,
+                    flex: '1 1 auto',
+                    minHeight: 0,
                     background: '#fff',
                     pointerEvents: 'none',
-                    zIndex: 2,
                   },
                 }),
               ),
@@ -3238,7 +3254,7 @@ export const usePrintManager = ({
           const effectiveBodyStepPx = nextPageStartOffset !== undefined
             ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
             : pageBodyStepPx;
-          const perPageGuardHeightCss = toCssMm(pageBodyHeightPx - effectiveBodyStepPx);
+          const bodyViewportHeightCss = toCssMm(getPrintBodyViewportHeightPx(pageBodyHeightPx, effectiveBodyStepPx));
 
           return React.createElement(
             'div',
@@ -3313,37 +3329,46 @@ export const usePrintManager = ({
                   maxHeight: pageBodyHeightCss,
                   position: 'relative',
                   overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
                 },
               },
               React.createElement(
                 'div',
                 {
-                  className: 'print-template-body-segment',
-                  style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                  className: 'print-template-body-viewport',
+                  style: {
+                    width: '100%',
+                    flex: `0 0 ${bodyViewportHeightCss}`,
+                    height: bodyViewportHeightCss,
+                    maxHeight: bodyViewportHeightCss,
+                    minHeight: 0,
+                    overflow: 'hidden',
+                    position: 'relative',
+                    boxSizing: 'border-box',
+                  },
                 },
-                React.createElement('div', {
-                  className: 'print-template-body-inner',
-                  style: { padding: sectionPadding, boxSizing: 'border-box' },
-                  dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
-                })
+                React.createElement(
+                  'div',
+                  {
+                    className: 'print-template-body-segment',
+                    style: { width: '100%', boxSizing: 'border-box', transform: `translateY(-${pageStartOffset}px)` },
+                  },
+                  React.createElement('div', {
+                    className: 'print-template-body-inner',
+                    style: { padding: sectionPadding, boxSizing: 'border-box' },
+                    dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+                  })
+                )
               ),
-              // Per-page bottom guard: covers exactly from effectiveBodyStepPx
-              // (= nextPageStartOffset - pageStartOffset) to pageBodyHeightPx.
-              // Because the guard starts at the exact pixel where the next page
-              // begins, there is no overlap (no duplicate content) and no
-              // partially-visible line at the bottom of this page.
               React.createElement('div', {
                 'aria-hidden': true,
-                className: 'print-template-body-edge-guard',
+                className: 'print-template-body-page-remainder',
                 style: {
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  height: perPageGuardHeightCss,
+                  flex: '1 1 auto',
+                  minHeight: 0,
                   background: '#fff',
                   pointerEvents: 'none',
-                  zIndex: 2,
                 },
               })
             ),

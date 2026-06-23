@@ -1273,6 +1273,7 @@ const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefi
 
   if (rawType === 'voice') return 'voice';
   if (rawType === 'audio') return 'audio';
+  if (rawType === 'gif') return 'gif';
   if (rawType === 'image') return 'image';
   if (rawType === 'video') return 'video';
 
@@ -1282,7 +1283,8 @@ const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefi
     return 'audio';
   }
 
-  if (/\.(png|jpe?g|gif|webp)$/i.test(name)) return 'image';
+  if (/\.(gif)$/i.test(name)) return 'gif';
+  if (/\.(png|jpe?g|webp)$/i.test(name)) return 'image';
   if (/\.(mp4|mkv|mov|avi|webm)$/i.test(name)) return 'video';
   if (/\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(name)) return 'audio';
   if (/\.(mp3)$/i.test(name)) return 'audio';
@@ -1316,6 +1318,7 @@ const pickDeepStringByKey = (node: any, acceptedKeys: string[]) => {
 
 const resolveRubikaUploadFileType = (attachment: Record<string, any> | null | undefined) => {
   const kind = normalizeAttachmentKind(attachment);
+  if (kind === 'gif') return 'Gif';
   if (kind === 'image') return 'Image';
   if (kind === 'video') return 'Video';
   if (kind === 'voice') return 'Voice';
@@ -1600,7 +1603,7 @@ const sendRubikaAttachmentMessage = async ({
     text,
   });
   return {
-    kind: uploadType === 'Voice' ? 'voice' : normalizeAttachmentKind(attachment),
+    kind: uploadType === 'Voice' ? 'voice' : uploadType === 'Gif' ? 'image' : normalizeAttachmentKind(attachment),
     file_id: uploadInfo.fileId,
     attachment_url: attachmentUrl,
     file_name: String(attachment?.name || '').trim() || 'file',
@@ -1641,6 +1644,7 @@ const sendTelegramLikeAttachmentMessage = async ({
   const kind = normalizeAttachmentKind(attachment);
   const kindToMethod: Record<string, { method: string; field: string }> = {
     image: { method: 'sendPhoto', field: 'photo' },
+    gif: { method: 'sendAnimation', field: 'animation' },
     video: { method: 'sendVideo', field: 'video' },
     voice: { method: 'sendVoice', field: 'voice' },
     audio: { method: 'sendAudio', field: 'audio' },
@@ -1690,7 +1694,7 @@ const sendTelegramLikeAttachmentMessage = async ({
 const canSendTelegramLikeMediaGroup = (attachments: Array<Record<string, any>>) => {
   if (!Array.isArray(attachments) || attachments.length < 2 || attachments.length > 10) return false;
   const kinds = attachments.map((item) => normalizeAttachmentKind(item));
-  if (kinds.every((kind) => kind === 'image' || kind === 'video')) return true;
+  if (kinds.every((kind) => kind === 'image' || kind === 'gif' || kind === 'video')) return true;
   if (kinds.every((kind) => kind === 'file')) return true;
   if (kinds.every((kind) => kind === 'audio')) return true;
   return false;
@@ -1730,6 +1734,8 @@ const sendTelegramLikeMediaGroupMessage = async ({
     const kind = normalizeAttachmentKind(attachment);
     const type = kind === 'image'
       ? 'photo'
+      : kind === 'gif'
+        ? 'video'
       : kind === 'video'
         ? 'video'
         : kind === 'audio'

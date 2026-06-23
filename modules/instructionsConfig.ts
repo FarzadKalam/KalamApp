@@ -7,7 +7,7 @@ import {
   ModuleNature,
   ViewMode,
 } from '../types';
-import { instructionStatusOptions } from '../utils/instructionSupport';
+import { instructionAiIndexStatusOptions, instructionStatusOptions } from '../utils/instructionSupport';
 
 export const instructionsModule: ModuleDefinition = {
   id: 'instructions',
@@ -85,6 +85,48 @@ export const instructionsModule: ModuleDefinition = {
       nature: FieldNature.STANDARD,
     },
     {
+      key: 'use_for_ai',
+      labels: { fa: 'در اختیار هوش مصنوعی', en: 'Use For AI' },
+      type: FieldType.CHECKBOX,
+      location: FieldLocation.HEADER,
+      order: 6,
+      defaultValue: false,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'ai_index_status',
+      labels: { fa: 'وضعیت آماده‌سازی هوش مصنوعی', en: 'AI Index Status' },
+      type: FieldType.STATUS,
+      location: FieldLocation.HEADER,
+      order: 7,
+      options: instructionAiIndexStatusOptions,
+      defaultValue: 'not_built',
+      readonly: true,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'ai_index_updated_at',
+      labels: { fa: 'آخرین بازسازی برای هوش مصنوعی', en: 'AI Rebuilt At' },
+      type: FieldType.DATETIME,
+      location: FieldLocation.BLOCK,
+      blockId: 'ai_context',
+      order: 1,
+      readonly: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'ai_index_error',
+      labels: { fa: 'خطای آماده‌سازی هوش مصنوعی', en: 'AI Index Error' },
+      type: FieldType.LONG_TEXT,
+      location: FieldLocation.BLOCK,
+      blockId: 'ai_context',
+      order: 2,
+      readonly: true,
+      nature: FieldNature.STANDARD,
+    },
+    {
       key: 'visible_to_user_ids',
       labels: { fa: 'قابل مشاهده برای کاربران', en: 'Visible To Users' },
       type: FieldType.MULTI_SELECT,
@@ -137,6 +179,22 @@ export const instructionsModule: ModuleDefinition = {
       titles: { fa: 'دسترسی مشاهده', en: 'Visibility' },
       type: BlockType.FIELD_GROUP,
       order: 2,
+    },
+    {
+      id: 'ai_context',
+      titles: { fa: 'آماده‌سازی برای هوش مصنوعی', en: 'AI Context' },
+      type: BlockType.FIELD_GROUP,
+      order: 3,
+    },
+  ],
+  recordActions: [
+    {
+      id: 'rebuild_instruction_ai_context',
+      label: 'بازسازی برای هوش مصنوعی',
+      placement: 'header',
+      variant: 'default',
+      confirmTitle: 'این دستورالعمل برای هوش مصنوعی بازسازی شود؟',
+      confirmDescription: 'متن فعلی دستورالعمل به بخش‌های قابل جستجوی هوشمند تبدیل می‌شود و فقط بر اساس دسترسی‌های همین رکورد استفاده خواهد شد.',
     },
   ],
   relatedTabs: [

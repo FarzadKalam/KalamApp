@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { NoteAttachment } from './noteContent';
 
 export type OverlayNotificationKind = 'note' | 'task' | 'responsibility' | 'bot' | 'assistant' | 'voip_call' | 'sms';
 export type OverlayNotificationChannel = 'internal' | 'system' | 'bot' | 'sms' | 'voip' | 'generic';
@@ -11,6 +12,7 @@ export interface UiNotificationOverlayItem {
   title: string;
   subtitle?: string | null;
   body: string;
+  attachments?: NoteAttachment[];
   avatarUrl?: string | null;
   avatarName?: string | null;
   createdAt: string | null;
@@ -60,6 +62,16 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
   for (let index = 0; index < left.length; index += 1) {
     const leftItem = left[index];
     const rightItem = right[index];
+    const leftAttachments = leftItem?.attachments || [];
+    const rightAttachments = rightItem?.attachments || [];
+    const attachmentsEqual = leftAttachments.length === rightAttachments.length
+      && leftAttachments.every((attachment, attachmentIndex) => {
+        const other = rightAttachments[attachmentIndex];
+        return String(attachment?.url || '') === String(other?.url || '')
+          && String(attachment?.name || '') === String(other?.name || '')
+          && String(attachment?.mimeType || '') === String(other?.mimeType || '')
+          && String(attachment?.fileType || '') === String(other?.fileType || '');
+      });
     if (
       leftItem?.id !== rightItem?.id
       || leftItem?.kind !== rightItem?.kind
@@ -72,6 +84,7 @@ const areItemsPresentationEqual = (left: UiNotificationOverlayItem[], right: UiN
       || leftItem?.avatarName !== rightItem?.avatarName
       || leftItem?.createdAt !== rightItem?.createdAt
       || Boolean(leftItem?.hasAttachments) !== Boolean(rightItem?.hasAttachments)
+      || !attachmentsEqual
     ) {
       return false;
     }

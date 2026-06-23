@@ -1,7 +1,6 @@
 import React from 'react';
 import { Avatar, Badge, Button, Empty, Input, Popover, Tag } from 'antd';
 import { EditOutlined, SearchOutlined, SnippetsOutlined, UserOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import ConversationTimeline from './ConversationTimeline';
@@ -12,6 +11,7 @@ import UnreadCountBadge, { NOTIFICATION_UNREAD_BADGE_COLOR } from './UnreadCount
 import { BOT_CHANNEL_LABELS_FA, getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 import type { NoteAttachment } from '../../utils/noteContent';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
+import { extractBotMessageAttachments } from '../../utils/messageAttachments';
 
 type BotDirectThreadRow = {
   id: string;
@@ -80,6 +80,7 @@ type BotDirectMessagesPanelProps = {
   openReadyTextsModal: (context: 'bot') => void;
   onOpenSettings?: (thread: BotDirectThreadRow) => void;
   handleClose: () => void;
+  openPreviewRecord?: (moduleId: string, recordId: string, label?: string) => void;
 };
 
 type AiSuggestionPopoverActionProps = {
@@ -204,6 +205,7 @@ const BotDirectMessagesPanel: React.FC<BotDirectMessagesPanelProps> = ({
   openReadyTextsModal,
   onOpenSettings,
   handleClose,
+  openPreviewRecord,
 }) => {
   const withDesktopSidebar = layout === 'desktop';
   const withMobileUserRail = layout === 'mobile';
@@ -242,19 +244,26 @@ const BotDirectMessagesPanel: React.FC<BotDirectMessagesPanelProps> = ({
         </>
       )
       : null;
-    const text = String(row.content_text || '').trim() || (String(row.file_name || '').trim() ? `فایل: ${String(row.file_name || '').trim()}` : '');
+    const extractedAttachments = extractBotMessageAttachments(row);
+    const mediaFileId = String((payload as any)?.media_file_id || '').trim();
+    const attachmentsForDisplay = extractedAttachments.length > 0
+      ? extractedAttachments
+      : (String(row.file_name || '').trim() || mediaFileId
+        ? [{
+          name: String(row.file_name || 'فایل').trim() || 'فایل',
+          url: String(row.file_url || '').trim(),
+          mimeType: String(row.mime_type || '').trim() || null,
+          fileType: String(row.message_type || (mediaFileId ? 'file' : '')).trim() || 'file',
+        }]
+        : []);
+    const text = String(row.content_text || '').trim() || (attachmentsForDisplay.length > 0 ? '' : (String(row.file_name || '').trim() ? `فایل: ${String(row.file_name || '').trim()}` : ''));
     return (
       <SharedNoteCard
         authorName={authorName}
         metaNode={metaNode}
         createdAtLabel={safeJalaliFormat(row.created_at, 'YYYY/MM/DD HH:mm')}
         text={text}
-        attachments={String(row.file_url || '').trim() ? [{
-          name: String(row.file_name || 'فایل').trim() || 'فایل',
-          url: String(row.file_url || '').trim(),
-          mimeType: String(row.mime_type || '').trim() || null,
-          fileType: String(row.message_type || 'file').trim() || 'file',
-        }] : []}
+        attachments={attachmentsForDisplay}
         avatarUrl={normalizePublicAssetUrl(String(selectedThread?.counterparty_image_url || '').trim()) || getBotPlatformAvatarSrc(selectedThread?.channel_type || '') || undefined}
         avatarFallback={authorName.slice(0, 1)}
         mentionUsers={[]}
@@ -335,13 +344,21 @@ const BotDirectMessagesPanel: React.FC<BotDirectMessagesPanelProps> = ({
           {selectedThread?.target_module_id && selectedThread?.target_record_id ? (
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               طرف مرتبط:{' '}
-              <Link
-                to={`/${selectedThread.target_module_id}/${selectedThread.target_record_id}`}
+              <button
+                type="button"
                 className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
-                onClick={handleClose}
+                onClick={() => {
+                  const moduleId = String(selectedThread.target_module_id || '').trim();
+                  const recordId = String(selectedThread.target_record_id || '').trim();
+                  if (openPreviewRecord && moduleId && recordId) {
+                    openPreviewRecord(moduleId, recordId, String(selectedThread.counterparty_label || selectedThread.display_name || '').trim() || undefined);
+                    return;
+                  }
+                  handleClose();
+                }}
               >
                 {String(selectedThread.counterparty_label || selectedThread.display_name || '').trim() || 'مشاهده رکورد'}
-              </Link>
+              </button>
             </div>
           ) : null}
           <Input

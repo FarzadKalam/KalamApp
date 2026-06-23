@@ -31,6 +31,7 @@ type AssistantAction =
   | 'get_image_status'
   | 'run_task_bundle'
   | 'embed_document_chunks'
+  | 'rebuild_instruction_ai_context'
   | 'saas_ai';
 
 type RequestContext = {
@@ -76,6 +77,7 @@ const AI_AUTHOR_NAME = 'دستیار هوشمند';
 const MAX_PAGE_CONTEXT_RECORDS = 10;
 const MAX_RETRIEVED_CONTEXTS = 4;
 const KNOWLEDGE_MATCH_THRESHOLD = 0.52;
+const INSTRUCTION_MATCH_THRESHOLD = 0.46;
 const PRIMARY_AI_MODEL_KEY = '__primary_model';
 
 const PRIMARY_MODEL_CAPABILITIES = new Set([
@@ -611,6 +613,24 @@ const restPatch = async (
   return Array.isArray(parsed) ? parsed : [];
 };
 
+const restDelete = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  table: string,
+  filters: Record<string, string | number | boolean | null | undefined>,
+) => {
+  const response = await fetch(restUrl(supabaseUrl, table, filters), {
+    method: 'DELETE',
+    headers: getServiceHeaders(serviceRoleKey),
+  });
+  const raw = await response.text();
+  const parsed = parseJsonSafe(raw);
+  if (!response.ok) {
+    throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed || {}));
+  }
+  return Array.isArray(parsed) ? parsed : [];
+};
+
 const restRpc = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -781,6 +801,16 @@ const canManageAiSettings = (authContext: any) => {
     && settingsPerm?.edit !== false
     && fields?.ai !== false
     && fields?.ai_settings !== false;
+};
+
+const canRebuildInstructionAiContext = (authContext: any) => {
+  const permissions = authContext?.permissions;
+  if (!permissions || typeof permissions !== 'object') return true;
+  const perm = permissions?.instructions || {};
+  const fields = perm?.fields || {};
+  return perm?.view !== false
+    && perm?.edit !== false
+    && fields?.__action_rebuild_instruction_ai_context !== false;
 };
 
 const canViewSaasAdmin = (authContext: any) => {
@@ -1514,6 +1544,47 @@ const tokenize = (value: string) =>
     )
   ).slice(0, 16);
 
+const splitTextIntoAiChunks = (body: string, maxLength = 1200) => {
+  const paragraphs = String(body || '')
+    .replace(/\r\n/g, '\n')
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const chunks: string[] = [];
+  let current = '';
+  paragraphs.forEach((paragraph) => {
+    if (!current) {
+      current = paragraph;
+      return;
+    }
+    if (`${current}\n\n${paragraph}`.length <= maxLength) {
+      current = `${current}\n\n${paragraph}`;
+      return;
+    }
+    chunks.push(current);
+    current = paragraph;
+  });
+  if (current) chunks.push(current);
+  if (chunks.length === 0 && body.trim()) chunks.push(body.trim().slice(0, maxLength));
+  return chunks.flatMap((chunk) => {
+    if (chunk.length <= maxLength) return [chunk];
+    const pieces: string[] = [];
+    for (let index = 0; index < chunk.length; index += maxLength) {
+      pieces.push(chunk.slice(index, index + maxLength));
+    }
+    return pieces;
+  });
+};
+
+const hashText = (value: string) => {
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) + hash) + value.charCodeAt(index);
+    hash &= 0xffffffff;
+  }
+  return Math.abs(hash).toString(16);
+};
+
 const getSearchTerms = (message: string) =>
   tokenize(message)
     .filter((token) => !QUERY_STOP_WORDS.has(token))
@@ -1829,20 +1900,94 @@ const fetchFinancialAnalyticsContext = async (
   }
 };
 
-const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, query: string) => {
+const isSystemAiInstructionChunk = (row: any) =>
+  String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
+  || String(row?.metadata?.document_type || '').trim() === 'ai_instructions';
+
+const isOperationalInstructionChunk = (row: any) =>
+  String(row?.source_kind || row?.metadata?.source_kind || '').trim() === 'instruction'
+  || String(row?.metadata?.document_type || '').trim() === 'module_instruction';
+
+const isChunkRelevantToModule = (row: any, moduleId?: string | null) => {
+  if (!isOperationalInstructionChunk(row)) return true;
+  const normalizedModuleId = String(moduleId || '').trim();
+  if (!normalizedModuleId) return true;
+  const targets = Array.isArray(row?.source_target_module_ids)
+    ? row.source_target_module_ids
+    : Array.isArray(row?.metadata?.module_ids)
+    ? row.metadata.module_ids
+    : [];
+  const normalizedTargets = targets.map((item: any) => String(item || '').trim()).filter(Boolean);
+  return normalizedTargets.length === 0 || normalizedTargets.includes(normalizedModuleId);
+};
+
+const canActorViewInstructionRow = (instruction: any, authContext: any) => {
+  const allowedUserIds = normalizeIds(Array.isArray(instruction?.visible_to_user_ids) ? instruction.visible_to_user_ids : []);
+  const allowedRoleIds = normalizeIds(Array.isArray(instruction?.visible_to_role_ids) ? instruction.visible_to_role_ids : []);
+  if (allowedUserIds.length === 0 && allowedRoleIds.length === 0) return true;
+  const userId = normalizeId(authContext?.userId);
+  const roleId = normalizeId(authContext?.roleId);
+  return (!!userId && allowedUserIds.includes(userId)) || (!!roleId && allowedRoleIds.includes(roleId));
+};
+
+const filterFreshOperationalInstructionChunks = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  rows: any[],
+  moduleId?: string | null,
+) => {
+  const operationalIds = Array.from(new Set(
+    (rows || [])
+      .filter(isOperationalInstructionChunk)
+      .map((row: any) => normalizeId(row?.source_record_id || row?.metadata?.source_record_id))
+      .filter(isUuid)
+  ));
+  if (operationalIds.length === 0) return rows;
+  const instructionRows = await restSelect(supabaseUrl, serviceRoleKey, 'instructions', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `in.(${operationalIds.join(',')})`,
+    select: 'id,status,module_ids,visible_to_user_ids,visible_to_role_ids,use_for_ai,ai_index_status',
+    limit: 80,
+  }).catch(() => []);
+  const instructionById = new Map(instructionRows.map((item: any) => [String(item?.id || ''), item]));
+  const allowedStatuses = new Set(['approved', 'published']);
+  const normalizedModuleId = String(moduleId || '').trim();
+  return (rows || []).filter((row: any) => {
+    if (!isOperationalInstructionChunk(row)) return true;
+    const sourceRecordId = normalizeId(row?.source_record_id || row?.metadata?.source_record_id);
+    const instruction = instructionById.get(sourceRecordId);
+    if (!instruction) return false;
+    if (instruction?.use_for_ai !== true) return false;
+    if (!allowedStatuses.has(String(instruction?.status || '').trim())) return false;
+    if (String(instruction?.ai_index_status || '').trim() !== 'ready') return false;
+    if (!canActorViewInstructionRow(instruction, authContext)) return false;
+    if (!normalizedModuleId) return true;
+    const moduleIds = Array.isArray(instruction?.module_ids)
+      ? instruction.module_ids.map((item: any) => String(item || '').trim()).filter(Boolean)
+      : [];
+    return moduleIds.length === 0 || moduleIds.includes(normalizedModuleId);
+  });
+};
+
+const fetchKnowledgeChunks = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  query: string,
+  options: { moduleId?: string | null } = {},
+) => {
   if (!authContext.orgId) return [];
-  const instructionRowsFor = (rows: any[]) => rows.filter((row: any) =>
-    String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
-    || String(row?.metadata?.document_type || '').trim() === 'ai_instructions'
-  );
+  const instructionRowsFor = (rows: any[]) => rows.filter(isSystemAiInstructionChunk);
+  const moduleId = String(options?.moduleId || '').trim();
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
     org_id: `eq.${authContext.orgId}`,
     status: 'eq.active',
-    select: 'id,document_id,chunk_index,content,metadata,updated_at,allowed_user_ids,allowed_role_ids',
+    select: 'id,document_id,chunk_index,content,metadata,updated_at,allowed_user_ids,allowed_role_ids,source_kind,source_module_id,source_record_id,source_target_module_ids',
     order: 'updated_at.desc',
     limit: 80,
   });
-  const visibleRows = rows.filter((row: any) => {
+  let visibleRows = rows.filter((row: any) => {
     const allowedUserIds = Array.isArray(row?.allowed_user_ids)
       ? row.allowed_user_ids.map(normalizeId).filter(isUuid)
       : [];
@@ -1853,7 +1998,8 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
     const userId = normalizeId(authContext?.userId);
     const roleId = normalizeId(authContext?.roleId);
     return (!!userId && allowedUserIds.includes(userId)) || (!!roleId && allowedRoleIds.includes(roleId));
-  });
+  }).filter((row: any) => isChunkRelevantToModule(row, moduleId));
+  visibleRows = await filterFreshOperationalInstructionChunks(supabaseUrl, serviceRoleKey, authContext, visibleRows, moduleId);
   const instructionRows = instructionRowsFor(visibleRows);
   const queryText = String(query || '').trim();
   if (queryText) {
@@ -1884,8 +2030,10 @@ const fetchKnowledgeChunks = async (supabaseUrl: string, serviceRoleKey: string,
             p_match_count: 6,
           });
         }
-        const filteredVectorRows = (vectorRows || [])
-          .filter((row: any) => Number(row?.similarity || 0) >= KNOWLEDGE_MATCH_THRESHOLD)
+        const freshVectorRows = await filterFreshOperationalInstructionChunks(supabaseUrl, serviceRoleKey, authContext, vectorRows || [], moduleId);
+        const filteredVectorRows = freshVectorRows
+          .filter((row: any) => isChunkRelevantToModule(row, moduleId))
+          .filter((row: any) => Number(row?.similarity || 0) >= (isOperationalInstructionChunk(row) ? INSTRUCTION_MATCH_THRESHOLD : KNOWLEDGE_MATCH_THRESHOLD))
           .filter((row: any) => !instructionRows.some((item: any) => String(item.id) === String(row.id)))
           .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
         if (filteredVectorRows.length > 0) {
@@ -2123,14 +2271,20 @@ const buildPromptMessages = (
   }));
   const aiInstructionIds = new Set(
     knowledgeChunks
-      .filter((chunk: any) =>
-        String(chunk?.metadata?.system_key || '').trim() === 'ai_instructions'
-        || String(chunk?.metadata?.document_type || '').trim() === 'ai_instructions'
-      )
+      .filter(isSystemAiInstructionChunk)
+      .map((chunk: any) => String(chunk?.id || ''))
+  );
+  const operationalInstructionIds = new Set(
+    knowledgeChunks
+      .filter(isOperationalInstructionChunk)
       .map((chunk: any) => String(chunk?.id || ''))
   );
   const aiInstructions = knowledge.filter((chunk) => aiInstructionIds.has(String(chunk.id || '')));
-  const otherKnowledge = knowledge.filter((chunk) => !aiInstructionIds.has(String(chunk.id || '')));
+  const operationalInstructions = knowledge.filter((chunk) => operationalInstructionIds.has(String(chunk.id || '')));
+  const otherKnowledge = knowledge.filter((chunk) =>
+    !aiInstructionIds.has(String(chunk.id || ''))
+    && !operationalInstructionIds.has(String(chunk.id || ''))
+  );
   const contextPayload = {
     company: companyContext,
     current_user: buildUserPromptContext(authContext),
@@ -2156,6 +2310,7 @@ const buildPromptMessages = (
     web_search_results: webSearchResults.length ? webSearchResults : undefined,
     selected_ai_capabilities: options.selectedCapabilities || [],
     ai_instructions: aiInstructions,
+    operational_instructions: operationalInstructions,
     organization_knowledge: otherKnowledge,
     user_question: message,
   };
@@ -2173,8 +2328,8 @@ const buildPromptMessages = (
     : '';
 
   const systemContent = pageContext.intent === 'process_guide'
-    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -4033,7 +4188,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [knowledgeChunks, companyContext, orgPeopleContext] = await Promise.all([
-    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message) : Promise.resolve([]),
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
   ]);
@@ -4326,7 +4481,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [knowledgeChunks, companyContext, orgPeopleContext] = await Promise.all([
-    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt) : Promise.resolve([]),
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
   ]);
@@ -6266,7 +6421,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [companyContext, knowledgeChunks] = await Promise.all([
     useOrganizationContext ? loadCompanyContext(supabaseUrl, serviceRoleKey, authContext) : Promise.resolve(null),
-    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt) : Promise.resolve([]),
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
   ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -7305,7 +7460,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     .filter(Boolean)
     .join('\n');
   const [knowledgeChunks, crossModuleContext] = await Promise.all([
-    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, knowledgeQuery),
+    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, knowledgeQuery, { moduleId: counterparty?.moduleId || contextForReply.moduleId || null }),
     fetchReplyCrossModuleContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
   const retrievedContexts = await fetchRelevantModuleContexts(
@@ -7343,10 +7498,16 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     conversation: recentMessages.slice(-16),
     retrieved_contexts: retrievedContexts.slice(0, 4),
     ai_instructions: knowledgeChunks
-      .filter((chunk: any) =>
-        String(chunk?.metadata?.system_key || '').trim() === 'ai_instructions'
-        || String(chunk?.metadata?.document_type || '').trim() === 'ai_instructions'
-      )
+      .filter(isSystemAiInstructionChunk)
+      .slice(0, 2)
+      .map((chunk, index) => ({
+        index: index + 1,
+        id: chunk.id,
+        title: chunk?.metadata?.document_title || null,
+        content: String(chunk?.content || '').slice(0, 1100),
+      })),
+    operational_instructions: knowledgeChunks
+      .filter(isOperationalInstructionChunk)
       .slice(0, 2)
       .map((chunk, index) => ({
         index: index + 1,
@@ -7356,8 +7517,8 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
       })),
     organization_knowledge: knowledgeChunks
       .filter((chunk: any) =>
-        String(chunk?.metadata?.system_key || '').trim() !== 'ai_instructions'
-        && String(chunk?.metadata?.document_type || '').trim() !== 'ai_instructions'
+        !isSystemAiInstructionChunk(chunk)
+        && !isOperationalInstructionChunk(chunk)
       )
       .map((chunk, index) => ({
         index: index + 1,
@@ -7371,7 +7532,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     {
       role: 'system',
       content:
-        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
+        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز، operational_instructions به‌عنوان دستورالعمل‌های کاری مرتبط، و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
     },
     {
       role: 'user',
@@ -7715,6 +7876,171 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
   return json(200, { success: true, processed, failed });
 };
 
+const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canRebuildInstructionAiContext(authContext)) {
+    return json(403, { success: false, message: 'دسترسی بازسازی دستورالعمل برای هوش مصنوعی را ندارید.' });
+  }
+  const instructionId = normalizeId(body?.instructionId || body?.instruction_id);
+  if (!isUuid(instructionId)) return json(400, { success: false, message: 'شناسه دستورالعمل معتبر نیست.' });
+
+  const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'embedding');
+
+  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'instructions', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `eq.${instructionId}`,
+    select: 'id,org_id,name,system_code,status,department,module_ids,visible_to_user_ids,visible_to_role_ids,goal,body,tags,use_for_ai',
+    limit: 1,
+  });
+  const instruction = rows[0] || null;
+  if (!instruction) return json(404, { success: false, message: 'دستورالعمل در این سازمان پیدا نشد.' });
+
+  await restDelete(supabaseUrl, serviceRoleKey, 'document_chunks', {
+    org_id: `eq.${authContext.orgId}`,
+    source_kind: 'eq.instruction',
+    source_module_id: 'eq.instructions',
+    source_record_id: `eq.${instructionId}`,
+  });
+
+  const now = new Date().toISOString();
+  const status = String(instruction?.status || '').trim();
+  const useForAi = instruction?.use_for_ai === true;
+  const allowedStatuses = new Set(['approved', 'published']);
+  const moduleIds = Array.isArray(instruction?.module_ids)
+    ? Array.from(new Set(instruction.module_ids.map((item: any) => String(item || '').trim()).filter(Boolean)))
+    : [];
+  const allowedUserIds = normalizeIds(Array.isArray(instruction?.visible_to_user_ids) ? instruction.visible_to_user_ids : []);
+  const allowedRoleIds = normalizeIds(Array.isArray(instruction?.visible_to_role_ids) ? instruction.visible_to_role_ids : []);
+  const tags = Array.isArray(instruction?.tags)
+    ? instruction.tags.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const title = String(instruction?.name || '').trim() || 'دستورالعمل بدون عنوان';
+  const content = [
+    `عنوان دستورالعمل: ${title}`,
+    instruction?.system_code ? `کد سیستمی: ${String(instruction.system_code).trim()}` : '',
+    instruction?.department ? `دپارتمان: ${String(instruction.department).trim()}` : '',
+    moduleIds.length ? `ماژول‌های مرتبط: ${moduleIds.join('، ')}` : '',
+    tags.length ? `برچسب‌ها: ${tags.join('، ')}` : '',
+    instruction?.goal ? `هدف:\n${String(instruction.goal).trim()}` : '',
+    instruction?.body ? `متن دستورالعمل:\n${String(instruction.body).trim()}` : '',
+  ].filter(Boolean).join('\n\n').trim();
+  const contentHash = hashText(content);
+
+  if (!useForAi || !allowedStatuses.has(status) || !content) {
+    await restPatch(supabaseUrl, serviceRoleKey, 'instructions', {
+      id: `eq.${instructionId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      ai_index_status: 'skipped',
+      ai_index_updated_at: now,
+      ai_index_error: !useForAi
+        ? null
+        : !allowedStatuses.has(status)
+        ? 'فقط دستورالعمل‌های تایید شده یا ابلاغ شده برای هوش مصنوعی استفاده می‌شوند.'
+        : 'متنی برای آماده‌سازی هوش مصنوعی وجود ندارد.',
+      ai_content_hash: contentHash,
+      updated_at: now,
+    });
+    return json(200, {
+      success: true,
+      processed: 0,
+      failed: 0,
+      message: !useForAi
+        ? 'استفاده از این دستورالعمل برای هوش مصنوعی غیرفعال است.'
+        : 'این دستورالعمل در وضعیت قابل استفاده برای هوش مصنوعی نیست.',
+    });
+  }
+
+  const providerConfig = getCentralProviderConfig();
+  const chunks = splitTextIntoAiChunks(content, 1200).slice(0, 40);
+  let processed = 0;
+  let failed = 0;
+  const insertRows: Record<string, any>[] = [];
+
+  for (const [index, chunkContent] of chunks.entries()) {
+    const baseRow: Record<string, any> = {
+      org_id: authContext.orgId,
+      document_id: null,
+      chunk_index: index,
+      content: chunkContent,
+      content_hash: hashText(chunkContent),
+      token_estimate: Math.ceil(chunkContent.length / 4),
+      status: 'active',
+      allowed_user_ids: allowedUserIds,
+      allowed_role_ids: allowedRoleIds,
+      source_kind: 'instruction',
+      source_module_id: 'instructions',
+      source_record_id: instructionId,
+      source_target_module_ids: moduleIds,
+      metadata: {
+        document_title: title,
+        document_type: 'module_instruction',
+        source_kind: 'instruction',
+        source_module_id: 'instructions',
+        source_record_id: instructionId,
+        instruction_status: status,
+        department: String(instruction?.department || '').trim() || null,
+        module_ids: moduleIds,
+        tags,
+      },
+    };
+    try {
+      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      insertRows.push({
+        ...baseRow,
+        embedding: `[${embeddingResult.embedding.join(',')}]`,
+        embedding_model: DEFAULT_EMBEDDING_MODEL,
+        embedding_dimension: 1536,
+        embedding_status: 'ready',
+        embedding_updated_at: now,
+        embedding_error: null,
+      });
+      processed += 1;
+      await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        capability: 'embedding',
+        provider: providerConfig.provider,
+        model: DEFAULT_EMBEDDING_MODEL,
+        requestId: embeddingResult.requestId,
+        usageMetadata: embeddingResult.usageMetadata,
+        metadata: { source: 'instruction_embedding', instruction_id: instructionId, chunk_index: index },
+      });
+    } catch (error: any) {
+      failed += 1;
+      insertRows.push({
+        ...baseRow,
+        embedding_status: 'failed',
+        embedding_error: String(error?.message || error).slice(0, 500),
+        embedding_updated_at: now,
+      });
+    }
+  }
+
+  if (insertRows.length > 0) {
+    await restInsert(supabaseUrl, serviceRoleKey, 'document_chunks', insertRows);
+  }
+
+  const finalStatus = failed > 0 ? 'failed' : processed > 0 ? 'ready' : 'skipped';
+  await restPatch(supabaseUrl, serviceRoleKey, 'instructions', {
+    id: `eq.${instructionId}`,
+    org_id: `eq.${authContext.orgId}`,
+  }, {
+    ai_index_status: finalStatus,
+    ai_index_updated_at: now,
+    ai_index_error: failed > 0 ? `${failed} بخش آماده نشد.` : null,
+    ai_content_hash: contentHash,
+    updated_at: now,
+  });
+
+  return json(200, {
+    success: true,
+    processed,
+    failed,
+    message: failed > 0
+      ? `بازسازی انجام شد، اما ${failed.toLocaleString('fa-IR')} بخش خطا داشت.`
+      : `دستورالعمل برای هوش مصنوعی آماده شد؛ ${processed.toLocaleString('fa-IR')} بخش ساخته شد.`,
+  });
+};
+
 const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const userMessage = String(body?.message || '').trim() || 'برای این رکورد یک یادداشت کوتاه و کاربردی پیشنهاد بده.';
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, {
@@ -7726,7 +8052,7 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
     return json(403, { success: false, message: 'برای پیشنهاد یادداشت باید روی یک رکورد قابل دسترس باشید.' });
   }
 
-  const knowledgeChunks = await fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, userMessage);
+  const knowledgeChunks = await fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, userMessage, { moduleId: pageContext.moduleId });
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
@@ -8268,6 +8594,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'generate_document') return await handleGenerateDocument(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'run_task_bundle') return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'create_record_from_prompt' || action === 'update_record_from_prompt') {

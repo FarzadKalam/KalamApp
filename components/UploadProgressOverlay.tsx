@@ -26,6 +26,7 @@ import CloudUploadOutlined from '@ant-design/icons/CloudUploadOutlined';
 import NotificationOutlined from '@ant-design/icons/NotificationOutlined';
 import SoundOutlined from '@ant-design/icons/SoundOutlined';
 import UpOutlined from '@ant-design/icons/UpOutlined';
+import PaperClipOutlined from '@ant-design/icons/PaperClipOutlined';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import { cancelUploadTask, retryUploadTask, useUploadTasks } from '../utils/uploadProgressStore';
 import {
@@ -39,6 +40,10 @@ import type { OverlayNotificationChannel, UiNotificationOverlayItem } from '../u
 import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import ProfileAvatar from './common/ProfileAvatar';
+import ResilientImage from './common/ResilientImage';
+import FileExtensionTile from './files/FileExtensionTile';
+import { isImageFileLike } from '../utils/imagePreview';
+import { isAudioNoteAttachment, type NoteAttachment } from '../utils/noteContent';
 
 const SnoozeScheduleModal = React.lazy(() => import('./notifications/SnoozeScheduleModal'));
 
@@ -202,6 +207,64 @@ const ExpandableNotificationText: React.FC<{ text: string }> = ({ text }) => {
     </div>
   );
 };
+
+const getAttachmentLabel = (attachment: NoteAttachment) => {
+  const directName = String(attachment?.name || '').trim();
+  if (directName) return directName;
+  const rawUrl = String(attachment?.url || '').split('?')[0].split('#')[0];
+  return rawUrl.split('/').pop() || 'فایل';
+};
+
+const OverlayAttachmentPreviewStrip: React.FC<{ attachments?: NoteAttachment[] }> = React.memo(({ attachments }) => {
+  const visibleAttachments = (attachments || []).filter((item) => String(item?.url || '').trim()).slice(0, 4);
+  if (visibleAttachments.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {visibleAttachments.map((attachment) => {
+        const label = getAttachmentLabel(attachment);
+        const url = String(attachment.url || '').trim();
+        const isImage = isImageFileLike(url, label, attachment.mimeType);
+        const isAudio = isAudioNoteAttachment(attachment);
+        if (isImage) {
+          return (
+            <span key={`${url}-${label}`} className="relative h-12 w-12 overflow-hidden rounded-md border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/10">
+              <ResilientImage
+                src={url}
+                preset="thumb"
+                alt={label}
+                loading="lazy"
+                className="h-full w-full object-cover"
+              />
+            </span>
+          );
+        }
+        if (isAudio) {
+          return (
+            <span key={`${url}-${label}`} className="inline-flex max-w-[160px] items-center gap-1.5 rounded-md border border-black/10 bg-black/[0.03] px-2 py-1 text-[10px] text-gray-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-gray-300">
+              <SoundOutlined className="shrink-0" />
+              <span className="truncate">{label}</span>
+            </span>
+          );
+        }
+        return (
+          <span key={`${url}-${label}`} className="inline-flex h-12 max-w-[170px] items-center gap-1.5 overflow-hidden rounded-md border border-black/10 bg-black/[0.03] pl-2 text-[10px] text-gray-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-gray-300">
+            <span className="h-12 w-12 shrink-0 overflow-hidden">
+              <FileExtensionTile fileName={label} url={url} mimeType={attachment.mimeType} compact />
+            </span>
+            <span className="truncate">{label}</span>
+          </span>
+        );
+      })}
+      {(attachments || []).length > visibleAttachments.length ? (
+        <span className="inline-flex h-12 items-center gap-1 rounded-md border border-black/10 px-2 text-[10px] text-gray-500 dark:border-white/10 dark:text-gray-400">
+          <PaperClipOutlined />
+          +{toPersianNumber(String((attachments || []).length - visibleAttachments.length))}
+        </span>
+      ) : null}
+    </div>
+  );
+});
+OverlayAttachmentPreviewStrip.displayName = 'OverlayAttachmentPreviewStrip';
 
 const UploadProgressOverlay: React.FC = () => {
   const tasks = useUploadTasks();
@@ -536,7 +599,8 @@ const UploadProgressOverlay: React.FC = () => {
                         <div style={{ color: token.colorTextSecondary }}>
                           <ExpandableNotificationText text={item.body} />
                         </div>
-                        {item.hasAttachments ? (
+                        <OverlayAttachmentPreviewStrip attachments={item.attachments} />
+                        {item.hasAttachments && (!item.attachments || item.attachments.length === 0) ? (
                           <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
                             دارای پیوست
                           </div>

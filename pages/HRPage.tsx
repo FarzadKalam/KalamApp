@@ -54,6 +54,7 @@ import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula } from '../utils/goalRewardRuntime';
 import { buildGoalRewardSourceKey, syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
 import { syncEmployeeCompensationEntriesForPayroll } from '../utils/employeeCompensationPayrollSync';
+import { calculatePayrollSlipTotals } from '../utils/payrollSlipTotals';
 import { syncSeniorityPayrollEntry, calcYearsOfService } from '../utils/seniorityRuntime';
 import {
   fetchPayrollLedgerEntries,
@@ -239,6 +240,8 @@ type EmployeeSummaryRow = {
   baseSalary: number;
   netPayable: number;
   detailRows: TaskDetailRow[];
+  payrollDetailRows: TaskDetailRow[];
+  payrollTaskIds: string[];
   activityPerformanceEntries: ActivityPerformanceEntry[];
 };
 
@@ -686,6 +689,7 @@ const toNativeGregorianDateString = (value: Dayjs | null | undefined): string | 
 };
 
 const HR_SESSION_KEY_RANGE = 'hr_filter_range';
+const HR_SESSION_KEY_RANGE_INITIALIZED = 'hr_filter_range_initialized';
 const HR_SESSION_KEY_EMPLOYEES = 'hr_filter_employee_ids';
 const HR_QUERY_KEY_EMPLOYEES = 'employees';
 const HR_QUERY_VALUE_ALL_EMPLOYEES = 'all';
@@ -740,6 +744,9 @@ const persistHrRange = (range: [Dayjs, Dayjs]) => {
   try {
     writeHrRangeToStorage(window.localStorage, serialized);
   } catch {}
+  try {
+    window.localStorage.setItem(HR_SESSION_KEY_RANGE_INITIALIZED, '1');
+  } catch {}
 };
 
 const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
@@ -751,7 +758,18 @@ const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
   }
   const persistedRange = readPersistedHrRange();
   if (persistedRange) return persistedRange;
-  return [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')];
+  const initialized = (() => {
+    try {
+      return window.localStorage.getItem(HR_SESSION_KEY_RANGE_INITIALIZED) === '1';
+    } catch {
+      return false;
+    }
+  })();
+  const initialRange: [Dayjs, Dayjs] = [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')];
+  if (!initialized) {
+    persistHrRange(initialRange);
+  }
+  return initialRange;
 };
 
 const readHrRangeFromSearch = (search: string): [Dayjs, Dayjs] | null => {
@@ -1517,6 +1535,7 @@ const buildSummaries = ({
         .map((task) => String(task.id)),
     );
     const payrollDetailRows = sortedDetailRows.filter((row) => payrollEligibleTaskIds.has(String(row.taskId)));
+    const payrollTaskIds = payrollDetailRows.map((row) => String(row.taskId || '').trim()).filter(Boolean);
 
     const taskWageTotal = payrollDetailRows.reduce((sum, row) => sum + row.wageFinal, 0);
     const producedQty = payrollDetailRows.reduce((sum, row) => sum + row.producedQty, 0);
@@ -1560,6 +1579,8 @@ const buildSummaries = ({
       baseSalary,
       netPayable,
       detailRows: sortedDetailRows,
+      payrollDetailRows,
+      payrollTaskIds,
       activityPerformanceEntries: employeeActivityEntries,
     } as EmployeeSummaryRow;
   });
@@ -4124,7 +4145,7 @@ const HRPage: React.FC = () => {
         line_type: 'earning' as const,
         title: 'حقوق عملکردی فعالیت‌ها',
         amount: payrollWizardSummary.taskWageTotal,
-        description: `${payrollWizardSummary.detailRows.length} فعالیت`,
+        description: `${payrollWizardSummary.payrollDetailRows.length} فعالیت`,
       }] : []),
     ];
     return [
@@ -5748,6 +5769,13 @@ const HRPage: React.FC = () => {
       try {
         await ensureActivityPerformanceLedgerForSummary(payrollWizardSummary, periodStart, periodEnd);
         const profile = payrollWizardSummary.profile;
+        if (profile?.source_id) {
+          await syncEmployeeCompensationEntriesForPayroll(supabase as any, {
+            employeeIds: [String(profile.source_id)],
+            periodStart,
+            periodEnd,
+          });
+        }
         if (profile?.seniority_mode === 'labor_law' && profile?.hire_date && profile?.source_id) {
           await syncSeniorityPayrollEntry(supabase as any, {
             employeeId: String(profile.source_id),
@@ -5826,6 +5854,15 @@ const HRPage: React.FC = () => {
       const employerInsuranceAmount = row.profile?.insurance_subject === false
         ? 0
         : (totalEarnings * toNumber(row.profile?.employer_insurance_rate)) / 100;
+      const previewLines = [
+        ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت` }] : []),
+        ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
+        ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'حقوق عملکردی فعالیت‌ها', amount: row.taskWageTotal, description: `${row.payrollDetailRows.length} فعالیت` }] : []),
+        ...ledgerLines,
+        ...advanceLines,
+        ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
+      ];
+      const slipTotals = calculatePayrollSlipTotals({ lines: previewLines, payments: [] });
       const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
       const payload = {
         name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
@@ -5841,16 +5878,9 @@ const HRPage: React.FC = () => {
         deduction_total: ledgerDeductionTotal + advanceDeductionTotal + employeeInsuranceAmount,
         insurance_employee_amount: employeeInsuranceAmount,
         insurance_employer_amount: employerInsuranceAmount,
-        gross_amount: totalEarnings,
-        net_amount: totalEarnings - ledgerDeductionTotal - advanceDeductionTotal - employeeInsuranceAmount,
-        lines: [
-          ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت` }] : []),
-          ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
-          ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'حقوق عملکردی فعالیت‌ها', amount: row.taskWageTotal, description: `${row.detailRows.length} فعالیت` }] : []),
-          ...ledgerLines,
-          ...advanceLines,
-          ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
-        ],
+        gross_amount: slipTotals.grossAmount,
+        net_amount: slipTotals.netPayable,
+        lines: previewLines,
         payments: [],
         performance_snapshot: {
           total_tasks: row.totalTasks,
@@ -5866,7 +5896,7 @@ const HRPage: React.FC = () => {
             presence_minutes: calculatePresenceMinutes(payrollWizardAttendanceRows),
           },
         },
-        task_ids: row.detailRows.map((detail) => detail.taskId).filter(Boolean),
+        task_ids: row.payrollTaskIds,
         notes: `ایجاد شده از ویزارد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
       };
 

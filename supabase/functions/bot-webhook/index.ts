@@ -795,10 +795,17 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.file_name,
     message?.document?.fileName,
     message?.video?.file_name,
+    message?.aux_data?.file_name,
+    message?.aux_data?.fileName,
+    message?.aux_data?.name,
     rubikaNewMessage?.file?.file_name,
     rubikaNewMessage?.file_name,
+    rubikaNewMessage?.aux_data?.file_name,
+    rubikaNewMessage?.aux_data?.fileName,
     rubikaRootMessage?.file?.file_name,
     rubikaRootMessage?.file_name,
+    rubikaRootMessage?.aux_data?.file_name,
+    rubikaRootMessage?.aux_data?.fileName,
     payload?.document?.file_name,
     payload?.video?.file_name,
     payload?.photo?.file_name,
@@ -815,12 +822,22 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.file?.type,
     message?.file?.file_type,
     message?.media?.type,
+    message?.aux_data?.type,
+    message?.aux_data?.file_type,
+    message?.aux_data?.fileType,
+    message?.aux_data?.mime_type,
     rubikaNewMessage?.file_type,
     rubikaNewMessage?.file?.type,
+    rubikaNewMessage?.aux_data?.type,
+    rubikaNewMessage?.aux_data?.file_type,
     rubikaUpdatedMessage?.file_type,
     rubikaUpdatedMessage?.file?.type,
+    rubikaUpdatedMessage?.aux_data?.type,
+    rubikaUpdatedMessage?.aux_data?.file_type,
     rubikaRootMessage?.file_type,
     rubikaRootMessage?.file?.type,
+    rubikaRootMessage?.aux_data?.type,
+    rubikaRootMessage?.aux_data?.file_type,
     payload?.file_type,
     payload?.file?.type,
   );
@@ -834,8 +851,12 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.video?.mime_type,
     message?.file?.mime_type,
     message?.media?.mime_type,
+    message?.aux_data?.mime_type,
+    message?.aux_data?.mimeType,
     rubikaNewMessage?.file?.mime_type,
+    rubikaNewMessage?.aux_data?.mime_type,
     rubikaRootMessage?.file?.mime_type,
+    rubikaRootMessage?.aux_data?.mime_type,
     payload?.mime_type,
     payload?.mimeType
   );
@@ -871,14 +892,14 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower)
     || payloadText.includes('"video"');
   const looksLikeVoice = fileTypeLower === 'voice'
-    || mimeLower === 'audio/mpeg'
-    || mimeLower === 'audio/mp3'
-    || /\.mp3$/i.test(nameLower)
+    || fileTypeLower === 'voicemessage'
+    || fileTypeLower === 'voice_message'
     || payloadText.includes('"voice"');
   const looksLikeAudio = fileTypeLower === 'music'
     || fileTypeLower === 'audio'
+    || fileTypeLower === 'sound'
     || mimeLower.startsWith('audio/')
-    || /\.(wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower)
+    || /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower)
     || payloadText.includes('"audio"');
   const messageType =
     (hasPhoto || looksLikeImage) ? 'image'

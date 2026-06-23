@@ -323,7 +323,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 
   const renderAttachment = (attachment: NoteAttachment) => {
     const label = getAttachmentLabel(attachment);
-    const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    const hasUrl = Boolean(String(attachment?.url || '').trim());
+    const isImage = hasUrl && isImageFileLike(attachment.url, label, attachment.mimeType);
     const isAudio = isAudioNoteAttachment(attachment);
     if (isAudio) {
       return (
@@ -346,7 +347,6 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
       );
     }
     if (!isImage) {
-      const hasUrl = Boolean(String(attachment?.url || '').trim());
       return (
         <button
           key={`${attachment.url}-${label}`}
@@ -406,7 +406,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
 
   const renderReplyAttachmentPreview = (attachment: NoteAttachment) => {
     const label = getAttachmentLabel(attachment);
-    const isImage = isImageFileLike(attachment.url, label, attachment.mimeType);
+    const hasUrl = Boolean(String(attachment?.url || '').trim());
+    const isImage = hasUrl && isImageFileLike(attachment.url, label, attachment.mimeType);
     const isAudio = isAudioNoteAttachment(attachment);
     if (isImage) {
       return (

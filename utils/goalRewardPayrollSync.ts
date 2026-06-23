@@ -95,6 +95,11 @@ export const collectGoalRewardLedgerDrafts = async ({
           userId: profile.profileUserId,
           roleId: null,
           permissions: null,
+          subjectUserId: profile.profileUserId,
+          overridePeriodRange: {
+            startIso: `${periodStart}T00:00:00.000Z`,
+            endIso: `${periodEnd}T23:59:59.999Z`,
+          },
         });
         if (!snapshot || snapshot.achievedValue <= 0) continue;
 

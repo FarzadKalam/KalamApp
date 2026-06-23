@@ -35,6 +35,7 @@ const MIN_LINE_ANCHOR_HEIGHT_PX = 2;
 const MAX_LINE_ANCHORS = 5000;
 const DEFAULT_MIN_PAGE_FILL_RATIO = 0.55;
 const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
+const OVERSIZED_KEEP_BLOCK_TOLERANCE_PX = 8;
 
 const roundPx = (value: number) => Math.max(0, Math.round(value));
 
@@ -273,6 +274,7 @@ export const buildSmartPrintPageOffsets = ({
     if (!nextOffset) {
       const hardTopCandidates = blockAnchors
         .filter((anchor) => anchor.priority === 'high')
+        .filter((anchor) => anchor.bottom - anchor.top <= safeStep - OVERSIZED_KEEP_BLOCK_TOLERANCE_PX)
         .map((anchor) => anchor.top)
         .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
       nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;

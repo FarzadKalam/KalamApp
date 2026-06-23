@@ -12,6 +12,14 @@ export const instructionStatusOptions: SelectOption[] = [
   { label: 'منقضی شده', value: 'expired', color: 'red' },
 ];
 
+export const instructionAiIndexStatusOptions: SelectOption[] = [
+  { label: 'آماده نشده', value: 'not_built', color: 'default' },
+  { label: 'نیازمند بازسازی', value: 'stale', color: 'gold' },
+  { label: 'آماده', value: 'ready', color: 'green' },
+  { label: 'خطا', value: 'failed', color: 'red' },
+  { label: 'غیرفعال', value: 'skipped', color: 'default' },
+];
+
 export const normalizeInstructionIdList = (value: unknown): string[] => {
   const source = Array.isArray(value)
     ? value
@@ -69,6 +77,9 @@ export const buildInstructionModuleConfig = (
       const key = String(field?.key || '').trim();
       if (key === 'status') {
         return cloneField(field, { options: instructionStatusOptions });
+      }
+      if (key === 'ai_index_status') {
+        return cloneField(field, { options: instructionAiIndexStatusOptions });
       }
       if (key === 'module_ids') {
         return cloneField(field, { options: nextModuleOptions });

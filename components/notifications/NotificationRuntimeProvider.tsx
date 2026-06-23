@@ -32,6 +32,8 @@ import {
   setUiNotificationOverlayPagination,
 } from '../../utils/uiNotificationOverlayStore';
 import { botMessageInsertBus, noteInsertBus } from '../../utils/communicationRealtimeBus';
+import { dedupeAttachments, extractBotMessageAttachments } from '../../utils/messageAttachments';
+import type { NoteAttachment } from '../../utils/noteContent';
 
 type RuntimeSection = NotificationUnreadSection | 'bot_direct_messages';
 type RuntimeRevisions = Record<RuntimeSection, number>;
@@ -188,6 +190,36 @@ const getPayloadText = (payload: Record<string, any> | null | undefined, keys: s
   return '';
 };
 
+const normalizeOverlayAttachment = (value: any): NoteAttachment | null => {
+  const url = String(value?.url || value?.file_url || value?.download_url || '').trim();
+  if (!url) return null;
+  const fallbackName = String(url.split('?')[0].split('#')[0].split('/').pop() || 'فایل').trim() || 'فایل';
+  return {
+    name: String(value?.name || value?.file_name || value?.fileName || fallbackName).trim() || fallbackName,
+    url,
+    mimeType: String(value?.mimeType || value?.mime_type || '').trim() || null,
+    fileType: String(value?.fileType || value?.file_type || value?.message_type || '').trim() || null,
+  };
+};
+
+const resolveOverlayAttachments = (row: OverlayFeedRow): NoteAttachment[] => {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  const previewItems = Array.isArray((payload as any).attachment_previews)
+    ? (payload as any).attachment_previews
+    : [];
+  const directItems = previewItems.map(normalizeOverlayAttachment);
+  if (row.section === 'bot_messages') {
+    const botItems = extractBotMessageAttachments({
+      file_url: (payload as any).file_url || null,
+      file_name: (payload as any).file_name || null,
+      mime_type: (payload as any).mime_type || null,
+      payload,
+    });
+    return dedupeAttachments([...directItems, ...botItems]);
+  }
+  return dedupeAttachments(directItems);
+};
+
 const getOverlayModuleSingularTitle = (moduleId?: string | null) => {
   const normalizedModuleId = String(moduleId || '').trim();
   const moduleConfig = normalizedModuleId ? MODULES[normalizedModuleId] : null;
@@ -238,7 +270,18 @@ const resolveOverlayTitle = (row: OverlayFeedRow) => {
 
 const resolveOverlayBody = (row: OverlayFeedRow) => {
   if (row.section === 'responsibilities') return resolveResponsibilityOverlayBody(row);
-  return String(row.body || '').trim() || 'برای مشاهده جزئیات کلیک کنید.';
+  const attachments = resolveOverlayAttachments(row);
+  const body = String(row.body || '').trim();
+  if (body && !/^لینک$/i.test(body)) return body;
+  if (attachments.length > 0) {
+    const firstType = String(attachments[0]?.fileType || '').trim();
+    if (attachments.length > 1 && attachments.every((item) => String(item.fileType || '') === 'image')) return 'چند تصویر ارسال شد.';
+    if (firstType === 'image') return 'تصویر ارسال شد.';
+    if (firstType === 'video') return 'ویدیو ارسال شد.';
+    if (firstType === 'voice' || firstType === 'audio') return 'پیام صوتی ارسال شد.';
+    return 'فایل ارسال شد.';
+  }
+  return 'برای مشاهده جزئیات کلیک کنید.';
 };
 
 const resolveOverlayAvatarUrl = (row: OverlayFeedRow) => {
@@ -288,7 +331,9 @@ type BotDirectMessageOverlayRow = {
   direct_thread_id: string | null;
   direction: string | null;
   content_text: string | null;
+  file_url: string | null;
   file_name: string | null;
+  mime_type: string | null;
   message_type: string | null;
   created_at: string | null;
   payload: Record<string, any> | null;
@@ -316,7 +361,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     }
     const { data: directMessages, error: directMessagesError } = await supabase
       .from('counterparty_bot_direct_messages')
-      .select('id,direct_thread_id,direction,content_text,file_name,message_type,created_at,payload')
+      .select('id,direct_thread_id,direction,content_text,file_url,file_name,mime_type,message_type,created_at,payload')
       .eq('org_id', identity.orgId)
       .eq('direction', 'inbound')
       .order('created_at', { ascending: false })
@@ -394,6 +439,12 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         const text = String(row?.content_text || '').trim()
           || (String(row?.file_name || '').trim() ? `فایل: ${String(row?.file_name || '').trim()}` : '')
           || 'برای مشاهده جزئیات کلیک کنید.';
+        const attachmentPreviews = extractBotMessageAttachments({
+          file_url: row?.file_url || null,
+          file_name: row?.file_name || null,
+          mime_type: row?.mime_type || null,
+          payload,
+        });
         return {
           section: 'bot_messages' as const,
           source_type: 'counterparty_bot_direct_message',
@@ -406,6 +457,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
           conversation_key: buildBotDirectConversationKey(channel, chatId),
           payload: {
             ...payload,
+            attachment_previews: attachmentPreviews,
             direct_thread_id: String(row?.direct_thread_id || '').trim() || null,
             channel_type: channel || null,
             chat_id: chatId || null,
@@ -823,6 +875,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     setUiNotificationOverlayItems(rows.map((row) => {
       const kind = getOverlayKind(row);
       const conversationKey = String(row.conversation_key || row.payload?.conversation_key || '').trim();
+      const attachments = resolveOverlayAttachments(row);
       const canQuickReply = canQuickReplyNotification({
         section: row.section,
         category: String(row.payload?.category || ''),
@@ -836,6 +889,8 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         title: resolveOverlayTitle(row),
         subtitle: row.section === 'bot_messages' ? resolveBotOverlaySenderName(row) : undefined,
         body: resolveOverlayBody(row),
+        attachments,
+        hasAttachments: attachments.length > 0,
         avatarUrl: resolveOverlayAvatarUrl(row),
         avatarName: resolveOverlayAvatarName(row),
         createdAt: row.created_at,
@@ -859,15 +914,21 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
-        response = await supabase.rpc('get_notification_overlay_feed_v2', {
+        response = await supabase.rpc('get_notification_overlay_feed_v3', {
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
         if (isMissingRpcError(response.error)) {
-          response = await supabase.rpc('get_notification_overlay_feed_v1', {
+          response = await supabase.rpc('get_notification_overlay_feed_v2', {
             p_before_cursor: beforeCursor,
             p_limit: 20,
           });
+          if (isMissingRpcError(response.error)) {
+            response = await supabase.rpc('get_notification_overlay_feed_v1', {
+              p_before_cursor: beforeCursor,
+              p_limit: 20,
+            });
+          }
         }
       } catch (error) {
         response = { data: null, error };

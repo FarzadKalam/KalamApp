@@ -1,3 +1,5 @@
+import { calculatePayrollSlipTotals } from './payrollSlipTotals';
+
 const toNumber = (value: any) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -33,13 +35,12 @@ export const normalizeOperationalDocumentTotals = (moduleId: string, values: any
   }
 
   if (moduleId === 'payroll_slips') {
-    const baseSalary = toNumber(next.base_salary);
-    const taskWage = toNumber(next.task_wage_total);
-    const bonus = toNumber(next.bonus_total);
-    const deductions = toNumber(next.deduction_total);
-    const insuranceEmployee = toNumber(next.insurance_employee_amount);
-    next.gross_amount = baseSalary + taskWage + bonus;
-    next.net_amount = next.gross_amount - deductions - insuranceEmployee;
+    const totals = calculatePayrollSlipTotals({
+      lines: Array.isArray(next.lines) ? next.lines : [],
+      payments: Array.isArray(next.payments) ? next.payments : [],
+    });
+    next.gross_amount = totals.grossAmount;
+    next.net_amount = totals.netPayable;
     return next;
   }
 

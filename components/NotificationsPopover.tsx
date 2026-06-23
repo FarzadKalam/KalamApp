@@ -492,6 +492,7 @@ type UiNotificationItem = {
   title: string;
   body: string;
   createdAt: string | null;
+  attachments?: NoteAttachment[];
   hasAttachments?: boolean;
   note?: any;
   task?: any;
@@ -7147,6 +7148,7 @@ useEffect(() => {
             title: group?.name || directUser?.display_name || note.author_name || 'پیام جدید',
             body: parsed.text || (parsed.attachments.length > 0 ? 'فایل جدید ارسال شد' : 'پیام جدید'),
             createdAt: note.created_at || null,
+            attachments: parsed.attachments,
             hasAttachments: parsed.attachments.length > 0,
             note,
             kindLabel: aiNote ? 'هوش مصنوعی' : undefined,
@@ -7213,6 +7215,7 @@ useEffect(() => {
           const group = botGroups.find((item) => String(item.id) === String(row.bot_group_id || ''));
           const title = String(group?.group_title || '').trim() || String(group?.counterparty_label || '').trim() || 'پیام جدید بات';
           const body = String(row?.content_text || '').trim() || (row?.file_name ? `فایل: ${row.file_name}` : 'پیام جدید');
+          const attachments = getBotMessageAttachments(row);
           return {
             id: `bot:${String(row.id)}`,
             dedupeKey,
@@ -7220,7 +7223,8 @@ useEffect(() => {
             title: `${title} - ${sender}`,
             body,
             createdAt: row.created_at || null,
-            hasAttachments: Boolean(row?.file_url || row?.file_name),
+            attachments,
+            hasAttachments: attachments.length > 0 || Boolean(row?.file_url || row?.file_name),
             botMessage: row,
             botGroupId: row.bot_group_id || null,
           };
@@ -7523,6 +7527,7 @@ useEffect(() => {
         title: item.title,
         body: item.body,
         createdAt: item.createdAt,
+        attachments: item.attachments,
         hasAttachments: item.hasAttachments,
         onOpen: () => openUiNotification(item),
         onDismiss: () => handleDismissUiNotification(item),
@@ -7656,6 +7661,7 @@ useEffect(() => {
         noteReplyTo,
         scrollMessageIntoView,
         openCreateActivityFromMessage,
+        openPreviewRecord,
         setNoteViewportReady,
         noteInitialAnchorDoneRef,
   }), [
@@ -7705,6 +7711,7 @@ useEffect(() => {
     notes,
     openCreateActivityFromMessage,
     openForwardModal,
+    openPreviewRecord,
     openReadyTextsModal,
     profile,
     recordTitleMap,
@@ -8311,6 +8318,7 @@ useEffect(() => {
         openReadyTextsModal={openReadyTextsModal}
         handleOpenBotStatusModal={handleOpenBotStatusModal}
         handleClose={handleClose}
+        openPreviewRecord={openPreviewRecord}
       />
     );
   };
@@ -8359,6 +8367,7 @@ useEffect(() => {
           });
         }}
         handleClose={handleClose}
+        openPreviewRecord={openPreviewRecord}
       />
     );
   };

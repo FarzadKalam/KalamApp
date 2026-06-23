@@ -1,7 +1,6 @@
 import React from 'react';
 import { App, Avatar, Badge, Button, Empty, Input, Modal, Popover } from 'antd';
 import { EditOutlined, RobotOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -451,6 +450,7 @@ type BotMessagesPanelProps = {
   openReadyTextsModal: (context: 'bot') => void;
   handleOpenBotStatusModal: () => Promise<void> | void;
   handleClose: () => void;
+  openPreviewRecord?: (moduleId: string, recordId: string, label?: string) => void;
 };
 
 const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
@@ -527,6 +527,7 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
   openReadyTextsModal,
   handleOpenBotStatusModal,
   handleClose,
+  openPreviewRecord,
 }) => {
   const { message } = App.useApp();
   const withDesktopSidebar = layout === 'desktop';
@@ -684,13 +685,21 @@ const BotMessagesPanel: React.FC<BotMessagesPanelProps> = ({
           {selectedGroup && (selectedGroup.customer_id || selectedGroup.supplier_id || selectedGroup.employee_id) ? (
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               طرف مرتبط:{' '}
-              <Link
-                to={`/${selectedGroup.customer_id ? 'customers' : selectedGroup.supplier_id ? 'suppliers' : 'employees'}/${selectedGroup.customer_id || selectedGroup.supplier_id || selectedGroup.employee_id}`}
+              <button
+                type="button"
                 className="underline decoration-dotted underline-offset-2 text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-300-rgb))]"
-                onClick={handleClose}
+                onClick={() => {
+                  const moduleId = selectedGroup.customer_id ? 'customers' : selectedGroup.supplier_id ? 'suppliers' : 'employees';
+                  const recordId = String(selectedGroup.customer_id || selectedGroup.supplier_id || selectedGroup.employee_id || '').trim();
+                  if (openPreviewRecord && recordId) {
+                    openPreviewRecord(moduleId, recordId, String(selectedGroup.counterparty_label || '').trim() || undefined);
+                    return;
+                  }
+                  handleClose();
+                }}
               >
                 {String(selectedGroup.counterparty_label || '').trim() || 'مشاهده رکورد'}
-              </Link>
+              </button>
             </div>
           ) : null}
           <Input

@@ -249,6 +249,12 @@ export const collectModulePermissionFields = (module: ModuleDefinition) => {
     ensureField(fieldMap, `__action_${actionId}`, `عملیات: ${action?.label || actionId}`);
   });
 
+  (module.recordActions || []).forEach((action: any) => {
+    const actionId = String(action?.id || '');
+    if (!actionId) return;
+    ensureField(fieldMap, `__action_${actionId}`, `عملیات: ${action?.label || actionId}`);
+  });
+
   if (module.id === 'production_orders') {
     ensureField(fieldMap, '__action_start_production', 'عملیات: شروع تولید');
     ensureField(fieldMap, '__action_stop_production', 'عملیات: توقف تولید');

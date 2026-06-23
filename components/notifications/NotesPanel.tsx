@@ -1,7 +1,6 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { Badge, Button, Input, Modal, Popover } from 'antd';
 import { DeleteOutlined, EditOutlined, LeftOutlined, LinkOutlined, PlusOutlined, SearchOutlined, SnippetsOutlined, TeamOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { supabase } from '../../supabaseClient';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
@@ -331,9 +330,9 @@ const NoteMessageRow: React.FC<NoteMessageRowProps> = React.memo(({ note, replyT
     openForwardModal,
     toggleNoteLike,
     message,
-    handleClose,
     scrollMessageIntoView,
     openCreateActivityFromMessage,
+    openPreviewRecord,
   } = ctx;
 
   const recordKey = `${note.module_id}:${note.record_id}`;
@@ -439,7 +438,16 @@ const NoteMessageRow: React.FC<NoteMessageRowProps> = React.memo(({ note, replyT
           });
         } : undefined}
         footer={note.module_id && note.record_id ? (
-          <span>رکورد مرتبط:{' '}<Link to={`/${note.module_id}/${note.record_id}`} className="text-leather-600" onClick={handleClose}>{recordTitle}</Link></span>
+          <span>
+            رکورد مرتبط:{' '}
+            <button
+              type="button"
+              className="text-leather-600 underline decoration-dotted underline-offset-2"
+              onClick={() => openPreviewRecord?.(String(note.module_id), String(note.record_id), recordTitle)}
+            >
+              {recordTitle}
+            </button>
+          </span>
         ) : null}
       />
     </div>

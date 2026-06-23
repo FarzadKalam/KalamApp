@@ -766,6 +766,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         children: [
           { key: '/process_templates', label: 'الگوهای فرآیند' },
           { key: '/process_runs', label: 'اجرای فرآیندها' },
+          { key: '/process-v2-lab', label: 'نمونه کارت‌های فرآیند' },
         ],
       },
       {

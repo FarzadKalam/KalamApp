@@ -6069,6 +6069,7 @@ const ModuleShow: React.FC = () => {
   }
   (moduleConfig.recordActions || [])
     .filter((action: any) => (action.placement || 'header') === 'header')
+    .filter((action: any) => canUseAction(action.id))
     .filter((action: any) => !action.visible || action.visible(data))
     .forEach((action: any) => {
       headerActions.push({

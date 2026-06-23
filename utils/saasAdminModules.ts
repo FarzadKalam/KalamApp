@@ -118,6 +118,26 @@ export const executeSaasModuleAction = async (
     throw new Error('رکوردی برای این عملیات در دسترس نیست.');
   }
 
+  if (moduleId === 'instructions' && actionId === 'rebuild_instruction_ai_context') {
+    const instructionId = normalizeText(record.id);
+    if (!instructionId) {
+      throw new Error('شناسه دستورالعمل پیدا نشد.');
+    }
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body: {
+        action: 'rebuild_instruction_ai_context',
+        instructionId,
+      },
+    });
+    if (error) throw error;
+    if (data?.success === false) {
+      throw new Error(String(data?.message || 'بازسازی دستورالعمل برای هوش مصنوعی ناموفق بود.'));
+    }
+    return {
+      message: String(data?.message || 'دستورالعمل برای هوش مصنوعی بازسازی شد.'),
+    };
+  }
+
   if (moduleId === 'saas_orgs' && actionId === 'convert_request_to_org') {
     const requestId = normalizeText(record.request_id || record.id);
     if (!requestId) {

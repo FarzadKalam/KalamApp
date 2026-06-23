@@ -45,7 +45,7 @@ export const payrollSlipsConfig: ModuleDefinition = {
     { key: 'insurance_employee_amount', labels: { fa: 'بیمه سهم کارمند', en: 'Employee Insurance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 5, nature: FieldNature.STANDARD },
     { key: 'insurance_employer_amount', labels: { fa: 'بیمه سهم کارفرما', en: 'Employer Insurance' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 6, nature: FieldNature.STANDARD },
     { key: 'gross_amount', labels: { fa: 'ناخالص', en: 'Gross' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
-    { key: 'net_amount', labels: { fa: 'خالص پرداختی', en: 'Net Amount' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 8, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'net_amount', labels: { fa: 'خالص قابل پرداخت', en: 'Net Payable' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'summary', order: 8, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'performance_snapshot', labels: { fa: 'اسنپ‌شات عملکرد', en: 'Performance Snapshot' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'tracking', order: 1, nature: FieldNature.STANDARD },
     { key: 'task_ids', labels: { fa: 'فعالیت‌های مبنا', en: 'Task IDs' }, type: FieldType.JSON, location: FieldLocation.BLOCK, blockId: 'tracking', order: 2, nature: FieldNature.STANDARD },
     { key: 'notes', labels: { fa: 'توضیحات', en: 'Notes' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'tracking', order: 3, nature: FieldNature.STANDARD },

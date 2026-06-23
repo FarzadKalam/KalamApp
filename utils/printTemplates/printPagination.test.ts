@@ -67,6 +67,25 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 984]);
   });
 
+  it('does not move the break to the top of an oversized protected block', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2600,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 460, priority: 'normal', source: 'block' },
+        { top: 460, bottom: 2100, priority: 'high', source: 'block' },
+        { top: 900, bottom: 924, priority: 'normal', source: 'line' },
+        { top: 950, bottom: 974, priority: 'normal', source: 'line' },
+        { top: 1000, bottom: 1024, priority: 'normal', source: 'line' },
+        { top: 1460, bottom: 1484, priority: 'normal', source: 'line' },
+        { top: 1950, bottom: 1974, priority: 'normal', source: 'line' },
+        { top: 2100, bottom: 2550, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 974, 1974]);
+  });
+
   it('keeps single-page content on the first page', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 640,
