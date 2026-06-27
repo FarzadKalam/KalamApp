@@ -39,6 +39,7 @@ export type ProcessAutomationRuleInspectorContext = {
     nextStageFields: ModuleField[];
     enableNextStageActions: boolean;
     processStageOptions?: OptionList;
+    activationStageOptions?: OptionList;
     moduleOptions: WorkflowModuleOption[];
     relationSourceModuleOptions: WorkflowModuleOption[];
     additionalRecipientFieldOptions: OptionList;
@@ -268,6 +269,7 @@ const ProcessAutomationRuleInspector: React.FC<ProcessAutomationRuleInspectorPro
       nextStageFields={context.actionsBuilder.nextStageFields}
       enableNextStageActions={context.actionsBuilder.enableNextStageActions}
       processStageOptions={context.actionsBuilder.processStageOptions}
+      activationStageOptions={context.actionsBuilder.activationStageOptions}
       moduleOptions={context.actionsBuilder.moduleOptions}
       relationSourceModuleOptions={context.actionsBuilder.relationSourceModuleOptions}
       additionalRecipientFieldOptions={context.actionsBuilder.additionalRecipientFieldOptions}

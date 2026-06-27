@@ -1,61 +1,127 @@
-import React, { memo, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Modal, Switch, Tag, Tooltip } from 'antd';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { App, Badge, Button, Input, Modal, Tag, Tooltip } from 'antd';
 import {
-  CaretRightOutlined,
   CheckOutlined,
-  CalendarOutlined,
   ClockCircleOutlined,
   CloseOutlined,
-  DownOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
-  EyeOutlined,
   FileOutlined,
+  FolderOpenOutlined,
+  HistoryOutlined,
   LockOutlined,
   LinkOutlined,
+  MessageOutlined,
   OrderedListOutlined,
   PlusOutlined,
   ReadOutlined,
+  ShareAltOutlined,
   StarFilled,
   StarOutlined,
-  TeamOutlined,
   UnlockOutlined,
-  UpOutlined,
   UploadOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import DynamicSelectField from '../DynamicSelectField';
+import SmartFieldRenderer from '../SmartFieldRenderer';
 import FileExtensionTile from '../files/FileExtensionTile';
 import RecordImageBox from '../RecordImageBox';
 import ResilientImage from '../common/ResilientImage';
-import { toPersianNumber } from '../../utils/persianNumberFormatter';
-import type { ProcessV2CardData, ProcessV2Stage } from './ProcessCardsV2';
+import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
+import ActivityPanel from '../Sidebar/ActivityPanel';
+import AssistantPanel from '../ai/AssistantPanel';
+import AiSparkleIcon from '../ai/AiSparkleIcon';
+import TaskInstructionsModal from '../tasks/TaskInstructionsModal';
+import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
+import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { FieldNature, FieldType, type ModuleField } from '../../types';
+import {
+  getProcessTaskCustomFieldValuesFromRecurrence,
+  getProcessTaskCustomFieldsFromRecurrence,
+  getProcessTaskCustomFieldsFromStage,
+  mergeProcessTaskCustomFieldValues,
+  normalizeProcessTaskCustomFields,
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+} from '../../utils/processTaskCustomFields';
+import {
+  getProcessTaskStatusOptionsFromStage,
+  getTaskStatusIconKey,
+  getTaskStatusOptions,
+  getTaskStatusSwatchColor,
+} from '../../utils/processTaskStatusOptions';
+import TaskStatusIcon from '../tasks/TaskStatusIcon';
+import { invalidateFileManagerFolderCaches, loadRecordFileItems, type FileManagerListItem } from '../../utils/fileManagerQueries';
+import { buildImagePreviewUrl } from '../../utils/imagePreview';
+import { parseProcessLinkMap } from '../../utils/processTargets';
+import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
+import {
+  getInstructionIdsFromStage,
+  getInstructionIdsFromTask,
+  instructionStatusOptions,
+  normalizeInstructionIdList,
+} from '../../utils/instructionSupport';
+import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
+import { syncProcessRunStageFromTask } from '../../utils/processRunRuntime';
+import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
+import { MODULES } from '../../moduleRegistry';
+import { supabase } from '../../supabaseClient';
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/taskMeta';
+import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
+import { resolveSelectPopupContainer } from '../../utils/popupContainer';
+import TagInput from '../TagInput';
+import type { ProcessV2CardData, ProcessV2Stage, ProcessV2TemplateOption } from './ProcessCardsV2';
 
 type ProcessTaskModalV2Props = {
   open: boolean;
   process: ProcessV2CardData;
   stage: ProcessV2Stage | null;
   laneTitle?: string | null;
+  templates?: ProcessV2TemplateOption[];
   onClose: () => void;
+  onStageStatusChange?: (stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
+  onCreateDraftActivity?: (overrides?: Record<string, any>) => void | Promise<void>;
 };
 
 type MockCustomField = {
   key: string;
   label: string;
   value: string;
-  type: 'text' | 'select' | 'multi_select' | 'number' | 'date' | 'boolean' | 'textarea' | 'long_text' | 'very_long_text';
+  type: FieldType;
+  field?: ModuleField;
   options?: Array<{ value: string; label: string; color?: string }>;
+  requiredForCompletion?: boolean;
 };
+type ModalFileItem = {
+  id: string;
+  title: string;
+  meta: string;
+  fileType: 'image' | 'video' | 'file';
+  mimeType: string | null;
+  fileUrl: string;
+  starred: boolean;
+  entryId?: string | null;
+};
+type RelatedRecordRow = {
+  label: string;
+  value: string;
+  moduleId: string;
+  recordId: string;
+};
+type TagItem = { id: string; title: string; color: string };
 
 const statusOptions = [
-  { value: 'draft', label: 'پیش نویس' },
-  { value: 'waiting', label: 'شروع نشده' },
-  { value: 'active', label: 'در حال انجام' },
-  { value: 'review', label: 'بازبینی' },
-  { value: 'done', label: 'تکمیل شده' },
-  { value: 'blocked', label: 'متوقف' },
-  { value: 'canceled', label: 'لغو شده' },
+  { value: 'draft', label: 'پیش نویس', icon: 'file' },
+  { value: 'waiting', label: 'شروع نشده', icon: 'clock' },
+  { value: 'active', label: 'در حال انجام', icon: 'play' },
+  { value: 'review', label: 'بازبینی', icon: 'audit' },
+  { value: 'done', label: 'تکمیل شده', icon: 'approve' },
+  { value: 'blocked', label: 'متوقف', icon: 'stop' },
+  { value: 'canceled', label: 'لغو شده', icon: 'cancel' },
 ];
 
 const statusLabel: Record<string, string> = {
@@ -88,258 +154,492 @@ const statusTagClass: Record<string, string> = {
   canceled: '!border-slate-300 !bg-slate-100 !text-slate-600 dark:!border-slate-600 dark:!bg-white/10 dark:!text-slate-200',
 };
 
-const fileSamples = [
-  {
-    id: 'file-1',
-    title: 'شرح فعالیت.pdf',
-    meta: 'فایل',
-    fileType: 'file',
-    mimeType: 'application/pdf',
-    fileUrl: '',
-    starred: true,
-  },
-  {
-    id: 'file-2',
-    title: 'تصویر پیوست.jpg',
-    meta: 'تصویر',
-    fileType: 'image',
-    mimeType: 'image/jpeg',
-    fileUrl: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&w=220&q=80',
-    starred: false,
-  },
-  {
-    id: 'file-3',
-    title: 'گزارش اقدام.docx',
-    meta: 'فایل',
-    fileType: 'file',
-    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    fileUrl: '',
-    starred: false,
-  },
-];
+const normalizeTaskTags = (value: any): TagItem[] => (
+  (Array.isArray(value) ? value : [])
+    .map((tag: any) => {
+      const title = String(tag?.title || tag?.label || tag?.name || tag || '').trim();
+      const id = String(tag?.id || title).trim();
+      if (!id || !title) return null;
+      return {
+        id,
+        title,
+        color: String(tag?.color || '#1677ff').trim() || '#1677ff',
+      };
+    })
+    .filter(Boolean) as TagItem[]
+);
 
-const activityTagOptions = [
-  { value: 'پیگیری', label: 'پیگیری', color: '#2563eb' },
-  { value: 'مشتری مهم', label: 'مشتری مهم', color: '#d97706' },
-  { value: 'فوری', label: 'فوری', color: '#dc2626' },
-  { value: 'مالی', label: 'مالی', color: '#059669' },
-  { value: 'حقوقی', label: 'حقوقی', color: '#7c3aed' },
-];
+const getTaskField = (fieldKey: string) => (
+  (MODULES.tasks?.fields || []).find((field: any) => String(field?.key || '').trim() === fieldKey) as ModuleField | undefined
+);
 
-const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => [
-  {
-    key: 'channel',
-    label: 'کانال پیگیری',
-    value: stage?.activityTypeLabel || 'تماس خروجی',
-    type: 'select',
-    options: [
-      { value: 'تماس خروجی', label: 'تماس خروجی' },
-      { value: 'پیامک', label: 'پیامک' },
-      { value: 'جلسه حضوری', label: 'جلسه حضوری' },
-    ],
-  },
-  {
-    key: 'priority',
-    label: 'درجه اهمیت',
-    value: stage?.status === 'blocked' ? 'فوری' : 'معمولی',
-    type: 'select',
-    options: [
-      { value: 'معمولی', label: 'معمولی' },
-      { value: 'مهم', label: 'مهم' },
-      { value: 'فوری', label: 'فوری' },
-    ],
-  },
-  { key: 'duration', label: 'زمان تخمینی', value: '45', type: 'number' },
-  { key: 'due', label: 'موعد انجام', value: stage?.dueLabel || '۱۴۰۳/۱۲/۲۵ ۱۶:۳۰', type: 'date' },
-  { key: 'needs_report', label: 'نیازمند گزارش', value: 'true', type: 'boolean' },
-  { key: 'expected_result', label: 'خروجی مورد انتظار', value: 'ثبت نتیجه و اقدام بعدی', type: 'text' },
-  { key: 'notes', label: 'یادداشت داخلی', value: 'در صورت عدم پاسخ، پیگیری به روز بعد منتقل شود.', type: 'textarea' },
-  {
-    key: 'long_text',
-    label: 'شرح تکمیلی',
-    value: 'این فیلد برای متن‌های بلندتر استفاده می‌شود؛ مثلا توضیح کامل شرایط فعالیت، نکات اجرایی و مواردی که باید قبل از شروع کار بررسی شوند.',
-    type: 'long_text',
-  },
-  {
-    key: 'very_long_text',
-    label: 'متن خیلی بلند',
-    value: 'این نمونه برای متن‌های خیلی بلند است؛ کاربر باید بتواند در زمان ویرایش، با گرفتن گوشه پایین فیلد، ارتفاع باکس را بیشتر کند تا متن‌های چند پاراگرافی، گزارش‌های طولانی یا شرح کامل مذاکره را راحت‌تر ببیند و ویرایش کند.',
-    type: 'very_long_text',
-  },
-];
+const parseObject = (value: any): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
 
-const TaskActionButton = ({
-  title,
-  icon,
-  color,
-  active,
-}: {
-  title: string;
-  icon: React.ReactNode;
-  color?: string;
-  active?: boolean;
-}) => {
-  const effectiveColor = color || '#6b7280';
-  return (
-    <Tooltip title={title}>
-      <Button
-        type="text"
-        size="middle"
-        icon={icon}
-        aria-label={title}
-        className="task-action-button !inline-flex !h-9 !w-9 !min-w-9 !items-center !justify-center !rounded-lg"
-        style={{
-          color: active ? effectiveColor : '#4b5563',
-          backgroundColor: active ? `${effectiveColor}1a` : 'transparent',
-          border: 'none',
-          boxShadow: active ? `0 4px 12px ${effectiveColor}33` : '0 3px 10px rgba(15, 23, 42, 0.10)',
-        }}
-      />
-    </Tooltip>
-  );
+const stringifyFieldValue = (value: any): string => {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map((item) => {
+    if (item && typeof item === 'object') return String(item?.id || item?.value || item?.title || item?.label || item?.name || '').trim();
+    return stringifyFieldValue(item);
+  }).filter(Boolean).join(',');
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'object') return String(value?.id || value?.value || value?.label || value?.title || value?.name || '').trim();
+  return String(value);
+};
+
+const hasOwnValue = (container: any, key: string) => (
+  container
+  && typeof container === 'object'
+  && !Array.isArray(container)
+  && Object.prototype.hasOwnProperty.call(container, key)
+);
+
+const pickCustomFieldValue = (key: string, containers: any[]) => {
+  for (const container of containers) {
+    if (hasOwnValue(container, key)) return container[key];
+  }
+  return undefined;
+};
+
+const mapFieldType = (type: any): MockCustomField['type'] => {
+  if (type === FieldType.RELATION) return FieldType.RELATION;
+  if (type === FieldType.MULTI_RELATION) return FieldType.MULTI_RELATION;
+  if (type === FieldType.SELECT || type === FieldType.STATUS || type === FieldType.USER) return FieldType.SELECT;
+  if (type === FieldType.MULTI_SELECT || type === FieldType.TAGS) return FieldType.MULTI_SELECT;
+  if (type === FieldType.NUMBER || type === FieldType.PRICE || type === FieldType.PERCENTAGE || type === FieldType.STOCK || type === FieldType.PERCENTAGE_OR_AMOUNT) return FieldType.NUMBER;
+  if (type === FieldType.DATE) return FieldType.DATE;
+  if (type === FieldType.TIME) return FieldType.TIME;
+  if (type === FieldType.DATETIME) return FieldType.DATETIME;
+  if (type === FieldType.CHECKBOX) return FieldType.CHECKBOX;
+  if (type === FieldType.LONG_TEXT) return FieldType.LONG_TEXT;
+  if (type === FieldType.SUPER_LONG_TEXT) return FieldType.SUPER_LONG_TEXT;
+  return FieldType.TEXT;
+};
+
+const isFieldRequiredForCompletion = (field: any): boolean => {
+  const containers = [
+    field,
+    field?.metadata,
+    field?.config,
+    field?.validation,
+    field?.rules,
+  ].filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+
+  return containers.some((item) => (
+    item.required_for_completion === true
+    || item.requiredForCompletion === true
+    || item.completion_required === true
+    || item.completionRequired === true
+    || item.required_on_complete === true
+    || item.requiredOnComplete === true
+  ));
+};
+
+const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
+  const source = stage?.source && typeof stage.source === 'object' ? stage.source : {};
+  const sourceMetadata = parseObject(source?.metadata);
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const sourceStageMetadata = parseObject(sourceStage?.metadata);
+  const recurrence = parseObject(source?.recurrence_info);
+  const sourceStageRecurrence = parseObject(sourceStage?.recurrence_info || sourceStageMetadata?.recurrence_info);
+  const fieldCandidates = [
+    ...(stage?.kind === 'draft' ? getProcessTaskCustomFieldsFromStage(source) : []),
+    ...getProcessTaskCustomFieldsFromRecurrence(recurrence),
+    ...getProcessTaskCustomFieldsFromRecurrence(sourceStageRecurrence),
+    ...normalizeProcessTaskCustomFields(source?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || source?.custom_task_fields),
+    ...normalizeProcessTaskCustomFields(sourceMetadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || sourceMetadata?.custom_task_fields),
+    ...normalizeProcessTaskCustomFields(sourceStage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || sourceStage?.custom_task_fields),
+    ...normalizeProcessTaskCustomFields(sourceStageMetadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || sourceStageMetadata?.custom_task_fields),
+  ];
+  const fieldsByKey = new Map<string, any>();
+  fieldCandidates.forEach((field: any) => {
+    const key = String(field?.key || '').trim();
+    if (key && !fieldsByKey.has(key)) fieldsByKey.set(key, field);
+  });
+  const rawValues = {
+    ...getProcessTaskCustomFieldValuesFromRecurrence(recurrence),
+    ...getProcessTaskCustomFieldValuesFromRecurrence(sourceStageRecurrence),
+    ...(source?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(sourceMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(source?.custom_field_values && typeof source.custom_field_values === 'object' ? source.custom_field_values : {}),
+    ...(source?.customFields && typeof source.customFields === 'object' ? source.customFields : {}),
+    ...(sourceMetadata?.custom_field_values && typeof sourceMetadata.custom_field_values === 'object' ? sourceMetadata.custom_field_values : {}),
+    ...(sourceMetadata?.customFields && typeof sourceMetadata.customFields === 'object' ? sourceMetadata.customFields : {}),
+    ...(recurrence?.custom_field_values && typeof recurrence.custom_field_values === 'object' ? recurrence.custom_field_values : {}),
+    ...(recurrence?.customFields && typeof recurrence.customFields === 'object' ? recurrence.customFields : {}),
+    ...(sourceStage?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceStage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceStage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(sourceStageMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceStageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceStageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(sourceStage?.custom_field_values && typeof sourceStage.custom_field_values === 'object' ? sourceStage.custom_field_values : {}),
+    ...(sourceStage?.customFields && typeof sourceStage.customFields === 'object' ? sourceStage.customFields : {}),
+    ...(sourceStageMetadata?.custom_field_values && typeof sourceStageMetadata.custom_field_values === 'object' ? sourceStageMetadata.custom_field_values : {}),
+    ...(sourceStageMetadata?.customFields && typeof sourceStageMetadata.customFields === 'object' ? sourceStageMetadata.customFields : {}),
+  };
+  Object.keys(rawValues).forEach((key) => {
+    if (!fieldsByKey.has(key)) {
+      fieldsByKey.set(key, {
+        key,
+        type: FieldType.TEXT,
+        labels: { fa: key, en: key },
+      });
+    }
+  });
+  const fields = Array.from(fieldsByKey.values());
+  const fallbackValues = fields.reduce<Record<string, any>>((acc, field: any) => {
+    const key = String(field?.key || '').trim();
+    if (!key) return acc;
+    const value = pickCustomFieldValue(key, [
+      source,
+      sourceMetadata,
+      recurrence,
+      sourceStage,
+      sourceStageMetadata,
+      sourceStageRecurrence,
+    ]);
+    if (value !== undefined) acc[key] = value;
+    return acc;
+  }, {});
+  const values = mergeProcessTaskCustomFieldValues(fields, {
+    ...rawValues,
+    ...fallbackValues,
+  });
+
+  return fields.map((field: any) => {
+    const key = String(field?.key || '').trim();
+    const type = mapFieldType(field?.type);
+    const label = String(field?.labels?.fa || field?.labelFa || key).trim() || key;
+    const options = Array.isArray(field?.options)
+      ? field.options.map((option: any) => ({
+        value: String(option?.value ?? option?.label ?? '').trim(),
+        label: String(option?.label ?? option?.value ?? '').trim(),
+        color: option?.color ? String(option.color) : undefined,
+      })).filter((option: any) => option.value && option.label)
+      : undefined;
+    return {
+      key,
+      label,
+      value: stringifyFieldValue(values[key]),
+      type,
+      field: {
+        ...field,
+        key,
+        type,
+        labels: {
+          ...(field?.labels || {}),
+          fa: label,
+          en: field?.labels?.en || key,
+        },
+        options,
+        nature: field?.nature || FieldNature.STANDARD,
+        validation: {
+          ...(field?.validation || {}),
+          ...(isFieldRequiredForCompletion(field) ? { required: true } : {}),
+        },
+      } as ModuleField,
+      requiredForCompletion: isFieldRequiredForCompletion(field),
+      options,
+    };
+  });
+};
+
+const buildStatusOptions = (stage: ProcessV2Stage | null) => {
+  const source = stage?.source && typeof stage.source === 'object' ? stage.source : {};
+  const options = stage?.kind === 'draft'
+    ? getProcessTaskStatusOptionsFromStage(source)
+    : getTaskStatusOptions(source);
+  const normalized = (options.length ? options : statusOptions).map((option: any) => ({
+    value: String(option?.value || '').trim(),
+    label: String(option?.label || option?.value || '').trim(),
+    color: option?.color ? String(option.color) : undefined,
+    icon: String(option?.icon || '').trim() || getTaskStatusIconKey(option?.value),
+    disabled: option?.disabled === true,
+  })).filter((option) => option.value && option.label && option.disabled !== true);
+  return normalized.length ? normalized : statusOptions;
+};
+
+const statusValueToV2 = (stageStatus?: string | null) => {
+  const value = String(stageStatus || '').trim();
+  if (value === 'active') return 'in_progress';
+  if (value === 'done') return 'done';
+  if (value === 'waiting') return 'todo';
+  return value || 'todo';
+};
+
+const mapFileItem = (item: FileManagerListItem): ModalFileItem => ({
+  id: String(item.id || item.entry_id || item.asset_id || item.file_url),
+  title: String(item.file_name || item.file_url?.split('/').pop() || 'فایل').trim(),
+  meta: item.file_type === 'image' ? 'تصویر' : item.file_type === 'video' ? 'ویدئو' : 'فایل',
+  fileType: (item.file_type === 'image' || item.file_type === 'video') ? item.file_type : 'file',
+  mimeType: item.mime_type || null,
+  fileUrl: item.file_url || '',
+  starred: Boolean(item.is_main_image || item.entry_metadata?.main_image?.starred || item.entry_metadata?.starred || (item as any)?.metadata?.starred),
+  entryId: item.entry_id || null,
+});
+
+const readStageNumber = (stage: any, key: string, fallback = 0) => {
+  const metadata = parseObject(stage?.metadata);
+  const value = Number(stage?.[key] ?? metadata?.[key] ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+};
+
+const readStageText = (stage: any, key: string, fallback = '') => {
+  const metadata = parseObject(stage?.metadata);
+  return String(stage?.[key] ?? metadata?.[key] ?? fallback ?? '').trim();
+};
+
+const mapTemplateStageToCopyStage = (row: any): ProcessV2Stage => {
+  const metadata = parseObject(row?.metadata);
+  const id = String(row?.id || '').trim();
+  const title = String(row?.stage_name || row?.name || metadata?.stage_name || 'مرحله الگو').trim();
+  const assigneeLabel = String(row?.assignee_label || metadata?.assignee_label || '').trim() || 'مسئول پیش فرض';
+  return {
+    id,
+    title,
+    kind: 'draft',
+    status: 'draft',
+    layoutSlot: Number(row?.sort_order || metadata?.sort_order || 0),
+    assigneeLabel,
+    activityTypeLabel: String(row?.task_type || metadata?.task_type || '').trim() || 'مرحله پیش نویس',
+    dueLabel: undefined,
+    actionCount: Array.isArray(metadata?.automation_rules) ? metadata.automation_rules.length : 0,
+    source: {
+      ...row,
+      ...metadata,
+      id,
+      stage_name: title,
+      metadata,
+      source_template_id: String(row?.template_id || metadata?.source_template_id || '').trim(),
+      template_stage_id: id,
+      process_task_custom_fields: row?.process_task_custom_fields || metadata?.process_task_custom_fields,
+      process_task_status_options: row?.process_task_status_options || metadata?.process_task_status_options,
+      wage: readStageNumber(row, 'wage', 0),
+      weight: readStageNumber(row, 'weight', 0),
+      duration_value: readStageNumber(row, 'duration_value', 0),
+      duration_unit: readStageText(row, 'duration_unit', 'day') || 'day',
+      duration_from: readStageText(row, 'duration_from', 'project_start') || 'project_start',
+      due_date: readStageText(row, 'due_date', ''),
+      start_date: readStageText(row, 'start_date', ''),
+    },
+  };
+};
+
+const getModuleLabel = (moduleId?: string | null) => {
+  const normalized = String(moduleId || '').trim();
+  return MODULES[normalized]?.titles?.faSingular || MODULES[normalized]?.titles?.fa || normalized || 'رکورد';
+};
+
+const collectStageRelatedRecordRefs = (stage: ProcessV2Stage | null) => {
+  const source = stage?.source && typeof stage.source === 'object' ? stage.source : {};
+  const metadata = parseObject(source?.metadata);
+  const recurrence = parseObject(source?.recurrence_info);
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const sourceStageMetadata = parseObject(sourceStage?.metadata);
+  const sourceStageRecurrence = parseObject(sourceStage?.recurrence_info || sourceStageMetadata?.recurrence_info);
+  const refs = new Map<string, { moduleId: string; recordId: string }>();
+  const addRef = (moduleId?: unknown, recordId?: unknown) => {
+    const normalizedModuleId = String(moduleId || '').trim();
+    const normalizedRecordId = String(recordId || '').trim();
+    if (!normalizedModuleId || !normalizedRecordId) return;
+    refs.set(buildRecordReferenceKey(normalizedModuleId, normalizedRecordId), {
+      moduleId: normalizedModuleId,
+      recordId: normalizedRecordId,
+    });
+  };
+
+  [
+    source?.process_links,
+    source?.process_link_map,
+    metadata?.process_links,
+    metadata?.process_link_map,
+    recurrence?.process_links,
+    sourceStage?.process_links,
+    sourceStage?.process_link_map,
+    sourceStageMetadata?.process_links,
+    sourceStageMetadata?.process_link_map,
+    sourceStageRecurrence?.process_links,
+  ].forEach((value) => {
+    Object.entries(parseProcessLinkMap(value)).forEach(([moduleId, recordId]) => addRef(moduleId, recordId));
+  });
+  addRef(source?.source_module_id, source?.source_record_id);
+  addRef(sourceStage?.source_module_id, sourceStage?.source_record_id);
+  (MODULES.tasks?.fields || [])
+    .filter((field: any) => field?.type === FieldType.RELATION && field?.relationConfig?.targetModule)
+    .forEach((field: any) => {
+      const fieldKey = String(field?.key || '').trim();
+      const targetModule = String(field?.relationConfig?.targetModule || '').trim();
+      if (!fieldKey || !targetModule) return;
+      addRef(targetModule, source?.[fieldKey] ?? metadata?.[fieldKey] ?? recurrence?.[fieldKey] ?? sourceStage?.[fieldKey] ?? sourceStageMetadata?.[fieldKey] ?? sourceStageRecurrence?.[fieldKey]);
+    });
+  return Array.from(refs.values());
+};
+
+const collectProcessRelatedRecordRefs = (process: ProcessV2CardData) => {
+  const refs = new Map<string, { moduleId: string; recordId: string }>();
+  process.lanes.forEach((lane) => {
+    lane.stages.forEach((item) => {
+      collectStageRelatedRecordRefs(item).forEach((ref) => {
+        refs.set(buildRecordReferenceKey(ref.moduleId, ref.recordId), ref);
+      });
+    });
+  });
+  return Array.from(refs.values());
 };
 
 type InlineEditableFieldProps = {
   label: string;
   value: string;
   onSave: (value: string) => void;
+  field?: ModuleField;
   options?: Array<{ value: string; label: string; color?: string }>;
   fieldType?: MockCustomField['type'];
-  icon?: React.ReactNode;
-  accentColor?: string;
-  multiline?: boolean;
-  placeholder?: string;
+  forceEditMode?: boolean;
+  requiredForCompletion?: boolean;
+  moduleId?: string;
+  recordId?: string | null;
+  overlayZIndexBase?: number;
+  displayNode?: React.ReactNode;
+  onOptionsUpdate?: () => void;
 };
 
 const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   label,
   value,
   onSave,
+  field,
   options,
-  fieldType = 'text',
-  icon,
-  accentColor,
-  multiline,
-  placeholder,
+  fieldType = FieldType.TEXT,
+  forceEditMode = false,
+  requiredForCompletion = false,
+  moduleId,
+  recordId,
+  overlayZIndexBase = 16020,
+  displayNode,
+  onOptionsUpdate,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draftValue, setDraftValue] = useState(value);
-  const [expanded, setExpanded] = useState(false);
+  const normalizedFieldType = field?.type || fieldType || FieldType.TEXT;
+  const fieldModel = useMemo<ModuleField>(() => ({
+    ...(field || {}),
+    key: field?.key || `process-task-${label.replace(/\s+/g, '-').toLowerCase()}`,
+    type: normalizedFieldType,
+    labels: {
+      ...(field?.labels || {}),
+      fa: field?.labels?.fa || label,
+      en: field?.labels?.en || label,
+    },
+    options: options
+      ? options.map((item) => ({
+        value: item.value,
+        label: item.label,
+        color: item.color,
+      }))
+      : field?.options,
+    protectedDynamicValues: field?.dynamicOptionsCategory
+      ? (field?.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)
+      : undefined,
+    validation: requiredForCompletion ? { ...(field?.validation || {}), required: true } : field?.validation,
+    nature: field?.nature || FieldNature.STANDARD,
+  } as ModuleField), [field, label, normalizedFieldType, options, requiredForCompletion]);
 
   useEffect(() => {
     if (!editing) setDraftValue(value);
   }, [editing, value]);
 
-  const commit = () => {
-    onSave(String(draftValue || '').trim() || value);
-    setEditing(false);
-  };
+  useEffect(() => {
+    if (forceEditMode) setDraftValue(value);
+  }, [forceEditMode, value]);
 
-  const cancel = () => {
+  const normalizeRendererValue = useCallback((rawValue: string) => {
+    if (normalizedFieldType === FieldType.MULTI_SELECT || normalizedFieldType === FieldType.TAGS || normalizedFieldType === FieldType.MULTI_RELATION) {
+      return String(rawValue || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    if (normalizedFieldType === FieldType.CHECKBOX) {
+      return String(rawValue || '') === 'true';
+    }
+    return rawValue;
+  }, [normalizedFieldType]);
+
+  const serializeRendererValue = useCallback((nextValue: any) => {
+    if (normalizedFieldType === FieldType.MULTI_SELECT || normalizedFieldType === FieldType.TAGS || normalizedFieldType === FieldType.MULTI_RELATION) {
+      return Array.isArray(nextValue)
+        ? nextValue.map((item) => String(item || '').trim()).filter(Boolean).join(',')
+        : String(nextValue || '');
+    }
+    if (normalizedFieldType === FieldType.CHECKBOX) {
+      return nextValue ? 'true' : 'false';
+    }
+    return String(nextValue ?? '');
+  }, [normalizedFieldType]);
+
+  const activeValue = forceEditMode ? value : (editing ? draftValue : value);
+  const rendererValue = useMemo(
+    () => normalizeRendererValue(activeValue),
+    [activeValue, normalizeRendererValue]
+  );
+
+  const handleChange = useCallback((nextValue: any) => {
+    const serialized = serializeRendererValue(nextValue);
+    setDraftValue(serialized);
+    if (forceEditMode) onSave(serialized);
+  }, [forceEditMode, onSave, serializeRendererValue]);
+
+  const commit = useCallback(() => {
+    onSave(draftValue);
+    setEditing(false);
+  }, [draftValue, onSave]);
+
+  const cancel = useCallback(() => {
     setDraftValue(value);
     setEditing(false);
-  };
+  }, [value]);
 
-  const isLongText = fieldType === 'long_text' || fieldType === 'very_long_text';
-  const isMultiline = multiline || fieldType === 'textarea' || isLongText;
-  const displayLabel = (() => {
-    if (fieldType === 'boolean') return value === 'true' ? 'بله' : 'خیر';
-    if (fieldType === 'multi_select') {
-      return String(value || '')
-        .split(',')
-        .map((item) => options?.find((option) => option.value === item.trim())?.label || item.trim())
-        .filter(Boolean)
-        .join('، ') || '-';
-    }
-    return options?.find((option) => option.value === value)?.label || value || '-';
-  })();
+  const fieldNode = (
+    <SmartFieldRenderer
+      field={fieldModel}
+      value={rendererValue}
+      onChange={handleChange}
+      forceEditMode={forceEditMode || editing}
+      moduleId={moduleId || 'tasks'}
+      recordId={recordId || undefined}
+      compactMode={!forceEditMode}
+      overlayZIndexBase={overlayZIndexBase}
+      popupContainer={resolveSelectPopupContainer}
+      onOptionsUpdate={onOptionsUpdate}
+    />
+  );
 
-  const renderEditor = () => {
-    if (fieldType === 'boolean') {
-      return (
-        <div className="flex h-9 items-center gap-2">
-          <Switch checked={draftValue === 'true'} onChange={(checked) => setDraftValue(checked ? 'true' : 'false')} />
-          <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{draftValue === 'true' ? 'فعال' : 'غیرفعال'}</span>
-        </div>
-      );
-    }
-
-    if (fieldType === 'multi_select') {
-      return (
-        <AdaptiveSelectField
-          mode="multiple"
-          value={String(draftValue || '').split(',').map((item) => item.trim()).filter(Boolean)}
-          onChange={(nextValue) => setDraftValue(Array.isArray(nextValue) ? nextValue.join(',') : String(nextValue ?? ''))}
-          options={options || []}
-          allowClear
-          className="w-full"
-          pickerTitle={label}
-          placeholder={placeholder || label}
-          optionRender={(option: any) => {
-            const rawValue = String(option?.value ?? option?.data?.value ?? '').trim();
-            const meta = options?.find((item) => item.value === rawValue);
-            const color = meta?.color || '#64748b';
-            return (
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-                <span>{meta?.label || String(option?.label ?? option?.data?.label ?? rawValue)}</span>
-              </span>
-            );
-          }}
-        />
-      );
-    }
-
-    if (options) {
-      return (
-        <AdaptiveSelectField
-          value={draftValue}
-          onChange={(nextValue) => setDraftValue(String(nextValue ?? ''))}
-          options={options}
-          allowClear={false}
-          className="w-full"
-          pickerTitle={label}
-          placeholder={placeholder || label}
-        />
-      );
-    }
-
-    if (isMultiline) {
-      return (
-        <Input.TextArea
-          value={draftValue}
-          onChange={(event) => setDraftValue(event.target.value)}
-          placeholder={placeholder || label}
-          className="!rounded-md !text-xs"
-          style={{
-            minHeight: fieldType === 'very_long_text' ? 168 : fieldType === 'long_text' ? 112 : 72,
-            resize: 'vertical',
-          }}
-        />
-      );
-    }
-
+  if (forceEditMode) {
     return (
-      <Input
-        type={fieldType === 'number' ? 'number' : 'text'}
-        inputMode={fieldType === 'number' ? 'numeric' : undefined}
-        value={draftValue}
-        onChange={(event) => setDraftValue(event.target.value)}
-        placeholder={placeholder || label}
-        className="!h-9 !rounded-md !text-xs"
-        prefix={fieldType === 'date' ? <CalendarOutlined /> : undefined}
-      />
+      <div className="min-w-0">
+        {fieldNode}
+      </div>
     );
-  };
+  }
 
   if (editing) {
     return (
       <div className="min-w-0 rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-gray-50 px-2 py-2 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-white/5">
-        <div className="mb-1 text-[11px] font-bold text-gray-500 dark:text-gray-400">{label}</div>
+        <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
+          <span>{label}</span>
+          {requiredForCompletion ? (
+            <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
+              ضروری برای تکمیل
+            </Tag>
+          ) : null}
+        </div>
         <div className="flex min-w-0 items-start gap-1.5">
-          <div className="min-w-0 flex-1">
-            {renderEditor()}
-          </div>
+          <div className="min-w-0 flex-1">{fieldNode}</div>
           <Button
             type="text"
             size="small"
@@ -363,77 +663,39 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     );
   }
 
-  const longTextNeedsToggle = isLongText && String(displayLabel || '').length > 120;
-
   return (
     <div
-      className="group flex min-h-[3.25rem] w-full min-w-0 items-start gap-2 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition hover:border-[rgba(var(--brand-200-rgb),0.7)] hover:bg-white dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.25)] dark:hover:bg-white/10"
+      role="button"
+      tabIndex={0}
+      onClick={() => setEditing(true)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setEditing(true);
+        }
+      }}
+      className="group flex min-h-[3.25rem] w-full min-w-0 cursor-pointer items-start gap-2 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition hover:border-[rgba(var(--brand-200-rgb),0.7)] hover:bg-white dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.25)] dark:hover:bg-white/10"
     >
-      {icon ? (
-        <span
-          className="mt-2 shrink-0 text-sm"
-          style={accentColor ? { color: accentColor } : undefined}
-        >
-          {icon}
-        </span>
-      ) : null}
       <span className="min-w-0 flex-1">
-        <span className="block text-[11px] font-bold text-gray-500 dark:text-gray-400">{label}</span>
-        {fieldType === 'multi_select' ? (
-          <span className="mt-1 flex min-w-0 flex-wrap gap-1">
-            {String(value || '')
-              .split(',')
-              .map((item) => item.trim())
-              .filter(Boolean)
-              .map((item) => {
-                const meta = options?.find((option) => option.value === item);
-                const color = meta?.color || '#64748b';
-                return (
-                <Tag
-                  key={item}
-                  className="!m-0 !rounded-full !px-2 !py-0 !text-[11px] !font-bold"
-                  style={{
-                    backgroundColor: `${color}1a`,
-                    borderColor: `${color}55`,
-                    color,
-                  }}
-                >
-                  {meta?.label || item}
-                </Tag>
-                );
-              })}
-          </span>
-        ) : isLongText ? (
-          <span className="relative mt-0.5 block">
-            <span className={`block whitespace-pre-wrap break-words text-sm font-semibold leading-6 text-gray-800 transition-all duration-200 dark:text-gray-100 ${longTextNeedsToggle && !expanded ? 'max-h-28 overflow-hidden' : ''}`}>
-              {displayLabel}
-            </span>
-            {longTextNeedsToggle && !expanded ? (
-              <span className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-gray-50 to-transparent dark:from-[#1f1f1f]" />
-            ) : null}
-          </span>
-        ) : (
-          <span className="mt-0.5 block truncate text-sm font-semibold text-gray-800 dark:text-gray-100">{displayLabel}</span>
-        )}
-        {longTextNeedsToggle ? (
-          <Button
-            size="small"
-            type="text"
-            icon={expanded ? <UpOutlined /> : <DownOutlined />}
-            onClick={(event) => {
-              event.stopPropagation();
-              setExpanded((current) => !current);
-            }}
-            className="mt-2 !h-6 !px-0 !text-xs !text-gray-500 hover:!text-leather-600"
-          >
-            {expanded ? 'جمع کردن' : 'مشاهده بیشتر'}
-          </Button>
-        ) : null}
+        <span className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
+          <span>{label}</span>
+          {requiredForCompletion ? (
+            <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
+              ضروری برای تکمیل
+            </Tag>
+          ) : null}
+        </span>
+        <span className="mt-1 block min-w-0 text-sm font-semibold text-gray-800 dark:text-gray-100">
+          {displayNode || fieldNode}
+        </span>
       </span>
       <button
         type="button"
-        onClick={() => setEditing(true)}
-        className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition group-hover:bg-white group-hover:text-[rgba(var(--brand-700-rgb),1)] dark:group-hover:bg-white/10"
+        onClick={(event) => {
+          event.stopPropagation();
+          setEditing(true);
+        }}
+        className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-300 opacity-55 transition group-hover:bg-white group-hover:text-gray-500 group-hover:opacity-80 dark:text-gray-500 dark:group-hover:bg-white/10 dark:group-hover:text-gray-300"
         aria-label={`ویرایش ${label}`}
       >
         <EditOutlined className="text-[12px]" />
@@ -442,23 +704,8 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   );
 };
 
-const AssigneeIcon: React.FC<{ label: string; avatarUrl?: string | null }> = ({ label, avatarUrl }) => {
-  if (avatarUrl) {
-    return (
-      <span className="block h-7 w-7 overflow-hidden rounded-full border border-white bg-gray-100 shadow-sm dark:border-gray-700">
-        <ResilientImage src={avatarUrl} preset="avatar" alt={label} className="h-full w-full object-cover" />
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-200">
-      {label.includes('واحد') || label.includes('تیم') ? <TeamOutlined /> : <UserOutlined />}
-    </span>
-  );
-};
-
 const FilePreviewThumb: React.FC<{
-  file: (typeof fileSamples)[number];
+  file: ModalFileItem;
 }> = ({ file }) => {
   if (file.fileType === 'image' && file.fileUrl) {
     return (
@@ -482,47 +729,1223 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   process,
   stage,
   laneTitle,
+  templates = [],
   onClose,
+  onStageStatusChange,
+  onCreateDraftActivity,
 }) => {
+  const { message } = App.useApp();
   const [statusValue, setStatusValue] = useState('waiting');
+  const [savingStatusValue, setSavingStatusValue] = useState<string | null>(null);
+  const [savingFieldKey, setSavingFieldKey] = useState<string | null>(null);
+  const [creatingDraftActivity, setCreatingDraftActivity] = useState(false);
+  const [taskActionBusy, setTaskActionBusy] = useState<string | null>(null);
+  const [localTaskPatch, setLocalTaskPatch] = useState<Record<string, any>>({});
   const [assigneeValue, setAssigneeValue] = useState('تعیین نشده');
+  const [taskNameValue, setTaskNameValue] = useState('');
   const [activityTypeValue, setActivityTypeValue] = useState('');
-  const [tagValue, setTagValue] = useState('پیگیری,مشتری مهم');
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [reportDraft, setReportDraft] = useState('');
+  const [activityTags, setActivityTags] = useState<TagItem[]>([]);
+  const [wageValue, setWageValue] = useState('0');
+  const [weightValue, setWeightValue] = useState('0');
+  const [dueDateValue, setDueDateValue] = useState('');
+  const [startDateValue, setStartDateValue] = useState('');
+  const [startScheduleMode, setStartScheduleMode] = useState<'manual' | 'system'>('manual');
+  const [dueScheduleMode, setDueScheduleMode] = useState<'manual' | 'system'>('system');
+  const [startDurationFromValue, setStartDurationFromValue] = useState('project_start');
+  const [startDurationValue, setStartDurationValue] = useState('0');
+  const [startDurationUnitValue, setStartDurationUnitValue] = useState('day');
+  const [startAnchorStageValue, setStartAnchorStageValue] = useState('');
+  const [dueDurationFromValue, setDueDurationFromValue] = useState('project_start');
+  const [dueDurationValue, setDueDurationValue] = useState('0');
+  const [dueDurationUnitValue, setDueDurationUnitValue] = useState('day');
+  const [dueAnchorStageValue, setDueAnchorStageValue] = useState('');
   const [customFields, setCustomFields] = useState<MockCustomField[]>([]);
   const [isLocked, setIsLocked] = useState(false);
-  const [starredFileIds, setStarredFileIds] = useState<Set<string>>(() => new Set(fileSamples.filter((file) => file.starred).map((file) => file.id)));
-  const isDraftActivityCreationMode = process.mode === 'run' && stage?.kind === 'draft';
+  const [filesExpanded, setFilesExpanded] = useState(false);
+  const [modalFiles, setModalFiles] = useState<ModalFileItem[]>([]);
+  const [previewFile, setPreviewFile] = useState<ModalFileItem | null>(null);
+  const [starredFileIds, setStarredFileIds] = useState<Set<string>>(() => new Set());
+  const [relatedLabelMap, setRelatedLabelMap] = useState<Record<string, string>>({});
+  const [sideTab, setSideTab] = useState<'files' | 'conversation' | 'ai' | 'instructions' | 'changelogs'>('files');
+  const [conversationCount, setConversationCount] = useState(0);
+  const [changelogCount, setChangelogCount] = useState(0);
+  const [instructionsModalOpen, setInstructionsModalOpen] = useState(false);
+  const [loadingInstructions, setLoadingInstructions] = useState(false);
+  const [loadedInstructions, setLoadedInstructions] = useState<any[]>([]);
+  const [activeInstructionId, setActiveInstructionId] = useState<string | null>(null);
+  const [assigneeOptions, setAssigneeOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [assigneeUsers, setAssigneeUsers] = useState<any[]>([]);
+  const [assigneeRoles, setAssigneeRoles] = useState<any[]>([]);
+  const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ value: string; label: string }>>([]);
+  const [draftCopyTemplateId, setDraftCopyTemplateId] = useState<string | undefined>(undefined);
+  const [draftCopyStageId, setDraftCopyStageId] = useState<string | undefined>(undefined);
+  const [templateCopyStages, setTemplateCopyStages] = useState<ProcessV2Stage[]>([]);
+  const [templateCopyStagesLoading, setTemplateCopyStagesLoading] = useState(false);
+  const taskTypeField = useMemo(() => getTaskField('task_type'), []);
+  const isDraftActivityCreationMode = stage?.kind === 'draft';
+  const runProcess = process.mode === 'run' ? process as Extract<ProcessV2CardData, { mode: 'run' }> : null;
+  const rawSource: Record<string, any> = stage?.source && typeof stage.source === 'object'
+    ? stage.source as Record<string, any>
+    : {};
+  const rawSourceRecurrence = parseObject(rawSource?.recurrence_info);
+  const localPatchRecurrence = parseObject(localTaskPatch?.recurrence_info);
+  const source: Record<string, any> = {
+    ...rawSource,
+    ...localTaskPatch,
+    recurrence_info: {
+      ...rawSourceRecurrence,
+      ...localPatchRecurrence,
+    },
+  };
+  const sourceMetadata = parseObject(source?.metadata);
+  const isTemplateBackedDraft = isDraftActivityCreationMode && Boolean(
+    String(source?.template_stage_id || source?.source_template_id || sourceMetadata?.source_template_id || '').trim()
+  );
+  const templateBackedStageId = String(stage?.id || source?.template_stage_id || source?.id || '').trim();
+  const templateBackedTemplateId = String(source?.source_template_id || sourceMetadata?.source_template_id || runProcess?.templateId || '').trim();
+  const draftCopyStage = useMemo(() => (
+    [
+      ...process.lanes.flatMap((lane) => lane.stages),
+      ...templateCopyStages,
+    ]
+      .find((candidate) => candidate.id === draftCopyStageId) || null
+  ), [draftCopyStageId, process.lanes, templateCopyStages]);
+  const effectiveConfigStage = draftCopyStage || stage;
+  const effectiveSource = effectiveConfigStage?.source && typeof effectiveConfigStage.source === 'object' ? effectiveConfigStage.source : source;
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const effectiveSourceStage = effectiveSource?.source_stage && typeof effectiveSource.source_stage === 'object' ? effectiveSource.source_stage : sourceStage;
+  const taskRecordId = String(source?.task_id || (!isDraftActivityCreationMode ? source?.id : '') || '').trim();
+  const recurrence = useMemo(() => parseObject(effectiveSource?.recurrence_info), [effectiveSource?.recurrence_info]);
+  const effectiveStatusOptions = useMemo(() => buildStatusOptions(effectiveConfigStage), [effectiveConfigStage]);
+  const draftSourceStageMetadata = useMemo(() => parseObject(sourceStage?.metadata), [sourceStage?.metadata]);
+  const draftSourceRecurrence = useMemo(() => parseObject(source?.recurrence_info), [source?.recurrence_info]);
+  const draftSourceStageRecurrence = useMemo(
+    () => parseObject(sourceStage?.recurrence_info || draftSourceStageMetadata?.recurrence_info),
+    [draftSourceStageMetadata?.recurrence_info, sourceStage?.recurrence_info],
+  );
+  const resolvedDraftTaskName = useMemo(() => {
+    if (!isDraftActivityCreationMode) return '';
+    const renderedStageTitle = String(stage?.title || '').trim();
+    const rawSourceTitle = String(
+      source?.name
+      || source?.stage_name
+      || source?.title
+      || sourceMetadata?.name
+      || sourceMetadata?.stage_name
+      || sourceMetadata?.title
+      || sourceStage?.name
+      || sourceStage?.stage_name
+      || draftSourceStageMetadata?.name
+      || draftSourceStageMetadata?.stage_name
+      || ''
+    ).trim();
+    return renderedStageTitle || rawSourceTitle;
+  }, [draftSourceStageMetadata?.name, draftSourceStageMetadata?.stage_name, isDraftActivityCreationMode, source?.name, source?.stage_name, source?.title, sourceMetadata?.name, sourceMetadata?.stage_name, sourceMetadata?.title, sourceStage?.name, sourceStage?.stage_name, stage?.title]);
+  const resolvedDraftActivityType = useMemo(() => {
+    if (!isDraftActivityCreationMode) return '';
+    return String(
+      source?.task_type
+      || sourceMetadata?.task_type
+      || draftSourceRecurrence?.task_type
+      || source?.source_stage?.task_type
+      || parseObject(source?.source_stage?.metadata)?.task_type
+      || parseObject(source?.source_stage?.recurrence_info || parseObject(source?.source_stage?.metadata)?.recurrence_info)?.task_type
+      || sourceStage?.task_type
+      || draftSourceStageMetadata?.task_type
+      || draftSourceStageRecurrence?.task_type
+      || stage?.activityTypeLabel
+      || 'مرحله پیش نویس'
+    ).trim();
+  }, [draftSourceRecurrence?.task_type, draftSourceStageMetadata?.task_type, draftSourceStageRecurrence?.task_type, isDraftActivityCreationMode, source?.task_type, sourceMetadata?.task_type, sourceStage?.task_type, stage?.activityTypeLabel]);
+  const assigneeDisplaySource = useMemo(() => {
+    const parsed = parseAssigneeValue(assigneeValue, null);
+    const normalizedType = parsed.assigneeType || String(effectiveSource?.assignee_type || source?.assignee_type || '').trim() || (effectiveSource?.assignee_role_id || source?.assignee_role_id ? 'role' : 'user');
+    const normalizedId = parsed.assigneeId || String(
+      normalizedType === 'role'
+        ? (effectiveSource?.assignee_role_id || source?.assignee_role_id || effectiveSource?.assignee_id || source?.assignee_id || '')
+        : (effectiveSource?.assignee_id || source?.assignee_id || '')
+    ).trim();
+    return {
+      ...effectiveSource,
+      assignee_type: normalizedType,
+      assignee_id: normalizedType === 'role' ? null : normalizedId,
+      assignee_role_id: normalizedType === 'role' ? normalizedId : null,
+      assignee_label: assigneeValue,
+    };
+  }, [assigneeValue, effectiveSource, source]);
+  const processTemplateOptions = useMemo(() => {
+    const base = templates.map((template) => ({ value: template.id, label: template.title }));
+    if (process.mode === 'run') {
+      const runProcess = process as Extract<ProcessV2CardData, { mode: 'run' }>;
+      if (runProcess.templateId && !base.some((option) => option.value === runProcess.templateId)) {
+        base.unshift({ value: runProcess.templateId, label: runProcess.templateTitle || 'الگوی فرآیند' });
+      }
+    }
+    return base;
+  }, [process, templates]);
+  const currentProcessDraftStageOptions = useMemo(() => (
+    process.lanes.flatMap((lane) => lane.stages
+      .filter((candidate) => candidate.kind === 'draft' && (isTemplateBackedDraft || candidate.id !== stage?.id))
+      .map((candidate) => ({
+        value: candidate.id,
+        label: `${lane.title} / ${candidate.title}`,
+      })))
+  ), [isTemplateBackedDraft, process.lanes, stage?.id]);
+  const draftStageOptions = useMemo(() => {
+    if (isTemplateBackedDraft || !draftCopyTemplateId || (runProcess && draftCopyTemplateId === runProcess.templateId)) {
+      return currentProcessDraftStageOptions;
+    }
+    return templateCopyStages.map((candidate) => ({
+      value: candidate.id,
+      label: candidate.title,
+    }));
+  }, [currentProcessDraftStageOptions, draftCopyTemplateId, isTemplateBackedDraft, runProcess, templateCopyStages]);
+  const processStageAnchorOptions = useMemo(() => (
+    process.lanes.flatMap((lane) => lane.stages.map((item) => {
+      const itemSource = item.source && typeof item.source === 'object' ? item.source : {};
+      const value = String(itemSource.process_node_key || itemSource.template_stage_id || itemSource.id || item.id || '').trim();
+      return {
+        value,
+        label: `${lane.title} / ${item.title}`,
+      };
+    })).filter((option) => option.value)
+  ), [process.lanes]);
+  const timingAnchorOptions = useMemo(() => ([
+    { value: 'current_stage_created', label: 'ایجاد همین فعالیت' },
+    { value: 'project_start', label: 'شروع فرآیند' },
+    { value: 'previous_stage_created', label: 'ایجاد مرحله قبلی' },
+    { value: 'previous_stage_start', label: 'زمان شروع مرحله قبلی' },
+    { value: 'previous_stage_end', label: 'مهلت انجام مرحله قبلی' },
+    { value: 'previous_stage_completed', label: 'زمان تکمیل واقعی مرحله قبلی' },
+    { value: 'next_stage_created', label: 'ایجاد مرحله بعدی' },
+    { value: 'next_stage_start', label: 'زمان شروع مرحله بعدی' },
+    { value: 'next_stage_due', label: 'مهلت انجام مرحله بعدی' },
+    { value: 'next_stage_completed', label: 'زمان تکمیل واقعی مرحله بعدی' },
+    { value: 'specific_stage_created', label: 'ایجاد مرحله خاص' },
+    { value: 'specific_stage_start', label: 'زمان شروع مرحله خاص' },
+    { value: 'specific_stage_due', label: 'مهلت انجام مرحله خاص' },
+    { value: 'specific_stage_completed', label: 'زمان تکمیل واقعی مرحله خاص' },
+  ]), []);
+  const instructionIds = useMemo(() => normalizeInstructionIdList([
+    ...getInstructionIdsFromTask(effectiveSource),
+    ...getInstructionIdsFromStage(effectiveSource),
+    ...getInstructionIdsFromStage(effectiveSourceStage),
+    ...normalizeInstructionIdList(recurrence?.instruction_ids),
+    ...normalizeInstructionIdList(recurrence?.instructionIds),
+  ]), [effectiveSource, effectiveSourceStage, recurrence?.instructionIds, recurrence?.instruction_ids]);
+  const taskForActions = useMemo(() => {
+    if (!taskRecordId) return null;
+    return {
+      ...source,
+      id: taskRecordId,
+      status: statusValue,
+      recurrence_info: {
+        ...recurrence,
+        instruction_ids: instructionIds,
+      },
+      instruction_ids: instructionIds,
+    };
+  }, [instructionIds, recurrence, source, statusValue, taskRecordId]);
+  const buildStageStatusPatch = useCallback((nextStatus: string, patch?: Record<string, any>) => ({
+    id: taskRecordId || source?.id || stage?.id,
+    task_id: taskRecordId || source?.task_id,
+    process_task_id: source?.process_task_id,
+    process_run_stage_id: source?.process_run_stage_id || sourceStage?.id,
+    run_stage_id: source?.run_stage_id,
+    template_stage_id: source?.template_stage_id || sourceStage?.template_stage_id,
+    process_node_key: source?.process_node_key || sourceStage?.process_node_key,
+    ...(patch || {}),
+    status: nextStatus,
+  }), [source, sourceStage, stage?.id, taskRecordId]);
+  const getAssigneeDisplayLabel = useCallback((value: string) => {
+    const parsed = parseAssigneeValue(value, null);
+    if (!parsed.assigneeType || !parsed.assigneeId) return String(value || '').trim();
+    if (parsed.assigneeType === 'role') {
+      return String(assigneeRoles.find((role: any) => String(role?.id || '') === parsed.assigneeId)?.title || 'نقش مسئول').trim();
+    }
+    const user = assigneeUsers.find((item: any) => String(item?.id || '') === parsed.assigneeId);
+    return String(user?.display_name || user?.full_name || user?.email || 'کاربر مسئول').trim();
+  }, [assigneeRoles, assigneeUsers]);
+  const persistTaskFieldPatch = useCallback(async (
+    fieldKey: string,
+    patch: Record<string, any>,
+    recurrencePatch?: Record<string, any>,
+    sourcePatch?: Record<string, any>,
+  ) => {
+    if (isDraftActivityCreationMode || !taskRecordId) return;
+    const currentRecurrence = parseObject(source?.recurrence_info);
+    const nextPatch: Record<string, any> = {
+      ...patch,
+      ...(recurrencePatch ? { recurrence_info: { ...currentRecurrence, ...recurrencePatch } } : {}),
+    };
+    setSavingFieldKey(fieldKey);
+    setLocalTaskPatch((current) => ({
+      ...current,
+      ...nextPatch,
+      recurrence_info: {
+        ...parseObject(current?.recurrence_info),
+        ...parseObject(nextPatch?.recurrence_info),
+      },
+    }));
+    const optimisticSourcePatch = {
+      ...source,
+      ...nextPatch,
+      ...(sourcePatch || {}),
+      id: taskRecordId,
+      task_id: taskRecordId,
+      process_run_stage_id: source?.process_run_stage_id || sourceStage?.id,
+    };
+    if (stage?.id) {
+      onStageStatusChange?.(stage.id, String(nextPatch.status || statusValue || source?.status || 'todo'), buildStageStatusPatch(
+        String(nextPatch.status || statusValue || source?.status || 'todo'),
+        optimisticSourcePatch,
+      ));
+    }
+    try {
+      const { data, error } = await supabase
+        .from('tasks')
+        .update(nextPatch)
+        .eq('id', taskRecordId)
+        .select('id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,due_date,start_date,actual_start_at,completed_at,description,task_report,wage,weight,recurrence_info,process_run_stage_id,process_node_key,process_lane_key,source_template_id,source_module_id,source_record_id,process_group_id')
+        .maybeSingle();
+      if (error) throw error;
+      const updatedTask = {
+        ...source,
+        ...nextPatch,
+        ...(data || {}),
+        ...(sourcePatch || {}),
+        id: taskRecordId,
+        process_run_stage_id: (data as any)?.process_run_stage_id || source?.process_run_stage_id || sourceStage?.id,
+      };
+      setLocalTaskPatch((current) => ({
+        ...current,
+        ...(data || nextPatch),
+        recurrence_info: {
+          ...parseObject(current?.recurrence_info),
+          ...parseObject(nextPatch?.recurrence_info),
+          ...parseObject((data as any)?.recurrence_info),
+        },
+      }));
+      await syncProcessRunStageFromTask({
+        supabaseClient: supabase,
+        task: updatedTask,
+      });
+      if (stage?.id) {
+        onStageStatusChange?.(
+          stage.id,
+          String(updatedTask.status || statusValue || 'todo'),
+          buildStageStatusPatch(String(updatedTask.status || statusValue || 'todo'), updatedTask),
+        );
+      }
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره تغییرات فعالیت ناموفق بود'));
+      throw error;
+    } finally {
+      setSavingFieldKey(null);
+    }
+  }, [
+    buildStageStatusPatch,
+    isDraftActivityCreationMode,
+    message,
+    onStageStatusChange,
+    source,
+    sourceStage?.id,
+    stage?.id,
+    statusValue,
+    taskRecordId,
+  ]);
+  const statusLabelMap = useMemo(
+    () => Object.fromEntries(effectiveStatusOptions.map((option) => [option.value, option.label])),
+    [effectiveStatusOptions],
+  );
+  const saveTaskAssignee = useCallback(async (nextValue: string) => {
+    const normalized = String(nextValue || '').trim();
+    const parsed = parseAssigneeValue(normalized, null);
+    const patch = parsed.assigneeType && parsed.assigneeId
+      ? {
+          assignee_type: parsed.assigneeType,
+          assignee_id: parsed.assigneeType === 'user' ? parsed.assigneeId : null,
+          assignee_role_id: parsed.assigneeType === 'role' ? parsed.assigneeId : null,
+        }
+      : {
+          assignee_type: null,
+          assignee_id: null,
+          assignee_role_id: null,
+        };
+    setAssigneeValue(normalized);
+    await persistTaskFieldPatch('assignee', patch, undefined, {
+      ...patch,
+      assignee_label: getAssigneeDisplayLabel(normalized),
+    });
+  }, [getAssigneeDisplayLabel, persistTaskFieldPatch]);
+  const saveTaskDescription = useCallback(async (nextValue: string) => {
+    setDescriptionDraft(nextValue);
+    await persistTaskFieldPatch('description', { description: String(nextValue || '').trim() || null });
+  }, [persistTaskFieldPatch]);
+  const saveTaskReport = useCallback(async (nextValue: string) => {
+    setReportDraft(nextValue);
+    await persistTaskFieldPatch('task_report', { task_report: String(nextValue || '').trim() || null });
+  }, [persistTaskFieldPatch]);
+  const saveCustomFieldValue = useCallback(async (fieldKey: string, nextValue: string) => {
+    const currentRecurrence = parseObject(source?.recurrence_info);
+    const currentValues = currentRecurrence?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]
+      && typeof currentRecurrence[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object'
+      ? currentRecurrence[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]
+      : {};
+    const nextValues = {
+      ...currentValues,
+      [fieldKey]: nextValue,
+    };
+    setCustomFields((current) => current.map((item) => (
+      item.key === fieldKey ? { ...item, value: nextValue } : item
+    )));
+    await persistTaskFieldPatch(fieldKey, {}, { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues });
+  }, [persistTaskFieldPatch, source?.recurrence_info]);
+  const hasFiles = modalFiles.length > 0;
+  const mainImageFile = useMemo(
+    () => modalFiles.find((file) => file.fileType === 'image' && starredFileIds.has(file.id))
+      || modalFiles.find((file) => file.fileType === 'image' && file.starred)
+      || null,
+    [modalFiles, starredFileIds],
+  );
+  const handleToggleFileStar = async (file: ModalFileItem) => {
+    const nextStarred = !starredFileIds.has(file.id);
+    setStarredFileIds((current) => {
+      const next = new Set(current);
+      if (nextStarred) next.add(file.id);
+      else next.delete(file.id);
+      return next;
+    });
+    setModalFiles((current) => current.map((item) => item.id === file.id ? { ...item, starred: nextStarred } : item));
+
+    if (!file.entryId) return;
+    try {
+      const { data } = await supabase
+        .from('file_entries')
+        .select('metadata')
+        .eq('id', file.entryId)
+        .maybeSingle();
+      const previousMetadata = data?.metadata && typeof data.metadata === 'object' ? data.metadata : {};
+      const { error } = await supabase
+        .from('file_entries')
+        .update({
+          metadata: {
+            ...previousMetadata,
+            main_image: {
+              ...(previousMetadata as any)?.main_image,
+              starred: nextStarred,
+              starred_at: nextStarred ? new Date().toISOString() : null,
+              module_id: 'tasks',
+              record_id: taskRecordId || null,
+            },
+          },
+        })
+        .eq('id', file.entryId);
+      if (error) throw error;
+      invalidateFileManagerFolderCaches('tasks', taskRecordId);
+    } catch (error) {
+      setStarredFileIds((current) => {
+        const next = new Set(current);
+        if (nextStarred) next.delete(file.id);
+        else next.add(file.id);
+        return next;
+      });
+      setModalFiles((current) => current.map((item) => item.id === file.id ? { ...item, starred: !nextStarred } : item));
+      message.error('بروزرسانی ستاره فایل ناموفق بود');
+    }
+  };
+
+  const loadTaskTypeOptions = useCallback(async (force = false) => {
+    try {
+      const loaded = taskTypeField?.dynamicOptionsCategory
+        ? await fetchDynamicOptionsByCategory(supabase, taskTypeField.dynamicOptionsCategory, { force })
+        : [];
+      const merged = getMergedTaskTypeOptions(loaded || []);
+      setTaskTypeOptions(
+        activityTypeValue && !merged.some((option) => String(option.value) === activityTypeValue)
+          ? [{ label: activityTypeValue, value: activityTypeValue }, ...merged]
+          : merged
+      );
+    } catch {
+      const fallback = getMergedTaskTypeOptions([]);
+      setTaskTypeOptions(
+        activityTypeValue && !fallback.some((option) => String(option.value) === activityTypeValue)
+          ? [{ label: activityTypeValue, value: activityTypeValue }, ...fallback]
+          : fallback
+      );
+    }
+  }, [activityTypeValue, taskTypeField?.dynamicOptionsCategory]);
+
+  const handleDirectShareFile = async (file: ModalFileItem) => {
+    const url = String(file.fileUrl || '').trim();
+    if (!url) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: file.title, url });
+        return;
+      }
+      await navigator.clipboard?.writeText(url);
+      message.success('لینک فایل برای ارسال مستقیم کپی شد');
+    } catch (error) {
+      console.warn('Direct share failed', error);
+      message.error('ارسال مستقیم ناموفق بود');
+    }
+  };
+
+  const renderPreviewFileContent = (file: ModalFileItem) => {
+    if (file.fileType === 'image') {
+      return (
+        <ResilientImage
+          src={buildImagePreviewUrl(file.fileUrl, 'gallery')}
+          preset="gallery"
+          alt={file.title}
+          className="max-h-[68vh] w-full rounded-lg border border-gray-200 object-contain dark:border-gray-700"
+        />
+      );
+    }
+    if (file.fileType === 'video') {
+      return (
+        <video
+          src={file.fileUrl}
+          controls
+          className="max-h-[68vh] w-full rounded-lg border border-gray-200 bg-black dark:border-gray-700"
+        />
+      );
+    }
+    return (
+      <div className="mx-auto max-w-sm rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900">
+        <FileExtensionTile fileName={file.title} url={file.fileUrl} mimeType={file.mimeType} />
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (!open) return;
-    setStatusValue(isDraftActivityCreationMode ? 'waiting' : stage?.status || 'waiting');
-    setAssigneeValue(String(stage?.assigneeLabel || '').trim() || 'تعیین نشده');
-    setActivityTypeValue(stage?.activityTypeLabel || (stage?.kind === 'draft' ? 'مرحله پیش نویس' : 'فعالیت سازمانی'));
-    setTagValue('پیگیری,مشتری مهم');
-    setDescriptionDraft(stage?.metaLabel || '');
-    setReportDraft('');
-    setCustomFields(buildCustomFields(stage));
+    let cancelled = false;
+    fetchAssigneeDirectory(supabase)
+      .then((directory) => {
+        if (cancelled) return;
+        setAssigneeUsers(directory?.users || []);
+        setAssigneeRoles(directory?.roles || []);
+        setAssigneeOptions([
+          ...(directory?.users || []).map((user: any) => ({
+            value: `user:${user.id}`,
+            label: String(user.display_name || user.full_name || user.email || user.mobile_1 || 'کاربر').trim(),
+          })),
+          ...(directory?.roles || []).map((role: any) => ({
+            value: `role:${role.id}`,
+            label: String(role.title || 'نقش').trim(),
+          })),
+        ]);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAssigneeUsers([]);
+          setAssigneeRoles([]);
+          setAssigneeOptions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const handleStatusActionClick = async (nextStatus: string) => {
+    const normalizedStatus = String(nextStatus || '').trim();
+    if (!normalizedStatus || normalizedStatus === statusValue) return;
+    if (isDraftActivityCreationMode || !taskForActions?.id) {
+      setStatusValue(normalizedStatus);
+      return;
+    }
+    setSavingStatusValue(normalizedStatus);
+    const previousStatus = statusValue;
+    setStatusValue(normalizedStatus);
+    if (stage?.id) {
+      onStageStatusChange?.(stage.id, normalizedStatus, buildStageStatusPatch(normalizedStatus));
+    }
+    try {
+      const updatedTask = await updateTaskStatusWithAutomation({
+        taskId: String(taskForActions.id),
+        nextStatus: normalizedStatus,
+        previousTask: taskForActions,
+        currentUser: null,
+      });
+      setStatusValue(String(updatedTask?.status || normalizedStatus));
+      if (stage?.id) {
+        onStageStatusChange?.(
+          stage.id,
+          String(updatedTask?.status || normalizedStatus),
+          buildStageStatusPatch(String(updatedTask?.status || normalizedStatus), updatedTask || undefined),
+        );
+      }
+      message.success('وضعیت فعالیت بروزرسانی شد');
+    } catch (error: any) {
+      setStatusValue(previousStatus);
+      if (stage?.id) {
+        onStageStatusChange?.(stage.id, previousStatus, buildStageStatusPatch(previousStatus));
+      }
+      message.error(toFaErrorMessage(error, 'تغییر وضعیت فعالیت ناموفق بود'));
+    } finally {
+      setSavingStatusValue(null);
+    }
+  };
+
+  const handleCreateDraftActivity = useCallback(async () => {
+    if (!onCreateDraftActivity || creatingDraftActivity) return;
+    setCreatingDraftActivity(true);
+    try {
+      const nextTaskName = taskNameValue || resolvedDraftTaskName || String(stage?.title || '').trim();
+      const nextTaskType = activityTypeValue || resolvedDraftActivityType || String(stage?.activityTypeLabel || '').trim();
+      const overrides: Record<string, any> = {
+        name: nextTaskName,
+        stage_name: nextTaskName,
+        task_type: nextTaskType,
+        wage: Number(wageValue) || 0,
+        weight: Number(weightValue) || 0,
+        start_date: startScheduleMode === 'manual' ? (startDateValue || null) : null,
+        due_date: dueScheduleMode === 'manual' ? (dueDateValue || null) : null,
+        start_duration_from: startScheduleMode === 'system' ? startDurationFromValue : null,
+        start_duration_value: startScheduleMode === 'system' ? Number(startDurationValue || 0) : null,
+        start_duration_unit: startScheduleMode === 'system' ? startDurationUnitValue : null,
+        start_anchor_stage_node_key: startScheduleMode === 'system' ? (startAnchorStageValue || null) : null,
+        duration_from: dueScheduleMode === 'system' ? dueDurationFromValue : null,
+        duration_value: dueScheduleMode === 'system' ? Number(dueDurationValue || 0) : null,
+        duration_unit: dueScheduleMode === 'system' ? dueDurationUnitValue : null,
+        due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
+        metadata: {
+          ...(source?.metadata && typeof source.metadata === 'object' ? source.metadata : {}),
+          task_type: nextTaskType,
+          start_schedule_mode: startScheduleMode,
+          due_schedule_mode: dueScheduleMode,
+          start_duration_from: startScheduleMode === 'system' ? startDurationFromValue : null,
+          start_duration_value: startScheduleMode === 'system' ? Number(startDurationValue || 0) : null,
+          start_duration_unit: startScheduleMode === 'system' ? startDurationUnitValue : null,
+          start_anchor_stage_node_key: startScheduleMode === 'system' ? (startAnchorStageValue || null) : null,
+          duration_from: dueScheduleMode === 'system' ? dueDurationFromValue : null,
+          duration_value: dueScheduleMode === 'system' ? Number(dueDurationValue || 0) : null,
+          duration_unit: dueScheduleMode === 'system' ? dueDurationUnitValue : null,
+          due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
+        },
+      };
+      await onCreateDraftActivity(overrides);
+      onClose();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ایجاد فعالیت ناموفق بود'));
+    } finally {
+      setCreatingDraftActivity(false);
+    }
+  }, [
+    creatingDraftActivity,
+    activityTypeValue,
+    dueAnchorStageValue,
+    dueDateValue,
+    dueDurationFromValue,
+    dueDurationUnitValue,
+    dueDurationValue,
+    dueScheduleMode,
+    message,
+    onClose,
+    onCreateDraftActivity,
+    resolvedDraftActivityType,
+    resolvedDraftTaskName,
+    source?.metadata,
+    stage?.activityTypeLabel,
+    stage?.title,
+    startAnchorStageValue,
+    startDateValue,
+    startDurationFromValue,
+    startDurationUnitValue,
+    startDurationValue,
+    startScheduleMode,
+    taskNameValue,
+    wageValue,
+    weightValue,
+  ]);
+
+  const handleUnlinkTaskFromProcess = useCallback(async () => {
+    if (!taskRecordId || taskActionBusy) return;
+    setTaskActionBusy('unlink');
+    try {
+      const currentRecurrence = parseObject(source?.recurrence_info);
+      const nextRecurrence = { ...currentRecurrence };
+      delete nextRecurrence.process_group;
+      delete nextRecurrence.process_links;
+      delete nextRecurrence.process_graph;
+      delete nextRecurrence.process_run_id;
+      delete nextRecurrence.process_run_stage_id;
+      delete nextRecurrence.process_node_key;
+      delete nextRecurrence.process_lane_key;
+      const nextSourcePatch = buildTaskSourcePatch({
+        related_to_module: null,
+        source_module_id: null,
+        source_record_id: null,
+      });
+      const patch = {
+        ...nextSourcePatch,
+        source_template_id: null,
+        process_group_id: null,
+        process_run_id: null,
+        process_run_stage_id: null,
+        process_node_key: null,
+        process_lane_key: null,
+        recurrence_info: nextRecurrence,
+      };
+      const { error } = await supabase.from('tasks').update(patch).eq('id', taskRecordId);
+      if (error) throw error;
+      if (source?.process_run_stage_id || source?.source_stage?.id) {
+        await syncProcessRunStageFromTask({
+          supabaseClient: supabase,
+          task: {
+            ...source,
+            ...patch,
+            id: null,
+            process_run_stage_id: source?.process_run_stage_id || source?.source_stage?.id,
+            status: 'todo',
+            assignee_id: null,
+            assignee_role_id: null,
+            due_date: null,
+            start_date: null,
+            actual_start_at: null,
+            completed_at: null,
+          },
+        });
+      }
+      message.success('اتصال فعالیت از فرآیند و رکورد قطع شد');
+      onClose();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'قطع اتصال فعالیت ناموفق بود'));
+    } finally {
+      setTaskActionBusy(null);
+    }
+  }, [message, onClose, source, taskActionBusy, taskRecordId]);
+
+  const handleDeleteTaskCompletely = useCallback(async () => {
+    if (!taskRecordId || taskActionBusy) return;
+    setTaskActionBusy('delete');
+    try {
+      if (source?.process_run_stage_id || source?.source_stage?.id) {
+        await syncProcessRunStageFromTask({
+          supabaseClient: supabase,
+          task: {
+            ...source,
+            id: null,
+            process_run_stage_id: source?.process_run_stage_id || source?.source_stage?.id,
+            status: 'todo',
+            assignee_id: null,
+            assignee_role_id: null,
+            due_date: null,
+            start_date: null,
+            actual_start_at: null,
+            completed_at: null,
+          },
+        });
+      }
+      await moveModuleRecordsToRecycleBin('tasks', [taskRecordId]);
+      message.success('فعالیت به سطل بازیافت منتقل شد');
+      onClose();
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'حذف فعالیت ناموفق بود'));
+    } finally {
+      setTaskActionBusy(null);
+    }
+  }, [message, onClose, source, taskActionBusy, taskRecordId]);
+
+  const confirmUnlinkTaskFromProcess = useCallback(() => {
+    Modal.confirm({
+      title: 'قطع اتصال فعالیت',
+      content: 'این فعالیت فقط از این فرآیند و رکورد جدا می‌شود و خود فعالیت باقی می‌ماند. ادامه می‌دهید؟',
+      okText: 'قطع اتصال',
+      cancelText: 'انصراف',
+      centered: true,
+      onOk: handleUnlinkTaskFromProcess,
+    });
+  }, [handleUnlinkTaskFromProcess]);
+
+  const confirmDeleteTaskCompletely = useCallback(() => {
+    Modal.confirm({
+      title: 'حذف کامل فعالیت',
+      content: 'این فعالیت به سطل بازیافت منتقل می‌شود. ادامه می‌دهید؟',
+      okText: 'حذف',
+      cancelText: 'انصراف',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: handleDeleteTaskCompletely,
+    });
+  }, [handleDeleteTaskCompletely]);
+
+  const loadInstructions = async () => {
+    if (loadedInstructions.length > 0 || instructionIds.length === 0) return;
+    setLoadingInstructions(true);
+    try {
+      const [{ data, error }, { data: filesData }] = await Promise.all([
+        supabase
+          .from('instructions')
+          .select('id, name, system_code, status, department, goal, body, image_url')
+          .in('id', instructionIds),
+        supabase
+          .from('record_files')
+          .select('id, record_id, file_url, file_name, mime_type, file_type')
+          .eq('module_id', 'instructions')
+          .in('record_id', instructionIds),
+      ]);
+      if (error) throw error;
+      const filesByRecordId: Record<string, any[]> = {};
+      for (const file of filesData || []) {
+        const recordId = String(file.record_id || '');
+        if (!filesByRecordId[recordId]) filesByRecordId[recordId] = [];
+        filesByRecordId[recordId].push({
+          id: String(file.id),
+          url: String(file.file_url || ''),
+          name: String(file.file_name || file.id),
+          mimeType: file.mime_type || null,
+          fileType: file.file_type || null,
+        });
+      }
+      const withStatus = (data || []).map((item) => {
+        const statusOption = instructionStatusOptions.find((option) => option.value === item?.status);
+        return {
+          ...item,
+          status_label: statusOption?.label || item?.status || null,
+          status_color: statusOption?.color || 'default',
+          attachments: filesByRecordId[String(item?.id || '')] || [],
+        };
+      });
+      const ordered = instructionIds
+        .map((id) => withStatus.find((item) => String(item?.id || '') === id))
+        .filter(Boolean);
+      setLoadedInstructions(ordered);
+      if (ordered.length > 0 && !activeInstructionId) {
+        setActiveInstructionId(String(ordered[0]?.id || ''));
+      }
+    } catch {
+      message.error('بارگذاری دستورالعمل‌ها ناموفق بود.');
+    } finally {
+      setLoadingInstructions(false);
+    }
+  };
+
+  const handleOpenInstructionsModal = async (instructionId?: string | null) => {
+    if (instructionId) setActiveInstructionId(String(instructionId));
+    await loadInstructions();
+    if (instructionId) setActiveInstructionId(String(instructionId));
+    setInstructionsModalOpen(true);
+  };
+
+  const applyStageSettingsToDraft = useCallback((targetStage: ProcessV2Stage | null) => {
+    if (!targetStage) return;
+    const targetSource = targetStage?.source && typeof targetStage.source === 'object' ? targetStage.source : {};
+    const targetSourceStage = targetSource?.source_stage && typeof targetSource.source_stage === 'object' ? targetSource.source_stage : {};
+    const targetSourceMetadata = parseObject(targetSource?.metadata);
+    const targetSourceStageMetadata = parseObject(targetSourceStage?.metadata);
+    const targetRecurrence = parseObject(targetSource?.recurrence_info);
+    const targetSourceStageRecurrence = parseObject(targetSourceStage?.recurrence_info || targetSourceStageMetadata?.recurrence_info);
+    const targetStatusOptions = buildStatusOptions(targetStage);
+    const targetSourceStatus = String(targetSource?.status || '').trim();
+    const nextStatus = targetStage.kind === 'draft'
+      ? (targetStatusOptions.find((option) => ['todo', 'planned', 'pending', 'waiting'].includes(option.value))?.value || targetStatusOptions[0]?.value || 'todo')
+      : (targetSourceStatus || statusValueToV2(targetStage.status));
+    setStatusValue(nextStatus);
+    setAssigneeValue(
+      buildAssigneeSelectValue(
+        targetSource?.assignee_role_id || targetSource?.assignee_id,
+        (targetSource?.assignee_role_id || String(targetSource?.assignee_type || '').trim() === 'role') ? 'role' : 'user',
+      )
+      || String(targetStage.assigneeLabel || targetSource?.assignee_label || '').trim()
+      || ''
+    );
+    const renderedStageTitle = String(targetStage.title || '').trim();
+    const rawSourceTitle = String(
+      targetSource?.name
+      || targetSource?.stage_name
+      || targetSource?.title
+      || targetSourceMetadata?.name
+      || targetSourceMetadata?.stage_name
+      || targetSourceMetadata?.title
+      || targetSourceStage?.name
+      || targetSourceStage?.stage_name
+      || targetSourceStageMetadata?.name
+      || targetSourceStageMetadata?.stage_name
+      || ''
+    ).trim();
+    setTaskNameValue(targetStage.kind === 'draft'
+      ? (renderedStageTitle || rawSourceTitle)
+      : (rawSourceTitle || renderedStageTitle));
+    setActivityTypeValue(String(
+      targetSource?.task_type
+      || targetSourceMetadata?.task_type
+      || targetRecurrence?.task_type
+      || targetSourceStage?.task_type
+      || targetSourceStageMetadata?.task_type
+      || targetSourceStageRecurrence?.task_type
+      || targetStage.activityTypeLabel
+      || (targetStage.kind === 'draft' ? 'مرحله پیش نویس' : 'فعالیت سازمانی')
+    ).trim());
+    const rawTags = Array.isArray(targetSource?.tags) ? targetSource.tags : (Array.isArray(targetRecurrence?.tags) ? targetRecurrence.tags : []);
+    const normalizedTags = normalizeTaskTags(rawTags);
+    setActivityTags(normalizedTags);
+    setDescriptionDraft(String(targetSource?.description || targetRecurrence?.description || targetSourceStage?.description || targetSourceStage?.metadata?.description || targetStage.metaLabel || '').trim());
+    setReportDraft(String(targetSource?.task_report || targetRecurrence?.task_report || '').trim());
+    setWageValue(String(targetSource?.wage ?? targetSource?.metadata?.wage ?? '0'));
+    setWeightValue(String(targetSource?.weight ?? targetSource?.metadata?.weight ?? '0'));
+    setDueDateValue(String(targetSource?.due_date || targetRecurrence?.due_date || '').trim());
+    setStartDateValue(String(targetSource?.start_date || targetSource?.actual_start_at || targetRecurrence?.start_date || '').trim());
+    setStartScheduleMode(String(targetSource?.start_date || targetSource?.actual_start_at || targetRecurrence?.start_date || '').trim() ? 'manual' : 'system');
+    setDueScheduleMode(String(targetSource?.due_date || targetRecurrence?.due_date || '').trim() ? 'manual' : 'system');
+    setStartDurationFromValue(String(targetSource?.start_duration_from || targetRecurrence?.start_duration_from || targetSourceMetadata?.start_duration_from || targetSource?.duration_start_from || targetSourceMetadata?.duration_start_from || 'project_start').trim() || 'project_start');
+    setStartDurationValue(String(targetSource?.start_duration_value ?? targetRecurrence?.start_duration_value ?? targetSourceMetadata?.start_duration_value ?? targetSource?.duration_start_value ?? targetSourceMetadata?.duration_start_value ?? '0'));
+    setStartDurationUnitValue(String(targetSource?.start_duration_unit || targetRecurrence?.start_duration_unit || targetSourceMetadata?.start_duration_unit || targetSource?.duration_start_unit || targetSourceMetadata?.duration_start_unit || 'day') === 'hour' ? 'hour' : 'day');
+    setStartAnchorStageValue(String(targetSource?.start_anchor_stage_node_key || targetRecurrence?.start_anchor_stage_node_key || targetSourceMetadata?.start_anchor_stage_node_key || '').trim());
+    setDueDurationFromValue(String(targetSource?.duration_from || targetRecurrence?.duration_from || targetSourceMetadata?.duration_from || 'project_start').trim() || 'project_start');
+    setDueDurationValue(String(targetSource?.duration_value ?? targetRecurrence?.duration_value ?? targetSourceMetadata?.duration_value ?? '0'));
+    setDueDurationUnitValue(String(targetSource?.duration_unit || targetRecurrence?.duration_unit || targetSourceMetadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day');
+    setDueAnchorStageValue(String(targetSource?.due_anchor_stage_node_key || targetRecurrence?.due_anchor_stage_node_key || targetSourceMetadata?.due_anchor_stage_node_key || '').trim());
+    setCustomFields(buildCustomFields(targetStage));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraftCopyTemplateId(isTemplateBackedDraft ? (templateBackedTemplateId || undefined) : (runProcess?.templateId || undefined));
+    setDraftCopyStageId(isTemplateBackedDraft ? (templateBackedStageId || stage?.id || undefined) : undefined);
+    setTemplateCopyStages([]);
+    applyStageSettingsToDraft(stage);
     setIsLocked(false);
-    setStarredFileIds(new Set(fileSamples.filter((file) => file.starred).map((file) => file.id)));
-  }, [isDraftActivityCreationMode, open, stage]);
+    setFilesExpanded(false);
+    setPreviewFile(null);
+    setModalFiles([]);
+    setStarredFileIds(new Set());
+    setInstructionsModalOpen(false);
+    setLoadingInstructions(false);
+    setLoadedInstructions([]);
+    setActiveInstructionId(null);
+    setConversationCount(0);
+    setChangelogCount(0);
+    setSideTab('files');
+    setCreatingDraftActivity(false);
+    setTaskActionBusy(null);
+    setSavingFieldKey(null);
+    setLocalTaskPatch({});
+  }, [applyStageSettingsToDraft, isTemplateBackedDraft, open, process, stage, templateBackedStageId, templateBackedTemplateId]);
+
+  useLayoutEffect(() => {
+    if (!open || !isDraftActivityCreationMode) return;
+    setTaskNameValue(resolvedDraftTaskName || '');
+    setActivityTypeValue(resolvedDraftActivityType || '');
+  }, [isDraftActivityCreationMode, open, resolvedDraftActivityType, resolvedDraftTaskName]);
+
+  useEffect(() => {
+    if (!open) return;
+    void loadTaskTypeOptions(false);
+  }, [loadTaskTypeOptions, open]);
+
+  useEffect(() => {
+    if (!open || !draftCopyStage) return;
+    applyStageSettingsToDraft(draftCopyStage);
+  }, [applyStageSettingsToDraft, draftCopyStage, open]);
+
+  useEffect(() => {
+    if (!open || isTemplateBackedDraft || !draftCopyTemplateId || (runProcess && draftCopyTemplateId === runProcess.templateId)) {
+      setTemplateCopyStages([]);
+      return;
+    }
+    let cancelled = false;
+    setTemplateCopyStagesLoading(true);
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('process_template_stages')
+          .select('id, template_id, stage_name, name, sort_order, wage, weight, default_assignee_id, default_assignee_role_id, metadata')
+          .eq('template_id', draftCopyTemplateId)
+          .order('sort_order', { ascending: true });
+        if (error) throw error;
+        if (cancelled) return;
+        setTemplateCopyStages((data || []).map(mapTemplateStageToCopyStage).filter((item) => item.id));
+      } catch {
+        if (!cancelled) setTemplateCopyStages([]);
+      } finally {
+        if (!cancelled) setTemplateCopyStagesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [draftCopyTemplateId, isTemplateBackedDraft, open, runProcess]);
+
+  useEffect(() => {
+    if (!open || !taskRecordId) return;
+    let cancelled = false;
+    loadRecordFileItems('tasks', taskRecordId, stage?.title || null, 'full')
+      .then((items) => {
+        if (cancelled) return;
+        const nextFiles = (items || []).map(mapFileItem);
+        setModalFiles(nextFiles);
+        setStarredFileIds(new Set(nextFiles.filter((file) => file.starred).map((file) => file.id)));
+      })
+      .catch(() => {
+        if (!cancelled) setModalFiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, stage?.title, taskRecordId]);
+
+  useEffect(() => {
+    if (!open || isDraftActivityCreationMode || !taskRecordId) {
+      setConversationCount(0);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { count } = await supabase
+          .from('notes')
+          .select('id', { count: 'exact', head: true })
+          .eq('module_id', 'tasks')
+          .eq('record_id', taskRecordId);
+        if (!cancelled) setConversationCount(Math.max(0, Number(count || 0)));
+      } catch {
+        if (!cancelled) setConversationCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isDraftActivityCreationMode, open, taskRecordId]);
+
+  useEffect(() => {
+    if (!open || !taskRecordId) {
+      setChangelogCount(0);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { count } = await supabase
+          .from('changelogs')
+          .select('id', { count: 'exact', head: true })
+          .eq('module_id', 'tasks')
+          .eq('record_id', taskRecordId);
+        if (!cancelled) setChangelogCount(count || 0);
+      } catch {
+        if (!cancelled) setChangelogCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, taskRecordId]);
 
   const taskTitle = isDraftActivityCreationMode
-    ? `ایجاد فعالیت: ${stage?.title || 'مرحله پیش نویس'}`
+    ? (taskNameValue || resolvedDraftTaskName || 'فعالیت جدید')
     : stage?.title || 'جزئیات فعالیت';
+  const draftTaskNameDisplayValue = isDraftActivityCreationMode
+    ? (taskNameValue || resolvedDraftTaskName)
+    : taskNameValue;
+  const draftActivityTypeDisplayValue = isDraftActivityCreationMode
+    ? (activityTypeValue || resolvedDraftActivityType)
+    : activityTypeValue;
   const actionCount = toPersianNumber(stage?.actionCount ?? 0);
-  const currentStatusColor = statusColor[statusValue] || '#64748b';
-  const relatedRows = useMemo(() => {
-    if (process.mode !== 'run') return [{ label: 'الگوی فرآیند', value: process.title, moduleId: 'process_templates', recordId: process.id }];
-    return [
-      { label: 'رکورد اصلی', value: process.relatedRecordLabel.replace(/^رکورد مرتبط:\s*/, ''), moduleId: 'records', recordId: process.id },
-      { label: 'فرآیند', value: process.title, moduleId: 'process_runs', recordId: process.id },
-      ...(laneTitle ? [{ label: 'ردیف', value: laneTitle, moduleId: 'process_runs', recordId: process.id }] : []),
-    ];
-  }, [laneTitle, process]);
+  const headerStatusValue = isDraftActivityCreationMode ? 'draft' : statusValue;
+  const headerStatusLabel = isDraftActivityCreationMode
+    ? 'پیش نویس'
+    : (statusLabelMap[statusValue] || statusLabel[statusValue] || statusValue);
+  const currentStatusColor = getTaskStatusSwatchColor(headerStatusValue, source) || statusColor[headerStatusValue] || '#64748b';
+  const relatedRows = useMemo<RelatedRecordRow[]>(() => {
+    const refs = collectProcessRelatedRecordRefs(process);
+    const rows = refs.map((ref) => {
+      const key = buildRecordReferenceKey(ref.moduleId, ref.recordId);
+      return {
+        label: getModuleLabel(ref.moduleId),
+        value: relatedLabelMap[key] || getModuleLabel(ref.moduleId),
+        moduleId: ref.moduleId,
+        recordId: ref.recordId,
+      };
+    });
+    return rows;
+  }, [process, relatedLabelMap]);
+  const primaryProcessRecordLink = useMemo(() => {
+    const ref = collectProcessRelatedRecordRefs(process)[0];
+    return ref || null;
+  }, [process]);
+  const formattedStageDueLabel = useMemo(() => {
+    const rawDue = String(source?.due_date || source?.planned_due_at || stage?.dueLabel || '').trim();
+    if (!rawDue) return '';
+    return toPersianNumber(safeJalaliFormat(rawDue, rawDue.includes(':') ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD') || rawDue);
+  }, [source?.due_date, source?.planned_due_at, stage?.dueLabel]);
+  const shouldShowTimingStageAnchor = useCallback((anchorType: string) => (
+    String(anchorType || '').trim().startsWith('specific_stage_')
+  ), []);
+  const renderScheduleEditor = useCallback((config: {
+    title: string;
+    mode: 'manual' | 'system';
+    onModeChange: (value: 'manual' | 'system') => void;
+    manualValue: string;
+    onManualSave: (value: string) => void;
+    durationFrom: string;
+    onDurationFromSave: (value: string) => void;
+    durationValue: string;
+    onDurationValueSave: (value: string) => void;
+    durationUnit: string;
+    onDurationUnitSave: (value: string) => void;
+    anchorStage: string;
+    onAnchorStageSave: (value: string) => void;
+  }) => (
+    <div className="sm:col-span-2 rounded-lg border border-gray-200 bg-white/70 p-2 dark:border-gray-700 dark:bg-white/5">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-bold text-gray-500 dark:text-gray-300">{config.title}</div>
+        <div className="inline-flex overflow-hidden rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-[11px] dark:border-gray-700 dark:bg-white/5">
+          {[
+            { value: 'manual' as const, label: 'دستی' },
+            { value: 'system' as const, label: 'سیستمی' },
+          ].map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => config.onModeChange(option.value)}
+              className={`rounded-md px-2 py-1 font-bold transition ${
+                config.mode === option.value
+                  ? 'bg-white text-[rgba(var(--brand-700-rgb),1)] shadow-sm dark:bg-white/10 dark:text-[rgba(var(--brand-100-rgb),1)]'
+                  : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {config.mode === 'manual' ? (
+        <InlineEditableField
+          label={config.title}
+          value={config.manualValue}
+          onSave={config.onManualSave}
+          fieldType={FieldType.DATETIME}
+          forceEditMode
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(6rem,0.45fr)_minmax(6rem,0.45fr)_minmax(0,1.3fr)]">
+          <InlineEditableField
+            label="مقدار"
+            value={config.durationValue}
+            onSave={config.onDurationValueSave}
+            fieldType={FieldType.NUMBER}
+            forceEditMode
+          />
+          <InlineEditableField
+            label="واحد"
+            value={config.durationUnit}
+            onSave={config.onDurationUnitSave}
+            fieldType={FieldType.SELECT}
+            forceEditMode
+            options={[
+              { value: 'hour', label: 'ساعت' },
+              { value: 'day', label: 'روز' },
+            ]}
+          />
+          <InlineEditableField
+            label="بعد از"
+            value={config.durationFrom}
+            onSave={config.onDurationFromSave}
+            fieldType={FieldType.SELECT}
+            forceEditMode
+            options={timingAnchorOptions}
+          />
+          {shouldShowTimingStageAnchor(config.durationFrom) ? (
+            <div className="sm:col-span-3">
+              <InlineEditableField
+                label="مرحله مبنا"
+                value={config.anchorStage}
+                onSave={config.onAnchorStageSave}
+                fieldType={FieldType.SELECT}
+                forceEditMode
+                options={processStageAnchorOptions}
+              />
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  ), [processStageAnchorOptions, shouldShowTimingStageAnchor, timingAnchorOptions]);
+
+  const aiProcessContext = useMemo(() => ({
+    record_type: 'process_task',
+    process: {
+      id: process.id,
+      title: process.title,
+      mode: process.mode,
+      template_id: runProcess?.templateId || process.id,
+      template_title: runProcess?.templateTitle || process.title,
+      selected_stage_id: stage?.id || null,
+      selected_stage_title: stage?.title || null,
+      selected_lane_title: laneTitle || null,
+    },
+    lanes: process.lanes.map((lane) => ({
+      id: lane.id,
+      title: lane.title,
+      collapsed: !!lane.collapsed,
+      stages: lane.stages.map((item) => ({
+        id: item.id,
+        title: item.title,
+        kind: item.kind,
+        status: item.status,
+        assignee: item.assigneeLabel || null,
+        activity_type: item.activityTypeLabel || null,
+        due: item.dueLabel || null,
+        action_count: item.actionCount ?? 0,
+        is_current: item.id === stage?.id,
+      })),
+    })),
+    related_records: relatedRows.map((row) => ({
+      module_id: row.moduleId,
+      title: row.value,
+      label: row.label,
+    })),
+  }), [laneTitle, process, relatedRows, stage?.id, stage?.title]);
+
+  useEffect(() => {
+    if (!open || sideTab !== 'ai' || !taskRecordId || typeof window === 'undefined') return;
+    const detail: AssistantContext = {
+      route: `/tasks/${taskRecordId}`,
+      mode: 'record',
+      moduleId: 'tasks',
+      recordId: taskRecordId,
+      visibleRecordIds: [],
+      selectedRecordIds: [taskRecordId],
+      processFieldKey: 'process_v2_task',
+      selectedProcessId: process.id,
+      selectedProcessGroupId: process.id,
+      availableProcesses: [{
+        id: process.id,
+        label: process.title,
+        templateId: runProcess?.templateId || process.id,
+        templateName: runProcess?.templateTitle || process.title,
+        stageCount: process.lanes.reduce((sum, lane) => sum + lane.stages.length, 0),
+      }],
+      processGuideContext: aiProcessContext,
+    };
+    window.dispatchEvent(new CustomEvent(AI_CONTEXT_EVENT, { detail }));
+  }, [aiProcessContext, open, process, sideTab, taskRecordId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const refs = collectProcessRelatedRecordRefs(process);
+    if (refs.length === 0) {
+      setRelatedLabelMap({});
+      return;
+    }
+    let cancelled = false;
+    fetchRecordReferenceLabels(supabase, refs).then((labels) => {
+      if (!cancelled) setRelatedLabelMap(labels || {});
+    }).catch(() => {
+      if (!cancelled) setRelatedLabelMap({});
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, process]);
 
   return (
+    <>
     <Modal
       rootClassName="task-quick-modal-root process-task-v2-modal-root"
       className="task-quick-modal process-task-v2-modal"
@@ -530,6 +1953,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       onCancel={onClose}
       footer={null}
       title={null}
+      closable={false}
       centered
       destroyOnHidden
       width={860}
@@ -554,11 +1978,23 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           <div className="min-w-0 space-y-2">
             <h4 className="m-0 line-clamp-2 text-sm font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{taskTitle}</h4>
             <div className="flex flex-wrap items-center gap-1.5">
-              <Tag className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${statusTagClass[statusValue]}`}>
-                {statusLabel[statusValue] || statusValue}
+              <Tag
+                className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${statusTagClass[headerStatusValue] || ''}`}
+                style={!statusTagClass[headerStatusValue] ? {
+                  borderColor: `${currentStatusColor}55`,
+                  backgroundColor: `${currentStatusColor}18`,
+                  color: currentStatusColor,
+                } : undefined}
+              >
+                {headerStatusLabel}
               </Tag>
-              <Tag className="!m-0 !rounded-full !text-[11px] !font-bold">{activityTypeValue || '-'}</Tag>
+              <Tag className="!m-0 !rounded-full !text-[11px] !font-bold">{draftActivityTypeDisplayValue || '-'}</Tag>
               <Tag className="!m-0 !rounded-full !text-[11px] !font-bold">{actionCount} اقدام</Tag>
+              {savingFieldKey ? (
+                <Tag className="!m-0 !rounded-full !text-[11px] !font-bold" color="processing">
+                  در حال ذخیره
+                </Tag>
+              ) : null}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
@@ -577,87 +2013,329 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         </div>
 
         <div className="mb-3 flex flex-wrap items-stretch gap-2 rounded-lg border border-gray-100 bg-gray-50/70 p-2 dark:border-gray-700 dark:bg-transparent">
-          <div className="min-w-[11rem] max-w-full flex-[0_1_14rem]">
-            <InlineEditableField
-              label="وضعیت"
-              value={statusValue}
-              onSave={setStatusValue}
-              options={statusOptions}
-              fieldType="select"
-              accentColor={currentStatusColor}
-              icon={<span className="block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: currentStatusColor }} />}
-            />
-          </div>
-
-          <div className="flex min-w-[15rem] flex-1 items-center justify-center gap-1.5 rounded-lg bg-white px-2 py-1.5 dark:bg-white/5">
+          <div className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-white px-2 py-2 dark:bg-white/5">
             {isDraftActivityCreationMode ? (
-              <div className="flex w-full flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-gray-500 dark:text-gray-300">
-                  این مرحله هنوز فعالیت واقعی ندارد.
-                </span>
-                <Button type="primary" icon={<PlusOutlined />} className="!h-9 !rounded-lg">
-                  ایجاد فعالیت
-                </Button>
+              <div className="grid w-full grid-cols-1 items-end gap-2 md:grid-cols-2">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <label className="shrink-0 text-sm font-bold text-gray-800 dark:text-gray-100">
+                      عنوان فعالیت: <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      value={draftTaskNameDisplayValue}
+                      onChange={(event) => setTaskNameValue(event.target.value)}
+                      placeholder="عنوان فعالیت"
+                      className="!h-10 !min-w-0 !rounded-lg !text-right !font-semibold"
+                    />
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <label className="shrink-0 text-sm font-bold text-gray-800 dark:text-gray-100">
+                      نوع فعالیت: <span className="text-red-500">*</span>
+                    </label>
+                    <DynamicSelectField
+                      value={draftActivityTypeDisplayValue}
+                      onChange={(value) => setActivityTypeValue(String(value || '').trim())}
+                      options={taskTypeOptions.length > 0 ? taskTypeOptions : []}
+                      category={taskTypeField?.dynamicOptionsCategory || 'task_type'}
+                      protectedValues={(taskTypeField?.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)}
+                      placeholder="انتخاب کنید"
+                      className="w-full"
+                      onOptionsUpdate={() => void loadTaskTypeOptions(true)}
+                      overlayZIndexBase={16030}
+                      modalZIndex={16040}
+                      pickerTitle="نوع فعالیت"
+                      getPopupContainer={resolveSelectPopupContainer}
+                    />
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="mb-1 text-[11px] font-bold text-gray-500 dark:text-gray-300">
+                    کپی کردن فعالیت از فرآیند
+                  </div>
+                  <AdaptiveSelectField
+                    value={draftCopyTemplateId}
+                    onChange={(value) => {
+                      setDraftCopyTemplateId(String(value || '') || undefined);
+                      setDraftCopyStageId(undefined);
+                    }}
+                    options={processTemplateOptions}
+                    allowClear
+                    disabled={isTemplateBackedDraft}
+                    placeholder="انتخاب الگوی فرآیند"
+                    pickerTitle="انتخاب الگوی فرآیند"
+                    className="w-full"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="mb-1 text-[11px] font-bold text-gray-500 dark:text-gray-300">
+                    انتخاب پیش نویس فعالیت
+                  </div>
+                  <AdaptiveSelectField
+                    value={draftCopyStageId}
+                    onChange={(value) => setDraftCopyStageId(String(value || '') || undefined)}
+                    options={draftStageOptions}
+                    allowClear
+                    disabled={isTemplateBackedDraft || draftStageOptions.length === 0}
+                    loading={templateCopyStagesLoading}
+                    placeholder={draftStageOptions.length > 0 ? 'انتخاب پیش‌نویس فعالیت' : 'پیش‌نویسی برای کپی وجود ندارد'}
+                    pickerTitle="انتخاب پیش نویس فعالیت"
+                    className="w-full"
+                  />
+                </div>
               </div>
             ) : (
-              <>
-                <TaskActionButton title="مشاهده دستورالعمل‌ها" icon={<ReadOutlined />} />
-                <TaskActionButton title="برنامه‌ریزی مجدد فعالیت" icon={<ClockCircleOutlined />} />
-                <TaskActionButton title="در حال انجام" icon={<CaretRightOutlined />} color="#2563eb" active={statusValue === 'active'} />
-                <TaskActionButton title="بازبینی" icon={<EyeOutlined />} color="#f97316" active={statusValue === 'review'} />
-                <TaskActionButton title="تکمیل فعالیت" icon={<CheckOutlined />} color="#16a34a" active={statusValue === 'done'} />
-              </>
+              <div className="flex max-w-full items-start gap-1.5 overflow-x-auto">
+                {effectiveStatusOptions.map((option) => {
+                  const value = String(option.value || '').trim();
+                  const isActive = value === statusValue;
+                  const color = getTaskStatusSwatchColor(value, taskForActions || source) || '#64748b';
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => void handleStatusActionClick(value)}
+                      disabled={savingStatusValue !== null}
+                      className="group flex w-[4.25rem] shrink-0 flex-col items-center gap-1 rounded-lg px-1.5 py-1 text-center transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_10px_22px_rgba(15,23,42,0.10)] disabled:cursor-wait disabled:opacity-60 dark:hover:bg-white/10 dark:hover:shadow-[0_10px_22px_rgba(0,0,0,0.22)]"
+                      aria-label={`تغییر وضعیت به ${option.label}`}
+                      title={String(option.label || value)}
+                    >
+                      <span
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[17px] shadow-sm transition group-hover:scale-110 group-hover:ring-2 group-hover:ring-offset-1 group-hover:ring-offset-white dark:group-hover:ring-offset-slate-950"
+                        style={{
+                          color: isActive ? '#fff' : color,
+                          opacity: isActive ? 1 : 0.48,
+                          backgroundColor: isActive ? color : `${color}0f`,
+                          boxShadow: isActive ? `0 8px 18px ${color}33` : '0 2px 8px rgba(15, 23, 42, 0.05)',
+                        }}
+                      >
+                        {savingStatusValue === value ? <ClockCircleOutlined spin /> : <TaskStatusIcon iconKey={(option as any).icon || getTaskStatusIconKey(value, taskForActions || source)} />}
+                      </span>
+                      <span className={`line-clamp-2 min-h-[1.5rem] text-[10px] leading-3 ${isActive ? 'font-black text-gray-700 dark:text-gray-100' : 'font-semibold text-gray-300 dark:text-gray-500'}`}>
+                        {option.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
 
         <div className="flex flex-col gap-3 lg:flex-row" dir="ltr">
           <aside className="min-w-0 space-y-3 lg:w-[17rem] lg:shrink-0" dir="rtl">
-            <RecordImageBox
-              moduleId="tasks"
-              recordId={stage?.id || undefined}
-              imageUrl={stage?.assigneeAvatarUrl || null}
-              canEdit={false}
-              canViewFilesManager={false}
-              compact
-              filesButtonLabel="فایل‌ها"
-            />
-            <Button block icon={<UploadOutlined />} className="!h-9 !rounded-lg">
-              آپلود فایل
-            </Button>
-
-            <div className="rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5">
-              <div className="mb-2 flex items-center gap-2 text-xs font-bold text-gray-600 dark:text-gray-200">
-                <FileOutlined />
-                فایل‌ها و تصاویر
-              </div>
-              <div className="space-y-1.5">
-                {fileSamples.map((file) => (
-                  <div key={file.id} className="flex min-w-0 items-center gap-2 rounded-md bg-white px-2 py-1.5 text-xs dark:bg-white/5">
-                    <FilePreviewThumb file={file} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-semibold text-gray-700 dark:text-gray-200">{file.title}</div>
-                      <div className="mt-0.5 text-[10px] text-gray-400">{file.meta}</div>
-                    </div>
-                    <Tooltip title={starredFileIds.has(file.id) ? 'ستاره‌دار' : 'ستاره‌دار کردن'}>
-                      <Button
-                        size="small"
-                        type={starredFileIds.has(file.id) ? 'primary' : 'text'}
-                        icon={starredFileIds.has(file.id) ? <StarFilled /> : <StarOutlined />}
-                        className={starredFileIds.has(file.id) ? '!bg-amber-500 !text-white' : '!text-gray-400 hover:!text-amber-500'}
-                        onClick={() => setStarredFileIds((current) => {
-                          const next = new Set(current);
-                          if (next.has(file.id)) next.delete(file.id);
-                          else next.add(file.id);
-                          return next;
-                        })}
-                        aria-label={starredFileIds.has(file.id) ? 'حذف ستاره فایل' : 'ستاره‌دار کردن فایل'}
-                      />
+            <div className="overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-white/5">
+              <div className="flex items-center justify-center gap-1 border-b border-gray-100 bg-gray-50/70 px-2 py-1.5 dark:border-gray-700 dark:bg-white/5">
+                {([
+                  { key: 'files' as const, title: 'فایل‌ها', icon: <FileOutlined />, count: modalFiles.length },
+                  { key: 'conversation' as const, title: 'گفتگوها', icon: <MessageOutlined />, count: conversationCount },
+                  { key: 'ai' as const, title: 'هوش مصنوعی', icon: <AiSparkleIcon className="h-4 w-4" />, count: 0 },
+                  { key: 'instructions' as const, title: 'دستورالعمل‌ها', icon: <ReadOutlined />, count: instructionIds.length },
+                  { key: 'changelogs' as const, title: 'آخرین تغییرات', icon: <HistoryOutlined />, count: changelogCount },
+                ]).map((tab) => {
+                  const active = sideTab === tab.key;
+                  return (
+                    <Tooltip key={tab.key} title={tab.title}>
+                      <Badge count={tab.count > 0 ? toPersianNumber(tab.count) : 0} size="small" offset={[-2, 3]}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSideTab(tab.key);
+                            if (tab.key === 'instructions' && instructionIds.length > 0) void loadInstructions();
+                          }}
+                          className={`inline-flex h-8 w-10 items-center justify-center rounded-lg border text-[16px] transition ${
+                            active
+                              ? 'border-[rgba(var(--brand-400-rgb),0.75)] bg-[rgba(var(--brand-50-rgb),0.95)] text-[rgba(var(--brand-800-rgb),1)] shadow-[0_7px_16px_rgba(var(--brand-700-rgb),0.16)] ring-2 ring-[rgba(var(--brand-200-rgb),0.65)] dark:border-[rgba(var(--brand-300-rgb),0.45)] dark:bg-[rgba(var(--brand-500-rgb),0.18)] dark:text-[rgba(var(--brand-100-rgb),1)]'
+                              : 'border-transparent text-gray-400 opacity-70 hover:bg-white hover:text-gray-700 hover:opacity-100 dark:text-gray-500 dark:hover:bg-white/10 dark:hover:text-gray-200'
+                          }`}
+                          aria-label={tab.title}
+                        >
+                          {tab.icon}
+                        </button>
+                      </Badge>
                     </Tooltip>
+                  );
+                })}
+              </div>
+
+              <div className="p-2">
+                {sideTab === 'files' ? (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      className="block w-full cursor-pointer rounded-lg text-right"
+                      onClick={mainImageFile ? () => setPreviewFile(mainImageFile) : undefined}
+                      disabled={!mainImageFile}
+                    >
+                      <RecordImageBox
+                        moduleId="tasks"
+                        recordId={taskRecordId || undefined}
+                        imageUrl={mainImageFile?.fileUrl || source?.image_url || null}
+                        canEdit={false}
+                        canViewFilesManager={false}
+                        compact
+                        filesButtonLabel="فایل‌ها"
+                      />
+                    </button>
+                    <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                      <Button block icon={<UploadOutlined />} className="!h-9 !rounded-lg">
+                        آپلود فایل
+                      </Button>
+                      <Button
+                        block
+                        icon={<FolderOpenOutlined />}
+                        disabled={!hasFiles}
+                        onClick={() => setFilesExpanded((current) => !current)}
+                        className="!h-9 !rounded-lg lg:!hidden"
+                      >
+                        مشاهده فایل‌ها
+                      </Button>
+                    </div>
+                    <div className={`${filesExpanded ? 'block' : 'hidden'} space-y-1.5 lg:block`}>
+                      {modalFiles.map((file) => (
+                        <button
+                          key={file.id}
+                          type="button"
+                          onClick={() => setPreviewFile(file)}
+                          className="flex w-full min-w-0 items-center gap-2 rounded-md bg-gray-50 px-2 py-1.5 text-right text-xs transition hover:bg-white dark:bg-white/5 dark:hover:bg-white/10"
+                        >
+                          <FilePreviewThumb file={file} />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-semibold text-gray-700 dark:text-gray-200">{file.title}</div>
+                            <div className="mt-0.5 text-[10px] text-gray-400">{file.meta}</div>
+                          </div>
+                          <Tooltip title={starredFileIds.has(file.id) ? 'ستاره‌دار' : 'ستاره‌دار کردن'}>
+                            <Button
+                              size="small"
+                              type={starredFileIds.has(file.id) ? 'primary' : 'text'}
+                              icon={starredFileIds.has(file.id) ? <StarFilled /> : <StarOutlined />}
+                              className={starredFileIds.has(file.id) ? '!bg-amber-500 !text-white' : '!text-gray-400 hover:!text-amber-500'}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleToggleFileStar(file);
+                              }}
+                              aria-label={starredFileIds.has(file.id) ? 'حذف ستاره فایل' : 'ستاره‌دار کردن فایل'}
+                            />
+                          </Tooltip>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ))}
+                ) : null}
+
+                {sideTab === 'conversation' ? (
+                  !isDraftActivityCreationMode && taskRecordId ? (
+                    <div className="h-[24rem] max-h-[52vh] min-h-[18rem] overflow-hidden">
+                      <ActivityPanel
+                        moduleId="tasks"
+                        recordId={taskRecordId}
+                        view="notes"
+                        recordName={stage?.title || taskTitle}
+                        moduleConfig={MODULES.tasks}
+                        compact
+                      />
+                    </div>
+                  ) : (
+                    <div className="px-2 py-4 text-xs leading-6 text-gray-400">
+                      گفتگو بعد از ایجاد فعالیت فعال می‌شود.
+                    </div>
+                  )
+                ) : null}
+
+                {sideTab === 'ai' ? (
+                  !isDraftActivityCreationMode && taskRecordId ? (
+                    <div className="h-[24rem] max-h-[52vh] min-h-[18rem] overflow-hidden rounded-lg bg-slate-100 dark:bg-[#101113]">
+                      <AssistantPanel active={sideTab === 'ai'} />
+                    </div>
+                  ) : (
+                    <div className="px-2 py-4 text-xs leading-6 text-gray-400">
+                      گفتگوی هوش مصنوعی بعد از ایجاد فعالیت فعال می‌شود.
+                    </div>
+                  )
+                ) : null}
+
+                {sideTab === 'changelogs' ? (
+                  !isDraftActivityCreationMode && taskRecordId ? (
+                    <div className="h-[24rem] max-h-[52vh] min-h-[18rem] overflow-hidden">
+                      <ActivityPanel
+                        moduleId="tasks"
+                        recordId={taskRecordId}
+                        view="changelogs"
+                        recordName={stage?.title || taskTitle}
+                        moduleConfig={MODULES.tasks}
+                        compact
+                      />
+                    </div>
+                  ) : (
+                    <div className="px-2 py-4 text-xs leading-6 text-gray-400">
+                      آخرین تغییرات بعد از ایجاد فعالیت ثبت می‌شود.
+                    </div>
+                  )
+                ) : null}
+
+                {sideTab === 'instructions' ? (
+                  <div className="space-y-2">
+                    {loadingInstructions ? (
+                      <div className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/5">
+                        در حال بارگذاری دستورالعمل‌ها...
+                      </div>
+                    ) : instructionIds.length === 0 ? (
+                      <div className="rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400 dark:bg-white/5">
+                        دستورالعملی برای این فعالیت ثبت نشده است.
+                      </div>
+                    ) : loadedInstructions.length === 0 ? (
+                      <Button
+                        block
+                        icon={<ReadOutlined />}
+                        onClick={() => void loadInstructions()}
+                        className="!h-9 !rounded-lg"
+                      >
+                        بارگذاری دستورالعمل‌ها
+                      </Button>
+                    ) : (
+                      <div className="max-h-[22rem] space-y-1.5 overflow-y-auto pr-0.5">
+                        {loadedInstructions.map((instruction) => (
+                          <button
+                            key={String(instruction?.id || '')}
+                            type="button"
+                            onClick={() => void handleOpenInstructionsModal(String(instruction?.id || ''))}
+                            className="w-full rounded-lg border border-gray-100 bg-gray-50 px-2.5 py-2 text-right transition hover:border-[rgba(var(--brand-300-rgb),0.85)] hover:bg-white dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+                          >
+                            <div className="flex min-w-0 items-center justify-between gap-2">
+                              <span className="min-w-0 truncate text-xs font-bold text-gray-700 dark:text-gray-100">
+                                {String(instruction?.name || instruction?.system_code || 'دستورالعمل')}
+                              </span>
+                              {instruction?.status_label ? (
+                                <Tag className="!m-0 !text-[10px]" color={String(instruction?.status_color || 'default')}>
+                                  {instruction.status_label}
+                                </Tag>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 truncate text-[10px] text-gray-400">
+                              {String(instruction?.department || '').trim() || 'بدون دپارتمان'}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
+            {isDraftActivityCreationMode ? (
+              <Button
+                type="primary"
+                block
+                icon={<PlusOutlined />}
+                loading={creatingDraftActivity}
+                disabled={!onCreateDraftActivity}
+                onClick={() => void handleCreateDraftActivity()}
+                className="!h-10 !rounded-lg !font-bold"
+              >
+                ایجاد فعالیت
+              </Button>
+            ) : null}
           </aside>
 
           <main className="min-w-0 flex-1" dir="rtl">
@@ -666,73 +2344,157 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 <InlineEditableField
                   label="مسئول"
                   value={assigneeValue}
-                  onSave={setAssigneeValue}
-                  options={[{ value: assigneeValue, label: assigneeValue }]}
-                  fieldType="select"
-                  icon={<AssigneeIcon label={assigneeValue} avatarUrl={stage?.assigneeAvatarUrl} />}
+                  onSave={isDraftActivityCreationMode ? setAssigneeValue : (value) => { void saveTaskAssignee(value); }}
+                  options={assigneeOptions.length > 0 ? assigneeOptions : (assigneeValue ? [{ value: assigneeValue, label: assigneeValue }] : [])}
+                  fieldType={FieldType.SELECT}
+                  forceEditMode={isDraftActivityCreationMode}
+                  displayNode={(
+                    <AssigneeAvatarDisplay
+                      source={assigneeDisplaySource}
+                      allUsers={assigneeUsers}
+                      allRoles={assigneeRoles}
+                      explicitLabel={assigneeValue.includes(':') ? null : assigneeValue}
+                      avatarSize={24}
+                      className="flex min-w-0 items-center gap-2"
+                      labelClassName="min-w-0 truncate text-sm font-bold text-gray-800 dark:text-gray-100"
+                    />
+                  )}
                 />
-                <InlineEditableField
-                  label="برچسب‌ها"
-                  value={tagValue}
-                  onSave={setTagValue}
-                  options={activityTagOptions}
-                  fieldType="multi_select"
-                />
+                <div className="min-w-0 rounded-lg bg-gray-50 px-3 py-2 dark:bg-white/5">
+                  <div className="mb-1 text-[11px] font-bold text-gray-500 dark:text-gray-400">برچسب‌ها</div>
+                  <TagInput
+                    moduleId="tasks"
+                    recordId={taskRecordId || undefined}
+                    initialTags={activityTags}
+                    onChange={(tags) => {
+                      const nextTags = normalizeTaskTags(tags || []);
+                      setActivityTags(nextTags);
+                    }}
+                    popupZIndex={16030}
+                  />
+                </div>
               </div>
 
               <InlineEditableField
                 label="شرح فعالیت"
                 value={descriptionDraft}
-                onSave={setDescriptionDraft}
-                fieldType="long_text"
-                placeholder="شرح فعالیت"
+                onSave={isDraftActivityCreationMode ? setDescriptionDraft : (value) => { void saveTaskDescription(value); }}
+                fieldType={FieldType.LONG_TEXT}
+                forceEditMode={isDraftActivityCreationMode}
               />
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-gray-500">فیلدهای اختصاصی این فعالیت:</span>
-                </div>
+              {isDraftActivityCreationMode ? (
                 <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5 sm:grid-cols-2">
-                  {customFields.map((field) => (
-                    <div key={field.key} className={field.type === 'long_text' || field.type === 'very_long_text' ? 'sm:col-span-2' : undefined}>
-                      <InlineEditableField
-                        label={field.label}
-                        value={field.value}
-                        fieldType={field.type}
-                        options={field.options}
-                        onSave={(nextValue) => setCustomFields((current) => current.map((item) => (
-                          item.key === field.key ? { ...item, value: nextValue } : item
-                        )))}
-                      />
-                    </div>
-                  ))}
+                  <InlineEditableField
+                    label="دستمزد"
+                    value={wageValue}
+                    onSave={setWageValue}
+                    fieldType={FieldType.NUMBER}
+                    forceEditMode
+                  />
+                  <InlineEditableField
+                    label="وزن"
+                    value={weightValue}
+                    onSave={setWeightValue}
+                    fieldType={FieldType.NUMBER}
+                    forceEditMode
+                  />
+                  {renderScheduleEditor({
+                    title: 'زمان شروع',
+                    mode: startScheduleMode,
+                    onModeChange: setStartScheduleMode,
+                    manualValue: startDateValue,
+                    onManualSave: setStartDateValue,
+                    durationFrom: startDurationFromValue,
+                    onDurationFromSave: setStartDurationFromValue,
+                    durationValue: startDurationValue,
+                    onDurationValueSave: setStartDurationValue,
+                    durationUnit: startDurationUnitValue,
+                    onDurationUnitSave: setStartDurationUnitValue,
+                    anchorStage: startAnchorStageValue,
+                    onAnchorStageSave: setStartAnchorStageValue,
+                  })}
+                  {renderScheduleEditor({
+                    title: 'موعد انجام',
+                    mode: dueScheduleMode,
+                    onModeChange: setDueScheduleMode,
+                    manualValue: dueDateValue,
+                    onManualSave: setDueDateValue,
+                    durationFrom: dueDurationFromValue,
+                    onDurationFromSave: setDueDurationFromValue,
+                    durationValue: dueDurationValue,
+                    onDurationValueSave: setDueDurationValue,
+                    durationUnit: dueDurationUnitValue,
+                    onDurationUnitSave: setDueDurationUnitValue,
+                    anchorStage: dueAnchorStageValue,
+                    onAnchorStageSave: setDueAnchorStageValue,
+                  })}
                 </div>
-              </div>
+              ) : null}
 
-              <div className="grid grid-cols-[minmax(8rem,0.78fr)_minmax(0,1.22fr)] gap-3 break-words rounded-lg border border-[rgba(var(--brand-200-rgb),0.45)] bg-gray-50/80 p-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
+              {customFields.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-gray-500">فیلدهای اختصاصی این فعالیت:</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5 sm:grid-cols-2">
+                    {customFields.map((field) => (
+                      <div key={field.key} className={field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT ? 'sm:col-span-2' : undefined}>
+                        <InlineEditableField
+                          label={field.label}
+                          value={field.value}
+                          field={field.field}
+                          fieldType={field.type}
+                          options={field.options}
+                          forceEditMode={isDraftActivityCreationMode}
+                          requiredForCompletion={field.requiredForCompletion}
+                          onSave={(nextValue) => {
+                            if (isDraftActivityCreationMode) {
+                              setCustomFields((current) => current.map((item) => (
+                                item.key === field.key ? { ...item, value: nextValue } : item
+                              )));
+                              return;
+                            }
+                            void saveCustomFieldValue(field.key, nextValue);
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-3 break-words rounded-lg border border-[rgba(var(--brand-200-rgb),0.45)] bg-gray-50/80 p-2 text-xs text-gray-700 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300 md:grid-cols-[minmax(8rem,0.78fr)_minmax(0,1.22fr)]">
                 <div className="order-1 space-y-2">
                   <div className="flex items-center gap-2">
                     <OrderedListOutlined className="text-gray-500 dark:text-gray-300" />
-                    <span>مرحله {toPersianNumber(stage?.layoutSlot ?? 1)} از فرآیند</span>
+                    <span>مرحله {toPersianNumber((stage?.layoutSlot ?? 0) + 1)}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-gray-400">نوع فعالیت:</span>
-                    <span className="font-semibold">{activityTypeValue || '-'}</span>
+                    <span className="text-gray-400">ترتیب:</span>
+                    <span className="font-semibold">{toPersianNumber(source?.sort_order ?? stage?.layoutSlot ?? 0)}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {assigneeValue.includes('واحد') || assigneeValue.includes('تیم') ? <TeamOutlined className="text-gray-500 dark:text-gray-300" /> : <UserOutlined className="text-gray-500 dark:text-gray-300" />}
-                    <span>مسئول: {assigneeValue}</span>
-                  </div>
-                  {stage?.dueLabel ? (
+                  {formattedStageDueLabel ? (
                     <div className="flex items-center gap-2">
                       <ClockCircleOutlined className="text-gray-500 dark:text-gray-300" />
-                      <span>موعد: {stage.dueLabel}</span>
+                      <span>موعد: {formattedStageDueLabel}</span>
+                    </div>
+                  ) : null}
+                  {primaryProcessRecordLink ? (
+                    <div className="flex items-center gap-2">
+                      <LinkOutlined className="text-gray-500 dark:text-gray-300" />
+                      <span className="min-w-0">
+                        فرآیند:{' '}
+                        <Link to={`/${primaryProcessRecordLink.moduleId}/${primaryProcessRecordLink.recordId}`} className="font-bold text-cyan-700 hover:underline dark:text-cyan-300">
+                          {process.title}
+                        </Link>
+                      </span>
                     </div>
                   ) : null}
                 </div>
                 <div className="order-2 space-y-2">
                   {relatedRows.map((row) => (
-                    <div key={`${row.label}-${row.value}`} className="flex items-center gap-2">
+                    <div key={`${row.moduleId}-${row.recordId}`} className="flex items-center gap-2">
                       <LinkOutlined className="text-gray-500 dark:text-gray-300" />
                       <span className="min-w-0">
                         {row.label}:{' '}
@@ -747,11 +2509,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
 
               <div className="space-y-2">
                 <InlineEditableField
-                  label="گزارش فعالیت"
-                  value={reportDraft}
-                  onSave={setReportDraft}
-                  fieldType="long_text"
-                  placeholder="متن گزارش را بنویسید..."
+                label="گزارش فعالیت"
+                value={reportDraft}
+                  onSave={isDraftActivityCreationMode ? setReportDraft : (value) => { void saveTaskReport(value); }}
+                  fieldType={FieldType.LONG_TEXT}
+                  forceEditMode={isDraftActivityCreationMode}
                 />
               </div>
             </div>
@@ -759,29 +2521,75 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[rgba(var(--brand-200-rgb),0.45)] pt-2 dark:border-[rgba(var(--brand-300-rgb),0.18)]">
               <span />
               <div className="flex items-center justify-end gap-1">
-                {isDraftActivityCreationMode ? (
-                  <Button type="primary" size="small" icon={<PlusOutlined />}>
-                    ایجاد فعالیت و تبدیل مرحله
-                  </Button>
-                ) : (
+                {!isDraftActivityCreationMode && taskRecordId ? (
                   <>
                     <Tooltip title="قطع اتصال از این فرآیند و رکورد">
-                      <Button size="small" type="text" icon={<LinkOutlined />} className="text-gray-500 hover:!text-amber-600" />
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<LinkOutlined />}
+                        loading={taskActionBusy === 'unlink'}
+                        disabled={taskActionBusy !== null}
+                        onClick={confirmUnlinkTaskFromProcess}
+                        className="text-gray-500 hover:!text-amber-600"
+                      />
                     </Tooltip>
                     <Tooltip title="حذف کامل وظیفه">
-                      <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        icon={<DeleteOutlined />}
+                        loading={taskActionBusy === 'delete'}
+                        disabled={taskActionBusy !== null}
+                        onClick={confirmDeleteTaskCompletely}
+                      />
                     </Tooltip>
-                    <Button size="small" type="link" className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)]">
+                    <Link
+                      to={`/tasks/${taskRecordId}`}
+                      onClick={onClose}
+                      className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
+                    >
                       جزئیات کامل
-                    </Button>
+                    </Link>
                   </>
-                )}
+                ) : null}
               </div>
             </div>
           </main>
         </div>
       </div>
+      <TaskInstructionsModal
+        open={instructionsModalOpen}
+        loading={loadingInstructions}
+        instructions={loadedInstructions}
+        activeInstructionId={activeInstructionId}
+        onSelectInstruction={(id) => setActiveInstructionId(id)}
+        onClose={() => setInstructionsModalOpen(false)}
+        hideList
+      />
     </Modal>
+    <Modal
+      title={previewFile?.title || 'پیش‌نمایش فایل'}
+      open={!!previewFile}
+      onCancel={() => setPreviewFile(null)}
+      width={860}
+      centered
+      destroyOnHidden
+      footer={previewFile ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button icon={<ShareAltOutlined />} onClick={() => void handleDirectShareFile(previewFile)}>
+            ارسال مستقیم
+          </Button>
+          <Button icon={<DownloadOutlined />} href={previewFile.fileUrl} target="_blank" rel="noreferrer" download={previewFile.title}>
+            دانلود فایل اصلی
+          </Button>
+        </div>
+      ) : null}
+    >
+      {previewFile ? renderPreviewFileContent(previewFile) : null}
+    </Modal>
+    </>
   );
 };
 

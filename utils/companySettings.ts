@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { normalizePublicAssetUrl } from './assetUrl';
 import { fetchSessionBootstrap } from './sessionCache';
 import { normalizePrintLetterheads } from './printTemplates/letterheads';
+import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from './supabaseTimeout';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
@@ -32,7 +33,19 @@ export const getResolvedCurrentOrgId = async (supabase: SupabaseClient) => {
 };
 
 export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
-  const currentOrgId = await getResolvedCurrentOrgId(supabase);
+  const session = await fetchSessionBootstrap(supabase);
+  const currentOrgId = normalizeText(session?.orgId) || null;
+  const bootstrapError = session?.bootstrapError || null;
+  const hasAuthenticatedUser = Boolean(session?.user?.id);
+
+  if (hasAuthenticatedUser && bootstrapError && !currentOrgId) {
+    return {
+      data: null,
+      error: bootstrapError,
+      orgId: null,
+      scope: 'bootstrap-error' as const,
+    };
+  }
 
   let query = supabase
     .from('company_settings')
@@ -44,7 +57,9 @@ export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
     ? query.eq('org_id', currentOrgId)
     : query.is('org_id', null);
 
-  let result = await query.maybeSingle();
+  let result = await runWithSupabaseTimeout((signal) =>
+    attachAbortSignalIfSupported(query, signal).maybeSingle()
+  );
 
   if (!result.error && result.data) {
     return {
@@ -55,14 +70,26 @@ export const loadScopedCompanySettings = async (supabase: SupabaseClient) => {
     };
   }
 
+  if (result.error) {
+    return {
+      ...result,
+      data: normalizeCompanyAssetFields(result.data),
+      orgId: currentOrgId,
+      scope: currentOrgId ? 'org' as const : 'global' as const,
+    };
+  }
+
   if (currentOrgId) {
-    result = await supabase
+    const fallbackQuery = supabase
       .from('company_settings')
       .select('*')
       .is('org_id', null)
       .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    result = await runWithSupabaseTimeout((signal) =>
+      attachAbortSignalIfSupported(fallbackQuery, signal).maybeSingle()
+    );
 
     return {
       ...result,

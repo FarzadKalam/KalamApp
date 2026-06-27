@@ -165,7 +165,7 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      plugins: [react(), generateVersionJson()],
+      plugins: [react({ babel: { compact: false } }), generateVersionJson()],
       build: {
         rollupOptions: {
           output: {

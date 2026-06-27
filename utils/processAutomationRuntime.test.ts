@@ -131,6 +131,51 @@ describe('processAutomationRuntime', () => {
     expect(mocks.sendNoteSmsNotifications).not.toHaveBeenCalled();
   });
 
+  it('skips process automations for tasks whose process run is in the recycle bin', async () => {
+    mocks.rowsByTable = {
+      recycle_bin_records: [
+        {
+          id: 'recycle-run-1',
+          source_table: 'process_runs',
+          source_record_id: 'run-1',
+        },
+      ],
+    };
+
+    await runProcessAutomationsForTaskEvent({
+      event: 'create',
+      task: {
+        id: 'task-recycled-parent',
+        name: 'فعالیت حذف‌شده',
+        process_run_id: 'run-1',
+        recurrence_info: {
+          process_automation_rules: [
+            {
+              id: 'rule-recycled-parent',
+              is_active: true,
+              trigger_type: 'on_create',
+              execution_mode: 'every_match',
+              target_type: 'specific_user',
+              target_user_id: 'user-1',
+              actions: [
+                {
+                  id: 'action-recycled-parent',
+                  type: 'send_note',
+                  config: {
+                    note_text: 'نباید اجرا شود',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(mocks.insertNotesWithFallback).not.toHaveBeenCalled();
+    expect(mocks.workflowLogRows).toHaveLength(0);
+  });
+
   it('resolves multi relation note recipients from the source record', async () => {
     mocks.rowsByTable = {
       tasks: [],

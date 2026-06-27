@@ -15,7 +15,7 @@ import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { fetchProcessWorkItems } from '../../utils/processWorkItems';
 
-const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
+const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
 type ProcessWidgetItem = {
   key: string;
@@ -561,7 +561,7 @@ const OurProcessesWidget: React.FC = () => {
                     type="button"
                     className="min-w-0 truncate text-right text-xs font-semibold text-gray-700 hover:text-[rgba(var(--brand-600-rgb),1)] dark:text-gray-200"
                     onClick={() => navigate(`/${item.moduleId}/${item.recordId}`)}
-                    title={`${getModuleTitle(item.moduleId)} - ${item.recordId}`}
+                    title={item.templateName ? `${getModuleTitle(item.moduleId)} - ${item.templateName}` : getModuleTitle(item.moduleId)}
                   >
                     {getModuleTitle(item.moduleId)}
                   </button>
@@ -572,16 +572,15 @@ const OurProcessesWidget: React.FC = () => {
                   ) : null}
                 </div>
                 <React.Suspense fallback={<Spin size="small" />}>
-                  <ProductionStagesField
+                  <ProcessCardsV2RuntimeBlock
                     recordId={item.recordId}
                     moduleId={item.moduleId}
-                    readOnly
-                    compact
-                    cardCompact
-                    lazyLoad
-                    onlyLineId={item.lineId}
-                    onlyProcessGroupId={item.groupId}
-                    forceProcessRecordMode
+                    recordData={{
+                      id: item.recordId,
+                      module_id: item.moduleId,
+                      process_group_id: item.groupId,
+                    }}
+                    variant="compact"
                   />
                 </React.Suspense>
               </div>

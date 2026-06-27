@@ -976,6 +976,70 @@ async function fetchModuleRecordsPage(
   );
 }
 
+function parseObjectValue(value: any): Record<string, any> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isDeletedLikeWorkflowRecord(record: any): boolean {
+  if (!record || typeof record !== 'object') return true;
+  return Boolean(
+    record.deleted_at
+    || record.deletedAt
+    || record.removed_at
+    || record.archived_at
+    || record.is_deleted === true
+    || record.deleted === true
+    || record._deleted === true
+  );
+}
+
+async function isWorkflowRecordInRecycleBin(
+  url: string,
+  key: string,
+  orgId: string,
+  sourceTable: string,
+  recordId: string,
+): Promise<boolean> {
+  const normalizedRecordId = String(recordId || '').trim();
+  const normalizedSourceTable = String(sourceTable || '').trim();
+  if (!normalizedSourceTable || !UUID_LIKE_REGEX.test(normalizedRecordId)) return false;
+  const rows = await dbGet(
+    url,
+    key,
+    `recycle_bin_records?org_id=eq.${encodeURIComponent(orgId)}&source_table=eq.${encodeURIComponent(normalizedSourceTable)}&source_record_id=eq.${encodeURIComponent(normalizedRecordId)}&select=id&limit=1`,
+  ).catch(() => []);
+  return rows.length > 0;
+}
+
+async function shouldSkipWorkflowIntervalRecord(
+  url: string,
+  key: string,
+  orgId: string,
+  sourceTable: string,
+  record: any,
+): Promise<boolean> {
+  if (isDeletedLikeWorkflowRecord(record)) return true;
+  const recordId = String(record?.id || '').trim();
+  if (await isWorkflowRecordInRecycleBin(url, key, orgId, sourceTable, recordId)) return true;
+
+  if (sourceTable === 'tasks') {
+    const recurrence = parseObjectValue(record?.recurrence_info);
+    const processRunId = String(record?.process_run_id || recurrence?.process_run_id || '').trim();
+    const processRunStageId = String(record?.process_run_stage_id || recurrence?.process_run_stage_id || '').trim();
+    if (processRunId && await isWorkflowRecordInRecycleBin(url, key, orgId, 'process_runs', processRunId)) return true;
+    if (processRunStageId && await isWorkflowRecordInRecycleBin(url, key, orgId, 'process_run_stages', processRunStageId)) return true;
+  }
+
+  return false;
+}
+
 async function insertWorkflowLog(url: string, key: string, log: {
   workflow_id: string; org_id: string; module_id: string; record_id: string;
   run_type: string; status: string; message?: string; details?: any;
@@ -2713,21 +2777,23 @@ async function executeAction(
   if (action.type === 'copy_process_template') {
     const templateId = String(config.template_id || '').trim();
     if (!templateId || !record?.id) return actionResult(action, 'skipped', 'قالب فرآیند یا رکورد مقصد مشخص نیست.');
-    // Load template stages and apply to record as draft
-    const stages = await dbGet(url, key, `process_template_stages?template_id=eq.${templateId}&order=sort_order.asc`).catch(() => []);
-    const templateRows = await dbGet(url, key, `process_templates?id=eq.${templateId}&select=name&limit=1`).catch(() => []);
-    const templateName = String(templateRows[0]?.name || '').trim();
-    const DRAFT_FIELD_MAP: Record<string, string> = {
-      invoices: 'process_draft', purchaseInvoices: 'process_draft',
-      tasks: 'sub_process_draft',
-    };
-    const draftFieldKey = DRAFT_FIELD_MAP[moduleId] || 'process_draft';
-    const draft = { template_id: templateId, template_name: templateName, stages: stages };
-    await updateRecord(url, key, moduleId, String(record.id), {
-      process_template_id: templateId,
-      [draftFieldKey]: JSON.stringify(draft),
-    }, actorUserId);
-    return actionResult(action, 'success', undefined, { affected_count: 1, details: { template_id: templateId } });
+    const runIdResult = await callRpc(url, key, 'create_process_run_from_template', {
+      p_org_id: orgId,
+      p_template_id: templateId,
+      p_module_id: moduleId,
+      p_record_id: String(record.id),
+      p_process_name: null,
+      p_copied_mode: 'auto',
+    });
+    const processRunId = Array.isArray(runIdResult) ? String(runIdResult[0] || '').trim() : String(runIdResult || '').trim();
+    if (actorUserId && processRunId) {
+      await dbPatch(url, key, 'process_runs', `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+      await dbPatch(url, key, 'process_run_stages', `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
+    }
+    return actionResult(action, 'success', undefined, {
+      affected_count: processRunId ? 1 : 0,
+      details: { template_id: templateId, process_run_id: processRunId },
+    });
   }
 
   // ── publish_story ─────────────────────────────────────────────────────
@@ -2977,6 +3043,8 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
         }
 
         for (const record of records) {
+          if (await shouldSkipWorkflowIntervalRecord(url, key, workflow.org_id, targetTable, record)) continue;
+
           stats.processedRecords++;
           const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
           if (!matched) continue;

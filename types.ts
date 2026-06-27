@@ -128,6 +128,8 @@ export interface SelectOption {
   label: string;
   value: string | number;
   color?: string; 
+  icon?: string;
+  disabled?: boolean;
   insertAfter?: string;
 }
 

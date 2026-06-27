@@ -20,6 +20,18 @@ const INTERACTIVE_PORTAL_SELECTOR = [
   '.ant-dropdown',
 ].join(', ');
 
+const VIEWPORT_SENSITIVE_OVERLAY_SELECTOR = [
+  '.ant-modal',
+  '.ant-modal-wrap',
+  '.ant-drawer',
+  '.ant-drawer-content',
+  '.ant-drawer-content-wrapper',
+  '.ant-popover',
+  '.ant-popconfirm',
+  '.ant-tooltip',
+  '.ant-dropdown',
+].join(', ');
+
 export const KALAM_SELECT_FIELD_CLASSNAME = 'kalam-select-field';
 export type AdaptivePickerMode = 'auto' | 'desktop' | 'mobile-sheet';
 
@@ -44,6 +56,9 @@ export const resolveOverlayPopupContainer = (triggerNode?: HTMLElement | null) =
   }
 
   if (!triggerNode) return getKalamPopupRoot();
+
+  const viewportSensitiveHost = triggerNode.closest(VIEWPORT_SENSITIVE_OVERLAY_SELECTOR) as HTMLElement | null;
+  if (viewportSensitiveHost) return getKalamPopupRoot();
 
   const stableOverlayHost = triggerNode.closest(OVERLAY_HOST_SELECTOR) as HTMLElement | null;
   return stableOverlayHost || getKalamPopupRoot();

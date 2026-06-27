@@ -185,7 +185,7 @@ export const actionTypeOptions: Array<{ label: string; value: WorkflowActionType
   { label: 'کپی الگوی فرآیند', value: 'copy_process_template' },
   { label: 'اجرای خودکار فرآیند', value: 'execute_process' },
   { label: 'فعال کردن مرحله بعدی', value: 'activate_next_process_stage' },
-  { label: 'فعال کردن مرحله خاص', value: 'activate_specific_process_stage' },
+  { label: 'فعال کردن مرحله فرآیند (فعالیت)', value: 'activate_specific_process_stage' },
   { label: 'انتشار استوری', value: 'publish_story' },
 ];
 

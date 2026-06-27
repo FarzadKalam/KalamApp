@@ -30,6 +30,7 @@ import FileExtensionTile from './files/FileExtensionTile';
 import { isImageFileLike } from '../utils/imagePreview';
 
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
+const ProcessCardsV2RuntimeBlock = React.lazy(() => import('./processes/ProcessCardsV2RuntimeBlock'));
 
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
@@ -864,6 +865,10 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
     const isPrimaryTitleColumn = isKeyLikeField && primaryTitleField?.key === field.key;
     const isSearchable = field.type === FieldType.TEXT || field.type === FieldType.PHONE || field.key.includes('name') || field.key.includes('code') || field.key.includes('title');
     const isTagField = field.type === FieldType.TAGS;
+    const isProcessStagesColumn = (
+      field.type === FieldType.PROGRESS_STAGES
+      || ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft', 'template_stages_preview', 'run_stages_preview'].includes(String(field.key || ''))
+    );
     const hasChoiceFilter =
       !isTagField &&
       (field.type === FieldType.STATUS ||
@@ -975,6 +980,8 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
       width:
         field.key === 'id'
           ? 60
+          : isProcessStagesColumn
+            ? 460
           : field.type === FieldType.IMAGE
             ? 62
           : isKeyLikeField
@@ -1144,17 +1151,29 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
               </RelatedRecordPopover>
             );
         }
-        const isProcessStagesCell = (
-          field.type === FieldType.PROGRESS_STAGES
-          || ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft'].includes(String(field.key || ''))
-        );
-        if (isProcessStagesCell) {
+        if (isProcessStagesColumn) {
           const draftKey = field.type === FieldType.PROGRESS_STAGES
             ? (moduleConfig?.id === 'production_orders' || moduleConfig?.id === 'production_boms'
               ? 'production_stages_draft'
               : String(field.key || 'production_stages_draft'))
             : String(field.key || 'production_stages_draft');
           const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
+          if (draftKey !== 'production_stages_draft') {
+            return (
+              <div className="min-w-[340px] max-w-[520px] overflow-hidden">
+                <React.Suspense fallback={null}>
+                  <ProcessCardsV2RuntimeBlock
+                    moduleId={moduleConfig?.id}
+                    recordId={record.id}
+                    recordData={record}
+                    draftStages={draftStages}
+                    fieldKey={draftKey}
+                    variant="column"
+                  />
+                </React.Suspense>
+              </div>
+            );
+          }
           return (
             <div style={{ minWidth: 160, minHeight: 20 }}>
               <React.Suspense fallback={null}>

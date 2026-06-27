@@ -20,6 +20,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
@@ -36,8 +37,20 @@ import {
   AI_INSTRUCTIONS_TITLE,
   isAiInstructionsConfigured,
 } from '../../utils/aiKnowledge';
+import {
+  buildBusinessModelCanvasDocumentContent,
+  BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE,
+  BUSINESS_MODEL_CANVAS_SYSTEM_KEY,
+  BUSINESS_MODEL_CANVAS_TITLE,
+  createEmptyBusinessModelCanvasSections,
+  isBusinessModelCanvasDocument,
+} from '../../utils/businessModelCanvas';
 import KnowledgeDocumentEditor, { OrgDocumentForEditor } from './KnowledgeDocumentEditor';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import {
+  embedKnowledgeDocumentChunks,
+  rebuildKnowledgeDocumentChunks,
+} from '../../utils/orgKnowledgeDocuments';
 
 type OrgDocument = {
   id: string;
@@ -75,6 +88,7 @@ const DOCUMENT_SELECT_FIELDS = 'id, title, body, body_html, document_type, statu
 
 const BASE_DOCUMENT_TYPE_OPTIONS = [
   { label: 'دستورهای هوش مصنوعی', value: AI_INSTRUCTIONS_DOCUMENT_TYPE },
+  { label: BUSINESS_MODEL_CANVAS_TITLE, value: BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE },
   { label: 'بیزنس پلن', value: 'business_plan' },
   { label: 'توضیحات کسب و کار', value: 'business_overview' },
   { label: 'SOP / فرایندها', value: 'sop' },
@@ -88,53 +102,9 @@ const STATUS_OPTIONS = [
   { label: 'آرشیو', value: 'archived' },
 ];
 
-const splitIntoChunks = (body: string) => {
-  const paragraphs = String(body || '')
-    .replace(/\r\n/g, '\n')
-    .split(/\n{2,}/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  const chunks: string[] = [];
-  let current = '';
-  const maxLength = 1200;
-
-  paragraphs.forEach((paragraph) => {
-    if (!current) {
-      current = paragraph;
-      return;
-    }
-    if (`${current}\n\n${paragraph}`.length <= maxLength) {
-      current = `${current}\n\n${paragraph}`;
-      return;
-    }
-    chunks.push(current);
-    current = paragraph;
-  });
-
-  if (current) chunks.push(current);
-  if (chunks.length === 0 && body.trim()) chunks.push(body.trim().slice(0, maxLength));
-  return chunks.flatMap((chunk) => {
-    if (chunk.length <= maxLength) return [chunk];
-    const pieces: string[] = [];
-    for (let index = 0; index < chunk.length; index += maxLength) {
-      pieces.push(chunk.slice(index, index + maxLength));
-    }
-    return pieces;
-  });
-};
-
-const hashText = (value: string) => {
-  let hash = 5381;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = ((hash << 5) + hash) + value.charCodeAt(index);
-    hash &= 0xffffffff;
-  }
-  return Math.abs(hash).toString(16);
-};
-
 const AiKnowledgeTab: React.FC = () => {
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const [form] = Form.useForm<KnowledgeFormValues>();
   const [documents, setDocuments] = useState<OrgDocument[]>([]);
   const [loading, setLoading] = useState(false);
@@ -155,6 +125,16 @@ const AiKnowledgeTab: React.FC = () => {
     const base = [...BASE_DOCUMENT_TYPE_OPTIONS, ...customTypeOptions];
     return base;
   }, [customTypeOptions]);
+
+  const creatableTypeOptions = useMemo(
+    () =>
+      allTypeOptions.filter(
+        (option) =>
+          option.value !== AI_INSTRUCTIONS_DOCUMENT_TYPE
+          && option.value !== BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE
+      ),
+    [allTypeOptions]
+  );
 
   // اضافه کردن آپشن‌های custom از اسناد موجود هنگام بارگذاری
   useEffect(() => {
@@ -264,10 +244,52 @@ const AiKnowledgeTab: React.FC = () => {
     return insertedDocument;
   };
 
+  const ensureBusinessModelCanvasDocument = async () => {
+    const { data, error } = await supabase
+      .from('org_documents')
+      .select(DOCUMENT_SELECT_FIELDS)
+      .eq('document_type', BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const existing = Array.isArray(data) ? (data[0] as OrgDocument | undefined) : undefined;
+    if (existing) return existing;
+
+    const { data: authData } = await supabase.auth.getUser();
+    const defaultContent = buildBusinessModelCanvasDocumentContent(createEmptyBusinessModelCanvasSections());
+    const { data: inserted, error: insertError } = await supabase
+      .from('org_documents')
+      .insert([
+        {
+          title: BUSINESS_MODEL_CANVAS_TITLE,
+          body: defaultContent.body,
+          body_html: defaultContent.body_html,
+          document_type: BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE,
+          status: 'active',
+          use_for_ai: true,
+          metadata: {
+            ...defaultContent.metadata,
+            system_key: BUSINESS_MODEL_CANVAS_SYSTEM_KEY,
+          },
+          created_by: authData?.user?.id || null,
+          updated_by: authData?.user?.id || null,
+          allowed_user_ids: [],
+          allowed_role_ids: [],
+        },
+      ])
+      .select(DOCUMENT_SELECT_FIELDS)
+      .maybeSingle();
+    if (insertError) throw insertError;
+    const insertedDocument = inserted as OrgDocument | null;
+    if (insertedDocument) await rebuildChunks(insertedDocument);
+    return insertedDocument;
+  };
+
   const fetchDocuments = async () => {
     setLoading(true);
     try {
       await ensureAiInstructionsDocument();
+      await ensureBusinessModelCanvasDocument();
       const { data, error } = await supabase
         .from('org_documents')
         .select(DOCUMENT_SELECT_FIELDS)
@@ -309,47 +331,12 @@ const AiKnowledgeTab: React.FC = () => {
   }, []);
 
   const rebuildChunks = async (doc: OrgDocument | OrgDocumentForEditor) => {
-    const { error: deleteError } = await supabase
-      .from('document_chunks')
-      .delete()
-      .eq('document_id', doc.id);
-    if (deleteError) throw deleteError;
-
-    // فقط اسناد فعال و با تیک هوش مصنوعی chunk می‌شوند
-    if (doc.status !== 'active' || doc.use_for_ai === false) return;
-
-    // اگر body_html داشت، plain text را از HTML بگیر؛ وگرنه از body مستقیم
-    const plainBody = doc.body_html ? htmlToPlainText(doc.body_html) : (doc.body || '');
-    const chunks = splitIntoChunks(plainBody);
-    if (chunks.length === 0) return;
-
-    const rows = chunks.map((content, index) => ({
-      document_id: doc.id,
-      chunk_index: index,
-      content,
-      content_hash: hashText(content),
-      token_estimate: Math.ceil(content.length / 4),
-      status: 'active',
-      allowed_user_ids: normalizeKnowledgeVisibilityIds(doc.allowed_user_ids),
-      allowed_role_ids: normalizeKnowledgeVisibilityIds(doc.allowed_role_ids),
-      metadata: {
-        document_title: doc.title,
-        document_type: doc.document_type || 'general',
-        system_key: doc?.metadata?.system_key || null,
-      },
-    }));
-
-    const { error: insertError } = await supabase.from('document_chunks').insert(rows);
-    if (insertError) throw insertError;
+    await rebuildKnowledgeDocumentChunks(supabase, doc);
   };
 
   const embedDocumentChunks = async (doc: OrgDocument | OrgDocumentForEditor, showFeedback = false) => {
     try {
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: { action: 'embed_document_chunks', documentId: doc.id },
-      });
-      if (error) throw error;
-      if ((data as any)?.error) throw new Error(String((data as any).error));
+      const data = await embedKnowledgeDocumentChunks(supabase, doc);
       if (showFeedback && Number((data as any)?.processed || 0) > 0) {
         message.success(`${Number((data as any).processed || 0).toLocaleString('fa-IR')} بخش برای جستجوی هوشمند آماده شد.`);
       }
@@ -387,12 +374,24 @@ const AiKnowledgeTab: React.FC = () => {
       const values = await form.validateFields();
       setSaving(true);
       const { data: authData } = await supabase.auth.getUser();
+      if (!editingDocument?.id && [AI_INSTRUCTIONS_DOCUMENT_TYPE, BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE].includes(String(values.document_type || '').trim())) {
+        throw new Error('این نوع سند به‌صورت سیستمی مدیریت می‌شود و از این بخش قابل ایجاد نیست.');
+      }
       const isSystemDocument = editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+      const isCanvasDocument = editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE;
       const payload = {
-        title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : values.title.trim(),
+        title: isSystemDocument
+          ? AI_INSTRUCTIONS_TITLE
+          : isCanvasDocument
+          ? BUSINESS_MODEL_CANVAS_TITLE
+          : values.title.trim(),
         body: values.body.trim(),
         body_html: null,
-        document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (values.document_type || 'general'),
+        document_type: isSystemDocument
+          ? AI_INSTRUCTIONS_DOCUMENT_TYPE
+          : isCanvasDocument
+          ? BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE
+          : (values.document_type || 'general'),
         status: values.status || 'active',
         allowed_user_ids: normalizeKnowledgeVisibilityIds(values.allowed_user_ids),
         allowed_role_ids: normalizeKnowledgeVisibilityIds(values.allowed_role_ids),
@@ -403,6 +402,12 @@ const AiKnowledgeTab: React.FC = () => {
               system_key: AI_INSTRUCTIONS_SYSTEM_KEY,
               is_system_default: true,
               default_template: !isAiInstructionsConfigured(values.body),
+            }
+          : isCanvasDocument
+          ? {
+              ...(editingDocument?.metadata || {}),
+              system_key: BUSINESS_MODEL_CANVAS_SYSTEM_KEY,
+              is_system_default: true,
             }
           : (editingDocument?.metadata || {}),
       };
@@ -445,8 +450,8 @@ const AiKnowledgeTab: React.FC = () => {
 
   const handleDelete = async (documentId: string) => {
     const targetDocument = documents.find((item) => item.id === documentId);
-    if (targetDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE) {
-      message.warning('رکورد دستورهای هوش مصنوعی قابل حذف نیست.');
+    if (targetDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || isBusinessModelCanvasDocument(targetDocument)) {
+      message.warning('رکوردهای سیستمی دانش سازمان قابل حذف نیستند.');
       return;
     }
     try {
@@ -533,10 +538,14 @@ const AiKnowledgeTab: React.FC = () => {
         onRow={(row) => ({
           onClick: (e) => {
             if ((e.target as HTMLElement).closest('.ant-btn, button, .ant-popover, .ant-popconfirm')) return;
+            if (isBusinessModelCanvasDocument(row)) {
+              navigate('/org-knowledge/business-model-canvas');
+              return;
+            }
             setEditorDocument(row);
           },
           style: { cursor: 'pointer' },
-          title: 'برای ویرایش کامل کلیک کنید',
+          title: isBusinessModelCanvasDocument(row) ? 'برای باز کردن صفحه اختصاصی کلیک کنید' : 'برای ویرایش کامل کلیک کنید',
         })}
         columns={[
           {
@@ -552,6 +561,10 @@ const AiKnowledgeTab: React.FC = () => {
                   {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE ? (
                     <Tag color={isAiInstructionsConfigured(row.body) ? 'magenta' : 'gold'} className="!m-0">
                       {isAiInstructionsConfigured(row.body) ? 'تنظیم‌شده' : 'نیازمند تنظیم'}
+                    </Tag>
+                  ) : isBusinessModelCanvasDocument(row) ? (
+                    <Tag color="cyan" className="!m-0">
+                      صفحه اختصاصی
                     </Tag>
                   ) : null}
                 </div>
@@ -624,9 +637,15 @@ const AiKnowledgeTab: React.FC = () => {
             width: 240,
             render: (_: unknown, row: OrgDocument) => (
               <Space size="small" onClick={(e) => e.stopPropagation()}>
-                <Button size="small" icon={<EditOutlined />} onClick={() => openQuickEditModal(row)}>
-                  ویرایش سریع
-                </Button>
+                {isBusinessModelCanvasDocument(row) ? (
+                  <Button size="small" icon={<EditOutlined />} onClick={() => navigate('/org-knowledge/business-model-canvas')}>
+                    باز کردن بوم
+                  </Button>
+                ) : (
+                  <Button size="small" icon={<EditOutlined />} onClick={() => openQuickEditModal(row)}>
+                    ویرایش سریع
+                  </Button>
+                )}
                 <Tooltip title="بازسازی bunk‌های هوش مصنوعی از محتوای فعلی سند">
                   <Button
                     size="small"
@@ -637,7 +656,7 @@ const AiKnowledgeTab: React.FC = () => {
                     بازسازی AI
                   </Button>
                 </Tooltip>
-                {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE ? null : (
+                {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE || isBusinessModelCanvasDocument(row) ? null : (
                   <Popconfirm title="این سند حذف شود؟" onConfirm={() => handleDelete(row.id)}>
                     <Button size="small" danger icon={<DeleteOutlined />} />
                   </Popconfirm>
@@ -667,12 +686,12 @@ const AiKnowledgeTab: React.FC = () => {
               className="md:col-span-2"
               rules={[{ required: true, message: 'عنوان را وارد کنید.' }]}
             >
-              <Input disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE} />
+              <Input disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE} />
             </Form.Item>
             <Form.Item label="نوع سند" name="document_type">
               <Select
-                options={allTypeOptions}
-                disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE}
+                options={editingDocument ? allTypeOptions : creatableTypeOptions}
+                disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE}
                 showSearch
                 filterOption={(input, opt) =>
                   String(opt?.label || '').toLowerCase().includes(input.toLowerCase())

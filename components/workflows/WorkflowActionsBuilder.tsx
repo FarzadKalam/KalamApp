@@ -53,6 +53,7 @@ interface WorkflowActionsBuilderProps {
   nextStageFields?: ModuleField[];
   enableNextStageActions?: boolean;
   processStageOptions?: Array<{ label: string; value: string }>;
+  activationStageOptions?: Array<{ label: string; value: string }>;
   disabled?: boolean;
   overlayZIndexBase?: number;
   popupContainer?: (trigger?: HTMLElement | null) => HTMLElement;
@@ -367,6 +368,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   nextStageFields,
   enableNextStageActions = false,
   processStageOptions = [],
+  activationStageOptions = [],
   disabled = false,
   overlayZIndexBase = 1400,
   popupContainer: popupContainerProp,
@@ -920,6 +922,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   }, [relationSourceModuleOptions]);
 
   const processTemplateOptions = relationOptions.process_template_id || [];
+  const effectiveActivationStageOptions = activationStageOptions.length > 0
+    ? activationStageOptions
+    : processStageOptions;
   const canUseProcessTemplateActions = supportsWorkflowProcessTemplateActions(currentModuleId);
   const effectiveActionTypeOptions = useMemo(() => {
     const supplementalOptions: Array<{ label: string; value: WorkflowActionType }> = [
@@ -936,7 +941,9 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               'activate_specific_process_stage',
               'send_to_specific_stage',
             ].includes(option.value)
-            || processStageOptions.length > 0
+            || (option.value === 'activate_specific_process_stage'
+              ? effectiveActivationStageOptions.length > 0
+              : processStageOptions.length > 0)
           )
         ));
     const optionsByValue = new Map(
@@ -951,7 +958,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }
     });
     return Array.from(optionsByValue.values());
-  }, [actionOptions, enableNextStageActions, processStageOptions.length, safeValue]);
+  }, [actionOptions, effectiveActivationStageOptions.length, enableNextStageActions, processStageOptions.length, safeValue]);
 
   const addAction = () => {
     const type = effectiveActionTypeOptions[0]?.value || 'send_note';
@@ -2643,12 +2650,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             {...commonSelectProps}
             value={config.stage_node_key || undefined}
             disabled={disabled}
-            options={processStageOptions}
+            options={effectiveActivationStageOptions}
             onChange={(nextVal) => updateActionConfig(action.id, { stage_node_key: nextVal })}
             placeholder="مرحله موردنظر"
             pickerTitle="انتخاب مرحله فرآیند"
           />
-          {processStageOptions.length === 0 ? (
+          {effectiveActivationStageOptions.length === 0 ? (
             <div className="text-xs text-gray-500">مرحله قابل انتخابی در این فرآیند وجود ندارد.</div>
           ) : null}
         </div>

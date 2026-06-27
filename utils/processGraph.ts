@@ -420,25 +420,43 @@ export const buildProcessStagePositionMap = (
   return result;
 };
 
-export const getPreviousProcessStage = (
+export const getPreviousProcessStages = (
   stages: Record<string, any>[],
   targetNodeKey: string,
   rawGraph?: ProcessGraphDefinition | null,
 ) => {
   const target = stages.find((stage, index) => getProcessStageNodeKey(stage, index) === targetNodeKey);
-  if (!target) return null;
+  if (!target) return [];
   const laneKey = getProcessStageLaneKey(target);
   const sameLane = stages
     .filter((stage) => getProcessStageLaneKey(stage) === laneKey)
     .sort((left, right) => Number(left?.sort_order || 0) - Number(right?.sort_order || 0));
   const index = sameLane.findIndex((stage, stageIndex) => getProcessStageNodeKey(stage, stageIndex) === targetNodeKey);
-  if (index > 0) return sameLane[index - 1] || null;
+  if (index > 0) return [sameLane[index - 1]].filter(Boolean);
 
   const graph = normalizeProcessGraph(rawGraph || readProcessGraphFromStages(stages) || {}, stages);
   const lane = graph.lanes.find((item) => item.key === laneKey);
-  const parentTrigger = graph.triggers.find((trigger) => trigger.key === lane?.parentTriggerKey);
-  if (!parentTrigger?.sourceNodeKey) return null;
-  return stages.find((stage, stageIndex) => getProcessStageNodeKey(stage, stageIndex) === parentTrigger.sourceNodeKey) || null;
+  const incomingTriggers = graph.triggers.filter((trigger) => (
+    Boolean(trigger.sourceNodeKey)
+    && (
+      trigger.targetLaneKeys.includes(laneKey)
+      || (lane?.parentTriggerKey && trigger.key === lane.parentTriggerKey)
+    )
+  ));
+  const previousByNodeKey = new Map<string, Record<string, any>>();
+  incomingTriggers.forEach((trigger) => {
+    const previous = stages.find((stage, stageIndex) => getProcessStageNodeKey(stage, stageIndex) === trigger.sourceNodeKey);
+    if (previous && trigger.sourceNodeKey) previousByNodeKey.set(trigger.sourceNodeKey, previous);
+  });
+  return Array.from(previousByNodeKey.values());
+};
+
+export const getPreviousProcessStage = (
+  stages: Record<string, any>[],
+  targetNodeKey: string,
+  rawGraph?: ProcessGraphDefinition | null,
+) => {
+  return getPreviousProcessStages(stages, targetNodeKey, rawGraph)[0] || null;
 };
 
 export const getNextProcessStages = (

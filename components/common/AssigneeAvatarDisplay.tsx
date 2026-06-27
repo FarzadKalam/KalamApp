@@ -27,8 +27,8 @@ const AssigneeAvatarDisplayComponent: React.FC<AssigneeAvatarDisplayProps> = ({
   className,
   showLabel = true,
   labelClassName = 'text-[10px] text-gray-600 dark:text-gray-300 truncate',
-  emptyPlaceholder = <span className="text-[10px] text-gray-400">-</span>,
-  unknownPlaceholder = <span className="text-[10px] text-gray-400">نامشخص</span>,
+  emptyPlaceholder = <span className="text-[10px] text-gray-400">تعیین نشده</span>,
+  unknownPlaceholder = <span className="text-[10px] text-gray-400">تعیین نشده</span>,
   roleAvatarClassName = 'bg-blue-100 text-blue-600',
 }) => {
   const presentation = useMemo(
@@ -73,7 +73,7 @@ const AssigneeAvatarDisplayComponent: React.FC<AssigneeAvatarDisplayProps> = ({
 
   return (
     <div className={className || 'flex min-h-[24px] items-center gap-1 min-w-0'}>
-      <ProfileAvatar size={avatarSize} icon={<UserOutlined />} name={presentation.label || 'نامشخص'} />
+      <ProfileAvatar size={avatarSize} icon={<UserOutlined />} name={presentation.label || ''} />
       {labelNode}
     </div>
   );

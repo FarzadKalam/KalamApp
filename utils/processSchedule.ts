@@ -1,4 +1,5 @@
 import {
+  getNextProcessStages,
   getPreviousProcessStage,
   getProcessStageNodeKey,
   type ProcessGraphDefinition,
@@ -6,7 +7,16 @@ import {
 
 export type ProcessDueAnchorType =
   | 'process_start'
+  | 'current_stage_created'
+  | 'previous_stage_created'
+  | 'previous_stage_start'
   | 'previous_stage_due'
+  | 'next_stage_created'
+  | 'next_stage_start'
+  | 'next_stage_due'
+  | 'next_stage_completed'
+  | 'specific_stage_created'
+  | 'specific_stage_start'
   | 'specific_stage_due'
   | 'previous_stage_completed'
   | 'specific_stage_completed';
@@ -32,8 +42,20 @@ export const normalizeProcessDueAnchor = (
   const typeMap: Record<string, ProcessDueAnchorType> = {
     project_start: 'process_start',
     process_start: 'process_start',
+    task_created: 'current_stage_created',
+    current_task_created: 'current_stage_created',
+    current_stage_created: 'current_stage_created',
+    stage_created: 'current_stage_created',
+    previous_stage_created: 'previous_stage_created',
+    previous_stage_start: 'previous_stage_start',
     previous_stage_end: 'previous_stage_due',
     previous_stage_due: 'previous_stage_due',
+    next_stage_created: 'next_stage_created',
+    next_stage_start: 'next_stage_start',
+    next_stage_due: 'next_stage_due',
+    next_stage_completed: 'next_stage_completed',
+    specific_stage_created: 'specific_stage_created',
+    specific_stage_start: 'specific_stage_start',
     specific_stage_due: 'specific_stage_due',
     previous_stage_completed: 'previous_stage_completed',
     specific_stage_completed: 'specific_stage_completed',
@@ -53,7 +75,16 @@ export const getProcessDueAnchorLabel = (
   const anchor = normalizeProcessDueAnchor(stage);
   const labels: Record<ProcessDueAnchorType, string> = {
     process_start: 'شروع فرآیند',
+    current_stage_created: 'ایجاد همین فعالیت',
+    previous_stage_created: 'ایجاد مرحله قبلی',
+    previous_stage_start: 'شروع مرحله قبلی',
     previous_stage_due: 'موعد انجام مرحله قبلی',
+    next_stage_created: 'ایجاد مرحله بعدی',
+    next_stage_start: 'شروع مرحله بعدی',
+    next_stage_due: 'موعد انجام مرحله بعدی',
+    next_stage_completed: 'تکمیل واقعی مرحله بعدی',
+    specific_stage_created: 'ایجاد مرحله خاص',
+    specific_stage_start: 'شروع مرحله خاص',
     specific_stage_due: 'موعد انجام مرحله خاص',
     previous_stage_completed: 'تکمیل واقعی مرحله قبلی',
     specific_stage_completed: 'تکمیل واقعی مرحله خاص',
@@ -78,17 +109,24 @@ export const resolveProcessDueAnchorStage = ({
   graph?: ProcessGraphDefinition | null;
 }) => {
   const anchor = normalizeProcessDueAnchor(stage);
-  if (anchor.type === 'specific_stage_due' || anchor.type === 'specific_stage_completed') {
+  if (anchor.type === 'specific_stage_created' || anchor.type === 'specific_stage_start' || anchor.type === 'specific_stage_due' || anchor.type === 'specific_stage_completed') {
     return anchor.stageNodeKey
       ? stages.find((candidate, index) => getProcessStageNodeKey(candidate, index) === anchor.stageNodeKey) || null
       : null;
   }
-  if (anchor.type === 'previous_stage_due' || anchor.type === 'previous_stage_completed') {
+  if (anchor.type === 'previous_stage_created' || anchor.type === 'previous_stage_start' || anchor.type === 'previous_stage_due' || anchor.type === 'previous_stage_completed') {
     return getPreviousProcessStage(
       stages,
       getProcessStageNodeKey(stage),
       graph,
     );
+  }
+  if (anchor.type === 'next_stage_created' || anchor.type === 'next_stage_start' || anchor.type === 'next_stage_due' || anchor.type === 'next_stage_completed') {
+    return getNextProcessStages(
+      stages,
+      getProcessStageNodeKey(stage),
+      graph,
+    )[0] || null;
   }
   return null;
 };
@@ -114,7 +152,13 @@ export const computeProcessStageDueDate = ({
   let anchorDate: Date | null = null;
   if (anchor.type === 'process_start') {
     anchorDate = processStartedAt instanceof Date ? processStartedAt : parseDate(processStartedAt);
-  } else if (anchor.type === 'previous_stage_due' || anchor.type === 'specific_stage_due') {
+  } else if (anchor.type === 'current_stage_created') {
+    anchorDate = parseDate(stage?.created_at || stage?.task_created_at || stage?.inserted_at) || new Date();
+  } else if (anchor.type === 'previous_stage_created' || anchor.type === 'next_stage_created' || anchor.type === 'specific_stage_created') {
+    anchorDate = parseDate(anchorStage?.created_at || anchorStage?.task_created_at || anchorStage?.inserted_at);
+  } else if (anchor.type === 'previous_stage_start' || anchor.type === 'next_stage_start' || anchor.type === 'specific_stage_start') {
+    anchorDate = parseDate(anchorStage?.start_date || anchorStage?.actual_start_at || anchorStage?.started_at);
+  } else if (anchor.type === 'previous_stage_due' || anchor.type === 'next_stage_due' || anchor.type === 'specific_stage_due') {
     anchorDate = parseDate(anchorStage?.due_date || anchorStage?.planned_due_at);
   } else {
     anchorDate = parseDate(anchorStage?.completed_at || anchorStage?.actual_end_at);
@@ -125,4 +169,3 @@ export const computeProcessStageDueDate = ({
   const multiplier = durationUnit === 'hour' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
   return new Date(anchorDate.getTime() + durationValue * multiplier);
 };
-

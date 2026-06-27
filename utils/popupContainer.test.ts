@@ -1,0 +1,30 @@
+import { describe, expect, it } from 'vitest';
+
+import { resolveOverlayPopupContainer } from './popupContainer';
+
+describe('resolveOverlayPopupContainer', () => {
+  it('uses the dedicated popup root for triggers inside modal overlays', () => {
+    document.body.innerHTML = `
+      <div class="ant-modal-root">
+        <div class="ant-modal-wrap">
+          <div class="ant-modal">
+            <button id="trigger" type="button">hover</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const trigger = document.getElementById('trigger') as HTMLElement;
+    const container = resolveOverlayPopupContainer(trigger);
+
+    expect(container.id).toBe('kalam-popup-root');
+    expect(container.parentElement).toBe(document.body);
+  });
+
+  it('keeps using the shared popup root when no trigger is provided', () => {
+    const container = resolveOverlayPopupContainer();
+
+    expect(container.id).toBe('kalam-popup-root');
+    expect(container.parentElement).toBe(document.body);
+  });
+});

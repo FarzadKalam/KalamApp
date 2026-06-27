@@ -41,6 +41,8 @@ const ACTION_VISUALS: Partial<Record<WorkflowActionType, ActionVisual>> = {
   create_related_record: { icon: <NodeIndexOutlined />, accentColor: '#10b981' },
   copy_process_template: { icon: <CopyOutlined />, accentColor: '#a855f7' },
   execute_process: { icon: <PlayCircleOutlined />, accentColor: '#ec4899' },
+  activate_next_process_stage: { icon: <PlayCircleOutlined />, accentColor: '#0ea5e9' },
+  activate_specific_process_stage: { icon: <PlayCircleOutlined />, accentColor: '#0284c7' },
   publish_story: { icon: <NotificationOutlined />, accentColor: '#f43f5e' },
 };
 

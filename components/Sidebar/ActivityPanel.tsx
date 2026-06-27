@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { App, Button, Checkbox, Empty, List, Spin, Tag, Timeline } from 'antd';
+import { App, Button, Checkbox, Empty, List, Spin, Tag, Timeline, Tooltip } from 'antd';
+import { MessageOutlined } from '@ant-design/icons';
 import DateObject from 'react-date-object';
 import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
@@ -44,6 +45,7 @@ interface ActivityPanelProps {
   mentionUsers?: any[];
   mentionRoles?: any[];
   moduleConfig?: any;
+  compact?: boolean;
 }
 
 const isAiNote = (note: any) =>
@@ -59,6 +61,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   mentionUsers = [],
   mentionRoles = [],
   moduleConfig,
+  compact = false,
 }) => {
   const { message } = App.useApp();
   const [items, setItems] = useState<any[]>([]);
@@ -82,6 +85,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [assigneeNameMap, setAssigneeNameMap] = useState<Record<string, string>>({});
   const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
+  const [assigneeUsers, setAssigneeUsers] = useState<any[]>([]);
+  const [assigneeRoles, setAssigneeRoles] = useState<any[]>([]);
   const [changeRelationValueMap, setChangeRelationValueMap] = useState<RelationValueMap>({});
 
   const tasksModuleConfig = MODULES.tasks;
@@ -310,6 +315,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       try {
         const directory = await fetchAssigneeDirectory(supabase);
         if (cancelled) return;
+        setAssigneeUsers(directory.users || []);
+        setAssigneeRoles(directory.roles || []);
         setAssigneeNameMap(
           directory.users.reduce<Record<string, string>>((acc, user) => {
             acc[user.id] = user.display_name || user.full_name || user.id;
@@ -555,23 +562,30 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       } as any;
 
       await insertNotesWithFallback([payload]);
+      setItems((prev) => [
+        {
+          ...payload,
+          id: `optimistic-note-${Date.now()}`,
+        },
+        ...prev,
+      ]);
       if (smsNotificationEnabled) {
         if (isPublicReply) {
-          await sendInvoiceReplySmsToCustomer({
+          void sendInvoiceReplySmsToCustomer({
             moduleId: scope.module_id,
             recordId: scope.record_id,
             recordName: recordName || '',
             systemCode: String(replyTargetNote?.metadata?.system_code || ''),
-          });
+          }).catch((error) => console.warn('Could not send invoice reply SMS', error));
         } else {
-          await sendNoteSmsNotifications({
+          void sendNoteSmsNotifications({
             authorName: String(currentUser.full_name || '').trim() || 'کاربر',
             noteText: newItem,
             mentionUserIds: mention_user_ids,
             mentionRoleIds: mention_role_ids,
             moduleId: scope.module_id,
             recordId: scope.record_id,
-          });
+          }).catch((error) => console.warn('Could not send note SMS notifications', error));
         }
       }
 
@@ -584,7 +598,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
       setReplyToId(null);
       setSmsNotificationEnabled(false);
       setSendPublicToCustomer(false);
-      await fetchData();
+      void fetchData();
     } catch (err: any) {
       console.error(err);
       message.error('ثبت با خطا مواجه شد');
@@ -639,22 +653,24 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 mb-4">
-        <div className="text-sm text-gray-600 dark:text-gray-400">
-          {view === 'notes' && 'یادداشت‌ها'}
-          {view === 'tasks' && 'فعالیت ها'}
-          {view === 'changelogs' && 'تاریخچه تغییرات'}
-        </div>
-        {recordName ? (
-          <div className="text-xs text-gray-500 dark:text-gray-500 mt-1 truncate">
-            {recordName}
+    <div className={`h-full flex flex-col ${compact ? 'bg-transparent text-xs' : ''}`}>
+      {!compact ? (
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 mb-4">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
+            {view === 'notes' && 'یادداشت‌ها'}
+            {view === 'tasks' && 'فعالیت ها'}
+            {view === 'changelogs' && 'تاریخچه تغییرات'}
           </div>
-        ) : null}
-      </div>
+          {recordName ? (
+            <div className="text-xs text-gray-500 dark:text-gray-500 mt-1 truncate">
+              {recordName}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {view === 'notes' ? (
-        <div className="mb-6 overflow-hidden rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.52)] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.52)]">
+        <div className={`${compact ? 'mb-2 rounded-none border-0 bg-transparent' : 'mb-6 overflow-hidden rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.52)] dark:border-[rgba(var(--brand-300-rgb),0.22)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.52)]'}`}>
           <SharedNoteComposer
             value={newItem}
             onChange={setNewItem}
@@ -696,17 +712,33 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
             filePickerRecordId={recordId}
             replyActive={Boolean(replyToId)}
             onClearReply={() => { setReplyToId(null); setSendPublicToCustomer(false); }}
-            smsNotificationEnabled={smsNotificationEnabled}
-            onSmsNotificationChange={setSmsNotificationEnabled}
+            smsNotificationEnabled={compact ? false : smsNotificationEnabled}
+            onSmsNotificationChange={compact ? undefined : setSmsNotificationEnabled}
             extraActions={(() => {
-              if (!replyToId) return undefined;
+              const nodes: React.ReactNode[] = [];
+              if (compact) {
+                nodes.push(
+                  <Tooltip key="sms" title={smsNotificationEnabled ? 'پیامک فعال است' : 'فعال‌سازی پیامک'}>
+                    <Button
+                      type={smsNotificationEnabled ? 'primary' : 'text'}
+                      size="small"
+                      shape="circle"
+                      icon={<MessageOutlined />}
+                      onClick={() => setSmsNotificationEnabled((current) => !current)}
+                      aria-label="اطلاع‌رسانی پیامکی"
+                    />
+                  </Tooltip>
+                );
+              }
+              if (!replyToId) return nodes.length ? nodes : undefined;
               const replyTarget = items.find((n: any) => n.id === replyToId);
               const isOnlineInvoice = replyTarget && ['online_invoice', 'online_invoice_confirm'].includes(
                 String(replyTarget?.metadata?.source || '')
               );
-              if (!isOnlineInvoice) return undefined;
-              return (
+              if (!isOnlineInvoice) return nodes.length ? nodes : undefined;
+              nodes.push(
                 <Checkbox
+                  key="public-reply"
                   checked={sendPublicToCustomer}
                   onChange={(e) => setSendPublicToCustomer(e.target.checked)}
                   className="mr-2 whitespace-nowrap text-[11px]"
@@ -714,6 +746,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                   ارسال در فاکتور برای مشتری
                 </Checkbox>
               );
+              return nodes;
             })()}
             submitDisabled={!newItem.trim() && pendingFiles.length === 0 && pendingLinkedAttachments.length === 0}
           />
@@ -728,7 +761,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         </div>
       ) : null}
 
-      <div className="flex-1 overflow-y-auto pr-1">
+      <div className={`flex-1 overflow-y-auto ${compact ? 'px-2 pb-2' : 'pr-1'}`}>
         {items.length === 0 ? (
           <Empty description="موردی یافت نشد" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
@@ -805,6 +838,8 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                     priorityOptions={priorityOptions}
                     assigneeNameMap={assigneeNameMap}
                     roleNameMap={roleNameMap}
+                    allUsers={assigneeUsers}
+                    allRoles={assigneeRoles}
                     recordTitle={recordName || null}
                     onStatusChange={async (taskId, status) => {
                       const previousTask = item ? { ...item } : null;

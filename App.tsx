@@ -114,6 +114,7 @@ const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
 const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
+const loadOrgKnowledgeBusinessModelCanvasPage = () => import("./pages/OrgKnowledgeBusinessModelCanvasPage");
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 const loadSaasAdminAiSettings = () => import("./pages/SaasAdmin/SaasAdminAiSettings");
@@ -165,6 +166,7 @@ const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
+const OrgKnowledgeBusinessModelCanvasPage = lazy(loadOrgKnowledgeBusinessModelCanvasPage);
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const SaasAdminAiSettings = lazy(loadSaasAdminAiSettings);
@@ -762,6 +764,7 @@ function App() {
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/org-knowledge" element={<OrgKnowledgePage />} />
+            <Route path="/org-knowledge/business-model-canvas" element={<OrgKnowledgeBusinessModelCanvasPage />} />
             <Route path="/recycle-bin" element={<RecycleBinPage />} />
             <Route path="/share-target" element={<ShareTargetPage />} />
             <Route path="/search" element={<GlobalSearchPage />} />

@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import RelatedRecordCard from './RelatedRecordCard';
+import RenderCardItem from '../moduleList/RenderCardItem';
 import { FieldType, RelatedTabConfig, RelatedTabFilterConfig } from '../../types';
 import {
   buildRelationValueMap,
@@ -942,13 +943,32 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
         <List
           dataSource={filteredItems}
           renderItem={(item: any) => (
-            <RelatedRecordCard
-              moduleId={tab.targetModule || ''}
-              item={item}
-              moduleConfig={targetConfig}
-              profileNameMap={profileNameMap}
-              relationValueMap={relationValueMap}
-            />
+            tab.targetModule === 'tasks' && targetConfig ? (
+              <div className="mb-3">
+                <RenderCardItem
+                  item={item}
+                  moduleId="tasks"
+                  moduleConfig={targetConfig}
+                  statusField="status"
+                  categoryField="task_type"
+                  tagsField="tags"
+                  selectedRowKeys={[]}
+                  setSelectedRowKeys={() => undefined}
+                  navigate={() => undefined}
+                  hideSelection
+                  minimal
+                  canViewField={() => true}
+                />
+              </div>
+            ) : (
+              <RelatedRecordCard
+                moduleId={tab.targetModule || ''}
+                item={item}
+                moduleConfig={targetConfig}
+                profileNameMap={profileNameMap}
+                relationValueMap={relationValueMap}
+              />
+            )
           )}
         />
       )}

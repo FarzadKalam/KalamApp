@@ -472,9 +472,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [jsonValidationError, setJsonValidationError] = useState('');
   const { label: currencyLabel } = useCurrencyConfig();
   const getProtectedDynamicValues = (dynamicCategory?: string) => (
-    ['main_unit', 'task_type'].includes(String(dynamicCategory || '').trim())
-      ? (field.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)
-      : []
+    Array.isArray((field as any)?.protectedDynamicValues)
+      ? (field as any).protectedDynamicValues.map((item: any) => String(item || '')).filter(Boolean)
+      : ['main_unit', 'task_type'].includes(String(dynamicCategory || '').trim())
+        ? (field.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)
+        : []
   );
   const normalizedLongTextValue = isLongTextField ? String(value || '').trim() : '';
   const longTextLineCount = normalizedLongTextValue ? normalizedLongTextValue.split(/\r?\n/).length : 0;

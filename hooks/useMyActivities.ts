@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type React from 'react';
 import { supabase } from '../supabaseClient';
 import { isMissingColumnError } from '../utils/notificationAssigneeHelpers';
+import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 
 // ---------------------------------------------------------------------------
 // Module-level cache — persists across popover open/close cycles.
@@ -10,9 +11,10 @@ import { isMissingColumnError } from '../utils/notificationAssigneeHelpers';
 type ActivitiesCacheEntry = { tasks: any[]; fetchedAt: number };
 const _activitiesCache = new Map<string, ActivitiesCacheEntry>();
 const ACTIVITIES_CACHE_TTL_MS = 90_000;
+const ACTIVITIES_CACHE_VERSION = 'v2-title-context';
 
 const buildCacheKey = (userId: string, roleId: string | null) =>
-  `${userId}:${roleId || 'norole'}`;
+  `${ACTIVITIES_CACHE_VERSION}:${userId}:${roleId || 'norole'}`;
 
 const readCache = (key: string): any[] | null => {
   const entry = _activitiesCache.get(key);
@@ -20,15 +22,18 @@ const readCache = (key: string): any[] | null => {
   return null;
 };
 
-const TASK_SELECT = [
+const TASK_SELECT_COLUMNS = [
   'id', 'name', 'status', 'priority', 'produced_qty',
   'created_at', 'start_date', 'due_date',
   'assignee_id', 'assignee_role_id', 'assignee_type',
+  'process_group_id', 'process_run_id', 'process_run_stage_id',
+  'source_template_id', 'source_stage_sort_order',
+  'recurrence_info', 'metadata',
   'production_line_id', 'related_to_module',
   'related_product', 'related_customer', 'related_supplier',
   'related_production_order', 'related_invoice', 'purchase_invoice_id',
   'project_id', 'marketing_lead_id', 'source_module_id', 'source_record_id',
-].join(', ');
+] as const;
 
 // ---------------------------------------------------------------------------
 
@@ -64,10 +69,10 @@ export const useMyActivities = ({ userId, roleId, enabled }: UseMyActivitiesOpti
   const fetchTasks = useCallback(async (): Promise<any[]> => {
     if (!userId) return [];
 
-    const buildBase = () =>
+    const buildBase = (selectExpr: string) =>
       supabase
         .from('tasks')
-        .select(TASK_SELECT)
+        .select(selectExpr)
         .neq('status', 'canceled')
         .order('created_at', { ascending: false })
         .limit(100);
@@ -77,7 +82,12 @@ export const useMyActivities = ({ userId, roleId, enabled }: UseMyActivitiesOpti
       ? `and(assignee_type.eq.user,assignee_id.eq.${userId}),and(assignee_type.eq.role,assignee_role_id.eq.${roleId})`
       : `and(assignee_type.eq.user,assignee_id.eq.${userId})`;
 
-    const { data, error } = await buildBase().or(orFilter);
+    const primaryResult = await runSelectWithCompatibleColumns<any[]>({
+      cacheKey: 'notifications:my-activities:tasks',
+      columns: TASK_SELECT_COLUMNS,
+      execute: (selectExpr) => buildBase(selectExpr).or(orFilter),
+    });
+    const { data, error } = primaryResult;
     if (!error) return data || [];
 
     // Fallback: schema might not have assignee_type / assignee_role_id columns
@@ -88,7 +98,12 @@ export const useMyActivities = ({ userId, roleId, enabled }: UseMyActivitiesOpti
       const legacyFilter = roleId
         ? `assignee_id.eq.${userId},assignee_id.eq.${roleId}`
         : `assignee_id.eq.${userId}`;
-      const { data: legacyData, error: legacyError } = await buildBase().or(legacyFilter);
+      const legacyResult = await runSelectWithCompatibleColumns<any[]>({
+        cacheKey: 'notifications:my-activities:tasks:legacy',
+        columns: TASK_SELECT_COLUMNS,
+        execute: (selectExpr) => buildBase(selectExpr).or(legacyFilter),
+      });
+      const { data: legacyData, error: legacyError } = legacyResult;
       if (!legacyError) return legacyData || [];
     }
 

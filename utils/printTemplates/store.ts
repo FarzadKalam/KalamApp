@@ -335,6 +335,7 @@ const buildOfficialLetterHeaderTemplate = () => `
       <img src="{{company.logo_url}}" alt="لوگو" style="display:block; margin:0 auto 2px auto; width:48px; height:48px; max-width:48px; max-height:48px; object-fit:contain;" />
       <div style="font-weight:900; font-size:14px; color:#111827; overflow-wrap:anywhere;">{{company.company_full_name}}</div>
       <div style="font-size:10px; color:#6b7280; overflow-wrap:anywhere;">{{company.trade_name}}</div>
+      <div style="font-size:9px; color:#6b7280; overflow-wrap:anywhere;">زمان چاپ: {{system.print_date}}</div>
     </div>
     <div style="width:32%;"></div>
   </div>
@@ -362,6 +363,7 @@ export const buildDefaultHeaderTemplateForModule = (moduleId: string) => {
       </td>
       <td style="width:34%; vertical-align:top; text-align:right; border:none; padding:10px; background:rgba(var(--brand-50-rgb),0.42); overflow-wrap:anywhere;">
         <div style="display:flex; flex-direction:column; gap:4px; font-size:12px; line-height:1.8;">
+          <div>زمان چاپ: {{system.print_date}}</div>
           <div>تاریخ: {{record.invoice_date}}</div>
           <div>شماره: {{record.system_code}}</div>
         </div>
@@ -772,6 +774,7 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'نام مسئول', value: 'responsible.name', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ امروز', value: 'system.today_date', kind: 'field', group: 'سیستم' },
     { label: 'تاریخ و زمان امروز', value: 'system.today_datetime', kind: 'field', group: 'سیستم' },
+    { label: 'تاریخ و زمان چاپ', value: 'system.print_date', kind: 'field', group: 'سیستم', scopes: ['record', 'list'] },
     { label: 'جدول فیلدهای دارای مقدار', value: 'system.compact_fields_table', kind: 'field', group: 'سیستم' },
     { label: 'فیلدها بصورت خطی (کاتالوگ)', value: 'system.compact_fields_inline', kind: 'field', group: 'سیستم', scopes: ['record'] },
     { label: 'URL تصویر رکورد', value: 'system.record_image_url', kind: 'field', group: 'سیستم', scopes: ['record'] },
@@ -1002,6 +1005,7 @@ const buildCompactA6DefaultTemplate = (moduleId: string, now: string): StoredPri
         <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
         <div style="font-size:13px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.7;">{{record.name}}</div>
         <div style="font-size:10px;">{{record.system_code}}</div>
+        <div style="font-size:9px; color:#64748b; margin-top:2px;">زمان چاپ: {{system.print_date}}</div>
       </td>
     </tr>
   </tbody>
@@ -1055,6 +1059,7 @@ const buildCompactA5DefaultTemplate = (moduleId: string, now: string): StoredPri
         <div style="font-size:10px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
         <div style="font-size:15px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.8;">{{record.name}}</div>
         <div style="font-size:10px;">{{record.system_code}}</div>
+        <div style="font-size:9px; color:#64748b; margin-top:2px;">زمان چاپ: {{system.print_date}}</div>
       </td>
     </tr>
   </tbody>
@@ -1108,6 +1113,7 @@ const buildCompactA4DefaultTemplate = (moduleId: string, now: string): StoredPri
         <div style="font-size:11px; color:#64748b; margin-bottom:2px;">${singularTitle}</div>
         <div style="font-size:18px; font-weight:900; color:rgb(var(--brand-500-rgb)); line-height:1.8;">{{record.name}}</div>
         <div style="font-size:11px;">{{record.system_code}}</div>
+        <div style="font-size:9px; color:#64748b; margin-top:2px;">زمان چاپ: {{system.print_date}}</div>
       </td>
     </tr>
   </tbody>
@@ -1283,7 +1289,7 @@ export const buildCatalogFullPageContentHtml = (
     email: '{{company.email}}',
     website: '{{company.website}}',
     companyAddress: '{{company.address}}',
-    todayDate: '{{system.today_date}}',
+    todayDate: '{{system.print_date}}',
     qrSectionHtml: '{{system.catalog_qr_section}}',
     mapSectionHtml: isBillboard ? '{{system.catalog_map_section}}' : '',
     imageDisplayMode,

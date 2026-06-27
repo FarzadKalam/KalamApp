@@ -23,6 +23,7 @@ type TaskInstructionsModalProps = {
   activeInstructionId?: string | null;
   onSelectInstruction: (instructionId: string) => void;
   onClose: () => void;
+  hideList?: boolean;
 };
 
 const resolveFileKind = (attachment: InstructionAttachment): 'image' | 'video' | 'audio' | 'file' => {
@@ -172,6 +173,7 @@ const TaskInstructionsModal: React.FC<TaskInstructionsModalProps> = ({
   activeInstructionId,
   onSelectInstruction,
   onClose,
+  hideList = false,
 }) => {
   const activeInstruction = instructions.find((item) => String(item?.id || '') === String(activeInstructionId || '')) || instructions[0] || null;
   const hasMedia = (instr: InstructionRecord) =>
@@ -192,7 +194,8 @@ const TaskInstructionsModal: React.FC<TaskInstructionsModalProps> = ({
           description="دستورالعملی برای این فعالیت ثبت نشده است."
         />
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-[320px_minmax(0,1fr)]">
+        <div className={hideList ? 'grid grid-cols-1 gap-4' : 'grid grid-cols-1 gap-4 md:grid-cols-[320px_minmax(0,1fr)]'}>
+          {!hideList ? (
           <div className="space-y-2 rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-white/5">
             <div className="text-xs text-gray-500">
               {`تعداد دستورالعمل‌ها: ${toPersianNumber(instructions.length)}`}
@@ -227,6 +230,7 @@ const TaskInstructionsModal: React.FC<TaskInstructionsModalProps> = ({
               })}
             </div>
           </div>
+          ) : null}
 
           <div className="min-w-0 overflow-y-auto rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-[#111827]" style={{ maxHeight: '72vh' }}>
             {activeInstruction ? (

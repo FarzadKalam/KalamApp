@@ -253,6 +253,8 @@ const TasksPanel: React.FC<TasksPanelProps> = ({
                   priorityOptions={priorityOptions}
                   assigneeNameMap={assigneeNameMap}
                   roleNameMap={roleNameMap}
+                  allUsers={directoryUsers}
+                  allRoles={directoryRoles}
                   recordTitle={recordTitle}
                   onClose={handleClose}
                   onStatusChange={async (taskId, status) => {

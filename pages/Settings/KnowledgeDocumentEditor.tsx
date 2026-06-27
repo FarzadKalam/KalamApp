@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import DOMPurify from 'dompurify';
 import {
   ArrowRightOutlined,
+  DownloadOutlined,
   PaperClipOutlined,
   PrinterOutlined,
   SaveOutlined,
@@ -11,7 +12,6 @@ import { App, Button, Input, Modal, Select, Spin, Switch, Tooltip, Typography } 
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { htmlToPlainText } from '../../utils/htmlToPlainText';
-import { printAsPdf } from '../../utils/printTemplates/printAsPdf';
 import PrintTemplateToolbar from '../../components/moduleShow/PrintTemplateToolbar';
 import RecordFilesManager from '../../components/RecordFilesManager';
 import {
@@ -26,6 +26,12 @@ import {
   normalizeKnowledgeVisibilityIds,
 } from '../../utils/knowledgeVisibility';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import {
+  buildKnowledgeDocumentPrintHtml,
+  downloadKnowledgePrintPdf,
+  loadKnowledgePrintCompanyInfo,
+  printKnowledgeHtml,
+} from '../../utils/orgKnowledgePrint';
 
 const PrintTemplateEditor = React.lazy(() => import('../../components/moduleShow/PrintTemplateEditor'));
 
@@ -72,14 +78,6 @@ type ShareTargetOption = {
   searchText: string;
   userIds?: string[];
   roleIds?: string[];
-};
-
-const sanitizePrintFilename = (value: string) => {
-  const normalized = String(value || '')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized || 'سند دانش سازمان';
 };
 
 const escapePrintHtml = (value: string) =>
@@ -166,27 +164,44 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
     }
   };
 
+  const getPrintHtml = async () => {
+    const html = DOMPurify.sanitize(bodyHtml || `<p>${escapePrintHtml(document.body || '')}</p>`, {
+      ADD_ATTR: ['style', 'class', 'colspan', 'rowspan'],
+    });
+    const company = await loadKnowledgePrintCompanyInfo(supabase);
+    return buildKnowledgeDocumentPrintHtml({
+      title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند دانش سازمان'),
+      bodyHtml: html,
+      company,
+    });
+  };
+
+  const handleDownload = async () => {
+    try {
+      setPrinting(true);
+      await downloadKnowledgePrintPdf({
+        title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند دانش سازمان'),
+        filename: document.title || 'سند دانش سازمان',
+        pageSize: 'A4 portrait',
+        sourceHtml: await getPrintHtml(),
+      });
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'خطا در آماده‌سازی فایل دانلود'));
+    } finally {
+      setPrinting(false);
+    }
+  };
+
   const handlePrint = async () => {
     try {
       setPrinting(true);
-      const html = DOMPurify.sanitize(bodyHtml || `<p>${escapePrintHtml(document.body || '')}</p>`, {
-        ADD_ATTR: ['style', 'class', 'colspan', 'rowspan'],
-      });
-      await printAsPdf({
-        title: document.title || 'سند دانش سازمان',
-        filename: sanitizePrintFilename(document.title || 'سند دانش سازمان'),
+      await printKnowledgeHtml({
+        title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (document.title || 'سند دانش سازمان'),
         pageSize: 'A4 portrait',
-        sourceHtml: `
-          <div class="invoice-custom-print-shell" dir="rtl">
-            <div class="print-template-page" style="width:210mm; min-height:297mm; box-sizing:border-box; padding:14mm; background:#fff; color:#111827; direction:rtl;">
-              <h1 style="margin:0 0 12px; font-size:18px; line-height:1.8;">${escapePrintHtml(document.title || 'سند دانش سازمان')}</h1>
-              <div style="font-family:inherit; direction:rtl; line-height:1.9; font-size:12px;">${html}</div>
-            </div>
-          </div>
-        `,
+        sourceHtml: await getPrintHtml(),
       });
     } catch (err: any) {
-      message.error(toFaErrorMessage(err, 'خطا در آماده‌سازی فایل پرینت'));
+      message.error(toFaErrorMessage(err, 'خطا در آماده‌سازی پرینت'));
     } finally {
       setPrinting(false);
     }
@@ -469,6 +484,16 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
             onClick={() => setFilesOpen(true)}
           >
             فایل‌ها
+          </Button>
+
+          {/* دانلود */}
+          <Button
+            icon={<DownloadOutlined />}
+            size="small"
+            loading={printing}
+            onClick={handleDownload}
+          >
+            دانلود
           </Button>
 
           {/* پرینت */}

@@ -138,6 +138,7 @@ export const processRunsModule: ModuleDefinition = {
       order: 4,
       readonly: true,
       nature: FieldNature.SYSTEM,
+      isTableColumn: true,
     },
   ],
   blocks: [

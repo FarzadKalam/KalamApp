@@ -423,6 +423,62 @@ const parseJsonSafe = (raw: string) => {
   }
 };
 
+const normalizeAiContentText = (value: any): string => {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value).trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeAiContentText(item)).filter(Boolean).join('\n').trim();
+  }
+  if (typeof value !== 'object') return '';
+  const type = String(value?.type || '').trim().toLowerCase();
+  if (type === 'text' || type === 'output_text' || type === 'input_text' || type === 'message') {
+    const direct = String(value?.text || value?.content || value?.value || '').trim();
+    if (direct) return direct;
+  }
+  if (Array.isArray(value?.content)) {
+    return value.content.map((item: any) => normalizeAiContentText(item)).filter(Boolean).join('\n').trim();
+  }
+  return '';
+};
+
+const normalizeAiContentAttachments = (value: any): Array<Record<string, any>> => {
+  const results: Array<Record<string, any>> = [];
+  const seen = new Set<string>();
+  const visit = (item: any) => {
+    if (item == null) return;
+    if (Array.isArray(item)) {
+      item.forEach((entry) => visit(entry));
+      return;
+    }
+    if (typeof item !== 'object') return;
+    const url = String(
+      item?.url
+      || item?.file_url
+      || item?.download_url
+      || item?.media_url
+      || item?.link_url
+      || item?.image_url?.url
+      || item?.image_url
+      || ''
+    ).trim();
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      const fallbackName = String(url.split('?')[0].split('#')[0].split('/').pop() || 'file').trim() || 'file';
+      results.push({
+        name: String(item?.name || item?.file_name || item?.fileName || item?.filename || fallbackName).trim() || fallbackName,
+        url,
+        mimeType: String(item?.mimeType || item?.mime_type || '').trim() || null,
+        fileType: String(item?.fileType || item?.file_type || item?.media_type || item?.kind || item?.type || '').trim() || null,
+      });
+    }
+    if (Array.isArray(item?.content)) visit(item.content);
+  };
+  visit(value);
+  return results;
+};
+
 const normalizeBaseUrl = (value: string) => {
   const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
   if (!raw) return DEFAULT_AI_BASE_URL;
@@ -2544,6 +2600,60 @@ const shortenProviderError = (raw: any) => {
   return text.length > 400 ? `${text.slice(0, 400)}…` : text;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetriableProviderFailure = (status: number, message: string) => {
+  const normalized = String(message || '').trim().toLowerCase();
+  return status >= 500
+    || /unexpected condition|try again later|temporar|gateway|timeout|timed out|workerrequestcancelled|cancelled/i.test(normalized);
+};
+
+const extractImagePayload = (raw: any): {
+  imageBase64: string;
+  imageUrl: string;
+  debugShape: string;
+} => {
+  const candidates: any[] = [];
+  const push = (value: any, label: string) => {
+    if (!value) return;
+    candidates.push({ value, label });
+  };
+
+  push(raw, 'root');
+  push(raw?.image, 'image');
+  push(raw?.images?.[0], 'images[0]');
+  push(raw?.data?.[0], 'data[0]');
+  push(raw?.output?.[0], 'output[0]');
+  push(raw?.result, 'result');
+  push(raw?.response?.data?.[0], 'response.data[0]');
+  push(raw?.candidates?.[0]?.content?.parts?.find((part: any) => part?.inline_data?.data || part?.inlineData?.data || part?.file_data?.file_uri || part?.fileData?.fileUri), 'gemini.part');
+
+  for (const entry of candidates) {
+    const item = entry.value;
+    const imageBase64 = String(
+      item?.b64_json
+      || item?.base64
+      || item?.image_base64
+      || item?.inline_data?.data
+      || item?.inlineData?.data
+      || ''
+    ).trim();
+    const imageUrl = String(
+      item?.url
+      || item?.image_url
+      || item?.uri
+      || item?.file_data?.file_uri
+      || item?.fileData?.fileUri
+      || ''
+    ).trim();
+    if (imageBase64 || imageUrl) {
+      return { imageBase64, imageUrl, debugShape: entry.label };
+    }
+  }
+
+  return { imageBase64: '', imageUrl: '', debugShape: 'none' };
+};
+
 const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
 
 const callChatCompletions = async (
@@ -2616,9 +2726,10 @@ const callChatCompletions = async (
       throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
     }
 
-    const content = parsed?.choices?.[0]?.message?.content || parsed?.choices?.[0]?.text || '';
+    const content = parsed?.choices?.[0]?.message?.content ?? parsed?.choices?.[0]?.text ?? '';
     return {
-      content: String(content || '').trim(),
+      content: normalizeAiContentText(content),
+      attachments: normalizeAiContentAttachments(content),
       provider: providerConfig.provider,
       model,
       requestId,
@@ -2976,13 +3087,13 @@ const callGeminiImageGenerate = async (
     const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
     throw new Error(`تولید تصویر ناموفق بود: ${shortenProviderError(message)}`);
   }
-  const responseParts = parsed?.candidates?.[0]?.content?.parts || [];
-  const imagePart = responseParts.find((part: any) => part?.inline_data?.data || part?.inlineData?.data);
-  const b64 = String(imagePart?.inline_data?.data || imagePart?.inlineData?.data || '').trim();
-  if (!b64) throw new Error('خروجی تصویر از مدل دریافت نشد.');
+  const extracted = extractImagePayload(parsed);
+  if (!extracted.imageBase64 && !extracted.imageUrl) {
+    throw new Error(`خروجی تصویر از مدل دریافت نشد. شکل پاسخ: ${extracted.debugShape}`);
+  }
   return {
-    imageBase64: b64,
-    imageUrl: '',
+    imageBase64: extracted.imageBase64,
+    imageUrl: extracted.imageUrl,
     provider: providerConfig.provider,
     model,
     requestId,
@@ -3171,22 +3282,91 @@ const callImageGeneration = async (
         formData.append(key, typeof value === 'string' ? value : JSON.stringify(value));
       });
     }
-    const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/edits', {
+    let lastFailure = '';
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/edits', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
+        body: formData,
+        signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
+      }, { disableFallback: true });
+      const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+      const parsed = parseJsonSafe(await response.text());
+      if (!response.ok) {
+        const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
+        lastFailure = `ویرایش تصویر ناموفق بود: ${shortenProviderError(message)}`;
+        if (attempt < 2 && isRetriableProviderFailure(response.status, message)) {
+          await sleep(1200);
+          continue;
+        }
+        throw new Error(lastFailure);
+      }
+      const extracted = extractImagePayload(parsed);
+      if (!extracted.imageBase64 && !extracted.imageUrl) {
+        lastFailure = `خروجی تصویر از مدل دریافت نشد. شکل پاسخ: ${extracted.debugShape}${requestId ? ` | request id: ${requestId}` : ''}`;
+        if (attempt < 2) {
+          await sleep(800);
+          continue;
+        }
+        throw new Error(lastFailure);
+      }
+      return {
+        imageBase64: extracted.imageBase64,
+        imageUrl: extracted.imageUrl,
+        provider: providerConfig.provider,
+        model,
+        requestId,
+        baseUrl,
+        raw: parsed,
+        usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
+      };
+    }
+    throw new Error(lastFailure || 'ویرایش تصویر ناموفق بود.');
+  }
+
+  let lastFailure = '';
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/generations', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${providerConfig.apiKey}` },
-      body: formData,
+      headers: {
+        Authorization: `Bearer ${providerConfig.apiKey}`,
+        'Content-Type': 'application/json',
+      },
       signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
+      body: JSON.stringify({
+        model,
+        prompt,
+        ...(options.quality && String(options.quality) !== 'auto' ? { quality: options.quality } : {}),
+        ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
+        n,
+        size,
+        // gpt-image-* always return b64_json and REJECT the response_format param.
+        ...(/^gpt-image/i.test(model) ? {} : { response_format: 'b64_json' }),
+      }),
     }, { disableFallback: true });
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
     const parsed = parseJsonSafe(await response.text());
     if (!response.ok) {
       const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-      throw new Error(`ویرایش تصویر ناموفق بود: ${shortenProviderError(message)}`);
+      lastFailure = `تولید تصویر ناموفق بود: ${shortenProviderError(message)}`;
+      if (attempt < 2 && isRetriableProviderFailure(response.status, message)) {
+        await sleep(1200);
+        continue;
+      }
+      throw new Error(lastFailure);
     }
-    const item = Array.isArray(parsed?.data) ? parsed.data[0] : parsed?.image || parsed;
+    const extracted = extractImagePayload(parsed);
+    if (!extracted.imageBase64 && !extracted.imageUrl) {
+      lastFailure = `خروجی تصویر از مدل دریافت نشد. شکل پاسخ: ${extracted.debugShape}${requestId ? ` | request id: ${requestId}` : ''}`;
+      if (attempt < 2) {
+        await sleep(800);
+        continue;
+      }
+      throw new Error(lastFailure);
+    }
     return {
-      imageBase64: String(item?.b64_json || item?.base64 || item?.image_base64 || '').trim(),
-      imageUrl: String(item?.url || item?.image_url || '').trim(),
+      imageBase64: extracted.imageBase64,
+      imageUrl: extracted.imageUrl,
       provider: providerConfig.provider,
       model,
       requestId,
@@ -3195,44 +3375,7 @@ const callImageGeneration = async (
       usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
     };
   }
-
-  const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/generations', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
-    body: JSON.stringify({
-      model,
-      prompt,
-      ...(options.quality && String(options.quality) !== 'auto' ? { quality: options.quality } : {}),
-      ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
-      n,
-      size,
-      // gpt-image-* always return b64_json and REJECT the response_format param.
-      ...(/^gpt-image/i.test(model) ? {} : { response_format: 'b64_json' }),
-    }),
-  }, { disableFallback: true });
-  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
-  const parsed = parseJsonSafe(await response.text());
-  if (!response.ok) {
-    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || JSON.stringify(parsed || {}));
-    throw new Error(`تولید تصویر ناموفق بود: ${shortenProviderError(message)}`);
-  }
-  const item = Array.isArray(parsed?.data) ? parsed.data[0] : parsed?.image || parsed;
-  const b64 = String(item?.b64_json || item?.base64 || item?.image_base64 || '').trim();
-  const url = String(item?.url || item?.image_url || '').trim();
-  return {
-    imageBase64: b64,
-    imageUrl: url,
-    provider: providerConfig.provider,
-    model,
-    requestId,
-    baseUrl,
-    raw: parsed,
-    usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
-  };
+  throw new Error(lastFailure || 'تولید تصویر ناموفق بود.');
 };
 
 // ── Video generation (async job, per AvalAI /v1/videos docs) ──────────────────
@@ -4358,6 +4501,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
       web_search_used: webSearchResults.length > 0,
       capabilities: selectedCapabilities,
+      attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
       capability,
@@ -4418,6 +4562,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
     answer: aiResult.content,
+    attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
     provider: aiResult.provider,
     model: aiResult.model,
     usage: withCustomerBilling(aiResult.usageMetadata, ledger),

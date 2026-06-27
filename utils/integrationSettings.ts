@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getResolvedCurrentOrgId } from './companySettings';
+import { fetchSessionBootstrap } from './sessionCache';
+import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from './supabaseTimeout';
 
 type LoadScopedIntegrationSettingsOptions = {
   connectionType: string;
@@ -18,7 +19,20 @@ export const loadScopedIntegrationSettings = async (
   supabase: SupabaseClient,
   options: LoadScopedIntegrationSettingsOptions,
 ) => {
-  const currentOrgId = await getResolvedCurrentOrgId(supabase);
+  const session = await fetchSessionBootstrap(supabase);
+  const currentOrgId = String(session?.orgId || '').trim() || null;
+  const bootstrapError = session?.bootstrapError || null;
+  const hasAuthenticatedUser = Boolean(session?.user?.id);
+
+  if (hasAuthenticatedUser && bootstrapError && !currentOrgId) {
+    return {
+      data: null,
+      error: bootstrapError,
+      orgId: null,
+      scope: 'bootstrap-error' as const,
+    };
+  }
+
   let query = supabase
     .from('integration_settings')
     .select(options.columns || '*')
@@ -38,9 +52,19 @@ export const loadScopedIntegrationSettings = async (
     ? query.eq('org_id', currentOrgId)
     : query.is('org_id', null);
 
-  let result = await query.maybeSingle();
+  let result = await runWithSupabaseTimeout((signal) =>
+    attachAbortSignalIfSupported(query, signal).maybeSingle()
+  );
 
   if (!result.error && result.data) {
+    return {
+      ...result,
+      orgId: currentOrgId,
+      scope: currentOrgId ? 'org' as const : 'global' as const,
+    };
+  }
+
+  if (result.error) {
     return {
       ...result,
       orgId: currentOrgId,
@@ -64,7 +88,10 @@ export const loadScopedIntegrationSettings = async (
       fallbackQuery = fallbackQuery.eq('is_active', options.isActive);
     }
 
-    result = await fallbackQuery.is('org_id', null).maybeSingle();
+    fallbackQuery = fallbackQuery.is('org_id', null);
+    result = await runWithSupabaseTimeout((signal) =>
+      attachAbortSignalIfSupported(fallbackQuery, signal).maybeSingle()
+    );
     return {
       ...result,
       orgId: currentOrgId,
@@ -83,7 +110,19 @@ export const listScopedIntegrationSettings = async (
   supabase: SupabaseClient,
   options: ListScopedIntegrationSettingsOptions,
 ) => {
-  const currentOrgId = await getResolvedCurrentOrgId(supabase);
+  const session = await fetchSessionBootstrap(supabase);
+  const currentOrgId = String(session?.orgId || '').trim() || null;
+  const bootstrapError = session?.bootstrapError || null;
+  const hasAuthenticatedUser = Boolean(session?.user?.id);
+
+  if (hasAuthenticatedUser && bootstrapError && !currentOrgId) {
+    return {
+      data: [],
+      error: bootstrapError,
+      orgId: null,
+    };
+  }
+
   let query = supabase
     .from('integration_settings')
     .select(options.columns || '*')
@@ -99,7 +138,9 @@ export const listScopedIntegrationSettings = async (
     ? query.eq('org_id', currentOrgId)
     : query.is('org_id', null);
 
-  const result = await query;
+  const result = await runWithSupabaseTimeout((signal) =>
+    attachAbortSignalIfSupported(query, signal)
+  );
   return {
     ...result,
     orgId: currentOrgId,

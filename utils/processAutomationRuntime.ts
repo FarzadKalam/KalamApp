@@ -35,9 +35,11 @@ import { assignProcessTemplateModuleAliases } from './processTemplateContext';
 import {
   getNextProcessStages,
   getPreviousProcessStage,
+  getPreviousProcessStages,
   getProcessStageNodeKey,
   materializeLegacyProcessGraph,
 } from './processGraph';
+import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 
 type AutomationActor = {
   id?: string | null;
@@ -236,7 +238,7 @@ const materializeSiblingTaskGraph = (siblingTasks: Record<string, any>[]) => {
   return materializeLegacyProcessGraph(graphStages);
 };
 
-const getPreviousSiblingTask = (
+const getPreviousSiblingTasks = (
   task: Record<string, any>,
   siblingTasks: Record<string, any>[],
 ) => {
@@ -245,12 +247,16 @@ const getPreviousSiblingTask = (
     task?.process_node_key || parseRecurrenceInfo(task?.recurrence_info)?.process_node_key || '',
   ).trim();
   if (currentNodeKey) {
-    return getPreviousProcessStage(materialized.stages, currentNodeKey, materialized.graph) || null;
+    const previousStages = getPreviousProcessStages(materialized.stages, currentNodeKey, materialized.graph);
+    if (previousStages.length > 0) return previousStages;
+    const previousStage = getPreviousProcessStage(materialized.stages, currentNodeKey, materialized.graph);
+    return previousStage ? [previousStage] : [];
   }
   const currentSort = Number(task?.sort_order || 0);
-  return siblingTasks
+  const previousTask = siblingTasks
     .filter((row) => Number(row?.sort_order || 0) < currentSort)
     .sort((a, b) => Number(b?.sort_order || 0) - Number(a?.sort_order || 0))[0] || null;
+  return previousTask ? [previousTask] : [];
 };
 
 const getNextSiblingTasks = (
@@ -634,7 +640,8 @@ const buildAutomationActionRecordWithLinks = async (
     assignProcessLinkedRecordFields(actionRecord, entry.moduleId, entry.record);
   });
 
-  const previousTask = getPreviousSiblingTask(task, siblingTasks);
+  const previousTasks = getPreviousSiblingTasks(task, siblingTasks);
+  const previousTask = previousTasks[0] || null;
   const nextTask = getNextSiblingTasks(task, siblingTasks)[0];
   const toCombo = (row?: Record<string, any> | null) => {
     if (!row) return '';
@@ -649,6 +656,7 @@ const buildAutomationActionRecordWithLinks = async (
     : [];
   actionRecord.__comm_recipient__current_task_assignee = toCombo(task);
   actionRecord.__comm_recipient__previous_stage_assignee = toCombo(previousTask);
+  actionRecord.__comm_recipient__previous_stage_assignees = previousTasks.map(toCombo).filter(Boolean);
   actionRecord.__comm_recipient__next_stage_assignee = toCombo(nextTask);
   const materializedSiblingGraph = materializeLegacyProcessGraph(siblingTasks);
   materializedSiblingGraph.stages.forEach((stage, index) => {
@@ -734,7 +742,7 @@ const resolveRuleTarget = async (
     case 'current_task_assignee':
       return buildMentionTargetFromTask(task);
     case 'previous_stage_assignee': {
-      return buildMentionTargetFromTask(getPreviousSiblingTask(task, siblingTasks));
+      return mergeMentionTargets(...getPreviousSiblingTasks(task, siblingTasks).map(buildMentionTargetFromTask));
     }
     case 'next_stage_assignee': {
       return buildMentionTargetFromTask(getNextSiblingTasks(task, siblingTasks)[0]);
@@ -859,6 +867,8 @@ export const runProcessAutomationsForTaskEvent = async ({
   previousTask = null,
   currentUser = null,
 }: ProcessAutomationRunArgs) => {
+  if (await shouldSkipRecordForAutomation({ moduleId: 'tasks', sourceTable: 'tasks', record: task })) return;
+
   const recurrence = parseRecurrenceInfo(task?.recurrence_info);
   const rules = normalizeProcessAutomationRules(recurrence?.process_automation_rules);
   if (rules.length === 0) return;
@@ -930,6 +940,7 @@ export const runProcessAutomationsForTaskEvent = async ({
     targetPreviousTask: Record<string, any> | null = null
   ) => {
     if (candidateRules.length === 0) return;
+    if (await shouldSkipRecordForAutomation({ moduleId: 'tasks', sourceTable: 'tasks', record: targetTask })) return;
 
     for (const rule of candidateRules) {
       const targetTaskId = String(targetTask?.id || '').trim();
@@ -1256,6 +1267,8 @@ export const runProcessAutomationsIntervalTick = async ({
 
     for (const task of rows) {
       stats.scannedTasks += 1;
+      if (await shouldSkipRecordForAutomation({ moduleId: 'tasks', sourceTable: 'tasks', record: task })) continue;
+
       const recurrence = parseRecurrenceInfo(task?.recurrence_info);
       const rules = normalizeProcessAutomationRules(recurrence?.process_automation_rules)
         .filter((rule) => rule?.is_active !== false && String(rule?.trigger_type || '').trim() === 'interval');

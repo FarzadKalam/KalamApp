@@ -805,6 +805,7 @@ const isDirectConversationNote = (
 const buildDirectoryMaps = async () => {
   const directory = await fetchAssigneeDirectory(supabase);
   return {
+    directory,
     userNameMap: directory.users.reduce<Record<string, string>>((acc, user) => {
       acc[user.id] = user.display_name || user.id;
       return acc;
@@ -2531,8 +2532,11 @@ useEffect(() => {
   }, [mentionOptions.length, open]);
 
   useEffect(() => {
-    if (!profile.id || variant !== 'chat') return;
-    if (!open && !groupModalOpen && !forwardingNote) return;
+    if (!profile.id) return;
+    const needsDirectory = variant === 'chat'
+      ? (open || groupModalOpen || Boolean(forwardingNote))
+      : detailRuntimeEnabled;
+    if (!needsDirectory) return;
     let cancelled = false;
     const loadMentionDirectory = async () => {
       try {
@@ -2558,7 +2562,7 @@ useEffect(() => {
     return () => {
       cancelled = true;
     };
-  }, [Boolean(forwardingNote), groupModalOpen, open, profile.id, variant]);
+  }, [Boolean(forwardingNote), detailRuntimeEnabled, groupModalOpen, open, profile.id, profile.org_id, variant]);
 
   useEffect(() => {
     const loadNoteRecords = async () => {
@@ -2871,13 +2875,24 @@ useEffect(() => {
 
   const loadPeopleMaps = async (items: any[]) => {
     const assigneeIds = Array.from(
-      new Set(items.filter((item: any) => item.assignee_type !== 'role').map((item: any) => item.assignee_id).filter(Boolean))
+      new Set(items
+        .filter((item: any) => String(item?.assignee_type || '').trim() !== 'role')
+        .map((item: any) => item.assignee_id)
+        .filter(Boolean))
     );
     const roleIds = Array.from(
-      new Set(items.filter((item: any) => item.assignee_type === 'role').map((item: any) => item.assignee_role_id || item.assignee_id).filter(Boolean))
+      new Set(items
+        .filter((item: any) => String(item?.assignee_type || '').trim() === 'role' || item?.assignee_role_id)
+        .map((item: any) => item.assignee_role_id || item.assignee_id)
+        .filter(Boolean))
     );
     const createdByIds = Array.from(new Set(items.map((i: any) => i.created_by || i.created_by_id).filter(Boolean)));
-    const { userNameMap, roleTitleMap } = await buildDirectoryMaps();
+    const { directory, userNameMap, roleTitleMap } = await buildDirectoryMaps();
+    setDirectoryUsers(directory.users || []);
+    setDirectoryRoles(directory.roles || []);
+    _notifDirectoryCache.orgId = profile.org_id || null;
+    _notifDirectoryCache.users = directory.users || [];
+    _notifDirectoryCache.roles = directory.roles || [];
 
     if (assigneeIds.length) {
       const map = assigneeIds.reduce<Record<string, string>>((acc, assigneeId) => {

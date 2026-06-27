@@ -10,6 +10,7 @@ import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '..
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
+const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../../components/processes/ProcessCardsV2RuntimeBlock'));
 
 // 👇 اینترفیس اصلاح شد: حذف linkedBomData و ...
 interface TablesSectionProps {
@@ -43,6 +44,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   onDataUpdate,
   focusBlockId,
   focusRowKey,
+  processRuntimeSnapshot,
   onProcessRuntimeSnapshot,
 }) => {
   if (!module || !data) return null;
@@ -198,26 +200,57 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                 {field.labels.fa}
               </h3>
             </div>
-            <React.Suspense fallback={null}>
-              <ProductionStagesField
-                recordId={data.id}
-                moduleId={module.id}
-                forceProcessRecordMode={isProcessStagesField && !isTemplatePreviewField && !isRunPreviewField}
-                automationContextModuleId={null}
-                automationContextModuleIds={
-                  module.id === 'process_templates' || module.id === 'process_runs'
-                    ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
-                    : null
-                }
-                readOnly={!canEditModule || productionLocked || isRunPreviewField}
-                compact={true}
-                onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}
-                draftStages={stageDraftValue}
-                onDraftStagesChange={handleDraftStagesChange}
-                showWageSummary={module.id === 'production_orders'}
-                onRuntimeSnapshot={onProcessRuntimeSnapshot}
-              />
-            </React.Suspense>
+            {!isProcessStagesField ? (
+              <React.Suspense fallback={null}>
+                <ProductionStagesField
+                  recordId={data.id}
+                  moduleId={module.id}
+                  forceProcessRecordMode={false}
+                  automationContextModuleId={null}
+                  automationContextModuleIds={
+                    module.id === 'process_templates' || module.id === 'process_runs'
+                      ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
+                      : null
+                  }
+                  readOnly={!canEditModule || productionLocked || isRunPreviewField}
+                  compact={true}
+                  onQuantityChange={isProductionOrder ? (qty) => onDataUpdate?.({ quantity: qty }) : undefined}
+                  draftStages={stageDraftValue}
+                  onDraftStagesChange={handleDraftStagesChange}
+                  showWageSummary={module.id === 'production_orders'}
+                  onRuntimeSnapshot={onProcessRuntimeSnapshot}
+                />
+              </React.Suspense>
+            ) : null}
+            {isProcessStagesField ? (
+              <React.Suspense fallback={null}>
+                {!isRunPreviewField ? (
+                  <div className="hidden" aria-hidden="true">
+                    <ProductionStagesField
+                      recordId={data.id}
+                      moduleId={module.id}
+                      forceProcessRecordMode={!isTemplatePreviewField}
+                      automationContextModuleId={null}
+                      automationContextModuleIds={normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)}
+                      readOnly={!canEditModule}
+                      compact={true}
+                      draftStages={stageDraftValue}
+                      onDraftStagesChange={handleDraftStagesChange}
+                      onRuntimeSnapshot={onProcessRuntimeSnapshot}
+                    />
+                  </div>
+                ) : null}
+                <ProcessCardsV2RuntimeBlock
+                  moduleId={module.id}
+                  recordId={data.id}
+                  recordData={data}
+                  fieldKey={fieldKey}
+                  draftStages={stageDraftValue}
+                  runtimeSnapshot={processRuntimeSnapshot}
+                  variant="full"
+                />
+              </React.Suspense>
+            ) : null}
             </div>
           );
         })()

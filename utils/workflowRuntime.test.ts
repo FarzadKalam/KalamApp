@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   sendSmsViaGateway: vi.fn(),
   sendBotMessageViaGateway: vi.fn(),
   sendCounterpartyBotGroupMessage: vi.fn(),
+  activateInitialProcessRunNodes: vi.fn(),
+  activateProcessStageAction: vi.fn(),
   authUser: null as any,
 }));
 
@@ -42,6 +44,11 @@ vi.mock('./smsGateway', () => ({
 vi.mock('./botGateway', () => ({
   sendBotMessageViaGateway: mocks.sendBotMessageViaGateway,
   sendCounterpartyBotGroupMessage: mocks.sendCounterpartyBotGroupMessage,
+}));
+
+vi.mock('./processStageActivation', () => ({
+  activateInitialProcessRunNodes: mocks.activateInitialProcessRunNodes,
+  activateProcessStageAction: mocks.activateProcessStageAction,
 }));
 
 import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
@@ -160,6 +167,8 @@ describe('workflow action recipients', () => {
     mocks.sendSmsViaGateway.mockResolvedValue({ success: true, sent: 0 });
     mocks.sendBotMessageViaGateway.mockResolvedValue({ ok: true });
     mocks.sendCounterpartyBotGroupMessage.mockResolvedValue({ ok: true });
+    mocks.activateInitialProcessRunNodes.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
+    mocks.activateProcessStageAction.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
     mocks.authUser = null;
     vi.clearAllMocks();
   });
@@ -773,6 +782,99 @@ describe('evaluateWorkflowConditions', () => {
       currentRecord: { due_date: '2026-06-01' },
       moduleId: 'tasks',
     })).resolves.toBe(true);
+  });
+});
+
+describe('workflow process actions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.rowsByTable = {};
+    mocks.from.mockImplementation((table: string) => makeQuery(table));
+    mocks.rpc.mockResolvedValue({ data: null, error: null });
+    mocks.activateInitialProcessRunNodes.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
+    mocks.activateProcessStageAction.mockResolvedValue({ createdTaskIds: [], existingTaskIds: [] });
+  });
+
+  it('copies a process template by creating a process run without activating stages', async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: 'process-run-1', error: null });
+    const record = { id: 'record-1', org_id: 'org-1' };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-copy-process',
+        type: 'copy_process_template',
+        config: { template_id: 'template-1' },
+      },
+      'projects',
+      record
+    );
+
+    expect(mocks.rpc).toHaveBeenCalledWith('create_process_run_from_template', {
+      p_org_id: 'org-1',
+      p_template_id: 'template-1',
+      p_module_id: 'projects',
+      p_record_id: 'record-1',
+      p_process_name: null,
+      p_copied_mode: 'auto',
+    });
+    expect(record).toMatchObject({
+      process_template_id: 'template-1',
+      process_run_id: 'process-run-1',
+    });
+    expect(mocks.activateInitialProcessRunNodes).not.toHaveBeenCalled();
+  });
+
+  it('executes a process by creating a run and activating initial stages', async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: 'process-run-2', error: null });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-execute-process',
+        type: 'execute_process',
+        config: { template_id: 'template-2' },
+      },
+      'projects',
+      { id: 'record-2', org_id: 'org-2' }
+    );
+
+    expect(mocks.rpc).toHaveBeenCalledWith('create_process_run_from_template', {
+      p_org_id: 'org-2',
+      p_template_id: 'template-2',
+      p_module_id: 'projects',
+      p_record_id: 'record-2',
+      p_process_name: null,
+      p_copied_mode: 'auto',
+    });
+    expect(mocks.activateInitialProcessRunNodes).toHaveBeenCalledWith({
+      processRunId: 'process-run-2',
+    });
+  });
+
+  it('delegates single-stage activation actions to the process stage runtime', async () => {
+    const record = {
+      id: 'task-1',
+      org_id: 'org-1',
+      process_run_id: 'process-run-3',
+      process_node_key: 'stage_a',
+    };
+    const config = { stage_node_keys: ['stage_b'] };
+
+    await executeWorkflowAction(
+      {
+        id: 'action-activate-stage',
+        type: 'activate_specific_process_stage',
+        config,
+      },
+      'tasks',
+      record
+    );
+
+    expect(mocks.activateProcessStageAction).toHaveBeenCalledWith({
+      actionType: 'activate_specific_process_stage',
+      config,
+      record,
+      moduleId: 'tasks',
+    });
   });
 });
 

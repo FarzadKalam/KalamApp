@@ -141,6 +141,10 @@ export const getWorkflowActionSummaryFa = (action: WorkflowAction | null | undef
     case 'copy_process_template':
     case 'execute_process':
       return config.template_id ? 'الگوی فرآیند انتخاب شده' : 'الگوی فرآیند انتخاب نشده';
+    case 'activate_next_process_stage':
+      return 'فعال‌سازی مرحله بعدی فرآیند';
+    case 'activate_specific_process_stage':
+      return config.stage_node_key ? 'فعال‌سازی مرحله انتخاب‌شده فرآیند' : 'مرحله‌ای برای فعال‌سازی انتخاب نشده';
     case 'publish_story': {
       const text = excerpt(config.text_template);
       return [

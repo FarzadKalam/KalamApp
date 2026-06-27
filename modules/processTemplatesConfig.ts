@@ -88,7 +88,7 @@ export const processTemplatesModule: ModuleDefinition = {
       order: 2,
       readonly: true,
       nature: FieldNature.SYSTEM,
-      isTableColumn: false,
+      isTableColumn: true,
     },
   ],
   blocks: [

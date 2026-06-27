@@ -18,15 +18,17 @@ import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapa
 import AiComposeModelBar from './AiComposeModelBar';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import type { AiMediaSettings, AiMediaSourceImage } from './AiMediaSettingsPopover';
-import AiMessageAttachmentPreview, { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
+import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
+import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
+import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 
 type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
-  content: string;
+  content: any;
   metadata?: Record<string, any> | null;
   created_at?: string | null;
   provider?: string | null;
@@ -371,7 +373,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
       id: String(serverMsg?.id || pendingId),
       role: 'assistant' as const,
-      content: String(serverMsg?.content || '').trim() || 'آماده شد.',
+      content: normalizeAiMessageText(serverMsg?.content) || 'آماده شد.',
       provider: serverMsg?.provider || null,
       model: serverMsg?.model || null,
       metadata: serverMsg?.metadata || null,
@@ -482,7 +484,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         .map((item: any) => ({
           id: String(item.id || `${item.role}-${item.created_at}`),
           role: item.role,
-          content: String(item.content || ''),
+          content: normalizeAiMessageText(item.content || ''),
           metadata: item.metadata || null,
           created_at: item.created_at || null,
           provider: item.provider || null,
@@ -679,8 +681,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         {
           id: data.messageId || `assistant-${Date.now()}`,
           role: 'assistant',
-          content: String(data.answer || '').trim() || 'پاسخی دریافت نشد.',
-          metadata: { usage: data.usage },
+          content: normalizeAiMessageText(data.answer) || 'پاسخی دریافت نشد.',
+          metadata: { usage: data.usage, attachments: Array.isArray(data.attachments) ? data.attachments : [] },
           provider: data.provider || null,
           model: data.model || null,
           created_at: new Date().toISOString(),
@@ -774,7 +776,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         {
           id: data.messageId || `assistant-image-${Date.now()}`,
           role: 'assistant',
-          content: String(data.answer || '').trim() || 'تصویر آماده شد.',
+          content: normalizeAiMessageText(data.answer) || 'تصویر آماده شد.',
           metadata: { usage: data.usage, image: data.image, capability: 'image_generation' },
           provider: data.provider || null,
           model: data.model || null,
@@ -825,7 +827,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         {
           id: data.messageId || `assistant-voice-output-${Date.now()}`,
           role: 'assistant',
-          content: String(data.answer || '').trim() || 'فایل صوتی آماده شد.',
+          content: normalizeAiMessageText(data.answer) || 'فایل صوتی آماده شد.',
           metadata: { usage: data.usage, file: data.file, capability: 'voice_output' },
           provider: data.provider || null,
           model: data.model || null,
@@ -907,7 +909,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         {
           id: data.messageId || `assistant-doc-${Date.now()}`,
           role: 'assistant',
-          content: String(data.answer || '').trim() || 'فایل آماده شد.',
+          content: normalizeAiMessageText(data.answer) || 'فایل آماده شد.',
           metadata: { usage: data.usage, file: data.file, capability: 'document_generation', format: data.format || format },
           provider: data.provider || null,
           model: data.model || null,
@@ -972,7 +974,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         input_kind: 'task_bundle',
         bundle_inputs: bundleInputs.map((item) => item.type === 'voice'
           ? { type: item.type, label: item.label, durationMs: item.voice.durationMs, mimeType: item.voice.mimeType }
-          : { type: item.type, label: item.label, filename: item.file.fileName, mimeType: item.file.mimeType, size: item.file.size }),
+          : {
+            type: item.type,
+            label: item.label,
+            name: item.file.fileName,
+            filename: item.file.fileName,
+            mimeType: item.file.mimeType,
+            size: item.file.size,
+            url: item.file.url || null,
+            data: item.file.data || null,
+            assetId: item.file.assetId || null,
+            entryId: item.file.entryId || null,
+            moduleId: item.file.moduleId || null,
+            recordId: item.file.recordId || null,
+          }),
       },
     };
     const thinkingMessage: ChatMessage = {
@@ -1043,7 +1058,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
           {
             id: data.messageId || `assistant-bundle-${Date.now()}`,
             role: 'assistant',
-            content: String(data.answer || '').trim() || 'نتیجه آماده شد.',
+            content: normalizeAiMessageText(data.answer) || 'نتیجه آماده شد.',
             metadata: { usage: data.usage, capability: recordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis' },
             provider: data.provider || null,
             model: data.model || null,
@@ -1101,7 +1116,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const renderMessage = (item: ChatMessage) => {
     const isUser = item.role === 'user';
     const usageText = !isUser ? formatUsageMetadata(item.metadata?.usage || item.metadata) : '';
-    const aiAttachment = item.metadata?.image || item.metadata?.file || (item.metadata?.image_url ? { url: item.metadata.image_url } : null);
+    const messageText = normalizeAiMessageText(item.content);
+    const attachments = extractAiMessageAttachments(item);
     const pendingKind = getPendingGenerationKind(item);
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
@@ -1132,12 +1148,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
                 : 'rounded-tl-md border border-slate-200/70 bg-white text-slate-700 dark:border-white/[0.08] dark:bg-white/[0.055] dark:text-slate-100'
             }`}
           >
-            {item.content}
-            <AiMessageAttachmentPreview
-              attachment={aiAttachment}
-              fallbackName={isUser ? 'فایل پیوست' : 'خروجی هوش مصنوعی'}
-              onEditImage={!isUser ? handleEditImage : undefined}
-            />
+            {messageText}
+            <MessageAttachmentGallery attachments={attachments} />
+            {!isUser && attachments.length === 1 && String(attachments[0]?.fileType || '').trim() === 'image' && String(attachments[0]?.url || '').trim() ? (
+              <div className="mt-2 flex justify-end">
+                <Button size="small" type="primary" ghost onClick={() => handleEditImage(String(attachments[0]?.url || ''))}>
+                  اصلاح این تصویر
+                </Button>
+              </div>
+            ) : null}
           </div>
           )}
           <div className={`mt-1 flex flex-wrap items-center gap-1 text-[9px] leading-4 ${isUser ? 'text-[rgb(var(--brand-700-rgb))] dark:text-[rgb(var(--brand-200-rgb))]' : 'text-gray-400'}`}>
@@ -1157,8 +1176,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
                     actorName: isUser ? 'شما' : 'دستیار هوشمند',
                     createdAt: item.created_at || null,
                     createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
-                    content: item.content,
-                    attachments: [],
+                    content: messageText,
+                    attachments,
                     relatedModuleId: context.mode === 'record' ? context.moduleId : null,
                     relatedRecordId: context.mode === 'record' ? context.recordId : null,
                   })}

@@ -41,6 +41,40 @@ const getRoleDisplayLabel = (role: AssigneeRole | null | undefined): string => {
   return String(role.title || role.name || '').trim();
 };
 
+const getSourceAssigneeLabel = (source: any, assigneeType: 'user' | 'role'): string => {
+  if (!source || typeof source !== 'object') return '';
+  const candidates = assigneeType === 'role'
+    ? [
+        source.assignee_role_title,
+        source.assignee_role_name,
+        source.role_title,
+        source.role_name,
+        source.responsible_role_title,
+        source.responsible_role_name,
+        source.assignee_label,
+        source.responsible_label,
+      ]
+    : [
+        source.assignee_name,
+        source.assignee_full_name,
+        source.assignee_display_name,
+        source.responsible_name,
+        source.responsible_full_name,
+        source.owner_name,
+        source.created_by_name,
+        source.assignee_label,
+        source.responsible_label,
+      ];
+
+  return candidates
+    .map((value) => String(value || '').trim())
+    .find(Boolean) || '';
+};
+
+const getAnySourceAssigneeLabel = (source: any): string => (
+  getSourceAssigneeLabel(source, 'user') || getSourceAssigneeLabel(source, 'role')
+);
+
 export const resolveAssigneePresentation = ({
   source,
   allUsers = [],
@@ -57,11 +91,12 @@ export const resolveAssigneePresentation = ({
   const normalizedExplicitLabel = String(explicitLabel || '').trim() || null;
 
   if (!assigneeId) {
+    const fallbackLabel = getAnySourceAssigneeLabel(source);
     return {
-      kind: 'empty',
+      kind: normalizedExplicitLabel || fallbackLabel ? 'user' : 'empty',
       assigneeId: null,
       assigneeType,
-      label: normalizedExplicitLabel,
+      label: normalizedExplicitLabel || fallbackLabel || null,
       avatarUrl: null,
       user: null,
       role: null,
@@ -70,11 +105,12 @@ export const resolveAssigneePresentation = ({
 
   if (assigneeType === 'role') {
     const role = allRoles.find((item) => String(item?.id || '').trim() === assigneeId) || null;
+    const fallbackLabel = getSourceAssigneeLabel(source, 'role');
     return {
-      kind: role || normalizedExplicitLabel ? 'role' : 'unknown',
+      kind: role || normalizedExplicitLabel || fallbackLabel ? 'role' : 'unknown',
       assigneeId,
       assigneeType,
-      label: normalizedExplicitLabel || getRoleDisplayLabel(role) || null,
+      label: normalizedExplicitLabel || getRoleDisplayLabel(role) || fallbackLabel || null,
       avatarUrl: null,
       user: null,
       role,
@@ -82,11 +118,12 @@ export const resolveAssigneePresentation = ({
   }
 
   const user = allUsers.find((item) => String(item?.id || '').trim() === assigneeId) || null;
+  const fallbackLabel = getSourceAssigneeLabel(source, 'user');
   return {
-    kind: user || normalizedExplicitLabel ? 'user' : 'unknown',
+    kind: user || normalizedExplicitLabel || fallbackLabel ? 'user' : 'unknown',
     assigneeId,
     assigneeType,
-    label: normalizedExplicitLabel || getUserDisplayLabel(user) || null,
+    label: normalizedExplicitLabel || getUserDisplayLabel(user) || fallbackLabel || null,
     avatarUrl: String(user?.avatar_url || '').trim() || null,
     user,
     role: null,

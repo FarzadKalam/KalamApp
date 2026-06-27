@@ -7,6 +7,7 @@ import {
   getProcessStagesByLane,
   materializeLegacyProcessGraph,
 } from './processGraph';
+import { isRecordInRecycleBin, shouldSkipRecordForAutomation } from './recycleBinGuards';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
@@ -33,6 +34,9 @@ export const activateProcessRunNodes = async ({
   const normalizedRunId = normalizeText(processRunId);
   const normalizedNodeKeys = Array.from(new Set(nodeKeys.map(normalizeText).filter(Boolean)));
   if (!normalizedRunId || normalizedNodeKeys.length === 0) {
+    return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
+  }
+  if (await isRecordInRecycleBin({ sourceTable: 'process_runs', recordId: normalizedRunId })) {
     return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
   }
 
@@ -81,6 +85,10 @@ export const activateInitialProcessRunNodes = async ({
   if (!normalizedRunId) {
     return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
   }
+  if (await isRecordInRecycleBin({ sourceTable: 'process_runs', recordId: normalizedRunId })) {
+    return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
+  }
+
   const stages = await loadProcessRunStages(normalizedRunId);
   const materialized = materializeLegacyProcessGraph(stages);
   const nodeKeys = getInitialProcessStageNodeKeys(materialized.stages, materialized.graph);
@@ -102,6 +110,8 @@ export const activateProcessStageAction = async ({
   record: Record<string, any>;
   moduleId?: string | null;
 }) => {
+  if (moduleId && await shouldSkipRecordForAutomation({ moduleId, record })) return null;
+
   const recurrence = parseObject(record?.recurrence_info);
   let processRunId = normalizeText(record?.process_run_id || recurrence?.process_run_id);
   if (!processRunId) {
@@ -124,6 +134,7 @@ export const activateProcessStageAction = async ({
     processRunId = normalizeText(data);
   }
   if (!processRunId) return null;
+  if (await isRecordInRecycleBin({ sourceTable: 'process_runs', recordId: processRunId })) return null;
 
   const stages = await loadProcessRunStages(processRunId);
   const materialized = materializeLegacyProcessGraph(stages);

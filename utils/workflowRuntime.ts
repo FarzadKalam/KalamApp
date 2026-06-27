@@ -45,6 +45,7 @@ import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 import { buildAiRecordCreationSchema } from './aiRecordCreation';
 import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
 import { lockRecord } from './recordLockRuntime';
+import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -2265,6 +2266,8 @@ export const executeWorkflowAction = async (
   moduleId: string,
   currentRecord: Record<string, any>
 ) => {
+  if (await shouldSkipRecordForAutomation({ moduleId, record: currentRecord })) return;
+
   const config = action?.config || {};
 
   if (
@@ -3036,8 +3039,31 @@ export const executeWorkflowAction = async (
 
   if (action.type === 'copy_process_template') {
     const templateId = String(config.template_id || '').trim();
+    if (!templateId || !currentRecord?.id) return;
+
+    const orgId = await resolveWorkflowOrgId(currentRecord);
+    if (!orgId) {
+      throw new Error('org_id برای کپی الگوی فرآیند مشخص نیست');
+    }
+
+    const { data: processRunId, error: runError } = await supabase.rpc('create_process_run_from_template', {
+      p_org_id: orgId,
+      p_template_id: templateId,
+      p_module_id: moduleId,
+      p_record_id: currentRecord.id,
+      p_process_name: null,
+      p_copied_mode: 'auto',
+    });
+    if (!runError) {
+      Object.assign(currentRecord, {
+        process_template_id: templateId,
+        process_run_id: String(processRunId || '').trim() || undefined,
+      });
+      return;
+    }
+
     const draftFieldKey = resolveWorkflowProcessDraftFieldKey(moduleId);
-    if (!templateId || !draftFieldKey || !currentRecord?.id) return;
+    if (!draftFieldKey) throw runError;
 
     const [stages, templateName] = await Promise.all([
       loadProcessTemplateStages(templateId),
@@ -3216,6 +3242,10 @@ const executeWorkflowForRecord = async ({
   runType: WorkflowRunType;
   executedRecordIds?: Set<string> | null;
 }) => {
+  if (await shouldSkipRecordForAutomation({ moduleId, record: currentRecord })) {
+    return { matched: false, success: false, skippedDeleted: true };
+  }
+
   const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
   if (!matched) {
     return { matched: false, success: false };
@@ -3281,6 +3311,8 @@ export const runWorkflowsForEvent = async ({
 }: RunWorkflowArgs) => {
   if (!moduleId || !currentRecord) return;
   const hydratedCurrentRecord = await hydrateWorkflowCurrentRecord(moduleId, currentRecord);
+  if (await shouldSkipRecordForAutomation({ moduleId, record: hydratedCurrentRecord })) return;
+
   const triggerTypes = event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
 
   let workflowQuery = supabase

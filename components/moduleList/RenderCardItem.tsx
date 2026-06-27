@@ -1,15 +1,17 @@
 import React from "react";
 import { Avatar, Checkbox, Popover, Tag } from "antd";
-import { AppstoreOutlined, DragOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, DragOutlined, LockOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
 import { getRecordTitle } from "../../utils/recordTitle";
+import { getRecordDisplayLabel } from "../../utils/recordLabel";
 import { getAssigneeLabel } from "../../utils/assigneeLabel";
 import { formatRecordDisplayValue, formatRecordFieldValue } from "../../utils/recordDisplayFormatter";
 import { getRecordCardSummaryFields, getRecordCardTags, resolveCardStatusMeta } from "../../utils/recordCardHelpers";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../../utils/taskMeta";
 import { MODULES } from "../../moduleRegistry";
 import TaskActionButtons from "../tasks/TaskActionButtons";
+import { getTaskStatusOptions } from "../../utils/processTaskStatusOptions";
 import { openTaskProcessModal } from "../../utils/taskProcessModalEvents";
 import { buildConditionalFieldStateMap } from "../../utils/conditionalFieldRules";
 import { getResolvedModuleConditionalDisplay } from "../../utils/moduleSettingsRuntime";
@@ -17,8 +19,11 @@ import ResilientImage from "../common/ResilientImage";
 import AssigneeAvatarDisplay from "../common/AssigneeAvatarDisplay";
 import RecordLockControl from "../recordLocks/RecordLockControl";
 import { getRecordLockStateFromRecord, mergeRecordLockIntoRecord, type RecordLockState } from "../../utils/recordLockRuntime";
+import { supabase } from "../../supabaseClient";
+import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from "../../utils/processTaskTitle";
 
 const ProductionStagesField = React.lazy(() => import("../ProductionStagesField"));
+const ProcessCardsV2RuntimeBlock = React.lazy(() => import("../processes/ProcessCardsV2RuntimeBlock"));
 
 export interface RenderCardItemProps {
   item: any;
@@ -56,7 +61,7 @@ const getAdaptiveCardTitleClassName = (value: unknown, minimal = false) => {
         ? 'text-[13px]'
         : (minimal ? 'text-[11px]' : 'text-sm');
 
-  return `font-extrabold text-gray-800 dark:text-white mb-0.5 ${sizeClass} leading-5 line-clamp-2 break-words overflow-hidden ${minimal ? 'min-h-[2.5rem]' : ''}`;
+  return `font-extrabold text-gray-800 dark:text-white mb-0.5 ${sizeClass} leading-5 line-clamp-2 break-words overflow-hidden`;
 };
 
 const RenderCardItem: React.FC<RenderCardItemProps> = ({
@@ -86,6 +91,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
 }) => {
   const [taskPatch, setTaskPatch] = React.useState<Record<string, any>>({});
   const [recordPatch, setRecordPatch] = React.useState<Record<string, any>>({});
+  const [resolvedTaskTitle, setResolvedTaskTitle] = React.useState("");
   const isSelected = selectedRowKeys.includes(item.id);
   const isTasks = moduleId === 'tasks';
   React.useEffect(() => {
@@ -109,6 +115,12 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       onChanged={handleLockChanged}
     />
   );
+  const lockMeta = isLocked ? (
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-500">
+      <LockOutlined />
+      <span>قفل شده</span>
+    </span>
+  ) : null;
   const conditionalDisplaySettings = React.useMemo(
     () => getResolvedModuleConditionalDisplay(moduleConfig?.id),
     [moduleConfig?.id]
@@ -123,7 +135,29 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     return cardFieldStateMap[fieldKey]?.visible !== false;
   }, [cardFieldStateMap]);
   const imageUrl = imageField && isCardFieldVisible(imageField) ? cardItem[imageField] : null;
-  const title = getRecordTitle(cardItem, moduleConfig, { fallback: "-" });
+  const title = (
+    getRecordTitle(cardItem, moduleConfig, { fallback: "" })
+    || getRecordDisplayLabel(cardItem, moduleId, { fallback: "" })
+    || "بدون عنوان"
+  );
+  React.useEffect(() => {
+    let cancelled = false;
+    setResolvedTaskTitle("");
+    if (!isTasks || !hasProcessTaskTitleTokens(title)) return undefined;
+    resolveProcessTaskTitle(supabase, cardItem, title)
+      .then((nextTitle) => {
+        if (!cancelled) setResolvedTaskTitle(nextTitle);
+      })
+      .catch(() => {
+        if (!cancelled) setResolvedTaskTitle("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cardItem?.id, cardItem?.updated_at, isTasks, title]);
+  const displayTitle = isTasks
+    ? (resolvedTaskTitle || (hasProcessTaskTitleTokens(title) ? "فعالیت" : title))
+    : title;
   const processRecordKeyByModule: Record<string, string> = {
     projects: 'project_id',
     customers: 'related_customer',
@@ -146,12 +180,24 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     && !!relatedProcessRecordId
     && Object.prototype.hasOwnProperty.call(processRecordKeyByModule, relatedProcessModuleId)
   );
+  const relatedProcessRecordData = React.useMemo(() => (
+    relatedProcessRecordId
+      ? {
+          id: relatedProcessRecordId,
+          module_id: relatedProcessModuleId,
+        }
+      : null
+  ), [relatedProcessModuleId, relatedProcessRecordId]);
 
   const statusFieldConfig = moduleConfig?.fields.find(
     (f: any) => f.type === FieldType.STATUS || f.key === statusField,
   );
   const status = statusField ? cardItem[statusField] : null;
   const statusOption = statusFieldConfig?.options?.find((o: any) => o.value === status);
+  const taskStatusOptions = React.useMemo(
+    () => isTasks ? getTaskStatusOptions(cardItem, statusFieldConfig?.options || []) : [],
+    [cardItem, isTasks, statusFieldConfig?.options]
+  );
 
   const categoryFieldConfig = moduleConfig?.fields.find((f: any) => f.key === categoryField);
   const category = categoryField ? cardItem[categoryField] : null;
@@ -250,6 +296,8 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     'related_to_module',
   ].filter(Boolean) as string[];
   const summaryFields = getRecordCardSummaryFields(cardItem, moduleConfig, summaryExcludedKeys, minimal ? 2 : 3);
+  const bottomStatusMeta = isTasks ? cardStatusMeta : null;
+  const taskModuleMetaLabel = relatedModuleTitle || categoryLabel || moduleConfig?.titles?.fa || 'فعالیت';
 
   const renderAssignee = () => {
     return (
@@ -280,20 +328,72 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       : [...selectedRowKeys, item.id];
     setSelectedRowKeys(newSelected);
   };
+  const hasSelectionControl = !hideSelection;
+  const hasLockControl = shouldShowLockControl;
+  const hasDragControl = !isLocked && showDragHandle && !!onDragHandlePointerDown;
+  const hasFooterControls = hasSelectionControl || hasLockControl || hasDragControl;
+  const cardSurfaceClassName = `
+    group relative flex cursor-pointer flex-col rounded-2xl border border-white/70 bg-[linear-gradient(145deg,#ffffff,#f3f6fb)] shadow-[0_16px_34px_rgba(15,23,42,0.10),inset_0_2px_5px_rgba(255,255,255,0.86),inset_0_-10px_22px_rgba(148,163,184,0.14)] transition-all
+    hover:-translate-y-0.5 hover:border-[rgba(var(--brand-200-rgb),0.78)] hover:shadow-[0_20px_42px_rgba(15,23,42,0.14),inset_0_2px_6px_rgba(255,255,255,0.92),inset_0_-10px_24px_rgba(148,163,184,0.16)]
+    dark:border-white/[0.09] dark:bg-[linear-gradient(145deg,rgba(38,38,38,0.98),rgba(24,24,24,0.98))] dark:shadow-[0_16px_36px_rgba(0,0,0,0.38),inset_0_1px_3px_rgba(255,255,255,0.06),inset_0_-12px_24px_rgba(0,0,0,0.20)]
+    dark:hover:border-[rgba(var(--brand-300-rgb),0.24)] dark:hover:shadow-[0_20px_44px_rgba(0,0,0,0.48),inset_0_1px_4px_rgba(255,255,255,0.08),inset_0_-12px_24px_rgba(0,0,0,0.24)]
+    ${isSelected ? "ring-2 ring-[rgba(var(--brand-500-rgb),0.36)]" : ""}
+    ${minimal ? "" : "h-full"}
+    ${minimal ? "p-3" : "p-3"}
+    ${hasFooterControls || bottomStatusMeta ? "pb-11" : ""}
+    ${isDragActive ? "opacity-75 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
+  `;
+  const actionRailClassName = `
+    relative z-30 mt-0.5 -mx-1 flex min-w-0 items-center justify-center gap-2 overflow-visible px-1 py-2
+  `;
   const renderDragHandle = () => {
-    if (isLocked || !showDragHandle || !onDragHandlePointerDown) return null;
+    if (!hasDragControl || !onDragHandlePointerDown) return null;
     return (
       <button
         type="button"
         title={dragHandleTitle}
         aria-label={dragHandleTitle}
-        className="absolute bottom-2 left-2 z-20 flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white/95 text-gray-500 shadow-sm transition hover:border-[rgba(var(--brand-500-rgb),0.8)] hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:border-white/10 dark:bg-[#242424] dark:text-gray-300"
+        className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 text-gray-500 shadow-sm transition hover:text-[rgb(var(--brand-700-rgb))] active:cursor-grabbing dark:bg-white/10 dark:text-gray-300"
         style={{ touchAction: 'none', userSelect: 'none' }}
         onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => onDragHandlePointerDown(item, event)}
       >
         <DragOutlined />
       </button>
+    );
+  };
+  const renderFooterControls = () => {
+    if (!hasFooterControls) return null;
+    return (
+      <div className="absolute bottom-2 left-2 z-30 flex items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
+        {hasSelectionControl ? (
+          <label
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/90 shadow-sm dark:bg-white/10"
+            title="انتخاب کارت"
+          >
+            <Checkbox checked={isSelected} onChange={toggleSelect} />
+          </label>
+        ) : null}
+        {hasLockControl ? (
+          <div className="flex h-7 min-w-7 items-center justify-center rounded-lg bg-white/90 px-1 shadow-sm dark:bg-white/10">
+            {lockControl}
+          </div>
+        ) : null}
+        {renderDragHandle()}
+      </div>
+    );
+  };
+  const renderBottomStatus = () => {
+    if (!bottomStatusMeta) return null;
+    return (
+      <div className="absolute bottom-1.5 right-2 z-30 max-w-[48%] truncate" onClick={(event) => event.stopPropagation()}>
+        <Tag
+          color={bottomStatusMeta.color || "default"}
+          className="!m-0 max-w-full truncate !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold"
+        >
+          {bottomStatusMeta.label}
+        </Tag>
+      </div>
     );
   };
   const handleCardClick = () => {
@@ -359,27 +459,12 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
     return (
       <div
         onClick={handleCardClick}
-        className={`
-          group relative flex cursor-pointer flex-col rounded-2xl border bg-gradient-to-b from-white to-gray-50 shadow-sm transition-all
-          dark:from-[#1d1d1d] dark:to-[#171717]
-          ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
-          ${minimal ? "" : "h-full"}
-          ${minimal ? "p-3" : "p-3"}
-          ${showDragHandle ? "pb-9" : ""}
-          ${isDragActive ? "opacity-70 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
-        `}
-      >
-        {renderDragHandle()}
-        {!hideSelection && (
-          <div className="absolute top-3 right-3 z-10" onClick={(e) => e.stopPropagation()}>
-            <Checkbox checked={isSelected} onChange={toggleSelect} />
-          </div>
-        )}
-        <div className="absolute left-3 top-3 z-10" onClick={(e) => e.stopPropagation()}>
-          {lockControl}
-        </div>
-        {moduleBadgeLabel ? (
-          <div className={`absolute top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200 ${shouldShowLockControl ? 'left-12' : 'left-3'}`}>
+        className={cardSurfaceClassName}
+    >
+      {renderFooterControls()}
+      {renderBottomStatus()}
+      {moduleBadgeLabel ? (
+          <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-white/10 dark:text-gray-200">
             {moduleBadgeLabel}
           </div>
         ) : null}
@@ -388,22 +473,27 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Avatar
             shape="square"
             size={minimal ? 36 : 52}
-            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={title} className="h-full w-full object-cover" /> : undefined}
+            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={displayTitle} className="h-full w-full object-cover" /> : undefined}
             icon={<AppstoreOutlined />}
             className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
           />
 
-          <div className={`min-w-0 flex-1 ${hideSelection ? '' : 'pr-6'}`}>
+          <div className="min-w-0 flex-1">
             <div className="min-w-0">
               <h4
                 className={getAdaptiveCardTitleClassName(title, minimal)}
-                title={title}
+                title={displayTitle}
               >
-                {title}
+                {displayTitle}
               </h4>
               <div className={`mt-1 flex min-w-0 flex-wrap items-center justify-between gap-2 ${minimal ? "leading-4" : ""}`}>
-                <div className="min-w-0 text-[10px] text-gray-400 font-mono">
-                  {recordCode || "---"}
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  {lockMeta}
+                  {recordCode ? (
+                    <span className="min-w-0 rounded-full bg-gray-100 px-1.5 py-0 text-[10px] font-mono text-gray-400 dark:bg-white/10">
+                      {recordCode}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-1">
                   {cardStatusMeta ? (
@@ -427,16 +517,16 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
             </div>
 
             {summaryFields.length > 0 ? (
-              <div className="mt-2 space-y-1.5 text-xs">
+              <div className="mt-2 grid grid-cols-1 gap-1.5 text-xs">
                 {summaryFields.map((field: any) => {
                   const value = cardItem?.[field.key];
                   if (value === undefined || value === null || value === '') return null;
                   return (
                     <div
                       key={field.key}
-                      className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 items-start border-b border-gray-100 pb-1.5 last:border-b-0 last:pb-0 dark:border-gray-800"
+                      className="grid grid-cols-[82px_minmax(0,1fr)] items-start gap-2 rounded-lg bg-gray-50/75 px-2 py-1.5 dark:bg-white/5"
                     >
-                      <span className="text-gray-500 dark:text-gray-400">{field.labels?.fa || field.title || field.key}</span>
+                      <span className="truncate text-[10px] font-semibold text-gray-400 dark:text-gray-500">{field.labels?.fa || field.title || field.key}</span>
                       {renderFieldValue(field, value)}
                     </div>
                   );
@@ -483,7 +573,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           </div>
         </div>
 
-        <div className="mt-auto pt-2 border-t border-gray-100 dark:border-gray-700 flex justify-between items-start gap-3 text-xs">
+        <div className="mt-auto flex items-start justify-between gap-3 border-t border-gray-100 pt-2 text-xs dark:border-gray-700">
           {assigneeAllowed ? (
             <div className="flex min-w-0 flex-col gap-0.5">
               <span className="text-gray-500 dark:text-gray-400 text-[8px]">{assigneeLabel}</span>
@@ -517,32 +607,19 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
   const taskCardNode = (
     <div
       onClick={handleCardClick}
-      className={`
-        bg-gradient-to-b from-white to-gray-50 dark:from-[#1d1d1d] dark:to-[#171717] rounded-2xl border shadow-sm cursor-pointer transition-all flex flex-col group relative
-        ${isSelected ? "border-leather-500 ring-1 ring-leather-500 bg-leather-50 dark:bg-leather-900/20" : "border-[rgba(var(--brand-200-rgb),0.75)] hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)]"}
-        ${minimal ? "p-3" : "p-3 h-full"}
-        ${showDragHandle ? "pb-9" : ""}
-        ${isDragActive ? "opacity-70 ring-2 ring-[rgba(var(--brand-500-rgb),0.45)]" : ""}
-      `}
+      className={cardSurfaceClassName}
     >
-      {renderDragHandle()}
-      {!hideSelection && (
-        <div className="absolute top-3 right-3 z-10" onClick={(e) => e.stopPropagation()}>
-          <Checkbox checked={isSelected} onChange={toggleSelect} />
-        </div>
-      )}
-      <div className="absolute left-3 top-3 z-10" onClick={(e) => e.stopPropagation()}>
-        {lockControl}
-      </div>
+      {renderFooterControls()}
+      {renderBottomStatus()}
       {moduleBadgeLabel ? (
-        <div className={`absolute top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-gray-800 dark:text-gray-200 ${shouldShowLockControl ? 'left-12' : 'left-3'}`}>
+        <div className="absolute left-3 top-3 z-10 max-w-[45%] truncate rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-600 dark:bg-white/10 dark:text-gray-200">
           {moduleBadgeLabel}
         </div>
       ) : null}
 
       {isTasks && imageUrl ? (
         <div className={`mb-2 overflow-hidden rounded-xl border border-gray-100 bg-gray-100 dark:border-gray-700 dark:bg-gray-900 ${moduleBadgeLabel ? 'mt-5' : ''} ${minimal ? 'h-24' : 'h-32'}`}>
-          <ResilientImage src={String(imageUrl)} preset="card" alt={title} className="h-full w-full object-cover" loading="lazy" />
+          <ResilientImage src={String(imageUrl)} preset="card" alt={displayTitle} className="h-full w-full object-cover" loading="lazy" />
         </div>
       ) : null}
 
@@ -551,75 +628,51 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           <Avatar
             shape="square"
             size={minimal ? 40 : 54}
-            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={title} className="h-full w-full object-cover" /> : undefined}
+            src={imageUrl ? <ResilientImage src={String(imageUrl)} preset="avatar" alt={displayTitle} className="h-full w-full object-cover" /> : undefined}
             icon={<AppstoreOutlined />}
             className="rounded-xl bg-gray-50 border border-gray-100 dark:bg-gray-800 dark:border-gray-700 shrink-0 object-cover"
           />
         )}
-        <div className={`min-w-0 flex-1 ${hideSelection ? '' : 'pr-6'}`}>
+        <div className="min-w-0 flex-1">
           <h4
             className={getAdaptiveCardTitleClassName(title, minimal)}
-            title={title}
+            title={displayTitle}
           >
-            {title}
+            {displayTitle}
           </h4>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center justify-between gap-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
-              {isTasks ? (
-                cardTags.length > 0 ? (
-                  <>
-                    {cardTags.slice(0, 2).map((tag, index) => (
-                      <Tag
-                        key={`${tag.label}-${index}`}
-                        color={tag.color || 'blue'}
-                        className="!m-0 !rounded-full !px-1.5 !py-0 !text-[9px] !leading-4"
-                      >
-                        {tag.label}
-                      </Tag>
-                    ))}
-                    {cardTags.length > 2 ? (
-                      <span className="rounded-full bg-gray-100 px-1.5 py-0 text-[9px] leading-4 text-gray-500 dark:bg-gray-800 dark:text-gray-300">
-                        +{cardTags.length - 2}
-                      </span>
-                    ) : null}
-                  </>
-                ) : recordCode ? (
-                  <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
-                    {recordCode}
-                  </div>
-                ) : null
-              ) : (
-                <div className={`text-[10px] text-gray-400 font-mono ${minimal ? "leading-4" : ""}`}>
-                  {recordCode || "---"}
-                </div>
-              )}
-              {isTasks && category && categoryAllowed && (
-                <Tag
-                  color="default"
-                  className="!m-0 !rounded-full !border-0 !bg-gray-100 !px-2 !py-0.5 !text-[10px] !text-gray-600 dark:!bg-gray-800 dark:!text-gray-300"
-                >
-                  {categoryLabel}
-                </Tag>
-              )}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+            {isTasks && cardTags.slice(0, 3).map((tag, index) => (
+              <Tag
+                key={`${tag.label}-${index}`}
+                color={tag.color || 'blue'}
+                className="!m-0 !rounded-full !px-1.5 !py-0 !text-[9px] !leading-4"
+              >
+                {tag.label}
+              </Tag>
+            ))}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] font-semibold text-gray-400 dark:text-gray-500">
+            <span className="truncate">{taskModuleMetaLabel}</span>
+            {recordCode ? (
+              <>
+                <span className="shrink-0 opacity-50">•</span>
+                <span className="shrink-0 font-mono">{recordCode}</span>
+              </>
+            ) : null}
+          </div>
+          <div className={actionRailClassName}>
+            <div className="relative z-30 flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto overflow-y-visible py-2">
               {isTasks ? (
                 <TaskActionButtons
                   task={cardItem}
                   disabled={isLocked}
+                  statusOptions={taskStatusOptions}
+                  hideReschedule
                   onTaskUpdated={async (updatedTask) => {
                     setTaskPatch((prev) => ({ ...prev, ...updatedTask }));
                   }}
                   modalZIndex={12100}
                 />
-              ) : null}
-              {cardStatusMeta ? (
-                <Tag
-                  color={cardStatusMeta.color || "default"}
-                  className="!m-0 !rounded-full !border-0 !px-2 !py-0.5 !text-[10px] !font-semibold shrink-0"
-                >
-                  {cardStatusMeta.label}
-                </Tag>
               ) : null}
             </div>
           </div>
@@ -799,17 +852,17 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
       )}
       {isExecutionProcessTask && (
         <div
-          className={`${minimal ? 'mt-2' : 'mt-3'}`}
+          className={`${showRelatedRecord ? 'mt-1' : (minimal ? 'mt-2' : 'mt-3')}`}
           onClick={(e) => e.stopPropagation()}
         >
           <React.Suspense fallback={null}>
-            <ProductionStagesField
+            <ProcessCardsV2RuntimeBlock
               recordId={String(relatedProcessRecordId)}
               moduleId={relatedProcessModuleId}
-              readOnly
-              compact
-              cardCompact
-              allowReportEditInReadOnly
+              recordData={relatedProcessRecordData}
+              variant="compact"
+              highlightedTaskId={String(cardItem?.id || '')}
+              highlightedRunStageId={String(cardItem?.process_run_stage_id || '')}
             />
           </React.Suspense>
         </div>

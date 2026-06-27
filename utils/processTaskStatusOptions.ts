@@ -16,16 +16,57 @@ export const PROCESS_TASK_STATUS_COLOR_META: Array<{ label: string; value: strin
 ];
 export const PROCESS_TASK_STATUS_COLOR_OPTIONS: Array<{ label: string; value: string }> =
   PROCESS_TASK_STATUS_COLOR_META.map(({ label, value }) => ({ label, value }));
+export const PROCESS_TASK_STATUS_ICON_OPTIONS: Array<{ label: string; value: string }> = [
+  { label: 'عمومی', value: 'circle' },
+  { label: 'کارت/فعالیت', value: 'app' },
+  { label: 'تایید', value: 'approve' },
+  { label: 'بازبینی', value: 'audit' },
+  { label: 'تقویم', value: 'calendar' },
+  { label: 'لغو', value: 'cancel' },
+  { label: 'حمل و نقل', value: 'delivery' },
+  { label: 'تحویل', value: 'carry' },
+  { label: 'شروع', value: 'play' },
+  { label: 'تیک', value: 'check' },
+  { label: 'ساعت', value: 'clock' },
+  { label: 'ساعت شنی', value: 'hourglass' },
+  { label: 'خرید', value: 'shopping' },
+  { label: 'کالا', value: 'inbox' },
+  { label: 'پرداخت', value: 'dollar' },
+  { label: 'چشم', value: 'eye' },
+  { label: 'هشدار', value: 'warning' },
+  { label: 'توقف', value: 'stop' },
+  { label: 'مکث', value: 'pause' },
+  { label: 'پرچم', value: 'flag' },
+  { label: 'ارسال', value: 'send' },
+  { label: 'قفل', value: 'lock' },
+  { label: 'باز', value: 'unlock' },
+  { label: 'علامت سوال', value: 'question' },
+  { label: 'فکر/ایده', value: 'idea' },
+  { label: 'کاربر', value: 'user' },
+  { label: 'تیم', value: 'team' },
+  { label: 'تماس', value: 'phone' },
+  { label: 'ایمیل', value: 'mail' },
+  { label: 'ابزار', value: 'tool' },
+  { label: 'ایمنی/کنترل', value: 'safety' },
+  { label: 'همگام‌سازی', value: 'sync' },
+  { label: 'پسند', value: 'like' },
+  { label: 'رد', value: 'dislike' },
+  { label: 'فایل', value: 'file' },
+];
 
 const LEGACY_TASK_STATUS_FALLBACKS: Record<string, SelectOption> = {
-  pending: { value: 'pending', label: 'در انتظار', color: 'orange' },
-  completed: { value: 'completed', label: 'تکمیل شده', color: 'green' },
-  done: { value: 'done', label: 'تکمیل شده', color: 'green' },
-  in_progress: { value: 'in_progress', label: 'در حال انجام', color: 'blue' },
-  review: { value: 'review', label: 'بازبینی', color: 'gold' },
-  todo: { value: 'todo', label: 'انجام نشده', color: 'red' },
-  planned: { value: 'planned', label: 'برنامه‌ریزی شده', color: 'purple' },
-  canceled: { value: 'canceled', label: 'لغو شده', color: 'default' },
+  pending: { value: 'pending', label: 'در انتظار', color: 'orange', icon: 'hourglass' },
+  completed: { value: 'completed', label: 'تکمیل شده', color: 'green', icon: 'approve' },
+  done: { value: 'done', label: 'تکمیل شده', color: 'green', icon: 'approve' },
+  in_progress: { value: 'in_progress', label: 'در حال انجام', color: 'blue', icon: 'play' },
+  active: { value: 'active', label: 'در حال انجام', color: 'blue', icon: 'play' },
+  review: { value: 'review', label: 'بازبینی', color: 'gold', icon: 'audit' },
+  todo: { value: 'todo', label: 'انجام نشده', color: 'red', icon: 'clock' },
+  waiting: { value: 'waiting', label: 'شروع نشده', color: 'red', icon: 'clock' },
+  planned: { value: 'planned', label: 'برنامه‌ریزی شده', color: 'purple', icon: 'calendar' },
+  canceled: { value: 'canceled', label: 'لغو شده', color: 'default', icon: 'cancel' },
+  blocked: { value: 'blocked', label: 'متوقف', color: 'red', icon: 'stop' },
+  draft: { value: 'draft', label: 'پیش‌نویس', color: 'gray', icon: 'file' },
 };
 
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
@@ -56,6 +97,8 @@ const normalizeTaskStatusOption = (value: any): SelectOption | null => {
     label: optionLabel,
     value: optionValue,
     color: String(value?.color || '').trim() || undefined,
+    icon: String(value?.icon || value?.iconKey || value?.icon_key || '').trim() || undefined,
+    disabled: value?.disabled === true || value?.enabled === false || value?.isDisabled === true || value?.is_disabled === true || undefined,
     insertAfter: insertAfter || undefined,
   };
 };
@@ -174,10 +217,11 @@ export const getTaskStatusOptions = (task?: any, baseOptions?: any[] | null): Se
           : LEGACY_TASK_STATUS_FALLBACKS[currentStatus]
       )
     : null;
-  if (fallback && !merged.some((option) => String(option?.value || '').trim().toLowerCase() === currentStatus)) {
-    return [...merged, fallback];
+  const visibleMerged = merged.filter((option) => option.disabled !== true);
+  if (fallback && !visibleMerged.some((option) => String(option?.value || '').trim().toLowerCase() === currentStatus)) {
+    return [...visibleMerged, fallback];
   }
-  return merged;
+  return visibleMerged;
 };
 
 export const getTaskStatusOption = (status: unknown, task?: any, baseOptions?: any[] | null): SelectOption | null => {
@@ -218,4 +262,13 @@ export const getTaskStatusColor = (status: unknown, task?: any, baseOptions?: an
 export const getTaskStatusSwatchColor = (status: unknown, task?: any, baseOptions?: any[] | null): string => {
   const colorValue = getTaskStatusColor(status, task, baseOptions);
   return PROCESS_TASK_STATUS_COLOR_META.find((item) => item.value === colorValue)?.hex || '#9ca3af';
+};
+
+export const getTaskStatusIconKey = (status: unknown, task?: any, baseOptions?: any[] | null): string => {
+  const option = getTaskStatusOption(status, task, baseOptions);
+  const optionIcon = String((option as any)?.icon || '').trim();
+  if (optionIcon) return optionIcon;
+
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  return String(LEGACY_TASK_STATUS_FALLBACKS[normalizedStatus]?.icon || 'circle');
 };

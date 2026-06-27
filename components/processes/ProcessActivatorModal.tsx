@@ -45,6 +45,7 @@ type FormValues = {
   name: string;
   description?: string;
   trigger_type: 'on_create' | 'on_upsert' | 'interval';
+  process_execution_action?: 'copy_process_template' | 'execute_process';
   execution_mode: 'first_match' | 'every_match';
   interval_value?: number | null;
   interval_unit?: 'hour' | 'day' | 'week' | 'month' | null;
@@ -86,6 +87,7 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const triggerType = Form.useWatch('trigger_type', form);
+  const isActive = Form.useWatch('is_active', form);
 
   const editableConditionsAll = useMemo(
     () => conditionsAll.filter((condition) => condition.id !== SOURCE_NODE_CONDITION_ID),
@@ -110,6 +112,11 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
         if (error) throw error;
         if (cancelled) return;
         const nextRecord = (data || null) as WorkflowRecord | null;
+        const recordActions = Array.isArray(nextRecord?.actions) ? nextRecord.actions : [];
+        const processAction = recordActions.find((action: any) => (
+          action?.type === 'copy_process_template' || action?.type === 'execute_process'
+        ));
+        const hasLegacyStageActivationAction = recordActions.some((action: any) => action?.type === 'activate_specific_process_stage');
         setRecord(nextRecord);
         form.setFieldsValue({
           name: nextRecord?.name || defaultName || 'فعال‌کننده فرآیند',
@@ -128,6 +135,9 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
           interval_days_after_holiday: nextRecord?.interval_days_after_holiday ?? null,
           batch_size: nextRecord?.batch_size || null,
           is_active: nextRecord?.is_active !== false,
+          process_execution_action: processAction?.type === 'execute_process'
+            ? 'execute_process'
+            : (hasLegacyStageActivationAction ? 'execute_process' : 'copy_process_template'),
         });
         setConditionsAll(Array.isArray(nextRecord?.conditions_all) ? nextRecord.conditions_all : []);
         setConditionsAny(Array.isArray(nextRecord?.conditions_any) ? nextRecord.conditions_any : []);
@@ -161,13 +171,21 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
             value: sourceNodeKey,
           }]
         : [];
+      const selectedProcessActionType = values.process_execution_action === 'execute_process'
+        ? 'execute_process'
+        : 'copy_process_template';
+      const existingActivationAction = record?.actions?.find((action) => (
+        action?.type === selectedProcessActionType
+        || action?.type === 'copy_process_template'
+        || action?.type === 'execute_process'
+        || action?.type === 'activate_specific_process_stage'
+      ));
       const activationAction = {
-        id: String(record?.actions?.find((action) => (
-          action?.type === 'activate_specific_process_stage'
-        ))?.id || createWorkflowId()),
-        type: 'activate_specific_process_stage' as const,
+        id: String(existingActivationAction?.id || createWorkflowId()),
+        type: selectedProcessActionType,
         config: {
           template_id: templateId,
+          process_trigger_key: triggerKey,
           target_lane_keys: targetLaneKeys,
         },
       };
@@ -254,6 +272,18 @@ const ProcessActivatorModal: React.FC<ProcessActivatorModalProps> = ({
         <Form.Item name="description" label="توضیحات">
           <Input.TextArea rows={2} />
         </Form.Item>
+        {isActive !== false ? (
+          <Form.Item name="process_execution_action" label="نوع اجرای خودکار">
+            <Radio.Group
+              options={[
+                { label: 'کپی کردن الگوی فرآیند', value: 'copy_process_template' },
+                { label: 'اجرای فرآیند و ارجاع خودکار مراحل', value: 'execute_process' },
+              ]}
+              optionType="button"
+              buttonStyle="solid"
+            />
+          </Form.Item>
+        ) : null}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Form.Item name="trigger_type" label="نوع اجرا">
             <Radio.Group options={triggerTypeOptions} optionType="button" buttonStyle="solid" />

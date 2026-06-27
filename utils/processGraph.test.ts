@@ -5,6 +5,7 @@ import {
   getInitialProcessStageNodeKeys,
   getNextProcessStages,
   getPreviousProcessStage,
+  getPreviousProcessStages,
   getProcessStagesByLane,
   materializeLegacyProcessGraph,
   moveProcessStageToPosition,
@@ -56,6 +57,45 @@ describe('processGraph legacy compatibility', () => {
     expect(getPreviousProcessStage(attached, 'c', graph)?.process_node_key).toBe('b');
     expect(getNextProcessStages(attached, 'b', graph).map((stage) => stage.process_node_key)).toEqual(['c']);
     expect(getInitialProcessStageNodeKeys(attached, graph)).toEqual(['a']);
+  });
+
+  it('resolves every incoming previous stage for a branched lane', () => {
+    const stages: any[] = [
+      { id: 'a', name: 'طراحی', sort_order: 10, process_node_key: 'a', process_lane_key: 'lane_1' },
+      { id: 'b', name: 'تاییدیه', sort_order: 20, process_node_key: 'b', process_lane_key: 'lane_1' },
+      { id: 'c', name: 'اجرا', sort_order: 10, process_node_key: 'c', process_lane_key: 'lane_2' },
+    ];
+    const graph: ProcessGraphDefinition = {
+      version: 2,
+      lanes: [
+        { key: 'lane_1', name: 'ردیف اول', sortOrder: 10, parentTriggerKey: null },
+        { key: 'lane_2', name: 'ردیف دوم', sortOrder: 20, parentTriggerKey: 'trigger_a' },
+      ],
+      triggers: [
+        {
+          key: 'trigger_a',
+          name: 'از طراحی',
+          sourceNodeKey: 'a',
+          targetLaneKeys: ['lane_2'],
+          workflowId: null,
+          manualEnabled: true,
+          sortOrder: 10,
+        },
+        {
+          key: 'trigger_b',
+          name: 'از تاییدیه',
+          sourceNodeKey: 'b',
+          targetLaneKeys: ['lane_2'],
+          workflowId: null,
+          manualEnabled: true,
+          sortOrder: 20,
+        },
+      ],
+    };
+    const attached = attachProcessGraphToStages(stages, graph);
+
+    expect(getPreviousProcessStages(attached, 'c', graph).map((stage) => stage.process_node_key)).toEqual(['a', 'b']);
+    expect(getPreviousProcessStage(attached, 'c', graph)?.process_node_key).toBe('a');
   });
 
   it('returns the first stage of every root lane', () => {

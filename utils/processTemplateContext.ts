@@ -1,3 +1,6 @@
+import { MODULES } from '../moduleRegistry';
+import { getFieldLabelFa } from './fieldLabel';
+
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 const getValueByPath = (record: Record<string, any> | null | undefined, path: string) => {
@@ -26,19 +29,55 @@ const buildModuleAliasCandidates = (moduleId: string) => {
   return Array.from(aliases).filter(Boolean);
 };
 
+const getModulePersianTitles = (moduleId: string | null | undefined) => {
+  const normalizedModuleId = normalizeText(moduleId);
+  const moduleConfig = MODULES[normalizedModuleId];
+  return Array.from(new Set([
+    normalizeText(moduleConfig?.titles?.fa),
+    normalizeText(moduleConfig?.titles?.faSingular),
+  ].filter(Boolean)));
+};
+
+const assignAliasValue = (target: Record<string, any>, key: unknown, value: unknown) => {
+  const normalizedKey = normalizeText(key);
+  if (!normalizedKey) return;
+  target[normalizedKey] = value;
+};
+
 export const assignProcessTemplateModuleAliases = (
   target: Record<string, any>,
   moduleId: string | null | undefined,
   record: Record<string, any> | null | undefined,
 ) => {
-  const aliases = buildModuleAliasCandidates(String(moduleId || ''));
+  const normalizedModuleId = normalizeText(moduleId);
+  const aliases = buildModuleAliasCandidates(normalizedModuleId);
   if (!record || aliases.length === 0) return;
+  const moduleConfig = MODULES[normalizedModuleId];
+  const moduleTitles = getModulePersianTitles(normalizedModuleId);
+  const fieldByKey = new Map(
+    (moduleConfig?.fields || [])
+      .map((field: any) => [normalizeText(field?.key), field] as const)
+      .filter(([key]) => Boolean(key)),
+  );
 
   Object.entries(record).forEach(([fieldKey, value]) => {
     const normalizedFieldKey = normalizeText(fieldKey);
     if (!normalizedFieldKey) return;
     aliases.forEach((alias) => {
-      target[`${alias}_${normalizedFieldKey}`] = value;
+      assignAliasValue(target, `${alias}_${normalizedFieldKey}`, value);
+      assignAliasValue(target, `linked_${alias}_${normalizedFieldKey}__`, value);
+      assignAliasValue(target, `linked_${alias}_${normalizedFieldKey}`, value);
+    });
+
+    const field = fieldByKey.get(normalizedFieldKey);
+    const fieldLabel = getFieldLabelFa(field, {
+      moduleId: normalizedModuleId,
+      fallback: normalizedFieldKey,
+      fieldKey: normalizedFieldKey,
+    });
+    assignAliasValue(target, fieldLabel, value);
+    moduleTitles.forEach((moduleTitle) => {
+      assignAliasValue(target, `${fieldLabel} (${moduleTitle})`, value);
     });
   });
 };

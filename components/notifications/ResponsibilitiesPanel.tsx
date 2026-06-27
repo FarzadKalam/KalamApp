@@ -79,9 +79,8 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
   );
   React.useEffect(() => {
     const entriesByModule = new Map<string, string[]>();
-    filteredResponsibilities.forEach((item: any) => {
-      const moduleId = String(item?.module_id || '').trim();
-      const recordId = String(item?.id || '').trim();
+    responsibilityIdsSignature.split('|').forEach((entry) => {
+      const [moduleId, recordId] = String(entry || '').split(':').map((part) => part.trim());
       if (!moduleId || !recordId) return;
       const current = entriesByModule.get(moduleId) || [];
       current.push(recordId);
@@ -114,7 +113,7 @@ const ResponsibilitiesPanel: React.FC<ResponsibilitiesPanelProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [filteredResponsibilities, responsibilityIdsSignature]);
+  }, [responsibilityIdsSignature]);
 
   const lockedResponsibilities = React.useMemo(
     () => filteredResponsibilities.map((item: any) => {

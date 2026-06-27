@@ -74,6 +74,8 @@ const downloadAttachment = (url: string, fileName: string) => {
   document.body.removeChild(link);
 };
 
+export { normalizeStoragePublicUrl };
+
 type AiMessageAttachmentPreviewProps = {
   attachment?: AiAttachmentLike | null;
   fallbackName?: string;

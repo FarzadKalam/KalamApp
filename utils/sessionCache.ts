@@ -1,5 +1,6 @@
 import { runSelectWithCompatibleColumns } from './selectCompat';
 import { normalizePublicAssetUrl } from './assetUrl';
+import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from './supabaseTimeout';
 
 type SessionBootstrapSnapshot = {
   user: any | null;
@@ -164,11 +165,16 @@ export const fetchSessionBootstrap = async (
         cacheKey: 'session-bootstrap:profile',
         columns: SESSION_PROFILE_COLUMNS,
         execute: (selectExpr) =>
-          supabaseClient
-            .from('profiles')
-            .select(selectExpr)
-            .eq('id', user.id)
-            .maybeSingle(),
+          runWithSupabaseTimeout((signal) =>
+            attachAbortSignalIfSupported(
+              supabaseClient
+                .from('profiles')
+                .select(selectExpr),
+              signal,
+            )
+              .eq('id', user.id)
+              .maybeSingle()
+          ),
       });
 
       if (profileResult.error) {
@@ -197,11 +203,16 @@ export const fetchSessionBootstrap = async (
           cacheKey: 'session-bootstrap:role',
           columns: SESSION_ROLE_COLUMNS,
           execute: (selectExpr) =>
-            supabaseClient
-              .from('org_roles')
-              .select(selectExpr)
-              .eq('id', profile.role_id)
-              .maybeSingle(),
+            runWithSupabaseTimeout((signal) =>
+              attachAbortSignalIfSupported(
+                supabaseClient
+                  .from('org_roles')
+                  .select(selectExpr),
+                signal,
+              )
+                .eq('id', profile.role_id)
+                .maybeSingle()
+            ),
         });
 
         if (roleResult.error) {

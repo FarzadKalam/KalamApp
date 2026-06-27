@@ -35,7 +35,7 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
   const useQuickPreviewModal = moduleConfig?.listPreviewMode === 'modal' || moduleConfig?.disableDetailView === true;
 
   const card = (
-      <div className="mb-3 rounded-2xl border border-[rgba(var(--brand-200-rgb),0.75)] bg-gradient-to-b from-white to-gray-50 p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-400-rgb),0.8)] hover:shadow-md dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:from-[#1d1d1d] dark:to-[#171717]">
+      <div className="mb-3 rounded-2xl border border-white/70 bg-[linear-gradient(145deg,#ffffff,#f3f6fb)] p-3 shadow-[0_16px_34px_rgba(15,23,42,0.10),inset_0_2px_5px_rgba(255,255,255,0.86),inset_0_-10px_22px_rgba(148,163,184,0.14)] transition-all hover:-translate-y-0.5 hover:border-[rgba(var(--brand-200-rgb),0.78)] hover:shadow-[0_20px_42px_rgba(15,23,42,0.14),inset_0_2px_6px_rgba(255,255,255,0.92),inset_0_-10px_24px_rgba(148,163,184,0.16)] dark:border-white/[0.09] dark:bg-[linear-gradient(145deg,rgba(38,38,38,0.98),rgba(24,24,24,0.98))] dark:shadow-[0_16px_36px_rgba(0,0,0,0.38),inset_0_1px_3px_rgba(255,255,255,0.06),inset_0_-12px_24px_rgba(0,0,0,0.20)] dark:hover:border-[rgba(var(--brand-300-rgb),0.24)] dark:hover:shadow-[0_20px_44px_rgba(0,0,0,0.48),inset_0_1px_4px_rgba(255,255,255,0.08),inset_0_-12px_24px_rgba(0,0,0,0.24)]">
         <div className="mb-3 min-w-0">
           <div className="min-w-0">
             <div className="line-clamp-2 break-words text-sm font-extrabold leading-5 text-gray-800 dark:text-gray-100" title={title}>
@@ -76,7 +76,7 @@ const RelatedRecordCard: React.FC<RelatedRecordCardProps> = ({
         ) : null}
 
         {assigneeName ? (
-          <div className="mt-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.72)] px-3 py-2 text-[11px] text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-[rgba(var(--brand-700-rgb),0.12)] dark:text-gray-200">
+          <div className="mt-3 rounded-xl bg-gray-50/80 px-3 py-2 text-[11px] text-gray-600 dark:bg-white/[0.04] dark:text-gray-200">
             مسئول: <span className="font-semibold">{toPersianNumber(assigneeName)}</span>
           </div>
         ) : null}

@@ -2373,6 +2373,7 @@ export const usePrintManager = ({
       }
       if (path === 'system.today_date') return toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'));
       if (path === 'system.today_datetime') return `${toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'))} ${now.toLocaleTimeString('fa-IR')}`;
+      if (path === 'system.print_date') return `${toPersianNumber(safeJalaliFormat(now, 'YYYY/MM/DD'))} ${now.toLocaleTimeString('fa-IR')}`;
       if (path === 'system.letter_sender_display') {
         return resolveRecordFieldDisplay('sender_manual') || resolveRecordFieldDisplay('sender_profile_id');
       }

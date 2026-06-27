@@ -22,6 +22,7 @@ import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
 import TaskActionButtons from './tasks/TaskActionButtons';
+import TaskStatusIcon from './tasks/TaskStatusIcon';
 import RecordLockControl from './recordLocks/RecordLockControl';
 import ProfileAvatar from './common/ProfileAvatar';
 import type { StageHandoverConfirm, StageHandoverGroup, StageHandoverDeliveryRow } from './production/TaskHandoverModal';
@@ -136,6 +137,8 @@ import {
   mergeTaskStatusOptions,
   rebuildProcessTaskStatusOptionsByMergedOrder,
   PROCESS_TASK_STATUS_COLOR_OPTIONS,
+  PROCESS_TASK_STATUS_COLOR_META,
+  PROCESS_TASK_STATUS_ICON_OPTIONS,
   PROCESS_TASK_STATUS_OPTIONS_KEY,
   PROCESS_TASK_STATUS_START_ANCHOR,
 } from '../utils/processTaskStatusOptions';
@@ -186,6 +189,8 @@ import {
   createProcessLaneKey,
   createProcessNodeKey,
   createProcessTriggerKey,
+  getNextProcessStages,
+  getPreviousProcessStages,
   getProcessStageLaneKey,
   getProcessStageNodeKey,
   getProcessStagesByLane,
@@ -689,6 +694,7 @@ const processTaskOptionEditableTypes = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.MULTI_SELECT,
   FieldType.STATUS,
+  FieldType.TAGS,
 ]);
 
 const supportedProcessTaskCustomFieldTypes: FieldType[] = [
@@ -717,6 +723,7 @@ const processTaskDynamicOptionCapableTypes = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.MULTI_SELECT,
   FieldType.STATUS,
+  FieldType.TAGS,
 ]);
 
 const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
@@ -827,30 +834,51 @@ const resolveProcessTaskCustomFieldDraftValuesFromRecord = (
 const supportsProcessTaskDynamicCategory = (fieldType: FieldType) =>
   processTaskDynamicOptionCapableTypes.has(fieldType);
 
-const serializeProcessTaskFieldOptions = (field: ModuleField): string =>
-  (field.options || [])
-    .map((option) =>
-      [String(option?.label || ''), String(option?.value || ''), String(option?.color || '')]
-        .filter((item) => item !== '')
-        .join('|')
-    )
-    .join('\n');
+type ProcessTaskOptionEditorRow = {
+  label?: string;
+  value?: string;
+  color?: string;
+};
 
-const parseProcessTaskFieldOptions = (value: string): Array<{ label: string; value: string; color?: string }> =>
-  value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line, index) => {
-      const [labelRaw, valueRaw, colorRaw] = line.split('|').map((item) => item.trim());
-      const label = labelRaw || valueRaw || `گزینه ${index + 1}`;
-      const optionValue = valueRaw || labelRaw || `option_${index + 1}`;
+type ProcessTaskOptionEditorFormValues = {
+  options?: ProcessTaskOptionEditorRow[];
+};
+
+const normalizeProcessTaskOptionKey = (value: unknown, fallback: string) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\u200c\s-]+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return normalized || fallback;
+};
+
+const buildDefaultProcessTaskOptionValue = (prefix: string, index: number) =>
+  `${prefix}_${Date.now().toString(36)}_${Math.max(1, index + 1)}`;
+
+const normalizeProcessTaskOptionRows = (
+  rows: ProcessTaskOptionEditorRow[] | undefined,
+  fallbackPrefix = 'option',
+) => {
+  const seen = new Set<string>();
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => {
+      const label = String(row?.label || '').trim();
+      const fallbackValue = buildDefaultProcessTaskOptionValue(fallbackPrefix, index);
+      const value = normalizeProcessTaskOptionKey(row?.value || label, fallbackValue);
+      if (!label || !value || seen.has(value)) return null;
+      seen.add(value);
+      const color = String(row?.color || '').trim();
       return {
         label,
-        value: optionValue,
-        ...(colorRaw ? { color: colorRaw } : {}),
+        value,
+        ...(color ? { color } : {}),
       };
-    });
+    })
+    .filter((option): option is { label: string; value: string; color?: string } => Boolean(option));
+};
 
 const TASK_MODAL_CUSTOM_FIELD_DRAFT_ID = '__task_modal_custom_fields__';
 
@@ -932,6 +960,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   } | null>(null);
   const [processTriggerForm] = Form.useForm();
   const watchedProcessActivatorTriggerType = Form.useWatch('workflow_trigger_type', processTriggerForm);
+  const watchedProcessActivatorIsActive = Form.useWatch('workflow_is_active', processTriggerForm);
   const watchedProcessActivatorSourceNodeKey = Form.useWatch('source_node_key', processTriggerForm);
   const [processActivatorWorkflowRecord, setProcessActivatorWorkflowRecord] = useState<WorkflowRecord | null>(null);
   const [processActivatorConditionsAll, setProcessActivatorConditionsAll] = useState<WorkflowCondition[]>([]);
@@ -940,7 +969,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [isDraftModalOpen, setIsDraftModalOpen] = useState(false);
   const [draftForm] = Form.useForm();
   const watchedTaskDurationFrom = Form.useWatch('duration_from', taskForm);
+  const watchedDraftStartDurationFrom = Form.useWatch('start_duration_from', draftForm);
   const watchedDraftDurationFrom = Form.useWatch('duration_from', draftForm);
+  const requiresSystemScheduleStageAnchor = useCallback((value: any) => (
+    String(value || '').trim().startsWith('specific_stage_')
+  ), []);
   const [draftToCreate, setDraftToCreate] = useState<any | null>(null);
   const [editingDraft, setEditingDraft] = useState<any | null>(null);
   const [draftAutomationRules, setDraftAutomationRules] = useState<ProcessAutomationRule[]>([]);
@@ -1021,7 +1054,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const [taskCustomFieldRelationOptions, setTaskCustomFieldRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [savingTaskCustomFields, setSavingTaskCustomFields] = useState<Record<string, boolean>>({});
   const [draftCustomFieldForm] = Form.useForm();
-  const [draftCustomFieldOptionsForm] = Form.useForm<{ optionsText: string }>();
+  const [draftCustomFieldOptionsForm] = Form.useForm<ProcessTaskOptionEditorFormValues>();
   const [draftStageInstructionIds, setDraftStageInstructionIds] = useState<string[]>([]);
   const [instructionsForEditor, setInstructionsForEditor] = useState<any[]>([]);
   const [isLoadingInstructionsForEditor, setIsLoadingInstructionsForEditor] = useState(false);
@@ -1308,6 +1341,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [draftCustomAutomationFields, stageAutomationScopeModuleIds]
   );
+  const defaultAssigneeComboOptions = useMemo(() => {
+    const fieldOptions = automationActionModuleFields
+      .filter((field: any) => String(field?.key || '').includes(WORKFLOW_ASSIGNEE_FIELD_KEY))
+      .map((field: any) => ({
+        value: `field:${String(field.key || '').trim()}`,
+        label: String(field?.labels?.fa || field?.key || '').trim(),
+        searchText: [field?.labels?.fa, field?.key, 'مسئول', 'فیلد'].filter(Boolean).join(' '),
+      }))
+      .filter((option) => option.value && option.label);
+    return [...assigneeComboOptions, ...fieldOptions];
+  }, [assigneeComboOptions, automationActionModuleFields]);
   const workflowModuleOptions = useMemo(
     () => getProjectModuleOptions(),
     []
@@ -1448,6 +1492,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     };
     const sortOrder = readNumber(stage?.sort_order, (index + 1) * 10) || ((index + 1) * 10);
     const weight = readNumber(stage?.weight ?? metadata?.weight, 0);
+    const startDurationValue = readNumber(stage?.start_duration_value ?? metadata?.start_duration_value ?? metadata?.duration_start_value, 0);
+    const startDurationUnit = String(stage?.start_duration_unit ?? metadata?.start_duration_unit ?? metadata?.duration_start_unit ?? 'day') === 'hour' ? 'hour' : 'day';
+    const startDurationFrom = String(stage?.start_duration_from ?? metadata?.start_duration_from ?? metadata?.duration_start_from ?? 'project_start') || 'project_start';
+    const startAnchorStageNodeKey = String(stage?.start_anchor_stage_node_key ?? metadata?.start_anchor_stage_node_key ?? '').trim() || null;
     const durationValue = readNumber(stage?.duration_value ?? metadata?.duration_value, 0);
     const durationUnit = String(stage?.duration_unit ?? metadata?.duration_unit ?? 'day') === 'hour' ? 'hour' : 'day';
     const dueAnchor = normalizeProcessDueAnchor(stage);
@@ -1476,6 +1524,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       weight,
       default_assignee_id: stage?.default_assignee_id ?? stage?.assignee_id ?? metadata?.default_assignee_id ?? null,
       default_assignee_role_id: stage?.default_assignee_role_id ?? stage?.assignee_role_id ?? metadata?.default_assignee_role_id ?? null,
+      start_duration_value: startDurationValue,
+      start_duration_unit: startDurationUnit,
+      start_duration_from: startDurationFrom,
+      start_anchor_stage_node_key: startAnchorStageNodeKey,
       duration_value: durationValue,
       duration_unit: durationUnit,
       duration_from: durationFrom,
@@ -1492,6 +1544,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         [PROCESS_TASK_CUSTOM_FIELDS_KEY]: processTaskCustomFields,
         [PROCESS_TASK_STATUS_OPTIONS_KEY]: processTaskStatusOptions,
         weight,
+        start_duration_value: startDurationValue,
+        start_duration_unit: startDurationUnit,
+        start_duration_from: startDurationFrom,
+        start_anchor_stage_node_key: startAnchorStageNodeKey,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
@@ -1672,11 +1728,15 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     [automationActionModuleFields, previousStageVariableFields]
   );
   const stageTemplateVariableOptions = useMemo(
-    () => automationActionVariableFields.map((field) => ({
-      key: String(field?.key || '').trim(),
-      label: String(field?.labels?.fa || field?.key || '').trim(),
-      token: `{{${String(field?.key || '').trim()}}}`,
-    })).filter((item) => item.key && item.label),
+    () => automationActionVariableFields.map((field) => {
+      const key = String(field?.key || '').trim();
+      const label = String(field?.labels?.fa || key).trim();
+      return {
+        key,
+        label,
+        token: `{{${label || key}}}`,
+      };
+    }).filter((item) => item.key && item.label),
     [automationActionVariableFields]
   );
   const stageTemplateVariableOptionMap = useMemo(
@@ -2134,6 +2194,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const fieldKey = String(field?.key || '').trim();
       if (!fieldKey) return;
       record[`${PREVIOUS_STAGE_TASK_AUTOMATION_FIELD_PREFIX}${fieldKey}`] = previousTaskRecord?.[fieldKey];
+    });
+
+    automationActionVariableFields.forEach((field) => {
+      const fieldKey = String(field?.key || '').trim();
+      const label = String(field?.labels?.fa || '').trim();
+      if (!fieldKey || !label || !Object.prototype.hasOwnProperty.call(record, fieldKey)) return;
+      record[label] = record[fieldKey];
     });
 
     return record;
@@ -4448,6 +4515,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         weight: draftStage?.weight || 0,
         description: draftStage?.description || '',
         task_type: draftStage?.task_type || undefined,
+        start_duration_from: draftStage?.start_duration_from || draftStage?.metadata?.start_duration_from || draftStage?.metadata?.duration_start_from || 'project_start',
+        start_anchor_stage_node_key: draftStage?.start_anchor_stage_node_key || draftStage?.metadata?.start_anchor_stage_node_key || undefined,
+        start_duration_value: Number(draftStage?.start_duration_value ?? draftStage?.metadata?.start_duration_value ?? draftStage?.metadata?.duration_start_value ?? 0),
+        start_duration_unit: draftStage?.start_duration_unit || draftStage?.metadata?.start_duration_unit || draftStage?.metadata?.duration_start_unit || 'day',
         duration_from: draftStage?.duration_from || 'project_start',
         due_anchor_stage_node_key: draftStage?.due_anchor_stage_node_key || undefined,
         duration_value: Number(draftStage?.duration_value || 0),
@@ -4527,10 +4598,16 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       const durationValue = Math.max(0, Number(values?.duration_value || 0));
       const durationUnit = String(values?.duration_unit || 'day') === 'hour' ? 'hour' : 'day';
       const durationFrom = String(values?.duration_from || 'project_start');
+      const startDurationValue = Math.max(0, Number(values?.start_duration_value || 0));
+      const startDurationUnit = String(values?.start_duration_unit || 'day') === 'hour' ? 'hour' : 'day';
+      const startDurationFrom = String(values?.start_duration_from || 'project_start');
+      const startAnchorStageNodeKey = requiresSystemScheduleStageAnchor(startDurationFrom)
+        ? String(values?.start_anchor_stage_node_key || '').trim() || null
+        : null;
       const dueAnchorType: ProcessDueAnchorType = durationFrom === 'project_start'
         ? 'process_start'
         : (durationFrom === 'previous_stage_end' ? 'previous_stage_due' : durationFrom as ProcessDueAnchorType);
-      const dueAnchorStageNodeKey = ['specific_stage_due', 'specific_stage_completed'].includes(dueAnchorType)
+      const dueAnchorStageNodeKey = requiresSystemScheduleStageAnchor(dueAnchorType)
         ? String(values?.due_anchor_stage_node_key || '').trim() || null
         : null;
 
@@ -4715,6 +4792,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             || draftToCreate?.metadata?.[PROCESS_GRAPH_METADATA_KEY]
             || processGraphOverride
             || null,
+          start_duration_from: startDurationFrom,
+          start_duration_value: startDurationValue,
+          start_duration_unit: startDurationUnit,
+          start_anchor_stage_node_key: startAnchorStageNodeKey,
           due_anchor_type: dueAnchorType,
           due_anchor_stage_node_key: dueAnchorStageNodeKey,
           duration_value: durationValue,
@@ -6512,12 +6593,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   useEffect(() => {
     if (!isProcessRecordModule || readOnly || !recordId || !moduleId || typeof window === 'undefined') return;
     const handler = (event: Event) => {
-      const customEvent = event as CustomEvent<{ moduleId?: string; recordId?: string }>;
+      const customEvent = event as CustomEvent<{
+        moduleId?: string;
+        recordId?: string;
+        mode?: 'append' | 'links';
+        group?: { id?: string | null; templateId?: string | null; stages?: any[] };
+      }>;
       const targetModuleId = String(customEvent?.detail?.moduleId || '');
       const targetRecordId = String(customEvent?.detail?.recordId || '');
       if (targetModuleId !== String(moduleId) || targetRecordId !== String(recordId)) return;
       setShowEmptyProcessDetails(true);
-      void handleOpenAppendProcessModal();
+      void handleOpenAppendProcessModal(customEvent?.detail?.mode || 'append', customEvent?.detail?.group);
     };
     window.addEventListener('kalamapp:open-process-append', handler as EventListener);
     return () => {
@@ -6830,6 +6916,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [draftLocal, getConnectedTaskCountForProcessGroup, getStageProcessGroupMeta, saveDraftStages]);
 
   const parseStageAssignee = useCallback((stage: any) => {
+    if (String(stage?.default_assignee_id || stage?.assignee_id || '').trim().startsWith('field:')) {
+      return { assigneeType: null, assigneeId: null };
+    }
     const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
     if (roleValue.assigneeType === 'role' && roleValue.assigneeId) {
       return { assigneeType: 'role', assigneeId: roleValue.assigneeId };
@@ -7128,7 +7217,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       : {};
     const firstText = (...inputValues: any[]) =>
       inputValues.map((value) => String(value ?? '').trim()).find(Boolean) || '';
-    const { assigneeType, assigneeId } = parseAssigneeComboValue(values?.default_assignee_combo);
+    const rawDefaultAssigneeCombo = String(values?.default_assignee_combo || '').trim();
+    const isDefaultAssigneeField = rawDefaultAssigneeCombo.startsWith('field:');
+    const { assigneeType, assigneeId } = isDefaultAssigneeField
+      ? { assigneeType: null, assigneeId: null }
+      : parseAssigneeComboValue(values?.default_assignee_combo);
     const hasDescriptionValue = Object.prototype.hasOwnProperty.call(values || {}, 'description');
     const hasTaskTypeValue = Object.prototype.hasOwnProperty.call(values || {}, 'task_type');
     const currentDraftCount = Array.isArray(draftLocalRef.current) ? draftLocalRef.current.length : draftLocal.length;
@@ -7151,13 +7244,19 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const stageStatusOptions = getDraftStageEditorStatusOptions();
     const processTaskCustomFields = normalizeProcessTaskCustomFields(assignProcessTaskCustomFieldOrder(draftCustomFields));
     const weight = Number(values?.weight || 0);
+    const startDurationValue = Number(values?.start_duration_value || 0);
+    const startDurationUnit = values?.start_duration_unit || 'day';
+    const startDurationFrom = values?.start_duration_from || 'project_start';
+    const startAnchorStageNodeKey = requiresSystemScheduleStageAnchor(startDurationFrom)
+      ? String(values?.start_anchor_stage_node_key || existingStage?.start_anchor_stage_node_key || existingMetadata?.start_anchor_stage_node_key || '').trim() || null
+      : null;
     const durationValue = Number(values?.duration_value || 0);
     const durationUnit = values?.duration_unit || 'day';
     const durationFrom = values?.duration_from || 'project_start';
     const dueAnchorType: ProcessDueAnchorType = durationFrom === 'project_start'
       ? 'process_start'
       : (durationFrom === 'previous_stage_end' ? 'previous_stage_due' : durationFrom);
-    const dueAnchorStageNodeKey = ['specific_stage_due', 'specific_stage_completed'].includes(dueAnchorType)
+    const dueAnchorStageNodeKey = requiresSystemScheduleStageAnchor(dueAnchorType)
       ? String(values?.due_anchor_stage_node_key || existingStage?.due_anchor_stage_node_key || '').trim() || null
       : null;
     const processNodeKey = String(
@@ -7201,8 +7300,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       sort_order: values.sort_order || existingStage?.sort_order || ((currentDraftCount + 1) * 10),
       wage: Number(values?.wage || 0),
       weight,
-      default_assignee_id: assigneeType === 'user' ? assigneeId : null,
+      default_assignee_id: isDefaultAssigneeField ? rawDefaultAssigneeCombo : (assigneeType === 'user' ? assigneeId : null),
       default_assignee_role_id: assigneeType === 'role' ? assigneeId : null,
+      start_duration_value: startDurationValue,
+      start_duration_unit: startDurationUnit,
+      start_duration_from: startDurationFrom,
+      start_anchor_stage_node_key: startAnchorStageNodeKey,
       duration_value: durationValue,
       duration_unit: durationUnit,
       duration_from: durationFrom,
@@ -7222,17 +7325,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         [PROCESS_TASK_CUSTOM_FIELDS_KEY]: processTaskCustomFields,
         [PROCESS_TASK_STATUS_OPTIONS_KEY]: stageStatusOptions,
         weight,
+        start_duration_value: startDurationValue,
+        start_duration_unit: startDurationUnit,
+        start_duration_from: startDurationFrom,
+        start_anchor_stage_node_key: startAnchorStageNodeKey,
         duration_value: durationValue,
         duration_unit: durationUnit,
         duration_from: durationFrom,
         due_anchor_type: dueAnchorType,
         due_anchor_stage_node_key: dueAnchorStageNodeKey,
+        default_assignee_field: isDefaultAssigneeField ? rawDefaultAssigneeCombo : null,
         [PROCESS_NODE_KEY]: processNodeKey,
         [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_STAGE_INSTRUCTION_IDS_KEY]: stageInstructionIds,
       },
     };
-  }, [activeDraftLaneKey, draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions]);
+  }, [activeDraftLaneKey, draftAutomationRules, draftCustomFields, draftLocal.length, draftStageInstructionIds, getDraftStageEditorStatusOptions, requiresSystemScheduleStageAnchor]);
 
   const saveDraftStageFromEditor = useCallback(async (rawValues?: any) => {
     if (draftStageSavePromiseRef.current) {
@@ -7325,14 +7433,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const validateDraftModalStep = useCallback(async (stepKey: DraftModalTabKey) => {
     if (stepKey === 'stage') {
       const fieldsToValidate = ['name'];
-      if (isProcessModule) fieldsToValidate.push('task_type');
+      if (isProcessModule) {
+        fieldsToValidate.push('task_type', 'default_assignee_combo');
+        if (requiresSystemScheduleStageAnchor(draftForm.getFieldValue('start_duration_from'))) {
+          fieldsToValidate.push('start_anchor_stage_node_key');
+        }
+        if (requiresSystemScheduleStageAnchor(draftForm.getFieldValue('duration_from'))) {
+          fieldsToValidate.push('due_anchor_stage_node_key');
+        }
+      }
       await draftForm.validateFields(fieldsToValidate);
       return;
     }
     if (stepKey === 'fields') {
       await draftForm.validateFields(['stage_status_options_editor']);
     }
-  }, [draftForm, isProcessModule]);
+  }, [draftForm, isProcessModule, requiresSystemScheduleStageAnchor]);
 
   const resetDraftStageEditorState = useCallback(() => {
     setEditingDraft(null);
@@ -7393,6 +7509,26 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     setDraftModalTabKey(tab);
     setIsDraftModalOpen(true);
   }, [normalizeDraftStageForEditor]);
+
+  useEffect(() => {
+    if (!isProcessTemplateModule || typeof window === 'undefined') return undefined;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<any>)?.detail || {};
+      if (String(detail?.moduleId || '').trim() !== String(moduleId || '').trim()) return;
+      if (String(detail?.recordId || '').trim() !== String(recordId || '').trim()) return;
+      const requestedStageId = String(detail?.stageId || '').trim();
+      const stageFromList = requestedStageId
+        ? (draftLocalRef.current || []).find((stage: any) => (
+            String(stage?.id || stage?.template_stage_id || stage?.process_node_key || '').trim() === requestedStageId
+          ))
+        : null;
+      openDraftStageModal(stageFromList || detail?.stage || null, detail?.tab || 'stage');
+    };
+    window.addEventListener('kalamapp:open-process-template-stage', handler as EventListener);
+    return () => {
+      window.removeEventListener('kalamapp:open-process-template-stage', handler as EventListener);
+    };
+  }, [isProcessTemplateModule, moduleId, openDraftStageModal, recordId]);
 
   const loadDraftSourceTemplateOptions = useCallback(async () => {
     try {
@@ -7516,10 +7652,39 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         label: String(option?.label || ''),
         value: String(option?.value || ''),
         color: String(option?.color || '') || 'default',
+        icon: String((option as any)?.icon || '') || 'circle',
+        disabled: option?.disabled === true,
         insertAfter: String(option?.insertAfter || '').trim() || undefined,
       }))
     );
   }, [draftForm]);
+
+  const upsertDraftStageStatusOption = useCallback((sourceOption: SelectOption, patch: Partial<SelectOption>) => {
+    const optionValue = String(sourceOption?.value || '').trim();
+    if (!optionValue) return;
+    const existing = draftStageStatusOptions.find((option) => String(option?.value || '').trim() === optionValue);
+    const patchedMerged = mergedDraftStageStatusOptions.map((option) => (
+      String(option?.value || '').trim() === optionValue
+        ? { ...option, ...existing, ...patch, value: optionValue }
+        : option
+    ));
+    const nextCustom = normalizeProcessTaskStatusOptions([
+      ...draftStageStatusOptions.filter((option) => String(option?.value || '').trim() !== optionValue),
+      {
+        ...sourceOption,
+        ...existing,
+        ...patch,
+        value: optionValue,
+      },
+    ]);
+    syncDraftStageStatusOptions(
+      rebuildProcessTaskStatusOptionsByMergedOrder(
+        patchedMerged,
+        nextCustom,
+        baseTaskStatusOptions
+      )
+    );
+  }, [baseTaskStatusOptions, draftStageStatusOptions, mergedDraftStageStatusOptions, syncDraftStageStatusOptions]);
 
   const moveDraftStageStatusOption = useCallback((optionValue: string, direction: 'up' | 'down') => {
     const normalizedValue = String(optionValue || '').trim();
@@ -7756,14 +7921,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const openDraftCustomFieldOptionsEditor = useCallback((field: ModuleField) => {
     setDraftCustomFieldOptionsEditorKey(String(field?.key || ''));
     draftCustomFieldOptionsForm.setFieldsValue({
-      optionsText: serializeProcessTaskFieldOptions(field),
+      options: (field.options || []).map((option) => ({
+        label: String(option?.label || ''),
+        value: String(option?.value || ''),
+        color: String(option?.color || '') || undefined,
+      })),
     });
   }, [draftCustomFieldOptionsForm]);
 
   const saveDraftCustomFieldOptions = useCallback(async () => {
     try {
       const values = await draftCustomFieldOptionsForm.validateFields();
-      const nextOptions = parseProcessTaskFieldOptions(String(values?.optionsText || ''));
+      const rawRows = Array.isArray(values?.options) ? values.options : [];
+      const nextOptions = normalizeProcessTaskOptionRows(rawRows, 'option');
+      const filledRowCount = rawRows.filter((row) => String(row?.label || row?.value || '').trim()).length;
+      if (nextOptions.length !== filledRowCount) {
+        message.error('عنوان یا مقدار گزینه‌ها تکراری یا نامعتبر است.');
+        return;
+      }
       setDraftCustomFields((prev) => prev.map((field) => (
         String(field?.key || '') === String(draftCustomFieldOptionsEditorKey || '')
           ? { ...field, options: nextOptions }
@@ -7774,7 +7949,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     } catch {
       // Ant validation handles this case.
     }
-  }, [draftCustomFieldOptionsEditorKey, draftCustomFieldOptionsForm]);
+  }, [draftCustomFieldOptionsEditorKey, draftCustomFieldOptionsForm, message]);
 
   const handleRemoveDraftStage = async (stageToRemove: any) => {
     openTaskLayerConfirm({
@@ -7797,9 +7972,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     if (!isDraftModalOpen) return;
     if (editingDraft) {
       const draftForEditor = normalizeDraftStageForEditor(editingDraft, 0);
-      const assigneeCombo = draftForEditor?.default_assignee_role_id
+      const rawDefaultAssigneeId = String(draftForEditor?.default_assignee_id || '').trim();
+      const assigneeCombo = rawDefaultAssigneeId.startsWith('field:')
+        ? rawDefaultAssigneeId
+        : draftForEditor?.default_assignee_role_id
         ? buildAssigneeSelectValue(draftForEditor.default_assignee_role_id, 'role')
-        : buildAssigneeSelectValue(draftForEditor?.default_assignee_id, 'user');
+        : buildAssigneeSelectValue(rawDefaultAssigneeId, 'user');
       draftForm.setFieldsValue({
         name: draftForEditor.name,
         description: draftForEditor.description || '',
@@ -7808,6 +7986,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         wage: draftForEditor.wage || 0,
         weight: draftForEditor.weight || 0,
         default_assignee_combo: assigneeCombo,
+        start_duration_value: draftForEditor.start_duration_value ?? draftForEditor.metadata?.start_duration_value ?? draftForEditor.metadata?.duration_start_value ?? 0,
+        start_duration_unit: draftForEditor.start_duration_unit || draftForEditor.metadata?.start_duration_unit || draftForEditor.metadata?.duration_start_unit || 'day',
+        start_duration_from: draftForEditor.start_duration_from || draftForEditor.metadata?.start_duration_from || draftForEditor.metadata?.duration_start_from || 'project_start',
+        start_anchor_stage_node_key: draftForEditor.start_anchor_stage_node_key || draftForEditor.metadata?.start_anchor_stage_node_key || undefined,
         duration_value: draftForEditor.duration_value || 0,
         duration_unit: draftForEditor.duration_unit || 'day',
         duration_from: draftForEditor.duration_from || 'project_start',
@@ -7816,6 +7998,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           label: String(option?.label || ''),
           value: String(option?.value || ''),
           color: String(option?.color || '') || 'default',
+          icon: String((option as any)?.icon || '') || 'circle',
+          disabled: option?.disabled === true,
           insertAfter: String(option?.insertAfter || '').trim() || undefined,
         })),
       });
@@ -7836,6 +8020,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         sort_order: (draftLocal.length + 1) * 10,
         wage: 0,
         weight: 0,
+        default_assignee_combo: undefined,
+        start_duration_value: 0,
+        start_duration_unit: 'day',
+        start_duration_from: 'project_start',
+        start_anchor_stage_node_key: undefined,
         duration_value: 0,
         duration_unit: 'day',
         duration_from: 'project_start',
@@ -7920,6 +8109,56 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }))),
     [draftProcessLanes],
   );
+  const activationStageNodeOptions = useMemo(() => {
+    const currentNodeKey = editingDraft
+      ? getProcessStageNodeKey(editingDraft)
+      : '';
+    if (!currentNodeKey) return processStageNodeOptions;
+
+    const labelByNodeKey = new Map(processStageNodeOptions.map((option) => [option.value, option.label] as const));
+    const connectedEntries = [
+      ...getNextProcessStages(draftGraphSnapshot.stages, currentNodeKey, draftGraphSnapshot.graph).map((stage: any) => ({
+        value: getProcessStageNodeKey(stage),
+        relationLabel: 'مرحله بعدی',
+      })),
+      ...getPreviousProcessStages(draftGraphSnapshot.stages, currentNodeKey, draftGraphSnapshot.graph).map((stage: any) => ({
+        value: getProcessStageNodeKey(stage),
+        relationLabel: 'مرحله قبلی',
+      })),
+    ]
+      .filter((entry) => entry.value && entry.value !== currentNodeKey && labelByNodeKey.has(entry.value));
+
+    const unique = Array.from(
+      new Map(connectedEntries.map((entry) => [entry.value, entry] as const)).values()
+    );
+    if (unique.length === 0) {
+      return processStageNodeOptions.filter((option) => option.value !== currentNodeKey);
+    }
+    return unique.map((entry) => ({
+      value: entry.value,
+      label: `${entry.relationLabel}: ${labelByNodeKey.get(entry.value) || entry.value}`,
+    }));
+  }, [draftGraphSnapshot.graph, draftGraphSnapshot.stages, editingDraft, processStageNodeOptions]);
+  const processSystemScheduleAnchorOptions = useMemo(() => ([
+    { label: 'ایجاد همین فعالیت', value: 'current_stage_created' },
+    { label: 'شروع فرآیند', value: 'project_start' },
+    { label: 'ایجاد مرحله قبلی', value: 'previous_stage_created' },
+    { label: 'زمان شروع مرحله قبلی', value: 'previous_stage_start' },
+    { label: 'مهلت انجام مرحله قبلی', value: 'previous_stage_end' },
+    { label: 'زمان تکمیل واقعی مرحله قبلی', value: 'previous_stage_completed' },
+    { label: 'ایجاد مرحله بعدی', value: 'next_stage_created' },
+    { label: 'زمان شروع مرحله بعدی', value: 'next_stage_start' },
+    { label: 'مهلت انجام مرحله بعدی', value: 'next_stage_due' },
+    { label: 'زمان تکمیل واقعی مرحله بعدی', value: 'next_stage_completed' },
+    { label: 'ایجاد مرحله خاص', value: 'specific_stage_created' },
+    { label: 'زمان شروع مرحله خاص', value: 'specific_stage_start' },
+    { label: 'مهلت انجام مرحله خاص', value: 'specific_stage_due' },
+    { label: 'زمان تکمیل واقعی مرحله خاص', value: 'specific_stage_completed' },
+  ]), []);
+  const processScheduleUnitOptions = useMemo(() => ([
+    { label: 'روز', value: 'day' },
+    { label: 'ساعت', value: 'hour' },
+  ]), []);
   const processSpecificStageRecipientOptions = useMemo(
     () => processStageNodeOptions.map((option) => ({
       value: createProcessStageRecipientFieldKey(option.value),
@@ -8318,6 +8557,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       workflow_interval_days_after_holiday: null,
       workflow_batch_size: null,
       workflow_is_active: true,
+      workflow_process_execution_action: 'copy_process_template',
       workflow_trigger_module_ids: initialWorkflowTriggerModuleIds,
     });
     setProcessActivatorWorkflowRecord(null);
@@ -8361,6 +8601,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           processTriggerEditor.trigger.workflowTriggerModuleIds,
           automationScopeModuleIds,
         );
+        const workflowActions = Array.isArray(workflow?.actions) ? workflow.actions : [];
+        const processExecutionAction = workflowActions.find((action: any) => (
+          action?.type === 'copy_process_template' || action?.type === 'execute_process'
+        ));
+        const hasLegacyStageActivationAction = workflowActions.some((action: any) => action?.type === 'activate_specific_process_stage');
         processTriggerForm.setFieldsValue({
           workflow_description: workflow?.description || '',
           workflow_trigger_type: workflow?.trigger_type || 'on_upsert',
@@ -8377,6 +8622,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           workflow_interval_days_after_holiday: workflow?.interval_days_after_holiday ?? null,
           workflow_batch_size: workflow?.batch_size || null,
           workflow_is_active: workflow?.is_active !== false,
+          workflow_process_execution_action: processExecutionAction?.type || (hasLegacyStageActivationAction ? 'execute_process' : 'copy_process_template'),
           workflow_trigger_module_ids: workflowModuleIds.length > 0
             ? workflowModuleIds
             : (workflowPrimaryModuleIds.length > 0 ? workflowPrimaryModuleIds : triggerModuleIds),
@@ -8454,15 +8700,24 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             value: triggerBase.sourceNodeKey,
           }]
         : [];
+      const selectedProcessActionType = String(values?.workflow_process_execution_action || 'copy_process_template') === 'execute_process'
+        ? 'execute_process'
+        : 'copy_process_template';
       const existingActivationAction = (Array.isArray(processActivatorWorkflowRecord?.actions)
         ? processActivatorWorkflowRecord?.actions
         : []
-      )?.find((action: any) => action?.type === 'activate_specific_process_stage');
+      )?.find((action: any) => (
+        action?.type === selectedProcessActionType
+        || action?.type === 'copy_process_template'
+        || action?.type === 'execute_process'
+        || action?.type === 'activate_specific_process_stage'
+      ));
       const activationAction = {
         id: String(existingActivationAction?.id || createWorkflowId()),
-        type: 'activate_specific_process_stage' as const,
+        type: selectedProcessActionType,
         config: {
           template_id: recordId,
+          process_trigger_key: triggerBase.key,
           target_lane_keys: triggerBase.targetLaneKeys,
         },
       };
@@ -10566,6 +10821,18 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           <Form.Item name="workflow_description" label="توضیحات">
             <Input.TextArea rows={2} />
           </Form.Item>
+          {watchedProcessActivatorIsActive !== false ? (
+            <Form.Item name="workflow_process_execution_action" label="نوع اجرای خودکار">
+              <Radio.Group
+                options={[
+                  { label: 'کپی کردن الگوی فرآیند', value: 'copy_process_template' },
+                  { label: 'اجرای فرآیند و ارجاع خودکار مراحل', value: 'execute_process' },
+                ]}
+                optionType="button"
+                buttonStyle="solid"
+              />
+            </Form.Item>
+          ) : null}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item name="workflow_trigger_type" label="نوع اجرای خودکار">
               <Radio.Group options={triggerTypeOptions} optionType="button" buttonStyle="solid" />
@@ -10788,21 +11055,28 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="col-span-12">
                   <div className="text-xs text-gray-500 mb-1">زمان انجام</div>
                 </div>
+                <div className="col-span-4">
+                  <Form.Item name="duration_value" label="مقدار">
+                    <InputNumber className="w-full" min={0} />
+                  </Form.Item>
+                </div>
+                <div className="col-span-3">
+                  <Form.Item name="duration_unit" label="واحد">
+                    <AdaptiveSelectField
+                      {...adaptiveModalSelectProps}
+                      options={processScheduleUnitOptions}
+                    />
+                  </Form.Item>
+                </div>
                 <div className="col-span-5">
                   <Form.Item name="duration_from" label="بعد از">
                     <AdaptiveSelectField
                       {...adaptiveModalSelectProps}
-                      options={[
-                        { label: 'بعد از شروع فرآیند', value: 'project_start' },
-                        { label: 'بعد از موعد انجام مرحله قبلی', value: 'previous_stage_end' },
-                        { label: 'بعد از موعد انجام مرحله خاص', value: 'specific_stage_due' },
-                        { label: 'بعد از زمان تکمیل واقعی مرحله قبلی', value: 'previous_stage_completed' },
-                        { label: 'بعد از زمان تکمیل واقعی مرحله خاص', value: 'specific_stage_completed' },
-                      ]}
+                      options={processSystemScheduleAnchorOptions}
                     />
                   </Form.Item>
                 </div>
-                {['specific_stage_due', 'specific_stage_completed'].includes(String(watchedTaskDurationFrom || '')) ? (
+                {requiresSystemScheduleStageAnchor(watchedTaskDurationFrom) ? (
                   <div className="col-span-12">
                     <Form.Item
                       name="due_anchor_stage_node_key"
@@ -10817,22 +11091,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     </Form.Item>
                   </div>
                 ) : null}
-                <div className="col-span-4">
-                  <Form.Item name="duration_value" label="مقدار">
-                    <InputNumber className="w-full" min={0} />
-                  </Form.Item>
-                </div>
-                <div className="col-span-3">
-                  <Form.Item name="duration_unit" label="واحد">
-                    <AdaptiveSelectField
-                      {...adaptiveModalSelectProps}
-                      options={[
-                        { label: 'روز', value: 'day' },
-                        { label: 'ساعت', value: 'hour' },
-                      ]}
-                    />
-                  </Form.Item>
-                </div>
               </>
             )}
 
@@ -10990,63 +11248,105 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                           </Form.Item>
                         </div>
                         <div className="col-span-12">
-                          <Form.Item name="default_assignee_combo" label="مسئول انجام پیش‌فرض">
+                          <Form.Item
+                            name="default_assignee_combo"
+                            label="مسئول انجام پیش‌فرض"
+                            rules={[{ required: true, message: 'مسئول انجام پیش‌فرض را انتخاب کنید.' }]}
+                          >
                             <AdaptiveSelectField
                               {...adaptiveModalSelectProps}
                               placeholder="انتخاب کنید..."
-                              options={assigneeComboOptions}
+                              options={defaultAssigneeComboOptions}
                             />
                           </Form.Item>
                         </div>
-                        <div className="col-span-12">
-                          <div className="text-xs text-gray-500 mb-1">زمان انجام</div>
-                        </div>
-                        <div className="col-span-5">
-                          <Form.Item name="duration_from" label="بعد از">
-                            <AdaptiveSelectField
-                              {...adaptiveModalSelectProps}
-                              options={[
-                                { label: 'بعد از شروع فرآیند', value: 'project_start' },
-                                { label: 'بعد از موعد انجام مرحله قبلی', value: 'previous_stage_end' },
-                                { label: 'بعد از موعد انجام مرحله خاص', value: 'specific_stage_due' },
-                                { label: 'بعد از زمان تکمیل واقعی مرحله قبلی', value: 'previous_stage_completed' },
-                                { label: 'بعد از زمان تکمیل واقعی مرحله خاص', value: 'specific_stage_completed' },
-                              ]}
-                            />
-                          </Form.Item>
-                        </div>
-                        {['specific_stage_due', 'specific_stage_completed'].includes(String(watchedDraftDurationFrom || '')) ? (
-                          <div className="col-span-12">
-                            <Form.Item
-                              name="due_anchor_stage_node_key"
-                              label="مرحله مبنا"
-                              rules={[{ required: true, message: 'مرحله مبنا را انتخاب کنید.' }]}
-                            >
-                              <AdaptiveSelectField
-                                {...adaptiveModalSelectProps}
-                                options={processStageNodeOptions.filter(
-                                  (option) => option.value !== String(editingDraft?.[PROCESS_NODE_KEY] || ''),
-                                )}
-                                placeholder="انتخاب مرحله خاص"
-                              />
-                            </Form.Item>
+                        <div className="col-span-12 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                          <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.35)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                            <div className="mb-3 text-xs font-bold text-gray-600 dark:text-gray-300">زمان شروع سیستمی</div>
+                            <div className="grid grid-cols-12 gap-2">
+                              <div className="col-span-6">
+                                <Form.Item name="start_duration_value" label="مقدار">
+                                  <InputNumber className="w-full" min={0} />
+                                </Form.Item>
+                              </div>
+                              <div className="col-span-6">
+                                <Form.Item name="start_duration_unit" label="واحد">
+                                  <AdaptiveSelectField
+                                    {...adaptiveModalSelectProps}
+                                    options={processScheduleUnitOptions}
+                                  />
+                                </Form.Item>
+                              </div>
+                              <div className="col-span-12">
+                                <Form.Item name="start_duration_from" label="بعد از">
+                                  <AdaptiveSelectField
+                                    {...adaptiveModalSelectProps}
+                                    options={processSystemScheduleAnchorOptions}
+                                  />
+                                </Form.Item>
+                              </div>
+                              {requiresSystemScheduleStageAnchor(watchedDraftStartDurationFrom) ? (
+                                <div className="col-span-12">
+                                  <Form.Item
+                                    name="start_anchor_stage_node_key"
+                                    label="مرحله مبنا"
+                                    rules={[{ required: true, message: 'مرحله مبنا را انتخاب کنید.' }]}
+                                  >
+                                    <AdaptiveSelectField
+                                      {...adaptiveModalSelectProps}
+                                      options={processStageNodeOptions.filter(
+                                        (option) => option.value !== String(editingDraft?.[PROCESS_NODE_KEY] || ''),
+                                      )}
+                                      placeholder="انتخاب مرحله خاص"
+                                    />
+                                  </Form.Item>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
-                        ) : null}
-                        <div className="col-span-4">
-                          <Form.Item name="duration_value" label="مقدار">
-                            <InputNumber className="w-full" min={0} />
-                          </Form.Item>
-                        </div>
-                        <div className="col-span-3">
-                          <Form.Item name="duration_unit" label="واحد">
-                            <AdaptiveSelectField
-                              {...adaptiveModalSelectProps}
-                              options={[
-                                { label: 'روز', value: 'day' },
-                                { label: 'ساعت', value: 'hour' },
-                              ]}
-                            />
-                          </Form.Item>
+                          <div className="rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.35)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5">
+                            <div className="mb-3 text-xs font-bold text-gray-600 dark:text-gray-300">مهلت انجام سیستمی</div>
+                            <div className="grid grid-cols-12 gap-2">
+                              <div className="col-span-6">
+                                <Form.Item name="duration_value" label="مقدار">
+                                  <InputNumber className="w-full" min={0} />
+                                </Form.Item>
+                              </div>
+                              <div className="col-span-6">
+                                <Form.Item name="duration_unit" label="واحد">
+                                  <AdaptiveSelectField
+                                    {...adaptiveModalSelectProps}
+                                    options={processScheduleUnitOptions}
+                                  />
+                                </Form.Item>
+                              </div>
+                              <div className="col-span-12">
+                                <Form.Item name="duration_from" label="بعد از">
+                                  <AdaptiveSelectField
+                                    {...adaptiveModalSelectProps}
+                                    options={processSystemScheduleAnchorOptions}
+                                  />
+                                </Form.Item>
+                              </div>
+                              {requiresSystemScheduleStageAnchor(watchedDraftDurationFrom) ? (
+                                <div className="col-span-12">
+                                  <Form.Item
+                                    name="due_anchor_stage_node_key"
+                                    label="مرحله مبنا"
+                                    rules={[{ required: true, message: 'مرحله مبنا را انتخاب کنید.' }]}
+                                  >
+                                    <AdaptiveSelectField
+                                      {...adaptiveModalSelectProps}
+                                      options={processStageNodeOptions.filter(
+                                        (option) => option.value !== String(editingDraft?.[PROCESS_NODE_KEY] || ''),
+                                      )}
+                                      placeholder="انتخاب مرحله خاص"
+                                    />
+                                  </Form.Item>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
                         </div>
                       </>
                     )}
@@ -11070,13 +11370,37 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   className="flex items-center justify-between gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.34)] px-3 py-2 dark:border-[rgba(var(--brand-300-rgb),0.16)] dark:bg-white/5"
                                 >
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <Tag color={String(option.color || 'default')}>{option.label}</Tag>
+                                    <Tag color={String(option.color || 'default')}>
+                                      <span className="inline-flex items-center gap-1">
+                                        <TaskStatusIcon iconKey={String((option as any).icon || 'circle')} />
+                                        <span>{option.label}</span>
+                                      </span>
+                                    </Tag>
                                     <Tag color={isCustom ? 'processing' : 'default'}>
                                       {isCustom ? 'سفارشی' : 'سیستمی'}
                                     </Tag>
+                                    {option.disabled === true ? (
+                                      <Tag color="default">غیرفعال</Tag>
+                                    ) : null}
                                   </div>
-                                  {isCustom ? (
-                                    <Space size="small">
+                                  <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+                                    <Input
+                                      size="small"
+                                      value={String(option.label || '')}
+                                      placeholder="نام فارسی وضعیت"
+                                      className="!w-44 !rounded-lg"
+                                      onKeyDown={(event) => event.stopPropagation()}
+                                      onChange={(event) => upsertDraftStageStatusOption(option, { label: event.target.value })}
+                                    />
+                                    <Switch
+                                      size="small"
+                                      checked={option.disabled !== true}
+                                      checkedChildren="فعال"
+                                      unCheckedChildren="خاموش"
+                                      onChange={(checked) => upsertDraftStageStatusOption(option, { disabled: !checked })}
+                                    />
+                                    {isCustom ? (
+                                      <Space size="small">
                                       <Button
                                         htmlType="button"
                                         size="small"
@@ -11091,10 +11415,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                         disabled={isLast}
                                         onClick={() => moveDraftStageStatusOption(optionValue, 'down')}
                                       />
-                                    </Space>
-                                  ) : (
-                                    <span className="text-xs text-gray-400">ثابت</span>
-                                  )}
+                                      </Space>
+                                    ) : null}
+                                  </div>
                                 </div>
                               );
                             }) : (
@@ -11106,14 +11429,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         <Form.List name="stage_status_options_editor">
                           {(fields, { add, remove }) => (
                             <div className="space-y-3">
-                              {fields.map((field) => {
+                              {fields.map((field, statusIndex) => {
                                 const { key, ...listField } = field;
                                 return (
                                 <div
                                   key={key}
                                   className="grid grid-cols-12 gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-[rgba(var(--brand-50-rgb),0.36)] p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5"
                                 >
-                                  <div className="col-span-12 md:col-span-4">
+                                  <div className="col-span-12 md:col-span-3">
                                     <Form.Item
                                       {...listField}
                                       label="عنوان فارسی"
@@ -11121,7 +11444,25 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       rules={[{ required: true, message: 'عنوان فارسی را وارد کنید' }]}
                                       className="mb-0"
                                     >
-                                      <Input placeholder="مثلا: منتظر تایید مدیر" />
+                                      <Input
+                                        placeholder="مثلا: منتظر تایید مدیر"
+                                        autoComplete="off"
+                                        onKeyDown={(event) => event.stopPropagation()}
+                                        onChange={(event) => {
+                                          const currentValue = String(
+                                            draftForm.getFieldValue(['stage_status_options_editor', field.name, 'value']) || ''
+                                          ).trim();
+                                          if (!currentValue) {
+                                            draftForm.setFieldValue(
+                                              ['stage_status_options_editor', field.name, 'value'],
+                                              normalizeProcessTaskOptionKey(
+                                                event.target.value,
+                                                buildDefaultProcessTaskOptionValue('custom_status', statusIndex)
+                                              )
+                                            );
+                                          }
+                                        }}
+                                      />
                                     </Form.Item>
                                   </div>
                                   <div className="col-span-12 md:col-span-4">
@@ -11135,10 +11476,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       ]}
                                       className="mb-0"
                                     >
-                                      <Input placeholder="manager_pending" dir="ltr" />
+                                      <Input
+                                        placeholder="manager_pending"
+                                        dir="ltr"
+                                        autoComplete="off"
+                                        onKeyDown={(event) => event.stopPropagation()}
+                                        onBlur={(event) => {
+                                          const normalized = normalizeProcessTaskOptionKey(
+                                            event.target.value,
+                                            buildDefaultProcessTaskOptionValue('custom_status', statusIndex)
+                                          );
+                                          draftForm.setFieldValue(['stage_status_options_editor', field.name, 'value'], normalized);
+                                        }}
+                                      />
                                     </Form.Item>
                                   </div>
-                                  <div className="col-span-10 md:col-span-3">
+                                  <div className="col-span-6 md:col-span-2">
                                     <Form.Item
                                       {...listField}
                                       label="رنگ"
@@ -11154,10 +11507,45 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       />
                                     </Form.Item>
                                   </div>
+                                  <div className="col-span-6 md:col-span-2">
+                                    <Form.Item
+                                      {...listField}
+                                      label="آیکون"
+                                      name={[field.name, 'icon']}
+                                      initialValue="circle"
+                                      className="mb-0"
+                                    >
+                                      <AdaptiveSelectField
+                                        {...adaptiveModalSelectProps}
+                                        options={PROCESS_TASK_STATUS_ICON_OPTIONS}
+                                        placeholder="آیکون"
+                                        optionRender={(option: any) => {
+                                          const rawValue = String(option?.value ?? option?.data?.value ?? '').trim();
+                                          const label = PROCESS_TASK_STATUS_ICON_OPTIONS.find((item) => item.value === rawValue)?.label
+                                            || String(option?.label ?? option?.data?.label ?? rawValue);
+                                          return (
+                                            <span className="inline-flex items-center gap-2">
+                                              <TaskStatusIcon iconKey={rawValue} />
+                                              <span>{label}</span>
+                                            </span>
+                                          );
+                                        }}
+                                        renderMobileOption={(option: any) => (
+                                          <span className="inline-flex items-center gap-2">
+                                            <TaskStatusIcon iconKey={String(option?.value || 'circle')} />
+                                            <span>{option?.label}</span>
+                                          </span>
+                                        )}
+                                      />
+                                    </Form.Item>
+                                  </div>
                                   <div className="col-span-2 md:col-span-1 flex items-end justify-end">
                                     <Button htmlType="button" type="text" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
                                   </div>
                                   <Form.Item {...listField} name={[field.name, 'insertAfter']} hidden>
+                                    <Input />
+                                  </Form.Item>
+                                  <Form.Item {...listField} name={[field.name, 'disabled']} hidden>
                                     <Input />
                                   </Form.Item>
                                 </div>
@@ -11167,7 +11555,9 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                 htmlType="button"
                                 icon={<PlusOutlined />}
                                 onClick={() => add({
+                                  value: buildDefaultProcessTaskOptionValue('custom_status', fields.length),
                                   color: 'default',
+                                  icon: 'circle',
                                   insertAfter: String(mergedDraftStageStatusOptions[mergedDraftStageStatusOptions.length - 1]?.value || '').trim() || PROCESS_TASK_STATUS_START_ANCHOR,
                                 })}
                                 className="w-full"
@@ -11645,6 +12035,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                       nextStageFields={nextStageTransferFields}
                                       enableNextStageActions
                                       processStageOptions={processStageNodeOptions}
+                                      activationStageOptions={activationStageNodeOptions}
                                       moduleOptions={workflowModuleOptions}
                                       relationSourceModuleOptions={automationScopeModuleIds.map((scopeModuleId) => ({
                                         value: scopeModuleId,
@@ -11714,6 +12105,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                               nextStageFields: nextStageTransferFields,
                               enableNextStageActions: true,
                               processStageOptions: processStageNodeOptions,
+                              activationStageOptions: activationStageNodeOptions,
                               moduleOptions: workflowModuleOptions,
                               relationSourceModuleOptions: automationScopeModuleIds.map((scopeModuleId) => ({
                                 value: scopeModuleId,
@@ -11995,13 +12387,147 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         style={responsiveProcessModalStyle}
         styles={stageModalStyles}
       >
-        <div className="mb-3 text-xs text-gray-500">
-          هر خط به‌صورت <code>label|value|color</code> وارد شود. رنگ اختیاری است.
+        <div className="mb-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.45)] bg-[rgba(var(--brand-50-rgb),0.32)] px-3 py-2 text-xs leading-6 text-gray-600 dark:border-[rgba(var(--brand-300-rgb),0.16)] dark:bg-white/5 dark:text-gray-300">
+          برای هر گزینه عنوان نمایشی، مقدار ذخیره‌شده و رنگ را جدا وارد کنید. اگر مقدار خالی بماند، مقدار فنی به‌صورت خودکار ساخته می‌شود.
         </div>
         <Form form={draftCustomFieldOptionsForm} layout="vertical">
-          <Form.Item label="گزینه‌ها" name="optionsText">
-            <Input.TextArea autoSize={{ minRows: 8, maxRows: 14 }} placeholder={'در حال انجام|in_progress|blue'} />
-          </Form.Item>
+          <Form.List name="options">
+            {(fields, { add, remove }) => (
+              <div className="space-y-3">
+                {fields.length === 0 ? (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="هنوز گزینه‌ای برای این فیلد ثبت نشده است."
+                  />
+                ) : null}
+                {fields.map((field, optionIndex) => {
+                  const { key, ...listField } = field;
+                  return (
+                    <div
+                      key={key}
+                      className="grid grid-cols-12 gap-3 rounded-xl border border-[rgba(var(--brand-200-rgb),0.55)] bg-white/90 p-3 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5"
+                    >
+                      <div className="col-span-12 md:col-span-4">
+                        <Form.Item
+                          {...listField}
+                          label="عنوان نمایشی"
+                          name={[field.name, 'label']}
+                          rules={[{ required: true, message: 'عنوان گزینه را وارد کنید.' }]}
+                          className="mb-0"
+                        >
+                          <Input
+                            placeholder="مثلا: منتظر تایید مدیر"
+                            autoComplete="off"
+                            onKeyDown={(event) => event.stopPropagation()}
+                            onChange={(event) => {
+                              const currentValue = String(
+                                draftCustomFieldOptionsForm.getFieldValue(['options', field.name, 'value']) || ''
+                              ).trim();
+                              if (!currentValue) {
+                                draftCustomFieldOptionsForm.setFieldValue(
+                                  ['options', field.name, 'value'],
+                                  normalizeProcessTaskOptionKey(
+                                    event.target.value,
+                                    buildDefaultProcessTaskOptionValue('option', optionIndex)
+                                  )
+                                );
+                              }
+                            }}
+                          />
+                        </Form.Item>
+                      </div>
+                      <div className="col-span-12 md:col-span-4">
+                        <Form.Item
+                          {...listField}
+                          label="مقدار ذخیره‌شده"
+                          name={[field.name, 'value']}
+                          className="mb-0"
+                        >
+                          <Input
+                            placeholder="manager_pending"
+                            dir="ltr"
+                            autoComplete="off"
+                            onKeyDown={(event) => event.stopPropagation()}
+                            onBlur={(event) => {
+                              draftCustomFieldOptionsForm.setFieldValue(
+                                ['options', field.name, 'value'],
+                                normalizeProcessTaskOptionKey(
+                                  event.target.value,
+                                  buildDefaultProcessTaskOptionValue('option', optionIndex)
+                                )
+                              );
+                            }}
+                          />
+                        </Form.Item>
+                      </div>
+                      <div className="col-span-10 md:col-span-3">
+                        <Form.Item
+                          {...listField}
+                          label="رنگ"
+                          name={[field.name, 'color']}
+                          className="mb-0"
+                        >
+                          <AdaptiveSelectField
+                            {...adaptiveModalSelectProps}
+                            allowClear
+                            options={PROCESS_TASK_STATUS_COLOR_OPTIONS}
+                            placeholder="بدون رنگ"
+                            optionRender={(option: any) => {
+                              const rawValue = String(option?.value ?? option?.data?.value ?? '').trim();
+                              const meta = PROCESS_TASK_STATUS_COLOR_META.find((item) => item.value === rawValue);
+                              const label = meta?.label || String(option?.label ?? option?.data?.label ?? rawValue);
+                              return (
+                                <span className="inline-flex items-center gap-2">
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-full"
+                                    style={{ backgroundColor: meta?.hex || '#9ca3af' }}
+                                  />
+                                  <span>{label}</span>
+                                </span>
+                              );
+                            }}
+                            renderMobileOption={(option: any) => {
+                              const meta = PROCESS_TASK_STATUS_COLOR_META.find((item) => item.value === String(option?.value || '').trim());
+                              return (
+                                <span className="inline-flex items-center gap-2">
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-full"
+                                    style={{ backgroundColor: meta?.hex || '#9ca3af' }}
+                                  />
+                                  <span>{option?.label}</span>
+                                </span>
+                              );
+                            }}
+                          />
+                        </Form.Item>
+                      </div>
+                      <div className="col-span-2 md:col-span-1 flex items-end justify-end">
+                        <Button
+                          htmlType="button"
+                          type="text"
+                          danger
+                          icon={<DeleteOutlined />}
+                          onClick={() => remove(field.name)}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                <Button
+                  type="dashed"
+                  htmlType="button"
+                  icon={<PlusOutlined />}
+                  onClick={() => add({
+                    value: buildDefaultProcessTaskOptionValue('option', fields.length),
+                    color: 'default',
+                  })}
+                  className="w-full"
+                >
+                  افزودن گزینه
+                </Button>
+              </div>
+            )}
+          </Form.List>
         </Form>
       </Modal>
 
