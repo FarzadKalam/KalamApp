@@ -69,6 +69,7 @@ import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelationFieldLinksForModules, normalizeProcessTargetModuleIds, syncProcessTemplateTargetModules } from '../utils/processTargets';
+import { syncProcessDraftToLinkedRecords } from '../utils/processLinkedDraftSync';
 import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
@@ -3243,19 +3244,21 @@ const ModuleShow: React.FC = () => {
       const projectId = await createProjectWithFallback(payload);
 
       if (selectedTemplateId && executionDraft.length > 0) {
+        const processLinkMap = {
+          ...quickProjectLinkedRecords,
+          ...(moduleId && id ? { [moduleId]: String(id) } : {}),
+          projects: projectId,
+        };
         const enrichedDraft = executionDraft.map((stage) => ({
           ...stage,
           process_target_module_ids: targetModuleIds,
-          process_link_map: {
-            ...quickProjectLinkedRecords,
-            ...(moduleId && id ? { [moduleId]: String(id) } : {}),
-            projects: projectId,
-          },
+          process_link_map: processLinkMap,
         }));
         await supabase
           .from('projects')
           .update({ execution_process_draft: enrichedDraft })
           .eq('id', projectId);
+        await syncProcessDraftToLinkedRecords(supabase, enrichedDraft, processLinkMap);
         payload.execution_process_draft = enrichedDraft;
       }
 

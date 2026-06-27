@@ -42,6 +42,7 @@ import {
   createProcessLinkedFieldKey,
   mergeProcessLinkMaps,
   normalizeProcessTargetModuleIds,
+  parseProcessLinkMap,
 } from './processTargets';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
 
@@ -429,6 +430,38 @@ const insertTasksWithFallback = async (
   return [] as Record<string, any>[];
 };
 
+const syncProcessRunLinks = async (
+  supabaseClient: any,
+  processRunId: string | null | undefined,
+  links: Record<string, any>,
+  primaryModuleId: string,
+  primaryRecordId: string,
+) => {
+  const normalizedRunId = normalizeText(processRunId);
+  if (!supabaseClient || !normalizedRunId) return;
+  const { data: runRow, error: runError } = await supabaseClient
+    .from('process_runs')
+    .select('org_id')
+    .eq('id', normalizedRunId)
+    .maybeSingle();
+  if (runError || !runRow?.org_id) return;
+  const normalizedOrgId = normalizeText(runRow.org_id);
+  const rows = Object.entries(parseProcessLinkMap(links)).map(([moduleId, recordId]) => ({
+    org_id: normalizedOrgId,
+    process_run_id: normalizedRunId,
+    module_id: moduleId,
+    record_id: recordId,
+    is_primary: moduleId === primaryModuleId && recordId === primaryRecordId,
+  }));
+  if (rows.length === 0) return;
+  const { error } = await supabaseClient
+    .from('process_run_links')
+    .upsert(rows, { onConflict: 'process_run_id,module_id,record_id' });
+  if (error && !isMissingColumnError(error, 'process_run_links')) {
+    throw error;
+  }
+};
+
 export const autoAssignProcessV2DraftStages = async ({
   supabaseClient,
   moduleId,
@@ -597,6 +630,13 @@ export const autoAssignProcessV2DraftStages = async ({
       stageMap: new Map<string, string>(),
     };
     const processRunStageId = resolveProcessRunStageId(processRunContext.stageMap, stage);
+    await syncProcessRunLinks(
+      supabaseClient,
+      processRunContext.processRunId,
+      effectiveProcessLinkMap,
+      normalizedModuleId,
+      normalizedRecordId,
+    );
 
     const taskRow = {
       name: resolvedStageName,
