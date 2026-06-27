@@ -3,7 +3,9 @@ import {
   buildGlobalSearchModules,
   buildPhoneSearchVariants,
   digitsToEnglish,
+  GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS,
   isGlobalSearchQueryReady,
+  mergeGlobalSearchGroups,
   normalizeGlobalSearchQuery,
   normalizePersianSearchText,
   searchGlobalRecords,
@@ -121,6 +123,114 @@ describe('globalSearch normalization', () => {
     } as any;
 
     expect(buildGlobalSearchModules(modules, { tasks: { view: false, record_scope: 'own' } })).toEqual([]);
+  });
+
+  it('merges duplicate groups without dropping stronger matches', () => {
+    const groups = mergeGlobalSearchGroups([
+      {
+        moduleId: 'customers',
+        moduleTitle: 'مشتریان',
+        hasMore: false,
+        items: [
+          { moduleId: 'customers', moduleTitle: 'مشتریان', recordId: '1', title: 'الف', subtitle: '', matchedFields: [], payload: {}, score: 10 },
+        ],
+      },
+      {
+        moduleId: 'customers',
+        moduleTitle: 'مشتریان',
+        hasMore: true,
+        items: [
+          { moduleId: 'customers', moduleTitle: 'مشتریان', recordId: '1', title: 'الف', subtitle: '', matchedFields: [], payload: {}, score: 40 },
+          { moduleId: 'customers', moduleTitle: 'مشتریان', recordId: '2', title: 'ب', subtitle: '', matchedFields: [], payload: {}, score: 20 },
+        ],
+      },
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].hasMore).toBe(true);
+    expect(groups[0].items.map((item) => [item.recordId, item.score])).toEqual([
+      ['1', 40],
+      ['2', 20],
+    ]);
+  });
+
+  it('falls back for modules not covered by the RPC allowlist', async () => {
+    const moduleConfigs = {
+      custom_forms: {
+        id: 'custom_forms',
+        titles: { fa: 'فرم‌ها' },
+        fields: [{ key: 'name', labels: { fa: 'نام' }, type: FieldType.TEXT }],
+      },
+    } as any;
+    const modules = buildGlobalSearchModules(moduleConfigs);
+    const abortSignal = vi.fn().mockReturnThis();
+    const range = vi.fn().mockResolvedValue({
+      data: [{ id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' }],
+      error: null,
+    });
+    const or = vi.fn(() => ({ range, abortSignal }));
+    const select = vi.fn(() => ({ or }));
+    const from = vi.fn(() => ({ select }));
+    const supabase = {
+      rpc: vi.fn(),
+      from,
+    } as any;
+
+    const results = await searchGlobalRecords(supabase, moduleConfigs, modules, {
+      query: 'قرارداد',
+      cacheNamespace: 'u1',
+    });
+
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(from).toHaveBeenCalledWith('custom_forms');
+    expect(results[0]?.items[0]?.title).toBe('فرم قرارداد');
+  });
+
+  it('keeps RPC on supported modules and uses fallback only for unsupported modules', async () => {
+    const moduleConfigs = {
+      customers: {
+        id: 'customers',
+        titles: { fa: 'مشتریان' },
+        fields: [{ key: 'full_name', labels: { fa: 'نام' }, type: FieldType.TEXT }],
+      },
+      custom_forms: {
+        id: 'custom_forms',
+        titles: { fa: 'فرم‌ها' },
+        fields: [{ key: 'name', labels: { fa: 'نام' }, type: FieldType.TEXT }],
+      },
+    } as any;
+    const modules = buildGlobalSearchModules(moduleConfigs);
+    const supportedModuleId = GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS.includes('customers') ? 'customers' : modules[0].id;
+    const range = vi.fn().mockResolvedValue({
+      data: [{ id: 'cf-1', name: 'فرم قرارداد', created_at: '2026-06-28T10:00:00Z' }],
+      error: null,
+    });
+    const or = vi.fn(() => ({ range }));
+    const select = vi.fn(() => ({ or }));
+    const from = vi.fn(() => ({ select }));
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({
+        data: [{
+          module_id: supportedModuleId,
+          record_id: 'c-1',
+          payload: { id: 'c-1', full_name: 'علی جعفری', created_at: '2026-06-28T09:00:00Z' },
+          matched_fields: ['full_name'],
+          score: 50,
+          created_at: '2026-06-28T09:00:00Z',
+        }],
+        error: null,
+      }),
+      from,
+    } as any;
+
+    const results = await searchGlobalRecords(supabase, moduleConfigs, modules, {
+      query: 'جعفری',
+      cacheNamespace: 'u1',
+    });
+
+    expect(supabase.rpc).toHaveBeenCalledTimes(1);
+    expect(from).toHaveBeenCalledWith('custom_forms');
+    expect(results.flatMap((group) => group.items).map((item) => item.recordId)).toEqual(expect.arrayContaining(['c-1', 'cf-1']));
   });
 
   it('does not fan out client fallback requests for a broken RPC function', async () => {

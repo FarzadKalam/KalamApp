@@ -56,6 +56,7 @@ import { RECYCLE_BIN_ROUTE } from '../utils/recycleBin';
 import {
   buildGlobalSearchModules,
   isGlobalSearchQueryReady,
+  mergeGlobalSearchGroups,
   searchGlobalRecords,
   splitGlobalSearchModulesByPriority,
   type GlobalSearchGroup,
@@ -971,27 +972,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     [searchableGlobalSearchModules]
   );
 
-  const mergeGlobalSearchGroups = useCallback((groups: GlobalSearchGroup[]) => {
-    const grouped = new Map<string, GlobalSearchGroup>();
-    groups.forEach((group) => {
-      const current = grouped.get(group.moduleId);
-      if (!current) {
-        grouped.set(group.moduleId, group);
-        return;
-      }
-      const existingIds = new Set(current.items.map((item) => item.recordId));
-      grouped.set(group.moduleId, {
-        ...current,
-        items: [
-          ...current.items,
-          ...group.items.filter((item) => !existingIds.has(item.recordId)),
-        ],
-        hasMore: current.hasMore || group.hasMore,
-      });
-    });
-    return Array.from(grouped.values());
-  }, []);
-
   useEffect(() => {
     const matchedPath = findMenuPath(rawMenuItems, selectedSidebarKey);
     const parentKeys = matchedPath.slice(0, -1);
@@ -1029,6 +1009,14 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         const remainingModules = prioritizedGlobalSearchModules.fastModules.length
           ? prioritizedGlobalSearchModules.remainingModules
           : [];
+        const remainingPromise = remainingModules.length
+          ? searchGlobalRecords(supabase, MODULES, remainingModules, {
+            query: term,
+            limitPerModule: 3,
+            cacheNamespace: `${globalSearchCacheNamespace}:remaining`,
+            signal: controller.signal,
+          })
+          : Promise.resolve([] as GlobalSearchGroup[]);
         const fastResults = await searchGlobalRecords(supabase, MODULES, fastModules, {
           query: term,
           limitPerModule: 5,
@@ -1040,12 +1028,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         setSearchTouched(true);
 
         if (!remainingModules.length || controller.signal.aborted) return;
-        const remainingResults = await searchGlobalRecords(supabase, MODULES, remainingModules, {
-          query: term,
-          limitPerModule: 3,
-          cacheNamespace: `${globalSearchCacheNamespace}:remaining`,
-          signal: controller.signal,
-        });
+        const remainingResults = await remainingPromise;
         if (searchRequestRef.current !== requestId) return;
         setSearchResults(mergeGlobalSearchGroups([...fastResults, ...remainingResults]));
       } catch (err) {
@@ -1064,7 +1047,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       clearTimeout(handle);
       controller.abort();
     };
-  }, [globalSearch, globalSearchCacheNamespace, mergeGlobalSearchGroups, prioritizedGlobalSearchModules, rolePermissionsReady, searchableGlobalSearchModules]);
+  }, [globalSearch, globalSearchCacheNamespace, prioritizedGlobalSearchModules, rolePermissionsReady, searchableGlobalSearchModules]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

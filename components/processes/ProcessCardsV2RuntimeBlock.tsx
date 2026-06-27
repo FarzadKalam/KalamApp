@@ -22,6 +22,7 @@ import {
   resolveProcessTemplateTokenValue,
 } from '../../utils/processTemplateContext';
 import { normalizeProcessTargetModuleIds, parseProcessLinkMap } from '../../utils/processTargets';
+import { fetchLinkedProcessDraftStagesForRecord } from '../../utils/processLinkedDraftLookup';
 import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
@@ -82,6 +83,7 @@ type RuntimeState = {
 type ProcessRuntimeBlockCacheEntry = {
   runtime: RuntimeState;
   templateStages: any[];
+  linkedDraftStages: any[];
   savedAt: number;
 };
 
@@ -342,8 +344,7 @@ const mapRawStageToV2 = (
     || metadata?.draft === true
     || ['draft', 'template', 'not_assigned', 'unassigned'].includes(status)
   );
-  const hasLinkedTaskId = Boolean(normalizeText(stage?.task_id));
-  const hasRealTask = stage?.__process_v2_has_real_task === true || (!explicitDraft && hasLinkedTaskId);
+  const hasRealTask = stage?.__process_v2_has_real_task === true;
   const effectiveKind = explicitDraft || (kind === 'activity' && !hasRealTask) ? 'draft' : kind;
   const assignee = resolveAssignee(stage, directory, fallbackModuleId);
   const rawDue = stage?.planned_due_at || stage?.due_date || metadata?.planned_due_at || metadata?.due_date;
@@ -604,7 +605,6 @@ const TASK_RUNTIME_COLUMNS = [
   'source_template_id',
   'source_stage_sort_order',
   'due_date',
-  'metadata',
 ] as const;
 
 const fetchRuntimeTasksByColumn = async (
@@ -768,6 +768,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const [extraCards, setExtraCards] = useState<ProcessV2CardData[]>([]);
   const [hiddenCardIds, setHiddenCardIds] = useState<Set<string>>(() => new Set());
   const [draftStagesOverride, setDraftStagesOverride] = useState<any[] | null>(null);
+  const [linkedDraftStages, setLinkedDraftStages] = useState<any[]>(() => (
+    cacheFresh && cachedRuntimeBlock ? cachedRuntimeBlock.linkedDraftStages || EMPTY_STAGE_LIST : EMPTY_STAGE_LIST
+  ));
   const [autoAssigningCardIds, setAutoAssigningCardIds] = useState<Record<string, boolean>>({});
   const [activatorModal, setActivatorModal] = useState<{
     templateId: string;
@@ -796,9 +799,25 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runtimeRef = useRef<RuntimeState>(runtime);
   const templateStagesRef = useRef<any[]>(templateStages);
+  const linkedDraftStagesRef = useRef<any[]>(linkedDraftStages);
   const recordDataRef = useRef<any>(recordData);
   const readOnlyVariant = variant !== 'full';
-  const effectiveDraftStages = draftStagesOverride || (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST);
+  const directDraftStages = draftStagesOverride || (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST);
+  const effectiveDraftStages = useMemo(() => {
+    if (!Array.isArray(linkedDraftStages) || linkedDraftStages.length === 0) return directDraftStages;
+    const seen = new Set<string>();
+    return [...directDraftStages, ...linkedDraftStages].filter((stage: any, index) => {
+      const metadata = parseObject(stage?.metadata);
+      const key = [
+        normalizeText(stage?.process_group_id || metadata?.process_group_id || stage?.source_template_id || metadata?.source_template_id),
+        normalizeText(stage?.id || stage?.template_stage_id || stage?.process_node_key || metadata?.process_node_key),
+        String(Number(stage?.sort_order || index + 1)),
+      ].join(':');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [directDraftStages, linkedDraftStages]);
 
   useEffect(() => {
     runtimeRef.current = runtime;
@@ -807,6 +826,15 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   useEffect(() => {
     templateStagesRef.current = templateStages;
   }, [templateStages]);
+
+  useEffect(() => {
+    linkedDraftStagesRef.current = linkedDraftStages;
+  }, [linkedDraftStages]);
+
+  const directDraftStagesRef = useRef<any[]>(directDraftStages);
+  useEffect(() => {
+    directDraftStagesRef.current = directDraftStages;
+  }, [directDraftStages]);
 
   useEffect(() => {
     recordDataRef.current = recordData;
@@ -819,6 +847,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       stages: runtimeSnapshot?.stages || [],
       tasks: runtimeSnapshot?.tasks || [],
     });
+    setLinkedDraftStages([]);
     setHasLoadedRuntime(true);
   }, [runtimeSnapshot?.runs, runtimeSnapshot?.stages, runtimeSnapshot?.tasks]);
 
@@ -830,6 +859,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   useEffect(() => {
     const cached = processRuntimeBlockCache.get(cacheKey);
     setHasLoadedRuntime(Boolean(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS));
+    setLinkedDraftStages(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS ? cached.linkedDraftStages || [] : []);
     setResolvedTemplateContext(null);
     setTemplateContextResolving(false);
     setTemplateContextResolvedKey('');
@@ -876,6 +906,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS) {
         setTemplateStages(cached.templateStages);
         setRuntime(cached.runtime);
+        setLinkedDraftStages(cached.linkedDraftStages || []);
         setHasLoadedRuntime(true);
         setLoading(false);
         return;
@@ -890,6 +921,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         processRuntimeBlockCache.set(cacheKey, {
           runtime: runtimeRef.current,
           templateStages: stages,
+          linkedDraftStages: linkedDraftStagesRef.current,
           savedAt: Date.now(),
         });
         return;
@@ -908,18 +940,38 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         processRuntimeBlockCache.set(cacheKey, {
           runtime: nextRuntime,
           templateStages: templateStagesRef.current,
+          linkedDraftStages: linkedDraftStagesRef.current,
           savedAt: Date.now(),
         });
         return;
       }
 
-      const snapshot = await fetchProcessRuntimeBatchForRecord(supabase, normalizedModuleId, normalizedRecordId, { force: true });
+      const snapshot = await fetchProcessRuntimeBatchForRecord(
+        supabase,
+        normalizedModuleId,
+        normalizedRecordId,
+        force ? { force: true } : undefined,
+      );
       const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshot.stages || []);
+      const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+      const shouldLoadLinkedDrafts = (
+        (snapshot.runs || []).length === 0
+        && (snapshot.stages || []).length === 0
+        && directDrafts.length === 0
+      );
+      const nextLinkedDraftStages = shouldLoadLinkedDrafts
+        ? await fetchLinkedProcessDraftStagesForRecord(supabase, normalizedModuleId, normalizedRecordId, {
+          excludeModuleId: normalizedModuleId,
+          excludeRecordId: normalizedRecordId,
+        }).catch(() => [])
+        : [];
       const nextRuntime = { runs: snapshot.runs || [], stages: snapshot.stages || [], tasks };
       setRuntime(nextRuntime);
+      setLinkedDraftStages(nextLinkedDraftStages);
       processRuntimeBlockCache.set(cacheKey, {
         runtime: nextRuntime,
         templateStages: templateStagesRef.current,
+        linkedDraftStages: nextLinkedDraftStages,
         savedAt: Date.now(),
       });
     } catch (error: any) {
@@ -1191,7 +1243,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       const card = buildTemplateCard(recordData || { id: normalizedRecordId }, templateStages, directory, templateContext, false);
       return card ? [card] : [];
     }
-    if (readOnlyVariant && !hasLoadedRuntime) return [];
+    if (!hasLoadedRuntime) return [];
 
     const runRows = isProcessRunModule(normalizedModuleId)
       ? [recordData].filter(Boolean)
@@ -1803,6 +1855,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const canShowEmptyAddProcess = (
     variant === 'full'
+    && hasLoadedRuntime
     && !isProcessTemplateModule(normalizedModuleId)
     && !isProcessRunModule(normalizedModuleId)
     && Boolean(normalizedModuleId && normalizedRecordId)

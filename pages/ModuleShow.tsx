@@ -2582,6 +2582,7 @@ const ModuleShow: React.FC = () => {
           };
           const { error: updateError } = await supabase.from(moduleTable).update(patch).eq('id', id);
           if (updateError) throw updateError;
+          await syncProcessDraftToLinkedRecords(supabase, mappedDraft, processLinkMap);
 
           setData((prev: any) => ({ ...(prev || {}), ...patch }));
           setAutoSyncedProcessTemplateId(templateId);
