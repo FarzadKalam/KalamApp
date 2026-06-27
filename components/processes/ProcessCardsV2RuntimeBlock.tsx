@@ -31,6 +31,8 @@ import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
   createProcessTriggerKey,
+  getProcessStageLaneKey,
+  getProcessStageNodeKey,
   getProcessStagesByLane,
   materializeLegacyProcessGraph,
   PROCESS_LANE_KEY,
@@ -62,6 +64,7 @@ type ProcessCardsV2RuntimeBlockProps = {
   recordId?: string | null;
   recordData?: any;
   draftStages?: any[];
+  onDraftStagesChange?: (stages: any[]) => void | Promise<void>;
   fieldKey?: string | null;
   runtimeSnapshot?: ProcessRuntimeSnapshot | null;
   variant?: ProcessV2Variant;
@@ -499,6 +502,40 @@ const resolveDraftGroupMeta = (stage: any) => {
   };
 };
 
+const collectRawStageIdentityIds = (stage: any, index = 0) => {
+  const metadata = parseObject(stage?.metadata);
+  const sourceStage = stage?.source_stage && typeof stage.source_stage === 'object' ? stage.source_stage : {};
+  return [
+    stage?.id,
+    stage?.task_id,
+    stage?.template_stage_id,
+    stage?.process_run_stage_id,
+    stage?.run_stage_id,
+    stage?.process_node_key,
+    stage?.[PROCESS_NODE_KEY],
+    metadata?.id,
+    metadata?.task_id,
+    metadata?.template_stage_id,
+    metadata?.process_run_stage_id,
+    metadata?.run_stage_id,
+    metadata?.process_node_key,
+    metadata?.[PROCESS_NODE_KEY],
+    sourceStage?.id,
+    sourceStage?.task_id,
+    sourceStage?.template_stage_id,
+    sourceStage?.process_run_stage_id,
+    sourceStage?.run_stage_id,
+    sourceStage?.process_node_key,
+    getProcessStageNodeKey(stage, index),
+  ].map(normalizeText).filter(Boolean);
+};
+
+const rawStageMatchesV2Stage = (rawStage: any, stage: ProcessV2Stage, index = 0) => {
+  const matchIds = getProcessV2StageMatchIds(stage);
+  if (matchIds.size === 0) return false;
+  return collectRawStageIdentityIds(rawStage, index).some((id) => matchIds.has(id));
+};
+
 const buildDraftProcessCards = (
   draftStages: any[],
   directory: AssigneeDirectory | null,
@@ -631,11 +668,71 @@ const fetchRunStages = async (runId: string) => {
   return fallback.data || [];
 };
 
+const isUnsupportedRecycleError = (error: any) => {
+  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return (
+    text.includes('not valid')
+    || text.includes('valid')
+    || text.includes('schema cache')
+    || text.includes('function')
+    || text.includes('معتبر')
+    || text.includes('پیدا نشد')
+  );
+};
+
+const moveProcessRowsToRecycleBin = async (
+  sourceTable: 'process_templates' | 'process_template_stages' | 'process_runs' | 'process_run_stages',
+  moduleId: string,
+  ids: string[],
+) => {
+  const normalizedIds = Array.from(new Set(ids.map(normalizeText).filter(Boolean)));
+  if (normalizedIds.length === 0) return 0;
+  const actor = await fetchSessionBootstrap(supabase);
+  const { data, error } = await supabase.rpc('move_records_to_recycle_bin', {
+    p_module_id: moduleId,
+    p_source_table: sourceTable,
+    p_record_ids: normalizedIds,
+    p_deleted_by: actor.user?.id || null,
+    p_deleted_by_name: actor.profile?.full_name || null,
+    p_org_id: actor.orgId || null,
+  });
+  if (error) throw error;
+  return Number(data || 0) || 0;
+};
+
+const deleteProcessRowsDirectly = async (
+  sourceTable: 'process_template_stages' | 'process_run_stages',
+  ids: string[],
+) => {
+  const normalizedIds = Array.from(new Set(ids.map(normalizeText).filter(Boolean)));
+  if (normalizedIds.length === 0) return 0;
+  const { error } = await (supabase.from(sourceTable as any) as any)
+    .delete()
+    .in('id', normalizedIds);
+  if (error) throw error;
+  return normalizedIds.length;
+};
+
+const recycleOrDeleteProcessRows = async (
+  sourceTable: 'process_template_stages' | 'process_run_stages',
+  moduleId: string,
+  ids: string[],
+) => {
+  try {
+    return await moveProcessRowsToRecycleBin(sourceTable, moduleId, ids);
+  } catch (error) {
+    if (!isUnsupportedRecycleError(error)) throw error;
+    return deleteProcessRowsDirectly(sourceTable, ids);
+  }
+};
+
 const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   moduleId,
   recordId,
   recordData,
   draftStages,
+  onDraftStagesChange,
+  fieldKey,
   runtimeSnapshot,
   variant = 'full',
   enabled = true,
@@ -666,6 +763,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const [cardOverrides, setCardOverrides] = useState<Record<string, ProcessV2CardData>>({});
   const [extraCards, setExtraCards] = useState<ProcessV2CardData[]>([]);
   const [hiddenCardIds, setHiddenCardIds] = useState<Set<string>>(() => new Set());
+  const [draftStagesOverride, setDraftStagesOverride] = useState<any[] | null>(null);
   const [autoAssigningCardIds, setAutoAssigningCardIds] = useState<Record<string, boolean>>({});
   const [activatorModal, setActivatorModal] = useState<{
     templateId: string;
@@ -696,7 +794,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const templateStagesRef = useRef<any[]>(templateStages);
   const recordDataRef = useRef<any>(recordData);
   const readOnlyVariant = variant !== 'full';
-  const effectiveDraftStages = Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST;
+  const effectiveDraftStages = draftStagesOverride || (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST);
 
   useEffect(() => {
     runtimeRef.current = runtime;
@@ -722,6 +820,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   useEffect(() => {
     if (Array.isArray(draftStages)) setTemplateStages(draftStages);
+    setDraftStagesOverride(null);
   }, [draftStages]);
 
   useEffect(() => {
@@ -1180,12 +1279,202 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
   }, [cardKey]);
 
-  const handleDeleteCard = useCallback((id: string) => {
-    setHiddenCardIds((current) => new Set([...Array.from(current), ...displayCards
-      .filter((card) => card.id === id)
-      .map(cardKey)]));
-    message.info('این فرآیند فقط از نمای جدید پنهان شد؛ حذف واقعی فعلا از مسیر فعلی فرآیند انجام می‌شود.');
-  }, [cardKey, displayCards, message]);
+  const persistDraftStageList = useCallback(async (nextStages: any[]) => {
+    const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
+    setDraftStagesOverride(normalizedStages);
+    processRuntimeBlockCache.delete(cacheKey);
+
+    if (onDraftStagesChange) {
+      await onDraftStagesChange(normalizedStages);
+      return;
+    }
+
+    const normalizedFieldKey = normalizeText(fieldKey);
+    if (!normalizedModuleId || !normalizedRecordId || !normalizedFieldKey) return;
+    if (isProcessTemplateModule(normalizedModuleId) || isProcessRunModule(normalizedModuleId)) return;
+
+    const { error } = await (supabase.from(normalizedModuleId as any) as any)
+      .update({ [normalizedFieldKey]: normalizedStages })
+      .eq('id', normalizedRecordId);
+    if (error) throw error;
+  }, [cacheKey, fieldKey, normalizedModuleId, normalizedRecordId, onDraftStagesChange]);
+
+  const removeDraftStagesByPredicate = useCallback(async (
+    predicate: (stage: any, index: number) => boolean,
+  ) => {
+    const currentStages = Array.isArray(effectiveDraftStages) ? effectiveDraftStages : [];
+    const nextStages = currentStages.filter((stage, index) => !predicate(stage, index));
+    if (nextStages.length === currentStages.length) {
+      message.warning('مرحله پیش‌نویس متناظر برای حذف پیدا نشد.');
+      return false;
+    }
+    await persistDraftStageList(nextStages);
+    return true;
+  }, [effectiveDraftStages, message, persistDraftStageList]);
+
+  const deleteTemplateStages = useCallback(async (stageIds: string[]) => {
+    const normalizedIds = Array.from(new Set(stageIds.map(normalizeText).filter(Boolean)));
+    if (normalizedIds.length === 0) return false;
+    await recycleOrDeleteProcessRows('process_template_stages', 'process_template_stages', normalizedIds);
+    setTemplateStages((current) => current.filter((stage) => !normalizedIds.includes(normalizeText(stage?.id || stage?.template_stage_id))));
+    processRuntimeBlockCache.delete(cacheKey);
+    await refresh(true);
+    return true;
+  }, [cacheKey, refresh]);
+
+  const deleteRunDraftStages = useCallback(async (stageIds: string[]) => {
+    const normalizedIds = Array.from(new Set(stageIds.map(normalizeText).filter(Boolean)));
+    if (normalizedIds.length === 0) return false;
+    await recycleOrDeleteProcessRows('process_run_stages', 'process_run_stages', normalizedIds);
+    setRuntime((current) => ({
+      ...current,
+      stages: current.stages.filter((stage) => !normalizedIds.includes(normalizeText(stage?.id || stage?.process_run_stage_id))),
+    }));
+    processRuntimeBlockCache.delete(cacheKey);
+    await refresh(true);
+    return true;
+  }, [cacheKey, refresh]);
+
+  const getRunStageIdForDraftStage = useCallback((stage: ProcessV2Stage) => {
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    const sourceStage = source.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+    const metadata = parseObject(source?.metadata);
+    return normalizeText(
+      source?.process_run_stage_id
+      || sourceStage?.id
+      || sourceStage?.process_run_stage_id
+      || metadata?.process_run_stage_id
+      || (source?.process_run_id ? source?.id : '')
+    );
+  }, []);
+
+  const handleDeleteStage = useCallback(async (
+    stage: ProcessV2Stage,
+    _lane: ProcessV2Lane,
+    process: ProcessV2CardData,
+  ) => {
+    if (stage.kind !== 'draft') {
+      message.warning('حذف فعالیت واقعی از مسیر حذف فعالیت انجام می‌شود؛ این دکمه فقط مرحله پیش‌نویس را حذف می‌کند.');
+      return false;
+    }
+
+    if (process.mode === 'template' && isProcessTemplateModule(normalizedModuleId)) {
+      const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+      const templateStageId = normalizeText(source?.template_stage_id || source?.id || stage.id);
+      if (await deleteTemplateStages([templateStageId])) {
+        message.success('مرحله پیش‌نویس حذف شد');
+        return true;
+      }
+      return false;
+    }
+
+    const runStageId = getRunStageIdForDraftStage(stage);
+    if (runStageId && !normalizeText(stage.source?.task_id)) {
+      if (await deleteRunDraftStages([runStageId])) {
+        message.success('مرحله پیش‌نویس حذف شد');
+        return true;
+      }
+      return false;
+    }
+
+    if (await removeDraftStagesByPredicate((candidate, index) => rawStageMatchesV2Stage(candidate, stage, index))) {
+      message.success('مرحله پیش‌نویس حذف شد');
+      return true;
+    }
+    return false;
+  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftStagesByPredicate]);
+
+  const handleDeleteLane = useCallback(async (
+    lane: ProcessV2Lane,
+    process: ProcessV2CardData,
+  ) => {
+    if (lane.stages.some((stage) => stage.kind !== 'draft')) {
+      message.warning('این ردیف فعالیت واقعی دارد. ابتدا فعالیت‌های واقعی را از مسیر خودشان حذف کنید.');
+      return false;
+    }
+
+    if (process.mode === 'template' && isProcessTemplateModule(normalizedModuleId)) {
+      const stageIds = lane.stages
+        .map((stage) => {
+          const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+          return normalizeText(source?.template_stage_id || source?.id || stage.id);
+        })
+        .filter(Boolean);
+      if (await deleteTemplateStages(stageIds)) {
+        message.success('ردیف پیش‌نویس حذف شد');
+        return true;
+      }
+      return false;
+    }
+
+    const runStageIds = lane.stages
+      .map(getRunStageIdForDraftStage)
+      .filter(Boolean);
+    if (runStageIds.length === lane.stages.length && runStageIds.length > 0) {
+      if (await deleteRunDraftStages(runStageIds)) {
+        message.success('ردیف پیش‌نویس حذف شد');
+        return true;
+      }
+      return false;
+    }
+
+    const targetGroupId = normalizeText(process.id).startsWith('draft:')
+      ? normalizeText(process.id).replace(/^draft:/, '')
+      : '';
+    const targetLaneId = normalizeText(lane.id);
+    if (await removeDraftStagesByPredicate((candidate) => {
+      const meta = resolveDraftGroupMeta(candidate);
+      if (targetGroupId && meta.groupId !== targetGroupId) return false;
+      return getProcessStageLaneKey(candidate) === targetLaneId;
+    })) {
+      message.success('ردیف پیش‌نویس حذف شد');
+      return true;
+    }
+    return false;
+  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftStagesByPredicate]);
+
+  const handleDeleteCard = useCallback(async (id: string) => {
+    const source = displayCards.find((card) => card.id === id);
+    if (!source) return;
+
+    if (normalizeText(source.id).startsWith('draft:')) {
+      const targetGroupId = normalizeText(source.id).replace(/^draft:/, '');
+      const removed = await removeDraftStagesByPredicate((stage) => (
+        resolveDraftGroupMeta(stage).groupId === targetGroupId
+      ));
+      if (removed) {
+        setHiddenCardIds((current) => new Set([...Array.from(current), cardKey(source)]));
+        message.success('فرآیند پیش‌نویس حذف شد');
+      }
+      return;
+    }
+
+    if (source.mode === 'template') {
+      setHiddenCardIds((current) => new Set([...Array.from(current), cardKey(source)]));
+      message.info('الگو فقط از نمای جدید پنهان شد؛ حذف رکورد الگو از مسیر حذف رکورد انجام می‌شود.');
+      return;
+    }
+
+    if (source.mode === 'run' && !source.lanes.some((lane) => lane.stages.some((stage) => stage.kind !== 'draft'))) {
+      try {
+        await moveProcessRowsToRecycleBin('process_runs', 'process_runs', [source.id]);
+      } catch (error) {
+        if (!isUnsupportedRecycleError(error)) throw error;
+        const { error: deleteError } = await (supabase.from('process_runs' as any) as any)
+          .delete()
+          .eq('id', source.id);
+        if (deleteError) throw deleteError;
+      }
+      setHiddenCardIds((current) => new Set([...Array.from(current), cardKey(source)]));
+      processRuntimeBlockCache.delete(cacheKey);
+      await refresh(true);
+      message.success('فرآیند حذف شد');
+      return;
+    }
+
+    message.warning('برای حذف فرآیند شامل فعالیت واقعی، ابتدا فعالیت‌ها را از مسیر خودشان حذف کنید.');
+    return;
+  }, [cacheKey, cardKey, displayCards, message, refresh, removeDraftStagesByPredicate]);
 
   const handleCopyCard = useCallback((id: string) => {
     const source = displayCards.find((card) => card.id === id);
@@ -1541,6 +1830,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
               onChange={handleCardChange}
               onStageStatusChange={handleStageStatusChange}
               onDelete={handleDeleteCard}
+              onDeleteLane={handleDeleteLane}
+              onDeleteStage={handleDeleteStage}
               onCopy={handleCopyCard}
               onAddRun={handleAddRun}
               onShowInfo={handleShowInfo}

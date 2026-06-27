@@ -89,6 +89,8 @@ type ProcessCardsV2Props = {
   variant?: ProcessV2Variant;
   onChange?: (next: ProcessV2CardData) => void;
   onDelete?: (id: string) => void;
+  onDeleteLane?: (lane: ProcessV2Lane, process: ProcessV2CardData) => boolean | void | Promise<boolean | void>;
+  onDeleteStage?: (stage: ProcessV2Stage, lane: ProcessV2Lane, process: ProcessV2CardData) => boolean | void | Promise<boolean | void>;
   onCopy?: (id: string) => void;
   onAddRun?: () => void;
   onOpenStageDetails?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData) => boolean | void;
@@ -450,7 +452,7 @@ const getLaneComputedStatus = (lane: ProcessV2Lane, cardMode: ProcessV2CardMode)
   return 'not_started';
 };
 
-const confirmProcessV2Delete = (title: string, onConfirm: () => void) => {
+const confirmProcessV2Delete = (title: string, onConfirm: () => void | Promise<void>) => {
   Modal.confirm({
     title,
     content: 'این عملیات قابل بازگشت نیست. ادامه می‌دهید؟',
@@ -1734,6 +1736,8 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   variant = 'full',
   onChange,
   onDelete,
+  onDeleteLane,
+  onDeleteStage,
   onCopy,
   onAddRun,
   onOpenStageDetails,
@@ -1819,6 +1823,30 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       lanes: current.lanes.map((lane) => (lane.id === laneId ? updater(lane) : lane)),
     } as ProcessV2CardData));
   }, [updateItem]);
+
+  const deleteLane = useCallback(async (lane: ProcessV2Lane) => {
+    if (onDeleteLane) {
+      const shouldContinue = await onDeleteLane(lane, item);
+      if (shouldContinue === false) return;
+    }
+    updateItem((current) => ({
+      ...current,
+      lanes: current.lanes.filter((candidate) => candidate.id !== lane.id),
+    } as ProcessV2CardData));
+  }, [item, onDeleteLane, updateItem]);
+
+  const deleteStage = useCallback(async (lane: ProcessV2Lane, stageId: string) => {
+    const stage = lane.stages.find((candidate) => candidate.id === stageId);
+    if (!stage) return;
+    if (onDeleteStage) {
+      const shouldContinue = await onDeleteStage(stage, lane, item);
+      if (shouldContinue === false) return;
+    }
+    updateLane(lane.id, (currentLane) => ({
+      ...currentLane,
+      stages: currentLane.stages.filter((candidate) => candidate.id !== stageId),
+    }));
+  }, [item, onDeleteStage, updateLane]);
 
   const patchStageStatus = useCallback((stageId: string, status: string, sourcePatch?: Record<string, any>) => {
     const nextStageStatus = mapTaskStatusToStageStatus(status);
@@ -2473,7 +2501,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                   dropSlotPreview={dropSlotPreview}
                   onUpdateTitle={(title) => updateLane(lane.id, (currentLane) => ({ ...currentLane, title }))}
                   onToggleCollapse={() => updateLane(lane.id, (currentLane) => ({ ...currentLane, collapsed: !currentLane.collapsed }))}
-                  onDelete={() => updateItem((current) => ({ ...current, lanes: current.lanes.filter((candidate) => candidate.id !== lane.id) } as ProcessV2CardData))}
+                  onDelete={() => deleteLane(lane)}
                   onCopy={item.mode === 'run' ? () => updateItem((current) => ({ ...current, lanes: [...current.lanes, cloneLane(lane)] } as ProcessV2CardData)) : undefined}
                   onInsertStageBefore={(stageId) => insertStageBefore(lane.id, stageId)}
                   onInsertStageAfter={(stageId) => insertStageAfter(lane.id, stageId)}
@@ -2501,10 +2529,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                     const stage = currentLane.stages.find((candidate) => candidate.id === stageId);
                     return stage ? { ...currentLane, stages: [...currentLane.stages, cloneStage(stage)] } : currentLane;
                   })}
-                  onDeleteStage={(stageId) => updateLane(lane.id, (currentLane) => ({
-                    ...currentLane,
-                    stages: currentLane.stages.filter((stage) => stage.id !== stageId),
-                  }))}
+                  onDeleteStage={(stageId) => deleteStage(lane, stageId)}
                 />
                 {!readOnlySurface && laneIndex === item.lanes.length - 1 ? (
                   <LaneDropMarker

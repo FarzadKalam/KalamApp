@@ -246,6 +246,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                   recordData={data}
                   fieldKey={fieldKey}
                   draftStages={stageDraftValue}
+                  onDraftStagesChange={handleDraftStagesChange}
                   runtimeSnapshot={processRuntimeSnapshot}
                   variant="full"
                 />

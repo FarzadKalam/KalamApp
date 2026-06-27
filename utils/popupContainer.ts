@@ -34,6 +34,7 @@ const VIEWPORT_SENSITIVE_OVERLAY_SELECTOR = [
 
 export const KALAM_SELECT_FIELD_CLASSNAME = 'kalam-select-field';
 export type AdaptivePickerMode = 'auto' | 'desktop' | 'mobile-sheet';
+const KALAM_POPUP_ROOT_Z_INDEX = 40000;
 
 export const mergeClassNames = (...parts: Array<string | null | undefined | false>) =>
   parts.filter(Boolean).join(' ');
@@ -42,10 +43,16 @@ const KALAM_POPUP_ROOT_ID = 'kalam-popup-root';
 
 const getKalamPopupRoot = () => {
   let root = document.getElementById(KALAM_POPUP_ROOT_ID);
-  if (root) return root;
+  if (root) {
+    root.style.setProperty('--kalam-popup-root-z-index', String(KALAM_POPUP_ROOT_Z_INDEX));
+    root.style.zIndex = String(KALAM_POPUP_ROOT_Z_INDEX);
+    return root;
+  }
 
   root = document.createElement('div');
   root.id = KALAM_POPUP_ROOT_ID;
+  root.style.setProperty('--kalam-popup-root-z-index', String(KALAM_POPUP_ROOT_Z_INDEX));
+  root.style.zIndex = String(KALAM_POPUP_ROOT_Z_INDEX);
   document.body.appendChild(root);
   return root;
 };
