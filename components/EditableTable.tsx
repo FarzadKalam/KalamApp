@@ -4410,7 +4410,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       relationConfig,
       dynamicOptionsCategory: col.dynamicOptionsCategory,
       readonly: baseReadonly
-        || gatewayLockedPaymentRow
+        || (gatewayLockedPaymentRow && col.key !== 'responsible_id')
         || (isProductStockMovements && (record as any)?._readonly)
         || (isProductStockMovements && ['invoice_id', 'production_order_id', 'created_by_name', 'created_at', 'main_unit', 'sub_unit'].includes(col.key))
         || (isProductStockMovements && col.key === 'source' && (record as any)?._readonly)

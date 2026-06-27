@@ -59,6 +59,7 @@ type AutoAssignResult = {
   createdCount: number;
   skippedCount: number;
   groupIds: string[];
+  createdTasks?: Record<string, any>[];
 };
 
 const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
@@ -570,7 +571,19 @@ export const autoAssignProcessV2DraftStages = async ({
       task_name: resolvedStageName,
       description: resolvedDescription || '',
     });
-    const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, {});
+    const stageMetadata = parseObject(stage?.metadata);
+    const rawStageCustomFieldValues = {
+      ...(recurrenceBase?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof recurrenceBase[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? recurrenceBase[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+      ...(stageMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof stageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? stageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+      ...(stage?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof stage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? stage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    };
+    const renderedStageCustomFieldValues = resolvedStageCustomFields.reduce<Record<string, any>>((acc, field) => {
+      const key = normalizeText(field?.key);
+      if (!key || !Object.prototype.hasOwnProperty.call(rawStageCustomFieldValues, key)) return acc;
+      acc[key] = renderProcessV2TemplateValueFromRecord(rawStageCustomFieldValues[key], templateContext, field.type);
+      return acc;
+    }, {});
+    const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, renderedStageCustomFieldValues);
     const assignee = resolveStageAssignee(stage, templateContext);
     const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
     const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
@@ -662,5 +675,6 @@ export const autoAssignProcessV2DraftStages = async ({
     createdCount: Math.max(insertedRows.length, visibleCreatedCount),
     skippedCount: stageRows.length - creatableStages.length,
     groupIds: Array.from(new Set(stageRows.map((stage) => getDraftStageProcessGroupMeta(stage).groupId))),
+    createdTasks: insertedRows,
   };
 };

@@ -154,6 +154,7 @@ type FormValues = {
     payment_domain?: string;
     callback_path?: string;
     merchant_id?: string;
+    default_bank_account_id?: string;
     title?: string;
     default_description?: string;
     online_invoice_payments_enabled?: boolean;
@@ -288,6 +289,7 @@ const DEFAULT_VALUES: FormValues = {
     payment_domain: 'https://tazesystem.ir',
     callback_path: '/payment/callback',
     merchant_id: '',
+    default_bank_account_id: '',
     title: 'درگاه پرداخت آنلاین تازه سیستم',
     default_description: 'پرداخت آنلاین از طریق زرین‌پال',
     online_invoice_payments_enabled: false,
@@ -375,6 +377,7 @@ const ConnectionsTab: React.FC = () => {
   const [activePanelKeys, setActivePanelKeys] = useState<string[]>([]);
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [isSaasAdminOrg, setIsSaasAdminOrg] = useState(false);
+  const [bankAccountOptions, setBankAccountOptions] = useState<Array<{ label: string; value: string }>>([]);
   const smsWebhookSecret = Form.useWatch(['sms', 'webhook_secret'], form);
   const voipWebhookSecret = Form.useWatch(['voip', 'webhook_secret'], form);
 
@@ -532,6 +535,30 @@ const ConnectionsTab: React.FC = () => {
     []
   );
 
+  const fetchBankAccountOptions = async () => {
+    const { data, error } = await supabase
+      .from('bank_accounts')
+      .select('id, bank_name, account_number, card_number, is_active')
+      .eq('is_active', true)
+      .order('bank_name', { ascending: true })
+      .limit(500);
+
+    if (error) {
+      console.warn('Could not load bank accounts for payment gateway settings', error);
+      setBankAccountOptions([]);
+      return;
+    }
+
+    setBankAccountOptions((data || []).map((account: any) => {
+      const bankName = String(account?.bank_name || '').trim() || 'حساب بانکی';
+      const number = String(account?.account_number || account?.card_number || '').trim();
+      return {
+        value: String(account.id),
+        label: number ? `${bankName} - ${number}` : bankName,
+      };
+    }));
+  };
+
   const buildSmsOverrideSettings = (smsValues: FormValues['sms']) => ({
     mode: 'soap' as const,
     base_url: 'https://api.payamak-panel.com/post/send.asmx/SendSimpleSMS2',
@@ -635,6 +662,7 @@ const ConnectionsTab: React.FC = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
+      void fetchBankAccountOptions();
       const { data, error } = await supabase
         .from('integration_settings')
         .select('*')
@@ -939,6 +967,7 @@ const ConnectionsTab: React.FC = () => {
             callback_path: normalizedPaymentGatewayCallbackPath,
             currency: companyPaymentCurrencyCode,
             merchant_id: String(currentPaymentGatewayValues.merchant_id || '').trim(),
+            default_bank_account_id: String(currentPaymentGatewayValues.default_bank_account_id || '').trim(),
             title: String(currentPaymentGatewayValues.title || '').trim(),
             default_description: String(currentPaymentGatewayValues.default_description || '').trim(),
             online_invoice_payments_enabled: currentPaymentGatewayValues.online_invoice_payments_enabled === true,
@@ -1797,6 +1826,15 @@ const ConnectionsTab: React.FC = () => {
                         dir="ltr"
                         placeholder={isSaasAdminOrg ? 'برای درگاه مرکزی خالی بماند؛ فقط برای درگاه اختصاصی سازمان وارد شود.' : 'Merchant ID دریافتی از زرین‌پال'}
                         autoComplete="off"
+                      />
+                    </Form.Item>
+                    <Form.Item label="حساب پیش‌فرض درگاه پرداخت" name={['payment_gateway', 'default_bank_account_id']} className="md:col-span-3">
+                      <Select
+                        allowClear
+                        showSearch
+                        optionFilterProp="label"
+                        options={bankAccountOptions}
+                        placeholder="انتخاب حساب بانکی مقصد دریافت‌های آنلاین"
                       />
                     </Form.Item>
                     <Form.Item label="عنوان نمایشی" name={['payment_gateway', 'title']} className="md:col-span-3">

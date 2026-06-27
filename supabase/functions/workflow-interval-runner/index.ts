@@ -3,7 +3,7 @@
 // Called by pg_cron via pg_net every 5 minutes — no browser dependency.
 // Tenant isolation: every DB operation is filtered by org_id.
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-18-process-workflow-hardening';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-27-event-payments';
 const MAX_WORKFLOWS = 30;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
@@ -494,12 +494,40 @@ function normalizeConditionValue(value: any): string {
     .replace(/[٠-٩]/g, (d) => String(ARABIC.indexOf(d)));
 }
 
+function comparableConditionValue(value: any): any {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map((item) => comparableConditionValue(item));
+  if (typeof value === 'object') {
+    const preferred = value?.id ?? value?.value ?? value?.label ?? value?.name ?? value?.title ?? value?.full_name ?? value?.display;
+    if (preferred !== undefined && preferred !== null) return comparableConditionValue(preferred);
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'boolean') return value;
+  const text = normalizeConditionValue(String(value).replace(/,/g, '').trim());
+  const num = Number(text);
+  if (!Number.isNaN(num) && text !== '') return num;
+  return text;
+}
+
+function comparableConditionJson(value: any): string {
+  return JSON.stringify(comparableConditionValue(value) ?? null);
+}
+
 async function evaluateCondition(condition: WorkflowCondition, record: Record<string, any>): Promise<boolean> {
+  return evaluateConditionWithPrevious(condition, record, null);
+}
+
+async function evaluateConditionWithPrevious(
+  condition: WorkflowCondition,
+  record: Record<string, any>,
+  previousRecord: Record<string, any> | null | undefined,
+): Promise<boolean> {
   const field = String(condition?.field || '').trim();
   if (!field) return true;
   const operator = String(condition?.operator || 'eq').trim();
   const expected = condition?.value;
   const currentRaw = getFieldValueForCondition(record, field);
+  const previousRaw = previousRecord ? getFieldValueForCondition(previousRecord, field) : undefined;
   const current = currentRaw;
   const currentStr = normalizeConditionValue(currentRaw);
 
@@ -522,6 +550,11 @@ async function evaluateCondition(condition: WorkflowCondition, record: Record<st
     case 'not_null': case 'not_empty': return current !== null && current !== undefined && String(current).trim() !== '';
     case 'is_true': return current === true || current === 'true' || current === 1;
     case 'is_false': return current === false || current === 'false' || current === 0;
+    case 'changed': return comparableConditionJson(current) !== comparableConditionJson(previousRaw);
+    case 'changed_from': return comparableConditionJson(previousRaw) === comparableConditionJson(expected)
+      && comparableConditionJson(current) !== comparableConditionJson(previousRaw);
+    case 'changed_to': return comparableConditionJson(current) === comparableConditionJson(expected)
+      && comparableConditionJson(current) !== comparableConditionJson(previousRaw);
     case 'contains': return String(current ?? '').includes(String(expected ?? ''));
     case 'not_contains': return !String(current ?? '').includes(String(expected ?? ''));
     case 'starts_with': return String(current ?? '').startsWith(String(expected ?? ''));
@@ -654,21 +687,22 @@ async function evaluateCondition(condition: WorkflowCondition, record: Record<st
 async function evaluateConditions(
   conditionsAll: WorkflowCondition[],
   conditionsAny: WorkflowCondition[],
-  record: Record<string, any>
+  record: Record<string, any>,
+  previousRecord: Record<string, any> | null | undefined = null,
 ): Promise<boolean> {
   const allConditions = Array.isArray(conditionsAll) ? conditionsAll : [];
   const anyConditions = Array.isArray(conditionsAny) ? conditionsAny : [];
 
   if (allConditions.length > 0) {
     for (const c of allConditions) {
-      if (!await evaluateCondition(c, record)) return false;
+      if (!await evaluateConditionWithPrevious(c, record, previousRecord)) return false;
     }
   }
 
   if (anyConditions.length > 0) {
     let anyPassed = false;
     for (const c of anyConditions) {
-      if (await evaluateCondition(c, record)) { anyPassed = true; break; }
+      if (await evaluateConditionWithPrevious(c, record, previousRecord)) { anyPassed = true; break; }
     }
     if (!anyPassed) return false;
   }
@@ -3121,6 +3155,245 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
   return stats;
 }
 
+function workflowTargetsModule(workflow: WorkflowRow, moduleId: string): boolean {
+  if (String(workflow?.module_id || '') === moduleId) return true;
+  if (Array.isArray(workflow?.module_ids) && workflow.module_ids.map(String).includes(moduleId)) return true;
+  return false;
+}
+
+function shouldRunWorkflowForEvent(workflow: WorkflowRow, moduleId: string): boolean {
+  if (!workflowTargetsModule(workflow, moduleId)) return false;
+  if (workflow?.scope_type !== 'process_activator') return true;
+  const sourceNodeKey = String(workflow?.process_source_node_key || '').trim();
+  if (sourceNodeKey) return moduleId === 'tasks';
+  return Array.isArray(workflow?.module_ids) && workflow.module_ids.map(String).includes(moduleId);
+}
+
+async function fetchWorkflowEventRecord(
+  url: string,
+  key: string,
+  moduleId: string,
+  recordId: string,
+  fallbackRecord: Record<string, any> | null | undefined,
+): Promise<{ table: string; record: Record<string, any> | null }> {
+  const table = getModuleTable(moduleId);
+  const normalizedRecordId = String(recordId || fallbackRecord?.id || '').trim();
+  if (normalizedRecordId) {
+    const rows = await dbGet(
+      url,
+      key,
+      `${table}?id=eq.${encodeURIComponent(normalizedRecordId)}&select=*&limit=1`,
+    ).catch((error) => {
+      console.warn('[workflow-runner] Event record fetch failed:', error?.message || error);
+      return [];
+    });
+    if (rows[0]) return { table, record: rows[0] };
+  }
+  return {
+    table,
+    record: fallbackRecord && typeof fallbackRecord === 'object' ? fallbackRecord : null,
+  };
+}
+
+async function fetchEventWorkflows(
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId: string,
+  event: string,
+): Promise<WorkflowRow[]> {
+  const triggerTypes = event === 'create' ? 'on_create,on_upsert' : 'on_upsert';
+  const rows = await dbGet(
+    url,
+    key,
+    `workflows?org_id=eq.${encodeURIComponent(orgId)}&is_active=eq.true&trigger_type=in.(${triggerTypes})&select=*&limit=500`,
+  ).catch((error) => {
+    console.warn('[workflow-runner] Event workflow fetch failed:', error?.message || error);
+    return [];
+  });
+  return (rows as WorkflowRow[]).filter((workflow) => shouldRunWorkflowForEvent(workflow, moduleId));
+}
+
+async function hasSuccessfulEventWorkflowLog(
+  url: string,
+  key: string,
+  workflowId: string,
+  moduleId: string,
+  recordId: string,
+): Promise<boolean> {
+  const rows = await dbGet(
+    url,
+    key,
+    `workflow_logs?workflow_id=eq.${encodeURIComponent(workflowId)}&run_type=eq.event&module_id=eq.${encodeURIComponent(moduleId)}&record_id=eq.${encodeURIComponent(recordId)}&status=eq.success&select=id&limit=1`,
+  ).catch(() => []);
+  return rows.length > 0;
+}
+
+async function runEventTick(
+  url: string,
+  key: string,
+  body: Record<string, any>,
+): Promise<Record<string, any>> {
+  const moduleId = String(body?.module_id || body?.moduleId || '').trim();
+  const recordId = String(body?.record_id || body?.recordId || body?.record?.id || '').trim();
+  const event = String(body?.event || 'upsert').trim() === 'create' ? 'create' : 'upsert';
+  const providedRecord = body?.record && typeof body.record === 'object' ? body.record : null;
+  const previousRecord = body?.previous_record && typeof body.previous_record === 'object'
+    ? body.previous_record
+    : body?.previousRecord && typeof body.previousRecord === 'object'
+    ? body.previousRecord
+    : null;
+  const source = String(body?.source || 'workflow_event_runner').trim() || 'workflow_event_runner';
+
+  if (!moduleId || !recordId) {
+    throw new Error('module_id و record_id برای اجرای event لازم است.');
+  }
+
+  const { table, record } = await fetchWorkflowEventRecord(url, key, moduleId, recordId, providedRecord);
+  if (!record?.id) {
+    throw new Error('رکورد مقصد گردش کار پیدا نشد.');
+  }
+
+  const orgId = String(record?.org_id || providedRecord?.org_id || previousRecord?.org_id || '').trim();
+  if (!orgId) {
+    throw new Error('شناسه سازمان رکورد مقصد گردش کار مشخص نیست.');
+  }
+
+  const stats = {
+    event,
+    moduleId,
+    recordId: String(record.id),
+    checkedWorkflows: 0,
+    matchedWorkflows: 0,
+    executedActions: 0,
+    failedRuns: 0,
+    skippedRuns: 0,
+  };
+
+  if (await shouldSkipWorkflowIntervalRecord(url, key, orgId, table, record)) {
+    stats.skippedRuns += 1;
+    return stats;
+  }
+
+  const workflows = await fetchEventWorkflows(url, key, orgId, moduleId, event);
+  stats.checkedWorkflows = workflows.length;
+
+  for (const workflow of workflows) {
+    const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+    const recordIdForLog = String(record?.id || '').trim();
+    try {
+      const matched = await evaluateConditions(
+        Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [],
+        Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [],
+        record,
+        previousRecord,
+      );
+      if (!matched) continue;
+      stats.matchedWorkflows += 1;
+
+      const executionMode = String(workflow.execution_mode || 'first_match');
+      if (
+        executionMode === 'first_match'
+        && recordIdForLog
+        && await hasSuccessfulEventWorkflowLog(url, key, workflow.id, moduleId, recordIdForLog)
+      ) {
+        stats.skippedRuns += 1;
+        await insertWorkflowLog(url, key, {
+          workflow_id: workflow.id,
+          org_id: workflow.org_id,
+          module_id: moduleId,
+          record_id: recordIdForLog,
+          run_type: 'event',
+          status: 'skipped',
+          message: 'این گردش کار قبلاً برای این رکورد اجرا شده است.',
+          details: { source, event, runner_build: FUNCTION_BUILD },
+        });
+        continue;
+      }
+
+      const actorUserId = resolveWorkflowActorId(workflow);
+      const errors: string[] = [];
+      const actionResults: ActionExecutionResult[] = [];
+      for (const action of actions) {
+        try {
+          const result = await executeActionWithRetry(
+            action as WorkflowAction,
+            record,
+            moduleId,
+            workflow.org_id,
+            url,
+            key,
+            actorUserId,
+          );
+          actionResults.push(result);
+          if (result.status === 'success') stats.executedActions += 1;
+          if (result.status === 'failed') {
+            errors.push(result.message || String((action as any)?.type || 'action failed'));
+            stats.failedRuns += 1;
+          }
+        } catch (error: any) {
+          const errorMessage = String(error?.message || (action as any)?.type || 'action failed');
+          errors.push(errorMessage);
+          actionResults.push({
+            action_type: String((action as any)?.type || ''),
+            action_id: (action as any)?.id || null,
+            status: 'failed',
+            message: errorMessage,
+          });
+          stats.failedRuns += 1;
+          console.error(`[workflow-runner] Event action failed (${workflow.name}/${(action as any)?.type}):`, error?.message || error);
+        }
+      }
+
+      const hasFailedAction = actionResults.some((result) => result.status === 'failed');
+      const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
+      const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
+      if (runStatus === 'skipped') stats.skippedRuns += 1;
+
+      await insertWorkflowLog(url, key, {
+        workflow_id: workflow.id,
+        org_id: workflow.org_id,
+        module_id: moduleId,
+        record_id: recordIdForLog,
+        run_type: 'event',
+        status: runStatus,
+        message: errors.length > 0 ? errors.join(' | ') : (!hasSuccessfulAction ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.' : undefined),
+        details: {
+          source,
+          event,
+          workflow_name: workflow.name,
+          action_count: actions.length,
+          action_results: actionResults,
+          runner_build: FUNCTION_BUILD,
+          has_previous_record: previousRecord !== null,
+        },
+      });
+
+      if (runStatus === 'success') {
+        await dbPatch(url, key, 'workflows', `id=eq.${workflow.id}`, { last_run_at: new Date().toISOString() }).catch(() => {});
+      }
+    } catch (error: any) {
+      stats.failedRuns += 1;
+      const errorMessage = String(error?.message || 'workflow event failed');
+      console.error(`[workflow-runner] Event workflow failed (${workflow?.name || workflow?.id}):`, errorMessage);
+      if (recordIdForLog) {
+        await insertWorkflowLog(url, key, {
+          workflow_id: workflow.id,
+          org_id: workflow.org_id,
+          module_id: moduleId,
+          record_id: recordIdForLog,
+          run_type: 'event',
+          status: 'failed',
+          message: errorMessage,
+          details: { source, event, runner_build: FUNCTION_BUILD },
+        });
+      }
+    }
+  }
+
+  return stats;
+}
+
 // ── Deno.serve ─────────────────────────────────────────────────────────────────
 
 const corsHeaders = {
@@ -3153,6 +3426,18 @@ Deno.serve(async (req) => {
   }
 
   try {
+    let body: Record<string, any> = {};
+    if (req.method === 'POST') {
+      body = await req.json().catch(() => ({}));
+    }
+    const action = String(body?.action || '').trim();
+    if (action === 'run_event') {
+      if (!isServiceRole) return json(401, { ok: false, error: 'Unauthorized event runner' });
+      const stats = await runEventTick(supabaseUrl, serviceRoleKey, body);
+      console.log(`[workflow-runner] build=${FUNCTION_BUILD} eventStats=${JSON.stringify(stats)}`);
+      return json(200, { ok: true, mode: 'event', stats });
+    }
+
     const stats = await runIntervalTick(supabaseUrl, serviceRoleKey);
     console.log(`[workflow-runner] build=${FUNCTION_BUILD} stats=${JSON.stringify(stats)}`);
     return json(200, { ok: true, stats });

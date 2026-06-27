@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { App, Badge, Button, Input, Modal, Tag, Tooltip } from 'antd';
 import {
   CheckOutlined,
@@ -22,7 +22,7 @@ import {
   UnlockOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Link, useInRouterContext } from 'react-router-dom';
 import AdaptiveSelectField from '../AdaptiveSelectField';
 import DynamicSelectField from '../DynamicSelectField';
 import SmartFieldRenderer from '../SmartFieldRenderer';
@@ -55,6 +55,9 @@ import {
 } from '../../utils/processTaskStatusOptions';
 import TaskStatusIcon from '../tasks/TaskStatusIcon';
 import { invalidateFileManagerFolderCaches, loadRecordFileItems, type FileManagerListItem } from '../../utils/fileManagerQueries';
+import { FILE_STORAGE_BUCKET, fileStorageClient } from '../../utils/storageClient';
+import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
+import { createFileManagerOriginForUpload, detectFileManagerTables } from '../../utils/fileManagerService';
 import { buildImagePreviewUrl } from '../../utils/imagePreview';
 import { parseProcessLinkMap } from '../../utils/processTargets';
 import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
@@ -73,6 +76,7 @@ import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../uti
 import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/taskMeta';
 import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
+import { renderProcessV2TemplateValueFromRecord } from '../../utils/processV2AutoAssign';
 import TagInput from '../TagInput';
 import type { ProcessV2CardData, ProcessV2Stage, ProcessV2TemplateOption } from './ProcessCardsV2';
 
@@ -84,17 +88,18 @@ type ProcessTaskModalV2Props = {
   templates?: ProcessV2TemplateOption[];
   onClose: () => void;
   onStageStatusChange?: (stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
-  onCreateDraftActivity?: (overrides?: Record<string, any>) => void | Promise<void>;
+  onCreateDraftActivity?: (overrides?: Record<string, any>) => any | Promise<any>;
 };
 
 type MockCustomField = {
   key: string;
   label: string;
-  value: string;
+  value: any;
   type: FieldType;
   field?: ModuleField;
   options?: Array<{ value: string; label: string; color?: string }>;
   requiredForCompletion?: boolean;
+  requiredForCreation?: boolean;
 };
 type ModalFileItem = {
   id: string;
@@ -243,6 +248,33 @@ const isFieldRequiredForCompletion = (field: any): boolean => {
   ));
 };
 
+const isFieldRequiredForCreation = (field: any): boolean => {
+  const containers = [
+    field,
+    field?.metadata,
+    field?.config,
+    field?.validation,
+    field?.rules,
+  ].filter((item) => item && typeof item === 'object' && !Array.isArray(item));
+
+  return containers.some((item) => (
+    item.required_for_creation === true
+    || item.requiredForCreation === true
+    || item.creation_required === true
+    || item.creationRequired === true
+    || item.required_on_create === true
+    || item.requiredOnCreate === true
+  ));
+};
+
+const isEmptyFieldValue = (value: any): boolean => {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'string') return value.trim() === '';
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+};
+
 const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
   const source = stage?.source && typeof stage.source === 'object' ? stage.source : {};
   const sourceMetadata = parseObject(source?.metadata);
@@ -250,6 +282,17 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
   const sourceStageMetadata = parseObject(sourceStage?.metadata);
   const recurrence = parseObject(source?.recurrence_info);
   const sourceStageRecurrence = parseObject(sourceStage?.recurrence_info || sourceStageMetadata?.recurrence_info);
+  const templateContext = {
+    ...(source?.__process_v2_template_context && typeof source.__process_v2_template_context === 'object' ? source.__process_v2_template_context : {}),
+    ...source,
+    ...sourceMetadata,
+    ...recurrence,
+    ...sourceStage,
+    ...sourceStageMetadata,
+    ...sourceStageRecurrence,
+    task_name: stage?.title || source?.name || source?.stage_name || '',
+    task_type: source?.task_type || sourceMetadata?.task_type || recurrence?.task_type || sourceStage?.task_type || sourceStageMetadata?.task_type || '',
+  };
   const fieldCandidates = [
     ...(stage?.kind === 'draft' ? getProcessTaskCustomFieldsFromStage(source) : []),
     ...getProcessTaskCustomFieldsFromRecurrence(recurrence),
@@ -325,7 +368,7 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     return {
       key,
       label,
-      value: stringifyFieldValue(values[key]),
+      value: renderProcessV2TemplateValueFromRecord(values[key], templateContext, type),
       type,
       field: {
         ...field,
@@ -338,12 +381,9 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
         },
         options,
         nature: field?.nature || FieldNature.STANDARD,
-        validation: {
-          ...(field?.validation || {}),
-          ...(isFieldRequiredForCompletion(field) ? { required: true } : {}),
-        },
       } as ModuleField,
       requiredForCompletion: isFieldRequiredForCompletion(field),
+      requiredForCreation: isFieldRequiredForCreation(field),
       options,
     };
   });
@@ -494,13 +534,14 @@ const collectProcessRelatedRecordRefs = (process: ProcessV2CardData) => {
 
 type InlineEditableFieldProps = {
   label: string;
-  value: string;
-  onSave: (value: string) => void;
+  value: any;
+  onSave: (value: any) => void;
   field?: ModuleField;
   options?: Array<{ value: string; label: string; color?: string }>;
   fieldType?: MockCustomField['type'];
   forceEditMode?: boolean;
   requiredForCompletion?: boolean;
+  requiredForCreation?: boolean;
   moduleId?: string;
   recordId?: string | null;
   overlayZIndexBase?: number;
@@ -517,6 +558,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   fieldType = FieldType.TEXT,
   forceEditMode = false,
   requiredForCompletion = false,
+  requiredForCreation = false,
   moduleId,
   recordId,
   overlayZIndexBase = 16020,
@@ -524,7 +566,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   onOptionsUpdate,
 }) => {
   const [editing, setEditing] = useState(false);
-  const [draftValue, setDraftValue] = useState(value);
+  const [draftValue, setDraftValue] = useState<any>(value);
   const normalizedFieldType = field?.type || fieldType || FieldType.TEXT;
   const fieldModel = useMemo<ModuleField>(() => ({
     ...(field || {}),
@@ -545,9 +587,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     protectedDynamicValues: field?.dynamicOptionsCategory
       ? (field?.options || []).map((item: any) => String(item?.value || '')).filter(Boolean)
       : undefined,
-    validation: requiredForCompletion ? { ...(field?.validation || {}), required: true } : field?.validation,
+    validation: requiredForCreation ? { ...(field?.validation || {}), required: true } : { ...(field?.validation || {}), required: false },
     nature: field?.nature || FieldNature.STANDARD,
-  } as ModuleField), [field, label, normalizedFieldType, options, requiredForCompletion]);
+  } as ModuleField), [field, label, normalizedFieldType, options, requiredForCreation]);
 
   useEffect(() => {
     if (!editing) setDraftValue(value);
@@ -557,14 +599,18 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     if (forceEditMode) setDraftValue(value);
   }, [forceEditMode, value]);
 
-  const normalizeRendererValue = useCallback((rawValue: string) => {
+  const normalizeRendererValue = useCallback((rawValue: any) => {
+    if (rawValue === null || rawValue === undefined) {
+      if (normalizedFieldType === FieldType.MULTI_SELECT || normalizedFieldType === FieldType.TAGS || normalizedFieldType === FieldType.MULTI_RELATION) return [];
+      if (normalizedFieldType === FieldType.CHECKBOX) return false;
+      return '';
+    }
     if (normalizedFieldType === FieldType.MULTI_SELECT || normalizedFieldType === FieldType.TAGS || normalizedFieldType === FieldType.MULTI_RELATION) {
-      return String(rawValue || '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean);
+      if (Array.isArray(rawValue)) return rawValue;
+      return String(rawValue || '').split(',').map((item) => item.trim()).filter(Boolean);
     }
     if (normalizedFieldType === FieldType.CHECKBOX) {
+      if (typeof rawValue === 'boolean') return rawValue;
       return String(rawValue || '') === 'true';
     }
     return rawValue;
@@ -572,14 +618,10 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
 
   const serializeRendererValue = useCallback((nextValue: any) => {
     if (normalizedFieldType === FieldType.MULTI_SELECT || normalizedFieldType === FieldType.TAGS || normalizedFieldType === FieldType.MULTI_RELATION) {
-      return Array.isArray(nextValue)
-        ? nextValue.map((item) => String(item || '').trim()).filter(Boolean).join(',')
-        : String(nextValue || '');
+      return Array.isArray(nextValue) ? nextValue.map((item) => String(item || '').trim()).filter(Boolean) : (nextValue ? [String(nextValue).trim()].filter(Boolean) : []);
     }
-    if (normalizedFieldType === FieldType.CHECKBOX) {
-      return nextValue ? 'true' : 'false';
-    }
-    return String(nextValue ?? '');
+    if (normalizedFieldType === FieldType.CHECKBOX) return Boolean(nextValue);
+    return nextValue ?? '';
   }, [normalizedFieldType]);
 
   const activeValue = forceEditMode ? value : (editing ? draftValue : value);
@@ -632,6 +674,11 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
       <div className="min-w-0 rounded-lg border border-[rgba(var(--brand-200-rgb),0.7)] bg-gray-50 px-2 py-2 dark:border-[rgba(var(--brand-300-rgb),0.25)] dark:bg-white/5">
         <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
           <span>{label}</span>
+          {requiredForCreation ? (
+            <Tag className="!m-0 !rounded-full !border-red-200 !bg-red-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-red-700 dark:!border-red-500/30 dark:!bg-red-500/10 dark:!text-red-200">
+              ضروری برای ایجاد
+            </Tag>
+          ) : null}
           {requiredForCompletion ? (
             <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
               ضروری برای تکمیل
@@ -679,6 +726,11 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
           <span>{label}</span>
+          {requiredForCreation ? (
+            <Tag className="!m-0 !rounded-full !border-red-200 !bg-red-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-red-700 dark:!border-red-500/30 dark:!bg-red-500/10 dark:!text-red-200">
+              ضروری برای ایجاد
+            </Tag>
+          ) : null}
           {requiredForCompletion ? (
             <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
               ضروری برای تکمیل
@@ -735,6 +787,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   onCreateDraftActivity,
 }) => {
   const { message } = App.useApp();
+  const isInsideRouter = useInRouterContext();
   const [statusValue, setStatusValue] = useState('waiting');
   const [savingStatusValue, setSavingStatusValue] = useState<string | null>(null);
   const [savingFieldKey, setSavingFieldKey] = useState<string | null>(null);
@@ -765,6 +818,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [isLocked, setIsLocked] = useState(false);
   const [filesExpanded, setFilesExpanded] = useState(false);
   const [modalFiles, setModalFiles] = useState<ModalFileItem[]>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [queuedUploadFiles, setQueuedUploadFiles] = useState<File[]>([]);
   const [previewFile, setPreviewFile] = useState<ModalFileItem | null>(null);
   const [starredFileIds, setStarredFileIds] = useState<Set<string>>(() => new Set());
   const [relatedLabelMap, setRelatedLabelMap] = useState<Record<string, string>>({});
@@ -783,6 +838,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [draftCopyStageId, setDraftCopyStageId] = useState<string | undefined>(undefined);
   const [templateCopyStages, setTemplateCopyStages] = useState<ProcessV2Stage[]>([]);
   const [templateCopyStagesLoading, setTemplateCopyStagesLoading] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadFilesForTaskRef = useRef<((targetTaskId: string, files: File[], shouldReload?: boolean) => Promise<void>) | null>(null);
   const taskTypeField = useMemo(() => getTaskField('task_type'), []);
   const isDraftActivityCreationMode = stage?.kind === 'draft';
   const runProcess = process.mode === 'run' ? process as Extract<ProcessV2CardData, { mode: 'run' }> : null;
@@ -1088,7 +1145,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setReportDraft(nextValue);
     await persistTaskFieldPatch('task_report', { task_report: String(nextValue || '').trim() || null });
   }, [persistTaskFieldPatch]);
-  const saveCustomFieldValue = useCallback(async (fieldKey: string, nextValue: string) => {
+  const saveCustomFieldValue = useCallback(async (fieldKey: string, nextValue: any) => {
     const currentRecurrence = parseObject(source?.recurrence_info);
     const currentValues = currentRecurrence?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]
       && typeof currentRecurrence[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object'
@@ -1298,10 +1355,40 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     try {
       const nextTaskName = taskNameValue || resolvedDraftTaskName || String(stage?.title || '').trim();
       const nextTaskType = activityTypeValue || resolvedDraftActivityType || String(stage?.activityTypeLabel || '').trim();
+      if (!String(nextTaskName || '').trim()) {
+        message.warning('عنوان فعالیت را وارد کنید.');
+        return;
+      }
+      if (!String(nextTaskType || '').trim()) {
+        message.warning('نوع فعالیت را انتخاب کنید.');
+        return;
+      }
+      const missingCreationField = customFields.find((field) => field.requiredForCreation && isEmptyFieldValue(field.value));
+      if (missingCreationField) {
+        message.warning(`فیلد «${missingCreationField.label}» برای ایجاد فعالیت ضروری است.`);
+        return;
+      }
+      const parsedAssignee = parseAssigneeValue(assigneeValue, null);
+      const hasSelectableAssignee = /^(user|role)[:_]/i.test(String(assigneeValue || '').trim())
+        && parsedAssignee.assigneeType
+        && parsedAssignee.assigneeId;
+      const customFieldValues = customFields.reduce<Record<string, any>>((acc, field) => {
+        acc[field.key] = field.value;
+        return acc;
+      }, {});
       const overrides: Record<string, any> = {
         name: nextTaskName,
         stage_name: nextTaskName,
         task_type: nextTaskType,
+        ...(hasSelectableAssignee ? {
+          assignee_type: parsedAssignee.assigneeType,
+          assignee_id: parsedAssignee.assigneeType === 'user' ? parsedAssignee.assigneeId : null,
+          assignee_role_id: parsedAssignee.assigneeType === 'role' ? parsedAssignee.assigneeId : null,
+          default_assignee_id: parsedAssignee.assigneeType === 'user' ? parsedAssignee.assigneeId : null,
+          default_assignee_role_id: parsedAssignee.assigneeType === 'role' ? parsedAssignee.assigneeId : null,
+        } : {}),
+        description: String(descriptionDraft || '').trim() || null,
+        tags: activityTags,
         wage: Number(wageValue) || 0,
         weight: Number(weightValue) || 0,
         start_date: startScheduleMode === 'manual' ? (startDateValue || null) : null,
@@ -1314,9 +1401,19 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         duration_value: dueScheduleMode === 'system' ? Number(dueDurationValue || 0) : null,
         duration_unit: dueScheduleMode === 'system' ? dueDurationUnitValue : null,
         due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
+        [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
+        recurrence_info: {
+          ...draftSourceRecurrence,
+          [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
+          ...(activityTags.length > 0 ? { tags: activityTags } : {}),
+          ...(String(descriptionDraft || '').trim() ? { description: String(descriptionDraft || '').trim() } : {}),
+        },
         metadata: {
-          ...(source?.metadata && typeof source.metadata === 'object' ? source.metadata : {}),
+          ...sourceMetadata,
           task_type: nextTaskType,
+          description: String(descriptionDraft || '').trim() || null,
+          tags: activityTags,
+          [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
           start_schedule_mode: startScheduleMode,
           due_schedule_mode: dueScheduleMode,
           start_duration_from: startScheduleMode === 'system' ? startDurationFromValue : null,
@@ -1329,7 +1426,21 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
         },
       };
-      await onCreateDraftActivity(overrides);
+      const creationResult = await onCreateDraftActivity(overrides);
+      const createdTasks = Array.isArray(creationResult?.createdTasks) ? creationResult.createdTasks : [];
+      const createdTask = createdTasks[0] || creationResult?.createdTask || creationResult?.task || null;
+      const createdTaskId = String(createdTask?.id || creationResult?.taskId || creationResult?.createdTaskId || '').trim();
+      if (Number(creationResult?.createdCount ?? (createdTaskId ? 1 : 0)) <= 0 && !createdTaskId) {
+        return;
+      }
+      if (queuedUploadFiles.length > 0) {
+        if (!createdTaskId) {
+          message.warning('فعالیت ایجاد شد، اما شناسه فعالیت برای آپلود فایل‌ها برنگشت.');
+        } else {
+          await uploadFilesForTaskRef.current?.(createdTaskId, queuedUploadFiles, false);
+          setQueuedUploadFiles([]);
+        }
+      }
       onClose();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فعالیت ناموفق بود'));
@@ -1339,6 +1450,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   }, [
     creatingDraftActivity,
     activityTypeValue,
+    activityTags,
+    assigneeValue,
+    customFields,
+    descriptionDraft,
     dueAnchorStageValue,
     dueDateValue,
     dueDurationFromValue,
@@ -1348,9 +1463,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     message,
     onClose,
     onCreateDraftActivity,
+    queuedUploadFiles,
     resolvedDraftActivityType,
     resolvedDraftTaskName,
-    source?.metadata,
+    draftSourceRecurrence,
+    sourceMetadata,
     stage?.activityTypeLabel,
     stage?.title,
     startAnchorStageValue,
@@ -1547,12 +1664,43 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       ? (targetStatusOptions.find((option) => ['todo', 'planned', 'pending', 'waiting'].includes(option.value))?.value || targetStatusOptions[0]?.value || 'todo')
       : (targetSourceStatus || statusValueToV2(targetStage.status));
     setStatusValue(nextStatus);
+    const rawRoleAssignee = targetSource?.default_assignee_role_id
+      || targetSource?.assignee_role_id
+      || targetSourceMetadata?.default_assignee_role_id
+      || targetSourceMetadata?.assignee_role_id
+      || targetRecurrence?.default_assignee_role_id
+      || targetRecurrence?.assignee_role_id
+      || targetSourceStage?.default_assignee_role_id
+      || targetSourceStage?.assignee_role_id
+      || targetSourceStageMetadata?.default_assignee_role_id
+      || targetSourceStageMetadata?.assignee_role_id
+      || targetSourceStageRecurrence?.default_assignee_role_id
+      || targetSourceStageRecurrence?.assignee_role_id;
+    const rawUserAssignee = targetSource?.default_assignee_id
+      || targetSource?.assignee_id
+      || targetSourceMetadata?.default_assignee_id
+      || targetSourceMetadata?.assignee_id
+      || targetRecurrence?.default_assignee_id
+      || targetRecurrence?.assignee_id
+      || targetSourceStage?.default_assignee_id
+      || targetSourceStage?.assignee_id
+      || targetSourceStageMetadata?.default_assignee_id
+      || targetSourceStageMetadata?.assignee_id
+      || targetSourceStageRecurrence?.default_assignee_id
+      || targetSourceStageRecurrence?.assignee_id;
+    const rawAssigneeIsField = String(rawRoleAssignee || rawUserAssignee || '').trim().startsWith('field:');
+    const assigneeFallbackType = (rawRoleAssignee || String(targetSource?.assignee_type || targetSourceMetadata?.assignee_type || targetRecurrence?.assignee_type || '').trim() === 'role')
+      ? 'role'
+      : 'user';
+    const nextAssigneeValue = rawAssigneeIsField
+      ? ''
+      : buildAssigneeSelectValue(
+        rawRoleAssignee || rawUserAssignee,
+        assigneeFallbackType,
+      );
     setAssigneeValue(
-      buildAssigneeSelectValue(
-        targetSource?.assignee_role_id || targetSource?.assignee_id,
-        (targetSource?.assignee_role_id || String(targetSource?.assignee_type || '').trim() === 'role') ? 'role' : 'user',
-      )
-      || String(targetStage.assigneeLabel || targetSource?.assignee_label || '').trim()
+      nextAssigneeValue
+      || String(targetStage.assigneeLabel || targetSource?.assignee_label || targetSourceMetadata?.assignee_label || '').trim()
       || ''
     );
     const renderedStageTitle = String(targetStage.title || '').trim();
@@ -1585,22 +1733,24 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     const rawTags = Array.isArray(targetSource?.tags) ? targetSource.tags : (Array.isArray(targetRecurrence?.tags) ? targetRecurrence.tags : []);
     const normalizedTags = normalizeTaskTags(rawTags);
     setActivityTags(normalizedTags);
-    setDescriptionDraft(String(targetSource?.description || targetRecurrence?.description || targetSourceStage?.description || targetSourceStage?.metadata?.description || targetStage.metaLabel || '').trim());
+    setDescriptionDraft(String(targetSource?.description || targetSourceMetadata?.description || targetRecurrence?.description || targetSourceStage?.description || targetSourceStageMetadata?.description || targetSourceStageRecurrence?.description || '').trim());
     setReportDraft(String(targetSource?.task_report || targetRecurrence?.task_report || '').trim());
-    setWageValue(String(targetSource?.wage ?? targetSource?.metadata?.wage ?? '0'));
-    setWeightValue(String(targetSource?.weight ?? targetSource?.metadata?.weight ?? '0'));
-    setDueDateValue(String(targetSource?.due_date || targetRecurrence?.due_date || '').trim());
-    setStartDateValue(String(targetSource?.start_date || targetSource?.actual_start_at || targetRecurrence?.start_date || '').trim());
-    setStartScheduleMode(String(targetSource?.start_date || targetSource?.actual_start_at || targetRecurrence?.start_date || '').trim() ? 'manual' : 'system');
-    setDueScheduleMode(String(targetSource?.due_date || targetRecurrence?.due_date || '').trim() ? 'manual' : 'system');
+    setWageValue(String(targetSource?.wage ?? targetSourceMetadata?.wage ?? targetRecurrence?.wage ?? targetSourceStage?.wage ?? targetSourceStageMetadata?.wage ?? '0'));
+    setWeightValue(String(targetSource?.weight ?? targetSourceMetadata?.weight ?? targetRecurrence?.weight ?? targetSourceStage?.weight ?? targetSourceStageMetadata?.weight ?? '0'));
+    const nextDueDate = String(targetSource?.due_date || targetSourceMetadata?.due_date || targetRecurrence?.due_date || targetSourceStage?.due_date || targetSourceStageMetadata?.due_date || targetSourceStageRecurrence?.due_date || '').trim();
+    const nextStartDate = String(targetSource?.start_date || targetSource?.actual_start_at || targetSourceMetadata?.start_date || targetRecurrence?.start_date || targetSourceStage?.start_date || targetSourceStageMetadata?.start_date || targetSourceStageRecurrence?.start_date || '').trim();
+    setDueDateValue(nextDueDate);
+    setStartDateValue(nextStartDate);
+    setStartScheduleMode(nextStartDate ? 'manual' : 'system');
+    setDueScheduleMode(nextDueDate ? 'manual' : 'system');
     setStartDurationFromValue(String(targetSource?.start_duration_from || targetRecurrence?.start_duration_from || targetSourceMetadata?.start_duration_from || targetSource?.duration_start_from || targetSourceMetadata?.duration_start_from || 'project_start').trim() || 'project_start');
     setStartDurationValue(String(targetSource?.start_duration_value ?? targetRecurrence?.start_duration_value ?? targetSourceMetadata?.start_duration_value ?? targetSource?.duration_start_value ?? targetSourceMetadata?.duration_start_value ?? '0'));
     setStartDurationUnitValue(String(targetSource?.start_duration_unit || targetRecurrence?.start_duration_unit || targetSourceMetadata?.start_duration_unit || targetSource?.duration_start_unit || targetSourceMetadata?.duration_start_unit || 'day') === 'hour' ? 'hour' : 'day');
     setStartAnchorStageValue(String(targetSource?.start_anchor_stage_node_key || targetRecurrence?.start_anchor_stage_node_key || targetSourceMetadata?.start_anchor_stage_node_key || '').trim());
-    setDueDurationFromValue(String(targetSource?.duration_from || targetRecurrence?.duration_from || targetSourceMetadata?.duration_from || 'project_start').trim() || 'project_start');
-    setDueDurationValue(String(targetSource?.duration_value ?? targetRecurrence?.duration_value ?? targetSourceMetadata?.duration_value ?? '0'));
-    setDueDurationUnitValue(String(targetSource?.duration_unit || targetRecurrence?.duration_unit || targetSourceMetadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day');
-    setDueAnchorStageValue(String(targetSource?.due_anchor_stage_node_key || targetRecurrence?.due_anchor_stage_node_key || targetSourceMetadata?.due_anchor_stage_node_key || '').trim());
+    setDueDurationFromValue(String(targetSource?.duration_from || targetRecurrence?.duration_from || targetSourceMetadata?.duration_from || targetSourceStage?.duration_from || targetSourceStageMetadata?.duration_from || 'project_start').trim() || 'project_start');
+    setDueDurationValue(String(targetSource?.duration_value ?? targetRecurrence?.duration_value ?? targetSourceMetadata?.duration_value ?? targetSourceStage?.duration_value ?? targetSourceStageMetadata?.duration_value ?? '0'));
+    setDueDurationUnitValue(String(targetSource?.duration_unit || targetRecurrence?.duration_unit || targetSourceMetadata?.duration_unit || targetSourceStage?.duration_unit || targetSourceStageMetadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day');
+    setDueAnchorStageValue(String(targetSource?.due_anchor_stage_node_key || targetRecurrence?.due_anchor_stage_node_key || targetSourceMetadata?.due_anchor_stage_node_key || targetSourceStage?.due_anchor_stage_node_key || targetSourceStageMetadata?.due_anchor_stage_node_key || '').trim());
     setCustomFields(buildCustomFields(targetStage));
   }, []);
 
@@ -1615,6 +1765,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setPreviewFile(null);
     setModalFiles([]);
     setStarredFileIds(new Set());
+    setUploadingFile(false);
+    setQueuedUploadFiles([]);
     setInstructionsModalOpen(false);
     setLoadingInstructions(false);
     setLoadedInstructions([]);
@@ -1768,11 +1920,115 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     const ref = collectProcessRelatedRecordRefs(process)[0];
     return ref || null;
   }, [process]);
+  const renderRouteText = useCallback((to: string, className: string, children: React.ReactNode) => {
+    if (!isInsideRouter) {
+      return <span className={className}>{children}</span>;
+    }
+    return (
+      <Link to={to} className={className}>
+        {children}
+      </Link>
+    );
+  }, [isInsideRouter]);
   const formattedStageDueLabel = useMemo(() => {
     const rawDue = String(source?.due_date || source?.planned_due_at || stage?.dueLabel || '').trim();
     if (!rawDue) return '';
     return toPersianNumber(safeJalaliFormat(rawDue, rawDue.includes(':') ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD') || rawDue);
   }, [source?.due_date, source?.planned_due_at, stage?.dueLabel]);
+  const reloadTaskFiles = useCallback(async () => {
+    if (!taskRecordId) {
+      setModalFiles([]);
+      setStarredFileIds(new Set());
+      return;
+    }
+    const nextFiles = (await loadRecordFileItems('tasks', taskRecordId, stage?.title || null, 'full')).map(mapFileItem);
+    setModalFiles(nextFiles);
+    setStarredFileIds(new Set(nextFiles.filter((file) => file.starred).map((file) => file.id)));
+  }, [stage?.title, taskRecordId]);
+  const uploadFilesForTask = useCallback(async (targetTaskId: string, files: File[], shouldReload = true) => {
+    const normalizedTaskId = String(targetTaskId || '').trim();
+    const selectedFiles = Array.from(files || []).filter(Boolean);
+    if (!normalizedTaskId || selectedFiles.length === 0) return;
+    setUploadingFile(true);
+    try {
+      for (const file of selectedFiles) {
+        const baseName = String(file.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'file';
+        const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${baseName}`;
+        const filePath = `record_files/tasks/${normalizedTaskId}/${fileName}`;
+        await uploadFileWithProgress({
+          client: fileStorageClient,
+          bucket: FILE_STORAGE_BUCKET,
+          path: filePath,
+          file,
+          label: file.name || 'فایل فعالیت',
+          detail: 'فایل فعالیت',
+        });
+        const { data: urlData } = fileStorageClient.storage.from(FILE_STORAGE_BUCKET).getPublicUrl(filePath);
+        const fileUrl = String(urlData?.publicUrl || '').trim();
+        if (!fileUrl) throw new Error('TASK_FILE_URL_MISSING');
+        const mimeType = file.type || null;
+        const fileType = mimeType?.startsWith('image/')
+          ? 'image'
+          : mimeType?.startsWith('video/')
+          ? 'video'
+          : mimeType?.startsWith('audio/')
+          ? 'audio'
+          : 'file';
+        const hasFileManagerTables = await detectFileManagerTables(supabase, false);
+        if (hasFileManagerTables) {
+          await createFileManagerOriginForUpload({
+            moduleId: 'tasks',
+            recordId: normalizedTaskId,
+            recordTitle: taskTitle,
+            fileUrl,
+            fileName: file.name || null,
+            mimeType,
+            fileType,
+            sortOrder: modalFiles.length,
+          });
+        } else {
+          const { error } = await supabase.from('record_files').insert([{
+            module_id: 'tasks',
+            record_id: normalizedTaskId,
+            file_url: fileUrl,
+            file_type: fileType === 'image' || fileType === 'video' ? fileType : 'file',
+            file_name: file.name || null,
+            mime_type: mimeType,
+            sort_order: modalFiles.length,
+          }]);
+          if (error) throw error;
+        }
+      }
+      if (shouldReload && normalizedTaskId === taskRecordId) {
+        await reloadTaskFiles();
+      }
+      message.success('فایل فعالیت آپلود شد');
+    } catch (error: any) {
+      if (!isUploadCanceledError(error)) {
+        message.error(toFaErrorMessage(error, 'آپلود فایل فعالیت ناموفق بود'));
+      }
+      throw error;
+    } finally {
+      setUploadingFile(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+    }
+  }, [message, modalFiles.length, reloadTaskFiles, taskRecordId, taskTitle]);
+  uploadFilesForTaskRef.current = uploadFilesForTask;
+  const handleUploadFiles = useCallback(async (files: FileList | File[] | null) => {
+    const selectedFiles = Array.from(files || []).filter(Boolean);
+    if (selectedFiles.length === 0) return;
+    if (!taskRecordId || isDraftActivityCreationMode) {
+      setQueuedUploadFiles((current) => [...current, ...selectedFiles]);
+      message.success(`${toPersianNumber(selectedFiles.length)} فایل پس از ایجاد فعالیت آپلود می‌شود`);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+      return;
+    }
+    try {
+      await uploadFilesForTask(taskRecordId, selectedFiles, true);
+    } catch {
+      // Error message is handled inside uploadFilesForTask.
+    }
+  }, [isDraftActivityCreationMode, message, taskRecordId, uploadFilesForTask]);
   const shouldShowTimingStageAnchor = useCallback((anchorType: string) => (
     String(anchorType || '').trim().startsWith('specific_stage_')
   ), []);
@@ -1965,6 +2221,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       }}
     >
       <div
+        data-testid="global-process-modal"
+        data-module-id={primaryProcessRecordLink?.moduleId || undefined}
+        data-record-id={primaryProcessRecordLink?.recordId || undefined}
+        data-task-id={taskRecordId || undefined}
         className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
         dir="rtl"
         style={{
@@ -2179,8 +2439,25 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                       />
                     </button>
                     <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-                      <Button block icon={<UploadOutlined />} className="!h-9 !rounded-lg">
-                        آپلود فایل
+                      <input
+                        ref={uploadInputRef}
+                        type="file"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => void handleUploadFiles(event.target.files)}
+                      />
+                      <Button
+                        block
+                        icon={<UploadOutlined />}
+                        loading={uploadingFile}
+                        onClick={() => {
+                          uploadInputRef.current?.click();
+                        }}
+                        className="!h-9 !rounded-lg"
+                      >
+                        {queuedUploadFiles.length > 0
+                          ? `آپلود فایل (${toPersianNumber(queuedUploadFiles.length)})`
+                          : 'آپلود فایل'}
                       </Button>
                       <Button
                         block
@@ -2331,7 +2608,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 loading={creatingDraftActivity}
                 disabled={!onCreateDraftActivity}
                 onClick={() => void handleCreateDraftActivity()}
-                className="!h-10 !rounded-lg !font-bold"
+                className="max-lg:!hidden !h-10 !rounded-lg !font-bold"
               >
                 ایجاد فعالیت
               </Button>
@@ -2448,6 +2725,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                           options={field.options}
                           forceEditMode={isDraftActivityCreationMode}
                           requiredForCompletion={field.requiredForCompletion}
+                          requiredForCreation={field.requiredForCreation}
                           onSave={(nextValue) => {
                             if (isDraftActivityCreationMode) {
                               setCustomFields((current) => current.map((item) => (
@@ -2485,9 +2763,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                       <LinkOutlined className="text-gray-500 dark:text-gray-300" />
                       <span className="min-w-0">
                         فرآیند:{' '}
-                        <Link to={`/${primaryProcessRecordLink.moduleId}/${primaryProcessRecordLink.recordId}`} className="font-bold text-cyan-700 hover:underline dark:text-cyan-300">
-                          {process.title}
-                        </Link>
+                        {renderRouteText(
+                          `/${primaryProcessRecordLink.moduleId}/${primaryProcessRecordLink.recordId}`,
+                          'font-bold text-cyan-700 hover:underline dark:text-cyan-300',
+                          process.title,
+                        )}
                       </span>
                     </div>
                   ) : null}
@@ -2498,9 +2778,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                       <LinkOutlined className="text-gray-500 dark:text-gray-300" />
                       <span className="min-w-0">
                         {row.label}:{' '}
-                        <Link to={`/${row.moduleId}/${row.recordId}`} className="font-bold text-cyan-700 hover:underline dark:text-cyan-300">
-                          {row.value}
-                        </Link>
+                        {renderRouteText(
+                          `/${row.moduleId}/${row.recordId}`,
+                          'font-bold text-cyan-700 hover:underline dark:text-cyan-300',
+                          row.value,
+                        )}
                       </span>
                     </div>
                   ))}
@@ -2545,19 +2827,36 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                         onClick={confirmDeleteTaskCompletely}
                       />
                     </Tooltip>
-                    <Link
-                      to={`/tasks/${taskRecordId}`}
-                      onClick={onClose}
-                      className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
-                    >
-                      جزئیات کامل
-                    </Link>
+                    {isInsideRouter ? (
+                      <Link
+                        to={`/tasks/${taskRecordId}`}
+                        onClick={onClose}
+                        className="inline-flex items-center gap-1 px-2 text-xs text-[rgba(var(--brand-700-rgb),1)] hover:text-[rgba(var(--brand-600-rgb),1)] hover:underline"
+                      >
+                        جزئیات کامل
+                      </Link>
+                    ) : null}
                   </>
                 ) : null}
               </div>
             </div>
           </main>
         </div>
+        {isDraftActivityCreationMode ? (
+          <div className="sticky bottom-0 z-20 -mx-3 mt-3 border-t border-gray-200 bg-white/95 px-3 py-2 backdrop-blur dark:border-gray-700 dark:bg-[#141416]/95 lg:hidden">
+            <Button
+              type="primary"
+              block
+              icon={<PlusOutlined />}
+              loading={creatingDraftActivity}
+              disabled={!onCreateDraftActivity}
+              onClick={() => void handleCreateDraftActivity()}
+              className="!h-11 !rounded-xl !font-bold"
+            >
+              ایجاد فعالیت
+            </Button>
+          </div>
+        ) : null}
       </div>
       <TaskInstructionsModal
         open={instructionsModalOpen}

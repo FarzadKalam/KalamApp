@@ -99,7 +99,7 @@ type ProcessCardsV2Props = {
   onShowRecords?: (item: ProcessV2CardData) => void;
   onTemplateChange?: (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => void;
   onAutoAssignProcess?: (item: ProcessV2CardData) => void;
-  onAutoAssignStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void;
+  onAutoAssignStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void | Promise<any>;
   onConfigureActivator?: (item: ProcessV2TemplateCard) => void;
   autoAssigning?: boolean;
   canAutoAssign?: boolean;

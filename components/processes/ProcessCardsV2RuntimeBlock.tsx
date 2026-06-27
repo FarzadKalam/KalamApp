@@ -366,7 +366,11 @@ const mapRawStageToV2 = (
     dueLabel: formatDueLabel(rawDue),
     actionCount: Number.isFinite(actionCount) ? Math.max(0, actionCount) : 0,
     metaLabel: statusLabel,
-    source: stage,
+    source: {
+      ...stage,
+      __process_v2_template_context: templateContext,
+      __process_v2_fallback_module_id: fallbackModuleId || null,
+    },
   };
 };
 
@@ -1702,9 +1706,14 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       const candidateId = normalizeText(candidate?.id || candidate?.template_stage_id || candidate?.process_node_key);
       if (!targetStageId || candidateId !== targetStageId || !overrides) return candidate;
       const candidateMetadata = parseObject(candidate?.metadata);
+      const candidateRecurrence = parseObject(candidate?.recurrence_info);
       return {
         ...candidate,
         ...overrides,
+        recurrence_info: {
+          ...candidateRecurrence,
+          ...(overrides.recurrence_info && typeof overrides.recurrence_info === 'object' ? overrides.recurrence_info : {}),
+        },
         metadata: {
           ...candidateMetadata,
           ...(overrides.metadata && typeof overrides.metadata === 'object' ? overrides.metadata : {}),
@@ -1732,8 +1741,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         message.warning('فعالیتی برای این مرحله ایجاد نشد. تنظیمات مرحله را بررسی کنید.');
       }
       await refresh(true);
+      return result;
     } catch (error: any) {
       message.error(normalizeText(error?.message || error?.details) || 'ارجاع خودکار مرحله ناموفق بود');
+      return { createdCount: 0, skippedCount: 0, groupIds: [], createdTasks: [] };
     } finally {
       setAutoAssigningCardIds((current) => {
         const next = { ...current };

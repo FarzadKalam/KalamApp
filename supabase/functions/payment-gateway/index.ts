@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'payment-gateway-2026-06-18-zarinpal-foundation';
+const FUNCTION_BUILD = 'payment-gateway-2026-06-27-online-payment-workflows';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -104,6 +104,91 @@ const getGatewaySettingsForOrg = async (urlBase: string, key: string, orgId: str
     `integration_settings?select=settings,is_active,provider,connection_type&org_id=eq.${enc(orgId)}&connection_type=eq.payment_gateway&provider=eq.zarinpal&order=is_active.desc,updated_at.desc,created_at.desc&limit=1`
   ));
   return row?.settings || {};
+};
+
+const getInvoiceWorkflowRecord = async (urlBase: string, key: string, invoiceId: string) => {
+  const normalizedInvoiceId = String(invoiceId || '').trim();
+  if (!normalizedInvoiceId) return null;
+  return first(await rest(
+    urlBase,
+    key,
+    `invoices?select=*&id=eq.${enc(normalizedInvoiceId)}&limit=1`
+  ).catch(() => []));
+};
+
+const runInvoiceWorkflowEvent = async (
+  urlBase: string,
+  key: string,
+  tx: Record<string, any>,
+  previousInvoice: Record<string, any> | null,
+  appendResult: Record<string, any> | null,
+) => {
+  if (!appendResult || appendResult?.success === false || appendResult?.already_exists === true) return null;
+  const invoiceId = String(appendResult?.invoice_id || tx?.record_id || '').trim();
+  if (!invoiceId) return null;
+
+  const currentInvoice = await getInvoiceWorkflowRecord(urlBase, key, invoiceId);
+  if (!currentInvoice?.id) return null;
+  const loadCurrentMetadata = async () => {
+    const row = first(await rest(
+      urlBase,
+      key,
+      `payment_transactions?select=metadata&id=eq.${enc(tx.id)}&limit=1`
+    ).catch(() => []));
+    return row?.metadata && typeof row.metadata === 'object' ? row.metadata : (tx?.metadata || {});
+  };
+
+  try {
+    const response = await fetch(`${trimSlashEnd(urlBase)}/functions/v1/workflow-interval-runner`, {
+      method: 'POST',
+      headers: h(key),
+      body: JSON.stringify({
+        action: 'run_event',
+        source: 'payment_gateway',
+        event: 'upsert',
+        module_id: 'invoices',
+        record_id: invoiceId,
+        record: currentInvoice,
+        previous_record: previousInvoice,
+        transaction_id: tx?.id || null,
+        reason: 'online_invoice_payment',
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(payload?.error || payload?.message || `workflow runner ${response.status}`));
+    const metadata = await loadCurrentMetadata();
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metadata: {
+          ...metadata,
+          online_payment_workflow_event: {
+            ok: true,
+            at: new Date().toISOString(),
+            stats: payload?.stats || null,
+          },
+        },
+      }),
+    }).catch(() => null);
+    return payload;
+  } catch (error: any) {
+    console.error('[payment-gateway] invoice workflow event failed:', error?.message || error);
+    const metadata = await loadCurrentMetadata();
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metadata: {
+          ...metadata,
+          online_payment_workflow_event: {
+            ok: false,
+            at: new Date().toISOString(),
+            message: String(error?.message || error || 'workflow event failed'),
+          },
+        },
+      }),
+    }).catch(() => null);
+    return null;
+  }
 };
 
 const resolveGatewayMerchantId = (scope: string, gatewaySettings: Record<string, any>, centralMerchantId: string) => {
@@ -326,9 +411,11 @@ const handleCallback = async (urlBase: string, key: string, merchantId: string, 
       }),
     });
 
-    await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+    const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
+    const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
       p_transaction_id: tx.id,
     });
+    await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
 
     return redirectHtml(returnUrl('success'), 'پرداخت با موفقیت ثبت شد.');
   } catch (err: any) {
@@ -404,9 +491,11 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
       }),
     });
 
-    await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+    const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
+    const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
       p_transaction_id: tx.id,
     });
+    await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
 
     return json(200, {
       success: true,
