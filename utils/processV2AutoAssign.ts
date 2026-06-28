@@ -285,24 +285,50 @@ export const buildProcessV2TemplateContext = async ({
 };
 
 const resolveStageAssignee = (stage: Record<string, any>, context: Record<string, any>) => {
-  const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info);
+  const resolveAssigneeReference = (value: any) => {
+    const normalized = normalizeText(value);
+    if (!normalized.startsWith('field:')) return value;
+    const fieldKey = normalized.replace(/^field:/, '').trim();
+    return context[fieldKey] || '';
+  };
+  const roleValue = parseAssigneeValue(
+    resolveAssigneeReference(stage?.default_assignee_role_id
+      || stage?.assignee_role_id
+      || metadata?.default_assignee_role_id
+      || metadata?.assignee_role_id
+      || recurrence?.default_assignee_role_id
+      || recurrence?.assignee_role_id),
+    'role',
+  );
   if (roleValue.assigneeType === 'role' && roleValue.assigneeId) {
     return { assigneeType: 'role' as const, assigneeId: roleValue.assigneeId };
   }
 
-  const rawUserValue = normalizeText(stage?.default_assignee_id || stage?.assignee_id);
-  if (rawUserValue.startsWith('field:')) {
-    const fieldKey = rawUserValue.replace(/^field:/, '').trim();
-    const resolved = parseAssigneeValue(context[fieldKey] || '', 'user');
-    if (resolved.assigneeType && resolved.assigneeId) {
-      return { assigneeType: resolved.assigneeType, assigneeId: resolved.assigneeId };
-    }
-    return { assigneeType: null, assigneeId: null };
-  }
+  const rawUserValue = resolveAssigneeReference(stage?.default_assignee_id
+    || stage?.assignee_id
+    || stage?.assignee_user_id
+    || metadata?.default_assignee_id
+    || metadata?.assignee_id
+    || metadata?.assignee_user_id
+    || recurrence?.default_assignee_id
+    || recurrence?.assignee_id
+    || recurrence?.assignee_user_id);
 
   const userValue = parseAssigneeValue(rawUserValue, 'user');
   if (userValue.assigneeType && userValue.assigneeId) {
     return { assigneeType: userValue.assigneeType, assigneeId: userValue.assigneeId };
+  }
+  const referenceValue = resolveAssigneeReference(stage?.default_assignee_combo
+    || metadata?.default_assignee_combo
+    || recurrence?.default_assignee_combo
+    || stage?.default_assignee_field
+    || metadata?.default_assignee_field
+    || recurrence?.default_assignee_field);
+  const referenceAssignee = parseAssigneeValue(referenceValue, null);
+  if (referenceAssignee.assigneeType && referenceAssignee.assigneeId) {
+    return { assigneeType: referenceAssignee.assigneeType, assigneeId: referenceAssignee.assigneeId };
   }
   return { assigneeType: null, assigneeId: null };
 };
@@ -579,9 +605,17 @@ export const autoAssignProcessV2DraftStages = async ({
     const effectiveProcessLinkMap = mergeProcessLinkMaps({ [normalizedModuleId]: normalizedRecordId }, processLinkMap);
     const dueDate = dueByStageKey.get(stage) || null;
     const startDate = startByStageKey.get(stage) || null;
-    const rawStageName = normalizeText(stage?.name || stage?.stage_name || stage?.title || `مرحله ${index + 1}`);
-    const stageTaskType = normalizeText(stage?.task_type) || null;
-    const stageDescription = normalizeText(stage?.description) || null;
+    const stageMetadata = parseObject(stage?.metadata);
+    const rawStageName = normalizeText(
+      stage?.name
+      || stage?.stage_name
+      || stage?.title
+      || stageMetadata?.name
+      || stageMetadata?.stage_name
+      || `مرحله ${index + 1}`
+    );
+    const stageTaskType = normalizeText(stage?.task_type || recurrenceBase?.task_type || stageMetadata?.task_type) || null;
+    const stageDescription = normalizeText(stage?.description || recurrenceBase?.description || stageMetadata?.description) || null;
     const templateContext = await buildProcessV2TemplateContext({
       supabaseClient,
       moduleId: normalizedModuleId,
@@ -604,7 +638,6 @@ export const autoAssignProcessV2DraftStages = async ({
       task_name: resolvedStageName,
       description: resolvedDescription || '',
     });
-    const stageMetadata = parseObject(stage?.metadata);
     const rawStageCustomFieldValues = {
       ...(recurrenceBase?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof recurrenceBase[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? recurrenceBase[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
       ...(stageMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof stageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? stageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
@@ -656,8 +689,8 @@ export const autoAssignProcessV2DraftStages = async ({
       assignee_type: assignee.assigneeType,
       assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
       assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
-      wage: Number(stage?.wage || 0),
-      weight: Number(stage?.weight || 0),
+      wage: Number(stage?.wage ?? stageMetadata?.wage ?? recurrenceBase?.wage ?? 0),
+      weight: Number(stage?.weight ?? stageMetadata?.weight ?? recurrenceBase?.weight ?? 0),
       sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
       due_date: dueDate,
       start_date: startDate,

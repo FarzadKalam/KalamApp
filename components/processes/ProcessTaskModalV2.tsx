@@ -341,6 +341,12 @@ const isEmptyFieldValue = (value: any): boolean => {
   return false;
 };
 
+const isEmptyCreationSnapshotValue = (value: any): boolean => {
+  if (isEmptyFieldValue(value)) return true;
+  if (typeof value !== 'string') return false;
+  return ['تعیین نشده', 'انتخاب کنید', 'انتخاب نشده'].includes(value.trim());
+};
+
 const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
   const source = stage?.source && typeof stage.source === 'object' ? stage.source : {};
   const sourceMetadata = parseObject(source?.metadata);
@@ -720,7 +726,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
       forceEditMode={forceEditMode || editing}
       moduleId={moduleId || 'tasks'}
       recordId={recordId || undefined}
-      compactMode={!forceEditMode}
+      compactMode
       overlayZIndexBase={overlayZIndexBase}
       popupContainer={resolveSelectPopupContainer}
       onOptionsUpdate={onOptionsUpdate}
@@ -1759,7 +1765,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     );
     const snapshotValue = (key: string, fallback: any) => (
       storedSnapshot && Object.prototype.hasOwnProperty.call(storedSnapshot, key)
-        ? storedSnapshot[key]
+        ? (!isEmptyCreationSnapshotValue(storedSnapshot[key]) || isEmptyFieldValue(fallback) ? storedSnapshot[key] : fallback)
         : fallback
     );
     const targetStatusOptions = buildStatusOptions(targetStage);
@@ -1782,16 +1788,36 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       || targetSourceStageRecurrence?.assignee_role_id;
     const rawUserAssignee = targetSource?.default_assignee_id
       || targetSource?.assignee_id
+      || targetSource?.assignee_user_id
       || targetSourceMetadata?.default_assignee_id
       || targetSourceMetadata?.assignee_id
+      || targetSourceMetadata?.assignee_user_id
       || targetRecurrence?.default_assignee_id
       || targetRecurrence?.assignee_id
+      || targetRecurrence?.assignee_user_id
       || targetSourceStage?.default_assignee_id
       || targetSourceStage?.assignee_id
+      || targetSourceStage?.assignee_user_id
       || targetSourceStageMetadata?.default_assignee_id
       || targetSourceStageMetadata?.assignee_id
+      || targetSourceStageMetadata?.assignee_user_id
       || targetSourceStageRecurrence?.default_assignee_id
-      || targetSourceStageRecurrence?.assignee_id;
+      || targetSourceStageRecurrence?.assignee_id
+      || targetSourceStageRecurrence?.assignee_user_id;
+    const rawAssigneeReference = pickFirstMeaningful(
+      targetSource?.default_assignee_combo,
+      targetSourceMetadata?.default_assignee_combo,
+      targetRecurrence?.default_assignee_combo,
+      targetSourceStage?.default_assignee_combo,
+      targetSourceStageMetadata?.default_assignee_combo,
+      targetSourceStageRecurrence?.default_assignee_combo,
+      targetSource?.default_assignee_field,
+      targetSourceMetadata?.default_assignee_field,
+      targetRecurrence?.default_assignee_field,
+      targetSourceStage?.default_assignee_field,
+      targetSourceStageMetadata?.default_assignee_field,
+      targetSourceStageRecurrence?.default_assignee_field,
+    );
     const resolveAssigneeReference = (value: any) => {
       const normalized = String(value || '').trim();
       if (!normalized.startsWith('field:')) return value;
@@ -1800,11 +1826,19 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     };
     const resolvedRoleAssignee = resolveAssigneeReference(rawRoleAssignee);
     const resolvedUserAssignee = resolveAssigneeReference(rawUserAssignee);
-    const assigneeFallbackType = (resolvedRoleAssignee || String(targetSource?.assignee_type || targetSourceMetadata?.assignee_type || targetRecurrence?.assignee_type || '').trim() === 'role')
+    const resolvedReferenceAssignee = resolveAssigneeReference(rawAssigneeReference);
+    const parsedReferenceAssignee = parseAssigneeValue(resolvedReferenceAssignee, null);
+    const assigneeFallbackType = (resolvedRoleAssignee
+      || parsedReferenceAssignee.assigneeType === 'role'
+      || String(targetSource?.assignee_type || targetSourceMetadata?.assignee_type || targetRecurrence?.assignee_type || '').trim() === 'role')
       ? 'role'
       : 'user';
     const nextAssigneeValue = buildAssigneeSelectValue(
-      resolvedRoleAssignee || resolvedUserAssignee,
+      resolvedRoleAssignee
+        || resolvedUserAssignee
+        || (parsedReferenceAssignee.assigneeType && parsedReferenceAssignee.assigneeId
+          ? `${parsedReferenceAssignee.assigneeType}:${parsedReferenceAssignee.assigneeId}`
+          : resolvedReferenceAssignee),
       assigneeFallbackType,
     );
     setAssigneeValue(
@@ -1880,22 +1914,34 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setWageValue(String(snapshotValue('wageValue', nextWage ?? '0')));
     setWeightValue(String(snapshotValue('weightValue', nextWeight ?? '0')));
     const nextDueDate = String(renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.planned_due_at,
       targetSource?.due_date,
+      targetSourceMetadata?.planned_due_at,
       targetSourceMetadata?.due_date,
       targetRecurrence?.due_date,
+      targetRecurrence?.planned_due_at,
+      targetSourceStage?.planned_due_at,
       targetSourceStage?.due_date,
+      targetSourceStageMetadata?.planned_due_at,
       targetSourceStageMetadata?.due_date,
+      targetSourceStageRecurrence?.planned_due_at,
       targetSourceStageRecurrence?.due_date,
       ''
     ), FieldType.DATETIME) || '').trim();
     const nextStartDate = String(renderStageTemplateValue(pickFirstMeaningful(
       targetSource?.start_date,
+      targetSource?.planned_start_at,
       targetSource?.actual_start_at,
       targetSourceMetadata?.start_date,
+      targetSourceMetadata?.planned_start_at,
       targetRecurrence?.start_date,
+      targetRecurrence?.planned_start_at,
       targetSourceStage?.start_date,
+      targetSourceStage?.planned_start_at,
       targetSourceStageMetadata?.start_date,
+      targetSourceStageMetadata?.planned_start_at,
       targetSourceStageRecurrence?.start_date,
+      targetSourceStageRecurrence?.planned_start_at,
       ''
     ), FieldType.DATETIME) || '').trim();
     setDueDateValue(String(snapshotValue('dueDateValue', nextDueDate) || ''));
@@ -1996,6 +2042,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       : {};
     setCustomFields(buildCustomFields(targetStage).map((field) => (
       Object.prototype.hasOwnProperty.call(storedCustomFieldValues, field.key)
+        && (!isEmptyCreationSnapshotValue(storedCustomFieldValues[field.key]) || isEmptyFieldValue(field.value))
         ? { ...field, value: storedCustomFieldValues[field.key] }
         : field
     )));
@@ -2044,8 +2091,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       return acc;
     }, {});
     writeCreationDraftSnapshot(creationDraftStorageKey, {
-      taskNameValue,
-      activityTypeValue,
+      taskNameValue: taskNameValue || resolvedDraftTaskName || '',
+      activityTypeValue: activityTypeValue || resolvedDraftActivityType || '',
       assigneeValue,
       descriptionDraft,
       reportDraft,
@@ -2082,6 +2129,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     isDraftActivityCreationMode,
     open,
     reportDraft,
+    resolvedDraftActivityType,
+    resolvedDraftTaskName,
     startAnchorStageValue,
     startDateValue,
     startDurationFromValue,

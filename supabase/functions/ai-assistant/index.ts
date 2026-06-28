@@ -3112,9 +3112,23 @@ const uint8ToBase64 = (bytes: Uint8Array) => {
   return btoa(binary);
 };
 
+const normalizeRawBase64 = (value: string) => {
+  const withoutHeader = String(value || '').replace(/^data:[^;]+;base64,/i, '');
+  const compact = withoutHeader.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  if (!compact) return '';
+  const padding = compact.length % 4;
+  return padding ? `${compact}${'='.repeat(4 - padding)}` : compact;
+};
+
 const base64ToUint8Array = (value: string) => {
-  const normalized = String(value || '').replace(/^data:[^;]+;base64,/, '').trim();
-  const binary = atob(normalized);
+  const normalized = normalizeRawBase64(value);
+  if (!normalized) return new Uint8Array();
+  let binary = '';
+  try {
+    binary = atob(normalized);
+  } catch {
+    throw new Error('فایل ارسالی قابل خواندن نیست. لطفاً فایل یا ویس را دوباره انتخاب و ارسال کنید.');
+  }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
@@ -5073,6 +5087,16 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         targetModuleId,
         title: moduleLabel,
         status: 'proposed',
+        schema: effectiveSchema,
+        proposedPayload: {
+          prompt,
+          reply,
+          target_module_id: targetModuleId,
+          target_table: targetTable,
+          module_label: moduleLabel,
+          payload,
+          relation_field_key: relationFieldKey || null,
+        },
       } : null,
       provider: aiResult.provider,
       model: aiResult.model,
@@ -5345,7 +5369,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   const inputs = normalizeTaskBundleInputs(body);
   const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
   if (!baseMessage && inputs.length === 0) {
-    return json(400, { success: false, message: 'متن یا ورودی برای اجرای باندل هوش مصنوعی ارسال نشده است.' });
+    return json(400, { success: false, message: 'متن، فایل یا ویس برای ارسال به هوش مصنوعی دریافت نشد.' });
   }
 
   for (const selectedCapability of selectedCapabilities) {

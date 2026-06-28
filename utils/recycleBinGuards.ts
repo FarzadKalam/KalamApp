@@ -2,6 +2,34 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const RECYCLE_BIN_CHECK_CACHE_TTL_MS = 1500;
+
+type RecycleBinCheckCacheEntry = {
+  savedAt: number;
+  value?: boolean;
+  promise?: Promise<boolean>;
+};
+
+const recycleBinCheckCache = new Map<string, RecycleBinCheckCacheEntry>();
+
+export const clearRecycleBinGuardCache = () => {
+  recycleBinCheckCache.clear();
+};
+
+const queryRecycleBinRecord = async (sourceTable: string, recordId: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('recycle_bin_records')
+      .select('id')
+      .eq('source_table', sourceTable)
+      .eq('source_record_id', recordId)
+      .maybeSingle();
+    if (error) return false;
+    return Boolean((data as any)?.id);
+  } catch {
+    return false;
+  }
+};
 
 const parseObject = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -46,19 +74,40 @@ export const isRecordInRecycleBin = async ({
   const normalizedSourceTable = normalizeText(sourceTable) || getRecycleBinSourceTableForModule(moduleId);
   const normalizedRecordId = normalizeText(recordId || record?.id);
   if (!normalizedSourceTable || !normalizedRecordId) return false;
+  const cacheKey = `${normalizedSourceTable}:${normalizedRecordId}`;
+  const cached = recycleBinCheckCache.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt < RECYCLE_BIN_CHECK_CACHE_TTL_MS) {
+    if (typeof cached.value === 'boolean') return cached.value;
+    if (cached.promise) return cached.promise;
+  }
 
+  const promise = queryRecycleBinRecord(normalizedSourceTable, normalizedRecordId);
+  recycleBinCheckCache.set(cacheKey, { savedAt: Date.now(), promise });
   try {
-    const { data, error } = await supabase
-      .from('recycle_bin_records')
-      .select('id')
-      .eq('source_table', normalizedSourceTable)
-      .eq('source_record_id', normalizedRecordId)
-      .maybeSingle();
-    if (error) return false;
-    return Boolean((data as any)?.id);
+    const value = await promise;
+    recycleBinCheckCache.set(cacheKey, { savedAt: Date.now(), value });
+    return value;
   } catch {
+    recycleBinCheckCache.set(cacheKey, { savedAt: Date.now(), value: false });
     return false;
   }
+};
+
+export const isRecordInRecycleBinUncached = async ({
+  moduleId,
+  sourceTable,
+  recordId,
+  record,
+}: {
+  moduleId?: string | null;
+  sourceTable?: string | null;
+  recordId?: string | null;
+  record?: Record<string, any> | null;
+}) => {
+  const normalizedSourceTable = normalizeText(sourceTable) || getRecycleBinSourceTableForModule(moduleId);
+  const normalizedRecordId = normalizeText(recordId || record?.id);
+  if (!normalizedSourceTable || !normalizedRecordId) return false;
+  return queryRecycleBinRecord(normalizedSourceTable, normalizedRecordId);
 };
 
 const getTaskProcessIds = (task?: Record<string, any> | null) => {

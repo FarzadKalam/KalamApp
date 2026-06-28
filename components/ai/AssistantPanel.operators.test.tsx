@@ -206,7 +206,7 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('document_analysis'));
     fireEvent.click(screen.getAllByText('send-file')[0]);
     expect(screen.getAllByText(/proposal\.pdf/).length).toBeGreaterThan(0);
-    await typeAndSend('این فایل را بررسی کن', 'اجرای باندل');
+    await typeAndSend('این فایل را بررسی کن', 'ارسال');
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle');
     expect(body?.capabilities).toContain('document_analysis');
@@ -220,7 +220,7 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('voice_input'));
     fireEvent.click(screen.getAllByText('send-voice')[0]);
     expect(screen.getAllByText(/ویس/).length).toBeGreaterThan(0);
-    await typeAndSend('این ویس را بررسی کن', 'اجرای باندل');
+    await typeAndSend('این ویس را بررسی کن', 'ارسال');
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle');
     expect(body?.bundle?.inputs?.[0]?.type).toBe('voice');
@@ -233,7 +233,7 @@ describe('AssistantPanel AI operators', () => {
     fireEvent.click(screen.getAllByText('cap-voice_input')[0]);
     fireEvent.click(screen.getAllByText('send-file')[0]);
     fireEvent.click(screen.getAllByText('send-voice')[0]);
-    await typeAndSend('این را به عنوان مشتری ثبت کن', 'اجرای باندل');
+    await typeAndSend('این را به عنوان مشتری ثبت کن', 'ارسال');
     await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle');
     expect(body?.capabilities).toContain('record_creation');

@@ -39,6 +39,8 @@ type AiBundleInput =
   | { id: string; type: 'file' | 'image'; label: string; file: AiUploadedFilePrompt }
   | { id: string; type: 'voice'; label: string; voice: RecordedVoice };
 
+const DEFAULT_COMPOSER_CAPABILITIES: AiComposerCapability[] = ['document_analysis', 'voice_input'];
+
 const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حال فکر کردن...') => {
   const set = new Set((capabilities || []).map((item) => String(item || '').trim()));
   if (set.has('voice_output')) return 'در حال تولید صدا...';
@@ -165,6 +167,32 @@ const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
   return parts.join(' · ');
 };
 
+const formatDraftValue = (value: any): string => {
+  if (value === null || value === undefined || value === '') return 'خالی';
+  if (Array.isArray(value)) return value.map(formatDraftValue).join('، ');
+  if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+};
+
+const buildPendingActionRevisionPrompt = (pendingAction: any, text: string) => {
+  const proposedPayload = pendingAction?.proposedPayload || pendingAction?.proposed_payload || {};
+  const payload = proposedPayload?.payload && typeof proposedPayload.payload === 'object' ? proposedPayload.payload : {};
+  const moduleLabel = String(pendingAction?.title || proposedPayload?.module_label || '').trim();
+  if (!Object.keys(payload).length) return text;
+  return [
+    'کاربر می‌خواهد پیش‌نویس ساخت رکورد قبلی را اصلاح یا تکمیل کند.',
+    moduleLabel ? `نوع رکورد: ${moduleLabel}` : '',
+    'پیش‌نویس قبلی:',
+    JSON.stringify(payload),
+    '',
+    'توضیح جدید کاربر:',
+    text,
+    '',
+    'با حفظ اطلاعات قبلی، فقط موارد جدید یا اصلاح‌شده را اعمال کن و دوباره پیش‌نویس تایید بساز.',
+  ].filter(Boolean).join('\n');
+};
+
 const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId, initialPrompt, openCreateActivityFromMessage }) => {
   const { message } = App.useApp();
   const location = useLocation();
@@ -184,7 +212,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const [imageEditSourceUrl, setImageEditSourceUrl] = useState<string | null>(null);
   const [currentUserView, setCurrentUserView] = useState({ name: 'شما', avatarUrl: null as string | null });
   const [capabilityAvailability, setCapabilityAvailability] = useState<Record<string, any>>({});
-  const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>([]);
+  const [selectedCapabilities, setSelectedCapabilities] = useState<AiComposerCapability[]>(DEFAULT_COMPOSER_CAPABILITIES);
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
@@ -205,6 +233,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     if (active) return undefined;
     return scheduleOverlayLockRelease();
   }, [active]);
+
+  useEffect(() => () => {
+    scheduleOverlayLockRelease(0);
+  }, []);
 
   useEffect(() => {
     const handleContextUpdate = (event: Event) => {
@@ -338,17 +370,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const videoMode = selectedCapabilities.includes('video_generation');
   const documentMode = selectedCapabilities.includes('document_generation');
   const workflowCapabilityCount = selectedCapabilities.filter((capability) => (
-    capability === 'document_analysis'
-    || capability === 'record_creation'
+    capability === 'record_creation'
     || capability === 'process_operation'
     || capability === 'document_generation'
   )).length;
   const shouldUseTaskBundle = bundleInputs.length > 0 || workflowCapabilityCount > 1;
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
-    setSelectedCapabilities(next);
-    const wantsProcessOperation = next.includes('process_operation');
+    const normalizedNext = Array.from(new Set(next));
+    setSelectedCapabilities(normalizedNext);
+    const wantsProcessOperation = normalizedNext.includes('process_operation');
     setProcessOperationMode(wantsProcessOperation);
-    if (!next.includes('record_creation')) {
+    if (!normalizedNext.includes('record_creation')) {
       setRecordCreationTargetModuleId(null);
     }
   }, []);
@@ -523,6 +555,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     setThreadId(normalizedInitialThreadId);
     setMessages([]);
     setPendingAiAction(null);
+    setSelectedCapabilities(DEFAULT_COMPOSER_CAPABILITIES);
+    setRecordCreationTargetModuleId(null);
+    setProcessOperationMode(false);
+    setBundleInputs([]);
   }, [active, contextKey, normalizedInitialThreadId]);
 
   useEffect(() => {
@@ -617,6 +653,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
+    const assistantText = pendingAiAction && recordCreationSchema
+      ? buildPendingActionRevisionPrompt(pendingAiAction, text)
+      : text;
     const shouldStartProcessGuideThread = contextWithSelection.intent === 'process_guide' && !threadId;
     if (rawText === undefined) setInput('');
     setPendingAiAction(null);
@@ -635,7 +674,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         action: 'process_operation_from_prompt',
         capability: 'record_chat',
         capabilities: selectedCapabilities,
-        message: text,
+        message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
         forceNewThread: shouldStartProcessGuideThread,
@@ -646,7 +685,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         action: 'create_record_from_prompt',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities,
-        message: text,
+        message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
         forceNewThread: shouldStartProcessGuideThread,
@@ -664,7 +703,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
           ? 'record_chat'
           : 'dashboard_chat',
         capabilities: selectedCapabilities,
-        message: text,
+        message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
         forceNewThread: shouldStartProcessGuideThread,
@@ -715,7 +754,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     } finally {
       setSubmitting(false);
     }
-  }, [callAssistant, contextWithSelection, input, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+  }, [callAssistant, contextWithSelection, input, message, pendingAiAction, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
 
   const submitImagePrompt = useCallback(async () => {
     const text = input.trim();
@@ -955,6 +994,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const submitTaskBundle = useCallback(async () => {
     const prompt = input.trim();
     if (submitting || (!prompt && bundleInputs.length === 0)) return;
+    const assistantPrompt = pendingAiAction && recordCreationSchema && prompt
+      ? buildPendingActionRevisionPrompt(pendingAiAction, prompt)
+      : prompt;
     const effectiveCapabilities = bundleInputs.some((item) => item.type === 'file' || item.type === 'image')
       && !selectedCapabilities.includes('document_analysis')
       ? [...selectedCapabilities, 'document_analysis' as AiComposerCapability]
@@ -1035,7 +1077,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
       const data = await callAssistant({
         action: 'run_task_bundle',
         capabilities: effectiveCapabilities,
-        message: prompt || (recordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
+        message: assistantPrompt || (recordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
         inputKind: 'task_bundle',
         bundle: { inputs },
         threadId,
@@ -1070,11 +1112,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     } catch (error: any) {
       setInput(prompt);
       setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
-      message.error(toFaErrorMessage(error, 'اجرای باندل هوش مصنوعی ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'ارسال درخواست هوش مصنوعی ناموفق بود.'));
     } finally {
       setSubmitting(false);
     }
-  }, [bundleInputs, callAssistant, contextWithSelection, input, message, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+  }, [bundleInputs, callAssistant, contextWithSelection, input, message, pendingAiAction, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
 
   const confirmPendingAiAction = useCallback(async () => {
     const actionId = String(pendingAiAction?.id || '').trim();
@@ -1300,15 +1342,42 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
           </div>
         ) : null}
         {pendingAiAction ? (
-          <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs leading-5 text-amber-900">
-            <div className="font-medium">هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.</div>
-            <div className="mt-1">تایید کنید یا در کادر پیام توضیح بیشتری بنویسید.</div>
+          <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="font-bold">
+                  {String(pendingAiAction?.actionType || '') === 'create_record_from_prompt'
+                    ? `پیش‌نویس ساخت ${String(pendingAiAction?.title || 'رکورد').trim()}`
+                    : 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.'}
+                </div>
+                <div className="mt-1 text-amber-800">اطلاعات فهمیده‌شده را بررسی کنید؛ می‌توانید تایید کنید، رد کنید یا با پیام/ویس توضیح تکمیلی بدهید.</div>
+              </div>
+            </div>
+            {pendingAiAction?.proposedPayload?.payload ? (
+              <div className="mt-2 space-y-1 rounded-xl border border-amber-200/70 bg-white/72 p-2">
+                {Object.entries(pendingAiAction.proposedPayload.payload).slice(0, 12).map(([key, value]) => {
+                  const field = Array.isArray(pendingAiAction?.schema?.fields)
+                    ? pendingAiAction.schema.fields.find((item: any) => String(item?.key || '') === key)
+                    : null;
+                  return (
+                    <div key={key} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0">
+                      <span className="shrink-0 font-semibold text-amber-900">{String(field?.label || key)}</span>
+                      <span className="min-w-0 text-left text-amber-800">{formatDraftValue(value)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+            <div className="mt-2">برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا ویس بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.</div>
             <Space size={6} className="mt-2">
               <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
                 تایید و اجرا
               </Button>
-              <Button size="small" onClick={() => setPendingAiAction(null)} disabled={confirmingAiAction}>
-                فعلا نه
+              <Button size="small" onClick={() => setInput((prev) => String(prev || '').trim() ? prev : 'این پیش‌نویس را این‌طور اصلاح کن: ')} disabled={confirmingAiAction}>
+                ویرایش با پیام
+              </Button>
+              <Button size="small" danger onClick={() => setPendingAiAction(null)} disabled={confirmingAiAction}>
+                رد پیشنهاد
               </Button>
             </Space>
           </div>
@@ -1398,7 +1467,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
             onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
-            {shouldUseTaskBundle ? 'اجرای باندل' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
+            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
           </Button>
         </div>
       </div>

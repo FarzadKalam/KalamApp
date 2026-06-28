@@ -1395,12 +1395,6 @@ const ProcessLaneRow = memo(({
       </div>
     );
   }
-  const laneActionItems: MenuProps['items'] = [
-    ...(cardMode === 'run' && onCopy ? [{ key: 'copy-lane', label: 'کپی ردیف', icon: <CopyOutlined />, onClick: onCopy }] : []),
-    { key: 'delete-lane', label: 'حذف ردیف', icon: <DeleteOutlined />, danger: true, onClick: () => confirmProcessV2Delete('حذف ردیف', onDelete) },
-    { key: 'toggle-lane', label: lane.collapsed ? 'باز کردن ردیف' : 'بستن ردیف', icon: lane.collapsed ? <LeftOutlined /> : <DownOutlined />, onClick: onToggleCollapse },
-  ];
-
   return (
     <section
       className={`box-border w-full min-w-0 max-w-full overflow-visible rounded-xl transition ${
@@ -1445,14 +1439,11 @@ const ProcessLaneRow = memo(({
           <Tag className={`!m-0 !rounded-full !border !px-2 !py-0 !text-[10px] !font-black ${laneStatusView.className}`}>
             {laneStatusView.label}
           </Tag>
-          <div className="hidden items-center gap-1 sm:flex" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
+          <div className="flex shrink-0 items-center gap-1" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
             {cardMode === 'run' && onCopy ? <IconButton title="کپی ردیف" icon={<CopyOutlined />} onClick={onCopy} /> : null}
             <IconButton title="حذف ردیف" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف ردیف', onDelete)} />
             <IconButton title={lane.collapsed ? 'باز کردن ردیف' : 'بستن ردیف'} icon={lane.collapsed ? <LeftOutlined /> : <DownOutlined />} onClick={onToggleCollapse} />
           </div>
-          <span className="sm:hidden" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
-            <ActionOverflow items={laneActionItems} />
-          </span>
         </div>
       ) : null}
 
@@ -2239,25 +2230,6 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     insertStageAfter(firstLane.id, null);
   }, [insertStageAfter, item.lanes]);
 
-  const headerActions: MenuProps['items'] = item.mode === 'run'
-    ? [
-        { key: 'delete', label: 'حذف فرآیند', icon: <DeleteOutlined />, danger: true, onClick: () => confirmProcessV2Delete('حذف فرآیند', () => onDelete?.(item.id)) },
-        { key: 'copy', label: 'کپی فرآیند', icon: <CopyOutlined />, onClick: () => onCopy?.(item.id) },
-        { key: 'info', label: 'اطلاعات اجرای فرآیند', icon: <InfoCircleOutlined />, onClick: () => onShowInfo?.(item) },
-        { key: 'records', label: 'مشاهده رکوردهای مرتبط', icon: <EyeOutlined />, onClick: () => onShowRecords?.(item) },
-        { key: 'toggle-all', label: processCollapsed ? 'باز کردن فرآیند' : 'جمع کردن فرآیند', icon: processCollapsed ? <LeftOutlined /> : <DownOutlined />, onClick: toggleAllLanesCollapsed },
-        { key: 'size', label: stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل', icon: <CompressOutlined />, onClick: toggleStageSizeMode },
-        { key: 'add-mode', label: connectorMode === 'add' ? 'بستن افزودن' : 'افزودن', icon: <PlusOutlined />, onClick: () => toggleConnectorMode('add') },
-        { key: 'connect-mode', label: connectorMode === 'connect' ? 'بستن اتصال' : 'اتصال مرحله ها', icon: <ApartmentOutlined />, onClick: () => toggleConnectorMode('connect') },
-      ]
-    : [
-        { key: 'delete', label: 'حذف الگو', icon: <DeleteOutlined />, danger: true, onClick: () => confirmProcessV2Delete('حذف الگو', () => onDelete?.(item.id)) },
-        { key: 'toggle-all', label: processCollapsed ? 'باز کردن الگو' : 'جمع کردن الگو', icon: processCollapsed ? <LeftOutlined /> : <DownOutlined />, onClick: toggleAllLanesCollapsed },
-        { key: 'size', label: stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل', icon: <CompressOutlined />, onClick: toggleStageSizeMode },
-        { key: 'add-mode', label: connectorMode === 'add' ? 'بستن افزودن' : 'افزودن', icon: <PlusOutlined />, onClick: () => toggleConnectorMode('add') },
-        { key: 'connect-mode', label: connectorMode === 'connect' ? 'بستن اتصال' : 'اتصال مرحله ها', icon: <ApartmentOutlined />, onClick: () => toggleConnectorMode('connect') },
-      ];
-
   const editorTools = (
     <div className="flex items-center gap-1">
       <IconButton
@@ -2387,7 +2359,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
             <Tag className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${computedStatusView.className}`}>
               {computedStatusView.label}
             </Tag>
-            <div className="hidden items-center gap-1 sm:flex" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
+            <div className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto justify-self-end" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
               {editorTools}
               <IconButton title="حذف فرآیند" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف فرآیند', () => onDelete?.(item.id))} />
               <IconButton title="کپی فرآیند" icon={<CopyOutlined />} onClick={() => onCopy?.(item.id)} />
@@ -2396,12 +2368,6 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               <IconButton title={processCollapsed ? 'باز کردن فرآیند' : 'جمع کردن فرآیند'} icon={processCollapsed ? <LeftOutlined /> : <DownOutlined />} onClick={toggleAllLanesCollapsed} />
               <IconButton title={stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل'} icon={<CompressOutlined />} onClick={toggleStageSizeMode} />
             </div>
-            <div className="flex items-center gap-1 justify-self-end sm:hidden" onClick={(event) => event.stopPropagation()}>
-              {editorTools}
-            </div>
-            <span className="justify-self-end sm:hidden" onClick={(event) => event.stopPropagation()}>
-              <ActionOverflow items={headerActions} />
-            </span>
           </div>
         </div>
       ) : (
@@ -2427,18 +2393,12 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
           <Tag className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${computedStatusView.className}`}>
             {computedStatusView.label}
           </Tag>
-          <div className="hidden items-center gap-1 sm:flex" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
+          <div className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
             {editorTools}
             <IconButton title="حذف الگو" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف الگو', () => onDelete?.(item.id))} />
             <IconButton title={processCollapsed ? 'باز کردن الگو' : 'جمع کردن الگو'} icon={processCollapsed ? <LeftOutlined /> : <DownOutlined />} onClick={toggleAllLanesCollapsed} />
             <IconButton title={stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل'} icon={<CompressOutlined />} onClick={toggleStageSizeMode} />
           </div>
-          <div className="flex items-center gap-1 sm:hidden" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
-            {editorTools}
-          </div>
-          <span className="sm:hidden" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
-            <ActionOverflow items={headerActions} />
-          </span>
         </div>
         )
       ) : null}

@@ -134,6 +134,10 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     if (disabled || loading) setOpen(false);
   }, [disabled, loading]);
 
+  useEffect(() => () => {
+    scheduleOverlayLockRelease(0);
+  }, []);
+
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) scheduleOverlayLockRelease();
@@ -184,7 +188,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const triggerButton = (
     <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => setOpen(true)} />
+      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => handleOpenChange(true)} />
     </Tooltip>
   );
 

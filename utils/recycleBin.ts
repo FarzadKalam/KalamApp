@@ -1,5 +1,6 @@
 import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
+import { clearRecycleBinGuardCache } from "./recycleBinGuards";
 import { fetchSessionBootstrap } from "./sessionCache";
 
 export const RECYCLE_BIN_ROUTE = "/recycle-bin";
@@ -64,6 +65,7 @@ export const moveModuleRecordsToRecycleBin = async (
     p_org_id: actor.orgId,
   });
   if (error) throw error;
+  clearRecycleBinGuardCache();
   return Number(data || 0) || 0;
 };
 
@@ -77,12 +79,14 @@ export const restoreRecycleBinRecords = async (recycleBinIds: Array<string | num
     p_recycle_ids: normalizedIds,
   });
   if (error) throw error;
+  clearRecycleBinGuardCache();
   return Number(data || 0) || 0;
 };
 
 export const purgeExpiredRecycleBinRecords = async () => {
   const { error } = await supabase.rpc("purge_expired_recycle_bin_records");
   if (error) throw error;
+  clearRecycleBinGuardCache();
 };
 
 export const getRecycleBinModuleTitle = (moduleId?: string | null) => {

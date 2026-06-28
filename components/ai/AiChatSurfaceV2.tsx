@@ -4,6 +4,7 @@ import { CloseOutlined, MenuOutlined, PlusOutlined, SearchOutlined } from '@ant-
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
 
@@ -118,6 +119,7 @@ const AiChatSurfaceV2: React.FC = () => {
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
     setThreadListOpen(false);
+    scheduleOverlayLockRelease(0);
   };
 
   const renderThreadList = (compact = false) => (
@@ -233,11 +235,17 @@ const AiChatSurfaceV2: React.FC = () => {
       </div>
       <Drawer
         open={threadListOpen}
-        onClose={() => setThreadListOpen(false)}
+        onClose={() => {
+          setThreadListOpen(false);
+          scheduleOverlayLockRelease();
+        }}
         placement="right"
         width="min(92vw, 360px)"
         title={null}
         classNames={{ body: '!p-0' }}
+        afterOpenChange={(nextOpen) => {
+          if (!nextOpen) scheduleOverlayLockRelease();
+        }}
       >
         <div className="flex h-full min-h-0 flex-col">
           <div className="flex items-center justify-between border-b border-slate-200/70 bg-white px-3 py-2 dark:border-white/[0.07] dark:bg-[#17191c]">
