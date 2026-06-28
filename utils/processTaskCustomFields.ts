@@ -41,6 +41,19 @@ const normalizeFieldOrder = (value: any) => {
   return Number.isFinite(order) ? order : undefined;
 };
 
+const copyPlainObject = (value: any): Record<string, any> | undefined => (
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...value }
+    : undefined
+);
+
+const hasTruthyFlag = (containers: any[], keys: string[]) => (
+  containers.some((container) => {
+    if (!container || typeof container !== 'object' || Array.isArray(container)) return false;
+    return keys.some((key) => container[key] === true);
+  })
+);
+
 export const normalizeProcessTaskCustomFieldKey = (raw: any) =>
   String(raw || '')
     .trim()
@@ -74,6 +87,27 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
   const relationTargetField = String(value?.relationConfig?.targetField || '').trim();
   const dynamicOptionsCategory = String(value?.dynamicOptionsCategory || '').trim();
   const order = normalizeFieldOrder(value?.order);
+  const rawMetadata = copyPlainObject(value?.metadata);
+  const rawConfig = copyPlainObject(value?.config);
+  const rawRules = copyPlainObject(value?.rules);
+  const rawValidation = copyPlainObject(value?.validation) || {};
+  const flagContainers = [value, rawMetadata, rawConfig, rawRules, rawValidation];
+  const requiredForCompletion = hasTruthyFlag(flagContainers, [
+    'required_for_completion',
+    'requiredForCompletion',
+    'completion_required',
+    'completionRequired',
+    'required_on_complete',
+    'requiredOnComplete',
+  ]) || rawValidation.required === true;
+  const requiredForCreation = hasTruthyFlag(flagContainers, [
+    'required_for_creation',
+    'requiredForCreation',
+    'creation_required',
+    'creationRequired',
+    'required_on_create',
+    'requiredOnCreate',
+  ]);
   const normalized: ModuleField = {
     key,
     type,
@@ -83,7 +117,8 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     },
     nature: FieldNature.STANDARD,
     validation: {
-      required: !!value?.validation?.required,
+      ...rawValidation,
+      required: requiredForCompletion,
     },
     options: normalizeSelectOptions(value?.options) as any,
     dynamicOptionsCategory: dynamicOptionsCategory || undefined,
@@ -96,7 +131,18 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     mode: type === FieldType.MULTI_SELECT ? 'multiple' : (type === FieldType.TAGS ? 'tags' : undefined),
     defaultValue: value?.defaultValue,
     order,
-  };
+    ...(rawMetadata ? { metadata: rawMetadata } : {}),
+    ...(rawConfig ? { config: rawConfig } : {}),
+    ...(rawRules ? { rules: rawRules } : {}),
+    ...(requiredForCompletion ? {
+      requiredForCompletion: true,
+      required_for_completion: true,
+    } : {}),
+    ...(requiredForCreation ? {
+      requiredForCreation: true,
+      required_for_creation: true,
+    } : {}),
+  } as ModuleField;
 
   if (!normalized.options?.length) delete normalized.options;
   if (!normalized.relationConfig) delete normalized.relationConfig;

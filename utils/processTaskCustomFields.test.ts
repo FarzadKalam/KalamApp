@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FieldType } from '../types';
-import { getMissingRequiredProcessTaskCustomFields } from './processTaskCustomFields';
+import { getMissingRequiredProcessTaskCustomFields, normalizeProcessTaskCustomField } from './processTaskCustomFields';
 
 describe('getMissingRequiredProcessTaskCustomFields', () => {
   it('returns the required custom fields that are empty', () => {
@@ -56,5 +56,27 @@ describe('getMissingRequiredProcessTaskCustomFields', () => {
     };
 
     expect(getMissingRequiredProcessTaskCustomFields(task)).toEqual([]);
+  });
+
+  it('keeps creation and completion requirements as separate process task field flags', () => {
+    const completionField = normalizeProcessTaskCustomField({
+      key: 'approval_note',
+      type: FieldType.TEXT,
+      labels: { fa: 'توضیح تایید' },
+      validation: { required: true },
+    }) as any;
+    const creationField = normalizeProcessTaskCustomField({
+      key: 'initial_code',
+      type: FieldType.TEXT,
+      labels: { fa: 'کد اولیه' },
+      requiredForCreation: true,
+      validation: { required: false },
+    }) as any;
+
+    expect(completionField?.validation?.required).toBe(true);
+    expect(completionField?.requiredForCompletion).toBe(true);
+    expect(completionField?.requiredForCreation).toBeUndefined();
+    expect(creationField?.validation?.required).toBe(false);
+    expect(creationField?.requiredForCreation).toBe(true);
   });
 });

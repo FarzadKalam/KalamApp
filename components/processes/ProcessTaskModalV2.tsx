@@ -119,6 +119,62 @@ type RelatedRecordRow = {
 };
 type TagItem = { id: string; title: string; color: string };
 
+const CREATION_DRAFT_STORAGE_PREFIX = 'process-task-modal-v2:create-draft';
+
+const buildCreationDraftStorageKey = (process: ProcessV2CardData, stage: ProcessV2Stage | null) => {
+  const source = stage?.source && typeof stage.source === 'object' ? stage.source as Record<string, any> : {};
+  const sourceMetadata = parseObject(source?.metadata);
+  const processKey = String(
+    process?.id
+    || ('runId' in process ? process.runId : '')
+    || process?.title
+    || ''
+  ).trim();
+  const stageKey = String(
+    stage?.id
+    || source?.template_stage_id
+    || source?.process_node_key
+    || sourceMetadata?.process_node_key
+    || source?.id
+    || ''
+  ).trim();
+  if (!processKey || !stageKey) return '';
+  return `${CREATION_DRAFT_STORAGE_PREFIX}:${processKey}:${stageKey}`;
+};
+
+const readCreationDraftSnapshot = (storageKey: string): Record<string, any> | null => {
+  if (!storageKey || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
+const writeCreationDraftSnapshot = (storageKey: string, snapshot: Record<string, any>) => {
+  if (!storageKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify({
+      ...snapshot,
+      savedAt: new Date().toISOString(),
+    }));
+  } catch {
+    // localStorage can be unavailable in private browsing or quota-constrained contexts.
+  }
+};
+
+const clearCreationDraftSnapshot = (storageKey: string) => {
+  if (!storageKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+};
+
 const statusOptions = [
   { value: 'draft', label: 'پیش نویس', icon: 'file' },
   { value: 'waiting', label: 'شروع نشده', icon: 'clock' },
@@ -214,6 +270,15 @@ const pickCustomFieldValue = (key: string, containers: any[]) => {
   return undefined;
 };
 
+const pickFirstMeaningful = (...values: any[]) => {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && value.trim() === '') continue;
+    return value;
+  }
+  return undefined;
+};
+
 const mapFieldType = (type: any): MockCustomField['type'] => {
   if (type === FieldType.RELATION) return FieldType.RELATION;
   if (type === FieldType.MULTI_RELATION) return FieldType.MULTI_RELATION;
@@ -230,6 +295,7 @@ const mapFieldType = (type: any): MockCustomField['type'] => {
 };
 
 const isFieldRequiredForCompletion = (field: any): boolean => {
+  if (field?.validation?.required === true) return true;
   const containers = [
     field,
     field?.metadata,
@@ -663,8 +729,21 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
 
   if (forceEditMode) {
     return (
-      <div className="min-w-0">
-        {fieldNode}
+      <div className="min-w-0 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition focus-within:border-[rgba(var(--brand-200-rgb),0.8)] focus-within:bg-white dark:bg-white/5 dark:focus-within:border-[rgba(var(--brand-300-rgb),0.35)] dark:focus-within:bg-white/10">
+        <div className="mb-1 flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
+          <span>{label}</span>
+          {requiredForCreation ? (
+            <Tag className="!m-0 !rounded-full !border-red-200 !bg-red-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-red-700 dark:!border-red-500/30 dark:!bg-red-500/10 dark:!text-red-200">
+              ضروری برای ایجاد
+            </Tag>
+          ) : null}
+          {requiredForCompletion ? (
+            <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
+              ضروری برای تکمیل
+            </Tag>
+          ) : null}
+        </div>
+        <div className="min-w-0">{fieldNode}</div>
       </div>
     );
   }
@@ -842,6 +921,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const uploadFilesForTaskRef = useRef<((targetTaskId: string, files: File[], shouldReload?: boolean) => Promise<void>) | null>(null);
   const taskTypeField = useMemo(() => getTaskField('task_type'), []);
   const isDraftActivityCreationMode = stage?.kind === 'draft';
+  const creationDraftStorageKey = useMemo(
+    () => (isDraftActivityCreationMode ? buildCreationDraftStorageKey(process, stage) : ''),
+    [isDraftActivityCreationMode, process, stage],
+  );
   const runProcess = process.mode === 'run' ? process as Extract<ProcessV2CardData, { mode: 'run' }> : null;
   const rawSource: Record<string, any> = stage?.source && typeof stage.source === 'object'
     ? stage.source as Record<string, any>
@@ -1441,6 +1524,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           setQueuedUploadFiles([]);
         }
       }
+      clearCreationDraftSnapshot(creationDraftStorageKey);
       onClose();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فعالیت ناموفق بود'));
@@ -1452,6 +1536,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     activityTypeValue,
     activityTags,
     assigneeValue,
+    creationDraftStorageKey,
     customFields,
     descriptionDraft,
     dueAnchorStageValue,
@@ -1650,7 +1735,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setInstructionsModalOpen(true);
   };
 
-  const applyStageSettingsToDraft = useCallback((targetStage: ProcessV2Stage | null) => {
+  const applyStageSettingsToDraft = useCallback((targetStage: ProcessV2Stage | null, storedSnapshot: Record<string, any> | null = null) => {
     if (!targetStage) return;
     const targetSource = targetStage?.source && typeof targetStage.source === 'object' ? targetStage.source : {};
     const targetSourceStage = targetSource?.source_stage && typeof targetSource.source_stage === 'object' ? targetSource.source_stage : {};
@@ -1658,6 +1743,25 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     const targetSourceStageMetadata = parseObject(targetSourceStage?.metadata);
     const targetRecurrence = parseObject(targetSource?.recurrence_info);
     const targetSourceStageRecurrence = parseObject(targetSourceStage?.recurrence_info || targetSourceStageMetadata?.recurrence_info);
+    const targetTemplateContext = {
+      ...(targetSource?.__process_v2_template_context && typeof targetSource.__process_v2_template_context === 'object' ? targetSource.__process_v2_template_context : {}),
+      ...targetSource,
+      ...targetSourceMetadata,
+      ...targetRecurrence,
+      ...targetSourceStage,
+      ...targetSourceStageMetadata,
+      ...targetSourceStageRecurrence,
+      task_name: targetStage?.title || targetSource?.name || targetSource?.stage_name || '',
+      task_type: targetSource?.task_type || targetSourceMetadata?.task_type || targetRecurrence?.task_type || targetSourceStage?.task_type || targetSourceStageMetadata?.task_type || targetSourceStageRecurrence?.task_type || '',
+    };
+    const renderStageTemplateValue = (value: any, type?: FieldType) => (
+      renderProcessV2TemplateValueFromRecord(value, targetTemplateContext, type)
+    );
+    const snapshotValue = (key: string, fallback: any) => (
+      storedSnapshot && Object.prototype.hasOwnProperty.call(storedSnapshot, key)
+        ? storedSnapshot[key]
+        : fallback
+    );
     const targetStatusOptions = buildStatusOptions(targetStage);
     const targetSourceStatus = String(targetSource?.status || '').trim();
     const nextStatus = targetStage.kind === 'draft'
@@ -1688,20 +1792,28 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       || targetSourceStageMetadata?.assignee_id
       || targetSourceStageRecurrence?.default_assignee_id
       || targetSourceStageRecurrence?.assignee_id;
-    const rawAssigneeIsField = String(rawRoleAssignee || rawUserAssignee || '').trim().startsWith('field:');
-    const assigneeFallbackType = (rawRoleAssignee || String(targetSource?.assignee_type || targetSourceMetadata?.assignee_type || targetRecurrence?.assignee_type || '').trim() === 'role')
+    const resolveAssigneeReference = (value: any) => {
+      const normalized = String(value || '').trim();
+      if (!normalized.startsWith('field:')) return value;
+      const fieldKey = normalized.replace(/^field:/, '').trim();
+      return targetTemplateContext[fieldKey] || '';
+    };
+    const resolvedRoleAssignee = resolveAssigneeReference(rawRoleAssignee);
+    const resolvedUserAssignee = resolveAssigneeReference(rawUserAssignee);
+    const assigneeFallbackType = (resolvedRoleAssignee || String(targetSource?.assignee_type || targetSourceMetadata?.assignee_type || targetRecurrence?.assignee_type || '').trim() === 'role')
       ? 'role'
       : 'user';
-    const nextAssigneeValue = rawAssigneeIsField
-      ? ''
-      : buildAssigneeSelectValue(
-        rawRoleAssignee || rawUserAssignee,
-        assigneeFallbackType,
-      );
+    const nextAssigneeValue = buildAssigneeSelectValue(
+      resolvedRoleAssignee || resolvedUserAssignee,
+      assigneeFallbackType,
+    );
     setAssigneeValue(
-      nextAssigneeValue
-      || String(targetStage.assigneeLabel || targetSource?.assignee_label || targetSourceMetadata?.assignee_label || '').trim()
-      || ''
+      String(snapshotValue(
+        'assigneeValue',
+        nextAssigneeValue
+          || String(targetStage.assigneeLabel || targetSource?.assignee_label || targetSourceMetadata?.assignee_label || '').trim()
+          || ''
+      ) || '')
     );
     const renderedStageTitle = String(targetStage.title || '').trim();
     const rawSourceTitle = String(
@@ -1717,10 +1829,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       || targetSourceStageMetadata?.stage_name
       || ''
     ).trim();
-    setTaskNameValue(targetStage.kind === 'draft'
-      ? (renderedStageTitle || rawSourceTitle)
-      : (rawSourceTitle || renderedStageTitle));
-    setActivityTypeValue(String(
+    const nextTaskName = targetStage.kind === 'draft'
+      ? (renderedStageTitle || String(renderStageTemplateValue(rawSourceTitle, FieldType.TEXT) || rawSourceTitle).trim())
+      : (String(renderStageTemplateValue(rawSourceTitle, FieldType.TEXT) || rawSourceTitle).trim() || renderedStageTitle);
+    setTaskNameValue(String(snapshotValue('taskNameValue', nextTaskName) || ''));
+    const nextActivityType = String(renderStageTemplateValue(pickFirstMeaningful(
       targetSource?.task_type
       || targetSourceMetadata?.task_type
       || targetRecurrence?.task_type
@@ -1729,29 +1842,163 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       || targetSourceStageRecurrence?.task_type
       || targetStage.activityTypeLabel
       || (targetStage.kind === 'draft' ? 'مرحله پیش نویس' : 'فعالیت سازمانی')
-    ).trim());
+    ), FieldType.TEXT) || '').trim();
+    setActivityTypeValue(String(snapshotValue('activityTypeValue', nextActivityType) || ''));
     const rawTags = Array.isArray(targetSource?.tags) ? targetSource.tags : (Array.isArray(targetRecurrence?.tags) ? targetRecurrence.tags : []);
     const normalizedTags = normalizeTaskTags(rawTags);
-    setActivityTags(normalizedTags);
-    setDescriptionDraft(String(targetSource?.description || targetSourceMetadata?.description || targetRecurrence?.description || targetSourceStage?.description || targetSourceStageMetadata?.description || targetSourceStageRecurrence?.description || '').trim());
-    setReportDraft(String(targetSource?.task_report || targetRecurrence?.task_report || '').trim());
-    setWageValue(String(targetSource?.wage ?? targetSourceMetadata?.wage ?? targetRecurrence?.wage ?? targetSourceStage?.wage ?? targetSourceStageMetadata?.wage ?? '0'));
-    setWeightValue(String(targetSource?.weight ?? targetSourceMetadata?.weight ?? targetRecurrence?.weight ?? targetSourceStage?.weight ?? targetSourceStageMetadata?.weight ?? '0'));
-    const nextDueDate = String(targetSource?.due_date || targetSourceMetadata?.due_date || targetRecurrence?.due_date || targetSourceStage?.due_date || targetSourceStageMetadata?.due_date || targetSourceStageRecurrence?.due_date || '').trim();
-    const nextStartDate = String(targetSource?.start_date || targetSource?.actual_start_at || targetSourceMetadata?.start_date || targetRecurrence?.start_date || targetSourceStage?.start_date || targetSourceStageMetadata?.start_date || targetSourceStageRecurrence?.start_date || '').trim();
-    setDueDateValue(nextDueDate);
-    setStartDateValue(nextStartDate);
-    setStartScheduleMode(nextStartDate ? 'manual' : 'system');
-    setDueScheduleMode(nextDueDate ? 'manual' : 'system');
-    setStartDurationFromValue(String(targetSource?.start_duration_from || targetRecurrence?.start_duration_from || targetSourceMetadata?.start_duration_from || targetSource?.duration_start_from || targetSourceMetadata?.duration_start_from || 'project_start').trim() || 'project_start');
-    setStartDurationValue(String(targetSource?.start_duration_value ?? targetRecurrence?.start_duration_value ?? targetSourceMetadata?.start_duration_value ?? targetSource?.duration_start_value ?? targetSourceMetadata?.duration_start_value ?? '0'));
-    setStartDurationUnitValue(String(targetSource?.start_duration_unit || targetRecurrence?.start_duration_unit || targetSourceMetadata?.start_duration_unit || targetSource?.duration_start_unit || targetSourceMetadata?.duration_start_unit || 'day') === 'hour' ? 'hour' : 'day');
-    setStartAnchorStageValue(String(targetSource?.start_anchor_stage_node_key || targetRecurrence?.start_anchor_stage_node_key || targetSourceMetadata?.start_anchor_stage_node_key || '').trim());
-    setDueDurationFromValue(String(targetSource?.duration_from || targetRecurrence?.duration_from || targetSourceMetadata?.duration_from || targetSourceStage?.duration_from || targetSourceStageMetadata?.duration_from || 'project_start').trim() || 'project_start');
-    setDueDurationValue(String(targetSource?.duration_value ?? targetRecurrence?.duration_value ?? targetSourceMetadata?.duration_value ?? targetSourceStage?.duration_value ?? targetSourceStageMetadata?.duration_value ?? '0'));
-    setDueDurationUnitValue(String(targetSource?.duration_unit || targetRecurrence?.duration_unit || targetSourceMetadata?.duration_unit || targetSourceStage?.duration_unit || targetSourceStageMetadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day');
-    setDueAnchorStageValue(String(targetSource?.due_anchor_stage_node_key || targetRecurrence?.due_anchor_stage_node_key || targetSourceMetadata?.due_anchor_stage_node_key || targetSourceStage?.due_anchor_stage_node_key || targetSourceStageMetadata?.due_anchor_stage_node_key || '').trim());
-    setCustomFields(buildCustomFields(targetStage));
+    setActivityTags(Array.isArray(storedSnapshot?.activityTags) ? normalizeTaskTags(storedSnapshot?.activityTags) : normalizedTags);
+    const nextDescription = String(renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.description,
+      targetSourceMetadata?.description,
+      targetRecurrence?.description,
+      targetSourceStage?.description,
+      targetSourceStageMetadata?.description,
+      targetSourceStageRecurrence?.description,
+      ''
+    ), FieldType.LONG_TEXT) || '').trim();
+    setDescriptionDraft(String(snapshotValue('descriptionDraft', nextDescription) || ''));
+    const nextReport = String(renderStageTemplateValue(pickFirstMeaningful(targetSource?.task_report, targetRecurrence?.task_report, ''), FieldType.LONG_TEXT) || '').trim();
+    setReportDraft(String(snapshotValue('reportDraft', nextReport) || ''));
+    const nextWage = renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.wage,
+      targetSourceMetadata?.wage,
+      targetRecurrence?.wage,
+      targetSourceStage?.wage,
+      targetSourceStageMetadata?.wage,
+      targetSourceStageRecurrence?.wage,
+      '0'
+    ), FieldType.NUMBER);
+    const nextWeight = renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.weight,
+      targetSourceMetadata?.weight,
+      targetRecurrence?.weight,
+      targetSourceStage?.weight,
+      targetSourceStageMetadata?.weight,
+      targetSourceStageRecurrence?.weight,
+      '0'
+    ), FieldType.NUMBER);
+    setWageValue(String(snapshotValue('wageValue', nextWage ?? '0')));
+    setWeightValue(String(snapshotValue('weightValue', nextWeight ?? '0')));
+    const nextDueDate = String(renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.due_date,
+      targetSourceMetadata?.due_date,
+      targetRecurrence?.due_date,
+      targetSourceStage?.due_date,
+      targetSourceStageMetadata?.due_date,
+      targetSourceStageRecurrence?.due_date,
+      ''
+    ), FieldType.DATETIME) || '').trim();
+    const nextStartDate = String(renderStageTemplateValue(pickFirstMeaningful(
+      targetSource?.start_date,
+      targetSource?.actual_start_at,
+      targetSourceMetadata?.start_date,
+      targetRecurrence?.start_date,
+      targetSourceStage?.start_date,
+      targetSourceStageMetadata?.start_date,
+      targetSourceStageRecurrence?.start_date,
+      ''
+    ), FieldType.DATETIME) || '').trim();
+    setDueDateValue(String(snapshotValue('dueDateValue', nextDueDate) || ''));
+    setStartDateValue(String(snapshotValue('startDateValue', nextStartDate) || ''));
+    setStartScheduleMode(snapshotValue('startScheduleMode', nextStartDate ? 'manual' : 'system') === 'manual' ? 'manual' : 'system');
+    setDueScheduleMode(snapshotValue('dueScheduleMode', nextDueDate ? 'manual' : 'system') === 'manual' ? 'manual' : 'system');
+    setStartDurationFromValue(String(snapshotValue('startDurationFromValue', pickFirstMeaningful(
+      targetSource?.start_duration_from,
+      targetRecurrence?.start_duration_from,
+      targetSourceMetadata?.start_duration_from,
+      targetSourceStage?.start_duration_from,
+      targetSourceStageRecurrence?.start_duration_from,
+      targetSourceStageMetadata?.start_duration_from,
+      targetSource?.duration_start_from,
+      targetSourceMetadata?.duration_start_from,
+      targetSourceStage?.duration_start_from,
+      targetSourceStageRecurrence?.duration_start_from,
+      targetSourceStageMetadata?.duration_start_from,
+      'project_start'
+    )) || 'project_start').trim() || 'project_start');
+    setStartDurationValue(String(snapshotValue('startDurationValue', pickFirstMeaningful(
+      targetSource?.start_duration_value,
+      targetRecurrence?.start_duration_value,
+      targetSourceMetadata?.start_duration_value,
+      targetSourceStage?.start_duration_value,
+      targetSourceStageRecurrence?.start_duration_value,
+      targetSourceStageMetadata?.start_duration_value,
+      targetSource?.duration_start_value,
+      targetSourceMetadata?.duration_start_value,
+      targetSourceStage?.duration_start_value,
+      targetSourceStageRecurrence?.duration_start_value,
+      targetSourceStageMetadata?.duration_start_value,
+      '0'
+    ))));
+    const nextStartUnit = String(snapshotValue('startDurationUnitValue', pickFirstMeaningful(
+      targetSource?.start_duration_unit,
+      targetRecurrence?.start_duration_unit,
+      targetSourceMetadata?.start_duration_unit,
+      targetSourceStage?.start_duration_unit,
+      targetSourceStageRecurrence?.start_duration_unit,
+      targetSourceStageMetadata?.start_duration_unit,
+      targetSource?.duration_start_unit,
+      targetSourceMetadata?.duration_start_unit,
+      targetSourceStage?.duration_start_unit,
+      targetSourceStageRecurrence?.duration_start_unit,
+      targetSourceStageMetadata?.duration_start_unit,
+      'day'
+    )));
+    setStartDurationUnitValue(nextStartUnit === 'hour' ? 'hour' : 'day');
+    setStartAnchorStageValue(String(snapshotValue('startAnchorStageValue', pickFirstMeaningful(
+      targetSource?.start_anchor_stage_node_key,
+      targetRecurrence?.start_anchor_stage_node_key,
+      targetSourceMetadata?.start_anchor_stage_node_key,
+      targetSourceStage?.start_anchor_stage_node_key,
+      targetSourceStageRecurrence?.start_anchor_stage_node_key,
+      targetSourceStageMetadata?.start_anchor_stage_node_key,
+      ''
+    )) || '').trim());
+    setDueDurationFromValue(String(snapshotValue('dueDurationFromValue', pickFirstMeaningful(
+      targetSource?.duration_from,
+      targetRecurrence?.duration_from,
+      targetSourceMetadata?.duration_from,
+      targetSourceStage?.duration_from,
+      targetSourceStageRecurrence?.duration_from,
+      targetSourceStageMetadata?.duration_from,
+      'project_start'
+    )) || 'project_start').trim() || 'project_start');
+    setDueDurationValue(String(snapshotValue('dueDurationValue', pickFirstMeaningful(
+      targetSource?.duration_value,
+      targetRecurrence?.duration_value,
+      targetSourceMetadata?.duration_value,
+      targetSourceStage?.duration_value,
+      targetSourceStageRecurrence?.duration_value,
+      targetSourceStageMetadata?.duration_value,
+      '0'
+    ))));
+    const nextDueUnit = String(snapshotValue('dueDurationUnitValue', pickFirstMeaningful(
+      targetSource?.duration_unit,
+      targetRecurrence?.duration_unit,
+      targetSourceMetadata?.duration_unit,
+      targetSourceStage?.duration_unit,
+      targetSourceStageRecurrence?.duration_unit,
+      targetSourceStageMetadata?.duration_unit,
+      'day'
+    )));
+    setDueDurationUnitValue(nextDueUnit === 'hour' ? 'hour' : 'day');
+    setDueAnchorStageValue(String(snapshotValue('dueAnchorStageValue', pickFirstMeaningful(
+      targetSource?.due_anchor_stage_node_key,
+      targetRecurrence?.due_anchor_stage_node_key,
+      targetSourceMetadata?.due_anchor_stage_node_key,
+      targetSourceStage?.due_anchor_stage_node_key,
+      targetSourceStageRecurrence?.due_anchor_stage_node_key,
+      targetSourceStageMetadata?.due_anchor_stage_node_key,
+      ''
+    )) || '').trim());
+    const storedCustomFieldValues = storedSnapshot?.customFieldValues && typeof storedSnapshot.customFieldValues === 'object'
+      ? storedSnapshot.customFieldValues
+      : {};
+    setCustomFields(buildCustomFields(targetStage).map((field) => (
+      Object.prototype.hasOwnProperty.call(storedCustomFieldValues, field.key)
+        ? { ...field, value: storedCustomFieldValues[field.key] }
+        : field
+    )));
   }, []);
 
   useEffect(() => {
@@ -1759,7 +2006,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setDraftCopyTemplateId(isTemplateBackedDraft ? (templateBackedTemplateId || undefined) : (runProcess?.templateId || undefined));
     setDraftCopyStageId(isTemplateBackedDraft ? (templateBackedStageId || stage?.id || undefined) : undefined);
     setTemplateCopyStages([]);
-    applyStageSettingsToDraft(stage);
+    const storedCreationDraft = isDraftActivityCreationMode
+      ? readCreationDraftSnapshot(creationDraftStorageKey)
+      : null;
+    applyStageSettingsToDraft(stage, storedCreationDraft);
     setIsLocked(false);
     setFilesExpanded(false);
     setPreviewFile(null);
@@ -1778,13 +2028,70 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setTaskActionBusy(null);
     setSavingFieldKey(null);
     setLocalTaskPatch({});
-  }, [applyStageSettingsToDraft, isTemplateBackedDraft, open, process, stage, templateBackedStageId, templateBackedTemplateId]);
+  }, [applyStageSettingsToDraft, creationDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, open, process, stage, templateBackedStageId, templateBackedTemplateId]);
 
   useLayoutEffect(() => {
     if (!open || !isDraftActivityCreationMode) return;
+    if (creationDraftStorageKey && readCreationDraftSnapshot(creationDraftStorageKey)) return;
     setTaskNameValue(resolvedDraftTaskName || '');
     setActivityTypeValue(resolvedDraftActivityType || '');
-  }, [isDraftActivityCreationMode, open, resolvedDraftActivityType, resolvedDraftTaskName]);
+  }, [creationDraftStorageKey, isDraftActivityCreationMode, open, resolvedDraftActivityType, resolvedDraftTaskName]);
+
+  useEffect(() => {
+    if (!open || !isDraftActivityCreationMode || !creationDraftStorageKey) return;
+    const customFieldValues = customFields.reduce<Record<string, any>>((acc, field) => {
+      acc[field.key] = field.value;
+      return acc;
+    }, {});
+    writeCreationDraftSnapshot(creationDraftStorageKey, {
+      taskNameValue,
+      activityTypeValue,
+      assigneeValue,
+      descriptionDraft,
+      reportDraft,
+      activityTags,
+      wageValue,
+      weightValue,
+      dueDateValue,
+      startDateValue,
+      startScheduleMode,
+      dueScheduleMode,
+      startDurationFromValue,
+      startDurationValue,
+      startDurationUnitValue,
+      startAnchorStageValue,
+      dueDurationFromValue,
+      dueDurationValue,
+      dueDurationUnitValue,
+      dueAnchorStageValue,
+      customFieldValues,
+    });
+  }, [
+    activityTags,
+    activityTypeValue,
+    assigneeValue,
+    creationDraftStorageKey,
+    customFields,
+    descriptionDraft,
+    dueAnchorStageValue,
+    dueDateValue,
+    dueDurationFromValue,
+    dueDurationUnitValue,
+    dueDurationValue,
+    dueScheduleMode,
+    isDraftActivityCreationMode,
+    open,
+    reportDraft,
+    startAnchorStageValue,
+    startDateValue,
+    startDurationFromValue,
+    startDurationUnitValue,
+    startDurationValue,
+    startScheduleMode,
+    taskNameValue,
+    wageValue,
+    weightValue,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -2714,9 +3021,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-gray-500">فیلدهای اختصاصی این فعالیت:</span>
                   </div>
-                  <div className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5 sm:grid-cols-2">
+                  <div className="space-y-2 rounded-lg border border-gray-200 bg-gray-50/80 p-2 dark:border-gray-700 dark:bg-white/5">
                     {customFields.map((field) => (
-                      <div key={field.key} className={field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT ? 'sm:col-span-2' : undefined}>
+                      <div key={field.key}>
                         <InlineEditableField
                           label={field.label}
                           value={field.value}
