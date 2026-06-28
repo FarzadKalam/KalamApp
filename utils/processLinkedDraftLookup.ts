@@ -115,7 +115,7 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
       const { data, error } = await supabaseClient
         .from(spec.tableName)
         .select(`id, process_template_id, ${spec.fieldKey}`)
-        .contains(spec.fieldKey, payload)
+        .filter(spec.fieldKey, 'cs', JSON.stringify(payload))
         .limit(limitPerModule);
       if (error || !Array.isArray(data)) return [];
       return data;

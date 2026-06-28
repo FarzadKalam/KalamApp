@@ -4,6 +4,7 @@ import { supabase } from '../../supabaseClient';
 import { OPEN_TASK_PROCESS_MODAL_EVENT } from '../../utils/taskProcessModalEvents';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
+import { markModuleListChanged } from '../../utils/moduleListLive';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { resolveAssigneePresentation } from '../../utils/assigneePresentation';
 import ProcessTaskModalV2 from '../processes/ProcessTaskModalV2';
@@ -83,6 +84,7 @@ const TASK_MODAL_SELECT_COLUMNS = [
   'process_run_stage_id',
   'recurrence_info',
   'metadata',
+  'org_id',
 ] as const;
 
 const normalizeText = (value: unknown) => String(value || '').trim();
@@ -254,6 +256,31 @@ const GlobalTaskProcessModalHost: React.FC = () => {
           laneTitle="ردیف فعالیت"
           onClose={closeSession}
           onStageStatusChange={(_stageId, status, sourcePatch) => {
+            const nextTask = {
+              ...(task || {}),
+              ...(sourcePatch || {}),
+              status,
+            };
+            const taskId = normalizeText(nextTask?.id || nextTask?.task_id);
+            if (taskId) {
+              markModuleListChanged({
+                org_id: nextTask?.org_id || null,
+                module_id: 'tasks',
+                record_id: taskId,
+                action: 'update',
+                updated_at: new Date().toISOString(),
+              });
+            }
+            const sourceLink = resolveTaskSourceLink(nextTask);
+            if (sourceLink.moduleId && sourceLink.recordId) {
+              markModuleListChanged({
+                org_id: nextTask?.org_id || null,
+                module_id: sourceLink.moduleId,
+                record_id: sourceLink.recordId,
+                action: 'update',
+                updated_at: new Date().toISOString(),
+              });
+            }
             setSession((current) => current ? {
               ...current,
               task: {

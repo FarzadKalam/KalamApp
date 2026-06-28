@@ -61,7 +61,10 @@ import { buildRecordReferenceKey, fetchRecordReferenceLabels } from "../utils/re
 import {
   isModuleListLiveInvalidationEnabled,
   isModuleListLiveInvalidationSupportedView,
+  readModuleListInvalidationMarker,
+  subscribeToLocalModuleListInvalidation,
   subscribeToModuleListLiveInvalidation,
+  type ModuleListLocalInvalidationMarker,
 } from "../utils/moduleListLive";
 import { resolveCashBankSourceNavigation } from "../utils/cashBankNavigation";
 import { normalizeModuleFormValues } from "../utils/moduleFormRuntime";
@@ -108,6 +111,43 @@ const RelatedRecordPopover = React.lazy(() => import("../components/RelatedRecor
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
+const MODULE_LIST_LIVE_WATERMARK_STORAGE_PREFIX = "kalam:module-list-live-watermark";
+
+const getModuleListLiveMarkerStamp = (marker?: ModuleListLocalInvalidationMarker | null) => {
+  if (!marker) return 0;
+  const sequence = Number(marker.sequence || 0);
+  if (Number.isFinite(sequence) && sequence > 0) return sequence;
+  const updatedAt = Date.parse(String(marker.updated_at || marker.received_at || ""));
+  return Number.isFinite(updatedAt) ? updatedAt : 0;
+};
+
+const buildModuleListLiveWatermarkKey = (
+  orgId?: string | null,
+  moduleId?: string | null,
+  viewMode?: ViewMode | null,
+  suffix?: string | null,
+) => {
+  const normalizedModuleId = String(moduleId || "").trim();
+  if (!normalizedModuleId) return null;
+  return `${MODULE_LIST_LIVE_WATERMARK_STORAGE_PREFIX}:${String(orgId || "*").trim() || "*"}:${normalizedModuleId}:${String(viewMode || "list")}:${String(suffix || "default").trim() || "default"}`;
+};
+
+const readModuleListLiveWatermark = (key?: string | null) => {
+  if (!key || typeof window === "undefined") return 0;
+  const value = Number(window.localStorage.getItem(key) || 0);
+  return Number.isFinite(value) ? value : 0;
+};
+
+const writeModuleListLiveWatermark = (key?: string | null, value?: number | null) => {
+  if (!key || typeof window === "undefined") return;
+  const nextValue = Number(value || 0);
+  if (!Number.isFinite(nextValue) || nextValue <= 0) return;
+  try {
+    window.localStorage.setItem(key, String(nextValue));
+  } catch {
+    // Storage quota or privacy mode should not break list rendering.
+  }
+};
 const getDefaultGridPageSize = () => 15;
 const getGridLoadStep = () => 15;
 const getDefaultKanbanPageSize = () => 15;
@@ -853,6 +893,9 @@ export const ModuleListRefine: React.FC<{
   const utilitySlotRef = useRef<HTMLDivElement | null>(null);
   const kanbanDragRef = useRef<{ record: any; sourceColumnKey: string; fieldKey: string } | null>(null);
   const tagViewFilterIdsCacheRef = useRef<{ signature: string; ids: string[] } | null>(null);
+  const moduleListLiveRefreshTimerRef = useRef<number | null>(null);
+  const moduleListLiveRefetchingRef = useRef(false);
+  const moduleListLivePendingMarkerRef = useRef<ModuleListLocalInvalidationMarker | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
@@ -1683,6 +1726,103 @@ export const ModuleListRefine: React.FC<{
     fetchPermissions();
   }, [fetchPermissions]);
 
+  const moduleListLiveWatermarkKey = useMemo(
+    () => buildModuleListLiveWatermarkKey(currentOrgId, resolvedModuleId, viewMode, storageKeySuffix),
+    [currentOrgId, resolvedModuleId, storageKeySuffix, viewMode]
+  );
+
+  const writeModuleListLiveObservedAt = useCallback((stamp?: number | null) => {
+    if (!moduleListLiveWatermarkKey) return;
+    const nextStamp = Number(stamp || Date.now());
+    if (!Number.isFinite(nextStamp) || nextStamp <= 0) return;
+    const previous = readModuleListLiveWatermark(moduleListLiveWatermarkKey);
+    writeModuleListLiveWatermark(moduleListLiveWatermarkKey, Math.max(previous, nextStamp));
+  }, [moduleListLiveWatermarkKey]);
+
+  const refreshModuleListFromLiveInvalidation = useCallback(async (
+    marker?: ModuleListLocalInvalidationMarker | null,
+  ) => {
+    if (moduleListLiveRefetchingRef.current) {
+      moduleListLivePendingMarkerRef.current = marker || moduleListLivePendingMarkerRef.current;
+      return;
+    }
+    moduleListLiveRefetchingRef.current = true;
+    try {
+      tagViewFilterIdsCacheRef.current = null;
+      setTagViewFilterRefreshSeed((prev) => prev + 1);
+      await tableQueryResult.refetch();
+      const markerStamp = getModuleListLiveMarkerStamp(marker);
+      writeModuleListLiveObservedAt(markerStamp || Date.now());
+    } catch (error) {
+      console.warn("Module list live refresh failed:", error);
+    } finally {
+      moduleListLiveRefetchingRef.current = false;
+      const pendingMarker = moduleListLivePendingMarkerRef.current;
+      moduleListLivePendingMarkerRef.current = null;
+      if (pendingMarker && getModuleListLiveMarkerStamp(pendingMarker) > readModuleListLiveWatermark(moduleListLiveWatermarkKey)) {
+        if (typeof window !== "undefined") {
+          window.setTimeout(() => {
+            void refreshModuleListFromLiveInvalidation(pendingMarker);
+          }, 0);
+        } else {
+          void refreshModuleListFromLiveInvalidation(pendingMarker);
+        }
+      }
+    }
+  }, [moduleListLiveWatermarkKey, tableQueryResult, writeModuleListLiveObservedAt]);
+
+  const scheduleModuleListLiveRefresh = useCallback((marker?: ModuleListLocalInvalidationMarker | null) => {
+    if (typeof window === "undefined") {
+      void refreshModuleListFromLiveInvalidation(marker);
+      return;
+    }
+    if (moduleListLiveRefreshTimerRef.current !== null) {
+      window.clearTimeout(moduleListLiveRefreshTimerRef.current);
+    }
+    moduleListLiveRefreshTimerRef.current = window.setTimeout(() => {
+      moduleListLiveRefreshTimerRef.current = null;
+      void refreshModuleListFromLiveInvalidation(marker);
+    }, 250);
+  }, [refreshModuleListFromLiveInvalidation]);
+
+  const refreshModuleListIfLocalMarkerIsStale = useCallback(() => {
+    if (!moduleListLiveInvalidationEnabled || !moduleListLiveInvalidationSupportedView || !resolvedModuleId) return;
+    const marker = readModuleListInvalidationMarker({ orgId: currentOrgId, moduleId: resolvedModuleId });
+    const markerStamp = getModuleListLiveMarkerStamp(marker);
+    if (!markerStamp) return;
+    const observedStamp = readModuleListLiveWatermark(moduleListLiveWatermarkKey);
+    if (markerStamp > observedStamp) {
+      scheduleModuleListLiveRefresh(marker);
+    }
+  }, [
+    currentOrgId,
+    moduleListLiveInvalidationEnabled,
+    moduleListLiveInvalidationSupportedView,
+    moduleListLiveWatermarkKey,
+    resolvedModuleId,
+    scheduleModuleListLiveRefresh,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined" && moduleListLiveRefreshTimerRef.current !== null) {
+        window.clearTimeout(moduleListLiveRefreshTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!moduleListLiveWatermarkKey || !isListView) return;
+    const dataUpdatedAt = Number(tableQueryResult.dataUpdatedAt || 0);
+    if (!Number.isFinite(dataUpdatedAt) || dataUpdatedAt <= 0) return;
+    writeModuleListLiveObservedAt(dataUpdatedAt);
+  }, [isListView, moduleListLiveWatermarkKey, tableQueryResult.dataUpdatedAt, writeModuleListLiveObservedAt]);
+
+  useEffect(() => {
+    if (isListView || !moduleListLiveWatermarkKey || !nonListReady || nonListLoading) return;
+    writeModuleListLiveObservedAt(Date.now());
+  }, [isListView, moduleListLiveWatermarkKey, nonListLoading, nonListReady, writeModuleListLiveObservedAt]);
+
   useEffect(() => {
     if (
       !moduleListLiveInvalidationEnabled
@@ -1693,38 +1833,70 @@ export const ModuleListRefine: React.FC<{
       return;
     }
 
-    let refreshTimer: number | null = null;
     const unsubscribe = subscribeToModuleListLiveInvalidation({
       supabaseClient: supabase,
       orgId: currentOrgId,
       moduleId: resolvedModuleId,
-      onInvalidate: () => {
-        if (typeof window !== "undefined" && refreshTimer !== null) {
-          window.clearTimeout(refreshTimer);
-        }
-        if (typeof window !== "undefined") {
-          refreshTimer = window.setTimeout(() => {
-            refreshTimer = null;
-            void tableQueryResult.refetch();
-          }, 300);
-        } else {
-          void tableQueryResult.refetch();
-        }
+      onInvalidate: (payload) => {
+        const now = Date.now();
+        scheduleModuleListLiveRefresh({
+          ...payload,
+          org_id: currentOrgId,
+          module_id: resolvedModuleId,
+          received_at: new Date(now).toISOString(),
+          sequence: now,
+        });
       },
     });
 
-    return () => {
-      if (typeof window !== "undefined" && refreshTimer !== null) {
-        window.clearTimeout(refreshTimer);
-      }
-      unsubscribe();
-    };
+    return unsubscribe;
   }, [
     currentOrgId,
     moduleListLiveInvalidationEnabled,
     moduleListLiveInvalidationSupportedView,
     resolvedModuleId,
-    tableQueryResult,
+    scheduleModuleListLiveRefresh,
+  ]);
+
+  useEffect(() => {
+    if (!moduleListLiveInvalidationEnabled || !moduleListLiveInvalidationSupportedView || !resolvedModuleId) {
+      return;
+    }
+    return subscribeToLocalModuleListInvalidation({
+      orgId: currentOrgId,
+      moduleId: resolvedModuleId,
+      onInvalidate: scheduleModuleListLiveRefresh,
+    });
+  }, [
+    currentOrgId,
+    moduleListLiveInvalidationEnabled,
+    moduleListLiveInvalidationSupportedView,
+    resolvedModuleId,
+    scheduleModuleListLiveRefresh,
+  ]);
+
+  useEffect(() => {
+    if (!moduleListLiveInvalidationEnabled || !moduleListLiveInvalidationSupportedView || !resolvedModuleId) {
+      return;
+    }
+    refreshModuleListIfLocalMarkerIsStale();
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") refreshModuleListIfLocalMarkerIsStale();
+    };
+    window.addEventListener("focus", refreshModuleListIfLocalMarkerIsStale);
+    window.addEventListener("pageshow", refreshModuleListIfLocalMarkerIsStale);
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => {
+      window.removeEventListener("focus", refreshModuleListIfLocalMarkerIsStale);
+      window.removeEventListener("pageshow", refreshModuleListIfLocalMarkerIsStale);
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
+  }, [
+    moduleListLiveInvalidationEnabled,
+    moduleListLiveInvalidationSupportedView,
+    refreshModuleListIfLocalMarkerIsStale,
+    resolvedModuleId,
   ]);
 
   const canViewField = useCallback(

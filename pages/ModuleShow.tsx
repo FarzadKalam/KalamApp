@@ -72,6 +72,7 @@ import { createProcessLinkedFieldKey, doesProcessTemplateSupportModule, getRelat
 import { syncProcessDraftToLinkedRecords } from '../utils/processLinkedDraftSync';
 import { buildTaskSourcePatch, fetchTaskSourceRecordOptions, getTaskModuleOptions, normalizeTaskSourceValues } from '../utils/taskMeta';
 import { updateTaskStatusWithAutomation } from '../utils/taskUpdateRuntime';
+import { markModuleListChanged } from '../utils/moduleListLive';
 import { mergeOptionLists, mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from '../utils/moduleOptionSnapshot';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import {
@@ -2398,6 +2399,16 @@ const ModuleShow: React.FC = () => {
     document.title = recordName ? `${recordName} | ${moduleTitle} | ${brandTitle}` : `${moduleTitle} | ${brandTitle}`;
   }, [moduleConfig, moduleId, data]);
 
+  const markCurrentModuleListChanged = useCallback((patch?: Record<string, any> | null) => {
+    markModuleListChanged({
+      org_id: patch?.org_id || data?.org_id || null,
+      module_id: moduleId,
+      record_id: id,
+      action: 'update',
+      updated_at: new Date().toISOString(),
+    });
+  }, [data?.org_id, id, moduleId]);
+
     const handleAssigneeChange = useCallback(async (value: string) => {
       if (!supportsAssignee) {
         msg.error('برای این ماژول ارجاع مسئول فعال نشده است.');
@@ -4243,6 +4254,7 @@ const ModuleShow: React.FC = () => {
         if (error) throw error;
         const nextData = withProcessTaskCustomFieldValues({ ...(data || {}), recurrence_info: nextRecurrence });
         setData(nextData);
+        markCurrentModuleListChanged({ recurrence_info: nextRecurrence });
         await insertChangelog({
           action: 'update',
           fieldName: key,
@@ -4275,6 +4287,7 @@ const ModuleShow: React.FC = () => {
         });
         setData((prev: any) => ({ ...(prev || {}), ...updatedTask }));
         setTempValues((prev) => ({ ...(prev || {}), status: updatedTask.status }));
+        markCurrentModuleListChanged(updatedTask as Record<string, any>);
         await insertChangelog({
           action: 'update',
           fieldName: key,
@@ -4409,6 +4422,7 @@ const ModuleShow: React.FC = () => {
           ? { ...(prev || {}), ...updatePayload }
           : { ...(prev || {}), [key]: newValue }
       ));
+      markCurrentModuleListChanged(updatePayload);
       await insertChangelog({
         action: 'update',
         fieldName: key,
@@ -4466,6 +4480,7 @@ const ModuleShow: React.FC = () => {
           navigate(`/${moduleId}/${nextRecordId}`, { replace: true });
           return;
         }
+        markCurrentModuleListChanged(values);
         void fetchRecord(true);
         return;
       }
@@ -4527,6 +4542,7 @@ const ModuleShow: React.FC = () => {
       if (moduleId === 'process_templates') {
         await syncProcessTemplateStages(String(id), meta?.templateStagesPreview || []);
       }
+      markCurrentModuleListChanged(persistedValues);
 
       if (moduleId === 'invoices' || moduleId === 'purchase_invoices') {
         await applyInvoiceFinalizationInventory({
@@ -4598,7 +4614,7 @@ const ModuleShow: React.FC = () => {
     } catch (err: any) {
       msg.error(toFaErrorMessage(err, 'عملیات ناموفق بود.'));
     }
-  }, [data, fetchRecord, id, logFieldChange, moduleConfig, moduleId, msg, navigate, syncProcessTemplateStages]);
+  }, [data, fetchRecord, id, logFieldChange, markCurrentModuleListChanged, moduleConfig, moduleId, msg, navigate, syncProcessTemplateStages]);
 
   const openResolvedAccountingEntries = useCallback((entries: ResolvedJournalEntry[]) => {
     const choices = buildAccountingEntryChoices(entries);
@@ -5610,7 +5626,8 @@ const ModuleShow: React.FC = () => {
 
   const handleRecordPatch = useCallback((patch: Record<string, any>) => {
     setData((prev: any) => ({ ...(prev || {}), ...patch }));
-  }, []);
+    markCurrentModuleListChanged(patch);
+  }, [markCurrentModuleListChanged]);
   const projectProcessLinkedFields = useMemo(() => {
     if (moduleId !== 'projects' || !processDraftFieldKey || !data) return [] as Array<{
       field: any;

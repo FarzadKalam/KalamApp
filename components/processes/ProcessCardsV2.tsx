@@ -460,6 +460,7 @@ const confirmProcessV2Delete = (title: string, onConfirm: () => void | Promise<v
     cancelText: 'انصراف',
     okButtonProps: { danger: true },
     centered: true,
+    zIndex: 32000,
     onOk: onConfirm,
   });
 };
@@ -882,7 +883,7 @@ const ProcessStagePill = memo(({
   const actionItems: MenuProps['items'] = [
     ...(stage.kind === 'draft' && onAutoAssignStage ? [{ key: 'auto-assign', label: 'ارجاع خودکار همین مرحله', icon: <PlayCircleOutlined />, onClick: onAutoAssignStage }] : []),
     { key: 'copy', label: 'کپی مرحله', icon: <CopyOutlined />, onClick: onCopy },
-    { key: 'delete', label: 'حذف مرحله', icon: <DeleteOutlined />, danger: true, onClick: () => confirmProcessV2Delete('حذف مرحله', onDelete) },
+    { key: 'delete', label: 'حذف مرحله', icon: <DeleteOutlined />, danger: true, onClick: onDelete },
   ];
   const expandedWidth = getExpandedStageWidth(stage, readOnlySurface, compact);
   const stageHeight = readOnlySurface ? (compact ? 40 : 44) : compact ? 50 : 58;
@@ -1019,7 +1020,7 @@ const ProcessStagePill = memo(({
               {stage.kind === 'draft' && onAutoAssignStage ? (
                 <IconButton title="ارجاع خودکار همین مرحله" icon={<PlayCircleOutlined />} onClick={onAutoAssignStage} />
               ) : null}
-              <IconButton title="حذف مرحله" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف مرحله', onDelete)} />
+              <IconButton title="حذف مرحله" icon={<DeleteOutlined />} danger onClick={onDelete} />
             </div>
             <span className="shrink-0 sm:hidden" onClick={(event) => event.stopPropagation()}>
               <ActionOverflow items={actionItems} />

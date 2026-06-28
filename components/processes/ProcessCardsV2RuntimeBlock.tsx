@@ -27,8 +27,9 @@ import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
-import { resolveTaskSourceLink } from '../../utils/taskMeta';
+import { buildTaskSourcePatch, resolveTaskSourceLink } from '../../utils/taskMeta';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
+import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
   createProcessTriggerKey,
@@ -42,6 +43,10 @@ import {
 import {
   getTaskStatusLabel,
 } from '../../utils/processTaskStatusOptions';
+import {
+  syncProcessRunStageFromTask,
+} from '../../utils/processRunRuntime';
+import { markModuleListChanged } from '../../utils/moduleListLive';
 import {
   autoAssignProcessV2DraftStages,
   buildProcessV2TemplateContext,
@@ -78,6 +83,13 @@ type RuntimeState = {
   runs: any[];
   stages: any[];
   tasks: any[];
+};
+
+type StageDeleteMode = 'unlink' | 'delete_task_keep_draft' | 'delete_all';
+type StageDeleteRequest = {
+  stage: ProcessV2Stage;
+  lane: ProcessV2Lane;
+  process: ProcessV2CardData;
 };
 
 type ProcessRuntimeBlockCacheEntry = {
@@ -772,6 +784,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     cacheFresh && cachedRuntimeBlock ? cachedRuntimeBlock.linkedDraftStages || EMPTY_STAGE_LIST : EMPTY_STAGE_LIST
   ));
   const [autoAssigningCardIds, setAutoAssigningCardIds] = useState<Record<string, boolean>>({});
+  const [stageDeleteRequest, setStageDeleteRequest] = useState<StageDeleteRequest | null>(null);
+  const [stageDeleteBusy, setStageDeleteBusy] = useState<StageDeleteMode | null>(null);
   const [activatorModal, setActivatorModal] = useState<{
     templateId: string;
     triggerKey: string;
@@ -1298,6 +1312,53 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }));
   }, [cardKey]);
 
+  const markRuntimeModuleListsChanged = useCallback((options?: {
+    taskId?: string | null;
+    processRunId?: string | null;
+    templateId?: string | null;
+  }) => {
+    const updatedAt = new Date().toISOString();
+    if (normalizedModuleId && normalizedRecordId) {
+      markModuleListChanged({
+        org_id: orgId || recordData?.org_id || null,
+        module_id: normalizedModuleId,
+        record_id: normalizedRecordId,
+        action: 'update',
+        updated_at: updatedAt,
+      });
+    }
+    const taskId = normalizeText(options?.taskId);
+    if (taskId) {
+      markModuleListChanged({
+        org_id: orgId || recordData?.org_id || null,
+        module_id: 'tasks',
+        record_id: taskId,
+        action: 'update',
+        updated_at: updatedAt,
+      });
+    }
+    const processRunId = normalizeText(options?.processRunId);
+    if (processRunId) {
+      markModuleListChanged({
+        org_id: orgId || recordData?.org_id || null,
+        module_id: 'process_runs',
+        record_id: processRunId,
+        action: 'update',
+        updated_at: updatedAt,
+      });
+    }
+    const templateId = normalizeText(options?.templateId);
+    if (templateId) {
+      markModuleListChanged({
+        org_id: orgId || recordData?.org_id || null,
+        module_id: 'process_templates',
+        record_id: templateId,
+        action: 'update',
+        updated_at: updatedAt,
+      });
+    }
+  }, [normalizedModuleId, normalizedRecordId, orgId, recordData?.org_id]);
+
   const handleStageStatusChange = useCallback((process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => {
     const key = cardKey(process);
     const stageStatus = mapTaskStatusToStageStatus(status);
@@ -1333,7 +1394,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         } as ProcessV2CardData,
       };
     });
-  }, [cardKey]);
+    markRuntimeModuleListsChanged({
+      taskId: sourcePatch?.task_id || sourcePatch?.process_task_id || sourcePatch?.id,
+      processRunId: sourcePatch?.process_run_id,
+      templateId: sourcePatch?.source_template_id,
+    });
+  }, [cardKey, markRuntimeModuleListsChanged]);
 
   const persistDraftStageList = useCallback(async (nextStages: any[]) => {
     const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
@@ -1342,6 +1408,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
     if (onDraftStagesChange) {
       await onDraftStagesChange(normalizedStages);
+      markRuntimeModuleListsChanged();
       return;
     }
 
@@ -1353,7 +1420,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       .update({ [normalizedFieldKey]: normalizedStages })
       .eq('id', normalizedRecordId);
     if (error) throw error;
-  }, [cacheKey, fieldKey, normalizedModuleId, normalizedRecordId, onDraftStagesChange]);
+    markRuntimeModuleListsChanged();
+  }, [cacheKey, fieldKey, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, onDraftStagesChange]);
 
   const removeDraftStagesByPredicate = useCallback(async (
     predicate: (stage: any, index: number) => boolean,
@@ -1375,8 +1443,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     setTemplateStages((current) => current.filter((stage) => !normalizedIds.includes(normalizeText(stage?.id || stage?.template_stage_id))));
     processRuntimeBlockCache.delete(cacheKey);
     await refresh(true);
+    markRuntimeModuleListsChanged({ templateId: normalizedRecordId });
     return true;
-  }, [cacheKey, refresh]);
+  }, [cacheKey, markRuntimeModuleListsChanged, normalizedRecordId, refresh]);
 
   const deleteRunDraftStages = useCallback(async (stageIds: string[]) => {
     const normalizedIds = Array.from(new Set(stageIds.map(normalizeText).filter(Boolean)));
@@ -1388,8 +1457,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }));
     processRuntimeBlockCache.delete(cacheKey);
     await refresh(true);
+    markRuntimeModuleListsChanged();
     return true;
-  }, [cacheKey, refresh]);
+  }, [cacheKey, markRuntimeModuleListsChanged, refresh]);
 
   const getRunStageIdForDraftStage = useCallback((stage: ProcessV2Stage) => {
     const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
@@ -1404,41 +1474,232 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     );
   }, []);
 
-  const handleDeleteStage = useCallback(async (
-    stage: ProcessV2Stage,
-    _lane: ProcessV2Lane,
-    process: ProcessV2CardData,
-  ) => {
-    if (stage.kind !== 'draft') {
-      message.warning('حذف فعالیت واقعی از مسیر حذف فعالیت انجام می‌شود؛ این دکمه فقط مرحله پیش‌نویس را حذف می‌کند.');
+  const getTaskIdForProcessStage = useCallback((stage: ProcessV2Stage) => {
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    const sourceStage = source.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+    const metadata = parseObject(source?.metadata);
+    if (source?.__process_v2_has_real_task === true || stage.kind === 'activity') {
+      return normalizeText(source?.task_id || source?.process_task_id || source?.id || metadata?.task_id || sourceStage?.task_id);
+    }
+    return normalizeText(source?.task_id || source?.process_task_id || metadata?.task_id || sourceStage?.task_id);
+  }, []);
+
+  const resetRunStageToDraft = useCallback(async (stage: ProcessV2Stage) => {
+    const runStageId = getRunStageIdForDraftStage(stage);
+    if (!runStageId) return;
+    const updateStage = async (patch: Record<string, any>) => (
+      (supabase.from('process_run_stages' as any) as any)
+        .update(patch)
+        .eq('id', runStageId)
+    );
+    const fullPatch = {
+      task_id: null,
+      status: 'draft',
+      assignee_user_id: null,
+      assignee_role_id: null,
+      planned_due_at: null,
+      completed_at: null,
+    };
+    let result = await updateStage(fullPatch);
+    if (result.error) {
+      result = await updateStage({ task_id: null, status: 'draft' });
+    }
+    if (result.error) throw result.error;
+
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    await syncProcessRunStageFromTask({
+      supabaseClient: supabase,
+      task: {
+        ...source,
+        id: null,
+        process_run_stage_id: runStageId,
+        status: 'draft',
+        assignee_id: null,
+        assignee_role_id: null,
+        due_date: null,
+        start_date: null,
+        actual_start_at: null,
+        completed_at: null,
+      },
+    });
+
+    setRuntime((current) => ({
+      ...current,
+      stages: current.stages.map((item: any) => (
+        normalizeText(item?.id || item?.process_run_stage_id) === runStageId
+          ? {
+              ...item,
+              task_id: null,
+              status: 'draft',
+              assignee_user_id: null,
+              assignee_role_id: null,
+              planned_due_at: null,
+              completed_at: null,
+            }
+          : item
+      )),
+    }));
+  }, [getRunStageIdForDraftStage]);
+
+  const unlinkTaskFromProcessStage = useCallback(async (stage: ProcessV2Stage) => {
+    const taskId = getTaskIdForProcessStage(stage);
+    if (!taskId) {
+      message.warning('فعالیت متناظر برای قطع اتصال پیدا نشد.');
       return false;
     }
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    const currentRecurrence = parseObject(source?.recurrence_info);
+    const nextRecurrence = { ...currentRecurrence };
+    delete nextRecurrence.process_group;
+    delete nextRecurrence.process_links;
+    delete nextRecurrence.process_graph;
+    delete nextRecurrence.process_run_id;
+    delete nextRecurrence.process_run_stage_id;
+    delete nextRecurrence.process_node_key;
+    delete nextRecurrence.process_lane_key;
+    const patch = {
+      ...buildTaskSourcePatch({
+        related_to_module: null,
+        source_module_id: null,
+        source_record_id: null,
+      }),
+      source_template_id: null,
+      process_group_id: null,
+      process_run_id: null,
+      process_run_stage_id: null,
+      process_node_key: null,
+      process_lane_key: null,
+      recurrence_info: nextRecurrence,
+    };
+    const { error } = await supabase.from('tasks').update(patch).eq('id', taskId);
+    if (error) throw error;
+    await resetRunStageToDraft(stage);
+    setRuntime((current) => ({
+      ...current,
+      tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+    }));
+    processRuntimeBlockCache.delete(cacheKey);
+    await refresh(true);
+    markRuntimeModuleListsChanged({ taskId });
+    message.success('اتصال فعالیت از این فرآیند حذف شد');
+    return true;
+  }, [cacheKey, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh, resetRunStageToDraft]);
 
+  const deleteTaskAndKeepDraftStage = useCallback(async (stage: ProcessV2Stage) => {
+    const taskId = getTaskIdForProcessStage(stage);
+    if (!taskId) {
+      message.warning('فعالیت متناظر برای حذف پیدا نشد.');
+      return false;
+    }
+    await resetRunStageToDraft(stage);
+    await moveModuleRecordsToRecycleBin('tasks', [taskId]);
+    setRuntime((current) => ({
+      ...current,
+      tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+    }));
+    processRuntimeBlockCache.delete(cacheKey);
+    await refresh(true);
+    markRuntimeModuleListsChanged({ taskId });
+    message.success('فعالیت حذف شد و مرحله پیش‌نویس باقی ماند');
+    return true;
+  }, [cacheKey, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh, resetRunStageToDraft]);
+
+  const deleteDraftStageCompletely = useCallback(async (
+    stage: ProcessV2Stage,
+    process: ProcessV2CardData,
+    showMessage = true,
+  ) => {
     if (process.mode === 'template' && isProcessTemplateModule(normalizedModuleId)) {
       const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
       const templateStageId = normalizeText(source?.template_stage_id || source?.id || stage.id);
       if (await deleteTemplateStages([templateStageId])) {
-        message.success('مرحله پیش‌نویس حذف شد');
+        if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
         return true;
       }
       return false;
     }
 
     const runStageId = getRunStageIdForDraftStage(stage);
-    if (runStageId && !normalizeText(stage.source?.task_id)) {
+    if (runStageId) {
       if (await deleteRunDraftStages([runStageId])) {
-        message.success('مرحله پیش‌نویس حذف شد');
+        if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
         return true;
       }
       return false;
     }
 
     if (await removeDraftStagesByPredicate((candidate, index) => rawStageMatchesV2Stage(candidate, stage, index))) {
-      message.success('مرحله پیش‌نویس حذف شد');
+      if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
       return true;
     }
     return false;
   }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftStagesByPredicate]);
+
+  const deleteTaskAndDraftStageCompletely = useCallback(async (
+    stage: ProcessV2Stage,
+    process: ProcessV2CardData,
+  ) => {
+    const taskId = getTaskIdForProcessStage(stage);
+    if (taskId) {
+      await moveModuleRecordsToRecycleBin('tasks', [taskId]);
+      setRuntime((current) => ({
+        ...current,
+        tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+      }));
+    }
+    const deletedDraft = await deleteDraftStageCompletely(stage, process, false);
+    if (!deletedDraft && taskId) {
+      processRuntimeBlockCache.delete(cacheKey);
+      await refresh(true);
+    }
+    markRuntimeModuleListsChanged({ taskId });
+    if (taskId && deletedDraft) {
+      message.success('فعالیت و مرحله فرآیند حذف شدند');
+    } else if (taskId) {
+      message.warning('فعالیت حذف شد، اما مرحله فرآیند برای حذف پیدا نشد.');
+    }
+    return deletedDraft || Boolean(taskId);
+  }, [cacheKey, deleteDraftStageCompletely, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh]);
+
+  const handleDeleteStage = useCallback(async (
+    stage: ProcessV2Stage,
+    lane: ProcessV2Lane,
+    process: ProcessV2CardData,
+  ) => {
+    setStageDeleteRequest({ stage, lane, process });
+    return false;
+  }, []);
+
+  const handleStageDeleteChoice = useCallback(async (mode: StageDeleteMode) => {
+    if (!stageDeleteRequest || stageDeleteBusy) return;
+    setStageDeleteBusy(mode);
+    try {
+      const { stage, process } = stageDeleteRequest;
+      if (mode === 'unlink') {
+        await unlinkTaskFromProcessStage(stage);
+      } else if (mode === 'delete_task_keep_draft') {
+        await deleteTaskAndKeepDraftStage(stage);
+      } else if (stage.kind === 'draft' && !getTaskIdForProcessStage(stage)) {
+        await deleteDraftStageCompletely(stage, process);
+      } else {
+        await deleteTaskAndDraftStageCompletely(stage, process);
+      }
+      setStageDeleteRequest(null);
+    } catch (error: any) {
+      message.error(normalizeText(error?.message || error?.details) || 'حذف مرحله فرآیند ناموفق بود');
+    } finally {
+      setStageDeleteBusy(null);
+    }
+  }, [
+    deleteDraftStageCompletely,
+    deleteTaskAndDraftStageCompletely,
+    deleteTaskAndKeepDraftStage,
+    getTaskIdForProcessStage,
+    message,
+    stageDeleteBusy,
+    stageDeleteRequest,
+    unlinkTaskFromProcessStage,
+  ]);
 
   const handleDeleteLane = useCallback(async (
     lane: ProcessV2Lane,
@@ -1732,6 +1993,14 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         message.warning('فعالیتی ایجاد نشد. تنظیمات مراحل پیش نویس را بررسی کنید.');
       }
       await refresh(true);
+      const createdTaskIds = Array.isArray(result.createdTasks)
+        ? result.createdTasks.map((task: any) => normalizeText(task?.id)).filter(Boolean)
+        : [];
+      if (createdTaskIds.length > 0) {
+        createdTaskIds.forEach((taskId) => markRuntimeModuleListsChanged({ taskId }));
+      } else {
+        markRuntimeModuleListsChanged();
+      }
     } catch (error: any) {
       message.error(normalizeText(error?.message || error?.details) || 'ارجاع خودکار فرآیند ناموفق بود');
     } finally {
@@ -1741,7 +2010,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
+  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
 
   const handleAutoAssignStage = useCallback(async (stage: ProcessV2Stage, _laneTitle: string, item: ProcessV2CardData, overrides?: Record<string, any>) => {
     if (stage.kind !== 'draft') return;
@@ -1793,6 +2062,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         message.warning('فعالیتی برای این مرحله ایجاد نشد. تنظیمات مرحله را بررسی کنید.');
       }
       await refresh(true);
+      const createdTaskId = Array.isArray(result.createdTasks)
+        ? normalizeText(result.createdTasks[0]?.id)
+        : '';
+      markRuntimeModuleListsChanged({ taskId: createdTaskId || undefined });
       return result;
     } catch (error: any) {
       message.error(normalizeText(error?.message || error?.details) || 'ارجاع خودکار مرحله ناموفق بود');
@@ -1804,7 +2077,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
+  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
 
   const handleConfigureTemplateActivator = useCallback((item: ProcessV2CardData) => {
     if (item.mode !== 'template') return;
@@ -1861,6 +2134,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     && Boolean(normalizedModuleId && normalizedRecordId)
   );
   const shouldRender = displayCards.length > 0 || loading || waitingForTemplateContext || errorText || canShowEmptyAddProcess;
+  const stageDeleteHasTask = Boolean(stageDeleteRequest && getTaskIdForProcessStage(stageDeleteRequest.stage));
   if (!shouldRender) return null;
 
   return (
@@ -1936,6 +2210,86 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           relationOptions={activatorEditorOptions.relationOptions}
         />
       ) : null}
+      <Modal
+        open={Boolean(stageDeleteRequest)}
+        title="حذف مرحله فرآیند"
+        footer={null}
+        centered
+        zIndex={32000}
+        destroyOnClose
+        onCancel={() => {
+          if (!stageDeleteBusy) setStageDeleteRequest(null);
+        }}
+      >
+        <div className="space-y-3 text-right" dir="rtl">
+          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            {stageDeleteRequest?.stage.title || 'این مرحله'} چگونه حذف شود؟
+          </div>
+          {stageDeleteHasTask ? (
+            <div className="space-y-2">
+              <Button
+                block
+                className="!h-auto !justify-start !rounded-xl !py-3 !text-right"
+                loading={stageDeleteBusy === 'unlink'}
+                disabled={stageDeleteBusy !== null}
+                onClick={() => void handleStageDeleteChoice('unlink')}
+              >
+                <span className="block w-full">
+                  <span className="block font-bold">اتصال فعالیت از این فرآیند حذف شود</span>
+                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                    فعالیت باقی می‌ماند، اما دیگر در این فرآیند نمایش داده نمی‌شود.
+                  </span>
+                </span>
+              </Button>
+              <Button
+                block
+                className="!h-auto !justify-start !rounded-xl !py-3 !text-right"
+                loading={stageDeleteBusy === 'delete_task_keep_draft'}
+                disabled={stageDeleteBusy !== null}
+                onClick={() => void handleStageDeleteChoice('delete_task_keep_draft')}
+              >
+                <span className="block w-full">
+                  <span className="block font-bold">فعالیت حذف شود و مرحله پیش‌نویس باقی بماند</span>
+                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                    فعالیت به سطل بازیافت می‌رود و این مرحله دوباره به حالت پیش‌نویس برمی‌گردد.
+                  </span>
+                </span>
+              </Button>
+              <Button
+                block
+                danger
+                className="!h-auto !justify-start !rounded-xl !py-3 !text-right"
+                loading={stageDeleteBusy === 'delete_all'}
+                disabled={stageDeleteBusy !== null}
+                onClick={() => void handleStageDeleteChoice('delete_all')}
+              >
+                <span className="block w-full">
+                  <span className="block font-bold">فعالیت و پیش‌نویس کامل حذف شوند</span>
+                  <span className="mt-1 block text-xs font-normal text-slate-500 dark:text-slate-400">
+                    فعالیت و جایگاه این مرحله از فرآیند حذف می‌شوند و با refresh دوباره از الگو برنمی‌گردند.
+                  </span>
+                </span>
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                این مرحله هنوز فعالیت واقعی ندارد و فقط مرحله پیش‌نویس حذف می‌شود.
+              </div>
+              <Button
+                block
+                danger
+                className="!h-auto !justify-start !rounded-xl !py-3 !text-right"
+                loading={stageDeleteBusy === 'delete_all'}
+                disabled={stageDeleteBusy !== null}
+                onClick={() => void handleStageDeleteChoice('delete_all')}
+              >
+                حذف مرحله پیش‌نویس
+              </Button>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 };
