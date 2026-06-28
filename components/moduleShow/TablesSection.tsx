@@ -224,22 +224,6 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             ) : null}
             {isProcessStagesField ? (
               <React.Suspense fallback={null}>
-                {!isRunPreviewField ? (
-                  <div className="hidden" aria-hidden="true">
-                    <ProductionStagesField
-                      recordId={data.id}
-                      moduleId={module.id}
-                      forceProcessRecordMode={!isTemplatePreviewField}
-                      automationContextModuleId={null}
-                      automationContextModuleIds={normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)}
-                      readOnly={!canEditModule}
-                      compact={true}
-                      draftStages={stageDraftValue}
-                      onDraftStagesChange={handleDraftStagesChange}
-                      onRuntimeSnapshot={onProcessRuntimeSnapshot}
-                    />
-                  </div>
-                ) : null}
                 <ProcessCardsV2RuntimeBlock
                   moduleId={module.id}
                   recordId={data.id}
@@ -248,6 +232,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                   draftStages={stageDraftValue}
                   onDraftStagesChange={handleDraftStagesChange}
                   runtimeSnapshot={processRuntimeSnapshot}
+                  onRuntimeSnapshot={onProcessRuntimeSnapshot}
                   variant="full"
                 />
               </React.Suspense>

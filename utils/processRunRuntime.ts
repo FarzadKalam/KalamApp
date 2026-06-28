@@ -48,6 +48,13 @@ type SyncProcessRunStageArgs = {
 };
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const normalizeDbUuid = (value: unknown) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, '');
+  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+};
 
 const toUuidOrNull = (value: unknown) => {
   const normalized = normalizeText(value);
@@ -444,7 +451,7 @@ export const syncProcessRunStageFromTask = async ({
   supabaseClient,
   task,
 }: SyncProcessRunStageArgs) => {
-  const processRunStageId = normalizeText(task?.process_run_stage_id);
+  const processRunStageId = normalizeDbUuid(task?.process_run_stage_id);
   if (!supabaseClient || !processRunStageId) return;
 
   const patch = {

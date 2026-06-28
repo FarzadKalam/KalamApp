@@ -6,6 +6,7 @@ import {
   ensureProcessRunContextsForStageGroups,
   mapProcessTemplateStagesToDraft,
   resolveProcessRunStageId,
+  syncProcessRunStageFromTask,
 } from './processRunRuntime';
 
 describe('process run draft helpers', () => {
@@ -71,6 +72,22 @@ describe('process run draft helpers', () => {
 
     expect(resolveProcessRunStageId(stageMap, stage)).toBe('run-stage-1');
     expect(resolveProcessRunStageId(stageMap, { name: 'چاپ', sort_order: 20 })).toBeNull();
+  });
+
+  it('strips process run stage UI prefixes before syncing a task', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null });
+    await syncProcessRunStageFromTask({
+      supabaseClient: { rpc },
+      task: {
+        id: '11111111-1111-4111-8111-111111111111',
+        process_run_stage_id: 'process_run_stage:22222222-2222-4222-8222-222222222222',
+        status: 'todo',
+      },
+    });
+
+    expect(rpc).toHaveBeenCalledWith('sync_process_run_stage_from_task', expect.objectContaining({
+      p_process_run_stage_id: '22222222-2222-4222-8222-222222222222',
+    }));
   });
 
   it('ensures a process run only once for each process group', async () => {
