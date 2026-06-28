@@ -5201,7 +5201,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   }, [closeTaskQuickModal, parseRecurrenceInfo, updateTaskWithFallback]);
   const handleDeleteTaskCompletely = useCallback(async (task: any) => {
     if (!task?.id) return;
-    const taskId = String(task.id);
+    const taskId = String(task.id || '').trim().replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, '');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(taskId)) {
+      message.warning('شناسه معتبر فعالیت برای حذف پیدا نشد.');
+      return;
+    }
     try {
       if (task?.process_run_stage_id) {
         await syncProcessRunStageFromTask({

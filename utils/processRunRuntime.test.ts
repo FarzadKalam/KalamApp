@@ -81,12 +81,17 @@ describe('process run draft helpers', () => {
       task: {
         id: '11111111-1111-4111-8111-111111111111',
         process_run_stage_id: 'process_run_stage:22222222-2222-4222-8222-222222222222',
+        assignee_id: '',
+        assignee_role_id: ' ',
         status: 'todo',
       },
     });
 
     expect(rpc).toHaveBeenCalledWith('sync_process_run_stage_from_task', expect.objectContaining({
       p_process_run_stage_id: '22222222-2222-4222-8222-222222222222',
+      p_task_id: '11111111-1111-4111-8111-111111111111',
+      p_assignee_user_id: null,
+      p_assignee_role_id: null,
     }));
   });
 

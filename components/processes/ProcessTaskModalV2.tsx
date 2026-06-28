@@ -234,6 +234,15 @@ const getTaskField = (fieldKey: string) => (
   (MODULES.tasks?.fields || []).find((field: any) => String(field?.key || '').trim() === fieldKey) as ModuleField | undefined
 );
 
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const normalizeDbUuid = (value: unknown) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, '');
+  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+};
+
 const parseObject = (value: any): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value;
   if (typeof value !== 'string') return {};
@@ -962,7 +971,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const effectiveSource = effectiveConfigStage?.source && typeof effectiveConfigStage.source === 'object' ? effectiveConfigStage.source : source;
   const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
   const effectiveSourceStage = effectiveSource?.source_stage && typeof effectiveSource.source_stage === 'object' ? effectiveSource.source_stage : sourceStage;
-  const taskRecordId = String(source?.task_id || (!isDraftActivityCreationMode ? source?.id : '') || '').trim();
+  const taskRecordId = normalizeDbUuid(source?.task_id || (!isDraftActivityCreationMode ? source?.id : '') || '');
   const recurrence = useMemo(() => parseObject(effectiveSource?.recurrence_info), [effectiveSource?.recurrence_info]);
   const effectiveStatusOptions = useMemo(() => buildStatusOptions(effectiveConfigStage), [effectiveConfigStage]);
   const draftSourceStageMetadata = useMemo(() => parseObject(sourceStage?.metadata), [sourceStage?.metadata]);

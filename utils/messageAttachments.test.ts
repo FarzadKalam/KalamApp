@@ -76,4 +76,31 @@ describe('extractBotMessageAttachments', () => {
       fileType: 'voice',
     })).toBe('voice');
   });
+
+  it('uses stored mime type when Rubika imports an image as a generic file', () => {
+    const attachments = extractBotMessageAttachments({
+      message_type: 'file',
+      payload: {
+        attachments: [
+          {
+            name: 'rubika-file',
+            url: 'https://api.tazesystem.ir/storage/v1/object/public/images/rubika/rubika-file',
+            mime_type: 'image/webp',
+            file_type: 'file',
+          },
+        ],
+      },
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.fileType).toBe('image');
+  });
+
+  it('recognizes official Rubika media type names', () => {
+    expect(resolveNoteAttachmentFileType({ fileType: 'GalleryImage', name: 'rubika' })).toBe('image');
+    expect(resolveNoteAttachmentFileType({ fileType: 'CameraVideo', name: 'rubika' })).toBe('video');
+    expect(resolveNoteAttachmentFileType({ fileType: 'Gif', mimeType: 'video/mp4' })).toBe('video');
+    expect(resolveNoteAttachmentFileType({ fileType: 'Music', name: 'track' })).toBe('audio');
+    expect(resolveNoteAttachmentFileType({ fileType: 'RecordAudio', mimeType: 'audio/mpeg' })).toBe('voice');
+  });
 });

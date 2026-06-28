@@ -541,6 +541,41 @@ const normalizeExtractedMedia = (
   };
 };
 
+const normalizeInboundMediaTypeToken = (value: any): 'image' | 'video' | 'audio' | 'voice' | 'file' | null => {
+  const token = String(value || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (!token) return null;
+  if (['image', 'photo', 'picture', 'cameraimage', 'galleryimage'].includes(token)) return 'image';
+  if (['video', 'movie', 'cameravideo', 'galleryvideo', 'gif'].includes(token)) return 'video';
+  if (['voice', 'voicemessage', 'recordaudio', 'recordedaudio'].includes(token)) return 'voice';
+  if (['audio', 'music', 'sound'].includes(token)) return 'audio';
+  if (['file', 'document', 'attachment'].includes(token)) return 'file';
+  return null;
+};
+
+const inferInboundMediaMessageType = ({
+  rawType,
+  mimeType,
+  fileName,
+  fallback = 'file',
+}: {
+  rawType?: any;
+  mimeType?: any;
+  fileName?: any;
+  fallback?: string;
+}) => {
+  const normalizedType = normalizeInboundMediaTypeToken(rawType);
+  if (normalizedType && normalizedType !== 'file') return normalizedType;
+
+  const mimeLower = String(mimeType || '').trim().toLowerCase();
+  const nameLower = String(fileName || '').trim().toLowerCase();
+  if (mimeLower.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower)) return 'image';
+  if (mimeLower.startsWith('video/') || /\.(mp4|mkv|mov|avi|webm|3gp|m4v)$/i.test(nameLower)) return 'video';
+  if (mimeLower.startsWith('audio/') || /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba)$/i.test(nameLower)) {
+    return normalizedType === 'voice' ? 'voice' : 'audio';
+  }
+  return normalizedType || String(fallback || 'file').trim().toLowerCase() || 'file';
+};
+
 const dedupeExtractedMediaItems = (items: Array<ExtractedInboundMediaItem | null | undefined>) => {
   const byKey = new Map<string, ExtractedInboundMediaItem>();
   items.forEach((item) => {
@@ -625,10 +660,10 @@ const collectMediaCollectionCandidates = (payload: Record<string, any>) => {
     pushNode(root?.medias, null);
     pushNode(root?.files, null);
     pushNode(root?.images, 'image');
-    pushNode(root?.gallery, 'image');
-    pushNode(root?.album, 'image');
-    pushNode(root?.album?.items, 'image');
-    pushNode(root?.gallery?.items, 'image');
+    pushNode(root?.gallery, null);
+    pushNode(root?.album, null);
+    pushNode(root?.album?.items, null);
+    pushNode(root?.gallery?.items, null);
     pushNode(root?.photo, 'image', { pickLast: true });
     pushNode(root?.photos, 'image', { pickLast: true });
     pushNode(root?.video, 'video');
@@ -818,28 +853,111 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload?.file?.name
   );
   const rawFileType = pick(
+    message?.type,
+    message?.media_type,
+    message?.mediaType,
     message?.file_type,
     message?.file?.type,
     message?.file?.file_type,
+    message?.file?.fileType,
+    message?.file?.media_type,
+    message?.file?.mediaType,
     message?.media?.type,
+    message?.media?.file_type,
+    message?.media?.fileType,
+    message?.media?.media_type,
+    message?.media?.mediaType,
     message?.aux_data?.type,
     message?.aux_data?.file_type,
     message?.aux_data?.fileType,
+    message?.aux_data?.media_type,
+    message?.aux_data?.mediaType,
+    message?.aux_data?.button_type,
+    message?.aux_data?.buttonType,
+    message?.aux_data?.input_type,
+    message?.aux_data?.inputType,
+    rubikaNewMessage?.type,
+    rubikaNewMessage?.media_type,
+    rubikaNewMessage?.mediaType,
     message?.aux_data?.mime_type,
     rubikaNewMessage?.file_type,
     rubikaNewMessage?.file?.type,
+    rubikaNewMessage?.file?.file_type,
+    rubikaNewMessage?.file?.fileType,
+    rubikaNewMessage?.file?.media_type,
+    rubikaNewMessage?.file?.mediaType,
     rubikaNewMessage?.aux_data?.type,
     rubikaNewMessage?.aux_data?.file_type,
+    rubikaNewMessage?.aux_data?.fileType,
+    rubikaNewMessage?.aux_data?.media_type,
+    rubikaNewMessage?.aux_data?.mediaType,
+    rubikaNewMessage?.aux_data?.button_type,
+    rubikaNewMessage?.aux_data?.buttonType,
+    rubikaNewMessage?.aux_data?.input_type,
+    rubikaNewMessage?.aux_data?.inputType,
+    rubikaUpdatedMessage?.type,
+    rubikaUpdatedMessage?.media_type,
+    rubikaUpdatedMessage?.mediaType,
     rubikaUpdatedMessage?.file_type,
     rubikaUpdatedMessage?.file?.type,
+    rubikaUpdatedMessage?.file?.file_type,
+    rubikaUpdatedMessage?.file?.fileType,
+    rubikaUpdatedMessage?.file?.media_type,
+    rubikaUpdatedMessage?.file?.mediaType,
     rubikaUpdatedMessage?.aux_data?.type,
     rubikaUpdatedMessage?.aux_data?.file_type,
+    rubikaUpdatedMessage?.aux_data?.fileType,
+    rubikaUpdatedMessage?.aux_data?.media_type,
+    rubikaUpdatedMessage?.aux_data?.mediaType,
+    rubikaUpdatedMessage?.aux_data?.button_type,
+    rubikaUpdatedMessage?.aux_data?.buttonType,
+    rubikaUpdatedMessage?.aux_data?.input_type,
+    rubikaUpdatedMessage?.aux_data?.inputType,
+    rubikaRootMessage?.type,
+    rubikaRootMessage?.media_type,
+    rubikaRootMessage?.mediaType,
     rubikaRootMessage?.file_type,
     rubikaRootMessage?.file?.type,
+    rubikaRootMessage?.file?.file_type,
+    rubikaRootMessage?.file?.fileType,
+    rubikaRootMessage?.file?.media_type,
+    rubikaRootMessage?.file?.mediaType,
     rubikaRootMessage?.aux_data?.type,
     rubikaRootMessage?.aux_data?.file_type,
+    rubikaRootMessage?.aux_data?.fileType,
+    rubikaRootMessage?.aux_data?.media_type,
+    rubikaRootMessage?.aux_data?.mediaType,
+    rubikaRootMessage?.aux_data?.button_type,
+    rubikaRootMessage?.aux_data?.buttonType,
+    rubikaRootMessage?.aux_data?.input_type,
+    rubikaRootMessage?.aux_data?.inputType,
+    rubikaInlineMessage?.type,
+    rubikaInlineMessage?.media_type,
+    rubikaInlineMessage?.mediaType,
+    rubikaInlineMessage?.file_type,
+    rubikaInlineMessage?.file?.type,
+    rubikaInlineMessage?.file?.file_type,
+    rubikaInlineMessage?.file?.fileType,
+    rubikaInlineMessage?.file?.media_type,
+    rubikaInlineMessage?.file?.mediaType,
+    rubikaInlineMessage?.aux_data?.type,
+    rubikaInlineMessage?.aux_data?.file_type,
+    rubikaInlineMessage?.aux_data?.fileType,
+    rubikaInlineMessage?.aux_data?.media_type,
+    rubikaInlineMessage?.aux_data?.mediaType,
+    rubikaInlineMessage?.aux_data?.button_type,
+    rubikaInlineMessage?.aux_data?.buttonType,
+    rubikaInlineMessage?.aux_data?.input_type,
+    rubikaInlineMessage?.aux_data?.inputType,
+    payload?.type,
+    payload?.media_type,
+    payload?.mediaType,
     payload?.file_type,
     payload?.file?.type,
+    payload?.file?.file_type,
+    payload?.file?.fileType,
+    payload?.file?.media_type,
+    payload?.file?.mediaType,
   );
   const mimeType = pick(
     message?.mime_type,
@@ -879,25 +997,25 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
   const hasVoice = Boolean(message?.voice || payload?.voice);
-  const fileTypeLower = String(rawFileType || '').trim().toLowerCase();
   const mimeLower = String(mimeType || '').toLowerCase();
   const nameLower = String(fileName || '').toLowerCase();
-  const looksLikeImage = fileTypeLower === 'image'
-    || fileTypeLower === 'gif'
+  const inferredMessageType = inferInboundMediaMessageType({
+    rawType: rawFileType,
+    mimeType,
+    fileName,
+    fallback: 'text',
+  });
+  const looksLikeImage = inferredMessageType === 'image'
     || mimeLower.startsWith('image/')
     || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(nameLower)
     || payloadText.includes('"photo"');
-  const looksLikeVideo = fileTypeLower === 'video'
+  const looksLikeVideo = inferredMessageType === 'video'
     || mimeLower.startsWith('video/')
     || /\.(mp4|mkv|mov|avi|webm|3gp)$/i.test(nameLower)
     || payloadText.includes('"video"');
-  const looksLikeVoice = fileTypeLower === 'voice'
-    || fileTypeLower === 'voicemessage'
-    || fileTypeLower === 'voice_message'
+  const looksLikeVoice = inferredMessageType === 'voice'
     || payloadText.includes('"voice"');
-  const looksLikeAudio = fileTypeLower === 'music'
-    || fileTypeLower === 'audio'
-    || fileTypeLower === 'sound'
+  const looksLikeAudio = inferredMessageType === 'audio'
     || mimeLower.startsWith('audio/')
     || /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i.test(nameLower)
     || payloadText.includes('"audio"');
@@ -906,7 +1024,12 @@ const extractMediaInfo = (payload: Record<string, any>) => {
       : (hasVoice || looksLikeVoice) ? 'voice'
         : (hasAudio || looksLikeAudio) ? 'audio'
       : (hasVideo || looksLikeVideo) ? 'video'
-        : (hasDocument || hasAudio) ? 'file'
+        : (hasDocument || hasAudio) ? inferInboundMediaMessageType({
+            rawType: rawFileType,
+            mimeType,
+            fileName,
+            fallback: 'file',
+          })
           : 'text';
   return {
     messageType,
@@ -2871,15 +2994,24 @@ Deno.serve(async (req) => {
       }
 
       const attachmentEntries = resolvedMediaEntries
-        .map(({ mediaInfo, mediaStored, finalMediaUrl }) => normalizeBotPayloadAttachment({
-          name: String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل',
-          url: finalMediaUrl,
-          mime_type: String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null,
-          file_type: String(mediaInfo.messageType || 'file').trim() || 'file',
-          media_file_id: mediaInfo.fileId,
-          provider_message_id: providerMessageIds[0] || null,
-          media_group_id: mediaEnvelope.mediaGroupId || null,
-        }))
+        .map(({ mediaInfo, mediaStored, finalMediaUrl }) => {
+          const finalName = String(mediaStored?.fileName || mediaInfo.fileName || 'فایل').trim() || 'فایل';
+          const finalMimeType = String(mediaStored?.mimeType || mediaInfo.mimeType || '').trim() || null;
+          return normalizeBotPayloadAttachment({
+            name: finalName,
+            url: finalMediaUrl,
+            mime_type: finalMimeType,
+            file_type: inferInboundMediaMessageType({
+              rawType: mediaInfo.messageType,
+              mimeType: finalMimeType,
+              fileName: finalName,
+              fallback: 'file',
+            }),
+            media_file_id: mediaInfo.fileId,
+            provider_message_id: providerMessageIds[0] || null,
+            media_group_id: mediaEnvelope.mediaGroupId || null,
+          });
+        })
         .filter(Boolean);
 
       const primaryStoredEntry = resolvedMediaEntries.find((entry) => Boolean(entry?.mediaStored?.stored)) || null;

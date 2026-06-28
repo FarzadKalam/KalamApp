@@ -455,10 +455,10 @@ export const syncProcessRunStageFromTask = async ({
   if (!supabaseClient || !processRunStageId) return;
 
   const patch = {
-    task_id: normalizeText(task?.id) || null,
+    task_id: normalizeDbUuid(task?.id) || null,
     status: normalizeStageStatusForRun(task?.status),
-    assignee_user_id: task?.assignee_id || null,
-    assignee_role_id: task?.assignee_role_id || null,
+    assignee_user_id: normalizeDbUuid(task?.assignee_id) || null,
+    assignee_role_id: normalizeDbUuid(task?.assignee_role_id) || null,
     planned_due_at: task?.due_date || null,
     started_at: task?.actual_start_at || task?.start_date || null,
     completed_at: task?.completed_at || null,

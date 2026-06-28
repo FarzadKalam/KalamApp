@@ -312,8 +312,13 @@ describe('process draft task flow', () => {
       stages: draftStages,
       targetStage: draftStages[0],
     });
+    const taskIds = [
+      '77777777-7777-4777-8777-777777777771',
+      '77777777-7777-4777-8777-777777777772',
+      '77777777-7777-4777-8777-777777777773',
+    ];
     const tasks = draftStages.map((stage, index) => ({
-      id: `task-${index + 1}`,
+      id: taskIds[index],
       name: stage.name,
       status: index === 1 ? 'in_progress' : 'todo',
       process_run_stage_id: resolveProcessRunStageId(context.stageMap, stage),
@@ -325,7 +330,7 @@ describe('process draft task flow', () => {
     await syncProcessRunStageFromTask({ supabaseClient, task: tasks[1] });
     expect(supabaseClient.rpc).toHaveBeenLastCalledWith('sync_process_run_stage_from_task', expect.objectContaining({
       p_process_run_stage_id: '88888888-8888-4888-8888-888888888881',
-      p_task_id: 'task-2',
+      p_task_id: '77777777-7777-4777-8777-777777777772',
       p_status: 'in_progress',
     }));
 

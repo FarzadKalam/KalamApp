@@ -23,6 +23,17 @@ const AUDIO_EXTENSIONS = /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i;
 
 const normalizeAttachmentToken = (value: unknown) => String(value || '').trim().toLowerCase();
 
+const normalizeKnownMediaType = (value: unknown): NoteAttachment['fileType'] | null => {
+  const token = normalizeAttachmentToken(value).replace(/[\s_-]+/g, '');
+  if (!token) return null;
+  if (['voice', 'voicemessage', 'recordaudio', 'recordedaudio'].includes(token)) return 'voice';
+  if (['audio', 'music', 'sound'].includes(token)) return 'audio';
+  if (['image', 'photo', 'picture', 'cameraimage', 'galleryimage'].includes(token)) return 'image';
+  if (['video', 'movie', 'cameravideo', 'galleryvideo', 'gif'].includes(token)) return 'video';
+  if (['file', 'document', 'attachment'].includes(token)) return 'file';
+  return null;
+};
+
 const getAttachmentNameCandidates = (value: any) => [
   String(value?.name || '').trim(),
   String(value?.file_name || '').trim(),
@@ -32,27 +43,23 @@ const getAttachmentNameCandidates = (value: any) => [
 ].filter(Boolean);
 
 export const resolveNoteAttachmentFileType = (value: any): NoteAttachment['fileType'] => {
-  const rawType = normalizeAttachmentToken(value?.fileType || value?.file_type);
+  const rawType = normalizeKnownMediaType(value?.fileType || value?.file_type || value?.media_type || value?.kind || value?.type);
   const mimeType = normalizeAttachmentToken(value?.mimeType || value?.mime_type);
   const names = getAttachmentNameCandidates(value);
   const joinedNames = names.join(' ').toLowerCase();
 
-  if (rawType === 'voice') return 'voice';
-  if (rawType === 'audio') return 'audio';
-  if (rawType === 'image') return 'image';
-  if (rawType === 'video') return 'video';
-  if (rawType === 'file') return 'file';
+  if (rawType && rawType !== 'file') return rawType;
 
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'video';
   if (mimeType.startsWith('audio/')) {
-    return 'audio';
+    return rawType === 'voice' ? 'voice' : 'audio';
   }
 
   if (IMAGE_EXTENSIONS.test(joinedNames)) return 'image';
   if (VIDEO_EXTENSIONS.test(joinedNames)) return 'video';
   if (AUDIO_EXTENSIONS.test(joinedNames)) {
-    return 'audio';
+    return rawType === 'voice' ? 'voice' : 'audio';
   }
 
   return 'file';

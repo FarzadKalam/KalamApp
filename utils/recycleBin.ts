@@ -39,6 +39,13 @@ const getRecycleBinActor = async () => {
   };
 };
 
+const normalizeRecycleBinRecordId = (value: unknown) => (
+  String(value ?? "")
+    .trim()
+    .replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, "")
+    .trim()
+);
+
 export const moveModuleRecordsToRecycleBin = async (
   moduleId: string,
   recordIds: Array<string | number>,
@@ -51,7 +58,7 @@ export const moveModuleRecordsToRecycleBin = async (
   }
 
   const normalizedRecordIds = Array.from(
-    new Set(recordIds.map((value) => String(value || "").trim()).filter(Boolean))
+    new Set(recordIds.map(normalizeRecycleBinRecordId).filter(Boolean))
   );
   if (!normalizedRecordIds.length) return 0;
 
