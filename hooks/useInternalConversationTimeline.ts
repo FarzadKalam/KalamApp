@@ -18,6 +18,8 @@ type UseInternalConversationTimelineOptions<TItem> = {
   conversationKey: string | null;
   pageSize?: number;
   fallbackLoadInitial?: LegacyLoader<TItem>;
+  fallbackOnEmptyInitial?: boolean;
+  mergeFallbackInitial?: boolean;
   cacheScopeKey?: string | null;
 };
 
@@ -52,6 +54,19 @@ const isCacheFresh = (cacheKey: string) => {
 
 const sortByDate = <T>(items: T[]): T[] =>
   items.slice().sort((a: any, b: any) => compareIsoAsc(a?.created_at, b?.created_at));
+
+const mergeItemsById = <T>(primaryItems: T[], fallbackItems: T[]): T[] => {
+  const unique = new Map<string, T>();
+  fallbackItems.forEach((item: any) => {
+    const key = String(item?.id || '').trim();
+    if (key) unique.set(key, item);
+  });
+  primaryItems.forEach((item: any) => {
+    const key = String(item?.id || '').trim();
+    if (key) unique.set(key, item);
+  });
+  return sortByDate(Array.from(unique.values()));
+};
 
 const _internalTimelinePrefetchInFlight = new Set<string>();
 
@@ -123,6 +138,8 @@ export const useInternalConversationTimeline = <TItem,>({
   conversationKey,
   pageSize = 10,
   fallbackLoadInitial,
+  fallbackOnEmptyInitial = false,
+  mergeFallbackInitial = false,
   cacheScopeKey,
 }: UseInternalConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
@@ -310,6 +327,30 @@ export const useInternalConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
+      if (payload.items.length === 0 && fallbackOnEmptyInitial && fallbackLoadInitial && !options?.force) {
+        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
+        if (fallbackPayload.items.length > 0) return fallbackPayload;
+      }
+      if (mergeFallbackInitial && fallbackLoadInitial) {
+        const fallbackItems = await fallbackLoadInitial();
+        if (activeConversationKeyRef.current !== requestConversationKey) {
+          return EMPTY_TIMELINE_PAYLOAD as NotificationTimelinePayload<TItem>;
+        }
+        if (fallbackItems.length > 0) {
+          const mergedPayload = {
+            ...payload,
+            items: mergeItemsById(payload.items || [], fallbackItems || []),
+          };
+          const appliedMerged = applyPayload(mergedPayload, {
+            preserveExistingItemsOnEmpty: true,
+            mergeWithExisting: Boolean(options?.force),
+          });
+          if (appliedMerged) {
+            _internalTimelineCache.set(timelineCacheKey, { payload: { ...mergedPayload, items: itemsRef.current }, fetchedAt: Date.now() });
+          }
+          return mergedPayload;
+        }
+      }
       // Keep loaded history only for background/force refreshes. Conversation
       // switches must replace the old timeline so messages never bleed across
       // direct/system/mine views.
@@ -326,7 +367,7 @@ export const useInternalConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightKeysRef.current.delete(requestConversationKey);
     }
-  }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
+  }, [applyPayload, available, conversationKey, enabled, fallbackLoadInitial, fallbackOnEmptyInitial, fetchTimelinePage, loadFallbackInitial, mergeFallbackInitial, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !conversationKey || !cursor || !available || loadingOlder) return;

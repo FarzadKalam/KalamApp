@@ -46,6 +46,8 @@ const normalizeRecycleBinRecordId = (value: unknown) => (
     .trim()
 );
 
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export const moveModuleRecordsToRecycleBin = async (
   moduleId: string,
   recordIds: Array<string | number>,
@@ -58,7 +60,7 @@ export const moveModuleRecordsToRecycleBin = async (
   }
 
   const normalizedRecordIds = Array.from(
-    new Set(recordIds.map(normalizeRecycleBinRecordId).filter(Boolean))
+    new Set(recordIds.map(normalizeRecycleBinRecordId).filter((id) => UUID_LIKE_RE.test(id)))
   );
   if (!normalizedRecordIds.length) return 0;
 

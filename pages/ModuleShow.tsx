@@ -84,7 +84,7 @@ import {
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
 import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
-import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
+import { isRecycleBinEnabledModule } from '../utils/recycleBin';
 import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
 import { BOT_CHANNELS, BOT_CHANNEL_LABELS_FA, getBotChatIdFieldKey, type BotTargetModuleId } from '../utils/botPlatform';
 import { syncBotDirectChatIdForTarget } from '../utils/botIdentityBindings';
@@ -130,6 +130,7 @@ const StartProductionModal = React.lazy(() => import('../components/production/S
 const TaxpayerInvoiceModal = React.lazy(() => import('../components/taxpayer/TaxpayerInvoiceModal'));
 const CounterpartyBotStatusModal = React.lazy(() => import('../components/bot/CounterpartyBotStatusModal'));
 const MessageComposerModal = React.lazy(() => import('../components/MessageComposerModal'));
+const DeleteModuleRecordsModal = React.lazy(() => import('../components/moduleDelete/DeleteModuleRecordsModal'));
 
 const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
   groupTitle: '',
@@ -578,6 +579,7 @@ const ModuleShow: React.FC = () => {
   const [currentTags, setCurrentTags] = useState<any[]>([]); // استیت تگ‌ها
 
   const [isEditDrawerOpen, setIsEditDrawerOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [tempValues, setTempValues] = useState<Record<string, any>>({});
   const [, setSavingField] = useState<string | null>(null);
@@ -2620,17 +2622,17 @@ const ModuleShow: React.FC = () => {
   }, [data, id, moduleId, msg, modal, processDraftFieldKey, processTemplateFieldOptions]);
 
   const handleDelete = () => {
+    if (isRecycleBinEnabledModule(moduleId)) {
+      setIsDeleteModalOpen(true);
+      return;
+    }
     modal.confirm({
       title: 'حذف رکورد',
       okType: 'danger',
       onOk: async () => {
         try {
-          if (isRecycleBinEnabledModule(moduleId)) {
-            await moveModuleRecordsToRecycleBin(moduleId, [String(id)]);
-          } else {
-            const { error } = await supabase.from(moduleConfig?.table || moduleId).delete().eq('id', id);
-            if (error) throw error;
-          }
+          const { error } = await supabase.from(moduleConfig?.table || moduleId).delete().eq('id', id);
+          if (error) throw error;
           msg.success('رکورد حذف شد');
           navigate(`/${moduleId}`);
         } catch (error: any) {
@@ -6256,6 +6258,24 @@ const ModuleShow: React.FC = () => {
         processRuntimeSnapshot={processRuntimeSnapshot}
         onProcessRuntimeSnapshot={setProcessRuntimeSnapshot}
       />
+
+      {isDeleteModalOpen && id ? (
+        <React.Suspense fallback={null}>
+          <DeleteModuleRecordsModal
+            open={isDeleteModalOpen}
+            moduleId={moduleId}
+            moduleConfig={moduleConfig}
+            recordIds={[String(id)]}
+            seededRecords={data ? [{ ...data, id }] : undefined}
+            onCancel={() => setIsDeleteModalOpen(false)}
+            onDeleted={async () => {
+              setIsDeleteModalOpen(false);
+              msg.success('رکورد به سطل بازیافت منتقل شد.');
+              navigate(`/${moduleId}`);
+            }}
+          />
+        </React.Suspense>
+      ) : null}
 
       {moduleId === 'chart_of_accounts' && id ? (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>

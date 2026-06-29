@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
-import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip } from 'antd';
+import { Table, Tag, Avatar, Input, InputNumber, Button, Space, Popover, Tooltip, Skeleton } from 'antd';
 import { AppstoreOutlined, SearchOutlined, ArrowUpOutlined, ArrowDownOutlined, TagOutlined, LockOutlined } from '@ant-design/icons';
 import { ModuleDefinition, FieldType } from '../types';
 import { getSafeOptionFallback, getSingleOptionLabel } from '../utils/optionHelpers';
@@ -1161,7 +1161,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           if (draftKey !== 'production_stages_draft') {
             return (
               <div className="min-w-[340px] max-w-[520px] overflow-hidden">
-                <React.Suspense fallback={null}>
+                <React.Suspense fallback={<Skeleton active title={false} paragraph={{ rows: 1 }} />}>
                   <ProcessCardsV2RuntimeBlock
                     moduleId={moduleConfig?.id}
                     recordId={record.id}

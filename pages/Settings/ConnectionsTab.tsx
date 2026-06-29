@@ -30,14 +30,18 @@ import ApiIntegrationSection from '../../components/ApiIntegrationSection';
 import { SAAS_ADMIN_PERMISSION_KEY } from '../../utils/permissions';
 import { loadScopedCompanySettings } from '../../utils/companySettings';
 import { normalizeCurrencyConfig } from '../../utils/currency';
+import { listScopedIntegrationSettings } from '../../utils/integrationSettings';
 
 type ConnectionType =
   | 'sms'
   | 'email'
   | 'site'
   | 'voip'
+  | 'telegram'
   | 'telegram_bot'
+  | 'bale'
   | 'bale_bot'
+  | 'rubika'
   | 'rubika_bot'
   | 'portal'
   | 'payment_gateway';
@@ -174,6 +178,21 @@ type FormValues = {
 };
 
 const CONNECTION_TYPES: ConnectionType[] = [
+  'sms',
+  'email',
+  'site',
+  'voip',
+  'telegram',
+  'telegram_bot',
+  'bale',
+  'bale_bot',
+  'rubika',
+  'rubika_bot',
+  'portal',
+  'payment_gateway',
+];
+
+const CANONICAL_CONNECTION_TYPES: ConnectionType[] = [
   'sms',
   'email',
   'site',
@@ -663,10 +682,10 @@ const ConnectionsTab: React.FC = () => {
     setLoading(true);
     try {
       void fetchBankAccountOptions();
-      const { data, error } = await supabase
-        .from('integration_settings')
-        .select('*')
-        .in('connection_type', CONNECTION_TYPES);
+      const { data, error } = await listScopedIntegrationSettings(supabase as any, {
+        connectionTypes: CONNECTION_TYPES,
+        includeGlobalFallback: true,
+      });
 
       if (error) {
         if (isMissingTableError(error)) {
@@ -689,6 +708,9 @@ const ConnectionsTab: React.FC = () => {
         const picked = pickPreferredConnectionRow(groupedByType.get(type) || []);
         if (picked) byType[type] = picked;
       });
+      const telegramBotRow = byType.telegram_bot || byType.telegram;
+      const baleBotRow = byType.bale_bot || byType.bale;
+      const rubikaBotRow = byType.rubika_bot || byType.rubika;
 
       setRowIds({
         sms: byType.sms?.id,
@@ -729,24 +751,24 @@ const ConnectionsTab: React.FC = () => {
         },
         telegram_bot: {
           ...DEFAULT_VALUES.telegram_bot,
-          provider: String(byType.telegram_bot?.provider || DEFAULT_VALUES.telegram_bot.provider),
-          ...(byType.telegram_bot?.settings || {}),
+          provider: String(telegramBotRow?.provider || DEFAULT_VALUES.telegram_bot.provider),
+          ...(telegramBotRow?.settings || {}),
           api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
-          is_active: byType.telegram_bot?.is_active ?? DEFAULT_VALUES.telegram_bot.is_active,
+          is_active: telegramBotRow?.is_active ?? DEFAULT_VALUES.telegram_bot.is_active,
         },
         bale_bot: {
           ...DEFAULT_VALUES.bale_bot,
-          provider: String(byType.bale_bot?.provider || DEFAULT_VALUES.bale_bot.provider),
-          ...(byType.bale_bot?.settings || {}),
+          provider: String(baleBotRow?.provider || DEFAULT_VALUES.bale_bot.provider),
+          ...(baleBotRow?.settings || {}),
           api_base_url: BALE_OFFICIAL_API_BASE_URL,
-          is_active: byType.bale_bot?.is_active ?? DEFAULT_VALUES.bale_bot.is_active,
+          is_active: baleBotRow?.is_active ?? DEFAULT_VALUES.bale_bot.is_active,
         },
         rubika_bot: {
           ...DEFAULT_VALUES.rubika_bot,
-          provider: String(byType.rubika_bot?.provider || DEFAULT_VALUES.rubika_bot.provider),
-          ...(byType.rubika_bot?.settings || {}),
+          provider: String(rubikaBotRow?.provider || DEFAULT_VALUES.rubika_bot.provider),
+          ...(rubikaBotRow?.settings || {}),
           api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
-          is_active: byType.rubika_bot?.is_active ?? DEFAULT_VALUES.rubika_bot.is_active,
+          is_active: rubikaBotRow?.is_active ?? DEFAULT_VALUES.rubika_bot.is_active,
         },
         portal: {
           ...DEFAULT_VALUES.portal,
@@ -823,6 +845,20 @@ const ConnectionsTab: React.FC = () => {
         ...(form.getFieldValue('payment_gateway') || {}),
         ...(values.payment_gateway || {}),
       };
+      const currentTelegramValues = {
+        ...(form.getFieldValue('telegram_bot') || {}),
+        ...(values.telegram_bot || {}),
+      };
+      const currentBaleValues = {
+        ...(form.getFieldValue('bale_bot') || {}),
+        ...(values.bale_bot || {}),
+      };
+      const currentRubikaValues = {
+        ...(form.getFieldValue('rubika_bot') || {}),
+        ...(values.rubika_bot || {}),
+      };
+      const sessionSnapshot = await fetchSessionBootstrap(supabase);
+      const resolvedOrgId = String(sessionSnapshot?.orgId || sessionSnapshot?.profile?.org_id || currentOrgId || '').trim() || null;
       const normalizedPaymentGatewayScope = isSaasAdminOrg
         ? (currentPaymentGatewayValues.gateway_scope === 'org' ? 'org' : 'system')
         : 'org';
@@ -834,15 +870,15 @@ const ConnectionsTab: React.FC = () => {
         : '/payment/callback';
       const companyPaymentCurrencyCode = await resolveCompanyPaymentCurrencyCode();
       const normalizedRubikaValues = {
-        ...(values.rubika_bot || {}),
+        ...currentRubikaValues,
         api_base_url: RUBIKA_OFFICIAL_API_BASE_URL,
       };
       const normalizedTelegramValues = {
-        ...(values.telegram_bot || {}),
+        ...currentTelegramValues,
         api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
       };
       const normalizedBaleValues = {
-        ...(values.bale_bot || {}),
+        ...currentBaleValues,
         api_base_url: BALE_OFFICIAL_API_BASE_URL,
       };
       const ensuredTelegramSecret = String(normalizedTelegramValues?.webhook_secret || '').trim() || createWebhookSecret('telegram');
@@ -859,6 +895,7 @@ const ConnectionsTab: React.FC = () => {
       const rows: Array<Record<string, any>> = [
         {
           id: rowIds.sms,
+          org_id: resolvedOrgId,
           connection_type: 'sms',
           provider: values.sms?.provider || 'meli_payamak',
           settings: buildSmsOverrideSettings(currentSmsValues),
@@ -866,6 +903,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.email,
+          org_id: resolvedOrgId,
           connection_type: 'email',
           provider: values.email?.provider || 'smtp',
           settings: {
@@ -881,6 +919,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.site,
+          org_id: resolvedOrgId,
           connection_type: 'site',
           provider: values.site?.provider || 'rest_api',
           settings: {
@@ -892,6 +931,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.voip,
+          org_id: resolvedOrgId,
           connection_type: 'voip',
           provider: currentVoipValues.provider || 'telefonchy',
           settings: {
@@ -907,6 +947,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.telegram_bot,
+          org_id: resolvedOrgId,
           connection_type: 'telegram_bot',
           provider: normalizedTelegramValues?.provider || 'telegram_bot_api',
           settings: {
@@ -919,6 +960,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.bale_bot,
+          org_id: resolvedOrgId,
           connection_type: 'bale_bot',
           provider: normalizedBaleValues?.provider || 'bale_bot_api',
           settings: {
@@ -931,6 +973,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.rubika_bot,
+          org_id: resolvedOrgId,
           connection_type: 'rubika_bot',
           provider: normalizedRubikaValues?.provider || 'rubika_bot_api',
           settings: {
@@ -943,6 +986,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.portal,
+          org_id: resolvedOrgId,
           connection_type: 'portal',
           provider: values.portal?.provider || 'customer_portal',
           settings: {
@@ -958,6 +1002,7 @@ const ConnectionsTab: React.FC = () => {
         },
         {
           id: rowIds.payment_gateway,
+          org_id: resolvedOrgId,
           connection_type: 'payment_gateway',
           provider: 'zarinpal',
           settings: {
@@ -996,7 +1041,7 @@ const ConnectionsTab: React.FC = () => {
       const nextIds: Partial<Record<ConnectionType, string>> = { ...rowIds };
       results.forEach((row: any) => {
         const type = String(row?.connection_type || '') as ConnectionType;
-        if (CONNECTION_TYPES.includes(type)) {
+        if (CANONICAL_CONNECTION_TYPES.includes(type)) {
           nextIds[type] = String(row.id);
         }
       });

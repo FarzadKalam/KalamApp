@@ -13,6 +13,7 @@ type BotAdminBody = {
   fileId?: string;
   fileName?: string;
   messageId?: string;
+  messageTable?: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages';
   providerMessageId?: string;
   provider_message_id?: string;
   skipLog?: boolean;
@@ -340,7 +341,7 @@ const uploadBinaryToStorage = async ({
   return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
 };
 
-const downloadBinaryFromUrl = async (url: string) => {
+const downloadBinaryFromUrl = async (url: string, extraHeaders?: Record<string, string>) => {
   const target = String(url || '').trim();
   if (!target) return null;
   try {
@@ -349,15 +350,38 @@ const downloadBinaryFromUrl = async (url: string) => {
       headers: {
         Accept: '*/*',
         'Cache-Control': 'no-cache',
+        ...(extraHeaders || {}),
       },
     });
     if (!response.ok) {
+      const rawError = await response.text().catch(() => '');
+      let fallbackAttempt: any = null;
+      if (isRubikaMediaHostUrl(target) && isTransientProviderStatus(response.status)) {
+        const rawDownloaded = await rawHttpsGetRubikaBinary(target, extraHeaders).catch((error: any) => ({
+          ok: false,
+          status: null,
+          contentType: null,
+          finalUrl: target,
+          bytes: null,
+          errorMessage: String(error?.message || error || 'raw_https_download_failed'),
+          transport: 'raw_https_http1',
+        }));
+        fallbackAttempt = rawDownloaded;
+        if (rawDownloaded?.ok === true && rawDownloaded?.bytes?.length) {
+          return rawDownloaded;
+        }
+      }
       return {
         ok: false,
         status: response.status,
         contentType: String(response.headers.get('content-type') || '').trim() || null,
         finalUrl: response.url || target,
-        errorMessage: `HTTP ${response.status}`,
+        errorMessage: summarizeHttpText(rawError, `HTTP ${response.status}`),
+        transport: 'fetch',
+        fallbackTransport: fallbackAttempt?.transport || null,
+        fallbackStatus: fallbackAttempt?.status ?? null,
+        fallbackContentType: fallbackAttempt?.contentType || null,
+        fallbackErrorMessage: fallbackAttempt?.errorMessage || null,
       };
     }
     const contentType = String(response.headers.get('content-type') || '').trim() || 'application/octet-stream';
@@ -371,12 +395,52 @@ const downloadBinaryFromUrl = async (url: string) => {
         errorMessage: 'empty_body',
       };
     }
+    const lowerContentType = contentType.toLowerCase();
+    const sample = new TextDecoder().decode(bytes.slice(0, 1024)).trim().toLowerCase();
+    const looksHtml = sample.startsWith('<!doctype') || sample.startsWith('<html') || sample.includes('<html');
+    const looksJsonError = sample.startsWith('{') && (
+      sample.includes('"error"')
+      || sample.includes('"code"')
+      || sample.includes('invalid')
+      || sample.includes('not found')
+    );
+    if (lowerContentType.includes('text/html') || looksHtml || looksJsonError) {
+      let fallbackAttempt: any = null;
+      if (isRubikaMediaHostUrl(target)) {
+        const rawDownloaded = await rawHttpsGetRubikaBinary(target, extraHeaders).catch((error: any) => ({
+          ok: false,
+          status: null,
+          contentType: null,
+          finalUrl: target,
+          bytes: null,
+          errorMessage: String(error?.message || error || 'raw_https_download_failed'),
+          transport: 'raw_https_http1',
+        }));
+        fallbackAttempt = rawDownloaded;
+        if (rawDownloaded?.ok === true && rawDownloaded?.bytes?.length) {
+          return rawDownloaded;
+        }
+      }
+      return {
+        ok: false,
+        status: response.status,
+        contentType,
+        finalUrl: response.url || target,
+        errorMessage: lowerContentType.includes('text/html') || looksHtml ? 'html_response' : 'json_error_response',
+        transport: 'fetch',
+        fallbackTransport: fallbackAttempt?.transport || null,
+        fallbackStatus: fallbackAttempt?.status ?? null,
+        fallbackContentType: fallbackAttempt?.contentType || null,
+        fallbackErrorMessage: fallbackAttempt?.errorMessage || null,
+      };
+    }
     return {
       ok: true,
       status: response.status,
       contentType,
       finalUrl: response.url || target,
       bytes,
+      transport: 'fetch',
     };
   } catch (error: any) {
     return {
@@ -385,6 +449,7 @@ const downloadBinaryFromUrl = async (url: string) => {
       contentType: null,
       finalUrl: target,
       errorMessage: String(error?.message || error || 'download_failed'),
+      transport: 'fetch',
     };
   }
 };
@@ -828,6 +893,41 @@ const summarizeProviderPayload = (payload: any, fallback: string) => {
     || payload?.data?.status
     || fallback
   );
+};
+
+const summarizeHttpText = (value: string, fallback: string) => {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  if (text.includes('<!DOCTYPE html') || text.toLowerCase().includes('<html')) {
+    const title = text.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim();
+    return title ? `${fallback}: ${title}` : fallback;
+  }
+  return text.slice(0, 500);
+};
+
+const describeExternalUrl = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return {
+      protocol: parsed.protocol.replace(':', ''),
+      host: parsed.host,
+      path: parsed.pathname || '/',
+      has_query: Boolean(parsed.search),
+    };
+  } catch {
+    return { raw: raw.slice(0, 160) };
+  }
+};
+
+const isRubikaMediaHostUrl = (value: string) => {
+  try {
+    const host = new URL(String(value || '').trim()).hostname.toLowerCase();
+    return host === 'rubika.ir' || host.endsWith('.rubika.ir');
+  } catch {
+    return false;
+  }
 };
 
 const disableTelegramLikeWebhook = async (
@@ -1318,17 +1418,46 @@ const pickDeepStringByKey = (node: any, acceptedKeys: string[]) => {
 
 const resolveRubikaUploadFileType = (attachment: Record<string, any> | null | undefined) => {
   const kind = normalizeAttachmentKind(attachment);
-  if (kind === 'gif') return 'Gif';
+  const name = String(attachment?.name || '').trim().toLowerCase();
+  const mimeType = String(attachment?.mimeType || attachment?.mime_type || '').trim().toLowerCase();
+  if (kind === 'gif') return mimeType === 'video/mp4' || /\.mp4$/i.test(name) ? 'Gif' : 'Image';
   if (kind === 'image') return 'Image';
   if (kind === 'video') return 'Video';
-  if (kind === 'voice') return 'Voice';
+  if (kind === 'voice') return mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name) ? 'Voice' : 'File';
   if (kind === 'audio') {
-    const name = String(attachment?.name || '').trim().toLowerCase();
-    const mimeType = String(attachment?.mimeType || attachment?.mime_type || '').trim().toLowerCase();
     if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name)) return 'Music';
     return 'File';
   }
   return 'File';
+};
+
+const describeBinarySignature = (bytes: Uint8Array) => {
+  if (!bytes?.length) return { kind: 'empty', mime_type: null };
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return { kind: 'png', mime_type: 'image/png' };
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return { kind: 'jpeg', mime_type: 'image/jpeg' };
+  }
+  if (bytes.length >= 6) {
+    const head = Array.from(bytes.slice(0, 6)).map((item) => String.fromCharCode(item)).join('');
+    if (head === 'GIF87a' || head === 'GIF89a') return { kind: 'gif', mime_type: 'image/gif' };
+  }
+  if (
+    bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    return { kind: 'webp', mime_type: 'image/webp' };
+  }
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return { kind: 'mp3', mime_type: 'audio/mpeg' };
+  }
+  if (bytes.length >= 12) {
+    const ftyp = Array.from(bytes.slice(4, 8)).map((item) => String.fromCharCode(item)).join('');
+    if (ftyp === 'ftyp') return { kind: 'mp4', mime_type: 'video/mp4' };
+  }
+  return { kind: 'unknown', mime_type: null };
 };
 
 const requestRubikaSendFileUploadUrl = async (
@@ -1364,10 +1493,228 @@ const requestRubikaSendFileUploadUrl = async (
       details: { file_type: type, provider_result: payload },
     });
   }
+  const normalizedBase = normalizeBaseUrl(settings?.api_base_url, 'rubika');
+  const normalizedUploadUrl = (() => {
+    const raw = String(uploadUrl || '').trim();
+    if (raw.startsWith('//')) return `https:${raw}`;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('/')) return `${normalizedBase}${raw}`;
+    return normalizeGenericBaseUrl(raw);
+  })();
   return {
-    uploadUrl,
+    uploadUrl: normalizedUploadUrl,
     providerResult: payload,
   };
+};
+
+const concatBytes = (parts: Uint8Array[]) => {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+};
+
+const buildLegacyRubikaMultipart = ({
+  bytes,
+  fileName,
+  contentType,
+}: {
+  bytes: Uint8Array;
+  fileName: string;
+  contentType: string;
+}) => {
+  const encoder = new TextEncoder();
+  const boundary = `--------------------------${Date.now().toString(16)}${Math.random().toString(16).slice(2, 14)}`;
+  const uploadFileName = safeFileName(String(fileName || 'file').trim() || 'file').replace(/["\r\n]/g, '_');
+  const header = encoder.encode(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${uploadFileName}"\r\n` +
+    `Content-Type: ${contentType || 'application/octet-stream'}\r\n\r\n`
+  );
+  const footer = encoder.encode(`\r\n--${boundary}--\r\n`);
+  return {
+    body: concatBytes([header, bytes, footer]),
+    boundary,
+    uploadFileName,
+  };
+};
+
+const decodeRawHttpChunkedBody = (bodyBytes: Uint8Array) => {
+  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
+  let offset = 0;
+  while (offset < bodyBytes.length) {
+    const remaining = decoder.decode(bodyBytes.slice(offset, Math.min(offset + 256, bodyBytes.length)));
+    const lineEnd = remaining.indexOf('\r\n');
+    if (lineEnd < 0) break;
+    const sizeText = remaining.slice(0, lineEnd).split(';')[0].trim();
+    const size = Number.parseInt(sizeText, 16);
+    if (!Number.isFinite(size) || size < 0) break;
+    offset += lineEnd + 2;
+    if (size === 0) break;
+    if (offset + size > bodyBytes.length) break;
+    chunks.push(bodyBytes.slice(offset, offset + size));
+    offset += size;
+    if (bodyBytes[offset] === 13 && bodyBytes[offset + 1] === 10) {
+      offset += 2;
+    }
+  }
+  return chunks.length > 0 ? concatBytes(chunks) : bodyBytes;
+};
+
+const parseRawHttpResponse = (rawResponse: Uint8Array) => {
+  const marker = new TextEncoder().encode('\r\n\r\n');
+  let headerEnd = -1;
+  for (let index = 0; index <= rawResponse.length - marker.length; index += 1) {
+    if (
+      rawResponse[index] === marker[0]
+      && rawResponse[index + 1] === marker[1]
+      && rawResponse[index + 2] === marker[2]
+      && rawResponse[index + 3] === marker[3]
+    ) {
+      headerEnd = index;
+      break;
+    }
+  }
+  const decoder = new TextDecoder();
+  const headerText = decoder.decode(headerEnd >= 0 ? rawResponse.slice(0, headerEnd) : rawResponse);
+  const bodyBytes = headerEnd >= 0 ? rawResponse.slice(headerEnd + marker.length) : new Uint8Array();
+  const lines = headerText.split(/\r?\n/);
+  const status = Number(lines[0]?.match(/\s(\d{3})\s/)?.[1] || 0);
+  const headers: Record<string, string> = {};
+  lines.slice(1).forEach((line) => {
+    const separator = line.indexOf(':');
+    if (separator <= 0) return;
+    headers[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
+  });
+  const decodedBodyBytes = String(headers['transfer-encoding'] || '').toLowerCase().includes('chunked')
+    ? decodeRawHttpChunkedBody(bodyBytes)
+    : bodyBytes;
+  return {
+    status,
+    headers,
+    bodyBytes: decodedBodyBytes,
+    bodyText: decoder.decode(decodedBodyBytes),
+  };
+};
+
+const rawHttpsGetRubikaBinary = async (url: string, extraHeaders?: Record<string, string>) => {
+  const parsed = new URL(url);
+  const hostname = parsed.hostname;
+  const port = Number(parsed.port || 443);
+  const path = `${parsed.pathname || '/'}${parsed.search || ''}`;
+  const mergedHeaders = {
+    Accept: '*/*',
+    'Cache-Control': 'no-cache',
+    ...(extraHeaders || {}),
+  };
+  const requestHeaders = Object.entries(mergedHeaders)
+    .filter(([, value]) => String(value || '').trim())
+    .map(([key, value]) => `${key}: ${String(value).replace(/\r|\n/g, ' ')}`)
+    .join('\r\n');
+  const requestHead = new TextEncoder().encode(
+    `GET ${path} HTTP/1.1\r\n` +
+    `Host: ${parsed.host}\r\n` +
+    `User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\n` +
+    `${requestHeaders ? `${requestHeaders}\r\n` : ''}` +
+    `Connection: close\r\n\r\n`
+  );
+  const connection = await Deno.connectTls({ hostname, port });
+  try {
+    await connection.write(requestHead);
+    const chunks: Uint8Array[] = [];
+    const buffer = new Uint8Array(32 * 1024);
+    while (true) {
+      const read = await connection.read(buffer);
+      if (read === null) break;
+      chunks.push(buffer.slice(0, read));
+    }
+    const raw = parseRawHttpResponse(concatBytes(chunks));
+    const contentType = String(raw.headers['content-type'] || '').trim() || 'application/octet-stream';
+    const lowerContentType = contentType.toLowerCase();
+    const bodyTextSample = new TextDecoder().decode(raw.bodyBytes.slice(0, 1024)).trim().toLowerCase();
+    const looksHtml = bodyTextSample.startsWith('<!doctype') || bodyTextSample.startsWith('<html') || bodyTextSample.includes('<html');
+    const ok = raw.status >= 200 && raw.status < 300 && raw.bodyBytes.length > 0 && !lowerContentType.includes('text/html') && !looksHtml;
+    return {
+      ok,
+      status: raw.status,
+      contentType,
+      finalUrl: url,
+      bytes: ok ? raw.bodyBytes : null,
+      errorMessage: ok ? null : (looksHtml || lowerContentType.includes('text/html') ? 'html_response' : `HTTP ${raw.status}`),
+      transport: 'raw_https_http1',
+    };
+  } finally {
+    try {
+      connection.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+};
+
+const rawHttpsPostRubikaMultipart = async ({
+  uploadUrl,
+  bytes,
+  fileName,
+  contentType,
+}: {
+  uploadUrl: string;
+  bytes: Uint8Array;
+  fileName: string;
+  contentType: string;
+}) => {
+  const parsed = new URL(uploadUrl);
+  const multipart = buildLegacyRubikaMultipart({ bytes, fileName, contentType });
+  const hostname = parsed.hostname;
+  const port = Number(parsed.port || 443);
+  const path = `${parsed.pathname || '/'}${parsed.search || ''}`;
+  const requestHead = new TextEncoder().encode(
+    `POST ${path} HTTP/1.1\r\n` +
+    `Host: ${parsed.host}\r\n` +
+    `User-Agent: node-fetch/1.0 (+https://github.com/bitinn/node-fetch)\r\n` +
+    `Accept: */*\r\n` +
+    `Connection: close\r\n` +
+    `Content-Type: multipart/form-data; boundary=${multipart.boundary}\r\n` +
+    `Content-Length: ${multipart.body.length}\r\n\r\n`
+  );
+  const connection = await Deno.connectTls({ hostname, port });
+  try {
+    await connection.write(concatBytes([requestHead, multipart.body]));
+    const chunks: Uint8Array[] = [];
+    const buffer = new Uint8Array(32 * 1024);
+    while (true) {
+      const read = await connection.read(buffer);
+      if (read === null) break;
+      chunks.push(buffer.slice(0, read));
+    }
+    const raw = parseRawHttpResponse(concatBytes(chunks));
+    const payload = (() => {
+      try {
+        return raw.bodyText ? JSON.parse(raw.bodyText) : null;
+      } catch {
+        return raw.bodyText;
+      }
+    })();
+    return {
+      ok: raw.status >= 200 && raw.status < 300,
+      status: raw.status,
+      contentType: raw.headers['content-type'] || null,
+      payload,
+      uploadFileName: multipart.uploadFileName,
+      contentLength: multipart.body.length,
+    };
+  } finally {
+    try {
+      connection.close();
+    } catch {
+      // ignore close errors
+    }
+  }
 };
 
 const uploadRubikaFileBytes = async ({
@@ -1385,11 +1732,13 @@ const uploadRubikaFileBytes = async ({
 }) => {
   const attempts: Array<Record<string, any>> = [];
   const normalizedAttempts = Math.min(Math.max(Number(maxAttempts || 3), 1), 5);
+  const urlDiagnostic = describeExternalUrl(uploadUrl);
 
   for (let attempt = 1; attempt <= normalizedAttempts; attempt += 1) {
+    const uploadFileName = safeFileName(String(fileName || 'file').trim() || 'file');
     try {
       const form = new FormData();
-      form.append('file', new File([bytes], fileName, { type: contentType || 'application/octet-stream' }));
+      form.append('file', new File([bytes], uploadFileName, { type: contentType || 'application/octet-stream' }));
       const response = await fetch(uploadUrl, {
         method: 'POST',
         body: form,
@@ -1397,20 +1746,89 @@ const uploadRubikaFileBytes = async ({
       const payload = await parseResponse(response);
       if (!response.ok) {
         const transient = isTransientProviderStatus(response.status);
+        if (transient) {
+          try {
+            const rawUpload = await rawHttpsPostRubikaMultipart({
+              uploadUrl,
+              bytes,
+              fileName: uploadFileName,
+              contentType: contentType || 'application/octet-stream',
+            });
+            attempts.push({
+              attempt,
+              transport: 'raw_https_http1',
+              http_status: rawUpload.status,
+              retryable: isTransientProviderStatus(rawUpload.status),
+              message: summarizeProviderPayload(rawUpload.payload, `HTTP ${rawUpload.status}`),
+              upload_file_name: rawUpload.uploadFileName,
+              upload_url: urlDiagnostic,
+              body_profile: 'legacy_file',
+              binary_field_name: 'file',
+              file_marker_field: null,
+              file_byte_length: bytes.length,
+              part_content_type: contentType || 'application/octet-stream',
+              content_length: rawUpload.contentLength,
+              response_content_type: rawUpload.contentType,
+            });
+            if (rawUpload.ok) {
+              const fileId = pick(
+                rawUpload.payload?.file_id,
+                rawUpload.payload?.fileId,
+                rawUpload.payload?.data?.file_id,
+                rawUpload.payload?.data?.fileId,
+                rawUpload.payload?.result?.file_id,
+                rawUpload.payload?.result?.fileId,
+                pickDeepStringByKey(rawUpload.payload, ['file_id', 'fileId'])
+              );
+              if (fileId) {
+                return {
+                  fileId,
+                  providerResult: rawUpload.payload,
+                  attempts,
+                  uploadFileName: rawUpload.uploadFileName,
+                };
+              }
+            }
+          } catch (rawError: any) {
+            attempts.push({
+              attempt,
+              transport: 'raw_https_http1',
+              http_status: null,
+              retryable: true,
+              message: String(rawError?.message || rawError || 'raw_https_upload_failed').slice(0, 500),
+              upload_file_name: uploadFileName,
+              upload_url: urlDiagnostic,
+              body_profile: 'legacy_file',
+              binary_field_name: 'file',
+              file_marker_field: null,
+              file_byte_length: bytes.length,
+              part_content_type: contentType || 'application/octet-stream',
+            });
+          }
+        }
         attempts.push({
           attempt,
+          transport: 'fetch_formdata',
           http_status: response.status,
           retryable: transient,
           message: summarizeProviderPayload(payload, `HTTP ${response.status}`),
+          upload_file_name: uploadFileName,
+          upload_url: urlDiagnostic,
+          body_profile: 'legacy_file',
+          binary_field_name: 'file',
+          file_marker_field: null,
+          file_byte_length: bytes.length,
+          part_content_type: contentType || 'application/octet-stream',
+          response_content_type: String(response.headers.get('content-type') || '').trim() || null,
         });
         if (transient && attempt < normalizedAttempts) {
           await sleep(450 * attempt);
           continue;
         }
-        throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+        throw createBotAdminError('آپلود فایل در روبیکا ناموفق بود.', {
           errorCode: 'rubika_upload_failed',
           retryable: transient,
-          details: { attempts },
+          details: { attempts, upload_url: urlDiagnostic },
         });
       }
       const fileId = pick(
@@ -1426,38 +1844,47 @@ const uploadRubikaFileBytes = async ({
         throw createBotAdminError('Rubika upload فایل، file_id برنگرداند.', {
           errorCode: 'rubika_upload_file_id_missing',
           retryable: true,
-          details: { attempts, provider_result: payload },
+          details: { attempts, provider_result: payload, upload_file_name: uploadFileName, upload_url: urlDiagnostic, body_profile: 'legacy_file' },
         });
       }
       return {
         fileId,
         providerResult: payload,
         attempts,
+        uploadFileName,
       };
     } catch (error: any) {
       if (error?.errorCode) throw error;
       attempts.push({
         attempt,
+        transport: 'fetch_formdata',
         http_status: null,
         retryable: true,
         message: String(error?.message || error || 'upload_failed').slice(0, 500),
+        upload_url: urlDiagnostic,
+        upload_file_name: uploadFileName,
+        body_profile: 'legacy_file',
+        binary_field_name: 'file',
+        file_marker_field: null,
+        file_byte_length: bytes.length,
+        part_content_type: contentType || 'application/octet-stream',
       });
       if (attempt < normalizedAttempts) {
         await sleep(450 * attempt);
         continue;
       }
-      throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+      throw createBotAdminError('آپلود فایل در روبیکا ناموفق بود.', {
         errorCode: 'rubika_upload_failed',
         retryable: true,
-        details: { attempts },
+        details: { attempts, upload_url: urlDiagnostic },
       });
     }
   }
 
-  throw createBotAdminError('آپلود فایل در روبیکا موقتاً ناموفق بود. لطفاً دوباره تلاش کنید.', {
+  throw createBotAdminError('آپلود فایل در روبیکا ناموفق بود.', {
     errorCode: 'rubika_upload_failed',
     retryable: true,
-    details: { attempts },
+    details: { attempts, upload_url: urlDiagnostic },
   });
 };
 
@@ -1547,10 +1974,18 @@ const sendRubikaAttachmentMessage = async ({
 
   const uploadType = resolveRubikaUploadFileType(attachment);
   const fileName = safeFileName(String(attachment?.name || 'file').trim() || 'file');
-  const contentType = String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream');
+  const binarySignature = describeBinarySignature(downloaded.bytes);
+  const contentType = String(
+    downloaded.contentType
+    || binarySignature.mime_type
+    || attachment?.mimeType
+    || attachment?.mime_type
+    || inferMimeTypeFromFileName(fileName)
+    || 'application/octet-stream'
+  ).trim() || 'application/octet-stream';
   const uploadRounds: Array<Record<string, any>> = [];
   let requestInfo: { uploadUrl: string; providerResult: any } | null = null;
-  let uploadInfo: { fileId: string; providerResult: any; attempts?: Array<Record<string, any>> } | null = null;
+  let uploadInfo: { fileId: string; providerResult: any; attempts?: Array<Record<string, any>>; uploadFileName?: string } | null = null;
 
   for (let round = 1; round <= 3; round += 1) {
     try {
@@ -1565,13 +2000,30 @@ const sendRubikaAttachmentMessage = async ({
       uploadRounds.push({
         round,
         success: true,
+        upload_type: uploadType,
+        body_profile: 'legacy_file',
+        requested_upload_type: uploadType,
+        binary_signature: binarySignature,
+        downloaded_content_type: downloaded.contentType || null,
+        final_content_type: contentType,
+        request_send_file_result: requestInfo.providerResult || null,
+        upload_url: describeExternalUrl(requestInfo.uploadUrl),
         upload_attempts: uploadInfo.attempts || [],
+        upload_file_name: uploadInfo.uploadFileName || null,
       });
       break;
     } catch (error: any) {
       uploadRounds.push({
         round,
         success: false,
+        upload_type: uploadType,
+        body_profile: 'legacy_file',
+        requested_upload_type: uploadType,
+        binary_signature: binarySignature,
+        downloaded_content_type: downloaded.contentType || null,
+        final_content_type: contentType,
+        request_send_file_result: requestInfo?.providerResult || null,
+        upload_url: requestInfo?.uploadUrl ? describeExternalUrl(requestInfo.uploadUrl) : null,
         error_code: String(error?.errorCode || 'rubika_upload_failed'),
         retryable: Boolean(error?.retryable),
         details: error?.details || null,
@@ -1592,7 +2044,7 @@ const sendRubikaAttachmentMessage = async ({
     throw createBotAdminError('آپلود فایل در روبیکا ناموفق بود.', {
       errorCode: 'rubika_upload_failed',
       retryable: true,
-      details: { upload_rounds: uploadRounds },
+      details: { upload_rounds: uploadRounds, requested_upload_type: uploadType },
     });
   }
 
@@ -1608,8 +2060,13 @@ const sendRubikaAttachmentMessage = async ({
     attachment_url: attachmentUrl,
     file_name: String(attachment?.name || '').trim() || 'file',
     mime_type: String(attachment?.mimeType || attachment?.mime_type || downloaded.contentType || '').trim() || null,
+    upload_type: uploadType,
+    requested_upload_type: uploadType,
+    body_profile: 'legacy_file',
+    binary_signature: binarySignature,
     request_send_file_result: requestInfo.providerResult,
     upload_result: uploadInfo.providerResult,
+    upload_file_name: uploadInfo.uploadFileName || null,
     upload_attempts: uploadRounds,
     send_attempts: sentFile.attempts,
     send_result: sentFile.payload,
@@ -1662,7 +2119,7 @@ const sendTelegramLikeAttachmentMessage = async ({
 
   const form = new FormData();
   form.append('chat_id', chatId);
-  form.append(fieldName, new File([downloaded.bytes], fileName, { type: contentType }));
+  form.append(fieldName, new Blob([downloaded.bytes], { type: contentType }), fileName);
 
   const normalizedCaption = String(text || '').trim();
   if (normalizedCaption) form.append('caption', normalizedCaption);
@@ -1744,7 +2201,7 @@ const sendTelegramLikeMediaGroupMessage = async ({
     const fieldName = `media_${index}`;
     const fileName = safeFileName(String(attachment?.name || 'file').trim() || 'file');
     const contentType = String(downloaded.contentType || attachment?.mimeType || attachment?.mime_type || 'application/octet-stream');
-    form.append(fieldName, new File([downloaded.bytes], fileName, { type: contentType }));
+    form.append(fieldName, new Blob([downloaded.bytes], { type: contentType }), fileName);
     mediaItems.push({
       type,
       media: `attach://${fieldName}`,
@@ -2172,7 +2629,8 @@ const normalizePublicDownloadUrl = (value: string) => {
     const parsed = new URL(trimmed);
     const host = String(parsed.hostname || '').toLowerCase();
     const isLocal = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') || host.endsWith('.internal');
-    if (!isLocal && parsed.protocol === 'http:') {
+    const preservesHttp = host.includes('rubika') || host.includes('messenger');
+    if (!isLocal && !preservesHttp && parsed.protocol === 'http:') {
       parsed.protocol = 'https:';
       return parsed.toString();
     }
@@ -2266,29 +2724,53 @@ const classifyRubikaImportFailure = (
   return { error_code: 'rubika_file_import_failed', retryable: false, message: rawMessage, details: null };
 };
 
+const buildRubikaDownloadHeaderProfiles = () => ([
+  { name: 'plain', headers: {} as Record<string, string> },
+  {
+    name: 'rubika_referer',
+    headers: {
+      Accept: '*/*',
+      Referer: 'https://rubika.ir/',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    },
+  },
+]);
+
 const downloadRubikaBinaryFromCandidates = async (urls: string[]) => {
   const attempts: Array<Record<string, any>> = [];
-  const candidates = [...new Set((urls || []).map((item) => normalizePublicDownloadUrl(item)).filter(Boolean))];
+  const candidates = [...new Set((urls || []).flatMap((item) => {
+    const raw = String(item || '').trim();
+    const normalized = normalizePublicDownloadUrl(raw);
+    return [normalized || raw].filter(Boolean);
+  }))];
   for (const candidate of candidates) {
-    const downloaded = await downloadBinaryFromUrl(candidate);
-    const attempt = {
-      requested_url: candidate,
-      final_url: String(downloaded?.finalUrl || candidate).trim() || candidate,
-      ok: downloaded?.ok === true,
-      status: downloaded?.status ?? null,
-      content_type: downloaded?.contentType || null,
-      error_message: downloaded?.errorMessage || null,
-      byte_length: downloaded?.ok === true ? Number(downloaded?.bytes?.length || 0) : 0,
-    };
-    attempts.push(attempt);
-    if (downloaded?.ok === true && downloaded?.bytes?.length) {
-      return {
-        success: true,
-        attempts,
-        bytes: downloaded.bytes,
-        contentType: downloaded.contentType || 'application/octet-stream',
-        finalUrl: attempt.final_url,
+    for (const profile of buildRubikaDownloadHeaderProfiles()) {
+      const downloaded = await downloadBinaryFromUrl(candidate, profile.headers);
+      const attempt = {
+        requested_url: describeExternalUrl(candidate),
+        final_url: describeExternalUrl(String(downloaded?.finalUrl || candidate).trim() || candidate),
+        header_profile: profile.name,
+        transport: downloaded?.transport || 'fetch',
+        ok: downloaded?.ok === true,
+        status: downloaded?.status ?? null,
+        content_type: downloaded?.contentType || null,
+        error_message: downloaded?.errorMessage || null,
+        fallback_transport: downloaded?.fallbackTransport || null,
+        fallback_status: downloaded?.fallbackStatus ?? null,
+        fallback_content_type: downloaded?.fallbackContentType || null,
+        fallback_error_message: downloaded?.fallbackErrorMessage || null,
+        byte_length: downloaded?.ok === true ? Number(downloaded?.bytes?.length || 0) : 0,
       };
+      attempts.push(attempt);
+      if (downloaded?.ok === true && downloaded?.bytes?.length) {
+        return {
+          success: true,
+          attempts,
+          bytes: downloaded.bytes,
+          contentType: downloaded.contentType || 'application/octet-stream',
+          finalUrl: attempt.final_url,
+        };
+      }
     }
   }
   return { success: false, attempts, bytes: null, contentType: null, finalUrl: null };
@@ -2304,13 +2786,7 @@ const resolveRubikaFileUrl = async (
   if (!normalizedFileId) throw new Error('fileId الزامی است.');
   const baseUrl = normalizeBaseUrl(settings?.api_base_url, 'rubika');
   const endpoint = `${baseUrl}/v3/${encodeURIComponent(token)}/getFile`;
-  const bodies: Array<Record<string, any>> = [
-    { file_id: normalizedFileId },
-    { fileId: normalizedFileId },
-    { id: normalizedFileId },
-    { file: normalizedFileId },
-    { file_id: normalizedFileId, download_type: 'file' },
-  ];
+  const bodies: Array<Record<string, any>> = [{ file_id: normalizedFileId }];
   let lastError = '';
   let lastProviderResult: any = null;
   for (const body of bodies) {
@@ -2373,9 +2849,10 @@ const resolveRubikaFileUrl = async (
 const loadCounterpartyBotMessage = async (
   supabaseUrl: string,
   serviceRoleKey: string,
-  messageId: string
+  messageId: string,
+  messageTable: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages' = 'counterparty_bot_messages'
 ) => {
-  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${messageTable}`);
   url.searchParams.set('id', `eq.${messageId}`);
   url.searchParams.set('select', 'id,file_url,file_name,mime_type,payload');
   url.searchParams.set('limit', '1');
@@ -2393,9 +2870,10 @@ const patchCounterpartyBotMessage = async (
   supabaseUrl: string,
   serviceRoleKey: string,
   messageId: string,
-  payload: Record<string, any>
+  payload: Record<string, any>,
+  messageTable: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages' = 'counterparty_bot_messages'
 ) => {
-  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/counterparty_bot_messages`);
+  const url = new URL(`${supabaseUrl.replace(/\/+$/, '')}/rest/v1/${messageTable}`);
   url.searchParams.set('id', `eq.${messageId}`);
   const response = await fetch(url.toString(), {
     method: 'PATCH',
@@ -2411,10 +2889,39 @@ const patchCounterpartyBotMessage = async (
   return Array.isArray(parsed) ? (parsed[0] || null) : parsed;
 };
 
+const mergeImportedBotAttachments = (
+  currentItems: any[],
+  incomingItem: Record<string, any>,
+) => {
+  const byKey = new Map<string, Record<string, any>>();
+  [...(Array.isArray(currentItems) ? currentItems : []), incomingItem].forEach((item) => {
+    if (!item || typeof item !== 'object') return;
+    const url = String(item?.url || item?.file_url || '').trim();
+    const fileId = String(item?.media_file_id || item?.file_id || item?.fileId || '').trim();
+    const name = String(item?.name || item?.file_name || item?.fileName || 'فایل').trim() || 'فایل';
+    const mimeType = String(item?.mime_type || item?.mimeType || '').trim() || null;
+    const fileType = String(item?.file_type || item?.fileType || 'file').trim() || 'file';
+    const key = fileId || url || `${name}|${fileType}|${mimeType || ''}`;
+    if (!key) return;
+    const existing = byKey.get(key);
+    byKey.set(key, {
+      ...(existing || {}),
+      ...item,
+      url: url || String(existing?.url || '').trim(),
+      name: name || String(existing?.name || '').trim() || 'فایل',
+      mime_type: mimeType || existing?.mime_type || null,
+      file_type: fileType || existing?.file_type || 'file',
+      media_file_id: fileId || existing?.media_file_id || null,
+    });
+  });
+  return Array.from(byKey.values());
+};
+
 const updateCounterpartyBotMessageImportState = async ({
   supabaseUrl,
   serviceRoleKey,
   messageId,
+  messageTable = 'counterparty_bot_messages',
   currentRow,
   fileName,
   mimeType,
@@ -2427,10 +2934,12 @@ const updateCounterpartyBotMessageImportState = async ({
   importErrorMessage,
   retryable,
   downloadDiagnostic,
+  fileId,
 }: {
   supabaseUrl: string;
   serviceRoleKey: string;
   messageId: string;
+  messageTable?: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages';
   currentRow?: Record<string, any> | null;
   fileName?: string | null;
   mimeType?: string | null;
@@ -2443,8 +2952,9 @@ const updateCounterpartyBotMessageImportState = async ({
   importErrorMessage?: string | null;
   retryable?: boolean | null;
   downloadDiagnostic?: Record<string, any> | null;
+  fileId?: string | null;
 }) => {
-  const row = currentRow || await loadCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId);
+  const row = currentRow || await loadCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId, messageTable);
   const currentPayload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
   const normalizedFileType = String(
     fileType
@@ -2465,14 +2975,19 @@ const updateCounterpartyBotMessageImportState = async ({
     media_download_diagnostic: downloadDiagnostic || null,
   };
   if (fileUrl) {
-    nextPayload.attachments = [{
+    const importedAttachment = {
       url: fileUrl,
       name: String(fileName || row?.file_name || 'فایل').trim() || 'فایل',
       mime_type: String(mimeType || row?.mime_type || '').trim() || null,
       file_type: normalizedFileType,
-    }];
-    nextPayload.media_stored = true;
-    nextPayload.media_storage_bucket = DEFAULT_FILE_STORAGE_BUCKET;
+      media_file_id: String(fileId || currentPayload?.media_file_id || '').trim() || null,
+    };
+    nextPayload.attachments = mergeImportedBotAttachments(
+      Array.isArray(currentPayload?.attachments) ? currentPayload.attachments : [],
+      importedAttachment,
+    );
+    nextPayload.media_stored = Boolean(storagePath);
+    nextPayload.media_storage_bucket = storagePath ? DEFAULT_FILE_STORAGE_BUCKET : null;
     nextPayload.media_storage_path = storagePath || null;
   }
   return patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId, {
@@ -2480,7 +2995,7 @@ const updateCounterpartyBotMessageImportState = async ({
     file_name: String(fileName || row?.file_name || 'file').trim() || 'file',
     mime_type: String(mimeType || row?.mime_type || '').trim() || null,
     payload: nextPayload,
-  });
+  }, messageTable);
 };
 
 const importRubikaFileToStorage = async ({
@@ -2492,6 +3007,7 @@ const importRubikaFileToStorage = async ({
   fileId,
   fileName,
   messageId,
+  messageTable = 'counterparty_bot_messages',
 }: {
   supabaseUrl: string;
   serviceRoleKey: string;
@@ -2501,15 +3017,20 @@ const importRubikaFileToStorage = async ({
   fileId: string;
   fileName?: string | null;
   messageId?: string | null;
+  messageTable?: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages';
 }) => {
   let currentRow: Record<string, any> | null = null;
+  let resolvedForFailure: any = null;
+  let downloadUrlsForFailure: string[] = [];
   try {
-    currentRow = messageId ? await loadCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId) : null;
+    currentRow = messageId ? await loadCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId, messageTable) : null;
     const currentPayload = currentRow?.payload && typeof currentRow.payload === 'object' ? currentRow.payload : {};
     const resolved = await resolveRubikaFileUrl(integration?.settings || {}, fileId);
+    resolvedForFailure = resolved;
     const downloadUrls = Array.isArray(resolved?.file_urls) && resolved.file_urls.length > 0
       ? resolved.file_urls
       : [String(resolved?.file_url || '').trim()].filter(Boolean);
+    downloadUrlsForFailure = downloadUrls;
     if (downloadUrls.length === 0) {
       throw createBotAdminError('Rubika getFile لینک دانلود برنگرداند.', {
         errorCode: 'rubika_file_resolve_failed',
@@ -2571,12 +3092,14 @@ const importRubikaFileToStorage = async ({
         supabaseUrl,
         serviceRoleKey,
         messageId,
+        messageTable,
         currentRow,
         fileName: effectiveFileName,
         mimeType: effectiveMimeType,
         fileType: detectedKind,
         fileUrl: publicUrl,
         storagePath: objectPath,
+        fileId,
         providerResult: resolved?.provider_result || null,
         importStatus: 'succeeded',
         importErrorCode: null,
@@ -2591,6 +3114,7 @@ const importRubikaFileToStorage = async ({
 
     return {
       file_url: publicUrl,
+      file_name: effectiveFileName,
       storage_bucket: DEFAULT_FILE_STORAGE_BUCKET,
       storage_path: objectPath,
       mime_type: effectiveMimeType,
@@ -2608,17 +3132,28 @@ const importRubikaFileToStorage = async ({
       fileName: fileName || currentRow?.file_name || null,
       messageType: String(currentPayload?.file_type || currentPayload?.message_type || currentRow?.message_type || '').trim() || null,
     });
+    const fallbackFileName = String(fileName || currentRow?.file_name || 'file').trim() || 'file';
+    const fallbackMimeType = String(
+      currentRow?.mime_type
+      || currentPayload?.mime_type
+      || inferMimeTypeFromFileName(fallbackFileName)
+      || ''
+    ).trim() || null;
+    const fallbackFileType = String(currentPayload?.file_type || currentPayload?.message_type || currentRow?.message_type || 'file').trim() || 'file';
     if (messageId) {
       try {
         await updateCounterpartyBotMessageImportState({
           supabaseUrl,
           serviceRoleKey,
           messageId,
+          messageTable,
           currentRow,
-          fileName: String(fileName || currentRow?.file_name || 'file').trim() || 'file',
-          mimeType: String(currentRow?.mime_type || currentPayload?.mime_type || '').trim() || null,
-          fileType: String(currentPayload?.file_type || currentPayload?.message_type || currentRow?.message_type || 'file').trim() || 'file',
-          providerResult: error?.details?.last_provider_result || null,
+          fileName: fallbackFileName,
+          mimeType: fallbackMimeType,
+          fileType: fallbackFileType,
+          fileUrl: undefined,
+          fileId,
+          providerResult: resolvedForFailure?.provider_result || error?.details?.last_provider_result || null,
           importStatus: 'failed',
           importErrorCode: failure.error_code,
           importErrorMessage: failure.message,
@@ -2677,6 +3212,7 @@ const diagnoseRubikaRuntime = async ({
     try {
       const resolved = await resolveRubikaFileUrl(settings, normalizedFileId);
       const downloadUrl = String(resolved?.file_url || '').trim();
+      const downloadProbe = downloadUrl ? await downloadBinaryFromUrl(downloadUrl) : null;
       resolvedFileDiagnostic = {
         requested_file_id: normalizedFileId,
         file_url_available: Boolean(downloadUrl),
@@ -2687,10 +3223,19 @@ const diagnoseRubikaRuntime = async ({
             return null;
           }
         })() : null,
+        download_probe: downloadUrl ? {
+          ok: downloadProbe?.ok === true,
+          http_status: downloadProbe?.status ?? null,
+          content_type: downloadProbe?.contentType || null,
+          final_url: downloadProbe?.finalUrl ? describeExternalUrl(String(downloadProbe.finalUrl)) : null,
+          error_message: downloadProbe?.errorMessage || null,
+        } : null,
         provider_result: resolved?.provider_result || null,
       };
       if (!downloadUrl) {
         missingRequirements.push('rubika_file_resolve_failed');
+      } else if (downloadProbe?.ok !== true) {
+        missingRequirements.push('rubika_file_download_failed');
       }
     } catch (error: any) {
       resolvedFileDiagnostic = {
@@ -2775,6 +3320,9 @@ Deno.serve(async (req) => {
     const fileId = String(body?.fileId || '').trim();
     const fileName = String(body?.fileName || '').trim();
     const messageId = String(body?.messageId || '').trim();
+    const messageTable = String(body?.messageTable || '').trim() === 'counterparty_bot_direct_messages'
+      ? 'counterparty_bot_direct_messages'
+      : 'counterparty_bot_messages';
     const providerMessageId = pick(body?.providerMessageId, body?.provider_message_id);
     const attachments = Array.isArray(body?.attachments)
       ? body.attachments.filter((item) => item && typeof item === 'object')
@@ -2975,6 +3523,7 @@ Deno.serve(async (req) => {
           fileId,
           fileName: fileName || null,
           messageId: messageId || null,
+          messageTable,
         });
         return json(200, {
           success: true,

@@ -69,6 +69,8 @@ type DashboardQuickAction = {
   description: string;
 };
 
+const DEFAULT_DASHBOARD_AI_CAPABILITIES: AiComposerCapability[] = [];
+
 type DashboardCardItem = {
   moduleId: string;
   title: string;
@@ -985,7 +987,7 @@ const Dashboard: React.FC = () => {
   const [dashboardAiQuestion, setDashboardAiQuestion] = useState('');
   const [dashboardVoiceSending, setDashboardVoiceSending] = useState(false);
   const [dashboardFileSending, setDashboardFileSending] = useState(false);
-  const [dashboardAiCapabilities, setDashboardAiCapabilities] = useState<AiComposerCapability[]>([]);
+  const [dashboardAiCapabilities, setDashboardAiCapabilities] = useState<AiComposerCapability[]>(DEFAULT_DASHBOARD_AI_CAPABILITIES);
   const [dashboardAiCapabilityAvailability, setDashboardAiCapabilityAvailability] = useState<Record<string, any>>({});
   const [dashboardRecordCreationTargetModuleId, setDashboardRecordCreationTargetModuleId] = useState<string | null>(null);
   const [dashboardMediaSettings, setDashboardMediaSettings] = useState<AiMediaSettings>({});
@@ -1021,8 +1023,9 @@ const Dashboard: React.FC = () => {
   const dashboardAiSendDisabled = !dashboardAiQuestion.trim() || dashboardNeedsRecordModule;
 
   const handleDashboardCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
-    setDashboardAiCapabilities(next);
-    if (next.includes('process_operation') || !next.includes('record_creation')) {
+    const normalizedNext = Array.from(new Set(next));
+    setDashboardAiCapabilities(normalizedNext);
+    if (normalizedNext.includes('process_operation') || !normalizedNext.includes('record_creation')) {
       setDashboardRecordCreationTargetModuleId(null);
     }
   }, []);
@@ -1141,17 +1144,18 @@ const Dashboard: React.FC = () => {
       return;
     }
     setDashboardAiQuestion('');
-    navigate('/ai', {
-      state: {
-        aiInitialPrompt: question,
-        aiInitialCapabilities: dashboardAiCapabilities,
-        aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
-        aiInitialModelOverride: dashboardModelOverrideRef.current,
-        aiInitialMediaSettings: dashboardMediaSettings,
-        aiInitialMediaSourceImages: dashboardMediaSourceImages,
-        forceNewThread: true,
-      },
-    });
+      navigate('/ai', {
+        state: {
+          aiInitialPrompt: question,
+          aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
+          aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
+          aiInitialModelOverride: dashboardModelOverrideRef.current,
+          aiInitialMediaSettings: dashboardMediaSettings,
+          aiInitialMediaSourceImages: dashboardMediaSourceImages,
+          aiAutoSubmitInitial: true,
+          forceNewThread: true,
+        },
+      });
   }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
@@ -1177,11 +1181,12 @@ const Dashboard: React.FC = () => {
         state: {
           aiInitialPrompt: transcript,
           aiInitialInputKind: 'voice',
-          aiInitialCapabilities: Array.from(new Set<AiComposerCapability>([...dashboardAiCapabilities, 'voice_input'])),
+          aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
           aiInitialMediaSourceImages: dashboardMediaSourceImages,
+          aiAutoSubmitInitial: true,
           forceNewThread: true,
         },
       });
@@ -1192,34 +1197,22 @@ const Dashboard: React.FC = () => {
     }
   }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, navigate]);
 
-  const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
+  const handleSubmitDashboardFiles = useCallback(async (filePrompts: AiUploadedFilePrompt[]) => {
     if (dashboardFileSending) return;
     setDashboardFileSending(true);
     try {
-      const fileCapabilities = dashboardAiCapabilities.includes('document_analysis')
-        ? dashboardAiCapabilities
-        : [...dashboardAiCapabilities, 'document_analysis' as AiComposerCapability];
+      const preparedFiles = (filePrompts || []).filter((item) => item?.fileName);
+      if (!preparedFiles.length) return;
       navigate('/ai', {
         state: {
-          aiInitialFile: {
-            fileName: filePrompt.fileName,
-            mimeType: filePrompt.mimeType,
-            size: filePrompt.size,
-            prompt: filePrompt.prompt,
-            data: filePrompt.data || null,
-            inputKind: filePrompt.inputKind || 'file',
-            url: filePrompt.url || null,
-            assetId: filePrompt.assetId || null,
-            entryId: filePrompt.entryId || null,
-            moduleId: filePrompt.moduleId || null,
-            recordId: filePrompt.recordId || null,
-            message: dashboardAiQuestion.trim() || 'این فایل را تحلیل کن و خلاصه، نکات مهم و اقدام‌های پیشنهادی را بگو.',
-          },
-          aiInitialCapabilities: fileCapabilities,
+          aiInitialFiles: preparedFiles,
+          aiInitialPrompt: dashboardAiQuestion.trim() || '',
+          aiInitialCapabilities: dashboardAiCapabilities.length ? dashboardAiCapabilities : undefined,
           aiInitialRecordCreationTargetModuleId: dashboardRecordCreationTargetModuleId,
           aiInitialModelOverride: dashboardModelOverrideRef.current,
           aiInitialMediaSettings: dashboardMediaSettings,
           aiInitialMediaSourceImages: dashboardMediaSourceImages,
+          aiAutoSubmitInitial: false,
           forceNewThread: true,
         },
       });
@@ -1228,6 +1221,10 @@ const Dashboard: React.FC = () => {
       setDashboardFileSending(false);
     }
   }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardFileSending, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, navigate]);
+
+  const handleSubmitDashboardFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
+    await handleSubmitDashboardFiles([filePrompt]);
+  }, [handleSubmitDashboardFiles]);
 
   // ─── handler‌های استوری ───────────────────────
   const handleOpenStory = useCallback((story: OrgStoryWithMeta, allStories: OrgStoryWithMeta[]) => {
@@ -1367,7 +1364,7 @@ const Dashboard: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
                     <Input
-                      bordered={false}
+                      variant="borderless"
                       value={dashboardAiQuestion}
                       onChange={(event) => setDashboardAiQuestion(event.target.value)}
                       onPressEnter={(event) => {
@@ -1392,8 +1389,11 @@ const Dashboard: React.FC = () => {
                       recordId={null}
                       onVoiceSend={handleSubmitDashboardVoice}
                       onFilePrepared={handleSubmitDashboardFile}
+                      onFilesPrepared={handleSubmitDashboardFiles}
                       voiceLoading={dashboardVoiceSending}
                       fileLoading={dashboardFileSending}
+                      directFileUpload
+                      allowMultipleFiles
                       recordCreationModuleOptions={dashboardRecordCreationModuleOptions}
                       recordCreationTargetModuleId={dashboardRecordCreationTargetModuleId}
                       onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
@@ -1406,6 +1406,7 @@ const Dashboard: React.FC = () => {
                   <div className="mt-1 px-7">
                     <AiComposeModelBar
                       selectedCapabilities={dashboardAiCapabilities}
+                      fallbackCapability="dashboard_chat"
                       onModelOverrideChange={(model) => { dashboardModelOverrideRef.current = model; }}
                     />
                   </div>

@@ -378,7 +378,7 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
       trigger="click"
       content={content}
       getPopupContainer={() => document.body}
-      destroyTooltipOnHide
+      destroyOnHidden
     >
       <Tooltip title="تنظیمات تولید رسانه">
         <Button size={size} disabled={disabled} icon={<SettingOutlined />}>

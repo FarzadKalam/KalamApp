@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
 import { CloseOutlined, MenuOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
+import type { AiComposerCapability } from './AiCapabilityComposerActions';
 
 type AiThreadRow = {
   id: string;
@@ -74,6 +76,8 @@ const isHiddenAssistantThread = (thread?: AiThreadRow | null) => {
 
 const AiChatSurfaceV2: React.FC = () => {
   const { message } = App.useApp();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [threads, setThreads] = useState<AiThreadRow[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadListOpen, setThreadListOpen] = useState(false);
@@ -81,6 +85,32 @@ const AiChatSurfaceV2: React.FC = () => {
   const [search, setSearch] = useState('');
   const [newConversationSeed, setNewConversationSeed] = useState(0);
   const searchInputRef = useRef<any>(null);
+  const routeState = (location.state && typeof location.state === 'object' ? location.state : {}) as Record<string, any>;
+  const initialFile = routeState.aiInitialFile && typeof routeState.aiInitialFile === 'object' ? routeState.aiInitialFile : null;
+  const initialFiles = useMemo(() => (
+    Array.isArray(routeState.aiInitialFiles)
+      ? routeState.aiInitialFiles.filter((item: any) => item && typeof item === 'object')
+      : []
+  ), [routeState.aiInitialFiles]);
+  const initialPrompt = String(routeState.aiInitialPrompt || initialFile?.message || initialFiles[0]?.message || searchParams.get('prompt') || '').trim();
+  const forceNewThread = routeState.forceNewThread === true || searchParams.get('new') === '1' || Boolean(initialPrompt) || Boolean(initialFile) || initialFiles.length > 0;
+  const autoSubmitInitial = typeof routeState.aiAutoSubmitInitial === 'boolean'
+    ? routeState.aiAutoSubmitInitial
+    : Boolean(initialPrompt && !initialFile && initialFiles.length === 0 && forceNewThread);
+  const initialCapabilities = useMemo(() => (
+    Array.isArray(routeState.aiInitialCapabilities)
+      ? routeState.aiInitialCapabilities.map((item: any) => String(item || '').trim()).filter(Boolean) as AiComposerCapability[]
+      : null
+  ), [routeState.aiInitialCapabilities]);
+  const initialPanelKey = useMemo(() => JSON.stringify({
+    prompt: initialPrompt,
+    inputKind: routeState.aiInitialInputKind || null,
+    capabilities: initialCapabilities || [],
+    recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
+    fileCount: initialFiles.length,
+    fileName: initialFile?.fileName || null,
+    forceNewThread,
+  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialPrompt, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -94,6 +124,7 @@ const AiChatSurfaceV2: React.FC = () => {
       setActiveThreadId((current) => {
         if (preferredThreadId && nextThreads.some((thread) => String(thread.id) === String(preferredThreadId))) return preferredThreadId;
         if (current && nextThreads.some((thread) => String(thread.id) === String(current))) return current;
+        if (forceNewThread) return null;
         return nextThreads[0]?.id || null;
       });
     } catch (error: any) {
@@ -101,7 +132,7 @@ const AiChatSurfaceV2: React.FC = () => {
     } finally {
       setLoadingThreads(false);
     }
-  }, [message]);
+  }, [forceNewThread, message]);
 
   useEffect(() => {
     void loadThreads();
@@ -227,9 +258,17 @@ const AiChatSurfaceV2: React.FC = () => {
         </aside>
         <main className="min-w-0 flex-1">
           <AssistantPanel
-            key={activeThreadId || `new-${newConversationSeed}`}
+            key={activeThreadId || `new-${newConversationSeed}-${initialPanelKey}`}
             active
             initialThreadId={activeThreadId}
+            initialPrompt={initialPrompt}
+            initialInputKind={String(routeState.aiInitialInputKind || 'text')}
+            initialCapabilities={initialCapabilities}
+            initialRecordCreationTargetModuleId={String(routeState.aiInitialRecordCreationTargetModuleId || '').trim() || null}
+            initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
+            initialFiles={initialFiles as any}
+            initialFile={initialFile as any}
+            autoSubmitInitialPrompt={autoSubmitInitial}
           />
         </main>
       </div>

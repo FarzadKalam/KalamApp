@@ -40,6 +40,8 @@ type UseNotificationConversationListOptions = {
   section: NotificationConversationSection;
   enabled: boolean;
   cacheScopeKey?: string | null;
+  fallbackLoadInitial?: () => Promise<NotificationConversationSummary[]>;
+  mergeFallbackInitial?: boolean;
 };
 
 type RefreshOptions = {
@@ -51,6 +53,8 @@ export const useNotificationConversationList = ({
   section,
   enabled,
   cacheScopeKey,
+  fallbackLoadInitial,
+  mergeFallbackInitial = false,
 }: UseNotificationConversationListOptions) => {
   const cacheKey = buildCacheKey(cacheScopeKey, section);
   // Initialize from module-level cache so first render shows data immediately
@@ -163,9 +167,45 @@ export const useNotificationConversationList = ({
         }
         throw error;
       }
-      const nextItems = Array.isArray(data)
+      let nextItems = Array.isArray(data)
         ? (data as NotificationConversationSummary[])
         : [];
+      if (mergeFallbackInitial && fallbackLoadInitial) {
+        const fallbackItems = await fallbackLoadInitial();
+        if (fallbackItems.length > 0) {
+          const merged = new Map<string, NotificationConversationSummary>();
+          nextItems.forEach((item) => {
+            const key = String(item?.conversation_key || '').trim();
+            if (key) merged.set(key, item);
+          });
+          fallbackItems.forEach((fallbackItem) => {
+            const key = String(fallbackItem?.conversation_key || '').trim();
+            if (!key) return;
+            const existing = merged.get(key);
+            if (!existing) {
+              merged.set(key, fallbackItem);
+              return;
+            }
+            const existingLatestMs = new Date(existing.latest_message_at || 0).getTime();
+            const fallbackLatestMs = new Date(fallbackItem.latest_message_at || 0).getTime();
+            if (Number.isFinite(fallbackLatestMs) && fallbackLatestMs > existingLatestMs) {
+              merged.set(key, {
+                ...existing,
+                ...fallbackItem,
+                title: fallbackItem.title || existing.title,
+                subtitle: fallbackItem.subtitle || existing.subtitle,
+                avatar_url: fallbackItem.avatar_url || existing.avatar_url,
+                role_label: fallbackItem.role_label || existing.role_label,
+                unread_count: existing.unread_count,
+                note_count: Math.max(Number(existing.note_count || 0), Number(fallbackItem.note_count || 0)),
+              });
+            }
+          });
+          nextItems = Array.from(merged.values()).sort((left, right) => (
+            new Date(right.latest_message_at || 0).getTime() - new Date(left.latest_message_at || 0).getTime()
+          ));
+        }
+      }
       setItemsState(nextItems);
       _convListCache.set(cacheKey, { items: nextItems, fetchedAt: Date.now() });
       return nextItems;
@@ -173,7 +213,7 @@ export const useNotificationConversationList = ({
       setLoading(false);
       refreshInFlightRef.current = false;
     }
-  }, [available, cacheKey, enabled, section, supabase, v2Available]);
+  }, [available, cacheKey, enabled, fallbackLoadInitial, mergeFallbackInitial, section, supabase, v2Available]);
 
   useEffect(() => {
     if (!enabled || !available) return;

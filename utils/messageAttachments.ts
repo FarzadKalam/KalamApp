@@ -7,6 +7,13 @@ type BotMessageLike = {
   payload?: Record<string, any> | null;
 };
 
+export type BotMediaFileRef = {
+  fileId: string;
+  fileName: string | null;
+  fileType: string | null;
+  url: string | null;
+};
+
 const normalizeText = (value: unknown) => String(value || '').trim();
 
 const normalizeAttachment = (value: any): NoteAttachment | null => {
@@ -66,6 +73,94 @@ const collectNestedAttachmentLikes = (root: unknown) => {
   }
 
   return results;
+};
+
+const normalizeBotMediaFileRef = (value: any, fallback?: Partial<BotMediaFileRef>): BotMediaFileRef | null => {
+  const fileId = normalizeText(value?.media_file_id || value?.file_id || value?.fileId || fallback?.fileId);
+  const url = normalizeText(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url || fallback?.url) || null;
+  if (!fileId) return null;
+  return {
+    fileId,
+    fileName: normalizeText(
+      value?.name
+      || value?.file_name
+      || value?.fileName
+      || value?.filename
+      || value?.original_name
+      || value?.title
+      || fallback?.fileName
+    ) || null,
+    fileType: normalizeText(
+      value?.file_type
+      || value?.fileType
+      || value?.media_type
+      || value?.kind
+      || value?.type
+      || value?.button_type
+      || value?.input_type
+      || fallback?.fileType
+    ) || null,
+    url,
+  };
+};
+
+const collectNestedBotMediaFileRefs = (root: unknown, fallback?: Partial<BotMediaFileRef>) => {
+  const results: BotMediaFileRef[] = [];
+  const seen = new Set<any>();
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      current.forEach((item) => stack.push(item));
+      continue;
+    }
+
+    const item = current as Record<string, any>;
+    const ref = normalizeBotMediaFileRef(item, fallback);
+    if (ref) results.push(ref);
+    Object.values(item).forEach((value) => {
+      if (value && typeof value === 'object') stack.push(value);
+    });
+  }
+
+  return results;
+};
+
+export const collectBotMessageMediaFileRefs = (row: BotMessageLike | null | undefined): BotMediaFileRef[] => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const fallback = {
+    fileName: normalizeText(row?.file_name) || null,
+    fileType: normalizeText((row as any)?.message_type) || null,
+    url: normalizeText(row?.file_url) || null,
+  };
+  const refs: Array<BotMediaFileRef | null> = [
+    normalizeBotMediaFileRef({
+      media_file_id: (payload as any)?.media_file_id || (payload as any)?.file_id || (payload as any)?.fileId,
+      name: (payload as any)?.file_name || (payload as any)?.fileName || row?.file_name,
+      file_type: (payload as any)?.file_type || (payload as any)?.media_type || (row as any)?.message_type,
+      url: (payload as any)?.media_url || (payload as any)?.file_url || (payload as any)?.download_url || row?.file_url,
+    }, fallback),
+  ];
+
+  const payloadAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
+  payloadAttachments.forEach((item: any) => refs.push(normalizeBotMediaFileRef(item, fallback)));
+  collectNestedBotMediaFileRefs(payload, fallback).forEach((item) => refs.push(item));
+
+  const byKey = new Map<string, BotMediaFileRef>();
+  refs.forEach((item) => {
+    if (!item?.fileId) return;
+    const existing = byKey.get(item.fileId);
+    byKey.set(item.fileId, {
+      fileId: item.fileId,
+      fileName: item.fileName || existing?.fileName || fallback.fileName || null,
+      fileType: item.fileType || existing?.fileType || fallback.fileType || null,
+      url: item.url || existing?.url || fallback.url || null,
+    });
+  });
+  return Array.from(byKey.values());
 };
 
 export const dedupeAttachments = (items: Array<NoteAttachment | null | undefined>): NoteAttachment[] => {

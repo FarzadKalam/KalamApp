@@ -325,13 +325,37 @@ const extractContact = (payload: Record<string, any>) => {
   const text = pick(
     message?.text,
     message?.body,
+    message?.caption,
+    message?.file?.caption,
+    message?.media?.caption,
+    message?.photo?.caption,
+    message?.document?.caption,
+    message?.video?.caption,
+    message?.aux_data?.caption,
+    message?.aux_data?.text,
+    message?.aux_data?.description,
     callbackQuery?.data,
     rubikaRootMessage?.text,
+    rubikaRootMessage?.caption,
+    rubikaRootMessage?.file?.caption,
+    rubikaRootMessage?.media?.caption,
+    rubikaRootMessage?.aux_data?.caption,
+    rubikaRootMessage?.aux_data?.text,
     rubikaNewMessage?.text,
+    rubikaNewMessage?.caption,
+    rubikaNewMessage?.file?.caption,
+    rubikaNewMessage?.media?.caption,
+    rubikaNewMessage?.aux_data?.caption,
+    rubikaNewMessage?.aux_data?.text,
     rubikaInlineMessage?.text,
+    rubikaInlineMessage?.caption,
     payload?.text,
+    payload?.message_text,
+    payload?.body,
     payload?.body?.text,
+    payload?.body?.caption,
     payload?.data?.text,
+    payload?.data?.caption,
     payload?.caption
   );
 
@@ -1081,6 +1105,20 @@ const extractMessageIdentity = (payload: Record<string, any>) => {
     payload?.reply_to_message ||
     payload?.replied_message ||
     null;
+  const deletedMessage =
+    payload?.deleted_message ||
+    payload?.deletedMessage ||
+    payload?.message_deleted ||
+    payload?.messageDeleted ||
+    payload?.removed_message ||
+    payload?.removedMessage ||
+    payload?.update?.deleted_message ||
+    payload?.update?.deletedMessage ||
+    payload?.update?.message_deleted ||
+    payload?.update?.messageDeleted ||
+    payload?.body?.deleted_message ||
+    payload?.data?.deleted_message ||
+    null;
 
   const providerMessageId = pick(
     message?.message_id,
@@ -1098,6 +1136,9 @@ const extractMessageIdentity = (payload: Record<string, any>) => {
     rubikaUpdatedMessage?.messageId,
     rubikaInlineMessage?.message_id,
     rubikaInlineMessage?.messageId,
+    deletedMessage?.message_id,
+    deletedMessage?.messageId,
+    deletedMessage?.id,
     payload?.message_id,
     payload?.messageId
   );
@@ -1127,6 +1168,49 @@ const extractMessageIdentity = (payload: Record<string, any>) => {
   return {
     providerMessageId: providerMessageId || null,
     replyProviderMessageId: replyProviderMessageId || null,
+  };
+};
+
+const extractMessageLifecycle = (payload: Record<string, any>) => {
+  const { rubikaUpdate, rubikaUpdatedMessage } = resolveInboundPayloadNodes(payload);
+  const deletedMessage =
+    payload?.deleted_message ||
+    payload?.deletedMessage ||
+    payload?.message_deleted ||
+    payload?.messageDeleted ||
+    payload?.removed_message ||
+    payload?.removedMessage ||
+    payload?.update?.deleted_message ||
+    payload?.update?.deletedMessage ||
+    payload?.update?.message_deleted ||
+    payload?.update?.messageDeleted ||
+    payload?.body?.deleted_message ||
+    payload?.data?.deleted_message ||
+    null;
+  const editedMessage =
+    payload?.edited_message ||
+    payload?.editedMessage ||
+    payload?.message_edited ||
+    payload?.messageEdited ||
+    payload?.updated_message ||
+    payload?.updatedMessage ||
+    rubikaUpdatedMessage ||
+    null;
+  const eventText = String(
+    payload?.event_type ||
+    payload?.eventType ||
+    payload?.type ||
+    payload?.update_type ||
+    payload?.updateType ||
+    rubikaUpdate?.type ||
+    ''
+  ).trim().toLowerCase();
+  const deleted = Boolean(deletedMessage) || (eventText.includes('delete') || eventText.includes('remove')) && eventText.includes('message');
+  const edited = !deleted && (Boolean(editedMessage) || (eventText.includes('edit') || eventText.includes('update')) && eventText.includes('message'));
+  return {
+    deleted,
+    edited,
+    eventText,
   };
 };
 
@@ -1197,6 +1281,36 @@ const findDeepDownloadUrl = (node: any): string | null => {
     }
   }
   return null;
+};
+
+const findDeepDownloadUrls = (node: any): string[] => {
+  const seen = new Set<any>();
+  const stack = [node];
+  const urls = new Set<string>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      current.forEach((item) => stack.push(item));
+      continue;
+    }
+    for (const [key, value] of Object.entries(current)) {
+      const lowerKey = String(key || '').toLowerCase();
+      if (typeof value === 'string') {
+        const trimmed = String(value || '').trim();
+        if (
+          /^https?:\/\//i.test(trimmed)
+          && (lowerKey.includes('url') || lowerKey.includes('download') || lowerKey.includes('link'))
+        ) {
+          urls.add(trimmed);
+        }
+      } else if (value && typeof value === 'object') {
+        stack.push(value);
+      }
+    }
+  }
+  return Array.from(urls);
 };
 
 const buildStorageObjectPath = ({
@@ -1420,9 +1534,15 @@ const tryRubikaGetFile = async ({
       const contentType = String(response.headers.get('content-type') || '').trim().toLowerCase();
       const parsed = await response.clone().json().catch(() => null);
       if (parsed && typeof parsed === 'object') {
-        const url = findDeepDownloadUrl(parsed);
-        if (url) {
-          return { fileUrl: url, bytes: null as Uint8Array | null, contentType: null as string | null };
+        const urls = findDeepDownloadUrls(parsed);
+        if (urls.length > 0) {
+          return {
+            fileUrl: urls[0],
+            fileUrls: urls,
+            bytes: null as Uint8Array | null,
+            contentType: null as string | null,
+            providerResult: parsed,
+          };
         }
         // JSON response without download url is not file bytes.
         continue;
@@ -1469,6 +1589,7 @@ const resolveAndStoreInboundMedia = async ({
   }
 
   let resolvedUrl = String(mediaInfo.fileUrl || '').trim() || null;
+  let resolvedUrls: string[] = resolvedUrl ? [resolvedUrl] : [];
   let resolvedMime = String(mediaInfo.mimeType || '').trim() || null;
   let bytes: Uint8Array | null = null;
 
@@ -1492,19 +1613,29 @@ const resolveAndStoreInboundMedia = async ({
     });
     if (byFileId) {
       if (byFileId.fileUrl) resolvedUrl = String(byFileId.fileUrl || '').trim() || resolvedUrl;
+      if (Array.isArray((byFileId as any).fileUrls)) {
+        resolvedUrls = Array.from(new Set([...(byFileId as any).fileUrls.map((item: any) => String(item || '').trim()).filter(Boolean), ...resolvedUrls]));
+      } else if (byFileId.fileUrl) {
+        resolvedUrls = Array.from(new Set([String(byFileId.fileUrl || '').trim(), ...resolvedUrls].filter(Boolean)));
+      }
       if (byFileId.bytes?.length) bytes = byFileId.bytes;
       if (byFileId.contentType) resolvedMime = String(byFileId.contentType || '').trim() || resolvedMime;
     }
   }
 
-  if (!bytes && resolvedUrl) {
-    const downloaded = await downloadBinaryFromUrl(resolvedUrl, {
-      fileName: mediaInfo.fileName,
-      messageType: mediaInfo.messageType,
-    });
-    if (downloaded?.bytes?.length) {
-      bytes = downloaded.bytes;
-      resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
+  if (!bytes && resolvedUrls.length > 0) {
+    const candidateUrls = Array.from(new Set(resolvedUrls));
+    for (const candidateUrl of candidateUrls) {
+      const downloaded = await downloadBinaryFromUrl(candidateUrl, {
+        fileName: mediaInfo.fileName,
+        messageType: mediaInfo.messageType,
+      });
+      if (downloaded?.bytes?.length) {
+        bytes = downloaded.bytes;
+        resolvedUrl = candidateUrl;
+        resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
+        break;
+      }
     }
   }
 
@@ -1516,17 +1647,23 @@ const resolveAndStoreInboundMedia = async ({
         fileId: normalizedFileId,
       });
       const refreshedUrl = String(refreshed?.fileUrl || '').trim();
-      if (!refreshedUrl) continue;
-      resolvedUrl = refreshedUrl;
-      const downloaded = await downloadBinaryFromUrl(refreshedUrl, {
-        fileName: mediaInfo.fileName,
-        messageType: mediaInfo.messageType,
-      });
-      if (downloaded?.bytes?.length) {
-        bytes = downloaded.bytes;
-        resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
-        break;
+      const refreshedUrls = Array.isArray((refreshed as any)?.fileUrls)
+        ? (refreshed as any).fileUrls.map((item: any) => String(item || '').trim()).filter(Boolean)
+        : [refreshedUrl].filter(Boolean);
+      const refreshedCandidateUrls = Array.from(new Set(refreshedUrls));
+      for (const refreshedCandidateUrl of refreshedCandidateUrls) {
+        resolvedUrl = refreshedCandidateUrl;
+        const downloaded = await downloadBinaryFromUrl(refreshedCandidateUrl, {
+          fileName: mediaInfo.fileName,
+          messageType: mediaInfo.messageType,
+        });
+        if (downloaded?.bytes?.length) {
+          bytes = downloaded.bytes;
+          resolvedMime = String(downloaded.contentType || '').trim() || resolvedMime;
+          break;
+        }
       }
+      if (bytes?.length) break;
     }
   }
 
@@ -2898,6 +3035,7 @@ Deno.serve(async (req) => {
       const isDirectConversation = !contact?.isGroup && Boolean(directThread?.id);
       const mediaEnvelope = extractMediaEnvelope(payload);
       const messageIdentity = extractMessageIdentity(payload);
+      const messageLifecycle = extractMessageLifecycle(payload);
       const providerMessageIds = dedupeTextList([
         messageIdentity.providerMessageId,
         ...mediaEnvelope.providerMessageIds,
@@ -2940,6 +3078,88 @@ Deno.serve(async (req) => {
               })
         )
         : null;
+      if (messageLifecycle.deleted) {
+        const now = new Date().toISOString();
+        const targetMessage = existingMessage || null;
+        const existingPayload = targetMessage?.payload && typeof targetMessage.payload === 'object' ? targetMessage.payload : {};
+        const deletionPayload = {
+          message_type: 'deleted',
+          content_text: 'پیام حذف شده',
+          file_url: null,
+          file_name: null,
+          mime_type: null,
+          payload: {
+            ...existingPayload,
+            ...(payload && typeof payload === 'object' ? payload : {}),
+            message_status: 'deleted',
+            message_deleted: true,
+            deleted_at: now,
+            provider_message_id: messageIdentity.providerMessageId || String((existingPayload as any)?.provider_message_id || '').trim() || null,
+            provider_message_ids: dedupeTextList([
+              ...(Array.isArray((existingPayload as any)?.provider_message_ids) ? (existingPayload as any).provider_message_ids : []),
+              ...providerMessageIds,
+            ]),
+            reply_provider_message_id: String((existingPayload as any)?.reply_provider_message_id || messageIdentity.replyProviderMessageId || '').trim() || null,
+            reply_to_message_id: String((existingPayload as any)?.reply_to_message_id || '').trim() || null,
+          },
+        };
+        if (targetMessage?.id) {
+          if (isDirectConversation) {
+            await patchCounterpartyBotDirectMessage(supabaseUrl, serviceRoleKey, String(targetMessage.id), deletionPayload);
+          } else {
+            await patchCounterpartyBotMessage(supabaseUrl, serviceRoleKey, String(targetMessage.id), deletionPayload);
+          }
+        } else {
+          const tombstoneBase = {
+            org_id: integration.org_id || null,
+            channel_type: channel,
+            direction: 'inbound',
+            chat_id: isDirectConversation ? senderChatId || null : String(contact.chatId || '').trim() || null,
+            provider_message_id: messageIdentity.providerMessageId || null,
+            ...deletionPayload,
+          };
+          if (isDirectConversation) {
+            await insertCounterpartyBotDirectMessage(supabaseUrl, serviceRoleKey, {
+              ...tombstoneBase,
+              direct_thread_id: directThread?.id || null,
+              target_module_id: senderBinding?.target_module_id || null,
+              target_record_id: senderBinding?.target_record_id || null,
+              customer_id: String(senderBinding?.target_module_id || '').trim() === 'customers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+              supplier_id: String(senderBinding?.target_module_id || '').trim() === 'suppliers' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+              employee_id: String(senderBinding?.target_module_id || '').trim() === 'employees' ? String(senderBinding?.target_record_id || '').trim() || null : null,
+              profile_id: senderBinding?.profile_id || null,
+            });
+          } else {
+            await insertCounterpartyBotMessage(supabaseUrl, serviceRoleKey, {
+              ...tombstoneBase,
+              bot_group_id: matchedGroup?.id || null,
+              customer_id: matchedGroup?.customer_id || null,
+              supplier_id: matchedGroup?.supplier_id || null,
+              employee_id: matchedGroup?.employee_id || null,
+            });
+          }
+        }
+        if (isDirectConversation && directThread?.id) {
+          await patchCounterpartyBotDirectThread(supabaseUrl, serviceRoleKey, String(directThread.id), {
+            last_seen_at: now,
+            last_inbound_at: now,
+            last_message_at: now,
+            last_message_preview: 'پیام حذف شده',
+          });
+        }
+        return json(200, {
+          success: true,
+          channel,
+          chat_id: contact.chatId,
+          is_group: contact?.isGroup === true,
+          chat_title: String(contact?.chatTitle || '').trim() || null,
+          contact: saved,
+          sender_contact: senderSaved,
+          matched_group_id: matchedGroup?.id || null,
+          direct_thread_id: directThread?.id || null,
+          message_status: 'deleted',
+        });
+      }
       const mediaGroupTarget = mediaEnvelope.mediaGroupId
         ? (
           isDirectConversation
@@ -3022,6 +3242,9 @@ Deno.serve(async (req) => {
       const senderPayload = {
         ...rawPayload,
         media_pipeline_build: BOT_WEBHOOK_BUILD,
+        message_status: messageLifecycle.edited ? 'edited' : String((rawPayload as any)?.message_status || '').trim() || null,
+        message_edited: messageLifecycle.edited || Boolean((rawPayload as any)?.message_edited),
+        edited_at: messageLifecycle.edited ? new Date().toISOString() : ((rawPayload as any)?.edited_at || null),
         sender_id: String(contact.senderId || '').trim() || null,
         sender_display_name: String(contact.displayName || '').trim() || null,
         username: String(contact.username || '').trim() || null,

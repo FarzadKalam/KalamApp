@@ -161,7 +161,7 @@ describe('process run draft helpers', () => {
     });
 
     expect(rpc).toHaveBeenCalledOnce();
-    expect(rpc).toHaveBeenCalledWith('ensure_process_run_for_draft_group', expect.objectContaining({
+    expect(rpc).toHaveBeenCalledWith('ensure_process_run_for_draft_group_v2', expect.objectContaining({
       p_module_id: 'projects',
       p_process_group_id: 'group-a',
     }));
@@ -264,19 +264,23 @@ describe('process run draft helpers', () => {
 
     expect(rpc.mock.calls[0][1].p_stages).toHaveLength(1);
     expect(rpc.mock.calls[0][1].p_stages[0]).toMatchObject({
-      draft_stage_id: 'draft-stage-2',
+      draft_stage_id: null,
       stage_name: 'چاپ',
       sort_order: 20,
+    });
+    expect(rpc.mock.calls[0][1].p_stages[0].metadata).toMatchObject({
+      draft_stage_id: 'draft-stage-2',
+      draft_stage_key: 'draft-stage-2',
     });
     expect(result.processRunStageId).toBe('22222222-2222-4222-8222-222222222222');
   });
 
-  it('keeps task creation available while the runtime RPC migration is pending', async () => {
+  it('fails when the runtime RPC migration is pending', async () => {
     const rpc = vi.fn().mockResolvedValue({
       data: null,
       error: {
         code: 'PGRST202',
-        message: 'Could not find the function public.ensure_process_run_for_draft_group',
+        message: 'Could not find the function public.ensure_process_run_for_draft_group_v2',
       },
     });
     const from = vi.fn(() => ({
@@ -289,7 +293,7 @@ describe('process run draft helpers', () => {
       }),
     }));
 
-    const result = await ensureProcessRunForDraftStageGroup({
+    await expect(ensureProcessRunForDraftStageGroup({
       supabaseClient: { from, rpc },
       moduleId: 'projects',
       recordId: '44444444-4444-4444-8444-444444444444',
@@ -298,14 +302,14 @@ describe('process run draft helpers', () => {
         name: 'طراحی',
         process_group_id: 'group-a',
       }],
+    })).rejects.toMatchObject({
+      code: 'PGRST202',
     });
 
-    expect(result.processRunId).toBeNull();
-    expect(result.processRunStageId).toBeNull();
     expect(from).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps task creation available when runtime linking is denied by the server', async () => {
+  it('fails when runtime linking is denied by the server', async () => {
     const rpc = vi.fn().mockResolvedValue({
       data: null,
       error: {
@@ -323,7 +327,7 @@ describe('process run draft helpers', () => {
       }),
     }));
 
-    const result = await ensureProcessRunForDraftStageGroup({
+    await expect(ensureProcessRunForDraftStageGroup({
       supabaseClient: { from, rpc },
       moduleId: 'projects',
       recordId: '44444444-4444-4444-8444-444444444444',
@@ -332,9 +336,9 @@ describe('process run draft helpers', () => {
         name: 'طراحی',
         process_group_id: 'group-a',
       }],
+    })).rejects.toMatchObject({
+      code: '42501',
     });
 
-    expect(result.processRunId).toBeNull();
-    expect(result.processRunStageId).toBeNull();
   });
 });

@@ -46,8 +46,11 @@ type AiCapabilityComposerActionsProps = {
   recordId?: string | null;
   onVoiceSend: (voice: RecordedVoice) => void | Promise<void>;
   onFilePrepared: (filePrompt: AiUploadedFilePrompt) => void | Promise<void>;
+  onFilesPrepared?: (filePrompts: AiUploadedFilePrompt[]) => void | Promise<void>;
   voiceLoading?: boolean;
   fileLoading?: boolean;
+  directFileUpload?: boolean;
+  allowMultipleFiles?: boolean;
   recordCreationModuleOptions?: Array<{ label: string; value: string }>;
   recordCreationTargetModuleId?: string | null;
   onRecordCreationTargetModuleChange?: (moduleId: string | null) => void;
@@ -101,8 +104,11 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   recordId,
   onVoiceSend,
   onFilePrepared,
+  onFilesPrepared,
   voiceLoading = false,
   fileLoading = false,
+  directFileUpload = false,
+  allowMultipleFiles = false,
   recordCreationModuleOptions = [],
   recordCreationTargetModuleId,
   onRecordCreationTargetModuleChange,
@@ -118,6 +124,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const autoMode = selectedSet.size === 0;
   // Only one media-generation capability is active at a time.
   const activeMediaCapability = selectedSet.has('image_generation')
     ? 'image_generation' as const
@@ -221,7 +228,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           trigger="click"
           content={content}
           getPopupContainer={() => document.body}
-          destroyTooltipOnHide
+          destroyOnHidden
           autoAdjustOverflow
           overlayStyle={{ maxWidth: 'calc(100vw - 24px)' }}
         >
@@ -230,6 +237,9 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       )}
 
       <Space size={[4, 4]} wrap>
+        {autoMode ? (
+          <Tag className="m-0">تصمیم‌گیری خودکار</Tag>
+        ) : null}
         {selected
           .filter((key) => CAPABILITY_META.some((item) => item.key === key))
           .map((key) => {
@@ -293,15 +303,18 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         </>
       ) : null}
 
-      {selectedSet.has('voice_input') && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
+      {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
         <AiVoiceRecorder disabled={disabled} loading={voiceLoading} onSend={onVoiceSend} />
       ) : null}
 
-      {selectedSet.has('document_analysis') && isCapabilityUsable(capabilityAvailability, 'document_analysis') ? (
+      {(selectedSet.has('document_analysis') || autoMode) && isCapabilityUsable(capabilityAvailability, 'document_analysis') ? (
         <AiFileUploadButton
           disabled={disabled}
           loading={fileLoading}
           onPrepared={onFilePrepared}
+          onPreparedMany={onFilesPrepared}
+          directUpload={directFileUpload}
+          multiple={allowMultipleFiles}
           moduleId={moduleId}
           recordId={recordId}
           size={size}

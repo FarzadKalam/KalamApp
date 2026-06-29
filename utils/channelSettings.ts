@@ -108,6 +108,7 @@ export const getActiveIntegrationSettings = async (
   const { data, error } = await listScopedIntegrationSettings(supabase as any, {
     connectionTypes,
     isActive: true,
+    includeGlobalFallback: true,
   });
 
   if (error) throw error;
@@ -125,6 +126,7 @@ export const listActiveNotificationBotOptions = async (): Promise<Array<{ label:
     connectionTypes: ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'],
     columns: 'connection_type, provider, settings, is_active, created_at, updated_at',
     isActive: true,
+    includeGlobalFallback: true,
   });
 
   if (error) throw error;
@@ -158,6 +160,7 @@ export const listActiveNotificationBots = async (): Promise<ActiveNotificationBo
     connectionTypes: ['telegram_bot', 'telegram', 'bale_bot', 'bale', 'rubika_bot', 'rubika'],
     columns: 'connection_type, settings, is_active, created_at, updated_at',
     isActive: true,
+    includeGlobalFallback: true,
   });
 
   if (error) throw error;

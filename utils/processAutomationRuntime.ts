@@ -39,7 +39,7 @@ import {
   getProcessStageNodeKey,
   materializeLegacyProcessGraph,
 } from './processGraph';
-import { shouldSkipRecordForAutomation } from './recycleBinGuards';
+import { primeRecycleBinGuardCache, shouldSkipRecordForAutomation } from './recycleBinGuards';
 
 type AutomationActor = {
   id?: string | null;
@@ -102,6 +102,16 @@ const parseRecurrenceInfo = (value: any): Record<string, any> => {
     return {};
   }
 };
+
+const buildRecycleGuardPrimeEntriesForTasks = (tasks: Record<string, any>[]) =>
+  tasks.flatMap((task) => {
+    const recurrence = parseRecurrenceInfo(task?.recurrence_info);
+    return [
+      { sourceTable: 'tasks', recordId: String(task?.id || '').trim() },
+      { sourceTable: 'process_runs', recordId: String(task?.process_run_id || recurrence?.process_run_id || '').trim() },
+      { sourceTable: 'process_run_stages', recordId: String(task?.process_run_stage_id || recurrence?.process_run_stage_id || '').trim() },
+    ].filter((entry) => entry.recordId);
+  });
 
 const buildAutomationActionRecord = (
   task: Record<string, any>,
@@ -1264,6 +1274,7 @@ export const runProcessAutomationsIntervalTick = async ({
 
     const rows = Array.isArray(data) ? data : [];
     if (rows.length === 0) break;
+    await primeRecycleBinGuardCache(buildRecycleGuardPrimeEntriesForTasks(rows));
 
     for (const task of rows) {
       stats.scannedTasks += 1;

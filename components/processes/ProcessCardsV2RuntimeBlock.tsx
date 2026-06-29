@@ -27,9 +27,8 @@ import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
-import { buildTaskSourcePatch, resolveTaskSourceLink } from '../../utils/taskMeta';
+import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
-import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
   createProcessTriggerKey,
@@ -43,9 +42,7 @@ import {
 import {
   getTaskStatusLabel,
 } from '../../utils/processTaskStatusOptions';
-import {
-  syncProcessRunStageFromTask,
-} from '../../utils/processRunRuntime';
+import { PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY } from '../../utils/processTaskCustomFields';
 import { markModuleListChanged } from '../../utils/moduleListLive';
 import { syncProjectStatusWithProcessState } from '../../utils/projectProcessStatus';
 import {
@@ -125,7 +122,7 @@ const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const normalizeDbUuid = (value: unknown) => {
   const raw = normalizeText(value);
   if (!raw) return '';
-  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, '');
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task|user|role)[_:]/i, '');
   return UUID_LIKE_RE.test(stripped) ? stripped : '';
 };
 
@@ -302,9 +299,11 @@ const resolveFieldAssigneeLabel = (rawValue: unknown, stage: any, fallbackModule
 
 const resolveAssignee = (stage: any, directory: AssigneeDirectory | null, fallbackModuleId?: string | null) => {
   const metadata = parseObject(stage?.metadata);
-  const userId = normalizeText(stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id);
-  const roleId = normalizeText(stage?.assignee_role_id || stage?.default_assignee_role_id || metadata?.assignee_role_id);
-  const fieldLabel = resolveFieldAssigneeLabel(userId || metadata?.default_assignee_field, stage, fallbackModuleId);
+  const rawUserId = stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id || metadata?.default_assignee_id;
+  const rawRoleId = stage?.assignee_role_id || stage?.default_assignee_role_id || metadata?.assignee_role_id || metadata?.default_assignee_role_id;
+  const userId = normalizeDbUuid(rawUserId);
+  const roleId = normalizeDbUuid(rawRoleId);
+  const fieldLabel = resolveFieldAssigneeLabel(rawUserId || metadata?.default_assignee_field, stage, fallbackModuleId);
   if (fieldLabel) {
     return {
       label: fieldLabel,
@@ -567,6 +566,89 @@ const rawStageMatchesV2Stage = (rawStage: any, stage: ProcessV2Stage, index = 0)
   return collectRawStageIdentityIds(rawStage, index).some((id) => matchIds.has(id));
 };
 
+const collectV2StageAutoAssignIds = (stage: ProcessV2Stage, index = 0) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const sourceStage = source.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const metadata = parseObject(source?.metadata);
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return [
+    ...Array.from(getProcessV2StageMatchIds(stage)),
+    stage.id,
+    source?.id,
+    source?.template_stage_id,
+    source?.process_run_stage_id,
+    source?.process_node_key,
+    source?.[PROCESS_NODE_KEY],
+    metadata?.draft_stage_id,
+    metadata?.draft_stage_key,
+    metadata?.template_stage_id,
+    metadata?.process_node_key,
+    metadata?.[PROCESS_NODE_KEY],
+    sourceStage?.id,
+    sourceStage?.template_stage_id,
+    sourceStage?.process_run_stage_id,
+    sourceStage?.process_node_key,
+    sourceStage?.[PROCESS_NODE_KEY],
+    sourceMetadata?.draft_stage_id,
+    sourceMetadata?.draft_stage_key,
+    sourceMetadata?.template_stage_id,
+    sourceMetadata?.process_node_key,
+    sourceMetadata?.[PROCESS_NODE_KEY],
+    getProcessStageNodeKey(sourceStage, index),
+    getProcessStageNodeKey(source, index),
+  ].map(normalizeText).filter(Boolean);
+};
+
+const mergeRuntimeDraftStageForAutoAssign = (
+  rawStage: any,
+  stageSource: any,
+  runtimeStage: any,
+) => {
+  const rawMetadata = parseObject(rawStage?.metadata);
+  const sourceMetadata = parseObject(stageSource?.metadata);
+  const runtimeMetadata = parseObject(runtimeStage?.metadata);
+  const rawRecurrence = parseObject(rawStage?.recurrence_info);
+  const sourceRecurrence = parseObject(stageSource?.recurrence_info);
+  const runtimeRecurrence = parseObject(runtimeStage?.recurrence_info || runtimeMetadata?.recurrence_info);
+  const nextMetadata = {
+    ...rawMetadata,
+    ...sourceMetadata,
+    ...runtimeMetadata,
+  };
+  const nextRecurrence = {
+    ...rawRecurrence,
+    ...sourceRecurrence,
+    ...runtimeRecurrence,
+  };
+  const sourceStage = stageSource?.source_stage && typeof stageSource.source_stage === 'object'
+    ? stageSource.source_stage
+    : {};
+  return {
+    ...rawStage,
+    ...sourceStage,
+    ...stageSource,
+    ...runtimeStage,
+    id: rawStage?.id || sourceStage?.id || stageSource?.id || runtimeStage?.id,
+    process_run_stage_id: runtimeStage?.id || stageSource?.process_run_stage_id || sourceStage?.process_run_stage_id || sourceStage?.id,
+    template_stage_id: runtimeStage?.template_stage_id || stageSource?.template_stage_id || sourceStage?.template_stage_id || rawStage?.template_stage_id,
+    process_node_key: runtimeStage?.process_node_key || stageSource?.process_node_key || sourceStage?.process_node_key || rawStage?.process_node_key,
+    process_lane_key: runtimeStage?.process_lane_key || stageSource?.process_lane_key || sourceStage?.process_lane_key || rawStage?.process_lane_key,
+    stage_name: runtimeStage?.stage_name || stageSource?.stage_name || rawStage?.stage_name || rawStage?.name,
+    name: runtimeStage?.stage_name || stageSource?.name || stageSource?.stage_name || rawStage?.name || rawStage?.stage_name,
+    assignee_id: runtimeStage?.assignee_user_id ?? stageSource?.assignee_id ?? rawStage?.assignee_id,
+    default_assignee_id: runtimeStage?.assignee_user_id ?? stageSource?.default_assignee_id ?? rawStage?.default_assignee_id,
+    assignee_user_id: runtimeStage?.assignee_user_id ?? stageSource?.assignee_user_id ?? rawStage?.assignee_user_id,
+    assignee_role_id: runtimeStage?.assignee_role_id ?? stageSource?.assignee_role_id ?? rawStage?.assignee_role_id,
+    default_assignee_role_id: runtimeStage?.assignee_role_id ?? stageSource?.default_assignee_role_id ?? rawStage?.default_assignee_role_id,
+    wage: runtimeStage?.wage ?? stageSource?.wage ?? rawStage?.wage,
+    due_date: runtimeStage?.planned_due_at ?? stageSource?.due_date ?? rawStage?.due_date,
+    start_date: runtimeStage?.planned_start_at ?? stageSource?.start_date ?? rawStage?.start_date,
+    task_type: runtimeMetadata?.task_type || sourceMetadata?.task_type || rawMetadata?.task_type || stageSource?.task_type || rawStage?.task_type,
+    metadata: nextMetadata,
+    recurrence_info: nextRecurrence,
+  };
+};
+
 const buildDraftProcessCards = (
   draftStages: any[],
   directory: AssigneeDirectory | null,
@@ -752,6 +834,26 @@ const fetchRuntimeTasks = async (runs: any[], stages: any[], options?: { force?:
   });
 };
 
+const filterDeletedProcessRunStageMarks = async (rows: any[]) => {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const ids = Array.from(new Set(normalizedRows.map((row: any) => normalizeDbUuid(row?.id || row?.process_run_stage_id)).filter(Boolean)));
+  if (ids.length === 0) return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
+  try {
+    const { data, error } = await supabase
+      .from('process_v2_deleted_stage_marks')
+      .select('process_run_stage_id')
+      .in('process_run_stage_id', ids);
+    if (error || !Array.isArray(data)) return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
+    const deletedIds = new Set(data.map((row: any) => normalizeDbUuid(row?.process_run_stage_id)).filter(Boolean));
+    return normalizedRows.filter((row: any) => {
+      const rowId = normalizeDbUuid(row?.id || row?.process_run_stage_id);
+      return !isProcessV2DeletedRow(row) && (!rowId || !deletedIds.has(rowId));
+    });
+  } catch {
+    return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
+  }
+};
+
 const fetchRunStages = async (runId: string) => {
   if (!runId) return [];
   const extended = await supabase
@@ -759,7 +861,7 @@ const fetchRunStages = async (runId: string) => {
     .select('id, process_run_id, template_stage_id, stage_name, sort_order, status, task_id, assignee_user_id, assignee_role_id, planned_due_at, completed_at, metadata, process_node_key, process_lane_key')
     .eq('process_run_id', runId)
     .order('sort_order', { ascending: true });
-  if (!extended.error) return extended.data || [];
+  if (!extended.error) return filterDeletedProcessRunStageMarks(extended.data || []);
 
   const fallback = await supabase
     .from('process_run_stages')
@@ -767,7 +869,7 @@ const fetchRunStages = async (runId: string) => {
     .eq('process_run_id', runId)
     .order('sort_order', { ascending: true });
   if (fallback.error) throw fallback.error;
-  return fallback.data || [];
+  return filterDeletedProcessRunStageMarks(fallback.data || []);
 };
 
 const isUnsupportedRecycleError = (error: any) => {
@@ -780,6 +882,16 @@ const isUnsupportedRecycleError = (error: any) => {
     || text.includes('معتبر')
     || text.includes('پیدا نشد')
   );
+};
+
+const isInvalidUuidLikeError = (error: any) => {
+  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return error?.code === '22P02' || text.includes('invalid input syntax for type uuid');
+};
+
+const isProcessV2DeletedRow = (row: any) => {
+  const metadata = parseObject(row?.metadata);
+  return metadata?.process_v2_deleted === true || metadata?.deleted_from_process_v2 === true;
 };
 
 const moveProcessRowsToRecycleBin = async (
@@ -811,8 +923,97 @@ const deleteProcessRowsDirectly = async (
   const { error } = await (supabase.from(sourceTable as any) as any)
     .delete()
     .in('id', normalizedIds);
-  if (error) throw error;
+  if (!error) return normalizedIds.length;
+  if (sourceTable !== 'process_run_stages' || !isInvalidUuidLikeError(error)) throw error;
+  const { error: softDeleteError } = await (supabase.from(sourceTable as any) as any)
+    .update({
+      status: 'canceled',
+      task_id: null,
+      assignee_user_id: null,
+      assignee_role_id: null,
+      metadata: {
+        process_v2_deleted: true,
+        deleted_from_process_v2: true,
+        deleted_at: new Date().toISOString(),
+      },
+    })
+    .in('id', normalizedIds);
+  if (softDeleteError) throw softDeleteError;
   return normalizedIds.length;
+};
+
+const deleteProcessRunStagesSafely = async (ids: string[]) => {
+  const normalizedIds = Array.from(new Set(ids.map(normalizeDbUuid).filter(Boolean)));
+  if (normalizedIds.length === 0) return 0;
+  const actor = await fetchSessionBootstrap(supabase);
+  const { data, error } = await supabase.rpc('delete_process_run_stages_v2_safe', {
+    p_stage_ids: normalizedIds,
+    p_deleted_by: actor.user?.id || null,
+    p_deleted_by_name: actor.profile?.full_name || null,
+    p_org_id: actor.orgId || null,
+  });
+  if (error) throw error;
+  return Number(data || 0) || 0;
+};
+
+const processV2DeleteTaskStageSafely = async (
+  mode: 'unlink' | 'delete_task_keep_draft' | 'delete_all',
+  taskId?: string | null,
+  stageId?: string | null,
+) => {
+  const normalizedTaskId = normalizeDbUuid(taskId);
+  const normalizedStageId = normalizeDbUuid(stageId);
+  if (!normalizedTaskId && !normalizedStageId) return null;
+  const actor = await fetchSessionBootstrap(supabase);
+  const { data, error } = await supabase.rpc('process_v2_delete_task_stage', {
+    p_org_id: actor.orgId || null,
+    p_task_id: normalizedTaskId || null,
+    p_stage_id: normalizedStageId || null,
+    p_mode: mode,
+    p_deleted_by: actor.user?.id || null,
+    p_deleted_by_name: actor.profile?.full_name || null,
+  });
+  if (error) throw error;
+  return data || null;
+};
+
+const processV2SaveDraftStageSafely = async ({
+  stageId,
+  stageName,
+  assigneeUserId,
+  assigneeRoleId,
+  wage,
+  plannedStartAt,
+  plannedDueAt,
+  metadata,
+}: {
+  stageId?: string | null;
+  stageName?: string | null;
+  assigneeUserId?: string | null;
+  assigneeRoleId?: string | null;
+  wage?: number | null;
+  plannedStartAt?: string | null;
+  plannedDueAt?: string | null;
+  metadata?: Record<string, any> | null;
+}) => {
+  const normalizedStageId = normalizeDbUuid(stageId);
+  if (!normalizedStageId) throw new Error('مرحله پیش‌نویس فرآیند برای ذخیره پیدا نشد.');
+  const normalizedRoleId = normalizeDbUuid(assigneeRoleId);
+  const normalizedUserId = normalizedRoleId ? '' : normalizeDbUuid(assigneeUserId);
+  const actor = await fetchSessionBootstrap(supabase);
+  const { data, error } = await supabase.rpc('process_v2_save_draft_stage', {
+    p_org_id: actor.orgId || null,
+    p_stage_id: normalizedStageId,
+    p_stage_name: normalizeText(stageName) || 'مرحله',
+    p_assignee_user_id: normalizedUserId || null,
+    p_assignee_role_id: normalizedRoleId || null,
+    p_wage: Number.isFinite(Number(wage)) ? Number(wage) : null,
+    p_planned_start_at: normalizeText(plannedStartAt) || null,
+    p_planned_due_at: normalizeText(plannedDueAt) || null,
+    p_metadata: metadata && typeof metadata === 'object' ? metadata : {},
+  });
+  if (error) throw error;
+  return data || null;
 };
 
 const recycleOrDeleteProcessRows = async (
@@ -820,6 +1021,9 @@ const recycleOrDeleteProcessRows = async (
   moduleId: string,
   ids: string[],
 ) => {
+  if (sourceTable === 'process_run_stages') {
+    return deleteProcessRunStagesSafely(ids);
+  }
   try {
     return await moveProcessRowsToRecycleBin(sourceTable, moduleId, ids);
   } catch (error) {
@@ -900,6 +1104,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     [processTemplateTargetModuleIds],
   );
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingScrollToFirstCardRef = useRef(false);
+  const pendingScrollCardKeyRef = useRef<string | null>(null);
+  const cardElementRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const runtimeRef = useRef<RuntimeState>(runtime);
   const templateStagesRef = useRef<any[]>(templateStages);
   const linkedDraftStagesRef = useRef<any[]>(linkedDraftStages);
@@ -1057,8 +1264,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return;
       }
     }
+    const cachedAtStart = processRuntimeBlockCache.get(cacheKey);
+    const cacheFreshAtStart = Boolean(cachedAtStart && Date.now() - cachedAtStart.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
     setErrorText('');
-    setLoading((current) => current || force || readOnlyVariant);
+    setLoading((current) => current || force || readOnlyVariant || !cacheFreshAtStart);
     try {
       if (isProcessTemplateModule(normalizedModuleId)) {
         const stages = await loadProcessTemplateStages(supabase, normalizedRecordId);
@@ -1098,11 +1307,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         normalizedRecordId,
         force ? { force: true } : undefined,
       );
-      const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshot.stages || [], { force });
+      const snapshotStages = await filterDeletedProcessRunStageMarks(snapshot.stages || []);
+      const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
         (snapshot.runs || []).length === 0
-        && (snapshot.stages || []).length === 0
+        && snapshotStages.length === 0
         && directDrafts.length === 0
       );
       const nextLinkedDraftStages = shouldLoadLinkedDrafts
@@ -1111,7 +1321,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           excludeRecordId: normalizedRecordId,
         }).catch(() => [])
         : [];
-      const nextRuntime = { runs: snapshot.runs || [], stages: snapshot.stages || [], tasks };
+      const nextRuntime = { runs: snapshot.runs || [], stages: snapshotStages, tasks };
       setRuntime(nextRuntime);
       setLinkedDraftStages(nextLinkedDraftStages);
       publishRuntimeSnapshot(nextRuntime);
@@ -1314,6 +1524,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ...acc,
       ...collectStageProcessLinks(stage),
     }), {} as Record<string, any>);
+    const timeoutId = window.setTimeout(() => {
+      if (!disposed) {
+        setTemplateContextResolving(false);
+        setTemplateContextResolvedKey(tokenKey);
+      }
+    }, 5000);
 
     buildProcessV2TemplateContext({
       supabaseClient: supabase,
@@ -1335,11 +1551,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         }
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (!disposed) setTemplateContextResolving(false);
       });
 
     return () => {
       disposed = true;
+      window.clearTimeout(timeoutId);
     };
   }, [effectiveDraftStages, enabled, normalizedModuleId, normalizedRecordId, recordData, runtime.stages, runtime.tasks]);
 
@@ -1384,7 +1602,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const cards = useMemo<ProcessV2CardData[]>(() => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return [];
-    if (waitingForTemplateContext) return [];
     if (isProcessTemplateModule(normalizedModuleId)) {
       if (readOnlyVariant && templateStages.length === 0 && !hasLoadedRuntime) return [];
       const card = buildTemplateCard(recordData || { id: normalizedRecordId }, templateStages, directory, templateContext, false);
@@ -1392,9 +1609,14 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }
     if (!hasLoadedRuntime) return [];
 
-    const runRows = isProcessRunModule(normalizedModuleId)
+    const runRows = (isProcessRunModule(normalizedModuleId)
       ? [recordData].filter(Boolean)
-      : (runtime.runs || []);
+      : (runtime.runs || []))
+      .slice()
+      .sort((left: any, right: any) => (
+        new Date(right?.created_at || right?.started_at || right?.updated_at || 0).getTime()
+        - new Date(left?.created_at || left?.started_at || left?.updated_at || 0).getTime()
+      ));
     const stageRows = runtime.stages || [];
     const runCards = runRows
       .map((run: any) => {
@@ -1415,11 +1637,26 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const cardKey = useCallback((card: ProcessV2CardData) => `${card.mode}:${card.id}`, []);
 
   const displayCards = useMemo(
-    () => [...cards, ...extraCards]
+    () => [...extraCards, ...cards]
       .map((card) => cardOverrides[cardKey(card)] || card)
       .filter((card) => !hiddenCardIds.has(cardKey(card))),
     [cardKey, cardOverrides, cards, extraCards, hiddenCardIds],
   );
+
+  useEffect(() => {
+    if (displayCards.length === 0) return;
+    const explicitKey = pendingScrollCardKeyRef.current;
+    const targetKey = explicitKey || (pendingScrollToFirstCardRef.current ? cardKey(displayCards[0]) : '');
+    if (!targetKey) return;
+    const node = cardElementRefs.current.get(targetKey);
+    if (!node) return;
+    pendingScrollCardKeyRef.current = null;
+    pendingScrollToFirstCardRef.current = false;
+    if (typeof window === 'undefined') return;
+    window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [cardKey, displayCards]);
 
   const getHighlightedStageIds = useCallback((card: ProcessV2CardData) => {
     const taskId = normalizeText(highlightedTaskId);
@@ -1503,6 +1740,25 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     if (directStageId) matchIds.add(directStageId);
     setCardOverrides((current) => {
       const base = current[key] || process;
+      const patchStage = (stage: ProcessV2Stage): ProcessV2Stage => {
+        const mergedSource = {
+          ...((stage.source && typeof stage.source === 'object') ? stage.source : {}),
+          ...(sourcePatch || {}),
+          status,
+        };
+        const resolvedAssignee = resolveAssignee(mergedSource, directory, normalizedModuleId);
+        return {
+          ...stage,
+          title: normalizeText(sourcePatch?.name || sourcePatch?.stage_name) || stage.title,
+          assigneeLabel: normalizeText(sourcePatch?.assignee_label) || resolvedAssignee.label || stage.assigneeLabel,
+          assigneeAvatarUrl: resolvedAssignee.avatarUrl,
+          activityTypeLabel: normalizeText(sourcePatch?.task_type) || stage.activityTypeLabel,
+          dueLabel: normalizeText(sourcePatch?.dueLabel || sourcePatch?.due_label) || stage.dueLabel,
+          status: displayStatus,
+          kind: stageStatus === 'draft' ? 'draft' : 'activity',
+          source: mergedSource,
+        };
+      };
       return {
         ...current,
         [key]: {
@@ -1511,16 +1767,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
             ...lane,
             stages: lane.stages.map((stage) => (
               processV2StageMatches(stage, matchIds)
-                ? {
-                    ...stage,
-                    status: displayStatus,
-                    kind: stageStatus === 'draft' ? 'draft' : 'activity',
-                    source: {
-                      ...((stage.source && typeof stage.source === 'object') ? stage.source : {}),
-                      ...(sourcePatch || {}),
-                      status,
-                    },
-                  }
+                ? patchStage(stage)
                 : stage
             )),
           })),
@@ -1537,7 +1784,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         console.warn('Could not sync project status after process v2 stage status change', error);
       });
     }
-  }, [cardKey, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId]);
+  }, [cardKey, directory, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId]);
 
   const persistDraftStageList = useCallback(async (nextStages: any[]) => {
     const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
@@ -1575,6 +1822,152 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     await persistDraftStageList(nextStages);
     return true;
   }, [effectiveDraftStages, message, persistDraftStageList]);
+
+  const resolveRawDraftStagesForV2Stages = useCallback((
+    stages: ProcessV2Stage[],
+    targetGroupId?: string | null,
+  ) => {
+    const sourceStages = Array.isArray(stages) ? stages.filter((stage) => stage.kind === 'draft') : [];
+    if (sourceStages.length === 0) return [];
+    const rawCandidates = Array.isArray(effectiveDraftStages) ? effectiveDraftStages : [];
+    const normalizedTargetGroupId = normalizeText(targetGroupId);
+    const resolved: any[] = [];
+    const seen = new Set<string>();
+
+    sourceStages.forEach((stage, stageIndex) => {
+      const stageSource = stage.source && typeof stage.source === 'object' ? stage.source : stage;
+      const localCopiedStage = normalizeText(stage.id).startsWith('stage_')
+        && normalizeText(stage.title).includes('کپی')
+        && normalizeText(stageSource?.id) !== normalizeText(stage.id);
+      const effectiveStageSource = localCopiedStage
+        ? {
+            ...stageSource,
+            id: stage.id,
+            name: stage.title,
+            stage_name: stage.title,
+            template_stage_id: null,
+            process_run_stage_id: null,
+            run_stage_id: null,
+            task_id: null,
+            process_task_id: null,
+            source_stage: undefined,
+            __process_v2_has_real_task: false,
+            process_node_key: stage.id,
+            is_draft: true,
+            status: 'draft',
+            metadata: {
+              ...parseObject(stageSource?.metadata),
+              draft_stage_id: stage.id,
+              draft_stage_key: stage.id,
+              process_node_key: stage.id,
+              copy_of_stage_id: stageSource?.id || null,
+              copy_of_template_stage_id: stageSource?.template_stage_id || parseObject(stageSource?.metadata)?.template_stage_id || null,
+              template_stage_id: null,
+              process_run_stage_id: null,
+              task_id: null,
+              name: stage.title,
+              stage_name: stage.title,
+            },
+          }
+        : stageSource;
+      const wantedIds = new Set(localCopiedStage ? [normalizeText(stage.id)] : collectV2StageAutoAssignIds(stage, stageIndex));
+      const stageSourceStage = effectiveStageSource.source_stage && typeof effectiveStageSource.source_stage === 'object' ? effectiveStageSource.source_stage : {};
+      const stageMetadata = parseObject(effectiveStageSource?.metadata);
+      const runtimeStageId = normalizeDbUuid(
+        effectiveStageSource?.process_run_stage_id
+        || effectiveStageSource?.run_stage_id
+        || stageSourceStage?.id
+        || stageSourceStage?.process_run_stage_id
+        || stageMetadata?.process_run_stage_id
+        || (effectiveStageSource?.process_run_id ? effectiveStageSource?.id : '')
+      );
+      const runtimeStage = runtimeStageId
+        ? (runtimeRef.current.stages || []).find((candidate: any) => normalizeDbUuid(candidate?.id || candidate?.process_run_stage_id) === runtimeStageId)
+        : null;
+      const stageGroupId = normalizeText(resolveDraftGroupMeta(effectiveStageSource).groupId);
+      const effectiveGroupId = normalizedTargetGroupId || stageGroupId;
+      const matched = rawCandidates.find((candidate, candidateIndex) => {
+        const candidateGroupId = normalizeText(resolveDraftGroupMeta(candidate).groupId);
+        if (effectiveGroupId && candidateGroupId && candidateGroupId !== effectiveGroupId) return false;
+        return collectRawStageIdentityIds(candidate, candidateIndex).some((id) => wantedIds.has(id));
+      });
+      const rawStage = mergeRuntimeDraftStageForAutoAssign(matched || effectiveStageSource, effectiveStageSource, runtimeStage || {});
+      const rawIds = collectRawStageIdentityIds(rawStage, stageIndex);
+      const key = [
+        normalizeText(resolveDraftGroupMeta(rawStage).groupId) || effectiveGroupId,
+        rawIds.find(Boolean) || stage.id || stageIndex,
+      ].join(':');
+      if (seen.has(key)) return;
+      seen.add(key);
+      resolved.push(rawStage);
+    });
+
+    return resolved;
+  }, [effectiveDraftStages]);
+
+  const removeDraftSourceForV2Stages = useCallback(async (
+    stages: ProcessV2Stage[],
+  ) => {
+    const targetStages = Array.isArray(stages) ? stages : [];
+    if (targetStages.length === 0) return false;
+    const matchesTarget = (candidate: any, index: number) => targetStages.some((stage, stageIndex) => {
+      if (rawStageMatchesV2Stage(candidate, stage, index)) return true;
+      const wantedIds = new Set(collectV2StageAutoAssignIds(stage, stageIndex));
+      return collectRawStageIdentityIds(candidate, index).some((id) => wantedIds.has(id));
+    });
+
+    const directStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+    const nextDirectStages = directStages.filter((stage, index) => !matchesTarget(stage, index));
+    let removedAny = false;
+    if (nextDirectStages.length !== directStages.length) {
+      await persistDraftStageList(nextDirectStages);
+      removedAny = true;
+    }
+
+    const linkedStages = Array.isArray(linkedDraftStagesRef.current) ? linkedDraftStagesRef.current : [];
+    const linkedOwnerKeys = new Map<string, { ownerModuleId: string; ownerRecordId: string; ownerFieldKey: string }>();
+    linkedStages.forEach((stage, index) => {
+      if (!matchesTarget(stage, index)) return;
+      const ownerModuleId = normalizeText(stage?.__process_v2_linked_owner_module_id);
+      const ownerRecordId = normalizeDbUuid(stage?.__process_v2_linked_owner_record_id);
+      const ownerFieldKey = normalizeText(stage?.__process_v2_linked_owner_field_key);
+      if (!ownerModuleId || !ownerRecordId || !ownerFieldKey) return;
+      linkedOwnerKeys.set(`${ownerModuleId}:${ownerRecordId}:${ownerFieldKey}`, {
+        ownerModuleId,
+        ownerRecordId,
+        ownerFieldKey,
+      });
+    });
+
+    for (const owner of linkedOwnerKeys.values()) {
+      const { data, error } = await (supabase.from(owner.ownerModuleId as any) as any)
+        .select(owner.ownerFieldKey)
+        .eq('id', owner.ownerRecordId)
+        .maybeSingle();
+      if (error) throw error;
+      const ownerStages = Array.isArray(data?.[owner.ownerFieldKey]) ? data[owner.ownerFieldKey] : [];
+      const nextOwnerStages = ownerStages.filter((stage: any, index: number) => !matchesTarget(stage, index));
+      if (nextOwnerStages.length === ownerStages.length) continue;
+      const { error: updateError } = await (supabase.from(owner.ownerModuleId as any) as any)
+        .update({ [owner.ownerFieldKey]: nextOwnerStages })
+        .eq('id', owner.ownerRecordId);
+      if (updateError) throw updateError;
+      removedAny = true;
+      markModuleListChanged({
+        org_id: orgId || recordDataRef.current?.org_id || null,
+        module_id: owner.ownerModuleId,
+        record_id: owner.ownerRecordId,
+        action: 'update',
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    if (removedAny) {
+      setLinkedDraftStages((current) => current.filter((stage, index) => !matchesTarget(stage, index)));
+      processRuntimeBlockCache.delete(cacheKey);
+    }
+    return removedAny;
+  }, [cacheKey, orgId, persistDraftStageList]);
 
   const deleteTemplateStages = useCallback(async (stageIds: string[]) => {
     const normalizedIds = Array.from(new Set(stageIds.map(normalizeDbUuid).filter(Boolean)));
@@ -1624,125 +2017,79 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     return normalizeDbUuid(source?.task_id || source?.process_task_id || metadata?.task_id || sourceStage?.task_id);
   }, []);
 
-  const resetRunStageToDraft = useCallback(async (stage: ProcessV2Stage) => {
-    const runStageId = getRunStageIdForDraftStage(stage);
-    if (!runStageId) return;
-    const updateStage = async (patch: Record<string, any>) => (
-      (supabase.from('process_run_stages' as any) as any)
-        .update(patch)
-        .eq('id', runStageId)
-    );
-    const fullPatch = {
-      task_id: null,
-      status: 'todo',
-      assignee_user_id: null,
-      assignee_role_id: null,
-      planned_due_at: null,
-      completed_at: null,
-    };
-    let result = await updateStage(fullPatch);
-    if (result.error) {
-      result = await updateStage({ task_id: null, status: 'todo' });
-    }
-    if (result.error) throw result.error;
-
-    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
-    await syncProcessRunStageFromTask({
-      supabaseClient: supabase,
-      task: {
-        ...source,
-        id: null,
-        process_run_stage_id: runStageId,
-        status: 'todo',
-        assignee_id: null,
-        assignee_role_id: null,
-        due_date: null,
-        start_date: null,
-        actual_start_at: null,
-        completed_at: null,
-      },
-    });
-
-    setRuntime((current) => ({
-      ...current,
-      stages: current.stages.map((item: any) => (
-        normalizeText(item?.id || item?.process_run_stage_id) === runStageId
-          ? {
-              ...item,
-              task_id: null,
-              status: 'todo',
-              assignee_user_id: null,
-              assignee_role_id: null,
-              planned_due_at: null,
-              completed_at: null,
-            }
-          : item
-      )),
-    }));
-  }, [getRunStageIdForDraftStage]);
-
   const unlinkTaskFromProcessStage = useCallback(async (stage: ProcessV2Stage) => {
     const taskId = getTaskIdForProcessStage(stage);
+    const runStageId = getRunStageIdForDraftStage(stage);
     if (!taskId) {
       message.warning('فعالیت متناظر برای قطع اتصال پیدا نشد.');
       return false;
     }
-    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
-    const currentRecurrence = parseObject(source?.recurrence_info);
-    const nextRecurrence = { ...currentRecurrence };
-    delete nextRecurrence.process_group;
-    delete nextRecurrence.process_links;
-    delete nextRecurrence.process_graph;
-    delete nextRecurrence.process_run_id;
-    delete nextRecurrence.process_run_stage_id;
-    delete nextRecurrence.process_node_key;
-    delete nextRecurrence.process_lane_key;
-    const patch = {
-      ...buildTaskSourcePatch({
-        related_to_module: null,
-        source_module_id: null,
-        source_record_id: null,
-      }),
-      source_template_id: null,
-      process_group_id: null,
-      process_run_id: null,
-      process_run_stage_id: null,
-      process_node_key: null,
-      process_lane_key: null,
-      recurrence_info: nextRecurrence,
-    };
-    const { error } = await supabase.from('tasks').update(patch).eq('id', taskId);
-    if (error) throw error;
-    await resetRunStageToDraft(stage);
-    setRuntime((current) => ({
-      ...current,
-      tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
-    }));
+    await processV2DeleteTaskStageSafely('unlink', taskId, runStageId);
+    setCardOverrides({});
+    setRuntime((current) => {
+      const next = {
+        ...current,
+        tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+        stages: current.stages.map((item: any) => (
+          runStageId && normalizeDbUuid(item?.id || item?.process_run_stage_id) === runStageId
+            ? {
+                ...item,
+                task_id: null,
+                status: 'todo',
+                assignee_user_id: null,
+                assignee_role_id: null,
+                planned_due_at: null,
+                completed_at: null,
+              }
+            : item
+        )),
+      };
+      runtimeRef.current = next;
+      return next;
+    });
     processRuntimeBlockCache.delete(cacheKey);
-    await refresh(true);
+    void refresh(true);
     markRuntimeModuleListsChanged({ taskId });
     message.success('اتصال فعالیت از این فرآیند حذف شد');
     return true;
-  }, [cacheKey, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh, resetRunStageToDraft]);
+  }, [cacheKey, getRunStageIdForDraftStage, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh]);
 
   const deleteTaskAndKeepDraftStage = useCallback(async (stage: ProcessV2Stage) => {
     const taskId = getTaskIdForProcessStage(stage);
+    const runStageId = getRunStageIdForDraftStage(stage);
     if (!taskId) {
       message.warning('فعالیت متناظر برای حذف پیدا نشد.');
       return false;
     }
-    await resetRunStageToDraft(stage);
-    await moveModuleRecordsToRecycleBin('tasks', [taskId]);
-    setRuntime((current) => ({
-      ...current,
-      tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
-    }));
+    await processV2DeleteTaskStageSafely('delete_task_keep_draft', taskId, runStageId);
+    setCardOverrides({});
+    setRuntime((current) => {
+      const next = {
+        ...current,
+        tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+        stages: current.stages.map((item: any) => (
+          runStageId && normalizeDbUuid(item?.id || item?.process_run_stage_id) === runStageId
+            ? {
+                ...item,
+                task_id: null,
+                status: 'todo',
+                assignee_user_id: null,
+                assignee_role_id: null,
+                planned_due_at: null,
+                completed_at: null,
+              }
+            : item
+        )),
+      };
+      runtimeRef.current = next;
+      return next;
+    });
     processRuntimeBlockCache.delete(cacheKey);
-    await refresh(true);
+    void refresh(true);
     markRuntimeModuleListsChanged({ taskId });
     message.success('فعالیت حذف شد و مرحله پیش‌نویس باقی ماند');
     return true;
-  }, [cacheKey, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh, resetRunStageToDraft]);
+  }, [cacheKey, getRunStageIdForDraftStage, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh]);
 
   const deleteDraftStageCompletely = useCallback(async (
     stage: ProcessV2Stage,
@@ -1762,6 +2109,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const runStageId = getRunStageIdForDraftStage(stage);
     if (runStageId) {
       if (await deleteRunDraftStages([runStageId])) {
+        await removeDraftSourceForV2Stages([stage]).catch((error) => {
+          console.warn('Could not remove process v2 draft source after deleting run stage', error);
+        });
         if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
         return true;
       }
@@ -1773,19 +2123,34 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return true;
     }
     return false;
-  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftStagesByPredicate]);
+  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftSourceForV2Stages, removeDraftStagesByPredicate]);
 
   const deleteTaskAndDraftStageCompletely = useCallback(async (
     stage: ProcessV2Stage,
     process: ProcessV2CardData,
   ) => {
     const taskId = getTaskIdForProcessStage(stage);
-    if (taskId) {
-      await moveModuleRecordsToRecycleBin('tasks', [taskId]);
-      setRuntime((current) => ({
-        ...current,
-        tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
-      }));
+    const runStageId = getRunStageIdForDraftStage(stage);
+    if (taskId || runStageId) {
+      await processV2DeleteTaskStageSafely('delete_all', taskId, runStageId);
+      await removeDraftSourceForV2Stages([stage]).catch((error) => {
+        console.warn('Could not remove process v2 draft source after deleting task and stage', error);
+      });
+      setCardOverrides({});
+      setRuntime((current) => {
+        const next = {
+          ...current,
+          tasks: current.tasks.filter((item: any) => normalizeText(item?.id) !== taskId),
+          stages: current.stages.filter((item: any) => !runStageId || normalizeDbUuid(item?.id || item?.process_run_stage_id) !== runStageId),
+        };
+        runtimeRef.current = next;
+        return next;
+      });
+      processRuntimeBlockCache.delete(cacheKey);
+      void refresh(true);
+      markRuntimeModuleListsChanged({ taskId });
+      if (taskId) message.success('فعالیت و مرحله فرآیند حذف شدند');
+      return true;
     }
     const deletedDraft = await deleteDraftStageCompletely(stage, process, false);
     if (!deletedDraft && taskId) {
@@ -1799,7 +2164,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       message.warning('فعالیت حذف شد، اما مرحله فرآیند برای حذف پیدا نشد.');
     }
     return deletedDraft || Boolean(taskId);
-  }, [cacheKey, deleteDraftStageCompletely, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh]);
+  }, [cacheKey, deleteDraftStageCompletely, getRunStageIdForDraftStage, getTaskIdForProcessStage, markRuntimeModuleListsChanged, message, refresh, removeDraftSourceForV2Stages]);
 
   const handleDeleteStage = useCallback(async (
     stage: ProcessV2Stage,
@@ -1850,7 +2215,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const deleteProcessRecordCompletely = useCallback(async (process: ProcessV2CardData) => {
     if (normalizeText(process.id).startsWith('draft:')) {
       const targetGroupId = normalizeText(process.id).replace(/^draft:/, '');
-      const removed = await removeDraftStagesByPredicate((stage) => (
+      const removedBySource = await removeDraftSourceForV2Stages(process.lanes.flatMap((lane) => lane.stages));
+      const removed = removedBySource || await removeDraftStagesByPredicate((stage) => (
         resolveDraftGroupMeta(stage).groupId === targetGroupId
       ));
       if (removed) {
@@ -1890,10 +2256,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (deleteError) throw deleteError;
     }
     setHiddenCardIds((current) => new Set([...Array.from(current), cardKey(process)]));
+    await removeDraftSourceForV2Stages(process.lanes.flatMap((lane) => lane.stages)).catch((error) => {
+      console.warn('Could not remove process v2 draft sources after deleting process', error);
+    });
     processRuntimeBlockCache.delete(cacheKey);
     await refresh(true);
     return true;
-  }, [cacheKey, cardKey, deleteTemplateStages, message, refresh, removeDraftStagesByPredicate]);
+  }, [cacheKey, cardKey, deleteTemplateStages, message, refresh, removeDraftSourceForV2Stages, removeDraftStagesByPredicate]);
 
   const handleBulkDeleteChoice = useCallback(async (mode: StageDeleteMode) => {
     if (!bulkDeleteRequest || bulkDeleteBusy) return;
@@ -1921,6 +2290,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
             const runStageIds = lane.stages.map(getRunStageIdForDraftStage).filter(Boolean);
             if (runStageIds.length === lane.stages.length && runStageIds.length > 0) {
               await deleteRunDraftStages(runStageIds);
+              await removeDraftSourceForV2Stages(lane.stages).catch((error) => {
+                console.warn('Could not remove process v2 draft sources after deleting lane', error);
+              });
             } else {
               const targetGroupId = normalizeText(process.id).startsWith('draft:')
                 ? normalizeText(process.id).replace(/^draft:/, '')
@@ -1995,6 +2367,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     normalizedModuleId,
     refresh,
     removeDraftStagesByPredicate,
+    removeDraftSourceForV2Stages,
     deleteRunDraftStages,
     deleteTemplateStages,
     unlinkTaskFromProcessStage,
@@ -2017,6 +2390,49 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const handleCopyCard = useCallback((id: string) => {
     const source = displayCards.find((card) => card.id === id);
     if (!source) return;
+    const cloneCardStage = (stage: ProcessV2Stage): ProcessV2Stage => {
+      const clonedId = `copy_stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const clonedNodeKey = `copy_node_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const clonedTitle = `${stage.title} کپی`;
+      const stageSource = stage.source && typeof stage.source === 'object' ? stage.source : {};
+      const metadata = parseObject(stageSource?.metadata);
+      return {
+        ...stage,
+        id: clonedId,
+        title: clonedTitle,
+        kind: 'draft',
+        status: 'draft',
+        source: {
+          ...stageSource,
+          id: clonedId,
+          name: clonedTitle,
+          stage_name: clonedTitle,
+          template_stage_id: null,
+          process_run_stage_id: null,
+          run_stage_id: null,
+          task_id: null,
+          process_task_id: null,
+          source_stage: undefined,
+          __process_v2_has_real_task: false,
+          process_node_key: clonedNodeKey,
+          is_draft: true,
+          status: 'draft',
+          metadata: {
+            ...metadata,
+            draft_stage_id: clonedId,
+            draft_stage_key: clonedId,
+            process_node_key: clonedNodeKey,
+            copy_of_stage_id: stage.id || stageSource?.id || null,
+            copy_of_template_stage_id: stageSource?.template_stage_id || metadata?.template_stage_id || null,
+            template_stage_id: null,
+            process_run_stage_id: null,
+            task_id: null,
+            name: clonedTitle,
+            stage_name: clonedTitle,
+          },
+        },
+      };
+    };
     const cloned: ProcessV2CardData = {
       ...source,
       id: `copy:${source.id}:${Date.now()}`,
@@ -2024,15 +2440,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       lanes: source.lanes.map((lane) => ({
         ...lane,
         id: `copy:${lane.id}:${Date.now()}`,
-        stages: lane.stages.map((stage) => ({
-          ...stage,
-          id: `copy:${stage.id}:${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        })),
+        stages: lane.stages.map(cloneCardStage),
       })),
     } as ProcessV2CardData;
-    setExtraCards((current) => [...current, cloned]);
+    pendingScrollCardKeyRef.current = cardKey(cloned);
+    setExtraCards((current) => [cloned, ...current]);
     message.success('کپی فرآیند در نمای جدید ساخته شد.');
-  }, [displayCards, message]);
+  }, [cardKey, displayCards, message]);
 
   const handleShowInfo = useCallback((item: ProcessV2CardData) => {
     const stageCount = item.lanes.reduce((sum, lane) => sum + lane.stages.length, 0);
@@ -2146,18 +2560,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const handleAddRun = useCallback(() => {
     if (typeof window !== 'undefined' && normalizedModuleId && normalizedRecordId) {
+      pendingScrollToFirstCardRef.current = true;
       window.dispatchEvent(new CustomEvent('kalamapp:open-process-append', {
         detail: {
           moduleId: normalizedModuleId,
           recordId: normalizedRecordId,
+          scrollToNewProcess: true,
         },
       }));
       return;
     }
     const next = buildLocalRunCard(templates[0]?.id || null);
-    setExtraCards((current) => [...current, next]);
+    pendingScrollCardKeyRef.current = cardKey(next);
+    setExtraCards((current) => [next, ...current]);
     void handleShowRecords(next);
-  }, [buildLocalRunCard, handleShowRecords, normalizedModuleId, normalizedRecordId, templates]);
+  }, [buildLocalRunCard, cardKey, handleShowRecords, normalizedModuleId, normalizedRecordId, templates]);
 
   const handleTemplateChange = useCallback((item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => {
     const selectedTitle = templateNameById.get(templateId) || templates.find((template) => template.id === templateId)?.title || item.templateTitle || 'الگوی فرآیند';
@@ -2177,23 +2594,28 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }
 
     const next = buildLocalRunCard(templateId);
-    setExtraCards((current) => [...current, next]);
+    pendingScrollCardKeyRef.current = cardKey(next);
+    setExtraCards((current) => [next, ...current]);
     void handleShowRecords(next);
   }, [buildLocalRunCard, cardKey, handleShowRecords, templateNameById, templates]);
 
   const handleAutoAssignProcess = useCallback(async (item: ProcessV2CardData) => {
-    const draftCount = item.lanes.reduce((sum, lane) => (
-      sum + lane.stages.filter((stage) => stage.kind === 'draft').length
-    ), 0);
-    if (draftCount === 0) {
+    const itemDraftStages = item.lanes.flatMap((lane) => lane.stages.filter((stage) => stage.kind === 'draft'));
+    if (itemDraftStages.length === 0) {
       message.info('مرحله پیش‌نویسی برای ارجاع وجود ندارد.');
       return;
     }
     const isDraftCard = normalizeText(item.id).startsWith('draft:');
-    const targetGroupId = isDraftCard ? normalizeText(item.id).replace(/^draft:/, '') : '';
-    const sourceDraftStages = effectiveDraftStages.length > 0
-      ? effectiveDraftStages
-      : item.lanes.flatMap((lane) => lane.stages.filter((stage) => stage.kind === 'draft').map((stage) => stage.source || stage));
+    const itemGroupIds = Array.from(new Set(
+      itemDraftStages
+        .map((stage) => resolveDraftGroupMeta(stage.source && typeof stage.source === 'object' ? stage.source : stage).groupId)
+        .map(normalizeText)
+        .filter(Boolean),
+    ));
+    const targetGroupId = isDraftCard
+      ? normalizeText(item.id).replace(/^draft:/, '')
+      : (itemGroupIds.length === 1 ? itemGroupIds[0] : '');
+    const sourceDraftStages = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
     const key = cardKey(item);
     if (autoAssigningCardIds[key]) return;
     setAutoAssigningCardIds((current) => ({ ...current, [key]: true }));
@@ -2208,6 +2630,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       });
       if (result.createdCount > 0) {
         message.success(`${toPersianNumber(result.createdCount)} فعالیت ایجاد شد`);
+      } else if (Number(result.missingAssigneeCount || 0) > 0) {
+        message.warning(`${toPersianNumber(result.missingAssigneeCount || 0)} مرحله مسئول مشخص ندارد و ارجاع نشد`);
       } else if (result.skippedCount > 0) {
         message.warning(`${toPersianNumber(result.skippedCount)} مرحله از قبل فعالیت مرتبط داشت یا قابل ایجاد نبود`);
       } else {
@@ -2231,22 +2655,33 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
+  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, resolveRawDraftStagesForV2Stages]);
 
   const handleAutoAssignStage = useCallback(async (stage: ProcessV2Stage, _laneTitle: string, item: ProcessV2CardData, overrides?: Record<string, any>) => {
     if (stage.kind !== 'draft') return;
-    const sourceDraftStagesBase = effectiveDraftStages.length > 0
-      ? effectiveDraftStages
-      : item.lanes.flatMap((lane) => lane.stages.filter((candidate) => candidate.kind === 'draft').map((candidate) => candidate.source || candidate));
     const sourceStage = stage.source && typeof stage.source === 'object' ? stage.source : {};
     const sourceMeta = parseObject(sourceStage?.metadata);
     const targetGroupId = normalizeText(item.id).startsWith('draft:')
       ? normalizeText(item.id).replace(/^draft:/, '')
       : normalizeText(sourceStage?.process_group_id || sourceMeta?.process_group_id || sourceMeta?.process_group?.id);
-    const targetStageId = normalizeText(stage.source?.id || stage.source?.template_stage_id || stage.source?.process_node_key || stage.id);
-    const sourceDraftStages = sourceDraftStagesBase.map((candidate: any) => {
-      const candidateId = normalizeText(candidate?.id || candidate?.template_stage_id || candidate?.process_node_key);
-      if (!targetStageId || candidateId !== targetStageId || !overrides) return candidate;
+    const itemDraftStages = item.lanes.flatMap((lane) => lane.stages.filter((candidate) => candidate.kind === 'draft'));
+    const sourceDraftStagesBase = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
+    const targetDraftStagesBase = resolveRawDraftStagesForV2Stages([stage], targetGroupId);
+    const targetRawStage = targetDraftStagesBase[0] || sourceStage;
+    const targetStageId = normalizeText(
+      targetRawStage?.process_node_key
+      || targetRawStage?.[PROCESS_NODE_KEY]
+      || targetRawStage?.template_stage_id
+      || targetRawStage?.id
+      || stage.id,
+    );
+    const targetIdentityIds = new Set(collectRawStageIdentityIds(targetRawStage, 0));
+    const sourceDraftStages = sourceDraftStagesBase.map((candidate: any, index: number) => {
+      const candidateMatchesTarget = collectRawStageIdentityIds(candidate, index).some((id) => targetIdentityIds.has(id))
+        || normalizeText(candidate?.process_node_key || candidate?.[PROCESS_NODE_KEY]) === targetStageId
+        || normalizeText(candidate?.template_stage_id) === targetStageId
+        || normalizeText(candidate?.id) === targetStageId;
+      if (!candidateMatchesTarget || !overrides) return candidate;
       const candidateMetadata = parseObject(candidate?.metadata);
       const candidateRecurrence = parseObject(candidate?.recurrence_info);
       return {
@@ -2277,6 +2712,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       });
       if (result.createdCount > 0) {
         message.success(`${toPersianNumber(result.createdCount)} فعالیت ایجاد شد`);
+      } else if (Number(result.missingAssigneeCount || 0) > 0) {
+        message.warning('این مرحله مسئول مشخص ندارد و ارجاع نشد');
       } else if (result.skippedCount > 0) {
         message.warning('برای این مرحله فعالیت مرتبط از قبل وجود دارد یا قابل ایجاد نیست');
       } else {
@@ -2298,7 +2735,174 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         return next;
       });
     }
-  }, [autoAssigningCardIds, cardKey, effectiveDraftStages, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh]);
+  }, [autoAssigningCardIds, cardKey, markRuntimeModuleListsChanged, message, normalizedModuleId, normalizedRecordId, recordData, refresh, resolveRawDraftStagesForV2Stages]);
+
+  const mergeDraftStageOverrides = useCallback((rawStage: any, overrides?: Record<string, any>) => {
+    const patch = overrides && typeof overrides === 'object' ? overrides : {};
+    const currentMetadata = parseObject(rawStage?.metadata);
+    const patchMetadata = parseObject(patch?.metadata);
+    const currentRecurrence = parseObject(rawStage?.recurrence_info);
+    const patchRecurrence = parseObject(patch?.recurrence_info);
+    const nextName = normalizeText(patch?.stage_name || patch?.name || rawStage?.stage_name || rawStage?.name || currentMetadata?.stage_name || currentMetadata?.name) || 'مرحله';
+    const nextTaskType = normalizeText(patch?.task_type || patchMetadata?.task_type || rawStage?.task_type || currentMetadata?.task_type);
+    const nextAssigneeUserId = normalizeDbUuid(patch?.default_assignee_id || patch?.assignee_id || rawStage?.default_assignee_id || rawStage?.assignee_id);
+    const nextAssigneeRoleId = normalizeDbUuid(patch?.default_assignee_role_id || patch?.assignee_role_id || rawStage?.default_assignee_role_id || rawStage?.assignee_role_id);
+    const nextCustomValues = patch?.process_task_custom_field_values || patch?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] || patchMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY];
+    const nextMetadata = {
+      ...currentMetadata,
+      ...patchMetadata,
+      name: nextName,
+      stage_name: nextName,
+      task_type: nextTaskType || null,
+      description: patch?.description ?? patchMetadata?.description ?? currentMetadata?.description ?? null,
+      tags: Array.isArray(patch?.tags) ? patch.tags : (Array.isArray(patchMetadata?.tags) ? patchMetadata.tags : currentMetadata?.tags),
+      wage: Number(patch?.wage ?? patchMetadata?.wage ?? rawStage?.wage ?? currentMetadata?.wage ?? 0) || 0,
+      weight: Number(patch?.weight ?? patchMetadata?.weight ?? rawStage?.weight ?? currentMetadata?.weight ?? 0) || 0,
+      ...(nextCustomValues && typeof nextCustomValues === 'object' ? { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextCustomValues } : {}),
+    };
+    const nextRecurrence = {
+      ...currentRecurrence,
+      ...patchRecurrence,
+      ...(nextCustomValues && typeof nextCustomValues === 'object' ? { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextCustomValues } : {}),
+    };
+    return {
+      ...rawStage,
+      ...patch,
+      id: rawStage?.id,
+      name: nextName,
+      stage_name: nextName,
+      task_type: nextTaskType || rawStage?.task_type || null,
+      default_assignee_id: nextAssigneeRoleId ? null : (nextAssigneeUserId || null),
+      default_assignee_role_id: nextAssigneeRoleId || null,
+      assignee_id: nextAssigneeRoleId ? null : (nextAssigneeUserId || null),
+      assignee_role_id: nextAssigneeRoleId || null,
+      wage: Number(patch?.wage ?? rawStage?.wage ?? 0) || 0,
+      weight: Number(patch?.weight ?? rawStage?.weight ?? currentMetadata?.weight ?? 0) || 0,
+      recurrence_info: nextRecurrence,
+      metadata: nextMetadata,
+    };
+  }, []);
+
+  const handleSaveDraftStage = useCallback(async (
+    stage: ProcessV2Stage,
+    _laneTitle: string,
+    item: ProcessV2CardData,
+    overrides?: Record<string, any>,
+  ) => {
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    const runStageId = getRunStageIdForDraftStage(stage);
+    const mergedSource = mergeDraftStageOverrides(source, overrides);
+
+    if (runStageId) {
+      const nextMetadata = parseObject(mergedSource?.metadata);
+      const nextStageName = normalizeText(mergedSource?.stage_name || mergedSource?.name || stage.title) || 'مرحله';
+      const nextAssigneeUserId = normalizeDbUuid(mergedSource?.default_assignee_id || mergedSource?.assignee_id);
+      const nextAssigneeRoleId = normalizeDbUuid(mergedSource?.default_assignee_role_id || mergedSource?.assignee_role_id);
+      const updatePatch = {
+        stage_name: nextStageName,
+        assignee_user_id: nextAssigneeRoleId ? null : (nextAssigneeUserId || null),
+        assignee_role_id: nextAssigneeRoleId || null,
+        wage: Number(mergedSource?.wage || 0) || 0,
+        planned_start_at: mergedSource?.start_date || null,
+        planned_due_at: mergedSource?.due_date || null,
+        metadata: nextMetadata,
+        updated_at: new Date().toISOString(),
+      };
+      const saved = await processV2SaveDraftStageSafely({
+        stageId: runStageId,
+        stageName: nextStageName,
+        assigneeUserId: nextAssigneeUserId,
+        assigneeRoleId: nextAssigneeRoleId,
+        wage: updatePatch.wage,
+        plannedStartAt: updatePatch.planned_start_at,
+        plannedDueAt: updatePatch.planned_due_at,
+        metadata: nextMetadata,
+      });
+      const savedStage = parseObject((saved as any)?.stage);
+      const runtimePatch = Object.keys(savedStage).length > 0
+        ? { ...savedStage, id: savedStage.id || runStageId }
+        : updatePatch;
+      setCardOverrides({});
+      setRuntime((current) => {
+        const next = {
+          ...current,
+          stages: current.stages.map((row: any) => (
+            normalizeDbUuid(row?.id || row?.process_run_stage_id) === runStageId
+              ? { ...row, ...runtimePatch, id: row?.id || runStageId }
+              : row
+          )),
+        };
+        runtimeRef.current = next;
+        return next;
+      });
+      processRuntimeBlockCache.delete(cacheKey);
+      markRuntimeModuleListsChanged({ processRunId: item.mode === 'run' ? item.id : undefined });
+      return;
+    }
+
+    const currentStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+    let matched = false;
+    const nextStages = currentStages.map((candidate, index) => {
+      if (!rawStageMatchesV2Stage(candidate, stage, index)) return candidate;
+      matched = true;
+      return mergeDraftStageOverrides(candidate, overrides);
+    });
+    if (matched) {
+      await persistDraftStageList(nextStages);
+      return;
+    }
+
+    const ownerModuleId = normalizeText(source?.__process_v2_linked_owner_module_id);
+    const ownerRecordId = normalizeDbUuid(source?.__process_v2_linked_owner_record_id);
+    const ownerFieldKey = normalizeText(source?.__process_v2_linked_owner_field_key);
+    if (ownerModuleId && ownerRecordId && ownerFieldKey) {
+      const { data, error } = await (supabase.from(ownerModuleId as any) as any)
+        .select(ownerFieldKey)
+        .eq('id', ownerRecordId)
+        .maybeSingle();
+      if (error) throw error;
+      const ownerStages = Array.isArray(data?.[ownerFieldKey]) ? data[ownerFieldKey] : [];
+      let ownerMatched = false;
+      const nextOwnerStages = ownerStages.map((candidate: any, index: number) => {
+        if (!rawStageMatchesV2Stage(candidate, stage, index)) return candidate;
+        ownerMatched = true;
+        return mergeDraftStageOverrides(candidate, overrides);
+      });
+      if (!ownerMatched) throw new Error('مرحله پیش‌نویس متناظر برای ذخیره پیدا نشد.');
+      const { error: updateError } = await (supabase.from(ownerModuleId as any) as any)
+        .update({ [ownerFieldKey]: nextOwnerStages })
+        .eq('id', ownerRecordId);
+      if (updateError) throw updateError;
+      processRuntimeBlockCache.delete(cacheKey);
+      setLinkedDraftStages((current) => current.map((candidate, index) => (
+        rawStageMatchesV2Stage(candidate, stage, index)
+          ? {
+              ...mergeDraftStageOverrides(candidate, overrides),
+              __process_v2_linked_owner_module_id: ownerModuleId,
+              __process_v2_linked_owner_record_id: ownerRecordId,
+              __process_v2_linked_owner_field_key: ownerFieldKey,
+            }
+          : candidate
+      )));
+      markModuleListChanged({
+        org_id: orgId || recordDataRef.current?.org_id || null,
+        module_id: ownerModuleId,
+        record_id: ownerRecordId,
+        action: 'update',
+        updated_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    throw new Error('مرحله پیش‌نویس متناظر برای ذخیره پیدا نشد.');
+  }, [
+    cacheKey,
+    getRunStageIdForDraftStage,
+    markRuntimeModuleListsChanged,
+    mergeDraftStageOverrides,
+    orgId,
+    persistDraftStageList,
+  ]);
 
   const handleConfigureTemplateActivator = useCallback((item: ProcessV2CardData) => {
     if (item.mode !== 'template') return;
@@ -2328,8 +2932,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const handleOpenStageDetails = useCallback((stage: ProcessV2Stage) => {
     if (
-      variant === 'full'
-      && isProcessTemplateModule(normalizedModuleId)
+      isProcessTemplateModule(normalizedModuleId)
       && stage.kind === 'draft'
       && typeof window !== 'undefined'
     ) {
@@ -2345,7 +2948,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return true;
     }
     return false;
-  }, [normalizedModuleId, normalizedRecordId, variant]);
+  }, [normalizedModuleId, normalizedRecordId]);
 
   const canShowEmptyAddProcess = (
     variant === 'full'
@@ -2386,35 +2989,46 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {displayCards.map((card) => (
-            <ProcessCardsV2
-              key={`${card.mode}:${card.id}`}
-              item={card}
-              templates={templates}
-              variant={variant}
-              onChange={handleCardChange}
-              onStageStatusChange={handleStageStatusChange}
-              onDelete={handleDeleteCard}
-              onDeleteLane={handleDeleteLane}
-              onDeleteStage={handleDeleteStage}
-              onCopy={handleCopyCard}
-              onAddRun={handleAddRun}
-              onShowInfo={handleShowInfo}
-              onShowRecords={handleShowRecords}
-              onTemplateChange={handleTemplateChange}
-              onAutoAssignProcess={handleAutoAssignProcess}
-              onAutoAssignStage={handleAutoAssignStage}
-              onOpenStageDetails={handleOpenStageDetails}
-              onConfigureActivator={
-                isProcessTemplateModule(normalizedModuleId) && variant === 'full'
-                  ? handleConfigureTemplateActivator
-                  : undefined
-              }
-              autoAssigning={Boolean(autoAssigningCardIds[cardKey(card)])}
-              canAutoAssign={card.lanes.some((lane) => lane.stages.some((stage) => stage.kind === 'draft'))}
-              highlightedStageIds={getHighlightedStageIds(card)}
-            />
-          ))}
+          {displayCards.map((card) => {
+            const key = cardKey(card);
+            return (
+              <div
+                key={key}
+                ref={(node) => {
+                  if (node) cardElementRefs.current.set(key, node);
+                  else cardElementRefs.current.delete(key);
+                }}
+              >
+                <ProcessCardsV2
+                  item={card}
+                  templates={templates}
+                  variant={variant}
+                  onChange={handleCardChange}
+                  onStageStatusChange={handleStageStatusChange}
+                  onDelete={handleDeleteCard}
+                  onDeleteLane={handleDeleteLane}
+                  onDeleteStage={handleDeleteStage}
+                  onCopy={handleCopyCard}
+                  onAddRun={handleAddRun}
+                  onShowInfo={handleShowInfo}
+                  onShowRecords={handleShowRecords}
+                  onTemplateChange={handleTemplateChange}
+                  onAutoAssignProcess={isProcessTemplateModule(normalizedModuleId) ? undefined : handleAutoAssignProcess}
+                  onAutoAssignStage={isProcessTemplateModule(normalizedModuleId) ? undefined : handleAutoAssignStage}
+                  onSaveDraftStage={handleSaveDraftStage}
+                  onOpenStageDetails={handleOpenStageDetails}
+                  onConfigureActivator={
+                    isProcessTemplateModule(normalizedModuleId) && variant === 'full'
+                      ? handleConfigureTemplateActivator
+                      : undefined
+                  }
+                  autoAssigning={Boolean(autoAssigningCardIds[key])}
+                  canAutoAssign={!isProcessTemplateModule(normalizedModuleId) && card.lanes.some((lane) => lane.stages.some((stage) => stage.kind === 'draft'))}
+                  highlightedStageIds={getHighlightedStageIds(card)}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
       {activatorModal ? (
@@ -2443,7 +3057,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         footer={null}
         centered
         zIndex={32000}
-        destroyOnClose
+        destroyOnHidden
         onCancel={() => {
           if (!stageDeleteBusy) setStageDeleteRequest(null);
         }}
@@ -2523,7 +3137,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         footer={null}
         centered
         zIndex={32000}
-        destroyOnClose
+        destroyOnHidden
         onCancel={() => {
           if (!bulkDeleteBusy) setBulkDeleteRequest(null);
         }}

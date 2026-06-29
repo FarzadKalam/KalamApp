@@ -158,10 +158,10 @@ const RecycleBinPage: React.FC = () => {
         render: (value: string | null, row) => (
           <div className="min-w-0">
             <div className="truncate font-bold text-gray-800 dark:text-gray-100">
-              {String(value || row.source_record_id || "-")}
+              {String(value || "-")}
             </div>
             <div className="truncate text-xs text-gray-500 dark:text-gray-400">
-              شناسه: {String(row.source_record_id || "-")}
+              {getRecycleBinModuleTitle(row.module_id)}
             </div>
           </div>
         ),

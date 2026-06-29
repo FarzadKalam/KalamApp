@@ -24,6 +24,7 @@ import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../u
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
+import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 
 type ChatMessage = {
   id: string;
@@ -39,7 +40,7 @@ type AiBundleInput =
   | { id: string; type: 'file' | 'image'; label: string; file: AiUploadedFilePrompt }
   | { id: string; type: 'voice'; label: string; voice: RecordedVoice };
 
-const DEFAULT_COMPOSER_CAPABILITIES: AiComposerCapability[] = ['document_analysis', 'voice_input'];
+const DEFAULT_COMPOSER_CAPABILITIES: AiComposerCapability[] = [];
 
 const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حال فکر کردن...') => {
   const set = new Set((capabilities || []).map((item) => String(item || '').trim()));
@@ -67,6 +68,13 @@ interface AssistantPanelProps {
   active: boolean;
   initialThreadId?: string | null;
   initialPrompt?: string | null;
+  initialInputKind?: string | null;
+  initialCapabilities?: AiComposerCapability[] | null;
+  initialRecordCreationTargetModuleId?: string | null;
+  initialModelOverride?: string | null;
+  initialFiles?: Array<(AiUploadedFilePrompt & { message?: string | null })> | null;
+  initialFile?: (AiUploadedFilePrompt & { message?: string | null }) | null;
+  autoSubmitInitialPrompt?: boolean;
   openCreateActivityFromMessage?: (input: any) => void | Promise<void>;
 }
 
@@ -193,7 +201,23 @@ const buildPendingActionRevisionPrompt = (pendingAction: any, text: string) => {
   ].filter(Boolean).join('\n');
 };
 
-const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId, initialPrompt, openCreateActivityFromMessage }) => {
+const normalizeInitialCapabilities = (items?: AiComposerCapability[] | null) => {
+  return Array.from(new Set((items || []).filter(Boolean)));
+};
+
+const AssistantPanel: React.FC<AssistantPanelProps> = ({
+  active,
+  initialThreadId,
+  initialPrompt,
+  initialInputKind,
+  initialCapabilities,
+  initialRecordCreationTargetModuleId,
+  initialModelOverride,
+  initialFiles,
+  initialFile,
+  autoSubmitInitialPrompt = false,
+  openCreateActivityFromMessage,
+}) => {
   const { message } = App.useApp();
   const location = useLocation();
   const [input, setInput] = useState('');
@@ -225,9 +249,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastAutoPromptSignatureRef = useRef<string>('');
+  const autoSubmittedInitialPromptRef = useRef('');
+  const autoSubmittedInitialBundleRef = useRef('');
   const modelOverrideRef = useRef<string | null>(null);
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
+  const normalizedInitialInputKind = String(initialInputKind || 'text').trim() || 'text';
 
   useEffect(() => {
     if (active) return undefined;
@@ -389,6 +416,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     () => recordCreationTargetModuleId ? buildAiRecordCreationSchema(recordCreationTargetModuleId) : null,
     [recordCreationTargetModuleId],
   );
+  const pendingRecordCreationSchema = useMemo(
+    () => pendingAiAction?.actionType === 'create_record_from_prompt' && pendingAiAction?.schema
+      ? pendingAiAction.schema
+      : null,
+    [pendingAiAction],
+  );
+  const activeRecordCreationSchema = recordCreationSchema || pendingRecordCreationSchema;
 
   const callAssistant = useCallback(async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
@@ -400,6 +434,184 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     }
     return data;
   }, []);
+
+  const buildBundleInputPayloads = useCallback(async () => Promise.all(bundleInputs.map(async (item) => {
+    if (item.type === 'voice') {
+      return {
+        id: item.id,
+        type: 'voice',
+        label: item.label,
+        audio: {
+          data: await blobToBase64(item.voice.blob),
+          mimeType: item.voice.mimeType,
+          durationMs: item.voice.durationMs,
+          filename: item.voice.filename,
+        },
+      };
+    }
+    return {
+      id: item.id,
+      type: item.type,
+      label: item.label,
+      file: {
+        filename: item.file.fileName,
+        mimeType: item.file.mimeType,
+        size: item.file.size,
+        text: item.file.inputKind === 'text' ? item.file.prompt : '',
+        data: item.file.data || null,
+        url: item.file.url || null,
+        assetId: item.file.assetId || null,
+        entryId: item.file.entryId || null,
+        moduleId: item.file.moduleId || null,
+        recordId: item.file.recordId || null,
+      },
+    };
+  })), [bundleInputs]);
+
+  const requestAutoRoute = useCallback(async (params: {
+    messageText: string;
+    inputKind: string;
+    bundlePayload?: any[];
+    forceNewThread?: boolean;
+  }) => {
+    const data = await callAssistant({
+      action: 'suggest_auto_capabilities',
+      message: params.messageText,
+      inputKind: params.inputKind,
+      bundle: params.bundlePayload?.length ? { inputs: params.bundlePayload } : undefined,
+      threadId: params.forceNewThread ? null : threadId,
+      forceNewThread: params.forceNewThread === true,
+      context: contextWithSelection,
+      modelOverride: modelOverrideRef.current,
+    });
+    return {
+      suggestedCapabilities: Array.from(new Set(
+        Array.isArray(data?.capabilities)
+          ? data.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
+          : [],
+      )) as AiComposerCapability[],
+      targetModuleId: String(data?.targetModuleId || '').trim() || null,
+    };
+  }, [callAssistant, contextWithSelection, threadId]);
+
+  const executeAutoRoute = useCallback(async (params: {
+    messageText: string;
+    inputKind: string;
+    bundlePayload?: any[];
+    forceNewThread?: boolean;
+  }) => {
+    const bundlePayload = Array.isArray(params.bundlePayload) ? params.bundlePayload : [];
+    const route = await requestAutoRoute({
+      messageText: params.messageText,
+      inputKind: params.inputKind,
+      bundlePayload,
+      forceNewThread: params.forceNewThread,
+    });
+    const capabilitySet = new Set(route.suggestedCapabilities);
+    const autoRecordSchema = capabilitySet.has('record_creation') && route.targetModuleId
+      ? buildAiRecordCreationSchema(route.targetModuleId)
+      : null;
+    if (capabilitySet.has('record_creation') && !autoRecordSchema) {
+      throw new Error('برای ساخت خودکار، نوع رکورد هنوز روشن نیست. لطفاً نوع رکورد را در پیام مشخص کنید.');
+    }
+
+    if (capabilitySet.has('image_generation')) {
+      const autoSourceImages = [
+        ...mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        ...bundlePayload
+          .filter((item) => String(item?.type || '') === 'image' && String(item?.file?.data || '').trim())
+          .map((item) => ({
+            data: String(item.file.data || ''),
+            mimeType: String(item.file.mimeType || 'image/png'),
+            filename: String(item.file.filename || 'image.png'),
+          })),
+      ];
+      const data = await callAssistant({
+        action: 'generate_image',
+        prompt: params.messageText || 'این تصویر را با توجه به درخواست کاربر اصلاح یا کامل کن.',
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: autoSourceImages,
+        sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
+      });
+      return { ...data, autoAction: 'generate_image' };
+    }
+
+    if (capabilitySet.has('voice_output')) {
+      const data = await callAssistant({
+        action: 'generate_voice_output',
+        text: params.messageText,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+      });
+      return { ...data, autoAction: 'generate_voice_output' };
+    }
+
+    if (capabilitySet.has('video_generation')) {
+      const data = await callAssistant({
+        action: 'generate_video',
+        prompt: params.messageText,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+      });
+      return { ...data, autoAction: 'generate_video' };
+    }
+
+    if (bundlePayload.length > 0
+      || capabilitySet.has('document_analysis')
+      || capabilitySet.has('voice_input')
+      || capabilitySet.has('record_creation')
+      || capabilitySet.has('process_operation')
+      || capabilitySet.has('document_generation')) {
+      return await callAssistant({
+        action: 'run_task_bundle',
+        capabilities: route.suggestedCapabilities,
+        message: params.messageText || (autoRecordSchema
+          ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.'
+          : capabilitySet.has('process_operation')
+          ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.'
+          : capabilitySet.has('document_generation')
+          ? 'بر اساس این ورودی‌ها فایل مناسب را بساز.'
+          : 'ورودی‌های پیوست‌شده را بررسی کن.'),
+        inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
+        bundle: bundlePayload.length ? { inputs: bundlePayload } : undefined,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        recordCreation: autoRecordSchema,
+        previewOnly: true,
+      });
+    }
+
+    return await callAssistant({
+      action: 'chat',
+      capability: route.suggestedCapabilities.includes('legal_assistant')
+        ? 'legal_assistant'
+        : route.suggestedCapabilities.includes('deep_reasoning')
+        ? 'deep_reasoning'
+        : contextWithSelection.mode === 'record'
+        ? 'record_chat'
+        : 'dashboard_chat',
+      capabilities: route.suggestedCapabilities,
+      message: params.messageText,
+      inputKind: params.inputKind,
+      threadId: params.forceNewThread ? null : threadId,
+      forceNewThread: params.forceNewThread === true,
+      context: contextWithSelection,
+      modelOverride: modelOverrideRef.current,
+    });
+  }, [callAssistant, contextWithSelection, imageEditSourceUrl, mediaSettings, mediaSourceImages, requestAutoRoute, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
@@ -555,11 +767,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     setThreadId(normalizedInitialThreadId);
     setMessages([]);
     setPendingAiAction(null);
-    setSelectedCapabilities(DEFAULT_COMPOSER_CAPABILITIES);
-    setRecordCreationTargetModuleId(null);
-    setProcessOperationMode(false);
-    setBundleInputs([]);
-  }, [active, contextKey, normalizedInitialThreadId]);
+    const nextInitialCapabilities = normalizeInitialCapabilities(initialCapabilities);
+    setSelectedCapabilities(nextInitialCapabilities);
+    setRecordCreationTargetModuleId(String(initialRecordCreationTargetModuleId || '').trim() || null);
+    setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
+    const seededFiles = (Array.isArray(initialFiles) ? initialFiles : [])
+      .concat(initialFile?.fileName ? [initialFile] : [])
+      .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
+    setBundleInputs(seededFiles.map((filePrompt, index) => ({
+      id: `initial-file-${Date.now()}-${index}`,
+      type: String(filePrompt.mimeType || '').toLowerCase().startsWith('image/') ? 'image' : 'file',
+      label: filePrompt.fileName || 'فایل پیوست',
+      file: filePrompt,
+    })));
+    modelOverrideRef.current = String(initialModelOverride || '').trim() || null;
+    autoSubmittedInitialPromptRef.current = '';
+    autoSubmittedInitialBundleRef.current = '';
+  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialModelOverride, initialRecordCreationTargetModuleId, normalizedInitialThreadId]);
 
   useEffect(() => {
     if (!active || !normalizedInitialThreadId) return;
@@ -653,7 +877,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
-    const assistantText = pendingAiAction && recordCreationSchema
+    const assistantText = pendingAiAction && activeRecordCreationSchema
       ? buildPendingActionRevisionPrompt(pendingAiAction, text)
       : text;
     const shouldStartProcessGuideThread = contextWithSelection.intent === 'process_guide' && !threadId;
@@ -663,14 +887,22 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     const thinkingMessage: ChatMessage = {
       id: `assistant-pending-${Date.now()}`,
       role: 'assistant',
-      content: buildAiPendingStatusText(selectedCapabilities),
+      content: selectedCapabilities.length > 0
+        ? buildAiPendingStatusText(selectedCapabilities)
+        : 'در حال تصمیم‌گیری و آماده‌سازی پاسخ...',
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: selectedCapabilities },
+      metadata: { pending_status: true, capabilities: selectedCapabilities.length > 0 ? selectedCapabilities : ['auto_router'] },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setSubmitting(true);
     try {
-      const data = await callAssistant(processOperationMode ? {
+      const data = await (selectedCapabilities.length === 0 && !processOperationMode && !activeRecordCreationSchema
+        ? executeAutoRoute({
+          messageText: assistantText,
+          inputKind,
+          forceNewThread: shouldStartProcessGuideThread,
+        })
+        : callAssistant(processOperationMode ? {
         action: 'process_operation_from_prompt',
         capability: 'record_chat',
         capabilities: selectedCapabilities,
@@ -681,7 +913,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         previewOnly: true,
-      } : recordCreationSchema ? {
+      } : activeRecordCreationSchema ? {
         action: 'create_record_from_prompt',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities,
@@ -691,7 +923,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         forceNewThread: shouldStartProcessGuideThread,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
-        recordCreation: recordCreationSchema,
+        recordCreation: activeRecordCreationSchema,
         previewOnly: true,
       } : {
         action: 'chat',
@@ -709,19 +941,84 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         forceNewThread: shouldStartProcessGuideThread,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
-      });
-      if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+      }));
+      if (!data?.proposedAction && activeRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
       }
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
+      if (data?.autoAction === 'generate_image') {
+        if (data?.pending) {
+          const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
+          if (serverMessages.length) {
+            setMessages((prev) => [
+              ...prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id),
+              ...serverMessages.map((item) => item.id === data.messageId
+                ? { ...item, metadata: { ...(item.metadata || {}), server_message_id: data.messageId } }
+                : item),
+            ]);
+          } else {
+            setMessages((prev) => prev.map((item) => {
+              if (item.id === userMessage.id) return { ...item, id: data.userMessageId || item.id };
+              if (item.id === thinkingMessage.id) {
+                return {
+                  ...item,
+                  id: data.messageId || item.id,
+                  content: 'در حال ساخت تصویر...',
+                  provider: data.provider || null,
+                  model: data.model || null,
+                  metadata: {
+                    ...(item.metadata || {}),
+                    pending_status: true,
+                    capabilities: ['image_generation'],
+                    kind: 'image_generation',
+                    started_at: Date.now(),
+                    server_message_id: data.messageId || null,
+                  },
+                };
+              }
+              return item;
+            }));
+          }
+          return;
+        }
+        const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
+        if (newImageUrl) setImageEditSourceUrl(newImageUrl);
+      }
+      if (data?.autoAction === 'generate_video') {
+        const videoId = String(data?.videoId || '').trim();
+        setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
+          ? {
+            ...item,
+            id: data?.messageId || item.id,
+            content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: {
+              ...(item.metadata || {}),
+              pending_status: true,
+              capabilities: ['video_generation'],
+              kind: 'video_generation',
+              started_at: Date.now(),
+              video_id: videoId,
+              server_message_id: data?.messageId || null,
+            },
+          }
+          : item));
+        return;
+      }
       setMessages((prev) => [
         ...prev.filter((item) => item.id !== thinkingMessage.id),
         {
           id: data.messageId || `assistant-${Date.now()}`,
           role: 'assistant',
-          content: normalizeAiMessageText(data.answer) || 'پاسخی دریافت نشد.',
-          metadata: { usage: data.usage, attachments: Array.isArray(data.attachments) ? data.attachments : [] },
+          content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'پاسخی دریافت نشد.'),
+          metadata: {
+            usage: data.usage,
+            attachments: Array.isArray(data.attachments) ? data.attachments : [],
+            ...(data?.file ? { file: data.file } : {}),
+            ...(data?.image ? { image: data.image } : {}),
+          },
           provider: data.provider || null,
           model: data.model || null,
           created_at: new Date().toISOString(),
@@ -754,7 +1051,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     } finally {
       setSubmitting(false);
     }
-  }, [callAssistant, contextWithSelection, input, message, pendingAiAction, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, callAssistant, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, selectedCapabilities, submitting, threadId]);
+
+  useEffect(() => {
+    const prompt = String(initialPrompt || '').trim();
+    if (!active || initialFile || !autoSubmitInitialPrompt || !prompt || submitting || loadingThread) return;
+    const expectedCapabilities = normalizeInitialCapabilities(initialCapabilities);
+    const capabilitiesReady = expectedCapabilities.length === selectedCapabilities.length
+      && expectedCapabilities.every((capability) => selectedCapabilities.includes(capability));
+    const expectedRecordTarget = String(initialRecordCreationTargetModuleId || '').trim() || null;
+    const recordTargetReady = String(recordCreationTargetModuleId || '') === String(expectedRecordTarget || '');
+    if (!capabilitiesReady || !recordTargetReady) return;
+    const signature = `${normalizedInitialThreadId || 'new'}:${normalizedInitialInputKind}:${prompt}`;
+    if (autoSubmittedInitialPromptRef.current === signature) return;
+    autoSubmittedInitialPromptRef.current = signature;
+    setInput('');
+    void submitChat(prompt, normalizedInitialInputKind);
+  }, [active, autoSubmitInitialPrompt, initialCapabilities, initialPrompt, initialRecordCreationTargetModuleId, loadingThread, normalizedInitialInputKind, normalizedInitialThreadId, recordCreationTargetModuleId, selectedCapabilities, submitChat, submitting]);
 
   const submitImagePrompt = useCallback(async () => {
     const text = input.trim();
@@ -991,13 +1304,31 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     setBundleInputs((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
+  const bundlePreviewItems = useMemo<ComposerAttachmentChipItem[]>(() => bundleInputs.map((item) => ({
+    id: item.id,
+    name: item.label || (item.type === 'voice' ? 'ویس' : item.file.fileName || 'فایل پیوست'),
+    mimeType: item.type === 'voice' ? item.voice.mimeType : item.file.mimeType,
+    fileType: item.type === 'voice' ? 'voice' : item.type === 'image' ? 'image' : 'file',
+    url: item.type === 'voice'
+      ? null
+      : (item.type === 'image' ? (item.file.data || item.file.url || null) : null),
+    subtitle: null,
+    sizeText: item.type === 'voice'
+      ? `${Math.max(1, Math.round(Number(item.voice.durationMs || 0) / 1000)).toLocaleString('fa-IR')} ثانیه`
+      : `${Math.max(1, Math.round(Number(item.file.size || 0) / 1024)).toLocaleString('fa-IR')} کیلوبایت`,
+    loading: false,
+    onRemove: submitting ? null : () => removeBundleInput(item.id),
+    removeDisabled: submitting,
+  })), [bundleInputs, removeBundleInput, submitting]);
+
   const submitTaskBundle = useCallback(async () => {
     const prompt = input.trim();
     if (submitting || (!prompt && bundleInputs.length === 0)) return;
-    const assistantPrompt = pendingAiAction && recordCreationSchema && prompt
+    const assistantPrompt = pendingAiAction && activeRecordCreationSchema && prompt
       ? buildPendingActionRevisionPrompt(pendingAiAction, prompt)
       : prompt;
-    const effectiveCapabilities = bundleInputs.some((item) => item.type === 'file' || item.type === 'image')
+    const effectiveCapabilities = selectedCapabilities.length > 0
+      && bundleInputs.some((item) => item.type === 'file' || item.type === 'image')
       && !selectedCapabilities.includes('document_analysis')
       ? [...selectedCapabilities, 'document_analysis' as AiComposerCapability]
       : selectedCapabilities;
@@ -1035,62 +1366,97 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     const thinkingMessage: ChatMessage = {
       id: `assistant-bundle-pending-${Date.now()}`,
       role: 'assistant',
-      content: buildAiPendingStatusText(effectiveCapabilities, 'در حال پردازش ورودی‌ها...'),
+      content: effectiveCapabilities.length > 0
+        ? buildAiPendingStatusText(effectiveCapabilities, 'در حال پردازش ورودی‌ها...')
+        : 'در حال تصمیم‌گیری و بررسی ورودی‌ها...',
       created_at: new Date().toISOString(),
-      metadata: { pending_status: true, capabilities: effectiveCapabilities, kind: 'document_analysis', started_at: Date.now() },
+      metadata: {
+        pending_status: true,
+        capabilities: effectiveCapabilities.length > 0 ? effectiveCapabilities : ['auto_router'],
+        kind: 'document_analysis',
+        started_at: Date.now(),
+      },
     };
     setMessages((prev) => [...prev, userMessage, thinkingMessage]);
     setSubmitting(true);
     try {
-      const inputs = await Promise.all(bundleInputs.map(async (item) => {
-        if (item.type === 'voice') {
-          return {
-            id: item.id,
-            type: 'voice',
-            label: item.label,
-            audio: {
-              data: await blobToBase64(item.voice.blob),
-              mimeType: item.voice.mimeType,
-              durationMs: item.voice.durationMs,
-              filename: item.voice.filename,
-            },
-          };
-        }
-        return {
-          id: item.id,
-          type: item.type,
-          label: item.label,
-          file: {
-            filename: item.file.fileName,
-            mimeType: item.file.mimeType,
-            size: item.file.size,
-            text: item.file.inputKind === 'text' ? item.file.prompt : '',
-            data: item.file.data || null,
-            url: item.file.url || null,
-            assetId: item.file.assetId || null,
-            entryId: item.file.entryId || null,
-            moduleId: item.file.moduleId || null,
-            recordId: item.file.recordId || null,
-          },
-        };
-      }));
-      const data = await callAssistant({
-        action: 'run_task_bundle',
-        capabilities: effectiveCapabilities,
-        message: assistantPrompt || (recordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
-        inputKind: 'task_bundle',
-        bundle: { inputs },
-        threadId,
-        context: contextWithSelection,
-        modelOverride: modelOverrideRef.current,
-        recordCreation: recordCreationSchema,
-        previewOnly: true,
-      });
-      if (!data?.proposedAction && recordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
+      const inputs = await buildBundleInputPayloads();
+      const data = await (effectiveCapabilities.length === 0 && !processOperationMode && !activeRecordCreationSchema
+        ? executeAutoRoute({
+          messageText: assistantPrompt,
+          inputKind: 'task_bundle',
+          bundlePayload: inputs,
+        })
+        : callAssistant({
+          action: 'run_task_bundle',
+          capabilities: effectiveCapabilities,
+          message: assistantPrompt || (activeRecordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
+          inputKind: 'task_bundle',
+          bundle: { inputs },
+          threadId,
+          context: contextWithSelection,
+          modelOverride: modelOverrideRef.current,
+          recordCreation: activeRecordCreationSchema,
+          previewOnly: true,
+        }));
+      if (!data?.proposedAction && activeRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
         message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
       }
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
+      if (data?.autoAction === 'generate_image') {
+        if (data?.pending) {
+          const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
+          if (serverMessages.length) {
+            setMessages(serverMessages);
+          } else {
+            setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
+              ? {
+                ...item,
+                id: data.messageId || item.id,
+                content: 'در حال ساخت تصویر...',
+                provider: data.provider || null,
+                model: data.model || null,
+                metadata: {
+                  ...(item.metadata || {}),
+                  pending_status: true,
+                  capabilities: ['image_generation'],
+                  kind: 'image_generation',
+                  started_at: Date.now(),
+                  server_message_id: data.messageId || null,
+                },
+              }
+              : item));
+          }
+          setBundleInputs([]);
+          return;
+        }
+        const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
+        if (newImageUrl) setImageEditSourceUrl(newImageUrl);
+      }
+      if (data?.autoAction === 'generate_video') {
+        const videoId = String(data?.videoId || '').trim();
+        setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
+          ? {
+            ...item,
+            id: data?.messageId || item.id,
+            content: 'در حال ساخت ویدیو... (ممکن است چند دقیقه طول بکشد)',
+            provider: data.provider || null,
+            model: data.model || null,
+            metadata: {
+              ...(item.metadata || {}),
+              pending_status: true,
+              capabilities: ['video_generation'],
+              kind: 'video_generation',
+              started_at: Date.now(),
+              video_id: videoId,
+              server_message_id: data?.messageId || null,
+            },
+          }
+          : item));
+        setBundleInputs([]);
+        return;
+      }
       const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
       if (serverMessages.length) {
         setMessages(serverMessages);
@@ -1100,8 +1466,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
           {
             id: data.messageId || `assistant-bundle-${Date.now()}`,
             role: 'assistant',
-            content: normalizeAiMessageText(data.answer) || 'نتیجه آماده شد.',
-            metadata: { usage: data.usage, capability: recordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis' },
+            content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'نتیجه آماده شد.'),
+            metadata: {
+              usage: data.usage,
+              capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis',
+              ...(data?.file ? { file: data.file } : {}),
+              ...(data?.image ? { image: data.image } : {}),
+            },
             provider: data.provider || null,
             model: data.model || null,
             created_at: new Date().toISOString(),
@@ -1116,7 +1487,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
     } finally {
       setSubmitting(false);
     }
-  }, [bundleInputs, callAssistant, contextWithSelection, input, message, pendingAiAction, processOperationMode, recordCreationSchema, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, selectedCapabilities, submitting, threadId]);
+
+  useEffect(() => {
+    if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
+    const fileName = String(initialFile.fileName || '').trim();
+    const signature = `${normalizedInitialThreadId || 'new'}:${fileName}:${String(initialFile.message || initialPrompt || '').trim()}`;
+    if (!fileName || autoSubmittedInitialBundleRef.current === signature) return;
+    autoSubmittedInitialBundleRef.current = signature;
+    void submitTaskBundle();
+  }, [active, autoSubmitInitialPrompt, bundleInputs.length, initialFile, initialPrompt, loadingThread, normalizedInitialThreadId, submitTaskBundle, submitting]);
 
   const confirmPendingAiAction = useCallback(async () => {
     const actionId = String(pendingAiAction?.id || '').trim();
@@ -1389,31 +1769,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
             <Button type="text" size="small" onClick={() => setImageEditSourceUrl(null)}>شروع از نو</Button>
           </div>
         ) : null}
-        {bundleInputs.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {bundleInputs.map((item) => (
-              <div
-                key={item.id}
-                className="inline-flex max-w-full items-center gap-2 rounded-2xl border border-slate-200/70 bg-slate-50/90 px-2.5 py-1.5 text-[11px] text-slate-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.045] dark:text-slate-200"
-              >
-                <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-[rgba(var(--brand-100-rgb),0.88)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-600-rgb),0.18)] dark:text-[rgb(var(--brand-200-rgb))]">
-                  {item.type === 'voice' ? 'ویس' : item.type === 'image' ? 'عکس' : 'فایل'}
-                </span>
-                <span className="min-w-0">
-                  <span className="block max-w-[220px] truncate font-semibold">{item.label}</span>
-                  <span className="block text-[10px] text-slate-400">
-                    {item.type === 'voice'
-                      ? `${Math.max(1, Math.round(Number(item.voice.durationMs || 0) / 1000)).toLocaleString('fa-IR')} ثانیه`
-                      : `${Math.max(1, Math.round(Number(item.file.size || 0) / 1024)).toLocaleString('fa-IR')} کیلوبایت`}
-                  </span>
-                </span>
-                {submitting ? <Spin size="small" /> : (
-                  <Button type="text" size="small" onClick={() => removeBundleInput(item.id)}>
-                    حذف
-                  </Button>
-                )}
-              </div>
-            ))}
+        {bundlePreviewItems.length > 0 ? (
+          <div className="mb-2">
+            <ComposerAttachmentChips items={bundlePreviewItems} />
           </div>
         ) : null}
         <Input.TextArea
@@ -1433,6 +1791,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
         <div className="mt-1">
           <AiComposeModelBar
             selectedCapabilities={selectedCapabilities}
+            fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
             onModelOverrideChange={(model) => { modelOverrideRef.current = model; }}
           />
         </div>
@@ -1467,7 +1826,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({ active, initialThreadId
             onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
-            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : recordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
+            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
           </Button>
         </div>
       </div>

@@ -52,15 +52,13 @@ const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const normalizeDbUuid = (value: unknown) => {
   const raw = normalizeText(value);
   if (!raw) return '';
-  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task):/i, '');
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task)[_:]/i, '');
   return UUID_LIKE_RE.test(stripped) ? stripped : '';
 };
 
 const toUuidOrNull = (value: unknown) => {
-  const normalized = normalizeText(value);
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(normalized)
-    ? normalized
-    : null;
+  const normalized = normalizeDbUuid(value);
+  return normalized || null;
 };
 
 const normalizeStageAssigneeFields = (stage: Record<string, any>) => {
@@ -228,15 +226,6 @@ const isMissingProcessRuntimeRpcError = (error: any, functionName: string) => {
     && (text.includes('function') || text.includes('schema cache'));
 };
 
-const isPermissionDeniedLikeError = (error: any) => {
-  const code = normalizeText(error?.code).toUpperCase();
-  if (code === '42501') return true;
-  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
-  return text.includes('permission denied')
-    || text.includes('row-level security')
-    || text.includes('دسترسی');
-};
-
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
 
 const resolveOrgId = async (
@@ -350,7 +339,8 @@ export const ensureProcessRunForDraftStageGroup = async ({
 }: EnsureProcessRunArgs): Promise<EnsuredProcessRunContext> => {
   const targetMeta = getDraftStageProcessGroupMeta(targetStage || stages[0]);
   const groupId = normalizeText(targetMeta.groupId);
-  if (!supabaseClient || !moduleId || !recordId || !groupId || groupId === 'default_process_group') {
+  const normalizedRecordId = normalizeDbUuid(recordId);
+  if (!supabaseClient || !moduleId || !normalizedRecordId || !groupId || groupId === 'default_process_group') {
     return { processRunId: null, processRunStageId: null, stageMap: new Map() };
   }
 
@@ -367,7 +357,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
     ? (scopedStages.length > 0 ? scopedStages : [targetStage])
     : groupStages;
 
-  const orgId = await resolveOrgId(supabaseClient, moduleId, recordId);
+  const orgId = normalizeDbUuid(await resolveOrgId(supabaseClient, moduleId, normalizedRecordId));
   if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
 
   try {
@@ -378,7 +368,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
       const stageName = normalizeText(stage?.name || stage?.stage_name || stage?.title) || 'مرحله';
       const assignee = normalizeStageAssigneeFields(stageForRuntime);
       return {
-        draft_stage_id: normalizeText(stage?.id) || null,
+        draft_stage_id: toUuidOrNull(stage?.id),
         template_stage_id: toUuidOrNull(stage?.template_stage_id),
         stage_name: stageName,
         sort_order: Number(stage?.sort_order || 10),
@@ -391,11 +381,12 @@ export const ensureProcessRunForDraftStageGroup = async ({
         metadata: {
           ...(stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {}),
           draft_stage_id: normalizeText(stage?.id) || null,
+          draft_stage_key: normalizeText(stage?.id) || null,
           process_group_id: normalizeText(stage?.process_group_id) || null,
           process_group_name: normalizeText(stage?.process_group_name) || null,
           process_target_module_ids: Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : [],
           process_link_map: stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
-          source_template_id: normalizeText(stage?.source_template_id) || null,
+          source_template_id: toUuidOrNull(stage?.source_template_id),
           source_template_name: normalizeText(stage?.source_template_name) || null,
           task_type: normalizeText(stage?.task_type) || null,
           [PROCESS_NODE_KEY]: getProcessStageNodeKey(stage),
@@ -406,10 +397,10 @@ export const ensureProcessRunForDraftStageGroup = async ({
         },
       };
     });
-    const { data, error } = await supabaseClient.rpc('ensure_process_run_for_draft_group', {
+    const { data, error } = await supabaseClient.rpc('ensure_process_run_for_draft_group_v2', {
       p_org_id: orgId,
       p_module_id: moduleId,
-      p_record_id: recordId,
+      p_record_id: normalizedRecordId,
       p_process_group_id: groupId,
       p_process_name: normalizeText(targetMeta.groupLabel || targetMeta.templateName) || 'فرآیند',
       p_template_id: toUuidOrNull(targetMeta.templateId),
@@ -435,15 +426,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
     const processRunStageId = targetStage ? resolveProcessRunStageId(stageMap, targetStage) : null;
     return { processRunId: processRunId || null, processRunStageId, stageMap };
   } catch (error) {
-    if (
-      !isMissingProcessRuntimeRpcError(error, 'ensure_process_run_for_draft_group')
-      && !isMissingColumnLikeError(error)
-      && !isPermissionDeniedLikeError(error)
-    ) {
-      throw error;
-    }
-    console.warn('Process runtime RPC is not available for this request; task will be created without runtime links');
-    return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+    throw error;
   }
 };
 

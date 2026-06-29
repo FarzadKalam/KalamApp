@@ -108,6 +108,7 @@ const ListPrintRuntime = React.lazy(() => import("../components/moduleList/ListP
 const MessageComposerModal = React.lazy(() => import("../components/MessageComposerModal"));
 const SaasUserAdminDrawer = React.lazy(() => import("../components/saas/SaasUserAdminDrawer"));
 const RelatedRecordPopover = React.lazy(() => import("../components/RelatedRecordPopover"));
+const DeleteModuleRecordsModal = React.lazy(() => import("../components/moduleDelete/DeleteModuleRecordsModal"));
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -747,6 +748,7 @@ export const ModuleListRefine: React.FC<{
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [selectAllPagesLoading, setSelectAllPagesLoading] = useState(false);
   const [selectedRowsMap, setSelectedRowsMap] = useState<Record<string, any>>({});
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [listVisibleRowKeys, setListVisibleRowKeys] = useState<React.Key[] | null>(null);
   const [currentView, setCurrentView] = useState<SavedView | null>(
     Array.isArray(initialViewFiltersOverride) && initialViewFiltersOverride.length > 0
@@ -3866,6 +3868,10 @@ export const ModuleListRefine: React.FC<{
       showListMessage("warning", "رکوردهای سیستمی قابل حذف نیستند.");
       return;
     }
+    if (resolvedModuleId && isRecycleBinEnabledModule(resolvedModuleId)) {
+      setDeleteModalOpen(true);
+      return;
+    }
     modal.confirm({
       title: `حذف ${selectedRowKeys.length} رکورد`,
       content: 'آیا مطمئن هستید؟',
@@ -3875,24 +3881,20 @@ export const ModuleListRefine: React.FC<{
       onOk: async () => {
         if (!resolvedModuleId) return;
         try {
-          if (isRecycleBinEnabledModule(resolvedModuleId)) {
-            await moveModuleRecordsToRecycleBin(resolvedModuleId, selectedRowKeys as string[]);
-          } else {
-            await new Promise<void>((resolve, reject) => {
-              deleteMany(
-                {
-                  resource: dataResource || resolvedModuleId,
-                  ids: selectedRowKeys as string[],
-                  successNotification: false,
-                  errorNotification: false,
-                },
-                {
-                  onSuccess: () => resolve(),
-                  onError: (error: any) => reject(error),
-                }
-              );
-            });
-          }
+          await new Promise<void>((resolve, reject) => {
+            deleteMany(
+              {
+                resource: dataResource || resolvedModuleId,
+                ids: selectedRowKeys as string[],
+                successNotification: false,
+                errorNotification: false,
+              },
+              {
+                onSuccess: () => resolve(),
+                onError: (error: any) => reject(error),
+              }
+            );
+          });
           setSelectedRowKeys([]);
           showListMessage('success', 'رکوردهای انتخاب‌شده حذف شدند.');
           tableQueryResult.refetch();
@@ -5143,8 +5145,27 @@ export const ModuleListRefine: React.FC<{
                 title={isBulkEditMode ? `ویرایش گروهی ${selectedRowKeys.length} مورد` : `ویرایش مورد انتخابی`}
                isBulkEdit={isBulkEditMode}
            />
-         </React.Suspense>
-       )}
+       </React.Suspense>
+      )}
+      {deleteModalOpen && resolvedModuleId && moduleConfig ? (
+        <React.Suspense fallback={null}>
+          <DeleteModuleRecordsModal
+            open={deleteModalOpen}
+            moduleId={resolvedModuleId}
+            moduleConfig={moduleConfig}
+            recordIds={selectedRowKeys.map((key) => String(key))}
+            seededRecords={selectedRows}
+            onCancel={() => setDeleteModalOpen(false)}
+            onDeleted={async () => {
+              setDeleteModalOpen(false);
+              setSelectedRowKeys([]);
+              setSelectedRowsMap({});
+              showListMessage('success', 'رکوردهای انتخاب‌شده به سطل بازیافت منتقل شدند.');
+              tableQueryResult.refetch();
+            }}
+          />
+        </React.Suspense>
+      ) : null}
       {bulkBuildModule && (
         <React.Suspense fallback={null}>
         <SmartForm

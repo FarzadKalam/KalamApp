@@ -13,15 +13,23 @@ type CapabilityModelInfo = {
 type AiComposeModelBarProps = {
   selectedCapabilities: string[];
   onModelOverrideChange: (model: string | null) => void;
+  fallbackCapability?: string | null;
   refreshKey?: number;
 };
 
-const resolveEffectiveCapability = (selected: Set<string>) => {
+const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
   if (selected.has('document_generation')) return 'document_generation';
   if (selected.has('video_generation')) return 'video_generation';
   if (selected.has('image_generation')) return 'image_generation';
   if (selected.has('voice_output')) return 'voice_output';
-  return null;
+  if (selected.has('process_operation')) return 'process_operation';
+  if (selected.has('record_creation')) return fallbackCapability || 'dashboard_chat';
+  if (selected.has('legal_assistant')) return 'legal_assistant';
+  if (selected.has('deep_reasoning')) return 'deep_reasoning';
+  if (selected.has('web_search')) return 'web_search';
+  if (selected.has('document_analysis')) return 'document_analysis';
+  if (selected.has('voice_input')) return 'voice_input';
+  return fallbackCapability || null;
 };
 
 const CAPABILITY_FA: Record<string, string> = {
@@ -29,11 +37,20 @@ const CAPABILITY_FA: Record<string, string> = {
   video_generation: 'ساخت ویدیو',
   image_generation: 'ساخت تصویر',
   voice_output: 'تولید صدا',
+  process_operation: 'اقدام فرآیندی',
+  dashboard_chat: 'گفتگوی آزاد',
+  record_chat: 'گفتگو روی رکورد',
+  legal_assistant: 'دستیار حقوقی',
+  deep_reasoning: 'تفکر عمیق',
+  web_search: 'جستجوی وب',
+  document_analysis: 'تحلیل سند',
+  voice_input: 'تحلیل صدا',
 };
 
 const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   selectedCapabilities,
   onModelOverrideChange,
+  fallbackCapability,
   refreshKey,
 }) => {
   const [capabilities, setCapabilities] = useState<Record<string, CapabilityModelInfo>>({});
@@ -59,8 +76,8 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   }, [refreshKey]);
 
   const effectiveCapability = useMemo(
-    () => resolveEffectiveCapability(new Set(selectedCapabilities)),
-    [selectedCapabilities],
+    () => resolveEffectiveCapability(new Set(selectedCapabilities), fallbackCapability),
+    [fallbackCapability, selectedCapabilities],
   );
 
   const info = effectiveCapability ? capabilities[effectiveCapability] : null;

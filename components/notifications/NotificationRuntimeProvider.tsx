@@ -92,6 +92,15 @@ const isTransientOverlayFeedError = (error: any) => {
     || text.includes('connection reset')
     || text.includes('err_failed');
 };
+const isOverlayFeedTimeoutError = (error: any) => {
+  const text = [
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+  return error?.code === '57014' || text.includes('statement timeout') || text.includes('canceling statement due to statement timeout');
+};
 const wait = (delayMs: number) => new Promise<void>((resolve) => {
   window.setTimeout(resolve, delayMs);
 });
@@ -106,7 +115,11 @@ const EMPTY_REVISIONS: RuntimeRevisions = {
 };
 
 const toReadStateSection = (section: RuntimeSection) => (
-  section === 'sms_messages' ? 'sms' : section
+  section === 'sms_messages'
+    ? 'sms'
+    : section === 'bot_direct_messages'
+      ? 'bot_messages'
+      : section
 );
 
 const toSummarySection = (section: RuntimeSection): NotificationUnreadSection | null => {
@@ -911,6 +924,19 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
   const loadOverlayPage = useCallback(async (beforeCursor: string | null, append: boolean) => {
     if (!identity.userId || !identity.orgId) return;
     let data: unknown = null;
+    const loadLegacyOverlayFeed = async () => {
+      let response = await supabase.rpc('get_notification_overlay_feed_v2', {
+        p_before_cursor: beforeCursor,
+        p_limit: 20,
+      });
+      if (isMissingRpcError(response.error) || isOverlayFeedTimeoutError(response.error)) {
+        response = await supabase.rpc('get_notification_overlay_feed_v1', {
+          p_before_cursor: beforeCursor,
+          p_limit: 20,
+        });
+      }
+      return response;
+    };
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
@@ -918,17 +944,8 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
-        if (isMissingRpcError(response.error)) {
-          response = await supabase.rpc('get_notification_overlay_feed_v2', {
-            p_before_cursor: beforeCursor,
-            p_limit: 20,
-          });
-          if (isMissingRpcError(response.error)) {
-            response = await supabase.rpc('get_notification_overlay_feed_v1', {
-              p_before_cursor: beforeCursor,
-              p_limit: 20,
-            });
-          }
+        if (isMissingRpcError(response.error) || isOverlayFeedTimeoutError(response.error)) {
+          response = await loadLegacyOverlayFeed();
         }
       } catch (error) {
         response = { data: null, error };

@@ -2,6 +2,7 @@
 
 type AssistantAction =
   | 'chat'
+  | 'suggest_auto_capabilities'
   | 'chat_with_file'
   | 'analyze_file'
   | 'upload_file'
@@ -61,7 +62,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-06-22-05';
+const FUNCTION_BUILD = 'ai-assistant-2026-06-29-01';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -93,11 +94,14 @@ const PRIMARY_MODEL_CAPABILITIES = new Set([
 
 const PRIMARY_MODEL_PREFERRED_IDS = [
   'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
   'gpt-5.4-mini',
-  'gpt-5-mini',
-  'gpt-4.1-mini',
-  'gpt-4o-mini',
+  'grok-4.3',
+  'gpt-5.5',
+  'qwen3.7-max',
+  'kimi-k2.6',
 ];
+const PRIMARY_MODEL_ALLOWED_IDS = new Set(PRIMARY_MODEL_PREFERRED_IDS);
 
 const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   dashboard_chat: 'ai_chat',
@@ -133,6 +137,20 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'video_generation',
   'document_generation',
 ]);
+
+const AUTO_ROUTER_CAPABILITIES = [
+  'document_analysis',
+  'voice_input',
+  'voice_output',
+  'image_generation',
+  'video_generation',
+  'document_generation',
+  'web_search',
+  'deep_reasoning',
+  'legal_assistant',
+  'record_creation',
+  'process_operation',
+];
 
 const ALLOWED_MODULES = new Set([
   'productBundles',
@@ -1007,6 +1025,7 @@ const pickPreferredPrimaryAiModel = (models: any[]) => {
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
+      && PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim())
       && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
   });
   const byId = new Map(candidates.map((model: any) => [String(model?.id || '').trim(), model]).filter(([id]) => id));
@@ -1035,6 +1054,7 @@ const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<stri
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
+      && PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim())
       && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
   });
   const requestedPrimary = String(selectedModels?.[PRIMARY_AI_MODEL_KEY] || '').trim();
@@ -4899,7 +4919,8 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
   if (isUpdate && (!pageContext?.recordId || pageContext?.moduleId !== targetModuleId)) {
     return json(400, { success: false, message: 'برای ویرایش با هوش مصنوعی باید رکورد جاری همان ماژول مشخص باشد.' });
   }
-  const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
+  const planContext = await loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext);
+  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const file = body?.file || body?.attachment || null;
   const filePrompt = file ? [
     prompt,
@@ -4941,6 +4962,13 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     model: providerConfig.model,
     forceNew: body?.forceNewThread === true,
   });
+  const [companyContext, orgPeopleContext, knowledgeChunks, retrievedContexts, previousMessages] = await Promise.all([
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId || targetModuleId }) : Promise.resolve([]),
+    fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext),
+    fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 20),
+  ]);
 
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
@@ -4956,16 +4984,36 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       target_module_id: targetModuleId,
     },
   });
-
-  const aiResult = await callChatCompletions(providerConfig, [
-    { role: 'system', content: systemPrompt },
+  const mutationMessages = buildPromptMessages(
+    filePrompt,
+    pageContext,
+    knowledgeChunks,
+    companyContext,
+    orgPeopleContext,
+    authContext,
+    retrievedContexts,
+    previousMessages,
+    [],
     {
+      legalMode: false,
+      deepReasoning: capability === 'deep_reasoning',
+      selectedCapabilities: Array.isArray(body?.capabilities)
+        ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
+        : ['record_creation'],
+    },
+  );
+  mutationMessages.unshift({ role: 'system', content: systemPrompt });
+  const lastMutationUserIndex = mutationMessages.map((item) => item.role).lastIndexOf('user');
+  if (lastMutationUserIndex >= 0) {
+    mutationMessages[lastMutationUserIndex] = {
       role: 'user',
       content: file && !String(file?.text || '').trim()
         ? buildOpenAiInputContentParts(filePrompt, file)
         : filePrompt,
-    },
-  ], {
+    };
+  }
+
+  const aiResult = await callChatCompletions(providerConfig, mutationMessages, {
     safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}_${isUpdate ? 'update' : 'create'}_record`,
     responseFormat: { type: 'json_object' },
   });
@@ -5349,6 +5397,259 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
     ...voiceParts,
     ...fileParts,
   ].filter(Boolean).join('\n\n').trim();
+};
+
+const AUTO_RECORD_CREATION_PATTERNS = [
+  /(?:بساز|ایجاد کن|ثبت کن|اضافه کن).*(?:رکورد|مشتری|تامین|تأمین|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند)/i,
+  /(?:به عنوان|تبدیل به).*(?:مشتری|تامین کننده|تامین‌کننده|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند)/i,
+];
+
+const AUTO_PROCESS_OPERATION_PATTERNS = [
+  /(?:فرآیند|فرایند|گردش کار|گردش‌کار|مرحله|فعالیت).*(?:اجرا|ارجاع|اقدام|تغییر|ببر|منتقل|بروزرسانی|به‌روزرسانی)/i,
+  /(?:اقدام فرآیندی|اقدام فرایندی|process operation|workflow action)/i,
+];
+
+const AUTO_IMAGE_GENERATION_PATTERNS = [
+  /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:بساز|ایجاد کن|طراحی کن|درست کن)/i,
+  /(?:تصویر|عکس).*(?:اصلاح|ادیت|ویرایش|تغییر)/i,
+  /(?:لوگو|بنر|پوستر|کاور).*(?:بساز|طراحی کن)/i,
+];
+
+const AUTO_VOICE_OUTPUT_PATTERNS = [
+  /(?:صدا|ویس|فایل صوتی).*(?:بساز|تولید کن|بخوان|بگو|تبدیل کن)/i,
+  /(?:متن|این نوشته).*(?:را|رو).*(?:به صدا|به ویس|صوتی)/i,
+];
+
+const AUTO_DOCUMENT_GENERATION_PATTERNS = [
+  /(?:فایل|ورد|اکسل|pdf|پی دی اف|گزارش|خروجی|csv).*(?:بساز|درست کن|ایجاد کن|تولید کن)/i,
+  /(?:فرم|نامه|قرارداد|پیشنهاد|گزارش).*(?:تهیه کن|بساز|در قالب)/i,
+];
+
+const AUTO_LEGAL_PATTERNS = [
+  /(?:حقوقی|قانون|قرارداد|شکایت|تعهد|مسئولیت|دادرسی|دادگاه|آیین نامه|آیین‌نامه)/i,
+  /(?:legal|contract|law|compliance)/i,
+];
+
+const AUTO_DEEP_REASONING_PATTERNS = [
+  /(?:عمیق|قدم به قدم|مرحله به مرحله|تحلیل کن|مقایسه کن|استدلال کن|سناریو)/i,
+  /(?:reasoning|analyze deeply|step by step)/i,
+];
+
+const buildAutoRouterHistoryText = (messages: any[], limit = 8) =>
+  (messages || [])
+    .filter((item: any) => item && (item.role === 'user' || item.role === 'assistant'))
+    .slice(-limit)
+    .map((item: any) => {
+      const role = item.role === 'assistant' ? 'دستیار' : 'کاربر';
+      const content = String(item?.content || '').replace(/\s+/g, ' ').trim();
+      return content ? `${role}: ${content.slice(0, 700)}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+
+const pickAutoTargetModuleId = (
+  suggestedModuleId: string | null,
+  message: string,
+  pageContext: any,
+  authContext: any,
+) => {
+  const requested = String(suggestedModuleId || '').trim();
+  const canUseModule = (moduleId: string) => {
+    if (!moduleId || !ALLOWED_MODULES.has(moduleId)) return false;
+    return canCreateModule(getModulePermission(authContext.permissions, moduleId));
+  };
+  if (canUseModule(requested)) return requested;
+  const detected = detectRelevantModuleIds(message, pageContext).filter((moduleId) => canUseModule(moduleId));
+  if (detected.length === 1) return detected[0];
+  if (pageContext?.moduleId && canUseModule(String(pageContext.moduleId))) return String(pageContext.moduleId);
+  return null;
+};
+
+const detectHeuristicAutoRoute = (
+  prompt: string,
+  inputs: any[],
+  transcripts: any[],
+  availableCapabilities: string[],
+) => {
+  const available = new Set((availableCapabilities || []).map((item) => String(item || '').trim()));
+  const text = String(prompt || '').trim();
+  const normalized = text.toLowerCase();
+  const hasImageInput = inputs.some((input) => input.type === 'image' || String(input?.file?.mimeType || '').toLowerCase().startsWith('image/'));
+  const hasFileInput = inputs.some((input) => input.file);
+  const hasVoiceInput = transcripts.length > 0 || inputs.some((input) => input.audio);
+  const suggestions: string[] = [];
+
+  const add = (capability: string) => {
+    if (!available.has(capability) || suggestions.includes(capability)) return;
+    suggestions.push(capability);
+  };
+
+  if (hasVoiceInput) add('voice_input');
+  if (hasFileInput) add('document_analysis');
+  if (AUTO_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('image_generation');
+  if (AUTO_VOICE_OUTPUT_PATTERNS.some((pattern) => pattern.test(normalized))) add('voice_output');
+  if (AUTO_DOCUMENT_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('document_generation');
+  if (AUTO_PROCESS_OPERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('process_operation');
+  if (AUTO_RECORD_CREATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('record_creation');
+  if (AUTO_LEGAL_PATTERNS.some((pattern) => pattern.test(normalized))) add('legal_assistant');
+  if (!suggestions.includes('legal_assistant') && shouldTriggerWebSearch(normalized)) add('web_search');
+  if (AUTO_DEEP_REASONING_PATTERNS.some((pattern) => pattern.test(normalized))) add('deep_reasoning');
+  if (hasImageInput && suggestions.includes('image_generation')) {
+    const next = suggestions.filter((item) => item !== 'document_analysis');
+    return Array.from(new Set(next));
+  }
+  return Array.from(new Set(suggestions));
+};
+
+const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const rawContext = normalizeContext(body?.context || {});
+  const baseCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, baseCapability, { modelOverride: body?.modelOverride });
+  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, baseCapability);
+  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+  const availability = buildAiCapabilityAvailability(planContext, providerConfig.orgAiSettings, catalogRows);
+  const availableCapabilities = AUTO_ROUTER_CAPABILITIES.filter((capability) => availability?.[capability]?.enabled === true);
+
+  const existingThread = body?.threadId
+    ? await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, String(body.threadId))
+    : null;
+  const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
+    ? existingThread.metadata.task_bundle_context
+    : null;
+  const inputs = normalizeTaskBundleInputs(body);
+  const transcripts = availability?.voice_input?.enabled === true
+    ? await transcribeTaskBundleVoices(supabaseUrl, serviceRoleKey, authContext, inputs)
+    : [];
+  const prompt = inputs.length
+    ? buildTaskBundlePrompt(body, inputs, transcripts, previousTaskContext)
+    : String(body?.message || body?.prompt || '').trim();
+  if (!prompt) return json(400, { success: false, message: 'متن یا ورودی کافی برای تصمیم‌گیری خودکار دریافت نشد.' });
+
+  const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const previousMessages = existingThread
+    ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, existingThread.id, 20)
+    : [];
+  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
+  const [knowledgeChunks, companyContext, orgPeopleContext, retrievedContexts] = await Promise.all([
+    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
+    fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext),
+  ]);
+
+  const heuristicCapabilities = detectHeuristicAutoRoute(prompt, inputs, transcripts, availableCapabilities);
+  const routerSystemPrompt = [
+    'شما فقط موتور تصمیم‌گیرنده برای انتخاب عملگرهای هوش مصنوعی هستید.',
+    'پاسخ شما باید فقط JSON معتبر باشد و هیچ متن اضافه‌ای نداشته باشد.',
+    'فقط از capabilityهای مجاز زیر انتخاب کن و capability جدید نساز:',
+    availableCapabilities.length ? availableCapabilities.join(', ') : 'هیچ capability فعال نیست',
+    'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
+    'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، document_analysis و در صورت وجود صوت voice_input را انتخاب کن.',
+    'اگر کاربر خواسته از روی ورودی‌ها رکورد ساخته شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده.',
+    'اگر کاربر خواسته مرحله، فعالیت یا فرآیند اجرا/تغییر/ارجاع شود، process_operation را انتخاب کن.',
+    'اگر کاربر ساخت یا اصلاح تصویر می‌خواهد، image_generation را انتخاب کن؛ مخصوصاً وقتی تصویر مبنا هم فرستاده شده است.',
+    'اگر کاربر ساخت فایل Word/Excel/PDF/CSV یا گزارش خروجی می‌خواهد، document_generation را انتخاب کن.',
+    'اگر کاربر تبدیل متن به ویس می‌خواهد، voice_output را انتخاب کن.',
+    'اگر سوال نیازمند اطلاعات جاری وب است، web_search را انتخاب کن.',
+    'اگر سوال حقوقی است، legal_assistant را انتخاب کن.',
+    'اگر سوال پیچیده و نیازمند تحلیل چندمرحله‌ای است، deep_reasoning را انتخاب کن.',
+    'چند capability را فقط وقتی باهم برگردان که واقعاً برای انجام همان درخواست لازم باشند.',
+    'برای record_creation اگر نوع رکورد روشن نیست target_module_id را null بگذار.',
+    'قالب خروجی:',
+    '{"capabilities":[],"target_module_id":null,"reason":"...","confidence":"low|medium|high"}',
+  ].join('\n');
+  const routingUserPrompt = [
+    `درخواست اصلی کاربر:\n${prompt}`,
+    heuristicCapabilities.length ? `پیشنهاد اولیه heuristic:\n${heuristicCapabilities.join(', ')}` : '',
+    previousMessages.length ? `خلاصه گفتگوی قبلی:\n${buildAutoRouterHistoryText(previousMessages)}` : '',
+    inputs.length ? `نوع ورودی‌ها:\n${inputs.map((input) => `- ${input.type}: ${input.label}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  let capabilities = heuristicCapabilities;
+  let targetModuleId: string | null = null;
+  let routeReason = heuristicCapabilities.length
+    ? `heuristic:${heuristicCapabilities.join(',')}`
+    : 'plain_chat';
+  let routeConfidence = heuristicCapabilities.length ? 'medium' : 'low';
+  let usageWithBilling: any = null;
+  let ledger: any = null;
+  try {
+    const routingMessages = buildPromptMessages(
+      routingUserPrompt,
+      pageContext,
+      knowledgeChunks,
+      companyContext,
+      orgPeopleContext,
+      authContext,
+      retrievedContexts,
+      previousMessages,
+      [],
+      {
+        legalMode: false,
+        deepReasoning: false,
+        selectedCapabilities: heuristicCapabilities,
+      },
+    );
+    routingMessages.unshift({ role: 'system', content: routerSystemPrompt });
+    const routeResult = await callChatCompletions(providerConfig, routingMessages, {
+      safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${baseCapability}_auto_router`,
+      responseFormat: { type: 'json_object' },
+    });
+    const parsed = extractJsonObjectFromText(routeResult.content) || {};
+    const suggestedCapabilities = Array.isArray(parsed?.capabilities)
+      ? parsed.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const filtered = suggestedCapabilities.filter((capability: string) => availableCapabilities.includes(capability));
+    capabilities = filtered.length ? Array.from(new Set(filtered)) : heuristicCapabilities;
+    targetModuleId = pickAutoTargetModuleId(String(parsed?.target_module_id || '').trim() || null, prompt, pageContext, authContext);
+    routeReason = String(parsed?.reason || routeReason || '').trim() || routeReason;
+    routeConfidence = String(parsed?.confidence || routeConfidence || '').trim() || routeConfidence;
+    ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+      threadId: existingThread?.id || null,
+      requestId: routeResult.requestId,
+      capability: baseCapability,
+      provider: routeResult.provider,
+      model: routeResult.model,
+      usageMetadata: routeResult.usageMetadata,
+      metadata: {
+        source: 'auto_router',
+        suggested_capabilities: capabilities,
+        target_module_id: targetModuleId,
+        confidence: routeConfidence,
+      },
+    });
+    usageWithBilling = withCustomerBilling(routeResult.usageMetadata, ledger);
+    return json(200, {
+      success: true,
+      capabilities,
+      targetModuleId,
+      capability: baseCapability,
+      reason: routeReason,
+      confidence: routeConfidence,
+      provider: routeResult.provider,
+      model: routeResult.model,
+      usage: usageWithBilling,
+      ledger,
+    });
+  } catch (error) {
+    console.warn('AI auto-router fell back to heuristics', error);
+  }
+
+  if (capabilities.includes('record_creation')) {
+    targetModuleId = pickAutoTargetModuleId(null, prompt, pageContext, authContext);
+  }
+  return json(200, {
+    success: true,
+    capabilities,
+    targetModuleId,
+    capability: baseCapability,
+    reason: routeReason,
+    confidence: routeConfidence,
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    usage: usageWithBilling,
+    ledger,
+  });
 };
 
 const parseAssistantJsonResponse = async (response: Response) => {
@@ -8766,6 +9067,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'suggest_auto_capabilities') return await handleSuggestAutoCapabilities(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'create_record_from_prompt' || action === 'update_record_from_prompt') {
       return await handleRecordMutationFromPrompt(supabaseUrl, serviceRoleKey, authContext, body);
     }

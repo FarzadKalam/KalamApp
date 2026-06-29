@@ -6637,11 +6637,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       }
 
       const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
-      const maxSortOrder = existing.reduce((maxValue: number, stage: any) => {
-        const n = Number(stage?.sort_order || 0);
-        return n > maxValue ? n : maxValue;
-      }, 0);
-      let cursor = maxSortOrder > 0 ? maxSortOrder + 10 : ((existing.length + 1) * 10);
       const nextGroupId = buildProcessGroupId();
       const existingGroupCount = new Set(
         existing
@@ -6660,7 +6655,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         templateName: selectedTemplate?.label || null,
         targetModuleIds: appendProcessTargetModuleIds,
         processLinkMap: currentLinkedRecords,
-        startSortOrder: cursor,
+        startSortOrder: 10,
       }).map((stage: any) => ({
         ...stage,
         automation_rules: normalizeProcessAutomationRules(stage?.automation_rules),
@@ -6670,7 +6665,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         duration_from: String(stage?.duration_from || 'project_start'),
       }));
 
-      const nextStages = [...existing, ...appendedStages].sort(
+      const existingSortShift = Math.max(20, (appendedStages.length + 1) * 10);
+      const shiftedExisting = existing.map((stage: any, index: number) => ({
+        ...stage,
+        sort_order: Number(stage?.sort_order || ((index + 1) * 10)) + existingSortShift,
+      }));
+
+      const nextStages = [...appendedStages, ...shiftedExisting].sort(
         (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
       );
       await saveDraftStages(nextStages);

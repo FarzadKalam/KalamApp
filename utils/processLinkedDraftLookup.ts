@@ -9,8 +9,16 @@ const PROCESS_DRAFT_FIELD_KEYS = [
   'sub_process_draft',
 ] as const;
 
+const LINKED_DRAFT_LOOKUP_EXCLUDED_TABLES = new Set([
+  'automation_execution_reports',
+  'sms_delivery_reports',
+  'voip_call_logs',
+]);
+
 const LINKED_DRAFT_CACHE_TTL_MS = 30_000;
+const LINKED_DRAFT_UNSUPPORTED_TTL_MS = 120_000;
 const linkedDraftCache = new Map<string, { savedAt: number; stages: Record<string, any>[] }>();
+const unsupportedLinkedDraftSpecs = new Map<string, number>();
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
@@ -28,6 +36,13 @@ const parseObject = (value: unknown): Record<string, any> => {
 const getDraftFieldKey = (module: any) => {
   const fieldKeys = new Set((module?.fields || []).map((field: any) => normalizeText(field?.key)).filter(Boolean));
   return PROCESS_DRAFT_FIELD_KEYS.find((fieldKey) => fieldKeys.has(fieldKey)) || '';
+};
+
+const isMissingColumnLikeError = (error: any) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  if (['42703', 'PGRST200', 'PGRST204'].includes(code)) return true;
+  const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return text.includes('column') || text.includes('schema cache') || text.includes('does not exist');
 };
 
 const extractStageLinks = (stage: Record<string, any>) => {
@@ -95,6 +110,7 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
       const sourceModuleId = normalizeText(module?.id);
       const tableName = normalizeText(module?.table || sourceModuleId);
       const fieldKey = getDraftFieldKey(module);
+      if (LINKED_DRAFT_LOOKUP_EXCLUDED_TABLES.has(tableName)) return null;
       if (!sourceModuleId || !tableName || !fieldKey) return null;
       return { moduleId: sourceModuleId, tableName, fieldKey };
     })
@@ -110,6 +126,9 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
       normalizeText(options?.excludeModuleId) === spec.moduleId
       && normalizeText(options?.excludeRecordId) === normalizedRecordId
     ) return;
+    const specKey = `${spec.tableName}:${spec.fieldKey}`;
+    const unsupportedAt = unsupportedLinkedDraftSpecs.get(specKey);
+    if (unsupportedAt && Date.now() - unsupportedAt < LINKED_DRAFT_UNSUPPORTED_TTL_MS) return;
 
     const queryRows = async (payload: any[]) => {
       const { data, error } = await supabaseClient
@@ -117,7 +136,11 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
         .select(`id, process_template_id, ${spec.fieldKey}`)
         .filter(spec.fieldKey, 'cs', JSON.stringify(payload))
         .limit(limitPerModule);
-      if (error || !Array.isArray(data)) return [];
+      if (error) {
+        if (isMissingColumnLikeError(error)) unsupportedLinkedDraftSpecs.set(specKey, Date.now());
+        return [];
+      }
+      if (!Array.isArray(data)) return [];
       return data;
     };
 
@@ -137,6 +160,7 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
           ...stage,
           __process_v2_linked_owner_module_id: spec.moduleId,
           __process_v2_linked_owner_record_id: ownerRecordId,
+          __process_v2_linked_owner_field_key: spec.fieldKey,
         });
       });
     });

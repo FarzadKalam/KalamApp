@@ -89,6 +89,7 @@ type ProcessTaskModalV2Props = {
   onClose: () => void;
   onStageStatusChange?: (stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
   onCreateDraftActivity?: (overrides?: Record<string, any>) => any | Promise<any>;
+  onSaveDraftActivity?: (overrides?: Record<string, any>) => any | Promise<any>;
 };
 
 type MockCustomField = {
@@ -879,6 +880,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   onClose,
   onStageStatusChange,
   onCreateDraftActivity,
+  onSaveDraftActivity,
 }) => {
   const { message } = App.useApp();
   const isInsideRouter = useInRouterContext();
@@ -886,6 +888,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [savingStatusValue, setSavingStatusValue] = useState<string | null>(null);
   const [savingFieldKey, setSavingFieldKey] = useState<string | null>(null);
   const [creatingDraftActivity, setCreatingDraftActivity] = useState(false);
+  const [savingDraftActivity, setSavingDraftActivity] = useState(false);
   const [taskActionBusy, setTaskActionBusy] = useState<string | null>(null);
   const [localTaskPatch, setLocalTaskPatch] = useState<Record<string, any>>({});
   const [assigneeValue, setAssigneeValue] = useState('تعیین نشده');
@@ -1447,25 +1450,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     }
   };
 
-  const handleCreateDraftActivity = useCallback(async () => {
-    if (!onCreateDraftActivity || creatingDraftActivity) return;
-    setCreatingDraftActivity(true);
-    try {
-      const nextTaskName = taskNameValue || resolvedDraftTaskName || String(stage?.title || '').trim();
-      const nextTaskType = activityTypeValue || resolvedDraftActivityType || String(stage?.activityTypeLabel || '').trim();
-      if (!String(nextTaskName || '').trim()) {
-        message.warning('عنوان فعالیت را وارد کنید.');
-        return;
-      }
-      if (!String(nextTaskType || '').trim()) {
-        message.warning('نوع فعالیت را انتخاب کنید.');
-        return;
-      }
-      const missingCreationField = customFields.find((field) => field.requiredForCreation && isEmptyFieldValue(field.value));
-      if (missingCreationField) {
-        message.warning(`فیلد «${missingCreationField.label}» برای ایجاد فعالیت ضروری است.`);
-        return;
-      }
+  const buildDraftActivityOverrides = useCallback(() => {
+    const nextTaskName = taskNameValue || resolvedDraftTaskName || String(stage?.title || '').trim();
+    const nextTaskType = activityTypeValue || resolvedDraftActivityType || String(stage?.activityTypeLabel || '').trim();
       const parsedAssignee = parseAssigneeValue(assigneeValue, null);
       const hasSelectableAssignee = /^(user|role)[:_]/i.test(String(assigneeValue || '').trim())
         && parsedAssignee.assigneeType
@@ -1524,6 +1511,58 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           due_anchor_stage_node_key: dueScheduleMode === 'system' ? (dueAnchorStageValue || null) : null,
         },
       };
+    return {
+      nextTaskName,
+      nextTaskType,
+      missingCreationField: customFields.find((field) => field.requiredForCreation && isEmptyFieldValue(field.value)) || null,
+      overrides,
+    };
+  }, [
+    activityTags,
+    activityTypeValue,
+    assigneeValue,
+    customFields,
+    descriptionDraft,
+    draftSourceRecurrence,
+    dueAnchorStageValue,
+    dueDateValue,
+    dueDurationFromValue,
+    dueDurationUnitValue,
+    dueDurationValue,
+    dueScheduleMode,
+    resolvedDraftActivityType,
+    resolvedDraftTaskName,
+    sourceMetadata,
+    stage?.activityTypeLabel,
+    stage?.title,
+    startAnchorStageValue,
+    startDateValue,
+    startDurationFromValue,
+    startDurationUnitValue,
+    startDurationValue,
+    startScheduleMode,
+    taskNameValue,
+    wageValue,
+    weightValue,
+  ]);
+
+  const handleCreateDraftActivity = useCallback(async () => {
+    if (!onCreateDraftActivity || creatingDraftActivity) return;
+    setCreatingDraftActivity(true);
+    try {
+      const { nextTaskName, nextTaskType, missingCreationField, overrides } = buildDraftActivityOverrides();
+      if (!String(nextTaskName || '').trim()) {
+        message.warning('عنوان فعالیت را وارد کنید.');
+        return;
+      }
+      if (!String(nextTaskType || '').trim()) {
+        message.warning('نوع فعالیت را انتخاب کنید.');
+        return;
+      }
+      if (missingCreationField) {
+        message.warning(`فیلد «${missingCreationField.label}» برای ایجاد فعالیت ضروری است.`);
+        return;
+      }
       const creationResult = await onCreateDraftActivity(overrides);
       const createdTasks = Array.isArray(creationResult?.createdTasks) ? creationResult.createdTasks : [];
       const createdTask = createdTasks[0] || creationResult?.createdTask || creationResult?.task || null;
@@ -1547,39 +1586,28 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       setCreatingDraftActivity(false);
     }
   }, [
+    buildDraftActivityOverrides,
     creatingDraftActivity,
-    activityTypeValue,
-    activityTags,
-    assigneeValue,
     creationDraftStorageKey,
-    customFields,
-    descriptionDraft,
-    dueAnchorStageValue,
-    dueDateValue,
-    dueDurationFromValue,
-    dueDurationUnitValue,
-    dueDurationValue,
-    dueScheduleMode,
     message,
     onClose,
     onCreateDraftActivity,
     queuedUploadFiles,
-    resolvedDraftActivityType,
-    resolvedDraftTaskName,
-    draftSourceRecurrence,
-    sourceMetadata,
-    stage?.activityTypeLabel,
-    stage?.title,
-    startAnchorStageValue,
-    startDateValue,
-    startDurationFromValue,
-    startDurationUnitValue,
-    startDurationValue,
-    startScheduleMode,
-    taskNameValue,
-    wageValue,
-    weightValue,
   ]);
+
+  const handleSaveDraftActivity = useCallback(async () => {
+    if (!onSaveDraftActivity || savingDraftActivity) return;
+    setSavingDraftActivity(true);
+    try {
+      const { overrides } = buildDraftActivityOverrides();
+      await onSaveDraftActivity(overrides);
+      message.success('پیش‌نویس مرحله ذخیره شد');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره پیش‌نویس ناموفق بود'));
+    } finally {
+      setSavingDraftActivity(false);
+    }
+  }, [buildDraftActivityOverrides, message, onSaveDraftActivity, savingDraftActivity]);
 
   const handleUnlinkTaskFromProcess = useCallback(async () => {
     if (!taskRecordId || taskActionBusy) return;
@@ -2081,6 +2109,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setChangelogCount(0);
     setSideTab('files');
     setCreatingDraftActivity(false);
+    setSavingDraftActivity(false);
     setTaskActionBusy(null);
     setSavingFieldKey(null);
     setLocalTaskPatch({});
@@ -2966,17 +2995,29 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
               </div>
             </div>
             {isDraftActivityCreationMode ? (
-              <Button
-                type="primary"
-                block
-                icon={<PlusOutlined />}
-                loading={creatingDraftActivity}
-                disabled={!onCreateDraftActivity}
-                onClick={() => void handleCreateDraftActivity()}
-                className="max-lg:!hidden !h-10 !rounded-lg !font-bold"
-              >
-                ایجاد فعالیت
-              </Button>
+              <div className="max-lg:hidden space-y-2">
+                <Button
+                  type="primary"
+                  block
+                  icon={<PlusOutlined />}
+                  loading={creatingDraftActivity}
+                  disabled={!onCreateDraftActivity}
+                  onClick={() => void handleCreateDraftActivity()}
+                  className="!h-10 !rounded-lg !font-bold"
+                >
+                  ایجاد فعالیت
+                </Button>
+                <Button
+                  block
+                  icon={<EditOutlined />}
+                  loading={savingDraftActivity}
+                  disabled={!onSaveDraftActivity}
+                  onClick={() => void handleSaveDraftActivity()}
+                  className="!h-10 !rounded-lg !border-dashed !font-bold"
+                >
+                  ذخیره پیش‌نویس
+                </Button>
+              </div>
             ) : null}
           </aside>
 
@@ -3219,6 +3260,16 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
               className="!h-11 !rounded-xl !font-bold"
             >
               ایجاد فعالیت
+            </Button>
+            <Button
+              block
+              icon={<EditOutlined />}
+              loading={savingDraftActivity}
+              disabled={!onSaveDraftActivity}
+              onClick={() => void handleSaveDraftActivity()}
+              className="mt-2 !h-10 !rounded-xl !border-dashed !font-bold"
+            >
+              ذخیره پیش‌نویس
             </Button>
           </div>
         ) : null}

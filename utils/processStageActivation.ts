@@ -10,6 +10,13 @@ import {
 import { isRecordInRecycleBin, shouldSkipRecordForAutomation } from './recycleBinGuards';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const normalizeDbUuid = (value: unknown) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task|user|role)[_:]/i, '');
+  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+};
 
 const parseObject = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -31,7 +38,7 @@ export const activateProcessRunNodes = async ({
   nodeKeys: string[];
   actorUserId?: string | null;
 }) => {
-  const normalizedRunId = normalizeText(processRunId);
+  const normalizedRunId = normalizeDbUuid(processRunId);
   const normalizedNodeKeys = Array.from(new Set(nodeKeys.map(normalizeText).filter(Boolean)));
   if (!normalizedRunId || normalizedNodeKeys.length === 0) {
     return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
@@ -41,14 +48,15 @@ export const activateProcessRunNodes = async ({
   }
 
   const roleContext = await fetchCurrentUserRoleContext(supabase);
-  const orgId = normalizeText(roleContext?.orgId);
+  const orgId = normalizeDbUuid(roleContext?.orgId);
   if (!orgId) throw new Error('سازمان جاری برای فعال‌سازی مرحله مشخص نیست.');
+  const actorId = normalizeDbUuid(actorUserId || roleContext?.userId) || null;
 
   const { data, error } = await supabase.rpc('activate_process_run_nodes', {
     p_org_id: orgId,
     p_process_run_id: normalizedRunId,
     p_node_keys: normalizedNodeKeys,
-    p_actor_user_id: normalizeText(actorUserId || roleContext?.userId) || null,
+    p_actor_user_id: actorId,
   });
   if (error) throw error;
   return {
@@ -81,7 +89,7 @@ export const activateInitialProcessRunNodes = async ({
   processRunId: string;
   actorUserId?: string | null;
 }) => {
-  const normalizedRunId = normalizeText(processRunId);
+  const normalizedRunId = normalizeDbUuid(processRunId);
   if (!normalizedRunId) {
     return { createdTaskIds: [] as string[], existingTaskIds: [] as string[] };
   }
@@ -113,14 +121,14 @@ export const activateProcessStageAction = async ({
   if (moduleId && await shouldSkipRecordForAutomation({ moduleId, record })) return null;
 
   const recurrence = parseObject(record?.recurrence_info);
-  let processRunId = normalizeText(record?.process_run_id || recurrence?.process_run_id);
+  let processRunId = normalizeDbUuid(record?.process_run_id || recurrence?.process_run_id);
   if (!processRunId) {
-    const templateId = normalizeText(config?.template_id);
-    const recordId = normalizeText(record?.id);
+    const templateId = normalizeDbUuid(config?.template_id);
+    const recordId = normalizeDbUuid(record?.id);
     const targetModuleId = normalizeText(moduleId || config?.record_module_id);
     if (!templateId || !recordId || !targetModuleId) return null;
     const roleContext = await fetchCurrentUserRoleContext(supabase);
-    const orgId = normalizeText(roleContext?.orgId);
+    const orgId = normalizeDbUuid(roleContext?.orgId);
     if (!orgId) throw new Error('سازمان جاری برای ایجاد فرآیند مشخص نیست.');
     const { data, error } = await supabase.rpc('create_process_run_from_template', {
       p_org_id: orgId,
@@ -131,7 +139,7 @@ export const activateProcessStageAction = async ({
       p_copied_mode: 'auto',
     });
     if (error) throw error;
-    processRunId = normalizeText(data);
+    processRunId = normalizeDbUuid(data);
   }
   if (!processRunId) return null;
   if (await isRecordInRecycleBin({ sourceTable: 'process_runs', recordId: processRunId })) return null;

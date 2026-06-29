@@ -1,5 +1,5 @@
 import React from "react";
-import { Avatar, Checkbox, Popover, Tag } from "antd";
+import { Avatar, Checkbox, Popover, Skeleton, Tag } from "antd";
 import { AppstoreOutlined, DragOutlined, LockOutlined } from "@ant-design/icons";
 import { FieldType } from "../../types";
 import { formatPersianPrice, toPersianNumber, safeJalaliFormat, parseDateValue } from "../../utils/persianNumberFormatter";
@@ -855,7 +855,7 @@ const RenderCardItem: React.FC<RenderCardItemProps> = ({
           className={`${showRelatedRecord ? 'mt-1' : (minimal ? 'mt-2' : 'mt-3')}`}
           onClick={(e) => e.stopPropagation()}
         >
-          <React.Suspense fallback={null}>
+          <React.Suspense fallback={<Skeleton active title={false} paragraph={{ rows: 1 }} />}>
             <ProcessCardsV2RuntimeBlock
               recordId={String(relatedProcessRecordId)}
               moduleId={relatedProcessModuleId}

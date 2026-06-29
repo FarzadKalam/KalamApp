@@ -658,7 +658,11 @@ const resolveStatusLabelFallback = (value: unknown) => {
 };
 
 const toNotificationStateSection = (section: NotificationSectionKey): NotificationStateSectionKey => (
-  section === 'sms_messages' ? 'sms' : section
+  section === 'sms_messages'
+    ? 'sms'
+    : section === 'bot_direct_messages'
+      ? 'bot_messages'
+      : section
 );
 
 const buildNotificationStateKey = (

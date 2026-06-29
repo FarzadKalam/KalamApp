@@ -67,9 +67,11 @@ import { syncRecordTags } from '../../../utils/recordTags';
 import { insertRecordActivity } from '../../../utils/recordActivity';
 import { runWorkflowsForEvent } from '../../../utils/workflowRuntime';
 import { loadScopedCompanySettings } from '../../../utils/companySettings';
-import { extractBotMessageAttachments } from '../../../utils/messageAttachments';
+import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage, type BotChannel } from '../../../utils/botGateway';
+import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { useOptionalNotificationRuntime } from '../NotificationRuntimeProvider';
+import { noteInsertBus } from '../../../utils/communicationRealtimeBus';
 import { useNotificationConversationList } from '../../../hooks/useNotificationConversationList';
 import { useInternalConversationTimeline } from '../../../hooks/useInternalConversationTimeline';
 import {
@@ -252,6 +254,28 @@ const channelFilters: Array<{ key: ChannelKind | 'all'; label: string; icon: Rea
 const formatBadgeCount = (value: number) => (value > 0 ? toPersianNumber(String(value)) : 0);
 const getNumericBadgeCount = (value: number) => (value > 0 ? toPersianNumber(String(value)) : undefined);
 
+type MessagingUnreadSummary = {
+  all: number;
+  internal: number;
+  bot_group: number;
+  bot_direct: number;
+  sms: number;
+  call: number;
+  system: number;
+  saved: number;
+};
+
+const EMPTY_MESSAGING_UNREAD_SUMMARY: MessagingUnreadSummary = {
+  all: 0,
+  internal: 0,
+  bot_group: 0,
+  bot_direct: 0,
+  sms: 0,
+  call: 0,
+  system: 0,
+  saved: 0,
+};
+
 const getConversationActivityMs = (conversation: Conversation) => {
   const raw = String(conversation.lastActivityAt || '').trim();
   if (!raw) return 0;
@@ -351,11 +375,147 @@ const buildInternalLiveConversations = (summaries: NotificationConversationSumma
       };
     });
 
-const ensureInternalSpecialConversations = (items: Conversation[], enabled: boolean, systemAvatarUrl?: string | null): Conversation[] => {
+const getInternalNotePreview = (row: any) => {
+  const parsed = parseNoteContent(row?.content ?? row?.body ?? row?.message_text ?? '');
+  const text = String(parsed.text || '').trim();
+  if (text) return text;
+  const firstAttachmentName = String(parsed.attachments?.[0]?.name || '').trim();
+  if (firstAttachmentName) return firstAttachmentName;
+  return parsed.attachments?.length ? 'فایل یا تصویر پیوست' : 'پیام داخلی';
+};
+
+const buildInternalConversationFallbackSummaries = (
+  rows: any[],
+  currentUserId: string,
+): NotificationConversationSummary[] => {
+  const normalizedCurrentUserId = String(currentUserId || '').trim();
+  if (!normalizedCurrentUserId) return [];
+  const summaries = new Map<string, NotificationConversationSummary>();
+
+  const upsertSummary = (
+    conversationKey: string,
+    row: any,
+    partial: Partial<NotificationConversationSummary>,
+  ) => {
+    const key = String(conversationKey || '').trim();
+    if (!key) return;
+    const createdAt = String(row?.created_at || row?.updated_at || '').trim() || null;
+    const existing = summaries.get(key);
+    const existingLatestMs = new Date(existing?.latest_message_at || 0).getTime();
+    const createdMs = new Date(createdAt || 0).getTime();
+    const latestIsNewer = !existing || (Number.isFinite(createdMs) && createdMs >= existingLatestMs);
+    summaries.set(key, {
+      section: 'notes',
+      conversation_key: key,
+      kind: partial.kind || existing?.kind || 'direct',
+      title: partial.title ?? existing?.title ?? null,
+      subtitle: partial.subtitle ?? existing?.subtitle ?? null,
+      avatar_url: partial.avatar_url ?? existing?.avatar_url ?? null,
+      role_label: partial.role_label ?? existing?.role_label ?? null,
+      note_count: Number(existing?.note_count || 0) + 1,
+      unread_count: Number(existing?.unread_count || 0),
+      latest_message_at: latestIsNewer ? createdAt : existing?.latest_message_at || createdAt,
+      last_message_preview: latestIsNewer ? getInternalNotePreview(row) : existing?.last_message_preview || getInternalNotePreview(row),
+      user_id: partial.user_id ?? existing?.user_id ?? null,
+      group_id: partial.group_id ?? existing?.group_id ?? null,
+      bot_group_id: null,
+      channel_type: null,
+      status: null,
+      counterparty_label: partial.counterparty_label ?? existing?.counterparty_label ?? null,
+      bot_chat_id: null,
+    });
+  };
+
+  rows.forEach((row) => {
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    const authorId = resolveInternalAuthorId(row);
+    const mentionUserIds = normalizeIdArray(row?.mention_user_ids);
+    const groupId = String(metadata?.chat_group_id || '').trim();
+    if (isInternalSystemNote(row)) {
+      upsertSummary('system', row, {
+        kind: 'system',
+        title: 'پیام‌های سیستم',
+      });
+      return;
+    }
+    if (groupId) {
+      upsertSummary(`${CHAT_GROUP_PREFIX}${groupId}`, row, {
+        kind: 'group',
+        group_id: groupId,
+      });
+      return;
+    }
+    if (
+      authorId === normalizedCurrentUserId
+      && (metadata?.saved_message === true || mentionUserIds.length === 0)
+    ) {
+      upsertSummary(MY_NOTES_CONVERSATION_KEY, row, {
+        kind: 'direct',
+        title: 'یادداشت‌های من',
+      });
+      return;
+    }
+    const targetUserIds = new Set<string>();
+    if (authorId === normalizedCurrentUserId) {
+      mentionUserIds
+        .filter((userId) => userId && userId !== normalizedCurrentUserId)
+        .forEach((userId) => targetUserIds.add(userId));
+    }
+    if (authorId && authorId !== normalizedCurrentUserId && mentionUserIds.includes(normalizedCurrentUserId)) {
+      targetUserIds.add(authorId);
+    }
+    targetUserIds.forEach((targetUserId) => {
+      const directConversationKey = buildDirectConversationKey(normalizedCurrentUserId, targetUserId);
+      if (!directConversationKey) return;
+      upsertSummary(directConversationKey, row, {
+        kind: 'direct',
+        user_id: targetUserId,
+      });
+    });
+  });
+
+  return Array.from(summaries.values()).sort((left, right) => (
+    new Date(right.latest_message_at || 0).getTime() - new Date(left.latest_message_at || 0).getTime()
+  ));
+};
+
+const doesInternalNoteBelongToConversation = (
+  row: any,
+  conversationKey: string,
+  currentUserId: string,
+) => {
+  const key = String(conversationKey || '').trim();
+  const normalizedCurrentUserId = String(currentUserId || '').trim();
+  if (!key || !normalizedCurrentUserId) return false;
+  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  const authorId = resolveInternalAuthorId(row);
+  const groupId = String(metadata?.chat_group_id || '').trim();
+  if (key === MY_NOTES_CONVERSATION_KEY) {
+    return authorId === normalizedCurrentUserId
+      && !groupId
+      && !isInternalSystemNote(row)
+      && (metadata?.saved_message === true || normalizeIdArray(row?.mention_user_ids).length === 0);
+  }
+  if (key === 'system') return isInternalSystemNote(row);
+  if (key.startsWith(CHAT_GROUP_PREFIX)) return groupId === getChatGroupSelectionId(key);
+  if (!key.startsWith('direct:') || groupId || isInternalSystemNote(row)) return false;
+  return normalizeIdArray(row?.mention_user_ids).some((targetUserId) => (
+    buildDirectConversationKey(authorId, targetUserId) === key
+  ));
+};
+
+const ensureInternalSpecialConversations = (
+  items: Conversation[],
+  enabled: boolean,
+  systemAvatarUrl?: string | null,
+): Conversation[] => {
   if (!enabled) return items;
   const next = items.map((conversation) => (
     conversation.internalKind === 'system' || conversation.sourceConversationKey === 'system'
-      ? { ...conversation, avatarUrl: systemAvatarUrl || conversation.avatarUrl || null }
+      ? {
+          ...conversation,
+          avatarUrl: systemAvatarUrl || conversation.avatarUrl || null,
+        }
       : conversation
   ));
   const hasSaved = next.some((conversation) => conversation.internalKind === 'saved' || conversation.sourceConversationKey === MY_NOTES_CONVERSATION_KEY);
@@ -409,7 +569,33 @@ const mergeDirectoryDirectConversations = (
 ): Conversation[] => {
   const normalizedCurrentUserId = String(currentUserId || '').trim();
   if (!normalizedCurrentUserId) return items;
-  const next = [...items];
+  const userByConversationKey = new Map<string, AssigneeDirectory['users'][number]>();
+  users.forEach((user) => {
+    const userId = String(user?.id || '').trim();
+    if (!userId || userId === normalizedCurrentUserId) return;
+    const sourceConversationKey = buildDirectConversationKey(normalizedCurrentUserId, userId);
+    if (sourceConversationKey) userByConversationKey.set(sourceConversationKey, user);
+  });
+  const isGenericInternalTitle = (value: string) => {
+    const normalized = String(value || '').trim();
+    return !normalized || ['نام کاربر', 'کاربر', 'کاربر سیستم', 'گفتگوی داخلی', 'پیام مستقیم داخلی'].includes(normalized);
+  };
+  const next = items.map((conversation) => {
+    if (conversation.internalKind !== 'direct') return conversation;
+    const sourceConversationKey = String(conversation.sourceConversationKey || '').trim();
+    const user = userByConversationKey.get(sourceConversationKey);
+    if (!user) return conversation;
+    const title = String(user.display_name || user.full_name || '').trim();
+    const roleLabel = String(user.job_title || roleLookup[String(user.role_id || '')] || '').trim();
+    return {
+      ...conversation,
+      title: title && isGenericInternalTitle(conversation.title) ? title : conversation.title,
+      subtitle: roleLabel || conversation.subtitle,
+      avatarUrl: String(conversation.avatarUrl || user.avatar_url || '').trim() || null,
+      avatarText: (title || conversation.title || '').slice(0, 1) || conversation.avatarText || 'د',
+      status: roleLabel || conversation.status,
+    };
+  });
   const existingSourceKeys = new Set(next.map((conversation) => String(conversation.sourceConversationKey || '').trim()).filter(Boolean));
   users.forEach((user) => {
     const userId = String(user?.id || '').trim();
@@ -507,6 +693,72 @@ const isInternalSystemNote = (note: any) =>
     || String(note?.metadata?.source_type || '').trim() === 'ai'
     || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id)
   );
+
+const getRecordPayload = (value: any) => (
+  value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {}
+);
+
+const getPayloadText = (payload: any, keys: string[]) => {
+  for (const key of keys) {
+    const value = String(payload?.[key] || '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const resolveInternalAuthorId = (row: any) => {
+  const payload = getRecordPayload(row?.payload);
+  return String(
+    row?.author_id
+    || row?.sender_user_id
+    || row?.sender_profile_id
+    || payload?.author_id
+    || payload?.sender_user_id
+    || payload?.sender_profile_id
+    || payload?.user_id
+    || ''
+  ).trim();
+};
+
+const resolveInternalAuthorName = (
+  row: any,
+  directoryUserMap: Record<string, any>,
+  currentUserId: string,
+  direction: 'inbound' | 'outbound' | 'system',
+) => {
+  if (direction === 'system') return 'پیام‌های سیستم';
+  const payload = getRecordPayload(row?.payload);
+  const authorId = resolveInternalAuthorId(row);
+  const payloadName = getPayloadText(payload, ['author_name', 'sender_display_name', 'sender_name', 'display_name', 'full_name']);
+  const directoryName = authorId ? String(directoryUserMap[authorId]?.display_name || '').trim() : '';
+  if (direction === 'outbound') {
+    return String(
+      row?.author_name
+      || payloadName
+      || directoryUserMap[currentUserId]?.display_name
+      || ''
+    ).trim() || 'من';
+  }
+  return String(row?.author_name || payloadName || directoryName || '').trim() || 'کاربر سازمان';
+};
+
+const resolveInternalAvatarUrl = (row: any, directoryUserMap: Record<string, any>) => {
+  const payload = getRecordPayload(row?.payload);
+  const authorId = resolveInternalAuthorId(row);
+  return String(
+    row?.sender_avatar_url
+    || row?.author_avatar_url
+    || row?.avatar_url
+    || payload?.author_avatar_url
+    || payload?.sender_avatar_url
+    || payload?.conversation_avatar_url
+    || payload?.avatar_url
+    || directoryUserMap[authorId]?.avatar_url
+    || ''
+  ).trim() || null;
+};
 
 const getNoteAttachmentKind = (attachment: NoteAttachment): AttachmentKind => {
   const fileType = String(attachment?.fileType || '').trim().toLowerCase();
@@ -648,8 +900,9 @@ const MessagingConversationList: React.FC<{
   onCreateInternalGroup?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter }) => (
-  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} />
+  unreadSummary?: MessagingUnreadSummary;
+}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
+  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
 );
 
 const MessagingConversationListInner: React.FC<{
@@ -662,7 +915,8 @@ const MessagingConversationListInner: React.FC<{
   onCreateInternalGroup?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter }) => {
+  unreadSummary: MessagingUnreadSummary;
+}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const normalizedSearch = String(searchValue || '').trim().toLocaleLowerCase('fa');
@@ -679,22 +933,14 @@ const MessagingConversationListInner: React.FC<{
       getConversationBadgeLabel(conversation),
     ].some((value) => String(value || '').toLocaleLowerCase('fa').includes(normalizedSearch)))
     : channelFilteredConversations;
-  const filterUnreadCounts = useMemo(() => {
-    const counts: Record<ChannelKind | 'all', number> = {
-      all: 0,
-      internal: 0,
-      bot_group: 0,
-      bot_direct: 0,
-      sms: 0,
-      call: 0,
-    };
-    conversations.forEach((conversation) => {
-      const unread = Math.max(0, Number(conversation.unread || 0));
-      counts.all += unread;
-      counts[conversation.channel] += unread;
-    });
-    return counts;
-  }, [conversations]);
+  const filterUnreadCounts: Record<ChannelKind | 'all', number> = {
+    all: unreadSummary.all,
+    internal: unreadSummary.internal,
+    bot_group: unreadSummary.bot_group,
+    bot_direct: unreadSummary.bot_direct,
+    sms: unreadSummary.sms,
+    call: unreadSummary.call,
+  };
 
   return (
     <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex h-full min-h-0 flex-col'}>
@@ -723,7 +969,7 @@ const MessagingConversationListInner: React.FC<{
               />
             </Tooltip>
             <Tooltip title="یادداشت‌های من">
-              <Badge count={getNumericBadgeCount(savedConversation?.unread || 0)} size="small" color="#c0392b">
+              <Badge count={getNumericBadgeCount(unreadSummary.saved)} size="small" color="#c0392b">
                 <Button
                   type={selectedKey === savedConversation?.key ? 'primary' : 'text'}
                   shape="circle"
@@ -735,7 +981,7 @@ const MessagingConversationListInner: React.FC<{
               </Badge>
             </Tooltip>
             <Tooltip title="پیام‌های سیستم">
-              <Badge count={getNumericBadgeCount(systemConversation?.unread || 0)} size="small" color="#c0392b">
+              <Badge count={getNumericBadgeCount(unreadSummary.system)} size="small" color="#c0392b">
                 <Button
                   type={selectedKey === systemConversation?.key ? 'primary' : 'text'}
                   shape="circle"
@@ -850,6 +1096,21 @@ const MessagingConversationListInner: React.FC<{
 
 const URL_PATTERN = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
 
+const isBrokenRubikaStorageUrl = (url: string) =>
+  /https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(String(url || '').trim());
+
+const isRubikaTemporaryDownloadUrl = (url: string) =>
+  /https?:\/\/messenger[^/]*\.rubika\.ir\/download\/?\?/i.test(String(url || '').trim());
+
+const hasRetryableRubikaMedia = (item: TimelineEvent) => {
+  if (item.botSenderChannel !== 'rubika') return false;
+  const refs = collectBotMessageMediaFileRefs(item.sourceRow);
+  return refs.some((ref) => {
+    const url = String(ref.url || '').trim();
+    return ref.fileId && (!url || isBrokenRubikaStorageUrl(url) || isRubikaTemporaryDownloadUrl(url));
+  });
+};
+
 const LinkifiedText: React.FC<{ text: string; inverse?: boolean }> = ({ text, inverse = false }) => {
   const value = String(text || '');
   const parts: React.ReactNode[] = [];
@@ -919,7 +1180,9 @@ const TimelineEventCard: React.FC<{
   onToggleLike?: (item: TimelineEvent) => void;
   onShowReceipts?: (item: TimelineEvent) => void;
   onBindBotSender?: (item: TimelineEvent) => void;
-}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender }) => {
+  onRetryBotMedia?: (item: TimelineEvent) => void;
+  retryingMedia?: boolean;
+}> = ({ item, activeConversation, unread = false, onReply, onForward, onCreateActivity, onToggleLike, onShowReceipts, onBindBotSender, onRetryBotMedia, retryingMedia = false }) => {
   const { message } = App.useApp();
   const outgoing = item.direction === 'outbound';
   const isCall = item.kind === 'call';
@@ -955,6 +1218,7 @@ const TimelineEventCard: React.FC<{
   const relatedRecordTextClassName = outgoing
     ? 'text-sky-50 underline decoration-sky-100/55 underline-offset-4 hover:text-white hover:decoration-white'
     : 'text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 hover:text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-300-rgb))] dark:hover:text-[rgb(var(--brand-200-rgb))]';
+  const canRetryRubikaMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableRubikaMedia(item);
   const copyMessageText = async () => {
     const text = String(item.text || '').trim();
     if (!text) return;
@@ -1085,6 +1349,7 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('reply') ? <TimelineIconButton title="پاسخ" icon={<RollbackOutlined />} inverse={outgoing} onClick={() => onReply?.(item)} /> : null}
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
+          {canRetryRubikaMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
           {!outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && item.botSenderChatId && !item.botSenderBound ? (
             <TimelineIconButton title="اتصال فرستنده به مخاطب" icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
           ) : null}
@@ -1501,9 +1766,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [chatGroups, setChatGroups] = useState<ChatGroupRow[]>([]);
   const [messageActivityDraft, setMessageActivityDraft] = useState<MessageActivityDraft | null>(null);
   const [refreshingMessages, setRefreshingMessages] = useState(false);
+  const [retryingBotMediaIds, setRetryingBotMediaIds] = useState<Set<string>>(() => new Set());
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
   const [orgDisplayName, setOrgDisplayName] = useState('');
   const [reelBootstrapped, setReelBootstrapped] = useState(false);
+  const [internalConversationLocalOverrides, setInternalConversationLocalOverrides] = useState<Record<string, { preview: string; lastActivityAt: string }>>({});
   const [localReadThroughByConversation, setLocalReadThroughByConversation] = useState<Record<string, string>>({});
   const [likedOverrides, setLikedOverrides] = useState<Record<string, boolean>>({});
   const [internalGroupModalOpen, setInternalGroupModalOpen] = useState(false);
@@ -1515,24 +1782,101 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
   const lastTimelineConversationRef = useRef('');
   const markReadDedupeRef = useRef('');
-  const liveData = useMessagingOmniLiveData();
+  const runtimeRevisionRef = useRef(notificationRuntime.revisions);
+  const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready });
   const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
+  const loadInternalConversationFallback = useMemo(() => {
+    const currentUserId = String(liveData.profile.id || '').trim();
+    if (!currentUserId) return undefined;
+    return async () => {
+      const [authoredResult, mentionedResult] = await Promise.all([
+        supabase
+          .from('notes')
+          .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+          .eq('author_id', currentUserId)
+          .order('created_at', { ascending: false })
+          .limit(180),
+        supabase
+          .from('notes')
+          .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+          .contains('mention_user_ids', [currentUserId])
+          .order('created_at', { ascending: false })
+          .limit(180),
+      ]);
+      if (authoredResult.error) throw authoredResult.error;
+      if (mentionedResult.error) throw mentionedResult.error;
+      const uniqueRows = new Map<string, any>();
+      [...(authoredResult.data || []), ...(mentionedResult.data || [])].forEach((row: any) => {
+        const key = String(row?.id || '').trim();
+        if (key) uniqueRows.set(key, row);
+      });
+      return buildInternalConversationFallbackSummaries(Array.from(uniqueRows.values()), currentUserId);
+    };
+  }, [liveData.profile.id]);
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',
     enabled: Boolean(liveData.profile.id),
     cacheScopeKey,
+    fallbackLoadInitial: loadInternalConversationFallback,
+    mergeFallbackInitial: true,
   });
   const selectedInternalSourceKey = getInternalSourceConversationKey(selectedKey);
+  const loadInternalTimelineFallback = useMemo(() => {
+    const conversationKey = String(selectedInternalSourceKey || '').trim();
+    const currentUserId = String(liveData.profile.id || '').trim();
+    if (!conversationKey || !currentUserId) return undefined;
+    return async () => {
+      const { data, error } = await supabase
+        .from('notes')
+        .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+        .order('created_at', { ascending: false })
+        .limit(160);
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      const filtered = rows.filter((row: any) => {
+        return doesInternalNoteBelongToConversation(row, conversationKey, currentUserId);
+      });
+      return filtered.sort((left: any, right: any) => (
+        new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
+      ));
+    };
+  }, [liveData.profile.id, selectedInternalSourceKey]);
   const internalTimeline = useInternalConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && selectedInternalSourceKey),
     conversationKey: selectedInternalSourceKey,
     pageSize: 40,
+    fallbackLoadInitial: loadInternalTimelineFallback,
+    fallbackOnEmptyInitial: true,
+    mergeFallbackInitial: true,
     cacheScopeKey,
   });
   const refreshInternalConversations = internalConversations.refresh;
   const refreshInternalTimeline = internalTimeline.refresh;
+  useEffect(() => {
+    const previous = runtimeRevisionRef.current;
+    const current = notificationRuntime.revisions;
+    runtimeRevisionRef.current = current;
+    if (!liveData.profile.id) return;
+    if (current.notes !== previous.notes) {
+      void refreshInternalConversations({ force: true });
+      void refreshInternalTimeline({ force: true });
+    }
+    if (
+      current.bot_messages !== previous.bot_messages
+      || current.bot_direct_messages !== previous.bot_direct_messages
+      || current.sms_messages !== previous.sms_messages
+      || current.voip_calls !== previous.voip_calls
+    ) {
+      void liveData.refresh();
+    }
+  }, [
+    liveData,
+    notificationRuntime.revisions,
+    refreshInternalConversations,
+    refreshInternalTimeline,
+  ]);
   const [assigneeDirectory, setAssigneeDirectory] = useState<AssigneeDirectory>({ users: [], roles: [] });
   const [mentionsLoading, setMentionsLoading] = useState(false);
   const [internalRecordTitleMap, setInternalRecordTitleMap] = useState<Record<string, string>>({});
@@ -1559,7 +1903,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     };
   }, [liveData.profile.orgId]);
   useEffect(() => {
-    if (!liveData.profile.id) return;
+    if (!liveData.profile.id || !liveData.profile.orgId) return;
     let disposed = false;
     setMentionsLoading(true);
     void fetchAssigneeDirectory(supabase).then((directory) => {
@@ -1572,7 +1916,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     return () => {
       disposed = true;
     };
-  }, [liveData.profile.id, message]);
+  }, [liveData.profile.id, liveData.profile.orgId, message]);
   useEffect(() => {
     const orgId = String(liveData.profile.orgId || '').trim();
     if (!orgId) {
@@ -1673,6 +2017,66 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     }
   };
 
+  const retryBotMessageMedia = async (item: TimelineEvent) => {
+    const rowId = String(item?.sourceRow?.id || '').trim();
+    if (!rowId || item.botSenderChannel !== 'rubika') {
+      message.warning('برای این پیام فایل قابل بازیابی پیدا نشد.');
+      return;
+    }
+    const mediaItems = collectBotMessageMediaFileRefs(item.sourceRow).filter((ref) => {
+      const url = String(ref.url || '').trim();
+      return ref.fileId && (!url || isBrokenRubikaStorageUrl(url) || isRubikaTemporaryDownloadUrl(url));
+    });
+    if (mediaItems.length === 0) {
+      message.info('این پیام پیوست قابل بازیابی ندارد.');
+      return;
+    }
+    setRetryingBotMediaIds((prev) => new Set(prev).add(rowId));
+    try {
+      const messageTable = String(item?.conversationKey || '').startsWith('live:bot_direct:')
+        ? 'counterparty_bot_direct_messages'
+        : 'counterparty_bot_messages';
+      const activeConnection = await getActiveChannelSettings('rubika');
+      const connectionId = String(activeConnection?.id || '').trim();
+      if (!connectionId) throw new Error('اتصال فعال روبیکا پیدا نشد.');
+      for (const mediaItem of mediaItems) {
+        const { data, error } = await supabase.functions.invoke('bot-admin', {
+          body: {
+            action: 'import_rubika_file',
+            channel: 'rubika',
+            connectionId,
+            messageId: rowId,
+            messageTable,
+            fileId: mediaItem.fileId,
+            fileName: mediaItem.fileName || String(item?.sourceRow?.file_name || '').trim() || undefined,
+          },
+        });
+        if (error) throw error;
+        if (!data?.success || !String(data?.file_url || '').trim()) {
+          const nextError: any = new Error(String(data?.message || 'بازیابی فایل روبیکا ناموفق بود.'));
+          nextError.details = data?.details || null;
+          throw nextError;
+        }
+      }
+      await liveData.refresh();
+      message.success('پیوست روبیکا دوباره بازیابی شد.');
+    } catch (error: any) {
+      console.info('Messaging v2 manual Rubika media retry failed.', {
+        messageId: rowId,
+        fileIds: mediaItems.map((mediaItem) => mediaItem.fileId),
+        error: String(error?.message || error || 'unknown_error'),
+        details: error?.details || null,
+      });
+      message.error(toFaErrorMessage(error, 'بازیابی دوباره فایل روبیکا ناموفق بود.'));
+    } finally {
+      setRetryingBotMediaIds((prev) => {
+        const next = new Set(prev);
+        next.delete(rowId);
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     const references = (internalTimeline.items || [])
       .map((row: any) => ({
@@ -1689,43 +2093,102 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     const orgId = String(liveData.profile.orgId || '').trim();
     const profileId = String(liveData.profile.id || '').trim();
     if (!orgId || !profileId) return;
+    const appendRealtimeNote = (row: any) => {
+      const rowOrgId = String(row?.org_id || '').trim();
+      if (rowOrgId && rowOrgId !== orgId) return;
+      const rowAuthorId = resolveInternalAuthorId(row);
+      const rowMentionUserIds = normalizeIdArray(row?.mention_user_ids);
+      const mightAffectCurrentUser = rowAuthorId === profileId
+        || rowMentionUserIds.includes(profileId)
+        || isInternalSystemNote(row)
+        || Boolean(String(row?.metadata?.chat_group_id || '').trim());
+      if (!mightAffectCurrentUser) return;
+      const summaries = buildInternalConversationFallbackSummaries([row], profileId);
+      if (summaries.length > 0) {
+        internalConversations.setItems((prev) => {
+          const existing = Array.isArray(prev) ? prev : [];
+          const merged = new Map<string, NotificationConversationSummary>();
+          existing.forEach((item) => {
+            const key = String(item?.conversation_key || '').trim();
+            if (key) merged.set(key, item);
+          });
+          summaries.forEach((summary) => {
+            const key = String(summary?.conversation_key || '').trim();
+            if (!key) return;
+            const current = merged.get(key);
+            merged.set(key, current ? { ...current, ...summary, unread_count: current.unread_count } : summary);
+          });
+          return Array.from(merged.values()).sort((left, right) => (
+            new Date(right.latest_message_at || 0).getTime() - new Date(left.latest_message_at || 0).getTime()
+          ));
+        });
+      }
+      if (
+        selectedInternalSourceKey
+        && doesInternalNoteBelongToConversation(row, selectedInternalSourceKey, profileId)
+      ) {
+        internalTimeline.setItems((prev: any[]) => {
+          const id = String(row?.id || '').trim();
+          if (!id || prev.some((item: any) => String(item?.id || '') === id)) return prev;
+          return [...prev, row].sort((left: any, right: any) => (
+            new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
+          ));
+        });
+      }
+    };
+    const unsubscribeNotes = noteInsertBus.subscribe(appendRealtimeNote);
     let channel = supabase
       .channel(`messaging-v2-internal-${orgId}-${profileId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notes', filter: `org_id=eq.${orgId}` }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notes', filter: `org_id=eq.${orgId}` }, (payload: any) => {
+        if (payload?.eventType === 'INSERT' && payload?.new) appendRealtimeNote(payload.new);
         void refreshInternalConversations({ force: true });
         void refreshInternalTimeline({ force: true });
       })
       .subscribe();
     return () => {
+      unsubscribeNotes();
       if (channel) {
         void supabase.removeChannel(channel);
         channel = null as any;
       }
     };
-  }, [liveData.profile.id, liveData.profile.orgId, refreshInternalConversations, refreshInternalTimeline]);
+  }, [internalConversations.setItems, internalTimeline.setItems, liveData.profile.id, liveData.profile.orgId, refreshInternalConversations, refreshInternalTimeline, selectedInternalSourceKey]);
+  const directoryReadyForReel = assigneeDirectory.users.length > 0;
   const internalConversationsReady = !internalConversations.available || internalConversations.items !== null;
+  const internalReelReady = internalConversationsReady || directoryReadyForReel;
   useEffect(() => {
     if (reelBootstrapped) return;
-    if (!liveData.profile.id || !internalConversationsReady) return;
+    if (!liveData.profile.id || !internalReelReady) return;
     setReelBootstrapped(true);
-  }, [internalConversationsReady, liveData.profile.id, reelBootstrapped]);
+  }, [internalReelReady, liveData.profile.id, reelBootstrapped]);
   const reelInitialLoading = !reelBootstrapped;
   const liveInternalConversations = useMemo(
-    () => mergeDirectoryDirectConversations(
+    () => sortConversationsByActivity(mergeDirectoryDirectConversations(
       ensureInternalSpecialConversations(
         buildInternalLiveConversations(internalConversations.items),
-        Boolean(liveData.profile.id && internalConversationsReady),
+        Boolean(liveData.profile.id && internalReelReady),
         orgLogoUrl,
       ),
       assigneeDirectory.users,
       String(liveData.profile.id || ''),
       roleLookup,
-    ),
-    [assigneeDirectory.users, internalConversations.items, internalConversationsReady, liveData.profile.id, orgLogoUrl, roleLookup],
+    ).map((conversation) => {
+      const sourceKey = String(conversation.sourceConversationKey || getInternalSourceConversationKey(conversation.key) || '').trim();
+      const override = sourceKey ? internalConversationLocalOverrides[sourceKey] : null;
+      if (!override) return conversation;
+      return {
+        ...conversation,
+        preview: override.preview || conversation.preview,
+        time: safeJalaliFormat(override.lastActivityAt, 'MM/DD HH:mm') || conversation.time,
+        lastActivityAt: override.lastActivityAt || conversation.lastActivityAt,
+      };
+    })),
+    [assigneeDirectory.users, internalConversationLocalOverrides, internalConversations.items, internalReelReady, liveData.profile.id, orgLogoUrl, roleLookup],
   );
   const liveInternalEvents = useMemo<TimelineEvent[]>(() => {
     if (!selectedInternalSourceKey) return [];
     const activeConversationKey = getLiveInternalConversationKey(selectedInternalSourceKey);
+    const currentUserId = String(liveData.profile.id || '').trim();
     return (internalTimeline.items || []).map((row: any) => {
       const parsed = parseNoteContent(row?.content ?? row?.body ?? row?.message_text ?? '');
       const mentionUsers = normalizeIdArray(row?.mention_user_ids)
@@ -1742,17 +2205,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         : '';
       const likes = likeReceiptMapFromBox(row?.metadata);
       const readReceipts = readReceiptMapFromBox(row?.metadata);
-      const currentUserId = String(liveData.profile.id || '').trim();
+      const authorId = resolveInternalAuthorId(row);
       const direction = isInternalSystemNote(row)
         ? 'system'
-        : String(row?.author_id || '').trim() && String(row?.author_id || '').trim() === String(liveData.profile.id || '').trim()
+        : authorId && authorId === currentUserId
           ? 'outbound'
           : 'inbound';
-      const author = direction === 'system'
-        ? 'پیام‌های سیستم'
-        : direction === 'outbound'
-          ? String(row?.author_name || directoryUserMap[currentUserId]?.display_name || '').trim() || 'من'
-          : String(row?.author_name || directoryUserMap[String(row?.author_id || '')]?.display_name || '').trim() || 'کاربر سیستم';
+      const author = resolveInternalAuthorName(row, directoryUserMap, currentUserId, direction);
       return {
         id: `live-internal-${String(row?.id || row?.created_at || Math.random())}`,
         sourceRow: row,
@@ -1773,7 +2232,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         })),
         mentionUsers,
         mentionRoles,
-        avatarUrl: String(row?.sender_avatar_url || row?.avatar_url || directoryUserMap[String(row?.author_id || '')]?.avatar_url || '').trim() || null,
+        avatarUrl: resolveInternalAvatarUrl(row, directoryUserMap),
         relatedRecordLabel: relatedRecordLabel || undefined,
         liked: Boolean(currentUserId && likes[currentUserId]),
       };
@@ -1801,6 +2260,27 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
   }, [liveData.conversations, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
+    const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
+    const savedConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'saved');
+    return {
+      all: Math.max(0, Number(notificationRuntime.communicationUnread || 0)),
+      internal: Math.max(0, Number(notificationRuntime.summary.notes || 0)),
+      bot_group: Math.max(0, Number(notificationRuntime.summary.bot_messages || 0)),
+      bot_direct: Math.max(0, Number(notificationRuntime.summary.bot_messages || 0)),
+      sms: Math.max(0, Number(notificationRuntime.summary.sms_messages || 0)),
+      call: Math.max(0, Number(notificationRuntime.summary.voip_calls || 0)),
+      system: Math.max(0, Number(systemConversation?.unread || 0)),
+      saved: Math.max(0, Number(savedConversation?.unread || 0)),
+    };
+  }, [
+    displayConversations,
+    notificationRuntime.communicationUnread,
+    notificationRuntime.summary.bot_messages,
+    notificationRuntime.summary.notes,
+    notificationRuntime.summary.sms_messages,
+    notificationRuntime.summary.voip_calls,
+  ]);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
@@ -2906,14 +3386,19 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       message.warning('متن پیام خالی است.');
       return false;
     }
-    if (conversation.channel === 'internal' && conversation.key.startsWith(LIVE_INTERNAL_PREFIX)) {
+    if (conversation.channel === 'internal') {
       if (conversation.readOnly || conversation.internalKind === 'system') {
         message.warning('پیام‌های سیستم فقط برای مشاهده هستند.');
         return false;
       }
       const orgId = String(liveData.profile.orgId || '').trim();
       const authorId = String(liveData.profile.id || '').trim();
-      const sourceConversationKey = String(conversation.sourceConversationKey || getInternalSourceConversationKey(conversation.key) || '').trim();
+      const sourceConversationKey = String(
+        conversation.sourceConversationKey
+        || getInternalSourceConversationKey(conversation.key)
+        || conversation.key
+        || ''
+      ).trim();
       if (!orgId || !authorId || !sourceConversationKey) {
         message.error('اطلاعات لازم برای ارسال پیام داخلی کامل نیست.');
         return false;
@@ -2922,12 +3407,15 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         const { mentionUserIds, mentionRoleIds } = parseMentionValues(payload?.mentionValues || []);
         let finalMentionUserIds = mentionUserIds;
         let finalMentionRoleIds = mentionRoleIds;
-        let metadata: Record<string, any> | null = null;
+        let metadata: Record<string, any> = {
+          conversation_key: sourceConversationKey,
+          source_type: 'internal_message',
+        };
 
         if (sourceConversationKey === MY_NOTES_CONVERSATION_KEY || conversation.internalKind === 'saved') {
           finalMentionUserIds = [];
           finalMentionRoleIds = [];
-          metadata = { saved_message: true };
+          metadata = { ...metadata, saved_message: true };
         } else {
           const selection = resolveConversationSelection(sourceConversationKey, authorId);
           if (typeof selection === 'string' && selection === SYSTEM_MESSAGES_USER_ID) {
@@ -2947,10 +3435,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
               const groupRoleIds = normalizeIdArray(groupRow?.role_ids);
               finalMentionUserIds = Array.from(new Set([...finalMentionUserIds, ...groupUserIds]));
               finalMentionRoleIds = Array.from(new Set([...finalMentionRoleIds, ...groupRoleIds]));
-              metadata = { chat_group_id: groupId };
+              metadata = { ...metadata, chat_group_id: groupId };
             }
           } else if (typeof selection === 'string' && selection) {
             finalMentionUserIds = Array.from(new Set([...finalMentionUserIds, selection]));
+            metadata = { ...metadata, target_user_id: selection };
+          } else {
+            throw new Error('گیرنده گفتگوی داخلی قابل شناسایی نیست.');
           }
         }
 
@@ -2965,7 +3456,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           await ensureNoteAttachmentShortcuts(null, null, linkedAttachments);
         }
 
-        await insertNotesWithFallback([{
+        const notePayload = {
           org_id: orgId,
           module_id: null,
           record_id: null,
@@ -2976,7 +3467,32 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           author_id: authorId,
           author_name: directoryUserMap[authorId]?.display_name || null,
           metadata,
-        }]);
+        };
+        const insertedRows = await insertNotesWithFallback([notePayload]);
+        if (!Array.isArray(insertedRows) || insertedRows.length === 0) {
+          throw new Error('پیام در سرور ذخیره نشد.');
+        }
+        const latestInserted = insertedRows[insertedRows.length - 1] as any;
+        const latestPreview = normalizedText || (mergedAttachments.length > 0 ? 'فایل یا تصویر پیوست' : 'پیام داخلی');
+        const latestAt = String(latestInserted?.created_at || new Date().toISOString()).trim();
+        setInternalConversationLocalOverrides((prev) => ({
+          ...prev,
+          [sourceConversationKey]: {
+            preview: latestPreview,
+            lastActivityAt: latestAt,
+          },
+        }));
+        internalTimeline.setItems((prev: any[]) => {
+          const merged = [...prev, ...insertedRows];
+          const unique = new Map<string, any>();
+          merged.forEach((row: any) => {
+            const key = String(row?.id || '').trim();
+            if (key) unique.set(key, row);
+          });
+          return Array.from(unique.values()).sort((left: any, right: any) => (
+            new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
+          ));
+        });
         if (payload.smsNotificationEnabled && (finalMentionUserIds.length > 0 || finalMentionRoleIds.length > 0)) {
           await sendNoteSmsNotifications({
             authorName: directoryUserMap[authorId]?.display_name || 'کاربر',
@@ -3013,7 +3529,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         if (linkedAttachments.length > 0) {
           await ensureNoteAttachmentShortcuts(conversation.relatedModuleId || null, conversation.relatedRecordId || null, linkedAttachments);
         }
-        const outboundAttachments = mergedAttachments.length > 0
+        const shareAttachments = mergedAttachments.length > 0
           ? await shortenAttachmentsForExternalShare(mergedAttachments, {
             title: conversation.title || 'پیوست پیام',
             moduleId: conversation.relatedModuleId || null,
@@ -3021,7 +3537,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             metadata: { source: 'messages_v2_omni' },
           })
           : [];
-        const attachmentNameText = buildAttachmentNameText(outboundAttachments);
+        const outboundAttachments = mergedAttachments;
+        const attachmentNameText = buildAttachmentNameText(shareAttachments.length > 0 ? shareAttachments : outboundAttachments);
         const finalText = normalizedText || (outboundAttachments.length > 0 ? attachmentNameText : '');
         if (!finalText && outboundAttachments.length === 0) {
           message.warning('متن یا پیوست پیام خالی است.');
@@ -3036,7 +3553,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             fallbackText: outboundAttachments.length > 0 ? [normalizedText, attachmentNameText].filter(Boolean).join('\n') : undefined,
             messageType: outboundAttachments.length > 0 ? 'file' : 'text',
             payload: {
-              attachments: outboundAttachments,
+              attachments: shareAttachments.length > 0 ? shareAttachments : outboundAttachments,
+              upload_attachments: outboundAttachments,
               reply_to_message_id: replyTarget?.sourceRow?.provider_message_id || null,
             },
           });
@@ -3049,7 +3567,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             fallbackText: outboundAttachments.length > 0 ? [normalizedText, attachmentNameText].filter(Boolean).join('\n') : undefined,
             messageType: outboundAttachments.length > 0 ? 'file' : 'text',
             payload: {
-              attachments: outboundAttachments,
+              attachments: shareAttachments.length > 0 ? shareAttachments : outboundAttachments,
+              upload_attachments: outboundAttachments,
               reply_to_message_id: replyTarget?.sourceRow?.provider_message_id || null,
             },
           });
@@ -3137,6 +3656,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             onCreateInternalGroup={openCreateInternalGroupModal}
             activeFilter={conversationFilter}
             onChangeFilter={changeConversationFilter}
+            unreadSummary={messagingUnreadSummary}
           />
         </aside>
         <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] md:hidden">
@@ -3151,6 +3671,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
               compact
               activeFilter={conversationFilter}
               onChangeFilter={changeConversationFilter}
+              unreadSummary={messagingUnreadSummary}
             />
           </div>
         </aside>
@@ -3170,6 +3691,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 onCreateInternalGroup={openCreateInternalGroupModal}
                 activeFilter={conversationFilter}
                 onChangeFilter={changeConversationFilter}
+                unreadSummary={messagingUnreadSummary}
               />
             </div>
           </div>
@@ -3219,6 +3741,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                       onToggleLike={toggleMessageLike}
                       onShowReceipts={showMessageReceipts}
                       onBindBotSender={openBotIdentityBindModalForMessage}
+                      onRetryBotMedia={retryBotMessageMedia}
+                      retryingMedia={retryingBotMediaIds.has(String(item.sourceRow?.id || '').trim())}
                     />
                   ))}
                 </div>

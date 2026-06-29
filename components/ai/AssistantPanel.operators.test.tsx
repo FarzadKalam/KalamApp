@@ -128,6 +128,20 @@ describe('AssistantPanel AI operators', () => {
       if (action === 'get_thread') {
         return { data: { success: true, threadId: 'thread-1', messages: [] }, error: null };
       }
+      if (action === 'suggest_auto_capabilities') {
+        const messageText = String(options?.body?.message || '').trim();
+        const bundleInputs = Array.isArray(options?.body?.bundle?.inputs) ? options.body.bundle.inputs : [];
+        if (messageText.includes('تصویر')) {
+          return { data: { success: true, capabilities: ['image_generation'], targetModuleId: null }, error: null };
+        }
+        if (messageText.includes('مشتری')) {
+          return { data: { success: true, capabilities: ['record_creation'], targetModuleId: 'customers' }, error: null };
+        }
+        if (bundleInputs.length > 0) {
+          return { data: { success: true, capabilities: ['document_analysis'], targetModuleId: null }, error: null };
+        }
+        return { data: { success: true, capabilities: [], targetModuleId: null }, error: null };
+      }
       if (action === 'transcribe_voice') {
         return { data: { success: true, transcript: 'متن ویس تست' }, error: null };
       }
@@ -212,6 +226,32 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.capabilities).toContain('document_analysis');
     expect(body?.bundle?.inputs?.[0]?.file?.filename).toBe('proposal.pdf');
     expect(body?.bundle?.inputs?.[0]?.file?.data).toContain('data:application/pdf');
+  });
+
+  it('uses auto routing as the default text mode when no operator is selected', async () => {
+    await renderPanel();
+    await typeAndSend('یک پاسخ معمولی بده', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(findBody('chat')).toBeTruthy());
+    expect(findBody('chat')?.capabilities || []).toEqual([]);
+  });
+
+  it('uses auto routing for record creation when no operator is selected', async () => {
+    await renderPanel();
+    await typeAndSend('این را به عنوان مشتری ثبت کن', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(findBody('create_record_from_prompt') || findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle') || findBody('create_record_from_prompt');
+    expect(body?.recordCreation?.moduleId).toBe('customers');
+  });
+
+  it('uses auto routing for attached files when no operator is selected', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('send-file')[0]);
+    await typeAndSend('این را بررسی کن', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    expect(findBody('run_task_bundle')?.capabilities).toContain('document_analysis');
   });
 
   it('queues voice_input and sends it through task bundle', async () => {

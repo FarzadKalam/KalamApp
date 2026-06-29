@@ -777,6 +777,27 @@ export const fetchRelationOptionsForField = async (
       ).values()
     );
 
+    if (dedupedOptions.length === 0 && exactId) {
+      const deletedRecordResult = await supabaseClient
+        .from('recycle_bin_records')
+        .select('record_title')
+        .eq('module_id', targetModule)
+        .eq('source_record_id', exactId)
+        .maybeSingle();
+      if (!deletedRecordResult.error && deletedRecordResult.data) {
+        const deletedTitle = String(deletedRecordResult.data?.record_title || '').trim();
+        const deletedLabel = deletedTitle ? `${deletedTitle} (حذف شده)` : 'رکورد حذف شده';
+        dedupedOptions.push({
+          label: deletedLabel,
+          value: exactId,
+          module: targetModule,
+          name: deletedTitle || 'رکورد حذف شده',
+          searchText: `${deletedLabel} ${String(exactId || '').trim()}`.trim(),
+          missing: true,
+        });
+      }
+    }
+
     relationOptionsCache.set(cacheKey, dedupedOptions);
     return dedupedOptions;
   })();

@@ -14,10 +14,12 @@ import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../../../ut
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { BOT_CHANNEL_LABELS_FA, isBotChannel, type BotChannel, type BotTargetModuleId } from '../../../utils/botPlatform';
-import { extractBotMessageAttachments } from '../../../utils/messageAttachments';
+import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
+import { getActiveChannelSettings } from '../../../utils/channelSettings';
+import { isAbortLikeError } from '../../../utils/requestErrors';
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
-type AttachmentKind = 'image' | 'file' | 'video' | 'audio';
+type AttachmentKind = 'image' | 'file' | 'video' | 'audio' | 'voice';
 type ConversationAction =
   | 'search'
   | 'attach'
@@ -123,6 +125,7 @@ type BotMessageRow = {
   mime_type?: string | null;
   payload?: Record<string, any> | null;
   created_at?: string | null;
+  channel_type?: string | null;
 };
 
 type BotDirectThreadRow = {
@@ -157,6 +160,9 @@ type BotIdentityBindingRow = {
 
 const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
 const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
+const RUBIKA_MEDIA_AUTO_HYDRATION_BATCH_SIZE = 5;
+const RUBIKA_MEDIA_HYDRATION_BACKOFF_MS = 5 * 60 * 1000;
+const RUBIKA_MEDIA_HYDRATION_MAX_FAILURES = 2;
 
 const buildReadStateKey = (section: string, sourceType: string, sourceId: string) =>
   `${String(section || '').trim()}:${String(sourceType || '').trim()}:${String(sourceId || '').trim()}`;
@@ -164,6 +170,7 @@ const buildReadStateKey = (section: string, sourceType: string, sourceId: string
 const normalizeReadStateSection = (section: string) => {
   const normalized = String(section || '').trim();
   if (normalized === 'sms_messages') return 'sms';
+  if (normalized === 'bot_direct_messages') return 'bot_messages';
   return normalized;
 };
 
@@ -514,6 +521,7 @@ const isRpcSchemaCompatibilityError = (error: any) => {
   return (
     isMissingRpcError(error)
     || status >= 500
+    || code === '57014'
     || code === '42703'
     || code === 'PGRST204'
     || code === 'PGRST301'
@@ -527,9 +535,137 @@ const safeLiveFetch = async <T,>(label: string, loader: () => Promise<T>, fallba
   try {
     return await loader();
   } catch (error) {
+    if (isAbortLikeError(error)) {
+      return fallback;
+    }
     console.warn(`Messaging v2 live fetch failed: ${label}`, error);
     return fallback;
   }
+};
+
+const isBrokenRubikaStorageUrl = (url: string) =>
+  /https?:\/\/botapi\.rubika\.ir\/storage\/v1\/object\/public\//i.test(String(url || '').trim());
+
+const isRubikaTemporaryDownloadUrl = (url: string) =>
+  /https?:\/\/messenger[^/]*\.rubika\.ir\/download\/?\?/i.test(String(url || '').trim());
+
+const isMissingOrBrokenBotMediaUrl = (channel: BotChannel, url: string | null | undefined) => {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl) return true;
+  return channel === 'rubika' && (isBrokenRubikaStorageUrl(normalizedUrl) || isRubikaTemporaryDownloadUrl(normalizedUrl));
+};
+
+const buildRenderableBotAttachments = (row: BotMessageRow, channel: BotChannel | null) =>
+  extractBotMessageAttachments(row)
+    .filter((attachment) => !(channel && isMissingOrBrokenBotMediaUrl(channel, attachment.url || null)))
+    .map((attachment) => ({
+      name: attachment.name || 'فایل',
+      kind: toAttachmentKind(attachment),
+      url: attachment.url || null,
+      mimeType: attachment.mimeType || null,
+    }));
+
+const collectBotMediaFileItems = (row: BotMessageRow | null | undefined, channel: BotChannel) => {
+  const seen = new Set<string>();
+  return collectBotMessageMediaFileRefs(row).filter((item) => {
+    if (!item.fileId || seen.has(item.fileId)) return false;
+    seen.add(item.fileId);
+    return isMissingOrBrokenBotMediaUrl(channel, item.url);
+  });
+};
+
+const getBotMessageLifecycleState = (row: BotMessageRow | null | undefined) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const status = String((payload as any)?.message_status || (payload as any)?.provider_message_status || '').trim().toLowerCase();
+  return {
+    deleted: Boolean((payload as any)?.message_deleted || (payload as any)?.deleted_at || status === 'deleted'),
+    edited: Boolean((payload as any)?.message_edited || (payload as any)?.edited_at || status === 'edited'),
+  };
+};
+
+const pickBotPayloadCaption = (row: BotMessageRow | null | undefined) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const candidates = [
+    (payload as any)?.caption,
+    (payload as any)?.message_text,
+    (payload as any)?.text,
+    (payload as any)?.body,
+    (payload as any)?.new_message?.caption,
+    (payload as any)?.new_message?.text,
+    (payload as any)?.update?.new_message?.caption,
+    (payload as any)?.update?.new_message?.text,
+    (payload as any)?.update?.new_message?.aux_data?.caption,
+    (payload as any)?.update?.new_message?.aux_data?.text,
+    (payload as any)?.message?.caption,
+    (payload as any)?.message?.text,
+    (payload as any)?.message?.aux_data?.caption,
+    (payload as any)?.message?.aux_data?.text,
+  ];
+  for (const candidate of candidates) {
+    const text = String(candidate || '').trim();
+    if (text) return text;
+  }
+  return '';
+};
+
+const resolveBotMessageText = (
+  row: BotMessageRow,
+  attachments: Array<{ name: string; kind: AttachmentKind; url?: string | null; mimeType?: string | null }>,
+  channel: BotChannel | null,
+) => {
+  const lifecycle = getBotMessageLifecycleState(row);
+  if (lifecycle.deleted) return 'پیام حذف شده';
+  const text = String(row?.content_text || '').trim() || pickBotPayloadCaption(row);
+  if (text) return text;
+  if (attachments.length) return '';
+  if (channel && collectBotMessageMediaFileRefs(row).some((item) => item.fileId && isMissingOrBrokenBotMediaUrl(channel, item.url))) {
+    return 'در حال بازیابی پیوست...';
+  }
+  return 'پیام بات';
+};
+
+const shouldHydrateBotMessageMedia = (
+  row: BotMessageRow | null | undefined,
+  groupById: Map<string, BotGroupRow>,
+  failureState?: { attempts: number; lastAttemptAt: number } | null,
+) => {
+  if (!row || String(row?.direction || '').trim() !== 'inbound') return false;
+  const groupId = String(row?.bot_group_id || '').trim();
+  const group = groupById.get(groupId);
+  const channel = String(group?.channel_type || '').trim();
+  if (channel !== 'rubika' && channel !== 'bale') return false;
+  const rowId = String(row?.id || '').trim();
+  if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
+  if (
+    failureState
+    && failureState.attempts >= RUBIKA_MEDIA_HYDRATION_MAX_FAILURES
+    && Date.now() - failureState.lastAttemptAt < RUBIKA_MEDIA_HYDRATION_BACKOFF_MS
+  ) {
+    return false;
+  }
+  return true;
+};
+
+const shouldHydrateBotDirectMessageMedia = (
+  row: BotMessageRow | null | undefined,
+  threadById: Map<string, BotDirectThreadRow>,
+  failureState?: { attempts: number; lastAttemptAt: number } | null,
+) => {
+  if (!row || String(row?.direction || '').trim() !== 'inbound') return false;
+  const threadId = String(row?.direct_thread_id || '').trim();
+  const thread = threadById.get(threadId);
+  const channel = String(thread?.channel_type || '').trim();
+  if (channel !== 'rubika' && channel !== 'bale') return false;
+  const rowId = String(row?.id || '').trim();
+  if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
+  if (
+    failureState
+    && failureState.attempts >= RUBIKA_MEDIA_HYDRATION_MAX_FAILURES
+    && Date.now() - failureState.lastAttemptAt < RUBIKA_MEDIA_HYDRATION_BACKOFF_MS
+  ) {
+    return false;
+  }
+  return true;
 };
 
 const fetchSmsMessages = async () => {
@@ -825,6 +961,7 @@ const buildVoipLiveModels = (voipCalls: any[], recordTitleMap: Record<string, st
 const toAttachmentKind = (attachment: any): AttachmentKind => {
   const fileType = String(attachment?.fileType || attachment?.file_type || '').trim().toLowerCase();
   const mimeType = String(attachment?.mimeType || attachment?.mime_type || '').trim().toLowerCase();
+  if (fileType === 'voice') return 'voice';
   if (fileType === 'image' || mimeType.startsWith('image/')) return 'image';
   if (fileType === 'video' || mimeType.startsWith('video/')) return 'video';
   if (fileType === 'audio' || mimeType.startsWith('audio/')) return 'audio';
@@ -891,12 +1028,7 @@ const buildBotGroupLiveModels = (
     const senderIdentity = resolveBotSenderBinding(row, channel, botSenderBindingMap);
     const senderTitle = resolveBotSenderLabel(row, recordTitleMap, group?.group_title || 'عضو گروه بات', senderIdentity.binding);
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
-    const attachments = extractBotMessageAttachments(row).map((attachment) => ({
-      name: attachment.name || 'فایل',
-      kind: toAttachmentKind(attachment),
-      url: attachment.url || null,
-      mimeType: attachment.mimeType || null,
-    }));
+    const attachments = buildRenderableBotAttachments(row, channel);
     return {
       id: `live-bot-group-${String(row?.id || `${groupId}-${row?.created_at || Math.random()}`)}`,
       sourceRow: row,
@@ -904,9 +1036,9 @@ const buildBotGroupLiveModels = (
       kind: 'message' as const,
       direction,
       author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
-      text: String(row?.content_text || '').trim() || (attachments.length ? '' : 'پیام بات'),
+      text: resolveBotMessageText(row, attachments, channel),
       time: formatTime(row?.created_at),
-      status: direction === 'outbound' ? 'ارسال شده' : undefined,
+      status: getBotMessageLifecycleState(row).edited ? 'ویرایش شده' : (direction === 'outbound' ? 'ارسال شده' : undefined),
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
       avatarUrl: resolveBotSenderAvatarUrl(row),
@@ -983,12 +1115,7 @@ const buildBotDirectLiveModels = (
     const senderIdentity = resolveBotSenderBinding(row, channel, botSenderBindingMap);
     const senderTitle = resolveBotSenderLabel(row, recordTitleMap, thread?.display_name || 'مخاطب بات', senderIdentity.binding);
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
-    const attachments = extractBotMessageAttachments(row).map((attachment) => ({
-      name: attachment.name || 'فایل',
-      kind: toAttachmentKind(attachment),
-      url: attachment.url || null,
-      mimeType: attachment.mimeType || null,
-    }));
+    const attachments = buildRenderableBotAttachments(row, channel);
     return {
       id: `live-bot-direct-${String(row?.id || `${threadId}-${row?.created_at || Math.random()}`)}`,
       sourceRow: row,
@@ -996,9 +1123,9 @@ const buildBotDirectLiveModels = (
       kind: 'message' as const,
       direction,
       author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
-      text: String(row?.content_text || '').trim() || (attachments.length ? '' : 'پیام بات'),
+      text: resolveBotMessageText(row, attachments, channel),
       time: formatTime(row?.created_at),
-      status: direction === 'outbound' ? 'ارسال شده' : undefined,
+      status: getBotMessageLifecycleState(row).edited ? 'ویرایش شده' : (direction === 'outbound' ? 'ارسال شده' : undefined),
       replyTo: String(row?.payload?.reply_to_message_id || row?.payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
       avatarUrl: resolveBotSenderAvatarUrl(row),
@@ -1015,7 +1142,8 @@ const buildBotDirectLiveModels = (
   return { conversations, events };
 };
 
-export const useMessagingOmniLiveData = () => {
+export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }) => {
+  const realtimeEnabled = options?.realtimeEnabled !== false;
   const [profile, setProfile] = useState<LiveProfile>({
     id: null,
     orgId: null,
@@ -1034,6 +1162,9 @@ export const useMessagingOmniLiveData = () => {
   const [readStateKeys, setReadStateKeys] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const refreshInFlightRef = useRef(false);
+  const hydratingRubikaMessageIdsRef = useRef<Set<string>>(new Set());
+  const rubikaHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
+  const loggedRubikaHydrationFailuresRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let disposed = false;
@@ -1125,8 +1256,248 @@ export const useMessagingOmniLiveData = () => {
     void refresh();
   }, [profile.id, refresh]);
 
+  const hydrateBotGroupMessageMedia = useCallback(async (rows: BotMessageRow[], groups: BotGroupRow[]) => {
+    const groupById = new Map((groups || []).map((group) => [String(group?.id || '').trim(), group] as const));
+    const pendingRows = (rows || [])
+      .filter((row) => {
+        const rowId = String(row?.id || '').trim();
+        if (!rowId || hydratingRubikaMessageIdsRef.current.has(rowId)) return false;
+        return shouldHydrateBotMessageMedia(row, groupById, rubikaHydrationFailuresRef.current.get(rowId) || null);
+      })
+      .slice(0, RUBIKA_MEDIA_AUTO_HYDRATION_BATCH_SIZE);
+    if (pendingRows.length === 0) return;
+
+    const connectionIdsByChannel = new Map<BotChannel, string>();
+
+    for (const row of pendingRows) {
+      const rowId = String(row?.id || '').trim();
+      const group = groupById.get(String(row?.bot_group_id || '').trim());
+      const channel = String(group?.channel_type || '').trim();
+      if (channel !== 'rubika' && channel !== 'bale') continue;
+      const mediaItems = collectBotMediaFileItems(row, channel);
+      if (!rowId || mediaItems.length === 0) continue;
+      hydratingRubikaMessageIdsRef.current.add(rowId);
+      try {
+        let connectionId = connectionIdsByChannel.get(channel);
+        if (!connectionId) {
+          const activeConnection = await getActiveChannelSettings(channel);
+          connectionId = String(activeConnection?.id || '').trim();
+          if (connectionId) connectionIdsByChannel.set(channel, connectionId);
+        }
+        if (!connectionId) continue;
+        const importedAttachments: Array<Record<string, any>> = [];
+        for (const mediaItem of mediaItems) {
+          const { data, error } = await supabase.functions.invoke('bot-admin', {
+            body: {
+              action: channel === 'rubika' ? 'import_rubika_file' : 'import_bale_file',
+              channel,
+              connectionId,
+              messageId: rowId,
+              messageTable: 'counterparty_bot_messages',
+              fileId: mediaItem.fileId,
+              fileName: mediaItem.fileName || String(row?.file_name || '').trim() || undefined,
+            },
+          });
+          if (error) throw error;
+          if (!data?.success || !String(data?.file_url || '').trim()) {
+            const nextError = new Error(String(data?.message || 'بازیابی فایل پیام‌رسان ناموفق بود.'));
+            (nextError as any).retryable = data?.retryable === true;
+            (nextError as any).details = data?.details || null;
+            throw nextError;
+          }
+          importedAttachments.push({
+            url: String(data?.file_url || '').trim(),
+            name: String(data?.file_name || mediaItem.fileName || row?.file_name || 'فایل').trim() || 'فایل',
+            mime_type: String(data?.mime_type || row?.mime_type || '').trim() || null,
+            file_type: String(data?.detected_kind || mediaItem.fileType || row?.message_type || 'file').trim() || 'file',
+            media_file_id: mediaItem.fileId,
+          });
+        }
+        setBotGroupMessages((prev) => prev.map((item) => {
+          if (String(item?.id || '').trim() !== rowId) return item;
+          const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+          const existingAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
+          const mergedByKey = new Map<string, Record<string, any>>();
+          [...existingAttachments, ...importedAttachments].forEach((attachment: any) => {
+            const key = String(attachment?.media_file_id || attachment?.url || attachment?.name || '').trim();
+            if (!key) return;
+            const existing = mergedByKey.get(key) || {};
+            mergedByKey.set(key, {
+              ...existing,
+              ...attachment,
+              url: String(attachment?.url || existing?.url || '').trim(),
+            });
+          });
+          const mergedAttachments = Array.from(mergedByKey.values());
+          const primaryAttachment = importedAttachments[0] || mergedAttachments[0] || null;
+          return {
+            ...item,
+            file_url: String(primaryAttachment?.url || item.file_url || '').trim() || null,
+            file_name: String(primaryAttachment?.name || item.file_name || '').trim() || null,
+            mime_type: String(primaryAttachment?.mime_type || item.mime_type || '').trim() || null,
+            payload: {
+              ...payload,
+              media_import_status: 'succeeded',
+              media_stored: true,
+              attachments: mergedAttachments,
+            },
+          };
+        }));
+        rubikaHydrationFailuresRef.current.delete(rowId);
+        loggedRubikaHydrationFailuresRef.current.delete(rowId);
+      } catch (error) {
+        const previousAttempts = rubikaHydrationFailuresRef.current.get(rowId)?.attempts || 0;
+        const retryable = (error as { retryable?: boolean } | null)?.retryable === true;
+        rubikaHydrationFailuresRef.current.set(rowId, {
+          attempts: retryable ? Math.max(previousAttempts, 1) : Math.max(previousAttempts + 1, RUBIKA_MEDIA_HYDRATION_MAX_FAILURES),
+          lastAttemptAt: Date.now(),
+        });
+        if (!loggedRubikaHydrationFailuresRef.current.has(rowId)) {
+          loggedRubikaHydrationFailuresRef.current.add(rowId);
+          console.info('Messaging v2 skipped bot media hydration after controlled failure.', {
+            channel,
+            messageId: rowId,
+            fileIds: mediaItems.map((item) => item.fileId),
+            error: String((error as any)?.message || error || 'unknown_error'),
+            details: (error as any)?.details || null,
+          });
+        }
+      } finally {
+        hydratingRubikaMessageIdsRef.current.delete(rowId);
+      }
+    }
+  }, []);
+
+  const hydrateBotDirectMessageMedia = useCallback(async (rows: BotMessageRow[], threads: BotDirectThreadRow[]) => {
+    const threadById = new Map((threads || []).map((thread) => [String(thread?.id || '').trim(), thread] as const));
+    const pendingRows = (rows || [])
+      .filter((row) => {
+        const rowId = String(row?.id || '').trim();
+        if (!rowId || hydratingRubikaMessageIdsRef.current.has(rowId)) return false;
+        return shouldHydrateBotDirectMessageMedia(row, threadById, rubikaHydrationFailuresRef.current.get(rowId) || null);
+      })
+      .slice(0, RUBIKA_MEDIA_AUTO_HYDRATION_BATCH_SIZE);
+    if (pendingRows.length === 0) return;
+
+    const connectionIdsByChannel = new Map<BotChannel, string>();
+
+    for (const row of pendingRows) {
+      const rowId = String(row?.id || '').trim();
+      const thread = threadById.get(String(row?.direct_thread_id || '').trim());
+      const channel = String(thread?.channel_type || '').trim();
+      if (channel !== 'rubika' && channel !== 'bale') continue;
+      const mediaItems = collectBotMediaFileItems(row, channel);
+      if (!rowId || mediaItems.length === 0) continue;
+      hydratingRubikaMessageIdsRef.current.add(rowId);
+      try {
+        let connectionId = connectionIdsByChannel.get(channel);
+        if (!connectionId) {
+          const activeConnection = await getActiveChannelSettings(channel);
+          connectionId = String(activeConnection?.id || '').trim();
+          if (connectionId) connectionIdsByChannel.set(channel, connectionId);
+        }
+        if (!connectionId) continue;
+        const importedAttachments: Array<Record<string, any>> = [];
+        for (const mediaItem of mediaItems) {
+          const { data, error } = await supabase.functions.invoke('bot-admin', {
+            body: {
+              action: channel === 'rubika' ? 'import_rubika_file' : 'import_bale_file',
+              channel,
+              connectionId,
+              messageId: rowId,
+              messageTable: 'counterparty_bot_direct_messages',
+              fileId: mediaItem.fileId,
+              fileName: mediaItem.fileName || String(row?.file_name || '').trim() || undefined,
+            },
+          });
+          if (error) throw error;
+          if (!data?.success || !String(data?.file_url || '').trim()) {
+            const nextError = new Error(String(data?.message || 'بازیابی فایل پیام‌رسان ناموفق بود.'));
+            (nextError as any).retryable = data?.retryable === true;
+            (nextError as any).details = data?.details || null;
+            throw nextError;
+          }
+          importedAttachments.push({
+            url: String(data?.file_url || '').trim(),
+            name: String(data?.file_name || mediaItem.fileName || row?.file_name || 'فایل').trim() || 'فایل',
+            mime_type: String(data?.mime_type || row?.mime_type || '').trim() || null,
+            file_type: String(data?.detected_kind || mediaItem.fileType || row?.message_type || 'file').trim() || 'file',
+            media_file_id: mediaItem.fileId,
+          });
+        }
+        setBotDirectMessages((prev) => prev.map((item) => {
+          if (String(item?.id || '').trim() !== rowId) return item;
+          const payload = item?.payload && typeof item.payload === 'object' ? item.payload : {};
+          const existingAttachments = Array.isArray((payload as any)?.attachments) ? (payload as any).attachments : [];
+          const mergedByKey = new Map<string, Record<string, any>>();
+          [...existingAttachments, ...importedAttachments].forEach((attachment: any) => {
+            const key = String(attachment?.media_file_id || attachment?.url || attachment?.name || '').trim();
+            if (!key) return;
+            const existing = mergedByKey.get(key) || {};
+            mergedByKey.set(key, {
+              ...existing,
+              ...attachment,
+              url: String(attachment?.url || existing?.url || '').trim(),
+            });
+          });
+          const mergedAttachments = Array.from(mergedByKey.values());
+          const primaryAttachment = importedAttachments[0] || mergedAttachments[0] || null;
+          return {
+            ...item,
+            file_url: String(primaryAttachment?.url || item.file_url || '').trim() || null,
+            file_name: String(primaryAttachment?.name || item.file_name || '').trim() || null,
+            mime_type: String(primaryAttachment?.mime_type || item.mime_type || '').trim() || null,
+            payload: {
+              ...payload,
+              media_import_status: 'succeeded',
+              media_stored: true,
+              attachments: mergedAttachments,
+            },
+          };
+        }));
+        rubikaHydrationFailuresRef.current.delete(rowId);
+        loggedRubikaHydrationFailuresRef.current.delete(rowId);
+      } catch (error) {
+        const previousAttempts = rubikaHydrationFailuresRef.current.get(rowId)?.attempts || 0;
+        const retryable = (error as { retryable?: boolean } | null)?.retryable === true;
+        rubikaHydrationFailuresRef.current.set(rowId, {
+          attempts: retryable ? Math.max(previousAttempts, 1) : Math.max(previousAttempts + 1, RUBIKA_MEDIA_HYDRATION_MAX_FAILURES),
+          lastAttemptAt: Date.now(),
+        });
+        if (!loggedRubikaHydrationFailuresRef.current.has(rowId)) {
+          loggedRubikaHydrationFailuresRef.current.add(rowId);
+          console.info('Messaging v2 skipped bot direct media hydration after controlled failure.', {
+            channel,
+            messageId: rowId,
+            fileIds: mediaItems.map((item) => item.fileId),
+            error: String((error as any)?.message || error || 'unknown_error'),
+            details: (error as any)?.details || null,
+          });
+        }
+      } finally {
+        hydratingRubikaMessageIdsRef.current.delete(rowId);
+      }
+    }
+  }, []);
+
   useEffect(() => {
-    if (!profile.id || !profile.orgId) return;
+    if (!profile.id || botGroupMessages.length === 0 || botGroups.length === 0) return;
+    void hydrateBotGroupMessageMedia(botGroupMessages, botGroups).catch((error) => {
+      if (isAbortLikeError(error)) return;
+      console.warn('Messaging v2 bot media hydration failed.', error);
+    });
+  }, [botGroupMessages, botGroups, hydrateBotGroupMessageMedia, profile.id]);
+
+  useEffect(() => {
+    if (!profile.id || botDirectMessages.length === 0 || botDirectThreads.length === 0) return;
+    void hydrateBotDirectMessageMedia(botDirectMessages, botDirectThreads).catch((error) => {
+      if (isAbortLikeError(error)) return;
+      console.warn('Messaging v2 bot direct media hydration failed.', error);
+    });
+  }, [botDirectMessages, botDirectThreads, hydrateBotDirectMessageMedia, profile.id]);
+
+  useEffect(() => {
+    if (!realtimeEnabled || !profile.id || !profile.orgId) return;
     const filter = `org_id=eq.${profile.orgId}`;
     let channel: RealtimeChannel | null = supabase
       .channel(`messaging-v2-live-${profile.orgId}-${profile.id}`)
@@ -1167,7 +1538,7 @@ export const useMessagingOmniLiveData = () => {
         channel = null;
       }
     };
-  }, [profile.canViewAllCalls, profile.id, profile.orgId, profile.voipExtension, refresh]);
+  }, [profile.canViewAllCalls, profile.id, profile.orgId, profile.voipExtension, realtimeEnabled, refresh]);
 
   return useMemo(() => {
     const smsModels = buildSmsLiveModels(smsMessages, recordTitleMap, readStateKeys);

@@ -100,6 +100,7 @@ type ProcessCardsV2Props = {
   onTemplateChange?: (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => void;
   onAutoAssignProcess?: (item: ProcessV2CardData) => void;
   onAutoAssignStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void | Promise<any>;
+  onSaveDraftStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void | Promise<any>;
   onConfigureActivator?: (item: ProcessV2TemplateCard) => void;
   autoAssigning?: boolean;
   canAutoAssign?: boolean;
@@ -238,11 +239,53 @@ let localIdSeed = 0;
 const nextLocalId = (prefix: string) => `${prefix}_${Date.now()}_${localIdSeed++}`;
 const processCollapsePreference = new Map<string, boolean>();
 
-const cloneStage = (stage: ProcessV2Stage): ProcessV2Stage => ({
-  ...stage,
-  id: nextLocalId('stage'),
-  title: `${stage.title} کپی`,
-});
+const cloneStage = (stage: ProcessV2Stage): ProcessV2Stage => {
+  const clonedId = nextLocalId('stage');
+  const clonedNodeKey = nextLocalId('process_node');
+  const clonedTitle = `${stage.title} کپی`;
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const metadata = source.metadata && typeof source.metadata === 'object' && !Array.isArray(source.metadata)
+    ? source.metadata
+    : {};
+  const clonedMetadata = {
+    ...metadata,
+    draft_stage_id: clonedId,
+    draft_stage_key: clonedId,
+    process_node_key: clonedNodeKey,
+    copy_of_stage_id: stage.id || source.id || null,
+    copy_of_template_stage_id: source.template_stage_id || metadata.template_stage_id || null,
+    template_stage_id: null,
+    process_run_stage_id: null,
+    task_id: null,
+    name: clonedTitle,
+    stage_name: clonedTitle,
+  };
+  const clonedSource = {
+    ...source,
+    id: clonedId,
+    name: clonedTitle,
+    stage_name: clonedTitle,
+    template_stage_id: null,
+    process_run_stage_id: null,
+    run_stage_id: null,
+    task_id: null,
+    process_task_id: null,
+    source_stage: undefined,
+    __process_v2_has_real_task: false,
+    process_node_key: clonedNodeKey,
+    metadata: clonedMetadata,
+    is_draft: true,
+    status: 'draft',
+  };
+  return {
+    ...stage,
+    id: clonedId,
+    title: clonedTitle,
+    kind: 'draft',
+    status: 'draft',
+    source: clonedSource,
+  };
+};
 
 const getStageLayoutSlot = (stage: ProcessV2Stage, fallbackIndex: number) => (
   typeof stage.layoutSlot === 'number' && Number.isFinite(stage.layoutSlot)
@@ -1739,6 +1782,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   onTemplateChange,
   onAutoAssignProcess,
   onAutoAssignStage,
+  onSaveDraftStage,
   onConfigureActivator,
   autoAssigning = false,
   canAutoAssign,
@@ -1846,10 +1890,20 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     const matchIds = getProcessV2StageMatchIds(activeStageModal?.stage || null, sourcePatch);
     const directStageId = String(stageId || '').trim();
     if (directStageId) matchIds.add(directStageId);
+    const hasAssigneePatch = Boolean(
+      sourcePatch
+      && (
+        Object.prototype.hasOwnProperty.call(sourcePatch, 'assignee_label')
+        || Object.prototype.hasOwnProperty.call(sourcePatch, 'assignee_id')
+        || Object.prototype.hasOwnProperty.call(sourcePatch, 'assignee_user_id')
+        || Object.prototype.hasOwnProperty.call(sourcePatch, 'assignee_role_id')
+      )
+    );
     const patchStage = (stage: ProcessV2Stage): ProcessV2Stage => ({
       ...stage,
       title: String(sourcePatch?.name || sourcePatch?.stage_name || '').trim() || stage.title,
       assigneeLabel: String(sourcePatch?.assignee_label || '').trim() || stage.assigneeLabel,
+      assigneeAvatarUrl: String(sourcePatch?.assignee_avatar_url || '').trim() || (hasAssigneePatch ? undefined : stage.assigneeAvatarUrl),
       activityTypeLabel: String(sourcePatch?.task_type || '').trim() || stage.activityTypeLabel,
       dueLabel: String(sourcePatch?.dueLabel || sourcePatch?.due_label || '').trim() || stage.dueLabel,
       status: nextStatusValue,
@@ -2521,6 +2575,11 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
         onCreateDraftActivity={
           activeStageModal?.stage?.kind === 'draft' && onAutoAssignStage
             ? (overrides) => onAutoAssignStage(activeStageModal.stage, activeStageModal.laneTitle, item, overrides)
+            : undefined
+        }
+        onSaveDraftActivity={
+          activeStageModal?.stage?.kind === 'draft' && onSaveDraftStage
+            ? (overrides) => onSaveDraftStage(activeStageModal.stage, activeStageModal.laneTitle, item, overrides)
             : undefined
         }
       />

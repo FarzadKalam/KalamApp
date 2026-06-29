@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Skeleton } from 'antd';
 import EditableTable from '../EditableTable.tsx';
 import GridTable from '../GridTable';
 import SummaryCard from '../SummaryCard';
@@ -223,7 +224,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               </React.Suspense>
             ) : null}
             {isProcessStagesField ? (
-              <React.Suspense fallback={null}>
+              <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
                 <ProcessCardsV2RuntimeBlock
                   moduleId={module.id}
                   recordId={data.id}

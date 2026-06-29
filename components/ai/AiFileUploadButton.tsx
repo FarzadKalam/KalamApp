@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { App, Button, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { PaperClipOutlined } from '@ant-design/icons';
@@ -7,6 +7,7 @@ import type { NoteAttachment } from '../../utils/noteContent';
 import { uploadAiFileAttachments } from '../../utils/aiFileAttachments';
 import { ensureRecordAiFilesFolder, ensureWorkspaceAiFilesFolder } from '../../utils/fileManagerService';
 import {
+  buildAiUploadedFilePrompt,
   buildAiUploadedFilePromptFromUrl,
   type AiUploadedFilePrompt,
 } from '../../utils/aiUploadedFilePrompt';
@@ -18,7 +19,10 @@ type AiFileUploadButtonProps = {
   size?: ButtonProps['size'];
   moduleId?: string | null;
   recordId?: string | null;
+  directUpload?: boolean;
+  multiple?: boolean;
   onPrepared: (filePrompt: AiUploadedFilePrompt) => void | Promise<void>;
+  onPreparedMany?: (filePrompts: AiUploadedFilePrompt[]) => void | Promise<void>;
 };
 
 const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
@@ -27,16 +31,31 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
   size,
   moduleId,
   recordId,
+  directUpload = false,
+  multiple = false,
   onPrepared,
+  onPreparedMany,
 }) => {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [initialFolderKey, setInitialFolderKey] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizedModuleId = String(moduleId || '').trim() || null;
   const normalizedRecordId = String(recordId || '').trim() || null;
   const hasRecordScope = Boolean(normalizedModuleId && normalizedRecordId);
+
+  const dispatchPrepared = async (filePrompts: AiUploadedFilePrompt[]) => {
+    if (!filePrompts.length) return;
+    if (onPreparedMany) {
+      await onPreparedMany(filePrompts);
+      return;
+    }
+    for (const filePrompt of filePrompts) {
+      await onPrepared(filePrompt);
+    }
+  };
 
   const prepareAttachment = async (attachment: NoteAttachment) => {
     const url = String(attachment.url || '').trim();
@@ -102,6 +121,26 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
     }
   };
 
+  const handleDirectFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    setPreparing(true);
+    try {
+      const prepared = await Promise.all(files.map((file) => buildAiUploadedFilePrompt(file)));
+      await dispatchPrepared(prepared);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'آماده‌سازی فایل برای هوش مصنوعی ناموفق بود.'));
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  const openDirectUpload = () => {
+    if (disabled || loading || preparing) return;
+    inputRef.current?.click();
+  };
+
   return (
     <>
       <Tooltip title="ارسال فایل به هوش مصنوعی">
@@ -110,9 +149,26 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
           disabled={disabled || loading || preparing}
           loading={preparing || loading}
           size={size}
-          onClick={() => void openPicker()}
+          onClick={() => {
+            if (directUpload) {
+              openDirectUpload();
+              return;
+            }
+            void openPicker();
+          }}
         />
       </Tooltip>
+      {directUpload ? (
+        <input
+          ref={inputRef}
+          type="file"
+          multiple={multiple}
+          className="hidden"
+          onChange={(event) => {
+            void handleDirectFileChange(event);
+          }}
+        />
+      ) : null}
       <FileManagerPickerModal
         open={open}
         onClose={() => setOpen(false)}

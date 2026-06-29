@@ -70,11 +70,14 @@ const PRIMARY_MODEL_CAPABILITIES = new Set([
 
 const PRIMARY_MODEL_PREFERRED_IDS = [
   'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
   'gpt-5.4-mini',
-  'gpt-5-mini',
-  'gpt-4.1-mini',
-  'gpt-4o-mini',
+  'grok-4.3',
+  'gpt-5.5',
+  'qwen3.7-max',
+  'kimi-k2.6',
 ];
+const PRIMARY_MODEL_ALLOWED_IDS = new Set(PRIMARY_MODEL_PREFERRED_IDS);
 
 const formatUnit = (value: unknown) =>
   Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 8 });
@@ -144,6 +147,7 @@ const AiSettingsTab: React.FC = () => {
       const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
       return model?.is_coming_soon !== true && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
     })
+    .filter((model) => PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim()))
     .sort((a, b) => {
       const aIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(a?.id || ''));
       const bIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(b?.id || ''));

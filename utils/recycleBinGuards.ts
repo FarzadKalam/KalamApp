@@ -2,7 +2,14 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
-const RECYCLE_BIN_CHECK_CACHE_TTL_MS = 1500;
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const normalizeDbUuid = (value: unknown) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task)[_:]/i, '');
+  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+};
+const RECYCLE_BIN_CHECK_CACHE_TTL_MS = 5 * 60_000;
 
 type RecycleBinCheckCacheEntry = {
   savedAt: number;
@@ -29,6 +36,51 @@ const queryRecycleBinRecord = async (sourceTable: string, recordId: string) => {
   } catch {
     return false;
   }
+};
+
+export const primeRecycleBinGuardCache = async (
+  entries: Array<{ moduleId?: string | null; sourceTable?: string | null; recordId?: string | null }>
+) => {
+  const bySourceTable = entries.reduce<Record<string, Set<string>>>((acc, entry) => {
+    const sourceTable = normalizeText(entry?.sourceTable) || getRecycleBinSourceTableForModule(entry?.moduleId);
+    const recordId = normalizeText(entry?.recordId);
+    if (!sourceTable || !recordId) return acc;
+    if (!acc[sourceTable]) acc[sourceTable] = new Set<string>();
+    acc[sourceTable].add(recordId);
+    return acc;
+  }, {});
+
+  await Promise.all(Object.entries(bySourceTable).map(async ([sourceTable, recordIds]) => {
+    const ids = Array.from(recordIds);
+    if (ids.length === 0) return;
+    const now = Date.now();
+    const missingIds = ids.filter((recordId) => {
+      const cached = recycleBinCheckCache.get(`${sourceTable}:${recordId}`);
+      return !cached || now - cached.savedAt >= RECYCLE_BIN_CHECK_CACHE_TTL_MS;
+    });
+    if (missingIds.length === 0) return;
+
+    missingIds.forEach((recordId) => {
+      recycleBinCheckCache.set(`${sourceTable}:${recordId}`, { savedAt: now, value: false });
+    });
+
+    try {
+      const { data, error } = await supabase
+        .from('recycle_bin_records')
+        .select('source_record_id')
+        .eq('source_table', sourceTable)
+        .in('source_record_id', missingIds);
+      if (error) return;
+      (Array.isArray(data) ? data : []).forEach((row: any) => {
+        const recordId = normalizeText(row?.source_record_id);
+        if (recordId) {
+          recycleBinCheckCache.set(`${sourceTable}:${recordId}`, { savedAt: Date.now(), value: true });
+        }
+      });
+    } catch {
+      // The per-record guard stays fail-open for recycle lookups so automations do not break on a transient UI read.
+    }
+  }));
 };
 
 const parseObject = (value: unknown): Record<string, any> => {
@@ -113,8 +165,8 @@ export const isRecordInRecycleBinUncached = async ({
 const getTaskProcessIds = (task?: Record<string, any> | null) => {
   const recurrence = parseObject(task?.recurrence_info);
   return {
-    processRunId: normalizeText(task?.process_run_id || recurrence?.process_run_id),
-    processRunStageId: normalizeText(task?.process_run_stage_id || recurrence?.process_run_stage_id),
+    processRunId: normalizeDbUuid(task?.process_run_id || recurrence?.process_run_id),
+    processRunStageId: normalizeDbUuid(task?.process_run_stage_id || recurrence?.process_run_stage_id),
   };
 };
 

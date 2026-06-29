@@ -13,6 +13,7 @@ type ListScopedIntegrationSettingsOptions = {
   connectionTypes: string[];
   columns?: string;
   isActive?: boolean;
+  includeGlobalFallback?: boolean;
 };
 
 export const loadScopedIntegrationSettings = async (
@@ -141,8 +142,51 @@ export const listScopedIntegrationSettings = async (
   const result = await runWithSupabaseTimeout((signal) =>
     attachAbortSignalIfSupported(query, signal)
   );
+
+  if (options.includeGlobalFallback === true && currentOrgId && !result.error) {
+    const orgRows = Array.isArray(result.data) ? result.data : [];
+    const presentTypes = new Set(
+      orgRows
+        .map((row: any) => String(row?.connection_type || '').trim())
+        .filter(Boolean)
+    );
+    const fallbackTypes = options.connectionTypes.filter((type) => !presentTypes.has(type));
+    if (fallbackTypes.length === 0) {
+      return {
+        ...result,
+        orgId: currentOrgId,
+        scope: 'org' as const,
+      };
+    }
+
+    let fallbackQuery = supabase
+      .from('integration_settings')
+      .select(options.columns || '*')
+      .in('connection_type', fallbackTypes)
+      .is('org_id', null)
+      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (options.isActive !== undefined) {
+      fallbackQuery = fallbackQuery.eq('is_active', options.isActive);
+    }
+
+    const fallbackResult = await runWithSupabaseTimeout((signal) =>
+      attachAbortSignalIfSupported(fallbackQuery, signal)
+    );
+    const fallbackRows = Array.isArray(fallbackResult.data) ? fallbackResult.data : [];
+    return {
+      ...result,
+      data: [...orgRows, ...fallbackRows],
+      error: result.error || fallbackResult.error,
+      orgId: currentOrgId,
+      scope: fallbackRows.length > 0 ? 'org-with-global-fallback' as const : 'org' as const,
+    };
+  }
+
   return {
     ...result,
     orgId: currentOrgId,
+    scope: currentOrgId ? 'org' as const : 'global' as const,
   };
 };

@@ -61,12 +61,20 @@ type AutoAssignResult = {
   skippedCount: number;
   groupIds: string[];
   createdTasks?: Record<string, any>[];
+  missingAssigneeCount?: number;
 };
 
 const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
 const EXACT_TEMPLATE_TOKEN_REGEX = /^\s*\{\{\s*([^}]+)\s*\}\}\s*$/;
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const normalizeDbUuid = (value: unknown) => {
+  const raw = normalizeText(value);
+  if (!raw) return '';
+  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task|user|role)[_:]/i, '');
+  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+};
 
 const isMissingColumnError = (error: any, columnName: string) => {
   const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -463,7 +471,7 @@ const syncProcessRunLinks = async (
   primaryModuleId: string,
   primaryRecordId: string,
 ) => {
-  const normalizedRunId = normalizeText(processRunId);
+  const normalizedRunId = normalizeDbUuid(processRunId);
   if (!supabaseClient || !normalizedRunId) return;
   const { data: runRow, error: runError } = await supabaseClient
     .from('process_runs')
@@ -471,14 +479,27 @@ const syncProcessRunLinks = async (
     .eq('id', normalizedRunId)
     .maybeSingle();
   if (runError || !runRow?.org_id) return;
-  const normalizedOrgId = normalizeText(runRow.org_id);
-  const rows = Object.entries(parseProcessLinkMap(links)).map(([moduleId, recordId]) => ({
-    org_id: normalizedOrgId,
-    process_run_id: normalizedRunId,
-    module_id: moduleId,
-    record_id: recordId,
-    is_primary: moduleId === primaryModuleId && recordId === primaryRecordId,
-  }));
+  const normalizedOrgId = normalizeDbUuid(runRow.org_id);
+  const normalizedPrimaryRecordId = normalizeDbUuid(primaryRecordId);
+  const rows: Array<{
+    org_id: string;
+    process_run_id: string;
+    module_id: string;
+    record_id: string;
+    is_primary: boolean;
+  }> = [];
+  Object.entries(parseProcessLinkMap(links)).forEach(([moduleId, recordId]) => {
+    const normalizedLinkedRecordId = normalizeDbUuid(recordId);
+    const normalizedLinkedModuleId = normalizeText(moduleId);
+    if (!normalizedOrgId || !normalizedLinkedModuleId || !normalizedLinkedRecordId) return;
+    rows.push({
+      org_id: normalizedOrgId,
+      process_run_id: normalizedRunId,
+      module_id: normalizedLinkedModuleId,
+      record_id: normalizedLinkedRecordId,
+      is_primary: normalizedLinkedModuleId === primaryModuleId && normalizedLinkedRecordId === normalizedPrimaryRecordId,
+    });
+  });
   if (rows.length === 0) return;
   const { error } = await supabaseClient
     .from('process_run_links')
@@ -498,9 +519,9 @@ export const autoAssignProcessV2DraftStages = async ({
   targetStageId,
 }: AutoAssignArgs): Promise<AutoAssignResult> => {
   const normalizedModuleId = normalizeText(moduleId);
-  const normalizedRecordId = normalizeText(recordId);
+  const normalizedRecordId = normalizeDbUuid(recordId);
   if (!supabaseClient || !normalizedModuleId || !normalizedRecordId) {
-    return { createdCount: 0, skippedCount: 0, groupIds: [] };
+    return { createdCount: 0, skippedCount: 0, groupIds: [], missingAssigneeCount: 0 };
   }
 
   const graphSnapshot = materializeLegacyProcessGraph(Array.isArray(draftStages) ? draftStages : []);
@@ -518,7 +539,7 @@ export const autoAssignProcessV2DraftStages = async ({
       ].map(normalizeText).includes(normalizedTargetStageId);
     })
     .sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
-  if (stageRows.length === 0) return { createdCount: 0, skippedCount: 0, groupIds: [] };
+  if (stageRows.length === 0) return { createdCount: 0, skippedCount: 0, groupIds: [], missingAssigneeCount: 0 };
 
   const [{ data: authData }, sourceRecord, directory, existingTasks] = await Promise.all([
     supabaseClient.auth.getUser(),
@@ -526,7 +547,7 @@ export const autoAssignProcessV2DraftStages = async ({
     fetchAssigneeDirectory(supabaseClient),
     loadExistingProcessTasks(supabaseClient, normalizedModuleId, normalizedRecordId),
   ]);
-  const currentUserId = normalizeText(authData?.user?.id) || null;
+  const currentUserId = normalizeDbUuid(authData?.user?.id) || null;
   const existingIdentity = getExistingIdentitySet(existingTasks);
   const creatableStages = stageRows.filter((stage) => {
     const keys = buildStageIdentity(stage);
@@ -540,6 +561,7 @@ export const autoAssignProcessV2DraftStages = async ({
       createdCount: 0,
       skippedCount: stageRows.length,
       groupIds: Array.from(new Set(stageRows.map((stage) => getDraftStageProcessGroupMeta(stage).groupId))),
+      missingAssigneeCount: 0,
     };
   }
 
@@ -594,6 +616,8 @@ export const autoAssignProcessV2DraftStages = async ({
   );
 
   const payload: Record<string, any>[] = [];
+  let runtimeSkippedCount = 0;
+  let missingAssigneeCount = 0;
   let previousResolvedTask: Record<string, any> | null = null;
   for (const [index, stage] of creatableStages.entries()) {
     const stageMeta = getDraftStageProcessGroupMeta(stage);
@@ -651,6 +675,11 @@ export const autoAssignProcessV2DraftStages = async ({
     }, {});
     const stageCustomFieldValues = mergeProcessTaskCustomFieldValues(resolvedStageCustomFields, renderedStageCustomFieldValues);
     const assignee = resolveStageAssignee(stage, templateContext);
+    if (!assignee.assigneeType || !normalizeDbUuid(assignee.assigneeId)) {
+      runtimeSkippedCount += 1;
+      missingAssigneeCount += 1;
+      continue;
+    }
     const stageAutomationRules = normalizeProcessAutomationRules(stage?.automation_rules);
     const stageCustomStatusOptions = getProcessTaskStatusOptionsFromStage(stage);
     const stageTargetModuleIds = normalizeProcessTargetModuleIds(
@@ -663,6 +692,10 @@ export const autoAssignProcessV2DraftStages = async ({
       stageMap: new Map<string, string>(),
     };
     const processRunStageId = resolveProcessRunStageId(processRunContext.stageMap, stage);
+    if (processRunContext.processRunId && !processRunStageId) {
+      runtimeSkippedCount += 1;
+      continue;
+    }
     await syncProcessRunLinks(
       supabaseClient,
       processRunContext.processRunId,
@@ -674,11 +707,11 @@ export const autoAssignProcessV2DraftStages = async ({
     const taskRow = {
       name: resolvedStageName,
       status: 'todo',
-      source_template_id: stageMeta.templateId,
+      source_template_id: normalizeDbUuid(stageMeta.templateId) || null,
       source_stage_sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
       process_group_id: stageMeta.groupId,
-      process_run_id: processRunContext.processRunId || null,
-      process_run_stage_id: processRunStageId || null,
+      process_run_id: normalizeDbUuid(processRunContext.processRunId) || null,
+      process_run_stage_id: normalizeDbUuid(processRunStageId) || null,
       process_node_key: getProcessStageNodeKey(stage),
       process_lane_key: getProcessStageLaneKey(stage),
       production_line_id: null,
@@ -687,8 +720,8 @@ export const autoAssignProcessV2DraftStages = async ({
       description: resolvedDescription,
       task_type: stageTaskType,
       assignee_type: assignee.assigneeType,
-      assignee_id: assignee.assigneeType === 'user' ? assignee.assigneeId : null,
-      assignee_role_id: assignee.assigneeType === 'role' ? assignee.assigneeId : null,
+      assignee_id: assignee.assigneeType === 'user' ? (normalizeDbUuid(assignee.assigneeId) || null) : null,
+      assignee_role_id: assignee.assigneeType === 'role' ? (normalizeDbUuid(assignee.assigneeId) || null) : null,
       wage: Number(stage?.wage ?? stageMetadata?.wage ?? recurrenceBase?.wage ?? 0),
       weight: Number(stage?.weight ?? stageMetadata?.weight ?? recurrenceBase?.weight ?? 0),
       sort_order: Number(stage?.sort_order || ((index + 1) * 10)),
@@ -701,8 +734,8 @@ export const autoAssignProcessV2DraftStages = async ({
         process_automation_rules: stageAutomationRules,
         process_target_module_ids: stageTargetModuleIds,
         process_links: effectiveProcessLinkMap,
-        process_run_id: processRunContext.processRunId || null,
-        process_run_stage_id: processRunStageId || null,
+        process_run_id: normalizeDbUuid(processRunContext.processRunId) || null,
+        process_run_stage_id: normalizeDbUuid(processRunStageId) || null,
         process_node_key: getProcessStageNodeKey(stage),
         process_lane_key: getProcessStageLaneKey(stage),
         process_graph: graphSnapshot.graph,
@@ -738,16 +771,12 @@ export const autoAssignProcessV2DraftStages = async ({
   for (const insertedTask of insertedRows) {
     await syncProcessRunStageFromTask({ supabaseClient, task: insertedTask });
   }
-  const tasksAfterInsert = await loadExistingProcessTasks(supabaseClient, normalizedModuleId, normalizedRecordId);
-  const tasksAfterIdentity = getExistingIdentitySet(tasksAfterInsert);
-  const visibleCreatedCount = creatableStages.reduce((sum, stage) => (
-    buildStageIdentity(stage).some((key) => tasksAfterIdentity.has(key)) ? sum + 1 : sum
-  ), 0);
 
   return {
-    createdCount: Math.max(insertedRows.length, visibleCreatedCount),
-    skippedCount: stageRows.length - creatableStages.length,
+    createdCount: insertedRows.length,
+    skippedCount: (stageRows.length - creatableStages.length) + runtimeSkippedCount,
     groupIds: Array.from(new Set(stageRows.map((stage) => getDraftStageProcessGroupMeta(stage).groupId))),
     createdTasks: insertedRows,
+    missingAssigneeCount,
   };
 };

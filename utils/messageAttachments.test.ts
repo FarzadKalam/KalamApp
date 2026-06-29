@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractBotMessageAttachments } from './messageAttachments';
+import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from './messageAttachments';
 import { resolveNoteAttachmentFileType } from './noteContent';
 
 describe('extractBotMessageAttachments', () => {
@@ -102,5 +102,32 @@ describe('extractBotMessageAttachments', () => {
     expect(resolveNoteAttachmentFileType({ fileType: 'Gif', mimeType: 'video/mp4' })).toBe('video');
     expect(resolveNoteAttachmentFileType({ fileType: 'Music', name: 'track' })).toBe('audio');
     expect(resolveNoteAttachmentFileType({ fileType: 'RecordAudio', mimeType: 'audio/mpeg' })).toBe('voice');
+  });
+
+  it('finds legacy nested Rubika file ids for later media hydration', () => {
+    const refs = collectBotMessageMediaFileRefs({
+      message_type: 'image',
+      file_name: 'photo.png',
+      payload: {
+        update: {
+          new_message: {
+            file: {
+              file_id: 'rubika-file-1',
+              file_name: 'photo.png',
+            },
+            aux_data: {
+              type: 'GalleryImage',
+            },
+          },
+        },
+      },
+    });
+
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({
+      fileId: 'rubika-file-1',
+      fileName: 'photo.png',
+      fileType: 'image',
+    });
   });
 });
