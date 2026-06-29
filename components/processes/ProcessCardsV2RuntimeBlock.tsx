@@ -2940,7 +2940,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         detail: {
           moduleId: normalizedModuleId,
           recordId: normalizedRecordId,
-          stageId: normalizeText(stage.source?.id || stage.source?.template_stage_id || stage.id),
+          stageId: normalizeText(stage.source?.template_stage_id || stage.source?.id || stage.id),
           stage: stage.source || stage,
           tab: 'stage',
         },

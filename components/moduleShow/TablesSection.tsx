@@ -224,19 +224,39 @@ const TablesSection: React.FC<TablesSectionProps> = ({
               </React.Suspense>
             ) : null}
             {isProcessStagesField ? (
-              <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
-                <ProcessCardsV2RuntimeBlock
-                  moduleId={module.id}
-                  recordId={data.id}
-                  recordData={data}
-                  fieldKey={fieldKey}
-                  draftStages={stageDraftValue}
-                  onDraftStagesChange={handleDraftStagesChange}
-                  runtimeSnapshot={processRuntimeSnapshot}
-                  onRuntimeSnapshot={onProcessRuntimeSnapshot}
-                  variant="full"
-                />
-              </React.Suspense>
+              <>
+                <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
+                  <ProcessCardsV2RuntimeBlock
+                    moduleId={module.id}
+                    recordId={data.id}
+                    recordData={data}
+                    fieldKey={fieldKey}
+                    draftStages={stageDraftValue}
+                    onDraftStagesChange={handleDraftStagesChange}
+                    runtimeSnapshot={processRuntimeSnapshot}
+                    onRuntimeSnapshot={onProcessRuntimeSnapshot}
+                    variant="full"
+                  />
+                </React.Suspense>
+                {module.id === 'process_templates' && isTemplatePreviewField ? (
+                  <div style={{ display: 'none' }} aria-hidden="true">
+                    <React.Suspense fallback={null}>
+                      <ProductionStagesField
+                        recordId={data.id}
+                        moduleId={module.id}
+                        forceProcessRecordMode={false}
+                        automationContextModuleId={null}
+                        automationContextModuleIds={normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)}
+                        readOnly={!canEditModule}
+                        compact={true}
+                        draftStages={stageDraftValue}
+                        onDraftStagesChange={handleDraftStagesChange}
+                        onRuntimeSnapshot={onProcessRuntimeSnapshot}
+                      />
+                    </React.Suspense>
+                  </div>
+                ) : null}
+              </>
             ) : null}
             </div>
           );

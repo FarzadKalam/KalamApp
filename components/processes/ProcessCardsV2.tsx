@@ -1524,7 +1524,7 @@ const ProcessLaneRow = memo(({
                       onInsertBefore={() => onInsertStageBefore(entry.stage.id)}
                       onInsertAbove={() => onInsertStageAbove(entry.stage.id)}
                       onInsertBelow={() => onInsertStageBelow(entry.stage.id)}
-                      onAutoAssignStage={onAutoAssignStage ? () => onAutoAssignStage(entry.stage, lane.title) : undefined}
+                      onAutoAssignStage={cardMode === 'run' && onAutoAssignStage ? () => onAutoAssignStage(entry.stage, lane.title) : undefined}
                       highlighted={highlightedStageIds.has(entry.stage.id)}
                       connectorMode={connectorMode}
                       selectedConnectorId={selectedConnectorId}
@@ -2523,7 +2523,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                   onInsertStageAtSlot={(slot) => insertStageAtSlot(lane.id, slot)}
                   onInsertStageAbove={(stageId) => insertConnectedStageInLane(lane.id, stageId, 'above')}
                   onInsertStageBelow={(stageId) => insertConnectedStageInLane(lane.id, stageId, 'below')}
-                  onAutoAssignStage={(stage, laneTitle) => onAutoAssignStage?.(stage, laneTitle, item)}
+                  onAutoAssignStage={item.mode === 'run' && onAutoAssignStage ? (stage, laneTitle) => onAutoAssignStage(stage, laneTitle, item) : undefined}
                   connectorMode={connectorMode}
                   selectedConnectorId={selectedConnectorId}
                   connectedConnectorIds={visibleConnectedConnectorIds}
@@ -2565,7 +2565,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
         </>
       ) : null}
       <ProcessTaskModalV2
-        open={Boolean(activeStageModal)}
+        open={item.mode !== 'template' && Boolean(activeStageModal)}
         process={item}
         stage={activeStageModal?.stage || null}
         laneTitle={activeStageModal?.laneTitle || null}
