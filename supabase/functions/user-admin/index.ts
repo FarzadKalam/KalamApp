@@ -78,6 +78,11 @@ const toLocalIranMobile = (value?: string | null) => {
   return normalized ? normalized.replace(/^\+98/, '0') : null;
 };
 
+const toGoTruePhone = (value?: string | null) => {
+  const normalized = normalizeIranMobileE164(value);
+  return normalized ? normalized.replace(/^\+/, '') : null;
+};
+
 const normalizeEmail = (value?: string | null) =>
   String(value || '').trim().toLowerCase();
 
@@ -601,35 +606,87 @@ const repairLegacyPhoneLogin = async (
     };
   }
 
-  const targetPhoneRepair = await repairPhoneOwnerConflict(
-    supabaseUrl,
-    serviceRoleKey,
-    String(targetProfile.id),
-    normalizedPhone,
-  );
-  if (targetPhoneRepair.blocked) {
-    return {
-      repaired: false,
-      reason: 'target_phone_blocked',
-      conflictUserId: targetPhoneRepair.conflictUserId || null,
-      conflictProfileId: targetPhoneRepair.conflictProfileId || null,
-      targetUserId: String(targetProfile.id || ''),
-    };
+  const targetUserId = String(targetProfile.id || '');
+  const conflictingAuthUsers = (await findAuthUsersByPhone(supabaseUrl, serviceRoleKey, normalizedPhone)).filter((user: any) => {
+    const id = String(user?.id || '');
+    return id && id !== callerUserId && id !== targetUserId;
+  });
+  for (const authUser of conflictingAuthUsers) {
+    const conflictProfile = await fetchProfile(supabaseUrl, serviceRoleKey, String(authUser?.id || ''));
+    if (conflictProfile?.id) {
+      return {
+        repaired: false,
+        reason: 'target_phone_blocked',
+        conflictUserId: String(authUser?.id || ''),
+        conflictProfileId: String(conflictProfile.id || ''),
+        targetUserId,
+      };
+    }
+  }
+  for (const authUser of conflictingAuthUsers) {
+    await deleteAuthUser(supabaseUrl, serviceRoleKey, String(authUser?.id || ''));
   }
 
-  await updateAuthUser(supabaseUrl, serviceRoleKey, String(targetProfile.id), {
-    phone: normalizedPhone,
+  if (targetUserId !== callerUserId) {
+    await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+      phone: null,
+      phone_confirm: false,
+    });
+    await upsertProfile(supabaseUrl, serviceRoleKey, {
+      id: targetUserId,
+      mobile_1: null,
+      mobile: null,
+    });
+  }
+
+  await updateAuthUser(supabaseUrl, serviceRoleKey, callerUserId, {
+    phone: toGoTruePhone(normalizedPhone),
     phone_confirm: true,
+    user_metadata: {
+      full_name: targetProfile.full_name || callerUser?.user_metadata?.full_name || '',
+      phone_verified: true,
+    },
   });
   await upsertProfile(supabaseUrl, serviceRoleKey, {
-    id: String(targetProfile.id),
+    id: callerUserId,
+    org_id: targetProfile.org_id || null,
+    role_id: targetProfile.role_id || null,
+    role: targetProfile.role || 'admin',
+    full_name: targetProfile.full_name || null,
+    email: targetProfile.email || null,
     mobile_1: toLocalIranMobile(normalizedPhone),
+    is_active: true,
   });
+
+  try {
+    const requestsUrl = restUrl(supabaseUrl, 'saas_onboarding_requests');
+    requestsUrl.searchParams.set('auth_user_id', `eq.${targetUserId}`);
+    requestsUrl.searchParams.set('mobile', `eq.${normalizedPhone}`);
+    await fetch(requestsUrl.toString(), {
+      method: 'PATCH',
+      headers: getServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({ auth_user_id: callerUserId }),
+    });
+  } catch { /* best effort */ }
+
+  try {
+    const issuanceUrl = restUrl(supabaseUrl, 'saas_demo_issuance');
+    issuanceUrl.searchParams.set('auth_user_id', `eq.${targetUserId}`);
+    issuanceUrl.searchParams.set('mobile', `eq.${normalizedPhone}`);
+    await fetch(issuanceUrl.toString(), {
+      method: 'PATCH',
+      headers: getServiceHeaders(serviceRoleKey),
+      body: JSON.stringify({ auth_user_id: callerUserId }),
+    });
+  } catch { /* best effort */ }
 
   return {
     repaired: true,
-    targetUserId: String(targetProfile.id || ''),
+    reason: 'caller_profile_adopted',
+    targetUserId: callerUserId,
+    previousUserId: targetUserId,
   };
+
 };
 
 const resendOtp = async (
@@ -858,6 +915,7 @@ Deno.serve(async (request) => {
       const email = normalizeEmail(body?.email);
       const password = String(body?.password || '').trim();
       const skipProfileUpsert = body?.skipProfileUpsert === true;
+      const normalizedOwnerPhone = normalizeIranMobileE164(body?.phone || caller?.phone || '');
 
       if (!targetUserId) {
         return json(401, { success: false, message: 'نشست کاربر معتبر نیست.' });
@@ -887,8 +945,10 @@ Deno.serve(async (request) => {
       await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
         email,
         password,
+        ...(normalizedOwnerPhone ? { phone: toGoTruePhone(normalizedOwnerPhone), phone_confirm: true } : {}),
         user_metadata: {
           full_name: fullName,
+          ...(normalizedOwnerPhone ? { phone: normalizedOwnerPhone, phone_verified: true } : {}),
         },
         email_confirm: true,
       });
