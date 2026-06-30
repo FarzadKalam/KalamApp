@@ -96,13 +96,22 @@ export const createOtpUiError = (error: any, fallback?: string) => {
 
 export const normalizeOtpPhone = (value: unknown) => normalizeIranMobile(value);
 
-export const requestSmsOtp = async (authClient: any, phone: string) => {
+export const requestSmsOtp = async (
+  authClient: any,
+  phone: string,
+  options?: { shouldCreateUser?: boolean },
+) => {
   const normalizedPhone = normalizeOtpPhone(phone);
   if (!normalizedPhone) {
     throw new Error('شماره موبایل معتبر وارد کنید. مثال: 0912...');
   }
 
-  const { error } = await authClient.signInWithOtp({ phone: normalizedPhone });
+  const shouldCreateUser = options?.shouldCreateUser;
+  const payload = shouldCreateUser === undefined
+    ? { phone: normalizedPhone }
+    : { phone: normalizedPhone, options: { shouldCreateUser } };
+
+  const { error } = await authClient.signInWithOtp(payload);
   if (error) throw createOtpUiError(error, 'ارسال کد تایید ناموفق بود.');
   return normalizedPhone;
 };

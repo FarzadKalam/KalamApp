@@ -356,7 +356,7 @@ const SaasPortalPage: React.FC = () => {
       setIsExistingPhoneUser(isExisting);
       if (isExisting) {
         // کاربر موجود: همین‌جا OTP می‌فرستیم
-        await requestSmsOtp(supabase.auth, normalizedPhone);
+        await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
         setStep('otp');
         setOtpCooldown(OTP_RESEND_SECONDS);
       } else {
