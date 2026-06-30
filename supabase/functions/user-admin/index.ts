@@ -1018,7 +1018,7 @@ Deno.serve(async (request) => {
             authPayload.email = email;
             authPayload.email_confirm = true;
           }
-          if (normalizedPhone) authPayload.phone = normalizedPhone;
+          if (normalizedPhone) authPayload.phone = toGoTruePhone(normalizedPhone);
           await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, authPayload);
         }
         const profile = await upsertProfile(supabaseUrl, serviceRoleKey, {
@@ -1140,7 +1140,7 @@ Deno.serve(async (request) => {
         const targetProfile = await fetchProfile(supabaseUrl, serviceRoleKey, targetUserId);
         if (!targetProfile?.id) return json(404, { success: false, message: 'ابتدا پروفایل کاربر را تکمیل کنید.' });
         if (action === 'saas_send_phone_otp') {
-          await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, { phone: normalizedPhone, phone_confirm: false });
+          await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, { phone: toGoTruePhone(normalizedPhone), phone_confirm: false });
           await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
           await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'phone_change');
           return json(200, { success: true });
@@ -1238,7 +1238,7 @@ Deno.serve(async (request) => {
 
       const authUser = await createAuthUser(supabaseUrl, serviceRoleKey, {
         email: email || undefined,
-        phone: normalizedPhone,
+        phone: toGoTruePhone(normalizedPhone),
         password,
         user_metadata: { full_name: fullName },
         email_confirm: email ? true : undefined,
@@ -1376,7 +1376,7 @@ Deno.serve(async (request) => {
 
       const authPayload: Record<string, any> = {
         email: email || undefined,
-        phone: normalizedPhone,
+        phone: toGoTruePhone(normalizedPhone),
         user_metadata: { full_name: fullName },
         email_confirm: email ? true : undefined,
       };
@@ -1473,7 +1473,7 @@ Deno.serve(async (request) => {
         });
       }
       await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
-        phone: normalizedPhone,
+        phone: toGoTruePhone(normalizedPhone),
         phone_confirm: false,
       });
       await upsertProfile(supabaseUrl, serviceRoleKey, {
@@ -1536,7 +1536,7 @@ Deno.serve(async (request) => {
       const currentAuthPhone = normalizeIranMobileE164(authUser?.phone || '');
       if (currentAuthPhone !== normalizedPhone) {
         await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
-          phone: normalizedPhone,
+          phone: toGoTruePhone(normalizedPhone),
         });
       }
       await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'phone_change');
