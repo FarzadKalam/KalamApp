@@ -49,7 +49,24 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 992, 1992]);
   });
 
-  it('uses complete line anchors inside an oversized table row instead of leaving a large blank area', () => {
+  it('splits normal paragraph text only at line boundaries', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2100,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 520, priority: 'normal', source: 'block' },
+        { top: 760, bottom: 1180, priority: 'normal', source: 'block' },
+        { top: 930, bottom: 952, priority: 'normal', source: 'line' },
+        { top: 970, bottom: 992, priority: 'normal', source: 'line' },
+        { top: 1180, bottom: 1680, priority: 'normal', source: 'block' },
+        { top: 1680, bottom: 2080, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 992, 1680]);
+  });
+
+  it('moves a protected table row to the next page before splitting its text', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 1900,
       pageBodyStepPx: 1000,
@@ -64,7 +81,7 @@ describe('buildSmartPrintPageOffsets', () => {
       ],
     });
 
-    expect(offsets).toEqual([0, 984]);
+    expect(offsets).toEqual([0, 460, 1240]);
   });
 
   it('does not move the break to the top of an oversized protected block', () => {
@@ -102,7 +119,7 @@ describe('annotatePrintFlowHtml', () => {
     const annotated = annotatePrintFlowHtml('<div><p>text</p><table><tbody><tr><td>row</td></tr></tbody></table></div>');
 
     expect(annotated).toContain(PRINT_FLOW_BLOCK_ATTR);
-    expect(annotated).toContain('data-print-flow-role="text-block"');
+    expect(annotated).toContain(`<p ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="text-block">text</p>`);
     expect(annotated).toContain('data-print-flow-role="table-container"');
     expect(annotated).toContain('data-print-flow-role="table-row"');
     expect(annotated).toContain(`<table ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);

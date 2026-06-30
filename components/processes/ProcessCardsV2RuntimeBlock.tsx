@@ -21,7 +21,11 @@ import {
   assignProcessTemplateModuleAliases,
   resolveProcessTemplateTokenValue,
 } from '../../utils/processTemplateContext';
-import { normalizeProcessTargetModuleIds, parseProcessLinkMap } from '../../utils/processTargets';
+import {
+  buildProcessLinkMapFromRecord,
+  normalizeProcessTargetModuleIds,
+  parseProcessLinkMap,
+} from '../../utils/processTargets';
 import { fetchLinkedProcessDraftStagesForRecord } from '../../utils/processLinkedDraftLookup';
 import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
@@ -41,10 +45,22 @@ import {
 } from '../../utils/processGraph';
 import {
   getTaskStatusLabel,
+  normalizeProcessTaskStatusOptions,
+  PROCESS_TASK_STATUS_OPTIONS_KEY,
 } from '../../utils/processTaskStatusOptions';
-import { PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY } from '../../utils/processTaskCustomFields';
+import {
+  normalizeProcessTaskCustomFields,
+  PROCESS_TASK_CUSTOM_FIELDS_KEY,
+  PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
+} from '../../utils/processTaskCustomFields';
 import { markModuleListChanged } from '../../utils/moduleListLive';
-import { syncProjectStatusWithProcessState } from '../../utils/projectProcessStatus';
+import {
+  syncProjectStatusesForProcessContext,
+} from '../../utils/projectProcessStatus';
+import {
+  createProcessGroupId,
+  mapProcessTemplateStagesToDraft,
+} from '../../utils/processRunRuntime';
 import {
   autoAssignProcessV2DraftStages,
   buildProcessV2TemplateContext,
@@ -1196,6 +1212,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       .map((row: any) => ({
         id: normalizeText(row?.id),
         title: normalizeText(row?.name) || 'الگوی فرآیند',
+        moduleId: normalizeText(row?.module_id) || null,
+        moduleIds: normalizeProcessTargetModuleIds(row?.module_ids, row?.module_id),
       }))
       .filter((item) => item.id);
     setOrgId(nextOrgId);
@@ -1226,30 +1244,33 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     nextRuntime: RuntimeState,
     draftStageValue?: any[] | null,
   ) => {
-    if (normalizedModuleId !== 'projects' || !normalizedRecordId) return;
+    if (!normalizedModuleId || !normalizedRecordId) return;
     try {
-      const { data: beforeProject } = await supabase
-        .from('projects')
-        .select('status')
-        .eq('id', normalizedRecordId)
-        .maybeSingle();
-      const previousStatus = normalizeText(beforeProject?.status);
-      const nextStatus = await syncProjectStatusWithProcessState(normalizedRecordId, {
-        draftStages: draftStageValue ?? directDraftStagesRef.current,
+      const statuses = await syncProjectStatusesForProcessContext({
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+        recordData: recordDataRef.current || recordData || null,
+        draftStages: draftStageValue ?? [
+          ...(Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : []),
+          ...(Array.isArray(linkedDraftStagesRef.current) ? linkedDraftStagesRef.current : []),
+        ],
+        runStages: nextRuntime.stages || [],
         tasks: nextRuntime.tasks || [],
       });
-      if (!nextStatus || previousStatus === normalizeText(nextStatus)) return;
-      markModuleListChanged({
-        org_id: orgId || recordDataRef.current?.org_id || null,
-        module_id: 'projects',
-        record_id: normalizedRecordId,
-        action: 'update',
-        updated_at: new Date().toISOString(),
+      statuses.forEach((result) => {
+        if (!result.projectId || !result.status) return;
+        markModuleListChanged({
+          org_id: orgId || recordDataRef.current?.org_id || null,
+          module_id: 'projects',
+          record_id: result.projectId,
+          action: 'update',
+          updated_at: new Date().toISOString(),
+        });
       });
     } catch (error) {
       console.warn('Could not sync project status from process v2 runtime', error);
     }
-  }, [normalizedModuleId, normalizedRecordId, orgId]);
+  }, [normalizedModuleId, normalizedRecordId, orgId, recordData]);
 
   const refresh = useCallback(async (force = false) => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
@@ -1292,6 +1313,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         };
         setRuntime(nextRuntime);
         publishRuntimeSnapshot(nextRuntime);
+        void syncProjectStatusForRuntime(nextRuntime);
         processRuntimeBlockCache.set(cacheKey, {
           runtime: nextRuntime,
           templateStages: templateStagesRef.current,
@@ -1325,6 +1347,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setRuntime(nextRuntime);
       setLinkedDraftStages(nextLinkedDraftStages);
       publishRuntimeSnapshot(nextRuntime);
+      void syncProjectStatusForRuntime(nextRuntime, [...directDrafts, ...nextLinkedDraftStages]);
       processRuntimeBlockCache.set(cacheKey, {
         runtime: nextRuntime,
         templateStages: templateStagesRef.current,
@@ -1337,7 +1360,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setHasLoadedRuntime(true);
       setLoading(false);
     }
-  }, [cacheKey, enabled, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant]);
+  }, [cacheKey, enabled, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => {
@@ -1779,12 +1802,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       processRunId: sourcePatch?.process_run_id,
       templateId: sourcePatch?.source_template_id,
     });
-    if (normalizedModuleId === 'projects' && normalizedRecordId) {
-      void syncProjectStatusWithProcessState(normalizedRecordId).catch((error) => {
-        console.warn('Could not sync project status after process v2 stage status change', error);
-      });
-    }
-  }, [cardKey, directory, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId]);
+    void syncProjectStatusForRuntime(runtimeRef.current).catch((error) => {
+      console.warn('Could not sync project status after process v2 stage status change', error);
+    });
+  }, [cardKey, directory, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, syncProjectStatusForRuntime]);
 
   const persistDraftStageList = useCallback(async (nextStages: any[]) => {
     const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
@@ -2305,6 +2326,19 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
               });
             }
           }
+          setCardOverrides((current) => {
+            const process = bulkDeleteRequest.process;
+            const laneId = normalizeText(lane.id);
+            const key = cardKey(process);
+            const base = current[key] || process;
+            return {
+              ...current,
+              [key]: {
+                ...base,
+                lanes: base.lanes.filter((candidate) => normalizeText(candidate.id) !== laneId),
+              } as ProcessV2CardData,
+            };
+          });
           message.success('ردیف پیش‌نویس حذف شد');
         }
         setBulkDeleteRequest(null);
@@ -2341,6 +2375,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           await deleteProcessRecordCompletely(bulkDeleteRequest.process);
           message.success('فرآیند و مرحله‌های آن حذف شدند');
         } else {
+          const deletedLaneId = normalizeText(bulkDeleteRequest.lane?.id);
+          if (deletedLaneId) {
+            setCardOverrides((current) => {
+              const process = bulkDeleteRequest.process;
+              const key = cardKey(process);
+              const base = current[key] || process;
+              return {
+                ...current,
+                [key]: {
+                  ...base,
+                  lanes: base.lanes.filter((candidate) => normalizeText(candidate.id) !== deletedLaneId),
+                } as ProcessV2CardData,
+              };
+            });
+          }
           processRuntimeBlockCache.delete(cacheKey);
           await refresh(true);
           message.success('ردیف و مرحله‌های آن حذف شدند');
@@ -2355,6 +2404,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [
     bulkDeleteBusy,
     bulkDeleteRequest,
+    cardKey,
     cacheKey,
     deleteDraftStageCompletely,
     deleteProcessRecordCompletely,
@@ -2377,6 +2427,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     lane: ProcessV2Lane,
     process: ProcessV2CardData,
   ) => {
+    if (!lane.stages || lane.stages.length === 0) return true;
     setBulkDeleteRequest({ kind: 'lane', lane, process });
     return false;
   }, []);
@@ -2384,8 +2435,15 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const handleDeleteCard = useCallback(async (id: string) => {
     const source = displayCards.find((card) => card.id === id);
     if (!source) return;
+    if (
+      (normalizeText(source.id).startsWith('new-run:') || normalizeText(source.id).startsWith('draft:'))
+      && source.lanes.every((lane) => lane.stages.length === 0)
+    ) {
+      setExtraCards((current) => current.filter((card) => card.id !== source.id));
+      return;
+    }
     setBulkDeleteRequest({ kind: 'process', process: source });
-  }, [displayCards]);
+  }, [cardKey, displayCards]);
 
   const handleCopyCard = useCallback((id: string) => {
     const source = displayCards.find((card) => card.id === id);
@@ -2471,19 +2529,37 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const handleShowRecords = useCallback(async (item: ProcessV2CardData) => {
     const relatedRecords = collectProcessRelatedRecords(item);
+    const groupStages = item.mode === 'run'
+      ? item.lanes.flatMap((lane) => lane.stages).map((stage) => stage.source || stage)
+      : [];
+    const rawGroupId = item.mode === 'run'
+      ? (
+          groupStages
+            .map((stage) => resolveDraftGroupMeta(stage).groupId)
+            .map(normalizeText)
+            .find(Boolean)
+          || normalizeText(item.id).replace(/^(draft|new-run):/, '')
+        )
+      : '';
     const fallbackGroup = item.mode === 'run'
       ? {
-          id: item.id,
+          id: rawGroupId || item.id,
           templateId: item.templateId || null,
-          stages: item.lanes.flatMap((lane) => lane.stages).map((stage) => stage.source || stage),
+          stages: groupStages,
         }
       : undefined;
 
-    if (typeof window !== 'undefined' && recordData?.module_id && recordData?.id) {
+    if (
+      typeof window !== 'undefined'
+      && normalizedModuleId
+      && normalizedRecordId
+      && !isProcessTemplateModule(normalizedModuleId)
+      && !isProcessRunModule(normalizedModuleId)
+    ) {
       window.dispatchEvent(new CustomEvent('kalamapp:open-process-append', {
         detail: {
-          moduleId: String(recordData.module_id),
-          recordId: String(recordData.id),
+          moduleId: normalizedModuleId,
+          recordId: normalizedRecordId,
           mode: 'links',
           group: fallbackGroup,
         },
@@ -2539,19 +2615,20 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       centered: true,
       direction: 'rtl',
     });
-  }, [recordData?.id, recordData?.module_id, recordData?.module_ids]);
+  }, [normalizedModuleId, normalizedRecordId, recordData?.module_id, recordData?.module_ids]);
 
   const buildLocalRunCard = useCallback((templateId?: string | null): ProcessV2CardData => {
     const normalizedTemplateId = normalizeText(templateId);
     const templateTitle = normalizedTemplateId
       ? (templateNameById.get(normalizedTemplateId) || templates.find((template) => template.id === normalizedTemplateId)?.title || 'الگوی فرآیند')
-      : (templates[0]?.title || 'الگوی فرآیند');
+      : '';
+    const groupId = createProcessGroupId();
     return {
       mode: 'run',
-      id: `new-run:${normalizedTemplateId || 'template'}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
-      title: templateTitle ? `فرآیند ${templateTitle}` : 'فرآیند جدید',
-      templateId: normalizedTemplateId || templates[0]?.id || '',
-      templateTitle,
+      id: `new-run:${groupId}`,
+      title: templateTitle || 'فرآیند جدید',
+      templateId: normalizedTemplateId,
+      templateTitle: templateTitle || '',
       relatedRecordLabel: fallbackRecordLabel,
       statusLabel: 'draft',
       lanes: [{ id: `lane_${Date.now()}`, title: 'ردیف اصلی', stages: [] }],
@@ -2559,25 +2636,104 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [fallbackRecordLabel, templateNameById, templates]);
 
   const handleAddRun = useCallback(() => {
-    if (typeof window !== 'undefined' && normalizedModuleId && normalizedRecordId) {
+    if (isProcessTemplateModule(normalizedModuleId)) return;
+    if (typeof window !== 'undefined' && normalizedModuleId && normalizedRecordId && !isProcessRunModule(normalizedModuleId)) {
       pendingScrollToFirstCardRef.current = true;
       window.dispatchEvent(new CustomEvent('kalamapp:open-process-append', {
         detail: {
           moduleId: normalizedModuleId,
           recordId: normalizedRecordId,
-          scrollToNewProcess: true,
+          mode: 'append',
         },
       }));
       return;
     }
-    const next = buildLocalRunCard(templates[0]?.id || null);
+    const next = buildLocalRunCard(null);
     pendingScrollCardKeyRef.current = cardKey(next);
     setExtraCards((current) => [next, ...current]);
-    void handleShowRecords(next);
-  }, [buildLocalRunCard, cardKey, handleShowRecords, normalizedModuleId, normalizedRecordId, templates]);
+  }, [buildLocalRunCard, cardKey, normalizedModuleId, normalizedRecordId]);
 
-  const handleTemplateChange = useCallback((item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => {
+  useEffect(() => {
+    if (typeof window === 'undefined' || !normalizedModuleId || !normalizedRecordId) return undefined;
+    if (isProcessTemplateModule(normalizedModuleId) || isProcessRunModule(normalizedModuleId)) return undefined;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        moduleId?: string;
+        recordId?: string;
+        mode?: 'append' | 'links';
+      }>)?.detail || {};
+      if (normalizeText(detail.moduleId) !== normalizedModuleId) return;
+      if (normalizeText(detail.recordId) !== normalizedRecordId) return;
+      if (detail.mode === 'links') return;
+      pendingScrollToFirstCardRef.current = true;
+    };
+    window.addEventListener('kalamapp:open-process-append', handler as EventListener);
+    return () => {
+      window.removeEventListener('kalamapp:open-process-append', handler as EventListener);
+    };
+  }, [normalizedModuleId, normalizedRecordId]);
+
+  const handleTemplateChange = useCallback(async (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => {
     const selectedTitle = templateNameById.get(templateId) || templates.find((template) => template.id === templateId)?.title || item.templateTitle || 'الگوی فرآیند';
+    const normalizedItemId = normalizeText(item.id);
+    const isDraftProcessCard = normalizedItemId.startsWith('draft:') || normalizedItemId.startsWith('new-run:');
+    const isEmptyLocalDraft = isDraftProcessCard && item.lanes.every((lane) => lane.stages.length === 0);
+    if (isDraftProcessCard || intent === 'add') {
+      try {
+        const selectedTemplate = templates.find((template) => template.id === templateId);
+        const templateTargetModuleIds = normalizeProcessTargetModuleIds(selectedTemplate?.moduleIds, selectedTemplate?.moduleId || normalizedModuleId);
+        const processLinkMap = buildProcessLinkMapFromRecord(
+          normalizedModuleId,
+          recordDataRef.current || recordData || {},
+          templateTargetModuleIds,
+        );
+        const templateStageRows = await loadProcessTemplateStages(supabase, templateId);
+        if (!Array.isArray(templateStageRows) || templateStageRows.length === 0) {
+          message.info('این الگو مرحله‌ای برای افزودن ندارد');
+          return;
+        }
+        const existingDirectStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+        const currentGroupId = isDraftProcessCard ? normalizedItemId.replace(/^(draft|new-run):/, '') : '';
+        const nextGroupId = intent === 'replace' && currentGroupId ? currentGroupId : createProcessGroupId();
+        const draftRows = mapProcessTemplateStagesToDraft(templateId, templateStageRows, {
+          groupId: nextGroupId,
+          groupName: selectedTitle,
+          templateName: selectedTitle,
+          targetModuleIds: templateTargetModuleIds,
+          processLinkMap,
+          startSortOrder: 10,
+        }).map((stage: any) => ({
+          ...stage,
+          automation_rules: Array.isArray(stage?.automation_rules) ? stage.automation_rules : [],
+          [PROCESS_TASK_CUSTOM_FIELDS_KEY]: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY] || stage?.metadata?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+          [PROCESS_TASK_STATUS_OPTIONS_KEY]: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY] || stage?.metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
+          duration_unit: normalizeText(stage?.duration_unit) === 'hour' ? 'hour' : 'day',
+          duration_from: normalizeText(stage?.duration_from || 'project_start'),
+        }));
+        const baseStages = intent === 'replace' && currentGroupId
+          ? existingDirectStages.filter((stage: any) => resolveDraftGroupMeta(stage).groupId !== currentGroupId)
+          : existingDirectStages;
+        const sortShift = Math.max(20, (draftRows.length + 1) * 10);
+        const shiftedExisting = baseStages.map((stage: any, index: number) => ({
+          ...stage,
+          sort_order: Number(stage?.sort_order || ((index + 1) * 10)) + sortShift,
+        }));
+        await persistDraftStageList([...draftRows, ...shiftedExisting].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)));
+        setExtraCards((current) => current.filter((card) => card.id !== item.id));
+        setCardOverrides((current) => {
+          const next = { ...current };
+          delete next[cardKey(item)];
+          return next;
+        });
+        pendingScrollToFirstCardRef.current = true;
+        markRuntimeModuleListsChanged({ templateId });
+        message.success(isEmptyLocalDraft ? 'فرآیند جدید از الگو ساخته شد' : 'الگوی فرآیند اعمال شد');
+        return;
+      } catch (error: any) {
+        message.error(normalizeText(error?.message || error?.details) || 'اعمال الگوی فرآیند ناموفق بود');
+        return;
+      }
+    }
     if (intent === 'replace') {
       const next: ProcessV2CardData = {
         ...item,
@@ -2597,7 +2753,18 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     pendingScrollCardKeyRef.current = cardKey(next);
     setExtraCards((current) => [next, ...current]);
     void handleShowRecords(next);
-  }, [buildLocalRunCard, cardKey, handleShowRecords, templateNameById, templates]);
+  }, [
+    buildLocalRunCard,
+    cardKey,
+    handleShowRecords,
+    markRuntimeModuleListsChanged,
+    message,
+    normalizedModuleId,
+    persistDraftStageList,
+    recordData,
+    templateNameById,
+    templates,
+  ]);
 
   const handleAutoAssignProcess = useCallback(async (item: ProcessV2CardData) => {
     const itemDraftStages = item.lanes.flatMap((lane) => lane.stages.filter((stage) => stage.kind === 'draft'));
@@ -2785,7 +2952,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const handleSaveDraftStage = useCallback(async (
     stage: ProcessV2Stage,
-    _laneTitle: string,
+    laneTitle: string,
     item: ProcessV2CardData,
     overrides?: Record<string, any>,
   ) => {
@@ -2894,8 +3061,55 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return;
     }
 
-    throw new Error('مرحله پیش‌نویس متناظر برای ذخیره پیدا نشد.');
+    const sourceMetadata = parseObject(source?.metadata);
+    const normalizedItemIdForDraftSave = normalizeText(item.id);
+    const processGroupId = normalizedItemIdForDraftSave.match(/^(draft|new-run):/)
+      ? normalizedItemIdForDraftSave.replace(/^(draft|new-run):/, '')
+      : (normalizeText(source?.process_group_id || sourceMetadata?.process_group_id) || createProcessGroupId());
+    const processGroupName = normalizeText(source?.process_group_name || sourceMetadata?.process_group_name || item.title) || 'فرآیند پیش نویس';
+    const processNodeKey = normalizeText(source?.process_node_key || source?.[PROCESS_NODE_KEY] || sourceMetadata?.process_node_key || sourceMetadata?.[PROCESS_NODE_KEY] || stage.id) || `node_${Date.now()}`;
+    const processLaneKey = normalizeText(source?.process_lane_key || source?.[PROCESS_LANE_KEY] || sourceMetadata?.process_lane_key || sourceMetadata?.[PROCESS_LANE_KEY]) || normalizeText(laneTitle) || 'lane_1';
+    const nextSortOrder = Number.isFinite(Number(stage.layoutSlot))
+      ? (Number(stage.layoutSlot) + 1) * 10
+      : ((currentStages.length + 1) * 10);
+    const itemTemplateId = item.mode === 'run' ? item.templateId : '';
+    const itemTemplateTitle = item.mode === 'run' ? item.templateTitle : '';
+    const baseDraftStage = {
+      ...source,
+      id: normalizeText(source?.id) || stage.id || `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: normalizeText(source?.name || source?.stage_name || stage.title) || 'مرحله',
+      stage_name: normalizeText(source?.stage_name || source?.name || stage.title) || 'مرحله',
+      status: 'draft',
+      is_draft: true,
+      sort_order: Number(source?.sort_order || nextSortOrder),
+      process_group_id: processGroupId,
+      process_group_name: processGroupName,
+      source_template_id: normalizeText(source?.source_template_id || itemTemplateId) || null,
+      source_template_name: normalizeText(source?.source_template_name || itemTemplateTitle) || null,
+      process_node_key: processNodeKey,
+      process_lane_key: processLaneKey,
+      metadata: {
+        ...sourceMetadata,
+        process_group_id: processGroupId,
+        process_group_name: processGroupName,
+        process_node_key: processNodeKey,
+        process_lane_key: processLaneKey,
+      },
+    };
+    const nextDraftStage = mergeDraftStageOverrides(baseDraftStage, overrides);
+    await persistDraftStageList([...currentStages, nextDraftStage].sort((a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)));
+    const itemStageCount = item.lanes.reduce((sum, lane) => sum + lane.stages.length, 0);
+    if (itemStageCount <= 1) {
+      setExtraCards((current) => current.filter((card) => card.id !== item.id));
+      setCardOverrides((current) => {
+        const next = { ...current };
+        delete next[cardKey(item)];
+        return next;
+      });
+    }
+    markRuntimeModuleListsChanged({ templateId: item.mode === 'run' ? item.templateId : undefined });
   }, [
+    cardKey,
     cacheKey,
     getRunStageIdForDraftStage,
     markRuntimeModuleListsChanged,

@@ -57,6 +57,8 @@ export type ProcessV2Lane = {
 export type ProcessV2TemplateOption = {
   id: string;
   title: string;
+  moduleId?: string | null;
+  moduleIds?: string[];
 };
 
 export type ProcessV2TemplateCard = {
@@ -97,7 +99,7 @@ type ProcessCardsV2Props = {
   onStageStatusChange?: (process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
   onShowInfo?: (item: ProcessV2CardData) => void;
   onShowRecords?: (item: ProcessV2CardData) => void;
-  onTemplateChange?: (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => void;
+  onTemplateChange?: (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => void | Promise<void>;
   onAutoAssignProcess?: (item: ProcessV2CardData) => void;
   onAutoAssignStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void | Promise<any>;
   onSaveDraftStage?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData, overrides?: Record<string, any>) => void | Promise<any>;
@@ -300,16 +302,37 @@ const cloneLane = (lane: ProcessV2Lane): ProcessV2Lane => ({
   stages: lane.stages.map((stage) => cloneStage(stage)),
 });
 
-const createNewStage = (layoutSlot?: number): ProcessV2Stage => ({
-  id: nextLocalId('stage'),
-  title: 'مرحله پیش نویس جدید',
-  kind: 'draft',
-  status: 'draft',
-  layoutSlot,
-  assigneeLabel: 'تعیین مسئول',
-  activityTypeLabel: 'مرحله پیش نویس',
-  actionCount: 0,
-});
+const createNewStage = (layoutSlot?: number, laneId?: string | null): ProcessV2Stage => {
+  const id = nextLocalId('stage');
+  const nodeKey = nextLocalId('process_node');
+  const laneKey = String(laneId || '').trim() || 'lane_1';
+  const title = 'مرحله پیش نویس جدید';
+  return {
+    id,
+    title,
+    kind: 'draft',
+    status: 'draft',
+    layoutSlot,
+    assigneeLabel: 'تعیین مسئول',
+    activityTypeLabel: 'مرحله پیش نویس',
+    actionCount: 0,
+    source: {
+      id,
+      name: title,
+      stage_name: title,
+      status: 'draft',
+      is_draft: true,
+      process_node_key: nodeKey,
+      process_lane_key: laneKey,
+      metadata: {
+        draft_stage_id: id,
+        draft_stage_key: id,
+        process_node_key: nodeKey,
+        process_lane_key: laneKey,
+      },
+    },
+  };
+};
 
 export const mapTaskStatusToStageStatus = (status: string): ProcessV2StageStatus => {
   const normalized = String(status || '').trim().toLowerCase();
@@ -2195,7 +2218,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       const index = lane.stages.findIndex((stage) => stage.id === stageId);
       const targetSlot = index >= 0 ? getStageLayoutSlot(lane.stages[index], index) : 0;
       const stages = shiftStagesFromSlot(lane.stages, targetSlot);
-      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(targetSlot)]) };
+      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(targetSlot, lane.id)]) };
     });
   }, [updateLane]);
 
@@ -2203,7 +2226,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     updateLane(laneId, (lane) => {
       const normalizedTargetSlot = Math.max(0, Math.floor(targetSlot));
       const stages = shiftStagesFromSlot(lane.stages, normalizedTargetSlot);
-      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(normalizedTargetSlot)]) };
+      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(normalizedTargetSlot, lane.id)]) };
     });
   }, [updateLane]);
 
@@ -2212,16 +2235,16 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       if (!stageId) {
         const targetSlot = 0;
         const stages = shiftStagesFromSlot(lane.stages, targetSlot);
-        return { ...lane, stages: sortStagesByLayoutSlot([createNewStage(targetSlot), ...stages]) };
+        return { ...lane, stages: sortStagesByLayoutSlot([createNewStage(targetSlot, lane.id), ...stages]) };
       }
       const index = lane.stages.findIndex((stage) => stage.id === stageId);
       if (index < 0) {
         const targetSlot = lane.stages.length;
-        return { ...lane, stages: sortStagesByLayoutSlot([...lane.stages, createNewStage(targetSlot)]) };
+        return { ...lane, stages: sortStagesByLayoutSlot([...lane.stages, createNewStage(targetSlot, lane.id)]) };
       }
       const targetSlot = getStageLayoutSlot(lane.stages[index], index) + 1;
       const stages = shiftStagesFromSlot(lane.stages, targetSlot);
-      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(targetSlot)]) };
+      return { ...lane, stages: sortStagesByLayoutSlot([...stages, createNewStage(targetSlot, lane.id)]) };
     });
   }, [updateLane]);
 
@@ -2232,7 +2255,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     if (sourceStageIndex < 0) return;
 
     const sourceSlot = getStageLayoutSlot(item.lanes[sourceLaneIndex].stages[sourceStageIndex], sourceStageIndex);
-    const nextStage = createNewStage(sourceSlot);
+    const nextStage = createNewStage(sourceSlot, laneId);
     const sourceConnectorId = `${sourceStageId}:${direction === 'above' ? 'top' : 'bottom'}`;
     const targetConnectorId = `${nextStage.id}:${direction === 'above' ? 'bottom' : 'top'}`;
 
@@ -2256,9 +2279,20 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       }
 
       const targetLane = lanes[targetLaneIndex];
+      const nextStageForTargetLane = {
+        ...nextStage,
+        source: {
+          ...((nextStage.source && typeof nextStage.source === 'object') ? nextStage.source : {}),
+          process_lane_key: targetLane.id,
+          metadata: {
+            ...(((nextStage.source && typeof nextStage.source === 'object' && nextStage.source.metadata && typeof nextStage.source.metadata === 'object') ? nextStage.source.metadata : {}) as Record<string, any>),
+            process_lane_key: targetLane.id,
+          },
+        },
+      };
       targetLane.stages = sortStagesByLayoutSlot([
         ...shiftStagesFromSlot(targetLane.stages, sourceSlot),
-        nextStage,
+        nextStageForTargetLane,
       ]);
       return { ...current, lanes } as ProcessV2CardData;
     });
@@ -2330,6 +2364,11 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   const handleTemplateSelectionChange = useCallback((templateId: string) => {
     if (item.mode !== 'run') return;
     if (!templateId || templateId === item.templateId) return;
+    const isEmptyDraftProcess = !item.templateId && item.lanes.every((lane) => lane.stages.length === 0);
+    if (isEmptyDraftProcess) {
+      onTemplateChange?.(item, templateId, 'replace');
+      return;
+    }
     Modal.confirm({
       title: 'تغییر الگوی فرآیند',
       content: 'شما در حال تغییر الگوی فرآیند برای یک فرآیند ایجاد شده هستید. چه اقدامی انجام شود؟',
@@ -2398,6 +2437,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               <Select
                 size="small"
                 value={item.templateId}
+                placeholder="انتخاب الگو"
                 options={templateOptions}
                 onChange={handleTemplateSelectionChange}
                 className="min-w-0 sm:min-w-[180px]"

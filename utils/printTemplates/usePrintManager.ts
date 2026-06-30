@@ -99,9 +99,7 @@ const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at
 const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|credit|cost/i;
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
-const PRINT_BODY_FOOTER_SAFETY_PX = 18;
-const PRINT_BODY_PAGE_STEP_PX = 28;
-const PRINT_BODY_EDGE_GUARD_PX = 28;
+const MIN_PRINT_BODY_HEIGHT_PX = 80;
 const PRINT_SECTION_CONTENT_PADDING = '6px 10px';
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
@@ -176,12 +174,12 @@ const toPersianWords = (value: number): string => {
 const mmToPx = (value: number) => (value * 96) / 25.4;
 const pxToMm = (value: number) => value / mmToPx(1);
 const toCssMm = (value: number) => `${Number(pxToMm(value).toFixed(3))}mm`;
-const snapPrintBodyHeightPx = (value: number) =>
-  Math.max(80, Math.floor(Math.max(80, value) / PRINT_BODY_PAGE_STEP_PX) * PRINT_BODY_PAGE_STEP_PX);
+const normalizePrintBodyHeightPx = (value: number) =>
+  Math.max(MIN_PRINT_BODY_HEIGHT_PX, Math.floor(Math.max(MIN_PRINT_BODY_HEIGHT_PX, value)));
 const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
-  Math.max(80, snapPrintBodyHeightPx(pageBodyHeightPx - PRINT_BODY_EDGE_GUARD_PX));
+  normalizePrintBodyHeightPx(pageBodyHeightPx);
 const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
-  Math.min(pageBodyHeightPx, Math.max(1, Math.ceil(effectiveBodyStepPx)));
+  Math.min(normalizePrintBodyHeightPx(pageBodyHeightPx), Math.max(1, Math.ceil(effectiveBodyStepPx)));
 
 const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
   const rootRect = bodyMeasure.getBoundingClientRect();
@@ -226,12 +224,11 @@ const getTemplatePageBodyHeightPx = ({
   footerHeight: number;
   signatureHeight: number;
 }) =>
-  snapPrintBodyHeightPx(
+  normalizePrintBodyHeightPx(
     mmToPx(innerHeightMm) -
       (showHeader ? headerHeight : 0) -
       (showFooter ? footerHeight : 0) -
-      signatureHeight -
-      PRINT_BODY_FOOTER_SAFETY_PX
+      signatureHeight
   );
 
 const getPaperSizeMetrics = (
@@ -503,6 +500,7 @@ export const usePrintManager = ({
   const bodyMeasureRef = useRef<HTMLDivElement | null>(null);
   const buildPrintCardRef = useRef<(pageCountOverride?: number | null) => React.ReactNode>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
+  const preparedPrintPageCountRef = useRef<number | null>(null);
   const renderedCustomTemplateRef = useRef<{ headerHtml: string; contentHtml: string; footerHtml: string } | null>(null);
   const printSignatureSectionHeightPxRef = useRef(0);
   const templatesLoadedRef = useRef(false);
@@ -939,64 +937,82 @@ export const usePrintManager = ({
     [data, moduleConfig, moduleId]
   );
 
+  const measureCurrentCustomTemplatePages = useCallback(() => {
+    if (!selectedTemplateId.startsWith('custom:') || !selectedStoredTemplate || !bodyMeasureRef.current) {
+      return null;
+    }
+
+    const metrics = getPaperSizeMetrics(
+      selectedStoredTemplate.paperSize,
+      selectedStoredTemplate.orientation || 'portrait'
+    );
+    const isOrgLetterhead =
+      selectedStoredTemplate.renderMode === 'org_letterhead' &&
+      Boolean(selectedOrgLetterhead?.imageUrl);
+    const pageBodyHeightPx = isOrgLetterhead
+      ? (() => {
+          const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+          return bodyItem ? mmToPx(metrics.heightMm * (bodyItem.height / 100)) : mmToPx(metrics.heightMm);
+        })()
+      : (() => {
+          const showHeader = selectedStoredTemplate.showHeader !== false;
+          const rawFooterHtml = String(renderedCustomTemplateRef.current?.footerHtml || '').trim();
+          const showFooter =
+            selectedStoredTemplate.showFooter !== false &&
+            hasRenderablePrintFooterHtml(rawFooterHtml);
+          const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
+          const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
+          const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
+          const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
+          return getTemplatePageBodyHeightPx({
+            innerHeightMm,
+            showHeader,
+            showFooter,
+            headerHeight,
+            footerHeight,
+            signatureHeight: printSignatureSectionHeightPxRef.current,
+          });
+        })();
+    const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
+    const pageOffsets = getMeasuredPrintPageOffsets(bodyMeasureRef.current, pageBodyStepPx);
+    const pageCount = Math.max(1, pageOffsets.length);
+
+    renderedPageOffsetsRef.current = pageOffsets;
+    preparedPrintPageCountRef.current = pageCount;
+    setRenderedPageOffsets((prev) =>
+      prev.length === pageOffsets.length &&
+      prev.every((value, index) => value === pageOffsets[index])
+        ? prev
+        : pageOffsets
+    );
+    setRenderedPageCount((prev) => (prev === pageCount ? prev : pageCount));
+
+    return { pageOffsets, pageCount };
+  }, [
+    selectedTemplateId,
+    selectedStoredTemplate,
+    selectedOrgLetterhead,
+  ]);
+
   const preparePrint = useCallback(() => {
+    measureCurrentCustomTemplatePages();
     if (!shouldUseGeneratedPdfPrint()) return;
     const printTitle = getPrintOutputName();
     reservedPrintWindowRef.current = prepareGeneratedPdfWindow(printTitle);
-  }, [getPrintOutputName]);
+  }, [getPrintOutputName, measureCurrentCustomTemplatePages]);
 
   const handlePrint = useCallback(() => {
     if (!selectedTemplateId) return;
     const printTitle = getPrintOutputName();
 
-    let measuredPageCount = renderedPageCount;
+    const preparedMeasurement = measureCurrentCustomTemplatePages();
+    let measuredPageCount =
+      preparedMeasurement?.pageCount ??
+      preparedPrintPageCountRef.current ??
+      renderedPageCount;
     let previewPageCount = 0;
     if (typeof document !== 'undefined') {
       previewPageCount = document.querySelectorAll('.print-preview-scale .print-template-page').length || 0;
-    }
-    if (selectedTemplateId.startsWith('custom:') && selectedStoredTemplate && bodyMeasureRef.current) {
-      const metrics = getPaperSizeMetrics(
-        selectedStoredTemplate.paperSize,
-        selectedStoredTemplate.orientation || 'portrait'
-      );
-      const isOrgLetterhead =
-        selectedStoredTemplate.renderMode === 'org_letterhead' &&
-        Boolean(selectedOrgLetterhead?.imageUrl);
-      const pageBodyHeightPx = isOrgLetterhead
-        ? (() => {
-            const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
-            return bodyItem ? mmToPx(metrics.heightMm * (bodyItem.height / 100)) : mmToPx(metrics.heightMm);
-          })()
-        : (() => {
-            const showHeader = selectedStoredTemplate.showHeader !== false;
-            const rawFooterHtml = String(renderedCustomTemplateRef.current?.footerHtml || '').trim();
-            const showFooter =
-              selectedStoredTemplate.showFooter !== false &&
-              hasRenderablePrintFooterHtml(rawFooterHtml);
-            const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
-            const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
-            const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
-            const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
-            return getTemplatePageBodyHeightPx({
-              innerHeightMm,
-              showHeader,
-              showFooter,
-              headerHeight,
-              footerHeight,
-              signatureHeight: printSignatureSectionHeightPxRef.current,
-            });
-          })();
-      const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
-      const bodyMeasure = bodyMeasureRef.current;
-      const measuredPageOffsets = getMeasuredPrintPageOffsets(bodyMeasure, pageBodyStepPx);
-      renderedPageOffsetsRef.current = measuredPageOffsets;
-      setRenderedPageOffsets((prev) =>
-        prev.length === measuredPageOffsets.length &&
-        prev.every((value, index) => value === measuredPageOffsets[index])
-          ? prev
-          : measuredPageOffsets
-      );
-      measuredPageCount = Math.max(1, measuredPageOffsets.length);
     }
     if (!bodyMeasureRef.current && previewPageCount > measuredPageCount) {
       measuredPageCount = previewPageCount;
@@ -1047,13 +1063,10 @@ export const usePrintManager = ({
       console.error('Print dialog failed to open', error);
     });
   }, [
-    activeTemplate,
     availableTemplates,
     getPrintOutputName,
-    moduleConfig,
+    measureCurrentCustomTemplatePages,
     renderedPageCount,
-    selectedOrgLetterhead?.imageUrl,
-    selectedStoredTemplate,
     selectedTemplateId,
   ]);
 
@@ -1078,7 +1091,7 @@ export const usePrintManager = ({
         ? 'A6 portrait'
         : 'A4 portrait';
     const resolvedPageCount = selectedTemplateId.startsWith('custom:')
-      ? Math.max(1, options?.pageCountOverride ?? renderedPageCount)
+      ? Math.max(1, options?.pageCountOverride ?? preparedPrintPageCountRef.current ?? renderedPageCount)
       : null;
     tracker?.addMetadata({
       templateId: selectedTemplateId,
@@ -1123,6 +1136,7 @@ export const usePrintManager = ({
   useEffect(() => {
     if (printMode) return;
     setForcedPrintPageCount(null);
+    preparedPrintPageCountRef.current = null;
   }, [printMode]);
 
   useEffect(() => {
@@ -2755,6 +2769,7 @@ export const usePrintManager = ({
 
   useEffect(() => {
     if (!selectedStoredTemplate) {
+      preparedPrintPageCountRef.current = null;
       setRenderedPageCount(1);
       renderedPageOffsetsRef.current = [0];
       setRenderedPageOffsets([0]);
@@ -2802,6 +2817,7 @@ export const usePrintManager = ({
 
       const nextPageOffsets = getMeasuredPrintPageOffsets(bodyMeasure, pageBodyStepPx);
       renderedPageOffsetsRef.current = nextPageOffsets;
+      preparedPrintPageCountRef.current = Math.max(1, nextPageOffsets.length);
       setRenderedPageOffsets((prev) =>
         prev.length === nextPageOffsets.length &&
         prev.every((value, index) => value === nextPageOffsets[index])
@@ -3425,7 +3441,22 @@ export const usePrintManager = ({
             effectivePageCount > 1
               ? React.createElement(
                   'div',
-                  { className: 'print-template-page-counter', style: { fontSize: 10, color: '#64748b', textAlign: 'left' } },
+                  {
+                    className: 'print-template-page-counter',
+                    style: {
+                      position: 'absolute',
+                      left: `${pageMargins.left}mm`,
+                      right: `${pageMargins.right}mm`,
+                      bottom: `${Math.max(pageMargins.bottom * 0.35, 1.5)}mm`,
+                      display: 'flex',
+                      justifyContent: 'flex-start',
+                      fontSize: 10,
+                      color: '#64748b',
+                      textAlign: 'left',
+                      pointerEvents: 'none',
+                      zIndex: 9,
+                    },
+                  },
                   `صفحه ${toPersianNumber(`${pageIndex + 1} از ${effectivePageCount}`)}`
                 )
               : null

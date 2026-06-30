@@ -15,6 +15,7 @@ import gregorian_en from 'react-date-object/locales/gregorian_en';
 import HeaderActions from '../components/moduleShow/HeaderActions';
 import HeroSection from '../components/moduleShow/HeroSection';
 import FieldGroupsTabs from '../components/moduleShow/FieldGroupsTabs';
+import PrintSection from '../components/moduleShow/PrintSection';
 import TablesSection from '../components/moduleShow/TablesSection';
 import RecordImageBox from '../components/RecordImageBox';
 import type { StartMaterialGroup, StartMaterialPiece, StartMaterialDeliveryRow } from '../components/production/StartProductionModal';
@@ -123,7 +124,6 @@ import {
 } from '../utils/recordLockRuntime';
 
 const SmartForm = React.lazy(() => import('../components/SmartForm'));
-const PrintSection = React.lazy(() => import('../components/moduleShow/PrintSection'));
 const OperationalFinancialOverviewPanel = React.lazy(() => import('../components/accounting/OperationalFinancialOverviewPanel'));
 const AccountLedgerPanel = React.lazy(() => import('../components/accounting/AccountLedgerPanel'));
 const StartProductionModal = React.lazy(() => import('../components/production/StartProductionModal'));

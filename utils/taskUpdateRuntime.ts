@@ -3,8 +3,7 @@ import { runProcessAutomationsForTaskEvent } from './processAutomationRuntime';
 import { attachTaskCompletionIfNeeded, buildTaskStatusUpdatePayload, isTaskDoneStatus } from './taskCompletion';
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { dispatchTaskRuntimeUpdated } from './taskRuntimeEvents';
-import { syncProjectStatusWithProcessState } from './projectProcessStatus';
-import { resolveTaskSourceLink } from './taskMeta';
+import { syncProjectStatusesForTask } from './projectProcessStatus';
 import { syncProcessRunStageFromTask } from './processRunRuntime';
 import { getMissingRequiredProcessTaskCustomFields } from './processTaskCustomFields';
 import { runWorkflowsForEvent } from './workflowRuntime';
@@ -215,15 +214,7 @@ export const updateTaskStatusWithAutomation = async ({
     previousRecord: currentTask,
   });
 
-  const updatedTaskSource = resolveTaskSourceLink(updatedTask);
-  const taskProjectId = String(
-    updatedTask?.project_id
-    || (updatedTaskSource.moduleId === 'projects' ? updatedTaskSource.recordId : '')
-    || ''
-  ).trim();
-  if (taskProjectId) {
-    await syncProjectStatusWithProcessState(taskProjectId);
-  }
+  await syncProjectStatusesForTask(updatedTask);
 
   dispatchTaskRuntimeUpdated({
     task: updatedTask,
@@ -296,15 +287,7 @@ export const updateTaskDueDateWithAutomation = async ({
     previousRecord: currentTask,
   });
 
-  const updatedTaskSource = resolveTaskSourceLink(updatedTask);
-  const taskProjectId = String(
-    updatedTask?.project_id
-    || (updatedTaskSource.moduleId === 'projects' ? updatedTaskSource.recordId : '')
-    || ''
-  ).trim();
-  if (taskProjectId) {
-    await syncProjectStatusWithProcessState(taskProjectId);
-  }
+  await syncProjectStatusesForTask(updatedTask);
 
   dispatchTaskRuntimeUpdated({
     task: updatedTask,
