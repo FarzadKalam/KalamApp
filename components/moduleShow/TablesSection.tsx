@@ -148,6 +148,16 @@ const TablesSection: React.FC<TablesSectionProps> = ({
     .filter((f: any) => f.type === FieldType.PROGRESS_STAGES || processStageFieldKeys.has(String(f?.key || '')))
     .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true))
     .filter((f: any) => (isFieldVisible ? isFieldVisible(f) : (!f.logic || checkVisibility(f.logic))));
+  const processModalHostFieldKey = progressFields
+    .map((field: any) => String(field?.key || ''))
+    .find((key: string) => (
+      processStageFieldKeys.has(key)
+      && key !== 'run_stages_preview'
+      && (
+        (module.id === 'process_templates' && key === 'template_stages_preview')
+        || module.id !== 'process_templates'
+      )
+    ));
 
   return (
     <div className="tables-section space-y-6 md:space-y-8">
@@ -158,6 +168,13 @@ const TablesSection: React.FC<TablesSectionProps> = ({
           const isProcessStagesField = processStageFieldKeys.has(fieldKey);
           const isTemplatePreviewField = fieldKey === 'template_stages_preview';
           const isRunPreviewField = fieldKey === 'run_stages_preview';
+          const shouldMountProcessModalHost = isProcessStagesField
+            && fieldKey === processModalHostFieldKey
+            && !isRunPreviewField
+            && (
+              (module.id === 'process_templates' && isTemplatePreviewField)
+              || module.id !== 'process_templates'
+            );
           const processSectionAnchorId = isProcessStagesField
             ? `process-section-${String(module?.id || '')}-${String(data?.id || '')}`
             : undefined;
@@ -238,16 +255,20 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                     variant="full"
                   />
                 </React.Suspense>
-                {module.id === 'process_templates' && isTemplatePreviewField ? (
+                {shouldMountProcessModalHost ? (
                   <div style={{ display: 'none' }} aria-hidden="true">
                     <React.Suspense fallback={null}>
                       <ProductionStagesField
                         recordId={data.id}
                         moduleId={module.id}
-                        forceProcessRecordMode={false}
+                        forceProcessRecordMode={module.id !== 'process_templates' && module.id !== 'process_runs'}
                         automationContextModuleId={null}
-                        automationContextModuleIds={normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)}
-                        readOnly={!canEditModule}
+                        automationContextModuleIds={
+                          module.id === 'process_templates' || module.id === 'process_runs'
+                            ? normalizeProcessTargetModuleIds((data as any)?.module_ids, (data as any)?.module_id)
+                            : null
+                        }
+                        readOnly={!canEditModule || productionLocked}
                         compact={true}
                         draftStages={stageDraftValue}
                         onDraftStagesChange={handleDraftStagesChange}

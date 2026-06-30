@@ -24,6 +24,25 @@ const ROOT_BLOCK_TAGS = new Set([
   'table',
   'ul',
 ]);
+const HIGH_PRIORITY_BLOCK_TAGS = new Set([
+  'canvas',
+  'figure',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'img',
+  'picture',
+  'svg',
+  'table',
+  'tbody',
+  'tfoot',
+  'thead',
+  'tr',
+]);
 
 const TEXT_BLOCK_SELECTOR = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, hr';
 const TABLE_CONTAINER_SELECTOR = 'table, tbody';
@@ -60,7 +79,7 @@ const markPrintFlowElement = (
 
 const getElementPriority = (element: Element): PrintFlowPriority => {
   const tagName = String(element.tagName || '').toLowerCase();
-  if (['table', 'thead', 'tbody', 'tfoot', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'img', 'svg', 'canvas', 'figure', 'picture'].includes(tagName)) {
+  if (HIGH_PRIORITY_BLOCK_TAGS.has(tagName)) {
     return 'high';
   }
 
@@ -243,6 +262,15 @@ export const buildSmartPrintPageOffsets = ({
         : 0;
 
     if (!nextOffset) {
+      const hardTopCandidates = blockAnchors
+        .filter((anchor) => anchor.priority === 'high')
+        .filter((anchor) => anchor.bottom - anchor.top <= safeStep - OVERSIZED_KEEP_BLOCK_TOLERANCE_PX)
+        .map((anchor) => anchor.top)
+        .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
+      nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;
+    }
+
+    if (!nextOffset) {
       const lineBottomCandidates = lineAnchors
         .map((anchor) => anchor.bottom)
         .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
@@ -269,15 +297,6 @@ export const buildSmartPrintPageOffsets = ({
       if (nearbyBottomBeforeBreak.length > 0) {
         nextOffset = Math.max(...nearbyBottomBeforeBreak);
       }
-    }
-
-    if (!nextOffset) {
-      const hardTopCandidates = blockAnchors
-        .filter((anchor) => anchor.priority === 'high')
-        .filter((anchor) => anchor.bottom - anchor.top <= safeStep - OVERSIZED_KEEP_BLOCK_TOLERANCE_PX)
-        .map((anchor) => anchor.top)
-        .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
-      nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;
     }
 
     if (!nextOffset) {

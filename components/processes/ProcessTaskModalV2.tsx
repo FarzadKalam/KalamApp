@@ -1052,14 +1052,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       })))
   ), [isTemplateBackedDraft, process.lanes, stage?.id]);
   const draftStageOptions = useMemo(() => {
-    if (isTemplateBackedDraft || !draftCopyTemplateId || (runProcess && draftCopyTemplateId === runProcess.templateId)) {
+    if (isTemplateBackedDraft || !draftCopyTemplateId) {
       return currentProcessDraftStageOptions;
     }
     return templateCopyStages.map((candidate) => ({
       value: candidate.id,
       label: candidate.title,
     }));
-  }, [currentProcessDraftStageOptions, draftCopyTemplateId, isTemplateBackedDraft, runProcess, templateCopyStages]);
+  }, [currentProcessDraftStageOptions, draftCopyTemplateId, isTemplateBackedDraft, templateCopyStages]);
   const processStageAnchorOptions = useMemo(() => (
     process.lanes.flatMap((lane) => lane.stages.map((item) => {
       const itemSource = item.source && typeof item.source === 'object' ? item.source : {};
@@ -2191,7 +2191,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   }, [applyStageSettingsToDraft, draftCopyStage, open]);
 
   useEffect(() => {
-    if (!open || isTemplateBackedDraft || !draftCopyTemplateId || (runProcess && draftCopyTemplateId === runProcess.templateId)) {
+    if (!open || isTemplateBackedDraft || !draftCopyTemplateId) {
       setTemplateCopyStages([]);
       return;
     }
@@ -2216,7 +2216,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [draftCopyTemplateId, isTemplateBackedDraft, open, runProcess]);
+  }, [draftCopyTemplateId, isTemplateBackedDraft, open]);
 
   useEffect(() => {
     if (!open || !taskRecordId) return;
