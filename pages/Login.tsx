@@ -412,11 +412,33 @@ const Login = () => {
 
     const candidate = await lookupPhoneLoginCandidate(phoneNumber);
     if ((candidate?.exists_in_profiles || candidate?.exists_in_auth) && candidate?.is_active !== false) {
+      if (candidate?.org_id && candidate?.role_id) {
+        try {
+          const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
+          if (repairResult?.repaired) {
+            await signOutLocalSession();
+            const { error: resendError } = await supabase.auth.signInWithOtp({
+              phone: phoneNumber,
+            });
+            if (resendError) throw resendError;
+            setOtpRequestedFor(phoneNumber);
+            setOtpCode('');
+            setOtpCooldown(OTP_RESEND_SECONDS);
+            throw new Error('__otp_phone_repaired_retry__');
+          }
+        } catch (repairError: any) {
+          const rawRepairError = String(repairError?.message || '');
+          if (rawRepairError.includes('__otp_phone_repaired_retry__')) {
+            throw repairError;
+          }
+        }
+      }
+
       const conflictProfile = await findExistingProfileConflict(phoneNumber, userEmail, userId);
       if (conflictProfile?.id) {
         try {
-            const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
-            if (repairResult?.repaired) {
+          const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
+          if (repairResult?.repaired) {
             await signOutLocalSession();
             const { error: resendError } = await supabase.auth.signInWithOtp({
               phone: phoneNumber,
