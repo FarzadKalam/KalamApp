@@ -45,6 +45,9 @@ const normalizeEmail = (value?: string | null) =>
 const normalizeRole = (value?: string | null) =>
   String(value || '').trim().toLowerCase();
 
+const getErrorMessage = (error: any, fallback = 'unknown_error') =>
+  String(error?.message || error?.details || error?.hint || error || fallback);
+
 const buildWeeklyPlan = () => ({
   saturday: { enabled: true, start: '08:30', end: '17:30' },
   sunday: { enabled: true, start: '08:30', end: '17:30' },
@@ -1356,6 +1359,8 @@ const seedOrgDemoData = async (client: any, caller: any, context: any) => {
     if (surveyError) throw surveyError;
     appendTrackedRows(trackedRows, 'surveys', surveys ? [surveys] : [], 110, 'title');
 
+    const seedWarnings: string[] = [];
+
     const { data: goals, error: goalsError } = await client
       .from('goals')
       .insert([
@@ -1411,8 +1416,11 @@ const seedOrgDemoData = async (client: any, caller: any, context: any) => {
         },
       ])
       .select('id,name');
-    if (goalsError) throw goalsError;
-    appendTrackedRows(trackedRows, 'goals', goals || [], 108);
+    if (goalsError) {
+      seedWarnings.push(`goals: ${getErrorMessage(goalsError)}`);
+    } else {
+      appendTrackedRows(trackedRows, 'goals', goals || [], 108);
+    }
 
     await registerRows(client, batchId, orgId, trackedRows);
     await markBatchStatus(client, batchId, {
@@ -1422,6 +1430,7 @@ const seedOrgDemoData = async (client: any, caller: any, context: any) => {
         slug: context.saasSettings?.slug || null,
         pack_key: 'general_v1',
         completed_at: now().toISOString(),
+        warnings: seedWarnings,
       },
     });
 
@@ -1431,7 +1440,7 @@ const seedOrgDemoData = async (client: any, caller: any, context: any) => {
       status: 'seeded',
       seeded_records_count: trackedRows.length,
       has_seeded_batch: true,
-      warning: null,
+      warning: seedWarnings.length ? seedWarnings.join(' | ') : null,
     };
   } catch (error) {
     await markBatchStatus(client, batchId, {
@@ -1440,7 +1449,7 @@ const seedOrgDemoData = async (client: any, caller: any, context: any) => {
         slug: context.saasSettings?.slug || null,
         pack_key: 'general_v1',
         failed_at: now().toISOString(),
-        error: String(error?.message || error || 'unknown_error'),
+        error: getErrorMessage(error),
       },
     }).catch(() => null);
     throw error;
@@ -1530,7 +1539,14 @@ Deno.serve(async (request) => {
     }
 
     if (action === 'seed_org_demo_data') {
-      const result = await seedOrgDemoData(client, caller, context);
+      const result = await seedOrgDemoData(client, caller, context).catch((error: any) => ({
+        success: true,
+        batch_id: null,
+        status: 'seed_failed',
+        seeded_records_count: 0,
+        has_seeded_batch: false,
+        warning: getErrorMessage(error, 'demo_seed_failed'),
+      }));
       return json(200, {
         ...result,
         is_demo: true,
