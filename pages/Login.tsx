@@ -491,7 +491,7 @@ const Login = () => {
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
       assertLoginOtpRequestAllowed(candidate, invite);
 
-      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
+      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone);
       setOtpRequestedFor(requestedPhone);
       setOtpCode('');
       setOtpCooldown(OTP_RESEND_SECONDS);
