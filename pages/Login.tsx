@@ -416,15 +416,7 @@ const Login = () => {
         try {
           const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
           if (repairResult?.repaired) {
-            await signOutLocalSession();
-            const { error: resendError } = await supabase.auth.signInWithOtp({
-              phone: phoneNumber,
-            });
-            if (resendError) throw resendError;
-            setOtpRequestedFor(phoneNumber);
-            setOtpCode('');
-            setOtpCooldown(OTP_RESEND_SECONDS);
-            throw new Error('__otp_phone_repaired_retry__');
+            return;
           }
         } catch (repairError: any) {
           const rawRepairError = String(repairError?.message || '');
@@ -439,15 +431,7 @@ const Login = () => {
         try {
           const repairResult = await repairLegacyPhoneLoginConflict(phoneNumber);
           if (repairResult?.repaired) {
-            await signOutLocalSession();
-            const { error: resendError } = await supabase.auth.signInWithOtp({
-              phone: phoneNumber,
-            });
-            if (resendError) throw resendError;
-            setOtpRequestedFor(phoneNumber);
-            setOtpCode('');
-            setOtpCooldown(OTP_RESEND_SECONDS);
-            throw new Error('__otp_phone_repaired_retry__');
+            return;
           }
         } catch (repairError: any) {
           const rawRepairError = String(repairError?.message || '');

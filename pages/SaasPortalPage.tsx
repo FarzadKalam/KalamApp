@@ -475,6 +475,7 @@ const SaasPortalPage: React.FC = () => {
           action: 'setup_owner_credentials',
           fullName: fullName.trim(),
           email: normalizedEmail,
+          phone: normalizedPhone,
           password: ownerPassword,
           skipProfileUpsert: true,
         },
