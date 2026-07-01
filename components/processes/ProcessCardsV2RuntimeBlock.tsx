@@ -5,6 +5,7 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
 import { fetchProcessRuntimeBatchForRecord } from '../../utils/processRuntimeBatch';
+import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
 import { isProcessExecutionStarted, type ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import {
   fetchAssigneeDirectory,
@@ -850,34 +851,14 @@ const fetchRuntimeTasks = async (runs: any[], stages: any[], options?: { force?:
   });
 };
 
-const filterDeletedProcessRunStageMarks = async (rows: any[]) => {
-  const normalizedRows = Array.isArray(rows) ? rows : [];
-  const ids = Array.from(new Set(normalizedRows.map((row: any) => normalizeDbUuid(row?.id || row?.process_run_stage_id)).filter(Boolean)));
-  if (ids.length === 0) return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
-  try {
-    const { data, error } = await supabase
-      .from('process_v2_deleted_stage_marks')
-      .select('process_run_stage_id')
-      .in('process_run_stage_id', ids);
-    if (error || !Array.isArray(data)) return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
-    const deletedIds = new Set(data.map((row: any) => normalizeDbUuid(row?.process_run_stage_id)).filter(Boolean));
-    return normalizedRows.filter((row: any) => {
-      const rowId = normalizeDbUuid(row?.id || row?.process_run_stage_id);
-      return !isProcessV2DeletedRow(row) && (!rowId || !deletedIds.has(rowId));
-    });
-  } catch {
-    return normalizedRows.filter((row: any) => !isProcessV2DeletedRow(row));
-  }
-};
-
-const fetchRunStages = async (runId: string) => {
+const fetchRunStages = async (runId: string, options?: { force?: boolean }) => {
   if (!runId) return [];
   const extended = await supabase
     .from('process_run_stages')
     .select('id, process_run_id, template_stage_id, stage_name, sort_order, status, task_id, assignee_user_id, assignee_role_id, planned_due_at, completed_at, metadata, process_node_key, process_lane_key')
     .eq('process_run_id', runId)
     .order('sort_order', { ascending: true });
-  if (!extended.error) return filterDeletedProcessRunStageMarks(extended.data || []);
+  if (!extended.error) return filterDeletedProcessRunStageMarks(supabase, extended.data || [], options);
 
   const fallback = await supabase
     .from('process_run_stages')
@@ -885,7 +866,7 @@ const fetchRunStages = async (runId: string) => {
     .eq('process_run_id', runId)
     .order('sort_order', { ascending: true });
   if (fallback.error) throw fallback.error;
-  return filterDeletedProcessRunStageMarks(fallback.data || []);
+  return filterDeletedProcessRunStageMarks(supabase, fallback.data || [], options);
 };
 
 const isUnsupportedRecycleError = (error: any) => {
@@ -903,11 +884,6 @@ const isUnsupportedRecycleError = (error: any) => {
 const isInvalidUuidLikeError = (error: any) => {
   const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
   return error?.code === '22P02' || text.includes('invalid input syntax for type uuid');
-};
-
-const isProcessV2DeletedRow = (row: any) => {
-  const metadata = parseObject(row?.metadata);
-  return metadata?.process_v2_deleted === true || metadata?.deleted_from_process_v2 === true;
 };
 
 const moveProcessRowsToRecycleBin = async (
@@ -1128,6 +1104,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const linkedDraftStagesRef = useRef<any[]>(linkedDraftStages);
   const recordDataRef = useRef<any>(recordData);
   const readOnlyVariant = variant !== 'full';
+  const liveRuntimeEnabled = variant === 'full';
   const directDraftStages = draftStagesOverride || (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST);
   const effectiveDraftStages = useMemo(() => {
     if (!Array.isArray(linkedDraftStages) || linkedDraftStages.length === 0) return directDraftStages;
@@ -1303,7 +1280,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       }
 
       if (isProcessRunModule(normalizedModuleId)) {
-        const stages = await fetchRunStages(normalizedRecordId);
+        const stages = await fetchRunStages(normalizedRecordId, force ? { force: true } : undefined);
         const runs = [recordDataRef.current].filter(Boolean);
         const tasks = await fetchRuntimeTasks(runs, stages, { force });
         const nextRuntime = {
@@ -1313,7 +1290,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         };
         setRuntime(nextRuntime);
         publishRuntimeSnapshot(nextRuntime);
-        void syncProjectStatusForRuntime(nextRuntime);
+        if (liveRuntimeEnabled) {
+          void syncProjectStatusForRuntime(nextRuntime);
+        }
         processRuntimeBlockCache.set(cacheKey, {
           runtime: nextRuntime,
           templateStages: templateStagesRef.current,
@@ -1329,7 +1308,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         normalizedRecordId,
         force ? { force: true } : undefined,
       );
-      const snapshotStages = await filterDeletedProcessRunStageMarks(snapshot.stages || []);
+      const snapshotStages = await filterDeletedProcessRunStageMarks(
+        supabase,
+        snapshot.stages || [],
+        force ? { force: true } : undefined,
+      );
       const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
@@ -1347,7 +1330,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setRuntime(nextRuntime);
       setLinkedDraftStages(nextLinkedDraftStages);
       publishRuntimeSnapshot(nextRuntime);
-      void syncProjectStatusForRuntime(nextRuntime, [...directDrafts, ...nextLinkedDraftStages]);
+      if (liveRuntimeEnabled) {
+        void syncProjectStatusForRuntime(nextRuntime, [...directDrafts, ...nextLinkedDraftStages]);
+      }
       processRuntimeBlockCache.set(cacheKey, {
         runtime: nextRuntime,
         templateStages: templateStagesRef.current,
@@ -1360,7 +1345,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setHasLoadedRuntime(true);
       setLoading(false);
     }
-  }, [cacheKey, enabled, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime]);
+  }, [cacheKey, enabled, liveRuntimeEnabled, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => {
@@ -1394,7 +1379,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [enabled, normalizedModuleId, normalizedRecordId, readOnlyVariant, refresh, runtimeSnapshot]);
 
   useEffect(() => {
-    if (!enabled || !orgId || !normalizedModuleId || !normalizedRecordId) return undefined;
+    if (!enabled || !liveRuntimeEnabled || !orgId || !normalizedModuleId || !normalizedRecordId) return undefined;
     const channel = supabase.channel(`process-v2-runtime-${normalizedModuleId}-${normalizedRecordId}`);
 
     if (isProcessTemplateModule(normalizedModuleId)) {
@@ -1486,7 +1471,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       void supabase.removeChannel(channel);
     };
-  }, [enabled, normalizedModuleId, normalizedRecordId, orgId, scheduleRefresh]);
+  }, [enabled, liveRuntimeEnabled, normalizedModuleId, normalizedRecordId, orgId, scheduleRefresh]);
 
   const fallbackRecordLabel = useMemo(() => {
     const moduleLabel = getModuleLabel(normalizedModuleId);

@@ -118,6 +118,14 @@ type ConnectorPoint = { x: number; y: number };
 type ConnectorPair = { id: string; from: string; to: string };
 type StageDragPayload = { laneId: string; stageId: string };
 type LaneDragPayload = { laneId: string };
+type TouchStageDragState = {
+  pointerId: number;
+  laneId: string;
+  stageId: string;
+  stageTitle: string;
+  pointerX: number;
+  pointerY: number;
+};
 type DropSlotPreview = { laneId: string; slot: number } | null;
 type DropLanePreview = { laneId: string; edge: 'before' | 'after' } | null;
 type ActiveStageModal = { stage: ProcessV2Stage; laneTitle: string } | null;
@@ -434,6 +442,43 @@ const getFitStageWidth = (stageSlotCount: number, readOnlySurface = false) => {
 const getStageActivityLabel = (stage: ProcessV2Stage, statusLabel: string) => (
   stage.assigneeLabel || stage.metaLabel || statusLabel
 );
+
+const parseDropSlotPreviewFromDataset = (target: EventTarget | null): DropSlotPreview => {
+  if (typeof document === 'undefined') return null;
+  const element = target instanceof Element ? target : null;
+  const slotElement = element?.closest?.('[data-process-drop-lane][data-process-drop-slot]') as HTMLElement | null;
+  if (!slotElement) return null;
+  const laneId = String(slotElement.dataset.processDropLane || '').trim();
+  const slotValue = Number(slotElement.dataset.processDropSlot);
+  if (!laneId || !Number.isFinite(slotValue)) return null;
+  return {
+    laneId,
+    slot: Math.max(0, Math.floor(slotValue)),
+  };
+};
+
+const resolveTouchStageDropTarget = (clientX: number, clientY: number): DropSlotPreview => {
+  if (typeof document === 'undefined') return null;
+  const element = document.elementFromPoint(clientX, clientY);
+  const directSlotTarget = parseDropSlotPreviewFromDataset(element);
+  if (directSlotTarget) return directSlotTarget;
+
+  const stageElement = element instanceof Element
+    ? element.closest('[data-process-stage-lane][data-process-stage-slot]') as HTMLElement | null
+    : null;
+  if (!stageElement) return null;
+
+  const laneId = String(stageElement.dataset.processStageLane || '').trim();
+  const slotValue = Number(stageElement.dataset.processStageSlot);
+  if (!laneId || !Number.isFinite(slotValue)) return null;
+
+  const rect = stageElement.getBoundingClientRect();
+  const targetSlot = clientX < rect.left + (rect.width / 2) ? slotValue : slotValue + 1;
+  return {
+    laneId,
+    slot: Math.max(0, Math.floor(targetSlot)),
+  };
+};
 
 const shiftStagesFromSlot = (stages: ProcessV2Stage[], targetSlot: number) => (
   stages.map((stage, index) => {
@@ -973,6 +1018,7 @@ InlineTitle.displayName = 'InlineTitle';
 const ProcessStagePill = memo(({
   stage,
   laneId,
+  slot,
   isFirstStage,
   compact,
   readOnlySurface,
@@ -991,10 +1037,14 @@ const ProcessStagePill = memo(({
   onConnectorClick,
   onDragStart,
   onDragEnd,
+  onTouchDragStart,
+  onTouchDragMove,
+  onTouchDragEnd,
   onOpenDetails,
 }: {
   stage: ProcessV2Stage;
   laneId: string;
+  slot: number;
   isFirstStage: boolean;
   compact: boolean;
   readOnlySurface: boolean;
@@ -1013,6 +1063,9 @@ const ProcessStagePill = memo(({
   onConnectorClick: (connectorId: string, insertStage: () => void) => void;
   onDragStart: (event: React.DragEvent<HTMLElement>, payload: StageDragPayload) => void;
   onDragEnd: () => void;
+  onTouchDragStart: (event: React.PointerEvent<HTMLButtonElement>, payload: StageDragPayload, title: string) => void;
+  onTouchDragMove: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onTouchDragEnd: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onOpenDetails: () => void;
 }) => {
   const visual = getProcessStageStatusVisual(stage);
@@ -1037,6 +1090,8 @@ const ProcessStagePill = memo(({
       className={`group relative box-border cursor-pointer rounded-xl border border-[var(--process-stage-border)] bg-[var(--process-stage-fill)] text-[var(--process-stage-text)] shadow-[var(--process-stage-shadow)] transition hover:brightness-[1.02] hover:shadow-[var(--process-stage-shadow-hover)] dark:border-[var(--process-stage-border-dark)] dark:bg-[var(--process-stage-fill-dark)] dark:text-[var(--process-stage-text-dark)] ${highlighted ? 'ring-2 ring-offset-2 ring-[rgba(var(--brand-500-rgb),0.75)] ring-offset-white dark:ring-[rgba(var(--brand-300-rgb),0.85)] dark:ring-offset-slate-950' : ''} ${fitClass}`}
       role="button"
       tabIndex={0}
+      data-process-stage-lane={laneId}
+      data-process-stage-slot={slot}
       onClick={onOpenDetails}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -1161,7 +1216,24 @@ const ProcessStagePill = memo(({
               <IconButton title="حذف مرحله" icon={<DeleteOutlined />} danger onClick={onDelete} />
             </div>
             <span className="shrink-0 sm:hidden" onClick={(event) => event.stopPropagation()}>
-              <ActionOverflow items={actionItems} />
+              <span className="flex items-center gap-1">
+                <Tooltip title="جابجایی با کشیدن">
+                  <button
+                    type="button"
+                    aria-label="جابجایی مرحله با لمس"
+                    onPointerDown={(event) => onTouchDragStart(event, { laneId, stageId: stage.id }, stage.title)}
+                    onPointerMove={onTouchDragMove}
+                    onPointerUp={onTouchDragEnd}
+                    onPointerCancel={onTouchDragEnd}
+                    onClick={(event) => event.stopPropagation()}
+                    className="inline-flex h-7 w-7 touch-none items-center justify-center rounded-full text-slate-600 transition active:bg-slate-100 dark:text-slate-200 dark:active:bg-white/10"
+                    style={{ touchAction: 'none' }}
+                  >
+                    <HolderOutlined />
+                  </button>
+                </Tooltip>
+                <ActionOverflow items={actionItems} />
+              </span>
             </span>
           </>
         ) : null}
@@ -1203,6 +1275,8 @@ const InterStageDot = memo(({
 }) => (
   <div
     className={`relative z-[4] flex ${readOnlySurface || compact ? 'w-[3px] overflow-visible' : 'w-1.5 overflow-visible'} shrink-0 items-center justify-center rounded-lg transition ${isDropTarget ? 'bg-[rgba(var(--brand-100-rgb),0.58)] dark:bg-[rgba(var(--brand-500-rgb),0.18)]' : ''}`}
+    data-process-drop-lane={typeof dropTargetSlot === 'number' ? connectorId.split(':')[0] : undefined}
+    data-process-drop-slot={typeof dropTargetSlot === 'number' ? dropTargetSlot : undefined}
     onDragEnter={() => {
       if (typeof dropTargetSlot === 'number') onDragEnterSlot?.(dropTargetSlot);
     }}
@@ -1244,6 +1318,7 @@ const EdgeDropMarker = memo(({
   side,
   compact,
   tight = false,
+  laneId,
   slot,
   isDropTarget,
   onDragEnterSlot,
@@ -1252,6 +1327,7 @@ const EdgeDropMarker = memo(({
   side: 'start' | 'end';
   compact: boolean;
   tight?: boolean;
+  laneId: string;
   slot: number;
   isDropTarget: boolean;
   onDragEnterSlot: (slot: number) => void;
@@ -1261,6 +1337,8 @@ const EdgeDropMarker = memo(({
     className={`relative z-[4] flex ${tight ? 'w-0 overflow-visible' : 'w-4'} shrink-0 items-center justify-center rounded-lg transition ${isDropTarget ? 'bg-[rgba(var(--brand-100-rgb),0.58)] dark:bg-[rgba(var(--brand-500-rgb),0.18)]' : ''}`}
     style={{ height: compact ? 40 : 58 }}
     aria-label={side === 'start' ? 'محل قرارگیری در ابتدای ردیف' : 'محل قرارگیری در انتهای ردیف'}
+    data-process-drop-lane={laneId}
+    data-process-drop-slot={slot}
     onDragEnter={() => onDragEnterSlot(slot)}
     onDragOver={(event) => {
       event.preventDefault();
@@ -1278,6 +1356,7 @@ const StageSlotSpacer = memo(({
   compact,
   readOnlySurface = false,
   sizeMode,
+  laneId,
   slot,
   isDropTarget,
   onDragEnterSlot,
@@ -1288,6 +1367,7 @@ const StageSlotSpacer = memo(({
   compact: boolean;
   readOnlySurface?: boolean;
   sizeMode: StageSizeMode;
+  laneId?: string;
   slot: number;
   isDropTarget: boolean;
   onDragEnterSlot: (slot: number) => void;
@@ -1307,6 +1387,8 @@ const StageSlotSpacer = memo(({
           ? 'border-[rgb(var(--brand-500-rgb))] bg-[rgba(var(--brand-100-rgb),0.46)] ring-2 ring-[rgba(var(--brand-500-rgb),0.18)] dark:border-[rgb(var(--brand-300-rgb))] dark:bg-[rgba(var(--brand-500-rgb),0.16)]'
           : 'border-transparent hover:border-slate-300 hover:bg-slate-100/55 dark:hover:border-white/20 dark:hover:bg-white/5'
       } ${fitClass}`}
+      data-process-drop-lane={laneId}
+      data-process-drop-slot={slot}
       onDragEnter={() => onDragEnterSlot(slot)}
       onDragOver={(event) => {
         event.preventDefault();
@@ -1432,6 +1514,9 @@ const ProcessLaneRow = memo(({
   onDeleteEmptySlot,
   onLaneDragStart,
   onLaneDragEnd,
+  onStageTouchDragStart,
+  onStageTouchDragMove,
+  onStageTouchDragEnd,
   onOpenStageDetails,
   onCopyStage,
   onDeleteStage,
@@ -1465,6 +1550,9 @@ const ProcessLaneRow = memo(({
   onDeleteEmptySlot: (laneId: string, slot: number) => void;
   onLaneDragStart: (event: React.DragEvent<HTMLElement>, payload: LaneDragPayload) => void;
   onLaneDragEnd: () => void;
+  onStageTouchDragStart: (event: React.PointerEvent<HTMLButtonElement>, payload: StageDragPayload, title: string) => void;
+  onStageTouchDragMove: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  onStageTouchDragEnd: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onOpenStageDetails: (stage: ProcessV2Stage, laneTitle: string) => void;
   onCopyStage: (stageId: string) => void;
   onDeleteStage: (stageId: string) => void;
@@ -1497,6 +1585,7 @@ const ProcessLaneRow = memo(({
               key={`${lane.id}_readonly_stage_${entry.stage.id}`}
               stage={entry.stage}
               laneId={lane.id}
+              slot={entry.slot}
               isFirstStage={entry.stage.id === firstStageId}
               compact={compact}
               readOnlySurface={readOnlySurface}
@@ -1515,6 +1604,9 @@ const ProcessLaneRow = memo(({
               onConnectorClick={onConnectorClick}
               onDragStart={onStageDragStart}
               onDragEnd={onStageDragEnd}
+              onTouchDragStart={() => undefined}
+              onTouchDragMove={() => undefined}
+              onTouchDragEnd={() => undefined}
               onOpenDetails={() => onOpenStageDetails(entry.stage, lane.title)}
             />
           ) : (
@@ -1523,6 +1615,7 @@ const ProcessLaneRow = memo(({
               compact
               readOnlySurface
               sizeMode={sizeMode}
+              laneId={lane.id}
               slot={slot}
               isDropTarget={false}
               onDragEnterSlot={() => undefined}
@@ -1594,6 +1687,7 @@ const ProcessLaneRow = memo(({
                 side="start"
                 compact={compact}
                 tight
+                laneId={lane.id}
                 slot={0}
                 isDropTarget={dropSlotPreview?.laneId === lane.id && dropSlotPreview.slot === 0}
                 onDragEnterSlot={(targetSlot) => onDragEnterSlot(lane.id, targetSlot)}
@@ -1609,6 +1703,7 @@ const ProcessLaneRow = memo(({
                     <ProcessStagePill
                       stage={entry.stage}
                       laneId={lane.id}
+                      slot={entry.slot}
                       isFirstStage={entry.stage.id === firstStageId}
                       compact={compact}
                       readOnlySurface={readOnlySurface}
@@ -1627,6 +1722,9 @@ const ProcessLaneRow = memo(({
                       onConnectorClick={onConnectorClick}
                       onDragStart={onStageDragStart}
                       onDragEnd={onStageDragEnd}
+                      onTouchDragStart={onStageTouchDragStart}
+                      onTouchDragMove={onStageTouchDragMove}
+                      onTouchDragEnd={onStageTouchDragEnd}
                       onOpenDetails={() => onOpenStageDetails(entry.stage, lane.title)}
                     />
                   ) : (
@@ -1634,6 +1732,7 @@ const ProcessLaneRow = memo(({
                       compact={readOnlySurface ? true : compact}
                       readOnlySurface={readOnlySurface}
                       sizeMode={sizeMode}
+                      laneId={lane.id}
                       slot={slot}
                       isDropTarget={!readOnlySurface && dropSlotPreview?.laneId === lane.id && dropSlotPreview.slot === slot}
                       onDragEnterSlot={(targetSlot) => {
@@ -1709,6 +1808,7 @@ const ProcessLaneRow = memo(({
                 side="end"
                 compact={readOnlySurface ? true : compact}
                 tight
+                laneId={lane.id}
                 slot={stageSlotCount}
                 isDropTarget={dropSlotPreview?.laneId === lane.id && dropSlotPreview.slot === stageSlotCount}
                 onDragEnterSlot={(targetSlot) => onDragEnterSlot(lane.id, targetSlot)}
@@ -1894,7 +1994,9 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   const [dropSlotPreview, setDropSlotPreview] = useState<DropSlotPreview>(null);
   const [dropLanePreview, setDropLanePreview] = useState<DropLanePreview>(null);
   const [draggingLaneId, setDraggingLaneId] = useState<string | null>(null);
+  const [touchStageDrag, setTouchStageDrag] = useState<TouchStageDragState | null>(null);
   const [activeStageModal, setActiveStageModal] = useState<ActiveStageModal>(null);
+  const dropSlotPreviewRef = useRef<DropSlotPreview>(null);
   const processPreferenceKey = `${item.mode}:${item.id}`;
   const [processCollapsed, setProcessCollapsed] = useState(() => processCollapsePreference.get(processPreferenceKey) ?? false);
   const userTouchedProcessCollapseRef = useRef(false);
@@ -2128,6 +2230,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
 
   const handleStageDragEnd = useCallback(() => {
     setDropSlotPreview(null);
+    dropSlotPreviewRef.current = null;
   }, []);
 
   const handleLaneDragStart = useCallback((event: React.DragEvent<HTMLElement>, payload: LaneDragPayload) => {
@@ -2147,7 +2250,9 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   }, []);
 
   const handleDragEnterSlot = useCallback((laneId: string, slot: number) => {
-    setDropSlotPreview({ laneId, slot });
+    const nextPreview = { laneId, slot };
+    dropSlotPreviewRef.current = nextPreview;
+    setDropSlotPreview(nextPreview);
   }, []);
 
   const moveStageToSlot = useCallback((sourceLaneId: string, stageId: string, targetLaneId: string, targetSlot: number) => {
@@ -2175,6 +2280,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     event.preventDefault();
     event.stopPropagation();
     setDropSlotPreview(null);
+    dropSlotPreviewRef.current = null;
     const rawPayload = event.dataTransfer.getData('application/x-process-stage');
     if (!rawPayload) return;
     try {
@@ -2238,6 +2344,59 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       return;
     }
   }, [moveLaneToEdge]);
+
+  const handleStageTouchDragStart = useCallback((event: React.PointerEvent<HTMLButtonElement>, payload: StageDragPayload, title: string) => {
+    if (event.pointerType !== 'touch') return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dropSlotPreviewRef.current = null;
+    setDropSlotPreview(null);
+    setTouchStageDrag({
+      pointerId: event.pointerId,
+      laneId: payload.laneId,
+      stageId: payload.stageId,
+      stageTitle: title,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+    });
+  }, []);
+
+  const handleStageTouchDragMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType !== 'touch') return;
+    setTouchStageDrag((current) => {
+      if (!current || current.pointerId !== event.pointerId) return current;
+      const nextPreview = resolveTouchStageDropTarget(event.clientX, event.clientY);
+      dropSlotPreviewRef.current = nextPreview;
+      setDropSlotPreview(nextPreview);
+      event.preventDefault();
+      return {
+        ...current,
+        pointerX: event.clientX,
+        pointerY: event.clientY,
+      };
+    });
+  }, []);
+
+  const handleStageTouchDragEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.pointerType !== 'touch') return;
+    let dragState: TouchStageDragState | null = null;
+    setTouchStageDrag((current) => {
+      if (!current || current.pointerId !== event.pointerId) return current;
+      dragState = current;
+      return null;
+    });
+    if (!dragState) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    event.preventDefault();
+    const nextPreview = resolveTouchStageDropTarget(event.clientX, event.clientY) || dropSlotPreviewRef.current;
+    setDropSlotPreview(null);
+    dropSlotPreviewRef.current = null;
+    if (!nextPreview) return;
+    moveStageToSlot(dragState.laneId, dragState.stageId, nextPreview.laneId, nextPreview.slot);
+  }, [moveStageToSlot]);
 
   useLayoutEffect(() => {
     measureConnectors();
@@ -2662,6 +2821,9 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                   onDeleteEmptySlot={handleDeleteEmptySlot}
                 onLaneDragStart={handleLaneDragStart}
                 onLaneDragEnd={handleLaneDragEnd}
+                onStageTouchDragStart={handleStageTouchDragStart}
+                onStageTouchDragMove={handleStageTouchDragMove}
+                onStageTouchDragEnd={handleStageTouchDragEnd}
                 onOpenStageDetails={(stage, laneTitle) => {
                   const handled = onOpenStageDetails?.(stage, laneTitle, item);
                   if (!handled) setActiveStageModal({ stage, laneTitle });
@@ -2706,9 +2868,21 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
         onSaveDraftActivity={
           activeStageModal?.stage?.kind === 'draft' && onSaveDraftStage
             ? (overrides) => onSaveDraftStage(activeStageModal.stage, activeStageModal.laneTitle, item, overrides)
-            : undefined
+          : undefined
         }
       />
+      {touchStageDrag ? (
+        <div
+          className="pointer-events-none fixed left-0 top-0 z-[32010]"
+          style={{
+            transform: `translate(${touchStageDrag.pointerX + 12}px, ${touchStageDrag.pointerY - 18}px)`,
+          }}
+        >
+          <div className="max-w-[220px] rounded-full border border-[rgba(var(--brand-500-rgb),0.32)] bg-white/95 px-3 py-1 text-[11px] font-bold text-slate-700 shadow-lg backdrop-blur dark:border-[rgba(var(--brand-300-rgb),0.26)] dark:bg-slate-950/90 dark:text-slate-100">
+            جابجایی: {touchStageDrag.stageTitle}
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 };

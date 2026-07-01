@@ -711,6 +711,10 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     () => normalizeRendererValue(activeValue),
     [activeValue, normalizeRendererValue]
   );
+  const useExpandedTextEditor = (
+    normalizedFieldType === FieldType.LONG_TEXT
+    || normalizedFieldType === FieldType.SUPER_LONG_TEXT
+  ) && (forceEditMode || editing);
 
   const handleChange = useCallback((nextValue: any) => {
     const serialized = serializeRendererValue(nextValue);
@@ -736,7 +740,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
       forceEditMode={forceEditMode || editing}
       moduleId={moduleId || 'tasks'}
       recordId={recordId || undefined}
-      compactMode
+      compactMode={!useExpandedTextEditor}
       overlayZIndexBase={overlayZIndexBase}
       popupContainer={resolveSelectPopupContainer}
       onOptionsUpdate={onOptionsUpdate}
