@@ -8,10 +8,12 @@ import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
 import { trackPageView } from "./utils/analytics";
 
+const loadInquiryForm = () => import("./pages/InquiryForm");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
 const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
 
+const InquiryForm = lazy(loadInquiryForm);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
@@ -53,6 +55,7 @@ const PublicRouteApp: React.FC = () => {
           >
             <LazyRouteBoundary>
               <Routes>
+                <Route path="/inquiry/*" element={<InquiryForm />} />
                 <Route path="/i/:code" element={<InvoicePublicPage />} />
                 <Route path="/d/:code" element={<DeliveryPublicPage />} />
                 <Route path="/payment/callback" element={<PaymentCallbackPage />} />

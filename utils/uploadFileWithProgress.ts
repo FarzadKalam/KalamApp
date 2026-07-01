@@ -99,6 +99,7 @@ export const uploadFileWithProgress = async ({
   const { url, anonKey } = resolveClientConfig(client);
   const { data } = await client.auth.getSession();
   const accessToken = data?.session?.access_token || null;
+  const authorizationToken = accessToken || anonKey;
   const totalBytes =
     file instanceof File || file instanceof Blob
       ? Number(file.size || 0)
@@ -181,9 +182,7 @@ export const uploadFileWithProgress = async ({
     xhr.setRequestHeader('apikey', anonKey);
     xhr.setRequestHeader('x-upsert', String(Boolean(upsert)));
     xhr.setRequestHeader('x-client-info', 'kalamapp-upload-progress/1.0');
-    if (accessToken) {
-      xhr.setRequestHeader('authorization', `Bearer ${accessToken}`);
-    }
+    xhr.setRequestHeader('authorization', `Bearer ${authorizationToken}`);
     xhr.send(formData);
   });
 };

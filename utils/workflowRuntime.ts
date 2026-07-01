@@ -46,6 +46,7 @@ import { buildAiRecordCreationSchema } from './aiRecordCreation';
 import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
 import { lockRecord } from './recordLockRuntime';
 import { shouldSkipRecordForAutomation } from './recycleBinGuards';
+import { buildTaskSourceInitialValues } from './taskMeta';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -2921,18 +2922,24 @@ export const executeWorkflowAction = async (
 
   if (action.type === 'create_related_record') {
     const targetModuleId = String(config.target_module_id || '').trim();
-    const relationFieldKey = String(config.relation_field_key || '').trim();
     const sourceModuleId = String(config.source_module_id || '').trim() || moduleId;
     const processLinks = getProcessLinkMapFromRecord(currentRecord);
     const sourceRecordId = sourceModuleId === moduleId
       ? String(currentRecord?.id || '').trim()
       : String(processLinks?.[sourceModuleId] || '').trim();
+    const relationFieldKey = String(
+      config.relation_field_key
+      || (targetModuleId === 'tasks' ? 'source_record_id' : '')
+    ).trim();
     if (!targetModuleId || !relationFieldKey || !sourceRecordId) return;
 
     const user = await getCurrentAuthUser();
     const payload: Record<string, any> = {
       [relationFieldKey]: sourceRecordId,
     };
+    if (targetModuleId === 'tasks') {
+      Object.assign(payload, buildTaskSourceInitialValues(sourceModuleId, sourceRecordId));
+    }
 
     const orgId = await resolveWorkflowOrgId(currentRecord);
     if (orgId) payload.org_id = orgId;

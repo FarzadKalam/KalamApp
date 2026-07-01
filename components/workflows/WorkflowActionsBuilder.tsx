@@ -35,6 +35,12 @@ import { supabase } from '../../supabaseClient';
 import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { buildAiRecordCreationSchema } from '../../utils/aiRecordCreation';
+import {
+  getCreateRelatedRecordRelationFieldOptions,
+  getCreateRelatedRecordTargetModuleOptions,
+  getDefaultCreateRelatedRecordRelationFieldKey,
+  isCreateRelatedRecordTaskTarget,
+} from '../../utils/workflowRelatedRecord';
 
 const Select = AdaptiveSelectField;
 
@@ -864,22 +870,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
   }, [attachmentFieldSource]);
 
-  const relatedTargetModuleOptions = useMemo(() => {
-    const allowedSourceModuleIds = new Set(
-      ((relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ value: currentModuleId, label: currentModuleId }]) || [])
-        .map((item) => String(item?.value || '').trim())
-        .filter(Boolean)
-    );
-    return moduleOptions.filter((option) => {
-      const target = MODULES[option.value];
-      if (!target) return false;
-      return (target.fields || []).some(
-        (field) =>
-          field.type === FieldType.RELATION &&
-          allowedSourceModuleIds.has(String((field.relationConfig as any)?.targetModule || ''))
-      );
-    });
-  }, [moduleOptions, currentModuleId, relationSourceModuleOptions]);
   const webFormRelationModuleOptions = useMemo(() => {
     const baseOptions = relationSourceModuleOptions && relationSourceModuleOptions.length > 0
       ? relationSourceModuleOptions
@@ -899,6 +889,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       ).values()
     );
   }, [currentModuleId, relationSourceModuleOptions]);
+  const getRelatedTargetModuleOptions = useCallback(
+    (sourceModuleId: string) => getCreateRelatedRecordTargetModuleOptions(sourceModuleId, moduleOptions),
+    [moduleOptions]
+  );
 
   const processLockLinkedRecordOptions = useMemo(() => {
     const baseOptions = relationSourceModuleOptions && relationSourceModuleOptions.length > 0
@@ -1452,21 +1446,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }
       if (action.type !== 'create_related_record') return action;
       const config = action.config || {};
-      const targetModuleId = String(config.target_module_id || '');
       const sourceModuleId = String(
         config.source_module_id
-        || relationSourceModuleOptions?.[0]?.value
+        || webFormRelationModuleOptions[0]?.value
         || currentModuleId
       );
-      if (!targetModuleId) return action;
+      const targetModuleId = String(config.target_module_id || '').trim();
+      if (!targetModuleId) {
+        if (sourceModuleId === String(config.source_module_id || '')) return action;
+        hasChanges = true;
+        return {
+          ...action,
+          config: {
+            ...config,
+            source_module_id: sourceModuleId,
+          },
+        };
+      }
 
-      const targetModule = MODULES[targetModuleId];
-      const relationFields = (targetModule?.fields || []).filter(
-        (field) =>
-          field.type === FieldType.RELATION &&
-          String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
-      );
-      const defaultRelationFieldKey = relationFields[0]?.key || '';
+      const defaultRelationFieldKey = getDefaultCreateRelatedRecordRelationFieldKey(targetModuleId, sourceModuleId);
       const relationFieldKey = String(config.relation_field_key || defaultRelationFieldKey || '');
 
       const rawMappings = Array.isArray(config.field_mappings)
@@ -2835,23 +2833,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (actionType === 'create_related_record') {
-      const targetModuleId = String(config.target_module_id || '');
+      const targetModuleId = String(config.target_module_id || '').trim();
       const sourceModuleId = String(
         config.source_module_id
-        || relationSourceModuleOptions?.[0]?.value
+        || webFormRelationModuleOptions[0]?.value
         || currentModuleId
       );
+      const allowedTargetModuleOptions = getRelatedTargetModuleOptions(sourceModuleId);
       const targetModule = targetModuleId ? MODULES[targetModuleId] : undefined;
       const targetFields = (targetModule?.fields || []).filter(
         (field) => !!field?.key && field?.nature !== 'system'
       );
-      const relationFields = targetFields
-        .filter(
-          (field) =>
-            field.type === FieldType.RELATION &&
-            String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
-        )
-        .map((field) => ({ label: getFieldLabel(field), value: field.key }));
+      const relationFields = getCreateRelatedRecordRelationFieldOptions(targetModuleId, sourceModuleId);
       const targetWritableOptions = targetFields.map((field) => ({
         label: getFieldLabel(field),
         value: field.key,
@@ -2876,22 +2869,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 {...commonSelectProps}
                 value={config.source_module_id || sourceModuleId}
                 disabled={disabled}
-                options={relationSourceModuleOptions && relationSourceModuleOptions.length > 0 ? relationSourceModuleOptions : [{ label: currentModuleId, value: currentModuleId }]}
+                options={webFormRelationModuleOptions}
                 onChange={(nextVal) => {
                   const nextSourceModuleId = String(nextVal || '');
-                  const defaultRelationField =
-                    (MODULES[targetModuleId]?.fields || []).find(
-                      (field) =>
-                        field.type === FieldType.RELATION &&
-                        String((field.relationConfig as any)?.targetModule || '') === nextSourceModuleId
-                    )?.key || '';
+                  const nextTargetModuleOptions = getRelatedTargetModuleOptions(nextSourceModuleId);
+                  const nextTargetModuleId = nextTargetModuleOptions.some((option) => option.value === targetModuleId)
+                    ? targetModuleId
+                    : '';
+                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(nextTargetModuleId, nextSourceModuleId);
                   updateActionConfig(action.id, {
                     source_module_id: nextSourceModuleId,
+                    target_module_id: nextTargetModuleId,
                     relation_field_key: defaultRelationField,
                     field_mappings: ensureRequiredMappings(
-                      targetModuleId,
+                      nextTargetModuleId,
                       defaultRelationField,
-                      getRelatedFieldMappings(action)
+                      nextTargetModuleId ? getRelatedFieldMappings(action) : []
                     ),
                   });
                 }}
@@ -2904,15 +2897,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 {...commonSelectProps}
                 value={config.target_module_id}
                 disabled={disabled}
-                options={relatedTargetModuleOptions}
+                options={allowedTargetModuleOptions}
                 onChange={(nextVal) => {
-                  const nextTargetModuleId = String(nextVal || '');
-                  const defaultRelationField =
-                    (MODULES[nextTargetModuleId]?.fields || []).find(
-                      (field) =>
-                        field.type === FieldType.RELATION &&
-                        String((field.relationConfig as any)?.targetModule || '') === sourceModuleId
-                    )?.key || '';
+                  const nextTargetModuleId = String(nextVal || '').trim();
+                  const defaultRelationField = getDefaultCreateRelatedRecordRelationFieldKey(nextTargetModuleId, sourceModuleId);
                   updateActionConfig(action.id, {
                     source_module_id: sourceModuleId,
                     target_module_id: nextVal,
@@ -2932,7 +2920,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               <Select
                 {...commonSelectProps}
                 value={config.relation_field_key}
-                disabled={disabled || !targetModuleId}
+                disabled={disabled || !targetModuleId || isCreateRelatedRecordTaskTarget(targetModuleId)}
                 options={relationFields}
                 onChange={(nextVal) => {
                   const nextRelationFieldKey = String(nextVal || '');

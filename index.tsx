@@ -7,29 +7,33 @@ const container = document.getElementById("root");
 const shouldUseStandalonePublicBootstrap = (pathname: string) => {
   const normalizedPath = String(pathname || "").split(/[?#]/)[0] || "/";
   return (
-    normalizedPath.startsWith("/i/")
+    normalizedPath.startsWith("/inquiry")
+    || normalizedPath.startsWith("/i/")
     || normalizedPath.startsWith("/d/")
     || normalizedPath === "/payment/callback"
   );
 };
 
 const bootstrapAndRender = async () => {
-  const appModulePromise = shouldUseStandalonePublicBootstrap(window.location.pathname)
+  const useStandalonePublicBootstrap = shouldUseStandalonePublicBootstrap(window.location.pathname);
+  const appModulePromise = useStandalonePublicBootstrap
     ? import("./publicRouteApp")
     : import("./initDayjs").then(() => import("./App"));
-
-  try {
-    const runtimeBranding = await loadRuntimeBranding();
-    persistRuntimeBranding(runtimeBranding);
-  } catch {
-    // keep cached/default branding when public bootstrap is unavailable
-  }
+  const runtimeBrandingPromise = loadRuntimeBranding()
+    .then((runtimeBranding) => {
+      persistRuntimeBranding(runtimeBranding);
+      return runtimeBranding;
+    })
+    .catch(() => undefined);
 
   const bootstrapModule = await appModulePromise;
   const mount = "mountPublicRouteApp" in bootstrapModule
     ? bootstrapModule.mountPublicRouteApp
     : bootstrapModule.mountApp;
   mount(container!);
+  if (!useStandalonePublicBootstrap) {
+    await runtimeBrandingPromise;
+  }
 };
 
 const cached = readCachedBranding();

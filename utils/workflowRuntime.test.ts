@@ -652,6 +652,56 @@ describe('formula-based workflow actions', () => {
       total_amount: 10000,
     }));
   });
+
+  it('creates a related activity with normalized source linkage fields', async () => {
+    const inserts: Array<Record<string, any>> = [];
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'tasks') {
+        return {
+          insert: vi.fn((payload: Record<string, any>) => {
+            inserts.push(payload);
+            return {
+              select: vi.fn(() => ({
+                maybeSingle: vi.fn(async () => ({ data: { id: 'task-1' }, error: null })),
+              })),
+            };
+          }),
+        };
+      }
+      return makeQuery(table);
+    });
+
+    await executeWorkflowAction(
+      {
+        id: 'action-task-create',
+        type: 'create_related_record',
+        config: {
+          source_module_id: 'customers',
+          target_module_id: 'tasks',
+          field_mappings: [
+            {
+              id: 'mapping-1',
+              field: 'name',
+              mode: 'static',
+              value: 'پیگیری مشتری',
+            },
+          ],
+        },
+      },
+      'customers',
+      { id: 'customer-1' }
+    );
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]).toEqual(expect.objectContaining({
+      related_to_module: 'customers',
+      source_module_id: 'customers',
+      source_record_id: 'customer-1',
+      related_customer: 'customer-1',
+      name: 'پیگیری مشتری',
+    }));
+  });
 });
 
 describe('evaluateWorkflowConditions', () => {

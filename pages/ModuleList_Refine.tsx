@@ -86,6 +86,7 @@ import {
   normalizeSurveyTemplateSnapshot,
   supportsWebFormTemplateRuntime,
 } from "../utils/surveyTemplates";
+import { shouldSkipModuleListField } from "../utils/moduleListFieldSelection";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import {
   fetchRecordLockMap,
@@ -267,6 +268,7 @@ const sanitizeModuleVisibleColumns = (
     .filter((key) => {
       if (moduleId === "cash_bank_operations" && CASH_BANK_LEGACY_ACCOUNT_KEYS.has(key)) return false;
       if (moduleId === "attendance_logs" && key === "closure_status") return false;
+      if (shouldSkipModuleListField(moduleId, key)) return false;
       if (!allowedFieldKeys.has(key) || seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -387,6 +389,7 @@ const buildModuleListRowSelect = (
   };
   const addKnownKey = (key?: string | null) => {
     const normalized = String(key || "").trim();
+    if (shouldSkipModuleListField(moduleConfig.id, normalized)) return;
     if (normalized === "id" || moduleFieldKeys.has(normalized) || extraSelectKeys.has(normalized) || (MANAGED_SYSTEM_COLUMNS.has(normalized) && moduleSupportsAssignee)) {
       addKey(normalized);
     }
@@ -400,6 +403,7 @@ const buildModuleListRowSelect = (
   (moduleConfig.fields || []).forEach((field) => {
     if (isWorkflowVirtualField(field)) return;
     const key = String(field?.key || "").trim();
+    if (shouldSkipModuleListField(moduleConfig.id, key)) return;
     if (!isSelectableColumnKey(key)) return;
     if (field.isKey || field.isTableColumn) addKnownKey(key);
     if (

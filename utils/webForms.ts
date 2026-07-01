@@ -121,6 +121,13 @@ const WEB_FORM_DUPLICATE_COMPARABLE_FIELD_TYPES = new Set<WebFormFieldType>([
 export const WEB_FORM_RECORD_IMAGE_TARGET_KEY = "__record_image__";
 export const WEB_FORM_RECORD_FILE_TARGET_KEY = "__record_files__";
 
+export const isWebFormManagedDefaultOnlyField = (
+  moduleId?: string | null,
+  fieldKey?: string | null,
+) =>
+  String(moduleId || "").trim() === "leave_requests"
+  && String(fieldKey || "").trim() === "status";
+
 const WEB_FORM_VIRTUAL_TARGET_FIELDS = [
   {
     label: "پیوست تصویر",
@@ -267,6 +274,7 @@ export const getWebFormTargetFields = (
       if (field.hideInCreateForm) return false;
       if (field.readonly) return false;
       if ((field as any).nature === "system") return false;
+      if (isWebFormManagedDefaultOnlyField(normalized, field.key)) return false;
       if (field.type === FieldType.RELATION) return allowRelation;
       return WEB_FORM_SUPPORTED_FIELD_TYPES.has(field.type);
     })

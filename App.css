@@ -652,6 +652,56 @@ html.dark .kalam-adaptive-picker__empty {
   padding: 0 !important;
 }
 
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker {
+  width: 100%;
+  background: transparent;
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-ym {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div {
+  border-radius: 14px;
+  border: 1px solid rgba(var(--brand-500-rgb), 0.12);
+  background: rgba(255, 255, 255, 0.78);
+  color: rgba(15, 23, 42, 0.88);
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div span,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div span {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div:not(.rmdp-disabled):hover,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div:not(.rmdp-disabled):hover {
+  background: rgba(var(--brand-500-rgb), 0.1);
+  border-color: rgba(var(--brand-500-rgb), 0.28);
+  color: rgb(var(--brand-700-rgb));
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div.rmdp-selected,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div.rmdp-selected {
+  background: linear-gradient(135deg, rgb(var(--brand-500-rgb)), rgb(var(--brand-700-rgb)));
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 12px 24px rgba(var(--brand-500-rgb), 0.22);
+}
+
+.kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div.rmdp-disabled,
+.kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div.rmdp-disabled {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.06);
+  color: rgba(15, 23, 42, 0.28);
+}
+
 .kalam-adaptive-picker__calendar-wrap .rmdp-day,
 .kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
 .kalam-adaptive-picker__calendar-wrap .rmdp-header-values,
@@ -950,6 +1000,39 @@ html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-week-day,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-header-values,
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day:not(.rmdp-disabled) span {
   color: rgba(255, 255, 255, 0.9) !important;
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div {
+  background: rgba(11, 16, 32, 0.78);
+  border-color: rgba(var(--brand-300-rgb), 0.16);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div:not(.rmdp-disabled):hover,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div:not(.rmdp-disabled):hover {
+  background: rgba(var(--brand-300-rgb), 0.16);
+  border-color: rgba(var(--brand-300-rgb), 0.3);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div.rmdp-selected,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div.rmdp-selected {
+  color: #ffffff;
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.34);
+}
+
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-month-picker .rmdp-ym > div.rmdp-disabled,
+html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-year-picker .rmdp-ym > div.rmdp-disabled {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.3);
 }
 
 html.dark .kalam-adaptive-picker__calendar-wrap .rmdp-day > span.kalam-rmdp-day--friday,

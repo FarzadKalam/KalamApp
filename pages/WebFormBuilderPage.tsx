@@ -35,6 +35,7 @@ import {
   getWebFormDuplicateFieldOptions,
   getWebFormModuleOptions,
   inferWebFormFieldType,
+  isWebFormManagedDefaultOnlyField,
   isWebFormTargetModule,
   isWebFormVirtualTargetField,
   normalizeWebFormConfig,
@@ -135,9 +136,6 @@ const slugify = (value: string) =>
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-const isHiddenManagedWebFormField = (targetModuleId?: string | null, targetFieldKey?: string | null) =>
-  String(targetModuleId || "").trim() === "leave_requests" && String(targetFieldKey || "").trim() === "status";
-
 const formatDateTime = (value?: string | null) => {
   if (!value) return "-";
   try {
@@ -160,7 +158,7 @@ const buildBuilderFieldValueFromTarget = (
   default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
   sort_order: (index + 1) * 10,
   is_required: item.isModuleRequired,
-  is_hidden: isHiddenManagedWebFormField(targetModuleId, item.value),
+  is_hidden: isWebFormManagedDefaultOnlyField(targetModuleId, item.value),
 });
 
 const buildSuggestedFields = (
@@ -189,7 +187,10 @@ const mergeManagedFields = (
   accessScope?: WebFormAccessScope | string | null,
   duplicateMatchField?: string | null,
 ): BuilderFieldValue[] => {
-  const currentFields = Array.isArray(fields) ? fields : [];
+  const currentFields = (Array.isArray(fields) ? fields : []).filter((field) => {
+    if (String(field?.binding_type || "record_field").trim() === "template_field") return true;
+    return !isWebFormManagedDefaultOnlyField(targetModuleId, String(field?.target_field_key || "").trim());
+  });
   const currentByTargetFieldKey = new Map(
     currentFields
       .filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
@@ -229,7 +230,7 @@ const mergeManagedFields = (
           ? existingField.default_value
           : (targetField.hasModuleDefault ? targetField.moduleDefaultValue : existingField.default_value),
       is_required: existingField.is_required === true || targetField.isModuleRequired,
-      is_hidden: existingField.is_hidden === true || isHiddenManagedWebFormField(targetModuleId, targetField.value),
+      is_hidden: existingField.is_hidden === true || isWebFormManagedDefaultOnlyField(targetModuleId, targetField.value),
     };
   });
 
@@ -424,9 +425,10 @@ const WebFormBuilderPage: React.FC = () => {
             slide_auto_advance: config.slide_auto_advance === true,
             duplicate_match_field: config.duplicate_match_field || undefined,
             duplicate_strategy: config.duplicate_strategy || "allow",
-            fields: (fieldRows || []).map((item, index) => {
-              const normalized = normalizeWebFormFieldRecord(item, index, { targetModuleId });
-              return {
+            fields: (fieldRows || [])
+              .map((item, index) => normalizeWebFormFieldRecord(item, index, { targetModuleId }))
+              .filter((item) => !isWebFormManagedDefaultOnlyField(targetModuleId, item.target_field_key || item.field_key))
+              .map((normalized) => ({
                 binding_type: getWebFormFieldBindingType(normalized),
                 field_key: normalized.field_key,
                 field_type: normalized.field_type,
@@ -440,8 +442,7 @@ const WebFormBuilderPage: React.FC = () => {
                 is_hidden: normalized.is_hidden === true,
                 options_text: formatWebFormOptionsText(normalized.config?.select_options),
                 relation_target_module: String(normalized.config?.relation_target_module || "").trim() || undefined,
-              };
-            }),
+              })),
           });
         setSlugTouched(true);
         seededFieldsRef.current = true;
@@ -916,6 +917,8 @@ const WebFormBuilderPage: React.FC = () => {
             config: {
               select_options: resolvedOptions,
               default_to_current_employee: defaultToCurrentEmployee,
+              relation_target_module: String(targetFieldItem.field?.relationConfig?.targetModule || "").trim() || null,
+              dynamic_options_category: String((targetFieldItem.field as any)?.dynamicOptionsCategory || "").trim() || null,
             },
             sort_order: Number(item?.sort_order || ((index + 1) * 10)),
             is_required: item?.is_required !== false,

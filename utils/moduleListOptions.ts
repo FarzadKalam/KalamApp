@@ -3,6 +3,7 @@ import { MODULES } from '../moduleRegistry';
 import { buildCustomerRelationSearchText } from './customerRelation';
 import { getPreferredRelationTargetField } from './relationTargetField';
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from './cashBankLegacyAccountKeys';
+import { shouldSkipModuleListField } from './moduleListFieldSelection';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
@@ -61,6 +62,7 @@ const buildRelationTargetCacheKey = (
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
     .filter((field) => !isWorkflowVirtualField(field))
+    .filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()))
     .filter((field) => field.isTableColumn)
     .filter((field) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(field?.key || '').trim()))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -71,6 +73,7 @@ const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[]
 
   return (moduleConfig.fields || []).filter((field) =>
     !isWorkflowVirtualField(field) &&
+    !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()) &&
     ['name', 'title', 'business_name', 'system_code', 'sell_price', 'stock_quantity', 'status', 'mobile_1', 'rank'].includes(field.key)
   );
 };
@@ -129,6 +132,7 @@ export const getModuleListVisibleFields = (
       ? normalizeCashBankVisibleColumnKeys(moduleConfig, visibleColumns)
       : visibleColumns;
     return prependCashBankImageField(moduleConfig, nextVisibleColumns
+      .filter((fieldKey) => !shouldSkipModuleListField(moduleConfig.id, String(fieldKey || '').trim()))
       .filter((fieldKey) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(fieldKey || '').trim()))
       .map((fieldKey) => moduleConfig.fields.find((field) => field.key === fieldKey))
       .filter((field) => Boolean(field) && !isWorkflowVirtualField(field)) as ModuleFieldLike[]);

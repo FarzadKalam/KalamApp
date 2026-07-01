@@ -1,31 +1,27 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Form, Input, Space, Spin, Typography, Upload } from "antd";
+import { Alert, App, Button, Card, Form, Input, Select, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import "../App.css";
 import PersianDatePicker from "../components/PersianDatePicker";
-import SmartFieldRenderer from "../components/SmartFieldRenderer";
-import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
 import { FieldType, type ModuleField } from "../types";
-import { runWorkflowsForEvent } from "../utils/workflowRuntime";
 import { BRANDING_APPLIED_EVENT, DEFAULT_BRANDING } from "../theme/brandTheme";
 import { readRuntimeBranding } from "../utils/brandingRuntime";
 import { normalizeCompanyAssetFields } from "../utils/companySettings";
 import { normalizePublicAssetUrl } from "../utils/assetUrl";
 import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
-import { uploadFileWithProgress } from "../utils/uploadFileWithProgress";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import ResilientImage from "../components/common/ResilientImage";
 import {
-  isWebFormCurrentEmployeeDefaultField,
-  isWebFormTemplateField,
-  normalizeWebFormConfig,
-  normalizeWebFormFieldRecord,
-  type WebFormAccessScope,
-  type WebFormFieldRecord,
-} from "../utils/webForms";
-import { getResolvedModuleConditionalDisplay } from "../utils/moduleSettingsRuntime";
+  isPublicWebFormManagedDefaultOnlyField,
+  isPublicWebFormCurrentEmployeeDefaultField,
+  isPublicWebFormTemplateField,
+  normalizePublicWebFormConfig,
+  normalizePublicWebFormFieldRecord,
+} from "../utils/publicWebForms";
+import type { WebFormAccessScope, WebFormFieldRecord } from "../utils/webForms";
 import {
   buildConditionalFieldStateMap,
   normalizeConditionalFieldSettings,
@@ -47,7 +43,7 @@ type PublicWebFormState = {
   name: string;
   accessScope: WebFormAccessScope;
   targetModuleId: string;
-  config: ReturnType<typeof normalizeWebFormConfig>;
+  config: ReturnType<typeof normalizePublicWebFormConfig>;
   fields: WebFormFieldRecord[];
   companySettings: Record<string, any>;
   conditionalDisplay: ConditionalFieldSettings;
@@ -112,41 +108,32 @@ const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["fie
   }
 };
 
-const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: string | null): ModuleField => {
-  const normalizedTargetModuleId = String(targetModuleId || "").trim();
-  const isTemplateField = isWebFormTemplateField(field);
+const buildPublicModuleField = (field: WebFormFieldRecord, _targetModuleId?: string | null): ModuleField => {
+  const isTemplateField = isPublicWebFormTemplateField(field);
   const targetFieldKey = String((isTemplateField ? field.field_key : (field.target_field_key || field.field_key)) || "").trim();
-  const targetField = normalizedTargetModuleId
-    ? (MODULES[normalizedTargetModuleId]?.fields || []).find((item) => String(item?.key || "").trim() === targetFieldKey)
-    : null;
   const configuredOptions = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
-  const liveOptions = Array.isArray(targetField?.options) ? targetField.options : [];
-  const resolvedOptions = liveOptions.length > 0 ? liveOptions : configuredOptions;
   const relationTargetModule = String(field.config?.relation_target_module || "").trim();
+  const dynamicOptionsCategory = String(field.config?.dynamic_options_category || "").trim();
   return {
-    ...(targetField || {}),
     key: targetFieldKey || field.field_key,
-    type: targetField?.type || mapWebFormFieldTypeToModuleFieldType(field.field_type),
+    type: mapWebFormFieldTypeToModuleFieldType(field.field_type),
     labels: {
       fa: field.label,
-      en: targetField?.labels?.en,
+      en: undefined,
     },
-    options: resolvedOptions,
+    options: configuredOptions,
     validation: {
-      ...(targetField?.validation || {}),
       required: field.is_required === true,
     },
-    dynamicOptionsCategory: targetField?.dynamicOptionsCategory,
-    relationConfig: targetField?.relationConfig || (relationTargetModule ? { targetModule: relationTargetModule } : undefined),
-    mode: targetField?.mode,
+    dynamicOptionsCategory: dynamicOptionsCategory || undefined,
+    relationConfig: relationTargetModule ? { targetModule: relationTargetModule } : undefined,
     readonly: false,
     hideInCreateForm: false,
   };
 };
 
 const isManagedHiddenPublicWebFormField = (field: WebFormFieldRecord, targetModuleId?: string | null) =>
-  String(targetModuleId || "").trim() === "leave_requests"
-  && String(field.target_field_key || field.field_key || "").trim() === "status";
+  isPublicWebFormManagedDefaultOnlyField(targetModuleId, String(field.target_field_key || field.field_key || "").trim());
 
 const getSlideFieldHeightClass = (field: WebFormFieldRecord) =>
   field.field_type === "long_text" ? "min-h-[180px]" : "min-h-[64px]";
@@ -281,7 +268,7 @@ const buildLegacyInquiryState = (companySettings?: Record<string, any>): PublicW
   name: "فرم استعلام",
   accessScope: "public",
   targetModuleId: "customers",
-  config: normalizeWebFormConfig({
+  config: normalizePublicWebFormConfig({
     header_title: "فرم استعلام",
     header_subtitle: "",
     submit_label: "ثبت درخواست",
@@ -374,7 +361,7 @@ const InquiryForm = () => {
   const initialFieldValues = useMemo(
     () =>
       (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
-        if (isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)) {
+        if (isPublicWebFormCurrentEmployeeDefaultField(field, publicForm?.accessScope)) {
           if (currentEmployee?.id) {
             acc[field.field_key] = currentEmployee.id;
           }
@@ -387,15 +374,10 @@ const InquiryForm = () => {
       }, {}),
     [currentEmployee?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
-  const conditionalDisplaySettings = useMemo(() => {
-    const moduleSettings = getResolvedModuleConditionalDisplay(publicForm?.targetModuleId);
-    return normalizeConditionalFieldSettings({
-      rules: [
-        ...(moduleSettings.rules || []),
-        ...(publicForm?.conditionalDisplay?.rules || []),
-      ],
-    });
-  }, [publicForm?.conditionalDisplay, publicForm?.targetModuleId]);
+  const conditionalDisplaySettings = useMemo(
+    () => normalizeConditionalFieldSettings(publicForm?.conditionalDisplay),
+    [publicForm?.conditionalDisplay]
+  );
   const publicModuleFields = useMemo(
     () => (publicForm?.fields || []).map((field) => buildPublicModuleField(field, publicForm?.targetModuleId)),
     [publicForm?.fields, publicForm?.targetModuleId]
@@ -422,17 +404,6 @@ const InquiryForm = () => {
     if (!targetFieldKey) return field.is_required === true;
     return publicFieldRuntimeStateMap[targetFieldKey]?.required ?? (field.is_required === true);
   }, [publicFieldRuntimeStateMap]);
-  const getRuntimePublicModuleField = useCallback((field: WebFormFieldRecord) => {
-    const moduleField = buildPublicModuleField(field, publicForm?.targetModuleId);
-    return {
-      ...moduleField,
-      validation: {
-        ...(moduleField.validation || {}),
-        required: isPublicFieldRequired(field),
-      },
-    };
-  }, [isPublicFieldRequired, publicForm?.targetModuleId]);
-
   useEffect(() => {
     const syncBranding = () => {
       setBranding(readRuntimeBranding() || DEFAULT_BRANDING);
@@ -493,6 +464,11 @@ const InquiryForm = () => {
   }, [publicForm]);
 
   useEffect(() => {
+    if (publicForm?.accessScope !== "internal") {
+      setAuthUser(null);
+      return;
+    }
+
     let active = true;
     const loadSession = async () => {
       const { data } = await supabase.auth.getSession();
@@ -506,16 +482,14 @@ const InquiryForm = () => {
       active = false;
       subscription?.subscription?.unsubscribe();
     };
-  }, []);
+  }, [publicForm?.accessScope]);
 
   useEffect(() => {
     let cancelled = false;
     const needsCurrentEmployee = Boolean(
       authUser?.id
       && publicForm?.accessScope === "internal"
-      && (publicForm?.fields || []).some((field) =>
-        isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
-      )
+      && (publicForm?.fields || []).some((field) => isPublicWebFormCurrentEmployeeDefaultField(field, publicForm?.accessScope))
     );
 
     if (!needsCurrentEmployee) {
@@ -580,10 +554,10 @@ const InquiryForm = () => {
 
         if (response?.form_id) {
           const webForm = toRecord(response.web_form);
-          const config = normalizeWebFormConfig(webForm.config);
+          const config = normalizePublicWebFormConfig(webForm.config);
           const targetModuleId = String(webForm.target_module_id || "");
           const fields = Array.isArray(response.fields)
-            ? response.fields.map((item: unknown, index: number) => normalizeWebFormFieldRecord(item, index, { targetModuleId }))
+            ? response.fields.map((item: unknown, index: number) => normalizePublicWebFormFieldRecord(item, index))
             : [];
 
           if (!cancelled) {
@@ -670,7 +644,7 @@ const InquiryForm = () => {
       !field.is_hidden
       && !isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId)
       && !(field.field_type === "relation" && publicForm?.accessScope !== "internal")
-      && !isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)
+      && !isPublicWebFormCurrentEmployeeDefaultField(field, publicForm?.accessScope)
       && isPublicFieldVisible(field)
     ),
     [isPublicFieldVisible, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
@@ -718,6 +692,7 @@ const InquiryForm = () => {
     try {
       setUploadingFieldKeys((prev) => ({ ...prev, [field.field_key]: true }));
       const filePath = buildPublicUploadPath(field, file);
+      const { uploadFileWithProgress } = await import("../utils/uploadFileWithProgress");
       await uploadFileWithProgress({
         client: fileStorageClient,
         bucket: FILE_STORAGE_BUCKET,
@@ -1064,6 +1039,90 @@ const InquiryForm = () => {
     );
   };
 
+  const renderListModeField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    const sharedExtra = options?.showHelp !== false && field.help_text ? (
+      <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+        {field.help_text}
+      </span>
+    ) : undefined;
+    const rules = isPublicFieldRequired(field)
+      ? [{
+          validator: async (_: unknown, value: unknown) => {
+            if (field.field_type === "checkbox") {
+              if (typeof value === "boolean") return;
+            } else if (field.field_type === "multi_select") {
+              if (Array.isArray(value) && value.length > 0) return;
+            } else if (value !== undefined && value !== null && String(value).trim() !== "") {
+              return;
+            }
+            throw new Error(`${field.label} را ${field.field_type === "checkbox" ? "تعیین" : "وارد"} کنید.`);
+          },
+        }]
+      : [];
+
+    if (field.field_type === "select" || field.field_type === "multi_select" || field.field_type === "relation") {
+      const selectOptions = getChoiceOptions(field).map((option) => ({
+        label: option.label,
+        value: option.value,
+      }));
+      return (
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+          <Select
+            mode={field.field_type === "multi_select" ? "multiple" : undefined}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            options={selectOptions}
+            placeholder={field.placeholder || field.label}
+          />
+        </Form.Item>
+      );
+    }
+
+    if (field.field_type === "checkbox") {
+      return (
+        <Form.Item
+          key={field.field_key}
+          name={field.field_key}
+          valuePropName="checked"
+          label={options?.showLabel === false ? undefined : field.label}
+          rules={rules}
+          extra={sharedExtra}
+        >
+          <input type="checkbox" />
+        </Form.Item>
+      );
+    }
+
+    if (field.field_type === "long_text") {
+      return (
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+          <Input.TextArea rows={5} placeholder={field.placeholder || field.label} />
+        </Form.Item>
+      );
+    }
+
+    if (field.field_type === "date" || field.field_type === "time" || field.field_type === "datetime") {
+      return (
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+          <PersianDatePicker
+            type={field.field_type === "date" ? "DATE" : field.field_type === "time" ? "TIME" : "DATETIME"}
+            placeholder={field.placeholder || field.label}
+          />
+        </Form.Item>
+      );
+    }
+
+    const inputType = field.field_type === "phone" ? "tel" : field.field_type === "number" ? "number" : "text";
+    const inputMode = field.field_type === "phone" ? "tel" : field.field_type === "number" ? "decimal" : "text";
+
+    return (
+      <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+        <Input type={inputType} inputMode={inputMode} placeholder={field.placeholder || field.label} />
+      </Form.Item>
+    );
+  };
+
   const renderField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
     if (field.is_hidden || isManagedHiddenPublicWebFormField(field, publicForm?.targetModuleId) || !isPublicFieldVisible(field)) return null;
     if (field.field_type === "relation" && publicForm?.accessScope !== "internal") return null;
@@ -1076,44 +1135,12 @@ const InquiryForm = () => {
     if (isSlideMode && ["text", "phone", "number", "long_text", "date", "time", "datetime"].includes(field.field_type)) {
       return renderSlideTextLikeField(field, options);
     }
-
-    const moduleField = getRuntimePublicModuleField(field);
-    const rules = isPublicFieldRequired(field)
-      ? [{
-          required: true,
-          message: field.field_type === "checkbox" ? `${field.label} را تعیین کنید.` : `${field.label} را وارد کنید.`,
-        }]
-      : [];
-
-    return (
-      <Form.Item
-        key={field.field_key}
-        name={field.field_key}
-        label={options?.showLabel === false ? undefined : field.label}
-        rules={rules}
-        extra={options?.showHelp !== false && field.help_text ? (
-          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
-            {field.help_text}
-          </span>
-        ) : undefined}
-      >
-        <SmartFieldRenderer
-          field={moduleField}
-          value={form.getFieldValue(field.field_key)}
-          onChange={(nextValue) => setPublicFormFieldValue(field.field_key, nextValue)}
-          forceEditMode
-          compactMode
-          moduleId={publicForm?.targetModuleId || undefined}
-          allValues={watchedFormValues}
-          overlayZIndexBase={1600}
-        />
-      </Form.Item>
-    );
+    return renderListModeField(field, options);
   };
 
   const buildSubmissionPayload = (values: Record<string, any>) =>
     (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
-      if (isWebFormCurrentEmployeeDefaultField(field, publicForm?.targetModuleId, publicForm?.accessScope)) {
+      if (isPublicWebFormCurrentEmployeeDefaultField(field, publicForm?.accessScope)) {
         if (currentEmployee?.id) {
           acc[field.field_key] = currentEmployee.id;
         }
@@ -1163,6 +1190,7 @@ const InquiryForm = () => {
     if (error) throw error;
 
     try {
+      const { runWorkflowsForEvent } = await import("../utils/workflowRuntime");
       await runWorkflowsForEvent({
         moduleId: "customers",
         event: "create",
@@ -1186,7 +1214,7 @@ const InquiryForm = () => {
     }
 
     const needsCurrentEmployee = (publicForm.fields || []).some((field) =>
-      isWebFormCurrentEmployeeDefaultField(field, publicForm.targetModuleId, publicForm.accessScope)
+      isPublicWebFormCurrentEmployeeDefaultField(field, publicForm.accessScope)
     );
     if (needsCurrentEmployee && !currentEmployeeLoaded) {
       message.error("در حال بررسی کارمند مرتبط با حساب کاربری هستیم. چند لحظه بعد دوباره تلاش کنید.");
@@ -1228,6 +1256,7 @@ const InquiryForm = () => {
       const recordAction = String(result.record_action || "created").trim();
       if (targetModuleId && Object.keys(targetRecord).length > 0 && ["created", "updated"].includes(recordAction)) {
         try {
+          const { runWorkflowsForEvent } = await import("../utils/workflowRuntime");
           await runWorkflowsForEvent({
             moduleId: targetModuleId,
             event: recordAction === "updated" ? "upsert" : "create",
