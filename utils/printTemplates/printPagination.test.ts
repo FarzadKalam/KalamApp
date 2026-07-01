@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { annotatePrintFlowHtml, buildSmartPrintPageOffsets, PRINT_FLOW_BLOCK_ATTR } from './printPagination';
 
 describe('buildSmartPrintPageOffsets', () => {
-  it('prefers breaking after the last complete block before the page limit', () => {
+  it('falls back to the last complete block only when no line anchors exist', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 2200,
       pageBodyStepPx: 1000,
@@ -18,7 +18,7 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 880, 1680]);
   });
 
-  it('moves the break before a protected block when no safe bottom is available', () => {
+  it('moves the break before a protected block when neither line nor block bottoms are safe', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 2000,
       pageBodyStepPx: 1000,
@@ -66,7 +66,27 @@ describe('buildSmartPrintPageOffsets', () => {
     expect(offsets).toEqual([0, 992, 1680]);
   });
 
-  it('moves a protected table row to the next page before splitting its text', () => {
+  it('prefers the latest complete line before the page limit even if a taller block continues', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2200,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 430, priority: 'normal', source: 'block' },
+        { top: 430, bottom: 1500, priority: 'normal', source: 'block' },
+        { top: 900, bottom: 924, priority: 'normal', source: 'line' },
+        { top: 950, bottom: 974, priority: 'normal', source: 'line' },
+        { top: 990, bottom: 1014, priority: 'normal', source: 'line' },
+        { top: 1460, bottom: 1484, priority: 'normal', source: 'line' },
+        { top: 1910, bottom: 1934, priority: 'normal', source: 'line' },
+        { top: 1950, bottom: 1974, priority: 'normal', source: 'line' },
+        { top: 1500, bottom: 2140, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 974, 1974]);
+  });
+
+  it('splits long table content at the last complete line instead of the row boundary', () => {
     const offsets = buildSmartPrintPageOffsets({
       totalHeight: 1900,
       pageBodyStepPx: 1000,
@@ -81,7 +101,35 @@ describe('buildSmartPrintPageOffsets', () => {
       ],
     });
 
-    expect(offsets).toEqual([0, 460, 1240]);
+    expect(offsets).toEqual([0, 984]);
+  });
+
+  it('does not leave a large blank area before a normal table-like block without line anchors', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2400,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 500, priority: 'normal', source: 'block' },
+        { top: 500, bottom: 1480, priority: 'normal', source: 'block' },
+        { top: 1480, bottom: 2360, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 1000, 2000]);
+  });
+
+  it('does not use an early line top as the page break for tall text rects', () => {
+    const offsets = buildSmartPrintPageOffsets({
+      totalHeight: 2400,
+      pageBodyStepPx: 1000,
+      anchors: [
+        { top: 0, bottom: 480, priority: 'normal', source: 'block' },
+        { top: 520, bottom: 1320, priority: 'normal', source: 'line' },
+        { top: 1320, bottom: 2300, priority: 'normal', source: 'block' },
+      ],
+    });
+
+    expect(offsets).toEqual([0, 1000, 2000]);
   });
 
   it('does not move the break to the top of an oversized protected block', () => {
@@ -132,5 +180,17 @@ describe('annotatePrintFlowHtml', () => {
 
     expect(annotated).toContain(`<table style="page-break-inside: avoid;" ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);
     expect(annotated).not.toContain('data-print-flow-role="manual-keep"');
+  });
+
+  it('does not hard-keep normal text sections with title or summary class names', () => {
+    const annotated = annotatePrintFlowHtml(
+      '<div class="payment-summary" style="page-break-inside: avoid;"><p class="section-title">normal text</p></div>'
+    );
+
+    expect(annotated).toContain(`data-print-flow-block="normal" data-print-flow-role="root-block"`);
+    expect(annotated).toContain(`<p class="section-title" ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="text-block">normal text</p>`);
+    expect(annotated).not.toContain(`${PRINT_FLOW_BLOCK_ATTR}="high"`);
+    expect(annotated).not.toContain('data-print-flow-role="manual-keep"');
+    expect(annotated).not.toContain('data-print-flow-role="semantic-block"');
   });
 });

@@ -72,11 +72,13 @@ export const syncProcessDraftToLinkedRecords = async (
       .select(`id, ${fieldKey}`)
       .eq('id', recordId)
       .maybeSingle();
-    if (error || !data) return;
+    if (error) throw error;
+    if (!data) return;
     const nextDraft = mergeProcessDraftStages((data as any)?.[fieldKey], stages);
-    await supabaseClient
+    const { error: updateError } = await supabaseClient
       .from(tableName)
       .update({ [fieldKey]: nextDraft })
       .eq('id', recordId);
+    if (updateError) throw updateError;
   }));
 };

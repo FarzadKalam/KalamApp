@@ -77,7 +77,7 @@ const MODULE_RELATION_SELECTABLE_FIELDS: Record<string, string[]> = {
   journal_entries: ['entry_no', 'source_record_title', 'description'],
   products: ['name', 'system_code', 'manual_code', 'crm_code', 'accounting_code', 'product_identifier', 'status'],
   product_bundles: ['name', 'bundle_number', 'status'],
-  billboards: ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'city_name', 'status'],
+  billboards: ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'product_identifier', 'city_name', 'status'],
   production_orders: ['name', 'system_code', 'status'],
   shelves: ['name', 'system_code', 'shelf_number'],
   invoices: ['name', 'system_code', 'status'],
@@ -138,7 +138,7 @@ export const getRelationLabelFallbackFields = (targetModule?: string | null): st
     return ['name', 'bundle_number'];
   }
   if (moduleName === 'billboards') {
-    return ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'city_name'];
+    return ['address', 'name', 'system_code', 'manual_code', 'catalog_code', 'product_identifier', 'city_name'];
   }
   return ['name', 'title', 'business_name', 'shelf_number'];
 };

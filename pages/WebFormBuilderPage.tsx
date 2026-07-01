@@ -50,6 +50,7 @@ import {
 } from "../utils/webForms";
 import { fetchRelationOptionsForField } from "../utils/relationOptions";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
+import { supportsWebFormTemplateRuntime } from "../utils/surveyTemplates";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -108,6 +109,8 @@ const SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS: Array<{ label: string; value: WebFormF
 const SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES = new Set<WebFormFieldType>(["select", "multi_select"]);
 
 const isSurveyTargetModule = (moduleId?: string | null) => String(moduleId || "").trim() === "surveys";
+const supportsTemplateFieldBindingsForModule = (moduleId?: string | null) =>
+  supportsWebFormTemplateRuntime(MODULES[String(moduleId || "").trim()] || null);
 
 const normalizeTemplateFieldKey = (value: string, index: number) =>
   String(value || "")
@@ -278,7 +281,7 @@ const WebFormBuilderPage: React.FC = () => {
   const duplicateMatchField = Form.useWatch("duplicate_match_field", form);
   const watchedFields = (Form.useWatch("fields", form) || []) as BuilderFieldValue[];
   const watchedSlug = Form.useWatch("route_slug", form);
-  const isSurveyModuleTarget = useMemo(() => isSurveyTargetModule(targetModuleId), [targetModuleId]);
+  const supportsTemplateFieldBindings = useMemo(() => supportsTemplateFieldBindingsForModule(targetModuleId), [targetModuleId]);
   const currentPublicUrl = useMemo(() => buildWebFormPublicUrl(watchedSlug), [watchedSlug]);
   const targetFieldItems = useMemo(() => getWebFormTargetFields(targetModuleId, { accessScope }), [accessScope, targetModuleId]);
   const duplicateFieldOptions = useMemo(
@@ -519,7 +522,7 @@ const WebFormBuilderPage: React.FC = () => {
         form.setFieldValue("duplicate_match_field", undefined);
         form.setFieldValue("duplicate_strategy", "allow");
       }
-      if (!isSurveyTargetModule(nextTargetModuleId)) {
+      if (!supportsTemplateFieldBindingsForModule(nextTargetModuleId)) {
         const currentFields = (form.getFieldValue("fields") || []) as BuilderFieldValue[];
         form.setFieldValue(
           "fields",
@@ -1129,7 +1132,7 @@ const WebFormBuilderPage: React.FC = () => {
                           extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField || isDuplicateDependency} onClick={() => remove(field.name)}>حذف</Button>}
                         >
                           <div className="grid gap-4 md:grid-cols-2">
-                            {isSurveyModuleTarget ? (
+                            {supportsTemplateFieldBindings ? (
                               <Form.Item label="نوع اتصال" name={[field.name, "binding_type"]} rules={[{ required: true, message: "نوع اتصال را انتخاب کنید." }]}>
                                 <Select
                                   options={[
@@ -1258,7 +1261,7 @@ const WebFormBuilderPage: React.FC = () => {
                       block
                       icon={<PlusOutlined />}
                       onClick={() => add({
-                        binding_type: isSurveyModuleTarget ? "record_field" : "record_field",
+                        binding_type: "record_field",
                         field_key: "",
                         field_type: "text",
                         label: "",

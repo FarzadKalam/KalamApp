@@ -1,8 +1,11 @@
 import { BlockType, FieldLocation, FieldNature, FieldType, type BlockDefinition, type ModuleDefinition, type ModuleField } from '../types';
-import { normalizeWebFormFieldRecord, type WebFormFieldConfig, type WebFormFieldRecord } from './webForms';
+import type { WebFormFieldConfig, WebFormFieldRecord } from './webForms';
 
 export const SURVEY_TEMPLATE_FIELD_PREFIX = '__survey_template__::';
 export const SURVEY_TEMPLATE_BLOCK_ID = 'survey_template_fields';
+export const WEB_FORM_TEMPLATE_ID_FIELD_KEY = 'survey_template_id';
+export const WEB_FORM_TEMPLATE_VALUES_FIELD_KEY = 'template_field_values';
+export const WEB_FORM_TEMPLATE_SNAPSHOT_FIELD_KEY = 'template_schema_snapshot';
 
 export type SurveyTemplateFieldBindingType = 'record_field' | 'template_field';
 
@@ -61,6 +64,23 @@ const WEB_FORM_FIELD_TYPE_TO_MODULE_FIELD_TYPE: Record<string, FieldType> = {
   relation: FieldType.RELATION,
 };
 
+const TEMPLATE_SOURCE_FIELD_TYPES = new Set<string>([
+  'text',
+  'long_text',
+  'number',
+  'phone',
+  'date',
+  'time',
+  'datetime',
+  'image',
+  'file',
+  'multi_select',
+  'location',
+  'checkbox',
+  'select',
+  'relation',
+]);
+
 const REPORT_SUPPORTED_TEMPLATE_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
   FieldType.LONG_TEXT,
@@ -76,9 +96,55 @@ const REPORT_SUPPORTED_TEMPLATE_FIELD_TYPES = new Set<FieldType>([
   FieldType.STATUS,
 ]);
 
+const WEB_FORM_TEMPLATE_RUNTIME_FIELD_KEYS = new Set<string>([
+  WEB_FORM_TEMPLATE_ID_FIELD_KEY,
+  WEB_FORM_TEMPLATE_VALUES_FIELD_KEY,
+  WEB_FORM_TEMPLATE_SNAPSHOT_FIELD_KEY,
+]);
+
 const toRecord = (value: unknown): Record<string, any> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, any>;
+};
+
+const normalizeTemplateSourceFieldRecord = (
+  value: unknown,
+  index = 0,
+): WebFormFieldRecord => {
+  const record = toRecord(value);
+  const config = toRecord(record.config);
+  const selectOptions = Array.isArray(config.select_options)
+    ? config.select_options
+        .map((item) => {
+          const option = toRecord(item);
+          const label = String(option.label || option.value || '').trim();
+          const optionValue = String(option.value || option.label || '').trim();
+          if (!label || !optionValue) return null;
+          return { label, value: optionValue };
+        })
+        .filter((item): item is { label: string; value: string } => Boolean(item))
+    : [];
+
+  const fieldType = String(record.field_type || '').trim();
+
+  return {
+    id: String(record.id || '').trim() || undefined,
+    field_key: String(record.field_key || `field_${index + 1}`).trim() || `field_${index + 1}`,
+    label: String(record.label || '').trim() || `فیلد ${index + 1}`,
+    target_field_key: String(record.target_field_key || '').trim() || null,
+    field_type: (TEMPLATE_SOURCE_FIELD_TYPES.has(fieldType) ? fieldType : 'text') as WebFormFieldRecord['field_type'],
+    placeholder: String(record.placeholder || '').trim() || null,
+    help_text: String(record.help_text || '').trim() || null,
+    default_value: record.default_value ?? null,
+    is_required: record.is_required !== false,
+    is_hidden: record.is_hidden === true,
+    sort_order: Number(record.sort_order || ((index + 1) * 10)),
+    config: {
+      ...config,
+      select_options: selectOptions,
+      default_to_current_employee: config.default_to_current_employee === true,
+    },
+  };
 };
 
 const slugifyTemplateFieldKey = (value: unknown, fallbackIndex = 0) => {
@@ -102,7 +168,7 @@ export const normalizeSurveyTemplateSchemaField = (
   value: unknown,
   index = 0,
 ): SurveyTemplateSchemaField => {
-  const normalized = normalizeWebFormFieldRecord(value, index);
+  const normalized = normalizeTemplateSourceFieldRecord(value, index);
   const bindingType = getSurveyTemplateFieldBindingType(normalized);
   return {
     ...normalized,
@@ -128,6 +194,17 @@ export const normalizeSurveyTemplateSnapshot = (value: unknown): SurveyTemplateS
     template_name: String(record.template_name || '').trim() || null,
     fields,
   };
+};
+
+export const supportsWebFormTemplateRuntime = (
+  module?: Pick<ModuleDefinition, 'fields'> | null,
+) => {
+  const fieldKeys = new Set(
+    (module?.fields || [])
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+  return Array.from(WEB_FORM_TEMPLATE_RUNTIME_FIELD_KEYS).every((fieldKey) => fieldKeys.has(fieldKey));
 };
 
 export const buildSurveyTemplateSnapshot = (
@@ -296,6 +373,7 @@ export const buildSurveyRuntimeModule = (
   const snapshot = normalizeSurveyTemplateSnapshot(snapshotValue);
   const visibleTemplateFields = snapshot.fields.filter((field) => field.is_hidden !== true);
   if (visibleTemplateFields.length === 0) return baseModule;
+  const appliesSurveySpecificBaseReplacement = String(baseModule.id || '').trim() === 'surveys';
   const templateFields = visibleTemplateFields.filter((field) => field.binding_type === 'template_field');
   const recordBoundFields = visibleTemplateFields.filter((field) => field.binding_type === 'record_field');
 
@@ -312,13 +390,14 @@ export const buildSurveyRuntimeModule = (
   );
 
   const nextFields = (baseModule.fields || [])
-    .filter((field) => {
-      const fieldKey = String(field?.key || '').trim();
-      if (!fieldKey) return false;
-      if (recordBoundTargetKeys.has(fieldKey)) return false;
-      if (SURVEY_ALWAYS_VISIBLE_FIELD_KEYS.has(fieldKey)) return true;
-      return !SURVEY_REPLACED_BASE_FIELD_KEYS.has(fieldKey);
-    })
+      .filter((field) => {
+        const fieldKey = String(field?.key || '').trim();
+        if (!fieldKey) return false;
+        if (recordBoundTargetKeys.has(fieldKey)) return false;
+        if (SURVEY_ALWAYS_VISIBLE_FIELD_KEYS.has(fieldKey)) return true;
+        if (!appliesSurveySpecificBaseReplacement) return true;
+        return !SURVEY_REPLACED_BASE_FIELD_KEYS.has(fieldKey);
+      })
     .map((field) => {
       const fieldKey = String(field?.key || '').trim();
       if (fieldKey === 'title' && context === 'form') {
@@ -346,7 +425,7 @@ export const buildSurveyRuntimeModule = (
         ...(baseModule.blocks || []),
         {
           id: SURVEY_TEMPLATE_BLOCK_ID,
-          titles: { fa: snapshot.template_name || 'قالب نظرسنجی', en: 'Survey Template' },
+          titles: { fa: snapshot.template_name || 'فیلدهای قالب وب‌فرم', en: 'Web Form Template' },
           type: BlockType.FIELD_GROUP,
           order: 1.5,
         } as BlockDefinition,

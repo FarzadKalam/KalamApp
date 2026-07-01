@@ -16,6 +16,12 @@ import {
   PROFIT_SHARE_SALARY_TYPE_VALUES,
   SALARY_TYPE_OPTIONS,
 } from '../utils/payrollSalaryType';
+import { createWebFormTemplateRecordSaver } from '../utils/webFormTemplateFormAdapter';
+
+const saveEmployeeRecord = createWebFormTemplateRecordSaver({
+  moduleId: 'employees',
+  table: 'employees',
+});
 
 export const employeesModule: ModuleDefinition = {
   id: 'employees',
@@ -28,6 +34,9 @@ export const employeesModule: ModuleDefinition = {
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
   table: 'employees',
+  formAdapter: {
+    save: saveEmployeeRecord,
+  },
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0.8 },
     { key: 'prefix', labels: { fa: 'پیشوند', en: 'Prefix' }, type: FieldType.SELECT, location: FieldLocation.HEADER, order: 1, options: [{ label: 'آقای', value: 'آقای' }, { label: 'خانم', value: 'خانم' }, { label: 'آقای دکتر', value: 'آقای دکتر' }, { label: 'خانم دکتر', value: 'خانم دکتر' }, { label: 'آقای مهندس', value: 'آقای مهندس' }, { label: 'خانم مهندس', value: 'خانم مهندس' }] },
@@ -65,6 +74,22 @@ export const employeesModule: ModuleDefinition = {
       isTableColumn: true,
     },
     { key: 'mobile_1', labels: { fa: 'موبایل', en: 'Mobile' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 1.7, isTableColumn: true },
+    {
+      key: 'survey_template_id',
+      labels: { fa: 'قالب وب‌فرم', en: 'Web Form Template' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 1.71,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+      relationConfig: {
+        targetModule: 'web_forms',
+        filter: {
+          target_module_id: 'employees',
+          is_active: true,
+        },
+      },
+    },
 
     {
       key: 'related_profile_id',
@@ -359,6 +384,8 @@ export const employeesModule: ModuleDefinition = {
     { key: 'job_description_notes', labels: { fa: 'توضیحات تکمیلی', en: 'Additional Notes' }, type: FieldType.LONG_TEXT, blockId: 'job_description_info', order: 11 },
 
     { key: 'notes', labels: { fa: 'توضیحات', en: 'Notes' }, type: FieldType.LONG_TEXT, blockId: 'notes_info', order: 12 },
+    { key: 'template_field_values', labels: { fa: 'داده‌های قالب', en: 'Template Values' }, type: FieldType.JSON, blockId: 'notes_info', order: 90, readonly: true, hideInCreateForm: true, nature: FieldNature.SYSTEM },
+    { key: 'template_schema_snapshot', labels: { fa: 'اسنپ‌شات قالب', en: 'Template Snapshot' }, type: FieldType.JSON, blockId: 'notes_info', order: 91, readonly: true, hideInCreateForm: true, nature: FieldNature.SYSTEM },
   
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 1.75, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.8, nature: FieldNature.STANDARD, isTableColumn: true },

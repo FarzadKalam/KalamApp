@@ -71,6 +71,7 @@ import {
   requestTrialRenewal,
   resolveTrialDaysLeft,
 } from '../utils/orgSaasStatus';
+import { resolveHrDashboardHref } from '../utils/hrFilters';
 import ProfileAvatar from './common/ProfileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
@@ -205,41 +206,48 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return Promise.resolve(preloadRoute(href)).catch(() => undefined);
   }, [preloadRoute]);
 
+  const resolveSidebarHref = useCallback((href: string) => {
+    if (href === '/hr') return resolveHrDashboardHref('/hr');
+    return href;
+  }, []);
+
   const scheduleRoutePreload = useCallback((href: string) => {
-    if (!href || !preloadRoute) return;
+    const resolvedHref = resolveSidebarHref(href);
+    if (!resolvedHref || !preloadRoute) return;
     const requestIdle = (window as any).requestIdleCallback as ((callback: () => void, options?: { timeout?: number }) => number) | undefined;
     if (requestIdle) {
-      requestIdle(() => { void preloadRouteNow(href); }, { timeout: 800 });
+      requestIdle(() => { void preloadRouteNow(resolvedHref); }, { timeout: 800 });
       return;
     }
-    window.setTimeout(() => { void preloadRouteNow(href); }, 80);
-  }, [preloadRoute, preloadRouteNow]);
+    window.setTimeout(() => { void preloadRouteNow(resolvedHref); }, 80);
+  }, [preloadRoute, preloadRouteNow, resolveSidebarHref]);
 
   const handleSidebarNavigate = useCallback(async (href: string) => {
-    if (!href) return;
+    const resolvedHref = resolveSidebarHref(href);
+    if (!resolvedHref) return;
     const latestNavigationState = latestNavigationStateRef.current;
-    const targetPath = String(href).split(/[?#]/)[0] || href;
-    if (latestNavigationState.pathname === targetPath && latestNavigationState.search === (href.includes('?') ? `?${href.split('?')[1].split('#')[0]}` : '')) {
+    const targetPath = String(resolvedHref).split(/[?#]/)[0] || resolvedHref;
+    if (latestNavigationState.pathname === targetPath && latestNavigationState.search === (resolvedHref.includes('?') ? `?${resolvedHref.split('?')[1].split('#')[0]}` : '')) {
       if (latestNavigationState.isMobile) setCollapsed(true);
       return;
     }
-    if (sidebarNavigationRef.current === href) return;
-    sidebarNavigationRef.current = href;
+    if (sidebarNavigationRef.current === resolvedHref) return;
+    sidebarNavigationRef.current = resolvedHref;
     if (latestNavigationState.isMobile) setCollapsed(true);
     if (latestNavigationState.isMobile && preloadRoute) {
       await Promise.race([
-        preloadRouteNow(href),
+        preloadRouteNow(resolvedHref),
         new Promise((resolve) => window.setTimeout(resolve, 700)),
       ]);
-      if (sidebarNavigationRef.current !== href) return;
+      if (sidebarNavigationRef.current !== resolvedHref) return;
     }
-    navigate(href);
+    navigate(resolvedHref);
     window.setTimeout(() => {
-      if (sidebarNavigationRef.current === href) {
+      if (sidebarNavigationRef.current === resolvedHref) {
         sidebarNavigationRef.current = '';
       }
     }, 350);
-  }, [navigate, preloadRoute, preloadRouteNow]);
+  }, [navigate, preloadRoute, preloadRouteNow, resolveSidebarHref]);
 
   const handleSidebarLinkClick = (
     event: React.MouseEvent<HTMLAnchorElement>,
@@ -316,7 +324,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     items.map((item) => {
       if (!item || typeof item !== 'object' || !('key' in item)) return item;
 
-      const href = typeof item.key === 'string' && item.key.startsWith('/') ? item.key : undefined;
+      const href = typeof item.key === 'string' && item.key.startsWith('/') ? resolveSidebarHref(item.key) : undefined;
       const label = 'label' in item ? item.label : null;
       const nextItem: any = {
         ...item,
@@ -951,7 +959,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
 
   const menuItems = useMemo<MenuProps['items']>(() => {
     return mapSidebarMenuItems(visibleRawMenuItems);
-  }, [visibleRawMenuItems]);
+  }, [location.pathname, location.search, visibleRawMenuItems]);
   const selectedSidebarKey = useMemo(() => {
     if (location.pathname === '/ai' && new URLSearchParams(location.search).get('prototype') === 'omni') {
       return '/ai';

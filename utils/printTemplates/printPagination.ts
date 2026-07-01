@@ -27,21 +27,9 @@ const ROOT_BLOCK_TAGS = new Set([
 const HIGH_PRIORITY_BLOCK_TAGS = new Set([
   'canvas',
   'figure',
-  'h1',
-  'h2',
-  'h3',
-  'h4',
-  'h5',
-  'h6',
-  'hr',
   'img',
   'picture',
   'svg',
-  'table',
-  'tbody',
-  'tfoot',
-  'thead',
-  'tr',
 ]);
 
 const TEXT_BLOCK_SELECTOR = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, hr';
@@ -52,11 +40,29 @@ const MANUAL_KEEP_SELECTOR = '[style*="page-break-inside: avoid"], [style*="page
 const MIN_ANCHOR_HEIGHT_PX = 4;
 const MIN_LINE_ANCHOR_HEIGHT_PX = 2;
 const MAX_LINE_ANCHORS = 5000;
+const MAX_LINE_RECT_HEIGHT_PX = 96;
+const LINE_BAND_MERGE_TOLERANCE_PX = 3;
+const LINE_BREAK_REQUIRED_GAP_PX = 6;
+const LINE_TOP_SNAP_LOOKBACK_PX = 180;
+const LINE_BREAK_GUARD_PX = 14;
 const DEFAULT_MIN_PAGE_FILL_RATIO = 0.55;
 const DEFAULT_HARD_KEEP_FILL_RATIO = 0.35;
 const OVERSIZED_KEEP_BLOCK_TOLERANCE_PX = 8;
 
 const roundPx = (value: number) => Math.max(0, Math.round(value));
+
+const hasHardKeepSemanticHint = (element: Element) => {
+  const hints = [
+    element.getAttribute('class'),
+    element.getAttribute('data-print-flow-role'),
+    element.getAttribute('data-role'),
+    element.getAttribute('data-type'),
+    element.getAttribute('style'),
+  ]
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+  return /(signature|signatory|stamp|seal)/.test(hints);
+};
 
 const isFragmentableTableContainer = (element: Element) => {
   const tagName = String(element.tagName || '').toLowerCase();
@@ -83,17 +89,7 @@ const getElementPriority = (element: Element): PrintFlowPriority => {
     return 'high';
   }
 
-  const roleHints = [
-    element.getAttribute('class'),
-    element.getAttribute('data-print-flow-role'),
-    element.getAttribute('data-role'),
-    element.getAttribute('data-type'),
-    element.getAttribute('style'),
-  ]
-    .map((value) => String(value || '').toLowerCase())
-    .join(' ');
-
-  if (/(signature|signatory|stamp|seal|footer|header|heading|title|summary)/.test(roleHints)) {
+  if (hasHardKeepSemanticHint(element)) {
     return 'high';
   }
 
@@ -123,7 +119,7 @@ export const annotatePrintFlowHtml = (html: string) => {
     markPrintFlowElement(element, 'normal', 'table-container');
   });
   root.querySelectorAll(TABLE_ROW_SELECTOR).forEach((element) => {
-    markPrintFlowElement(element, 'high', 'table-row');
+    markPrintFlowElement(element, 'normal', 'table-row');
   });
   root.querySelectorAll(MEDIA_BLOCK_SELECTOR).forEach((element) => {
     markPrintFlowElement(element, 'high', 'media-block');
@@ -131,7 +127,9 @@ export const annotatePrintFlowHtml = (html: string) => {
 
   root.querySelectorAll(MANUAL_KEEP_SELECTOR).forEach((element) => {
     if (isFragmentableTableContainer(element)) return;
-    markPrintFlowElement(element, 'high', 'manual-keep');
+    if (getElementPriority(element) === 'high') {
+      markPrintFlowElement(element, 'high', 'manual-keep');
+    }
   });
 
   Array.from(root.querySelectorAll('*')).forEach((element) => {
@@ -143,7 +141,7 @@ export const annotatePrintFlowHtml = (html: string) => {
     ]
       .map((value) => String(value || '').toLowerCase())
       .join(' ');
-    if (/(signature|signatory|stamp|seal|footer|header|heading|title|summary)/.test(hint)) {
+    if (/(signature|signatory|stamp|seal)/.test(hint)) {
       if (isFragmentableTableContainer(element)) return;
       markPrintFlowElement(element, 'high', 'semantic-block');
     }
@@ -179,6 +177,7 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
   // Fallback: capture per-line rects from text nodes so long plain-text containers
   // can still break safely at line boundaries.
   let lineAnchorCount = 0;
+  const lineRects: Array<{ top: number; bottom: number }> = [];
   const doc = root.ownerDocument;
   const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let currentNode = walker.nextNode();
@@ -192,19 +191,76 @@ export const collectPrintPageAnchors = (root: HTMLElement): PrintPageAnchor[] =>
         if (lineAnchorCount >= MAX_LINE_ANCHORS) return;
         if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) return;
         if (rect.height < MIN_LINE_ANCHOR_HEIGHT_PX) return;
+        if (rect.height > MAX_LINE_RECT_HEIGHT_PX) return;
         const top = roundPx(rect.top - rootRect.top);
         const bottom = roundPx(rect.bottom - rootRect.top);
         if (bottom - top < MIN_LINE_ANCHOR_HEIGHT_PX) return;
-        const key = `${top}:${bottom}`;
-        if (!deduped.has(key)) {
-          deduped.set(key, { top, bottom, priority: 'normal', source: 'line' });
-          lineAnchorCount += 1;
-        }
+        lineRects.push({ top, bottom });
+        lineAnchorCount += 1;
       });
       range.detach?.();
     }
     currentNode = walker.nextNode();
   }
+
+  const normalizedLineRects = Array.from(
+    lineRects
+      .reduce((map, rect) => {
+        const key = `${rect.top}:${rect.bottom}`;
+        if (!map.has(key)) map.set(key, rect);
+        return map;
+      }, new Map<string, { top: number; bottom: number }>())
+      .values()
+  ).sort((left, right) => {
+    if (left.top !== right.top) return left.top - right.top;
+    return left.bottom - right.bottom;
+  });
+
+  const lineBands = normalizedLineRects.reduce<Array<{ top: number; bottom: number }>>((bands, rect) => {
+    const current = bands[bands.length - 1];
+    const currentCenter = current ? (current.top + current.bottom) / 2 : 0;
+    const rectCenter = (rect.top + rect.bottom) / 2;
+    const sameVisualLine =
+      Boolean(current) &&
+      (Math.abs(rect.top - current!.top) <= LINE_BAND_MERGE_TOLERANCE_PX ||
+        Math.abs(rect.bottom - current!.bottom) <= LINE_BAND_MERGE_TOLERANCE_PX ||
+        Math.abs(rectCenter - currentCenter) <= LINE_BAND_MERGE_TOLERANCE_PX);
+    if (
+      current &&
+      sameVisualLine
+    ) {
+      current.top = Math.min(current.top, rect.top);
+      current.bottom = Math.max(current.bottom, rect.bottom);
+      return bands;
+    }
+    bands.push({ ...rect });
+    return bands;
+  }, []);
+
+  lineBands.forEach((rect, index) => {
+    const nextLine = lineBands[index + 1];
+    const gapToNextLine = nextLine ? nextLine.top - rect.bottom : Number.POSITIVE_INFINITY;
+    const breakBeforeLine = Math.max(0, rect.top - LINE_BREAK_GUARD_PX);
+    const beforeKey = `line-before:${breakBeforeLine}:${rect.top}`;
+    if (!deduped.has(beforeKey)) {
+      deduped.set(beforeKey, {
+        top: Math.max(0, breakBeforeLine - 1),
+        bottom: Math.max(1, breakBeforeLine),
+        priority: 'normal',
+        source: 'line',
+      });
+    }
+
+    if (!nextLine || gapToNextLine >= LINE_BREAK_REQUIRED_GAP_PX) {
+      const safeBreakBottom = nextLine
+        ? Math.min(rect.bottom + LINE_BREAK_GUARD_PX, Math.max(rect.bottom + 1, nextLine.top - 1))
+        : rect.bottom + LINE_BREAK_GUARD_PX;
+      const afterKey = `line-after:${rect.top}:${safeBreakBottom}`;
+      if (!deduped.has(afterKey)) {
+        deduped.set(afterKey, { top: rect.top, bottom: safeBreakBottom, priority: 'normal', source: 'line' });
+      }
+    }
+  });
 
   return Array.from(deduped.values()).sort((left, right) => {
     if (left.top !== right.top) return left.top - right.top;
@@ -248,40 +304,37 @@ export const buildSmartPrintPageOffsets = ({
     guard += 1;
     const targetBreak = Math.min(safeTotalHeight, currentOffset + safeStep);
 
-    const highBottomBlockCandidates = blockAnchors
-      .filter((anchor) => anchor.priority === 'high')
+    const lineBottomCandidates = lineAnchors
       .map((anchor) => anchor.bottom)
       .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
-    const bottomBlockCandidates = blockAnchors
-      .map((anchor) => anchor.bottom)
-      .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
-    let nextOffset = highBottomBlockCandidates.length > 0
-      ? Math.max(...highBottomBlockCandidates)
-      : bottomBlockCandidates.length > 0
-        ? Math.max(...bottomBlockCandidates)
-        : 0;
+    let nextOffset = lineBottomCandidates.length > 0 ? Math.max(...lineBottomCandidates) : 0;
+    const hasLineAnchorsInCurrentPage = lineAnchors.some(
+      (anchor) => anchor.bottom > currentOffset + minHardFill && anchor.top < targetBreak + 1
+    );
 
     if (!nextOffset) {
-      const hardTopCandidates = blockAnchors
+      const topSnapMin = Math.max(currentOffset + minHardFill, targetBreak - LINE_TOP_SNAP_LOOKBACK_PX);
+      const lineTopCandidates = lineAnchors
+        .map((anchor) => anchor.top)
+        .filter((top) => top > topSnapMin && top < targetBreak - 1);
+      nextOffset = lineTopCandidates.length > 0 ? Math.max(...lineTopCandidates) : 0;
+    }
+
+    if (!nextOffset && !hasLineAnchorsInCurrentPage) {
+      const anyBottomCandidates = sortedAnchors
+        .map((anchor) => anchor.bottom)
+        .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
+      nextOffset = anyBottomCandidates.length > 0 ? Math.max(...anyBottomCandidates) : 0;
+    }
+
+    if (!nextOffset) {
+      const protectedBlockCrossingBreak = blockAnchors
         .filter((anchor) => anchor.priority === 'high')
+        .filter((anchor) => anchor.top < targetBreak - 1 && anchor.bottom > targetBreak + 1)
         .filter((anchor) => anchor.bottom - anchor.top <= safeStep - OVERSIZED_KEEP_BLOCK_TOLERANCE_PX)
         .map((anchor) => anchor.top)
         .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
-      nextOffset = hardTopCandidates.length > 0 ? Math.max(...hardTopCandidates) : 0;
-    }
-
-    if (!nextOffset) {
-      const lineBottomCandidates = lineAnchors
-        .map((anchor) => anchor.bottom)
-        .filter((bottom) => bottom > currentOffset + minFill && bottom <= targetBreak + 1);
-      nextOffset = lineBottomCandidates.length > 0 ? Math.max(...lineBottomCandidates) : 0;
-    }
-
-    if (!nextOffset) {
-      const lineTopCandidates = lineAnchors
-        .map((anchor) => anchor.top)
-        .filter((top) => top > currentOffset + minHardFill && top < targetBreak - 1);
-      nextOffset = lineTopCandidates.length > 0 ? Math.max(...lineTopCandidates) : 0;
+      nextOffset = protectedBlockCrossingBreak.length > 0 ? Math.max(...protectedBlockCrossingBreak) : 0;
     }
 
     // Last-resort snap: look for the closest anchor bottom within the final
@@ -297,13 +350,6 @@ export const buildSmartPrintPageOffsets = ({
       if (nearbyBottomBeforeBreak.length > 0) {
         nextOffset = Math.max(...nearbyBottomBeforeBreak);
       }
-    }
-
-    if (!nextOffset) {
-      const softTopCandidates = blockAnchors
-        .map((anchor) => anchor.top)
-        .filter((top) => top > currentOffset + minFill && top < targetBreak - 1);
-      nextOffset = softTopCandidates.length > 0 ? Math.max(...softTopCandidates) : 0;
     }
 
     if (!nextOffset) {

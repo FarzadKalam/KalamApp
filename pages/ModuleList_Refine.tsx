@@ -84,6 +84,7 @@ import {
   getSurveyTemplateScopedIdFromCrudFilters,
   loadSurveyTemplateDefinition,
   normalizeSurveyTemplateSnapshot,
+  supportsWebFormTemplateRuntime,
 } from "../utils/surveyTemplates";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import {
@@ -677,11 +678,11 @@ export const ModuleListRefine: React.FC<{
   const baseModuleConfig = resolvedModuleId ? MODULES[resolvedModuleId] : null;
   const moduleConfig = useMemo(
     () => (
-      resolvedModuleId === "surveys" && baseModuleConfig
+      baseModuleConfig && supportsWebFormTemplateRuntime(baseModuleConfig)
         ? buildSurveyRuntimeModule(baseModuleConfig, surveyTemplateSnapshot, "list")
         : baseModuleConfig
     ),
-    [baseModuleConfig, resolvedModuleId, surveyTemplateSnapshot]
+    [baseModuleConfig, surveyTemplateSnapshot]
   );
   const dataResource = moduleConfig?.table || resolvedModuleId;
   const searchTargetField = useMemo(() => {
@@ -843,16 +844,16 @@ export const ModuleListRefine: React.FC<{
   );
   const surveyTemplateScopedId = useMemo(
     () => (
-      resolvedModuleId === "surveys"
+      baseModuleConfig && supportsWebFormTemplateRuntime(baseModuleConfig)
         ? getSurveyTemplateScopedIdFromCrudFilters(buildMergedFilters(viewFiltersState, searchTerm, columnFilters))
         : null
     ),
-    [columnFilters, resolvedModuleId, searchTerm, viewFiltersState]
+    [baseModuleConfig, columnFilters, searchTerm, viewFiltersState]
   );
 
   useEffect(() => {
     let cancelled = false;
-    if (resolvedModuleId !== "surveys" || !surveyTemplateScopedId) {
+    if (!baseModuleConfig || !supportsWebFormTemplateRuntime(baseModuleConfig) || !surveyTemplateScopedId) {
       setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot({}));
       return () => {
         cancelled = true;
@@ -875,7 +876,7 @@ export const ModuleListRefine: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [resolvedModuleId, surveyTemplateScopedId]);
+  }, [baseModuleConfig, surveyTemplateScopedId]);
   const moduleListRowSelect = useMemo(
     () => buildModuleListRowSelect(moduleConfig, visibleColumns, {
       viewMode,

@@ -1018,6 +1018,7 @@ ${invoice.description ? `
             <ResilientImage
               src={logoUrl}
               preset="gallery"
+              forcePreviewTransform
               alt={branding.brandName}
               style={{
                 width: 52,
@@ -1256,6 +1257,7 @@ ${invoice.description ? `
                           <ResilientImage
                             src={imageUrl}
                             preset="thumb"
+                            forcePreviewTransform
                             alt={productTitle}
                             className="h-full w-full object-cover"
                           />

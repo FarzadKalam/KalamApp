@@ -167,6 +167,7 @@ const fieldsArray: any[] = [
   { key: 'daily_rent', labels: { fa: 'اجاره روزانه', en: 'Daily Rent' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 3, nature: FieldNature.STANDARD, isTableColumn: false },
   { key: 'monthly_rent', labels: { fa: 'اجاره ماهانه', en: 'Monthly Rent' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 4, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'print_cost', labels: { fa: 'هزینه چاپ و نصب', en: 'Print Cost' }, type: FieldType.PRICE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5, nature: FieldNature.STANDARD, isTableColumn: true },
+  { key: 'product_identifier', labels: { fa: 'شناسه کالا/خدمت مودیان', en: 'Taxpayer Product Identifier' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
   { key: 'commission_percentage', labels: { fa: 'پورسانت', en: 'Commission (%)' }, type: FieldType.PERCENTAGE, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 5.5, nature: FieldNature.STANDARD, defaultValue: 0, isTableColumn: false },
   { key: 'address', labels: { fa: 'آدرس کامل', en: 'Address' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 49, nature: FieldNature.STANDARD, isTableColumn: false },
   { key: 'related_supplier', labels: { fa: 'تامین‌کننده مرتبط', en: 'Related Supplier' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'baseInfo', order: 6, relationConfig: { targetModule: 'suppliers', targetField: 'business_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'product_type', operator: LogicOperator.EQUALS, value: 'goods' } } },
@@ -201,7 +202,7 @@ export const billboardConfig: ModuleDefinition = {
   },
   relationDisplay: {
     labelTemplate: '{{name}} - {{system_code}}',
-    searchFields: ['name', 'system_code', 'manual_code', 'catalog_code', 'address', 'category', 'id'],
+    searchFields: ['name', 'system_code', 'manual_code', 'catalog_code', 'product_identifier', 'address', 'category', 'id'],
   },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID, ViewMode.KANBAN, ViewMode.MAP],
   defaultViewMode: ViewMode.LIST,

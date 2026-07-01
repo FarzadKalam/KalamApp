@@ -2201,7 +2201,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       try {
         const { data, error } = await supabase
           .from('process_template_stages')
-          .select('id, template_id, stage_name, name, sort_order, wage, weight, default_assignee_id, default_assignee_role_id, metadata')
+          .select('id, template_id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
           .eq('template_id', draftCopyTemplateId)
           .order('sort_order', { ascending: true });
         if (error) throw error;

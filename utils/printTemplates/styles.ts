@@ -70,6 +70,16 @@ export const printStyles = `
     box-sizing: border-box;
     line-height: 1.9;
     font-size: 14px;
+    direction: rtl;
+    text-align: right;
+    font-family: inherit;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+  .invoice-custom-print-shell .print-template-body-measure *,
+  .invoice-custom-print-shell .print-template-body-inner * {
+    box-sizing: border-box;
   }
   .invoice-custom-print-shell [data-print-flow-role="manual-keep"],
   .invoice-custom-print-shell [data-print-flow-role="semantic-block"],

@@ -8,15 +8,20 @@ import {
 interface ResilientImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   src: string;
   preset?: ImagePreviewPreset;
+  forcePreviewTransform?: boolean;
 }
 
 const ResilientImage: React.FC<ResilientImageProps> = ({
   src,
   preset = 'card',
+  forcePreviewTransform = false,
   onError,
   ...imgProps
 }) => {
-  const candidates = useMemo(() => getImagePreviewCandidates(src, preset), [preset, src]);
+  const candidates = useMemo(
+    () => getImagePreviewCandidates(src, preset, { forceTransform: forcePreviewTransform }),
+    [forcePreviewTransform, preset, src]
+  );
   const [candidateIndex, setCandidateIndex] = useState(0);
 
   useEffect(() => {

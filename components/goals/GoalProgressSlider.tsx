@@ -35,6 +35,7 @@ type GoalProgressSliderProps = {
   showPlaybackControls?: boolean;
   onActiveCardChange?: (card: GoalProgressSnapshot | null) => void;
   periodOverride?: { startIso: string; endIso: string };
+  subjectUserIds?: string[] | null;
 };
 
 const GOAL_PROGRESS_CACHE_TTL_MS = 60_000;
@@ -162,8 +163,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   showPlaybackControls = true,
   onActiveCardChange,
   periodOverride,
+  subjectUserIds,
 }) => {
   const { label: currencyLabel } = useCurrencyConfig();
+  const hasSubjectUserFilter = Array.isArray(subjectUserIds);
   const [loading, setLoading] = useState(true);
   const [cards, setCards] = useState<GoalProgressSnapshot[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -180,6 +183,13 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const cardsRef = useRef<GoalProgressSnapshot[]>([]);
 
   const placementField = placement === 'dashboard' ? 'dashboard_widget' : 'module_list_cards';
+
+  const normalizedSubjectUserIds = useMemo(
+    () => hasSubjectUserFilter
+      ? Array.from(new Set((subjectUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))).sort()
+      : [],
+    [hasSubjectUserFilter, subjectUserIds],
+  );
 
   const loadFiscalYear = useCallback(async () => {
     if (goalProgressFiscalYearCache.data && goalProgressFiscalYearCache.expiresAt > Date.now()) {
@@ -249,6 +259,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         userId: roleContext.userId || null,
         roleId: roleContext.roleId || null,
         periodOverride: periodOverride ? `${periodOverride.startIso}__${periodOverride.endIso}` : null,
+        subjectUserIds: normalizedSubjectUserIds,
         selections: Object.keys(resolvedSelections)
           .sort()
           .reduce<Record<string, GoalPeriodUnit>>((acc, key) => {
@@ -327,12 +338,19 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         if (error) throw error;
 
         const directory = await fetchAssigneeDirectory(supabase);
+        const selectedSubjectUserIdSet = hasSubjectUserFilter
+          ? new Set(normalizedSubjectUserIds)
+          : null;
 
         const visibleGoals = dedupeGoalsForDisplay(
           (data || [])
             .map((item) => normalizeGoalRecord(item))
             .filter((goal) => resolveModuleGoalAccessPermissions(roleContext.permissions, goal.module_id).canViewGoal)
             .filter((goal) => canUserViewGoalResults(goal, roleContext.userId, roleContext.roleId))
+            .filter((goal) => {
+              if (!selectedSubjectUserIdSet) return true;
+              return resolveGoalAssignedMembers(goal, directory).some((member) => selectedSubjectUserIdSet.has(String(member.userId || '').trim()));
+            })
         );
 
         if (visibleGoals.length > 0 && cardsRef.current.length === 0) {
@@ -355,6 +373,13 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
           async (goal) => {
             const selectedSubperiodUnit =
               nextSelections?.[goal.id] || subperiodSelections[goal.id] || goal.subperiod_unit;
+            const goalSubjects = resolveGoalAssignedMembers(goal, directory);
+            const filteredSubjects = selectedSubjectUserIdSet
+              ? goalSubjects.filter((subject) => selectedSubjectUserIdSet.has(String(subject.userId || '').trim()))
+              : goalSubjects;
+            const explicitSubject = goal.goal_scope === 'personal' && filteredSubjects.length === 1
+              ? filteredSubjects[0]
+              : null;
             try {
               return await executeGoalProgress(goal, {
                 userId: roleContext.userId,
@@ -366,7 +391,10 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 fiscalYear: fiscalYearRef.current,
                 selectedSubperiodUnit,
                 cache: rowCacheRef.current,
-                fallbackSubjects: resolveGoalAssignedMembers(goal, directory),
+                subjectUserId: explicitSubject?.userId || null,
+                subjectRoleId: explicitSubject?.roleId || null,
+                subjectLabel: explicitSubject?.label || null,
+                fallbackSubjects: filteredSubjects,
                 overridePeriodRange: periodOverride,
               });
             } catch {
@@ -406,7 +434,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [loadFiscalYear, moduleId, periodOverride, placementField, subperiodSelections]);
+  }, [hasSubjectUserFilter, loadFiscalYear, moduleId, normalizedSubjectUserIds, periodOverride, placementField, subperiodSelections]);
 
   useEffect(() => {
     cardsRef.current = cards;

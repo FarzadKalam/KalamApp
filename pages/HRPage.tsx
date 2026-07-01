@@ -35,7 +35,7 @@ import {
 import dayjs, { Dayjs } from 'dayjs';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
-import { formatPersianPrice, parseDateValue, safeJalaliFormat, toGregorianDateString, toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, formatPersianTime, parseDateValue, safeJalaliFormat, toGregorianDateString, toPersianNumber } from '../utils/persianNumberFormatter';
 import { isTaskDoneStatus, normalizeTaskStatus } from '../utils/taskCompletion';
 import { MODULES } from '../moduleRegistry';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -64,6 +64,19 @@ import {
   type PayrollLedgerEntry,
   type PayrollSlipLine,
 } from '../utils/payrollLedger';
+import {
+  HR_QUERY_KEY_EMPLOYEES,
+  buildHrFilterQuery,
+  getInitialHrRangeFromQuery,
+  isSameHrRange,
+  parseHrEmployeeFilterParam,
+  persistHrEmployees,
+  persistHrRange,
+  readHrRangeFromSearch,
+  readPersistedHrEmployees,
+  shouldDeferHrFilterUrlSync,
+  toNativeGregorianDateString,
+} from '../utils/hrFilters';
 
 const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
@@ -664,167 +677,6 @@ const isInRange = (value: dayjs.Dayjs | null, start: dayjs.Dayjs, end: dayjs.Day
   if (!value) return false;
   const t = value.valueOf();
   return t >= start.valueOf() && t <= end.valueOf();
-};
-
-const parseDateParam = (rawDate: string | null): Dayjs | null => {
-  if (!rawDate) return null;
-  const parsed = parseDateValue(rawDate);
-  if (!parsed || !parsed.isValid()) return null;
-  const gregorian = toGregorianDateString(parsed, 'YYYY-MM-DD');
-  if (!gregorian) return null;
-  const year = Number(gregorian.slice(0, 4));
-  if (!Number.isFinite(year) || year < 1900 || year > 2100) return null;
-  const normalized = dayjs(gregorian);
-  return normalized.isValid() ? normalized : null;
-};
-
-const toNativeGregorianDateString = (value: Dayjs | null | undefined): string | null => {
-  if (!value?.isValid?.()) return null;
-  const date = value.toDate();
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
-  const year = String(date.getFullYear()).padStart(4, '0');
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
-const HR_SESSION_KEY_RANGE = 'hr_filter_range';
-const HR_SESSION_KEY_RANGE_INITIALIZED = 'hr_filter_range_initialized';
-const HR_SESSION_KEY_EMPLOYEES = 'hr_filter_employee_ids';
-const HR_QUERY_KEY_EMPLOYEES = 'employees';
-const HR_QUERY_VALUE_ALL_EMPLOYEES = 'all';
-
-const normalizePersistedHrRange = (value: unknown): [Dayjs, Dayjs] | null => {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value as { from?: unknown; to?: unknown };
-  const savedFrom = parseDateParam(typeof raw.from === 'string' ? raw.from : null);
-  const savedTo = parseDateParam(typeof raw.to === 'string' ? raw.to : null);
-  if (savedFrom?.isValid() && savedTo?.isValid() && savedFrom.valueOf() <= savedTo.valueOf()) {
-    return [savedFrom.startOf('day'), savedTo.endOf('day')];
-  }
-  return null;
-};
-
-const readPersistedHrRange = (): [Dayjs, Dayjs] | null => {
-  const readFromStorage = (storage: Storage | null): [Dayjs, Dayjs] | null => {
-    if (!storage) return null;
-    try {
-      const saved = storage.getItem(HR_SESSION_KEY_RANGE);
-      if (!saved) return null;
-      return normalizePersistedHrRange(JSON.parse(saved));
-    } catch {}
-    return null;
-  };
-  try {
-    const range = readFromStorage(window.sessionStorage);
-    if (range) return range;
-  } catch {}
-  try {
-    const range = readFromStorage(window.localStorage);
-    if (range) return range;
-  } catch {}
-  return null;
-};
-
-const writeHrRangeToStorage = (storage: Storage | null, serialized: string) => {
-  if (!storage) return;
-  try {
-    storage.setItem(HR_SESSION_KEY_RANGE, serialized);
-  } catch {}
-};
-
-const persistHrRange = (range: [Dayjs, Dayjs]) => {
-  const from = toNativeGregorianDateString(range[0]);
-  const to = toNativeGregorianDateString(range[1]);
-  if (!from || !to) return;
-  const serialized = JSON.stringify({ from, to });
-  try {
-    writeHrRangeToStorage(window.sessionStorage, serialized);
-  } catch {}
-  try {
-    writeHrRangeToStorage(window.localStorage, serialized);
-  } catch {}
-  try {
-    window.localStorage.setItem(HR_SESSION_KEY_RANGE_INITIALIZED, '1');
-  } catch {}
-};
-
-const getInitialRangeFromQuery = (): [Dayjs, Dayjs] => {
-  const query = new URLSearchParams(window.location.search);
-  const from = parseDateParam(query.get('from'));
-  const to = parseDateParam(query.get('to'));
-  if (from && to && from.valueOf() <= to.valueOf()) {
-    return [from.startOf('day'), to.endOf('day')];
-  }
-  const persistedRange = readPersistedHrRange();
-  if (persistedRange) return persistedRange;
-  const initialized = (() => {
-    try {
-      return window.localStorage.getItem(HR_SESSION_KEY_RANGE_INITIALIZED) === '1';
-    } catch {
-      return false;
-    }
-  })();
-  const initialRange: [Dayjs, Dayjs] = [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')];
-  if (!initialized) {
-    persistHrRange(initialRange);
-  }
-  return initialRange;
-};
-
-const readHrRangeFromSearch = (search: string): [Dayjs, Dayjs] | null => {
-  const query = new URLSearchParams(search);
-  const from = parseDateParam(query.get('from'));
-  const to = parseDateParam(query.get('to'));
-  if (from && to && from.valueOf() <= to.valueOf()) {
-    return [from.startOf('day'), to.endOf('day')];
-  }
-  return null;
-};
-
-const isSameHrRange = (left: [Dayjs, Dayjs], right: [Dayjs, Dayjs]) => {
-  const leftFrom = toNativeGregorianDateString(left[0].startOf('day'));
-  const leftTo = toNativeGregorianDateString(left[1].endOf('day'));
-  const rightFrom = toNativeGregorianDateString(right[0].startOf('day'));
-  const rightTo = toNativeGregorianDateString(right[1].endOf('day'));
-  return leftFrom === rightFrom && leftTo === rightTo;
-};
-
-const parseHrEmployeeFilterParam = (rawValue: string | null): { hasValue: boolean; ids: string[] } => {
-  if (rawValue === null) return { hasValue: false, ids: [] };
-  const trimmed = rawValue.trim();
-  if (!trimmed || trimmed === HR_QUERY_VALUE_ALL_EMPLOYEES) return { hasValue: true, ids: [] };
-  return {
-    hasValue: true,
-    ids: trimmed
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean),
-  };
-};
-
-const readPersistedHrEmployees = (): string[] | null => {
-  try {
-    const saved = sessionStorage.getItem(HR_SESSION_KEY_EMPLOYEES);
-    if (!saved) return null;
-    const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed.map((id) => String(id || '').trim()).filter(Boolean) : null;
-  } catch {}
-  return null;
-};
-
-const persistHrEmployees = (employeeIds: string[]) => {
-  try {
-    sessionStorage.setItem(HR_SESSION_KEY_EMPLOYEES, JSON.stringify(employeeIds));
-  } catch {}
-};
-
-const buildHrFilterQuery = (range: [Dayjs, Dayjs], employeeIds: string[]) => {
-  const params = new URLSearchParams();
-  params.set('from', toNativeGregorianDateString(range[0].startOf('day')) || '');
-  params.set('to', toNativeGregorianDateString(range[1].endOf('day')) || '');
-  params.set(HR_QUERY_KEY_EMPLOYEES, employeeIds.length ? employeeIds.join(',') : HR_QUERY_VALUE_ALL_EMPLOYEES);
-  return params.toString();
 };
 
 const toStatusLabel = (rawStatus: string | null | undefined) => {
@@ -1430,6 +1282,8 @@ const calculateAttendancePaidLeaveMinutes = (
 };
 
 const renderDateTime = (value: string | null | undefined) => safeJalaliFormat(value, 'YYYY/MM/DD HH:mm') || '-';
+const renderAttendanceTime = (value: string | null | undefined) =>
+  safeJalaliFormat(value, 'HH:mm') || formatPersianTime(value) || '-';
 
 const buildSummaries = ({
   profiles,
@@ -1603,7 +1457,7 @@ const HRPage: React.FC = () => {
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedRange, setSelectedRange] = useState<[Dayjs, Dayjs]>(() => getInitialRangeFromQuery());
+  const [selectedRange, setSelectedRange] = useState<[Dayjs, Dayjs]>(() => getInitialHrRangeFromQuery());
   const [profiles, setProfiles] = useState<ProfileRecord[]>([]);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [activityPerformanceEntries, setActivityPerformanceEntries] = useState<ActivityPerformanceEntry[]>([]);
@@ -1783,6 +1637,7 @@ const HRPage: React.FC = () => {
 
   useEffect(() => {
     if (!employeeFilterInitialized) return;
+    if (shouldDeferHrFilterUrlSync(location.search, [monthStart, monthEnd], selectedEmployeeIds)) return;
     const from = toNativeGregorianDateString(monthStart);
     const to = toNativeGregorianDateString(monthEnd);
     if (!from || !to) return;
@@ -1793,7 +1648,7 @@ const HRPage: React.FC = () => {
     if (currentUrl !== nextUrl) {
       window.history.replaceState(window.history.state, '', nextUrl);
     }
-  }, [employeeFilterInitialized, employeeId, monthEnd, monthStart, selectedEmployeeIds]);
+  }, [employeeFilterInitialized, employeeId, location.search, monthEnd, monthStart, selectedEmployeeIds]);
 
   const updateSelectedRangeDates = useCallback((value: PersianDateRangeValue | null) => {
     const startDate = parseDateValue(value?.[0] || null);
@@ -3837,6 +3692,17 @@ const HRPage: React.FC = () => {
     assignedMembers: goalTouchRows.length,
     rewardSuggestion: goalTouchRows.reduce((sum, row) => sum + row.rewardSuggestion, 0),
   }), [goalCards.length, goalTouchRows]);
+
+  const selectedGoalSubjectUserIds = useMemo(
+    () => visibleSummaries
+      .map((row) => String(row.profile.related_profile_id || row.profile.id || '').trim())
+      .filter(Boolean),
+    [visibleSummaries],
+  );
+  const goalSubjectUserFilter = useMemo(
+    () => (selectedEmployeeIds.length > 0 || selectedGoalSubjectUserIds.length === 0 ? selectedGoalSubjectUserIds : null),
+    [selectedEmployeeIds.length, selectedGoalSubjectUserIds],
+  );
 
   const commissionRowsByBucket = useMemo(() => {
     const empty: Record<CommissionReviewBucket, any[]> = {
@@ -7368,6 +7234,7 @@ const HRPage: React.FC = () => {
           placement="dashboard"
           autoPlay={false}
           showPlaybackControls={false}
+          subjectUserIds={goalSubjectUserFilter}
           onActiveCardChange={(card) => setHrActiveGoalId(card?.goal.id || null)}
           periodOverride={{ startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() }}
         />
@@ -8070,8 +7937,8 @@ const HRPage: React.FC = () => {
                       dataSource={payrollWizardAttendanceRows}
                       columns={[
                         { title: 'تاریخ', key: 'attendanceDate', render: (_: unknown, row: any) => row.attendanceDate ? toPersianNumber(safeJalaliFormat(row.attendanceDate, 'YYYY/MM/DD')) : '-' },
-                        { title: 'ورود', dataIndex: 'checkInAt', key: 'checkInAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
-                        { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => val ? toPersianNumber(val) : '-' },
+                        { title: 'ورود', dataIndex: 'checkInAt', key: 'checkInAt', render: (val: string | null) => <span className="persian-number">{renderAttendanceTime(val)}</span> },
+                        { title: 'خروج', dataIndex: 'checkOutAt', key: 'checkOutAt', render: (val: string | null) => <span className="persian-number">{renderAttendanceTime(val)}</span> },
                         { title: 'حضور', key: 'presence', render: (_: unknown, row: any) => { const pm = calculatePresenceMinutes([row]); return <span className="persian-number">{toPersianNumber((pm / 60).toFixed(1))} ساعت</span>; } },
                         { title: 'تاخیر (دقیقه)', key: 'late', render: (_: unknown, row: any) => { const grace = toNumber(payrollWizardSummary?.profile?.grace_minutes_for_late); const effective = Math.max(0, row.lateMinutes - grace); return <span className={`persian-number ${effective > 0 ? 'text-red-700 font-bold' : 'text-gray-500'}`}>{toPersianNumber(row.lateMinutes)}{grace > 0 ? ` (مجاز: ${toPersianNumber(grace)})` : ''}</span>; } },
                         { title: 'مرخصی تاییدشده (دقیقه)', key: 'approved_leave', render: (_: unknown, row: any) => <span className="persian-number text-cyan-700">{toPersianNumber(row.approvedLeaveMinutes || 0)}</span> },

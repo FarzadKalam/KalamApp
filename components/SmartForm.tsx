@@ -65,6 +65,7 @@ import {
   loadSurveyTemplateDefinition,
   mergeSurveyTemplateValuesIntoRecord,
   normalizeSurveyTemplateSnapshot,
+  supportsWebFormTemplateRuntime,
 } from '../utils/surveyTemplates';
 import InvoicePaymentAllocationModal from './invoices/InvoicePaymentAllocationModal';
 import {
@@ -340,7 +341,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       ...normalizedWatchedValues,
     };
   }, [formData, watchedValues]);
-  const isSurveyModule = module.id === 'surveys';
+  const supportsTemplateRuntime = supportsWebFormTemplateRuntime(module);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot(
     initialValuesProp?.template_schema_snapshot || {}
   ));
@@ -348,11 +349,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
   const surveyTemplatePreviousIdRef = useRef<string | null>(null);
   const effectiveModule = useMemo(
     () => (
-      isSurveyModule
+      supportsTemplateRuntime
         ? buildSurveyRuntimeModule(module, surveyTemplateSnapshot, 'form')
         : module
     ),
-    [isSurveyModule, module, surveyTemplateSnapshot]
+    [module, surveyTemplateSnapshot, supportsTemplateRuntime]
   );
   const runtimeFields = effectiveModule.fields || [];
   const runtimeBlocks = effectiveModule.blocks || [];
@@ -468,7 +469,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
             assignee_combo: assigneeCombo,
             ...(hasAutoNameToggle ? { auto_name_enabled: false } : {}),
           };
-          if (isSurveyModule) {
+          if (supportsTemplateRuntime) {
             setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(initialValues?.template_schema_snapshot || {}));
             surveyTemplatePreviousIdRef.current = String(initialValues?.survey_template_id || '').trim() || null;
           }
@@ -570,7 +571,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           if (module.id === 'tasks') {
             finalValues = normalizeTaskSourceValues(finalValues);
           }
-          if (isSurveyModule) {
+          if (supportsTemplateRuntime) {
             setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(initialValues?.template_schema_snapshot || {}));
             surveyTemplatePreviousIdRef.current = String(initialProps?.survey_template_id || '').trim() || null;
           }
@@ -595,10 +596,10 @@ const SmartForm: React.FC<SmartFormProps> = ({
       // فراخوانی توابع کمکی
       fetchUserPermissions();
     }
-  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues, runtimeFields]);
+  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues, runtimeFields, supportsTemplateRuntime]);
 
   useEffect(() => {
-    if (!visible || !isSurveyModule) return;
+    if (!visible || !supportsTemplateRuntime) return;
     const nextTemplateId = String(currentValues?.survey_template_id || '').trim() || null;
     const previousTemplateId = surveyTemplatePreviousIdRef.current;
     if (nextTemplateId === previousTemplateId) return;
@@ -647,8 +648,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
       if (surveyTemplateConfirmOpenRef.current === nextTemplateId) return;
       surveyTemplateConfirmOpenRef.current = nextTemplateId;
       Modal.confirm({
-        title: 'تغییر قالب نظرسنجی',
-        content: 'فیلدهای قالب قبلی پاک می‌شوند و فیلدهای قالب جدید جایگزین خواهند شد. ادامه می‌دهید؟',
+        title: 'تغییر قالب وب‌فرم',
+        content: 'فیلدهای پویای قالب قبلی پاک می‌شوند و فیلدهای قالب جدید جایگزین خواهند شد. ادامه می‌دهید؟',
         okText: 'بله، جایگزین کن',
         cancelText: 'انصراف',
         onOk: async () => {
@@ -664,7 +665,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     }
 
     void commitTemplateChange(previousTemplateId !== nextTemplateId && !recordId);
-  }, [currentValues?.survey_template_id, form, isSurveyModule, recordId, surveyTemplateSnapshot, visible]);
+  }, [currentValues?.survey_template_id, form, recordId, surveyTemplateSnapshot, visible, supportsTemplateRuntime]);
 
   const fetchAssignees = useCallback(async () => {
     try {
@@ -1137,7 +1138,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       if (error) throw error;
           if (data) {
         let nextValues: any = normalizeModuleFormValues(module.id, data);
-        if (isSurveyModule) {
+        if (supportsTemplateRuntime) {
           setSurveyTemplateSnapshot(normalizeSurveyTemplateSnapshot(data?.template_schema_snapshot || {}));
           surveyTemplatePreviousIdRef.current = String(data?.survey_template_id || '').trim() || null;
           nextValues = mergeSurveyTemplateValuesIntoRecord(nextValues) || nextValues;

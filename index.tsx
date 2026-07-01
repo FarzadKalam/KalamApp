@@ -4,8 +4,19 @@ import { applyBrandingRuntime, loadRuntimeBranding, persistRuntimeBranding, read
 
 const container = document.getElementById("root");
 
+const shouldUseStandalonePublicBootstrap = (pathname: string) => {
+  const normalizedPath = String(pathname || "").split(/[?#]/)[0] || "/";
+  return (
+    normalizedPath.startsWith("/i/")
+    || normalizedPath.startsWith("/d/")
+    || normalizedPath === "/payment/callback"
+  );
+};
+
 const bootstrapAndRender = async () => {
-  const appModulePromise = import("./initDayjs").then(() => import("./App"));
+  const appModulePromise = shouldUseStandalonePublicBootstrap(window.location.pathname)
+    ? import("./publicRouteApp")
+    : import("./initDayjs").then(() => import("./App"));
 
   try {
     const runtimeBranding = await loadRuntimeBranding();
@@ -14,8 +25,11 @@ const bootstrapAndRender = async () => {
     // keep cached/default branding when public bootstrap is unavailable
   }
 
-  const { mountApp } = await appModulePromise;
-  mountApp(container!);
+  const bootstrapModule = await appModulePromise;
+  const mount = "mountPublicRouteApp" in bootstrapModule
+    ? bootstrapModule.mountPublicRouteApp
+    : bootstrapModule.mountApp;
+  mount(container!);
 };
 
 const cached = readCachedBranding();

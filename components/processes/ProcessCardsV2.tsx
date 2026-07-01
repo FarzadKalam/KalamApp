@@ -15,17 +15,18 @@ import {
   CompressOutlined,
   CopyOutlined,
   DeleteOutlined,
-  EyeOutlined,
   HolderOutlined,
   InfoCircleOutlined,
   DownOutlined,
   LeftOutlined,
+  LinkOutlined,
   MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   SettingOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
+import { parseProcessLinkMap } from '../../utils/processTargets';
 
 export type ProcessV2StageKind = 'draft' | 'activity';
 export type ProcessV2StageStatus = 'draft' | 'waiting' | 'active' | 'done' | 'blocked' | 'canceled';
@@ -516,6 +517,77 @@ const getLaneComputedStatus = (lane: ProcessV2Lane, cardMode: ProcessV2CardMode)
   if (statuses.every((status) => status === 'done')) return 'completed';
   if (statuses.some((status) => status === 'active' || status === 'done' || status === 'blocked')) return 'in_progress';
   return 'not_started';
+};
+
+const toFaDigits = (value: number) => String(value).replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)] || digit);
+
+const parseObject = (value: any): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const collectProcessTargetConnectionStats = (
+  item: ProcessV2CardData,
+  templates: ProcessV2TemplateOption[],
+) => {
+  const targetModules = new Set<string>();
+  const connectedModules = new Set<string>();
+  if (item.mode === 'run') {
+    const selectedTemplate = templates.find((template) => template.id === item.templateId);
+    (selectedTemplate?.moduleIds || []).forEach((moduleId) => {
+      const normalized = String(moduleId || '').trim();
+      if (normalized) targetModules.add(normalized);
+    });
+    if (selectedTemplate?.moduleId) targetModules.add(String(selectedTemplate.moduleId).trim());
+  }
+
+  item.lanes.forEach((lane) => {
+    lane.stages.forEach((stage) => {
+      const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+      const metadata = parseObject(source?.metadata);
+      const recurrence = parseObject(source?.recurrence_info || metadata?.recurrence_info);
+      [
+        source?.process_target_module_ids,
+        metadata?.process_target_module_ids,
+      ].forEach((value) => {
+        if (!Array.isArray(value)) return;
+        value.forEach((moduleId) => {
+          const normalized = String(moduleId || '').trim();
+          if (normalized) targetModules.add(normalized);
+        });
+      });
+      [
+        source?.process_link_map,
+        source?.process_links,
+        metadata?.process_link_map,
+        metadata?.process_links,
+        recurrence?.process_link_map,
+        recurrence?.process_links,
+      ].forEach((value) => {
+        Object.entries(parseProcessLinkMap(value)).forEach(([moduleId, recordId]) => {
+          const normalizedModuleId = String(moduleId || '').trim();
+          const normalizedRecordId = String(recordId || '').trim();
+          if (!normalizedModuleId || !normalizedRecordId) return;
+          connectedModules.add(normalizedModuleId);
+          if (targetModules.size === 0) targetModules.add(normalizedModuleId);
+        });
+      });
+    });
+  });
+
+  const targetList = Array.from(targetModules);
+  const connectedCount = targetList.filter((moduleId) => connectedModules.has(moduleId)).length;
+  return {
+    connectedCount,
+    totalCount: targetList.length,
+    label: `${toFaDigits(connectedCount)} از ${toFaDigits(targetList.length)}`,
+  };
 };
 
 const confirmProcessV2Delete = (title: string, onConfirm: () => void | Promise<void>) => {
@@ -1847,6 +1919,10 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     () => templates.map((template) => ({ value: template.id, label: template.title })),
     [templates],
   );
+  const relatedConnectionStats = useMemo(
+    () => collectProcessTargetConnectionStats(item, templates),
+    [item, templates],
+  );
   const defaultActivatorPair = useMemo<ConnectorPair | null>(() => {
     if (!shouldShowActivator) return null;
     const firstLaneWithStage = item.lanes.find((lane) => lane.stages.length > 0);
@@ -2455,11 +2531,21 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               {computedStatusView.label}
             </Tag>
             <div className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto justify-self-end" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
+              <Tooltip title="رکوردهای مرتبط با این فرآیند">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<LinkOutlined />}
+                  onClick={() => onShowRecords?.(item)}
+                  className="!inline-flex !h-7 !shrink-0 !items-center !justify-center !gap-1.5 !rounded-full !px-2 !text-[11px] !font-black !text-slate-600 hover:!bg-slate-100 dark:!text-slate-200 dark:hover:!bg-white/10"
+                >
+                  {relatedConnectionStats.totalCount > 0 ? relatedConnectionStats.label : toFaDigits(relatedConnectionStats.connectedCount)}
+                </Button>
+              </Tooltip>
               {editorTools}
               <IconButton title="حذف فرآیند" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف فرآیند', () => onDelete?.(item.id))} />
               <IconButton title="کپی فرآیند" icon={<CopyOutlined />} onClick={() => onCopy?.(item.id)} />
               <IconButton title="اطلاعات اجرای فرآیند" icon={<InfoCircleOutlined />} onClick={() => onShowInfo?.(item)} />
-              <IconButton title="مشاهده رکوردهای مرتبط" icon={<EyeOutlined />} onClick={() => onShowRecords?.(item)} />
               <IconButton title={processCollapsed ? 'باز کردن فرآیند' : 'جمع کردن فرآیند'} icon={processCollapsed ? <LeftOutlined /> : <DownOutlined />} onClick={toggleAllLanesCollapsed} />
               <IconButton title={stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل'} icon={<CompressOutlined />} onClick={toggleStageSizeMode} />
             </div>

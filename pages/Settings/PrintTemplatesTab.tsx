@@ -1014,7 +1014,7 @@ const PrintTemplatesTab: React.FC = () => {
                   <section
                     className={`relative flex-none border-b border-dashed border-slate-300/80 ${activeSection === 'header' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('header')}
-                    style={{ height: `${pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}mm` }}
+                    style={{ minHeight: `${pxToMm(Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK))}mm` }}
                   >
                     <div className="pointer-events-none absolute top-2 right-4 z-10 rounded-full bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-500 shadow-sm">
                       سربرگ
@@ -1025,8 +1025,7 @@ const PrintTemplatesTab: React.FC = () => {
                         value={editingTemplate.headerHtml || ''}
                         onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, headerHtml: html } : prev))}
                         placeholder="سربرگ هر برگه را اینجا تنظیم کنید..."
-                        minHeight={HEADER_HEIGHT_MIN}
-                        fixedHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
+                        minHeight={Number(editingTemplate.headerHeight || HEADER_HEIGHT_FALLBACK)}
                         contentPadding="2px 10px"
                         onEditorReady={setHeaderEditor}
                         onFocusSection={() => setActiveSection('header')}
@@ -1070,7 +1069,7 @@ const PrintTemplatesTab: React.FC = () => {
                   <section
                     className={`relative flex-none border-t border-dashed border-slate-300/80 ${activeSection === 'footer' ? 'ring-1 ring-[rgba(var(--brand-500-rgb),0.32)]' : ''}`}
                     onClick={() => setActiveSection('footer')}
-                    style={{ height: `${pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}mm` }}
+                    style={{ minHeight: `${pxToMm(Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK))}mm` }}
                   >
                     <button
                       type="button"
@@ -1090,8 +1089,7 @@ const PrintTemplatesTab: React.FC = () => {
                         value={editingTemplate.footerHtml || ''}
                         onChange={(html) => setEditingTemplate((prev) => (prev ? { ...prev, footerHtml: html } : prev))}
                         placeholder="پاورقی هر برگه را اینجا تنظیم کنید..."
-                        minHeight={FOOTER_HEIGHT_MIN}
-                        fixedHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
+                        minHeight={Number(editingTemplate.footerHeight || FOOTER_HEIGHT_FALLBACK)}
                         contentPadding="2px 10px"
                         onEditorReady={setFooterEditor}
                         onFocusSection={() => setActiveSection('footer')}
@@ -1217,4 +1215,3 @@ const PrintTemplatesTab: React.FC = () => {
 };
 
 export default PrintTemplatesTab;
-

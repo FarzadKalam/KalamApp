@@ -143,6 +143,7 @@ export const buildImageBackgroundStyle = (
 export const getImagePreviewCandidates = (
   rawUrl: string | null | undefined,
   preset: ImagePreviewPreset = 'card',
+  options?: { forceTransform?: boolean },
 ): string[] => {
   const normalized = normalizePublicAssetUrl(rawUrl);
   if (!normalized) return [];
@@ -150,7 +151,7 @@ export const getImagePreviewCandidates = (
   if (normalizedUrl && unavailableTransformOrigins.has(normalizedUrl.origin)) {
     return [normalized];
   }
-  const previewUrl = buildImagePreviewUrl(normalized, preset);
+  const previewUrl = buildImagePreviewUrl(normalized, preset, { forceTransform: options?.forceTransform });
   if (!previewUrl || previewUrl === normalized) {
     return [normalized];
   }

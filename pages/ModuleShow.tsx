@@ -114,7 +114,7 @@ import {
 } from '../utils/instructionSupport';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../utils/processTemplateStages';
 import type { ProcessRuntimeSnapshot } from '../utils/processRuntimeSnapshot';
-import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord } from '../utils/surveyTemplates';
+import { buildSurveyRuntimeModule, mergeSurveyTemplateValuesIntoRecord, supportsWebFormTemplateRuntime } from '../utils/surveyTemplates';
 import RecordLockControl from '../components/recordLocks/RecordLockControl';
 import {
   fetchRecordLockState,
@@ -466,7 +466,7 @@ const ModuleShow: React.FC = () => {
         })).filter((option) => option.value),
       });
     }
-    if (moduleId === 'surveys' && nextConfig && data?.template_schema_snapshot) {
+    if (nextConfig && supportsWebFormTemplateRuntime(nextConfig) && data?.template_schema_snapshot) {
       nextConfig = buildSurveyRuntimeModule(nextConfig, data.template_schema_snapshot, 'show');
     }
     return nextConfig;
@@ -3268,10 +3268,11 @@ const ModuleShow: React.FC = () => {
           process_target_module_ids: targetModuleIds,
           process_link_map: processLinkMap,
         }));
-        await supabase
+        const { error: projectDraftUpdateError } = await supabase
           .from('projects')
           .update({ execution_process_draft: enrichedDraft })
           .eq('id', projectId);
+        if (projectDraftUpdateError) throw projectDraftUpdateError;
         await syncProcessDraftToLinkedRecords(supabase, enrichedDraft, processLinkMap);
         payload.execution_process_draft = enrichedDraft;
       }

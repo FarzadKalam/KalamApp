@@ -100,7 +100,9 @@ const PRICE_PATH_PATTERN = /amount|price|total|balance|discount|vat|tax|debt|cre
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
 const MULTILINE_PRINT_STYLE = 'white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere;';
 const MIN_PRINT_BODY_HEIGHT_PX = 80;
-const PRINT_SECTION_CONTENT_PADDING = '6px 10px';
+const PRINT_SECTION_CONTENT_PADDING = '0 10px';
+const PRINT_PAGE_COUNTER_HEIGHT_PX = 18;
+const PRINT_BODY_LINE_GUARD_PX = 28;
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -181,18 +183,18 @@ const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
 const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
   Math.min(normalizePrintBodyHeightPx(pageBodyHeightPx), Math.max(1, Math.ceil(effectiveBodyStepPx)));
 
-const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
-  const rootRect = bodyMeasure.getBoundingClientRect();
-  const descendantBottom = Array.from(bodyMeasure.querySelectorAll('*')).reduce((maxBottom, element) => {
+const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
+  const rootRect = measureNode.getBoundingClientRect();
+  const descendantBottom = Array.from(measureNode.querySelectorAll('*')).reduce((maxBottom, element) => {
     const rect = (element as HTMLElement).getBoundingClientRect();
     if (!rect.height && !rect.width) return maxBottom;
     return Math.max(maxBottom, rect.bottom - rootRect.top);
   }, 0);
 
   return Math.max(
-    bodyMeasure.scrollHeight,
-    bodyMeasure.offsetHeight,
-    bodyMeasure.clientHeight,
+    measureNode.scrollHeight,
+    measureNode.offsetHeight,
+    measureNode.clientHeight,
     Math.ceil(rootRect.height || 0),
     Math.ceil(descendantBottom || 0),
     1
@@ -200,13 +202,32 @@ const getMeasuredPrintBodyHeight = (bodyMeasure: HTMLElement) => {
 };
 
 const getMeasuredPrintPageOffsets = (bodyMeasure: HTMLElement, pageBodyStepPx: number) => {
-  const bodyHeight = getMeasuredPrintBodyHeight(bodyMeasure);
+  const bodyHeight = getMeasuredPrintBlockHeight(bodyMeasure);
   const anchors = collectPrintPageAnchors(bodyMeasure);
   return buildSmartPrintPageOffsets({
     totalHeight: bodyHeight,
     pageBodyStepPx,
     anchors,
   });
+};
+
+const getEffectiveMeasuredSectionHeightPx = ({
+  enabled,
+  configuredHeightPx,
+  measuredNode,
+  fallbackHeightPx = 0,
+}: {
+  enabled: boolean;
+  configuredHeightPx: number;
+  measuredNode?: HTMLElement | null;
+  fallbackHeightPx?: number;
+}) => {
+  if (!enabled) return 0;
+  const measuredHeight = measuredNode ? getMeasuredPrintBlockHeight(measuredNode) : fallbackHeightPx;
+  if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+    return Math.max(0, Math.round(configuredHeightPx));
+  }
+  return Math.max(0, Math.min(Math.round(configuredHeightPx), Math.ceil(measuredHeight)));
 };
 
 const getTemplatePageBodyHeightPx = ({
@@ -228,7 +249,8 @@ const getTemplatePageBodyHeightPx = ({
     mmToPx(innerHeightMm) -
       (showHeader ? headerHeight : 0) -
       (showFooter ? footerHeight : 0) -
-      signatureHeight
+      signatureHeight -
+      PRINT_BODY_LINE_GUARD_PX
   );
 
 const getPaperSizeMetrics = (
@@ -497,6 +519,9 @@ export const usePrintManager = ({
     provider: 'tiptap',
   });
   const [savingPrintFields, setSavingPrintFields] = useState(false);
+  const [measuredSectionHeights, setMeasuredSectionHeights] = useState({ header: 0, footer: 0 });
+  const headerMeasureRef = useRef<HTMLDivElement | null>(null);
+  const footerMeasureRef = useRef<HTMLDivElement | null>(null);
   const bodyMeasureRef = useRef<HTMLDivElement | null>(null);
   const buildPrintCardRef = useRef<(pageCountOverride?: number | null) => React.ReactNode>(() => null);
   const reservedPrintWindowRef = useRef<Window | null>(null);
@@ -959,9 +984,31 @@ export const usePrintManager = ({
           const rawFooterHtml = String(renderedCustomTemplateRef.current?.footerHtml || '').trim();
           const showFooter =
             selectedStoredTemplate.showFooter !== false &&
-            hasRenderablePrintFooterHtml(rawFooterHtml);
-          const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
-          const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
+            (hasRenderablePrintFooterHtml(rawFooterHtml) ||
+              printSignatureSectionHeightPxRef.current > 0 ||
+              PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+          const configuredHeaderHeight = Number(selectedStoredTemplate.headerHeight || 84);
+          const configuredFooterHeight = Number(selectedStoredTemplate.footerHeight || 62);
+          const headerHeight = getEffectiveMeasuredSectionHeightPx({
+            enabled: showHeader,
+            configuredHeightPx: configuredHeaderHeight,
+            measuredNode: headerMeasureRef.current,
+            fallbackHeightPx: measuredSectionHeights.header,
+          });
+          const measuredFooterHeight = getEffectiveMeasuredSectionHeightPx({
+            enabled: showFooter,
+            configuredHeightPx: configuredFooterHeight,
+            measuredNode: footerMeasureRef.current,
+            fallbackHeightPx: measuredSectionHeights.footer,
+          });
+          const footerHeight = showFooter
+            ? measuredFooterHeight + printSignatureSectionHeightPxRef.current + PRINT_PAGE_COUNTER_HEIGHT_PX
+            : 0;
+          setMeasuredSectionHeights((prev) =>
+            prev.header === headerHeight && prev.footer === measuredFooterHeight
+              ? prev
+              : { header: headerHeight, footer: measuredFooterHeight }
+          );
           const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
           const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
           return getTemplatePageBodyHeightPx({
@@ -970,7 +1017,7 @@ export const usePrintManager = ({
             showFooter,
             headerHeight,
             footerHeight,
-            signatureHeight: printSignatureSectionHeightPxRef.current,
+            signatureHeight: 0,
           });
         })();
     const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
@@ -989,6 +1036,8 @@ export const usePrintManager = ({
 
     return { pageOffsets, pageCount };
   }, [
+    measuredSectionHeights.footer,
+    measuredSectionHeights.header,
     selectedTemplateId,
     selectedStoredTemplate,
     selectedOrgLetterhead,
@@ -2770,6 +2819,7 @@ export const usePrintManager = ({
   useEffect(() => {
     if (!selectedStoredTemplate) {
       preparedPrintPageCountRef.current = null;
+      setMeasuredSectionHeights((prev) => (prev.header === 0 && prev.footer === 0 ? prev : { header: 0, footer: 0 }));
       setRenderedPageCount(1);
       renderedPageOffsetsRef.current = [0];
       setRenderedPageOffsets([0]);
@@ -2799,9 +2849,31 @@ export const usePrintManager = ({
             const rawFooterHtml = String(renderedCustomTemplate?.footerHtml || '').trim();
             const showFooter =
               selectedStoredTemplate.showFooter !== false &&
-              hasRenderablePrintFooterHtml(rawFooterHtml);
-            const headerHeight = Number(selectedStoredTemplate.headerHeight || 84);
-            const footerHeight = Number(selectedStoredTemplate.footerHeight || 62);
+              (hasRenderablePrintFooterHtml(rawFooterHtml) ||
+                printSignatureSectionHeightPx > 0 ||
+                PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+            const configuredHeaderHeight = Number(selectedStoredTemplate.headerHeight || 84);
+            const configuredFooterHeight = Number(selectedStoredTemplate.footerHeight || 62);
+            const headerHeight = getEffectiveMeasuredSectionHeightPx({
+              enabled: showHeader,
+              configuredHeightPx: configuredHeaderHeight,
+              measuredNode: headerMeasureRef.current,
+              fallbackHeightPx: measuredSectionHeights.header,
+            });
+            const measuredFooterHeight = getEffectiveMeasuredSectionHeightPx({
+              enabled: showFooter,
+              configuredHeightPx: configuredFooterHeight,
+              measuredNode: footerMeasureRef.current,
+              fallbackHeightPx: measuredSectionHeights.footer,
+            });
+            const footerHeight = showFooter
+              ? measuredFooterHeight + printSignatureSectionHeightPx + PRINT_PAGE_COUNTER_HEIGHT_PX
+              : 0;
+            setMeasuredSectionHeights((prev) =>
+              prev.header === headerHeight && prev.footer === measuredFooterHeight
+                ? prev
+                : { header: headerHeight, footer: measuredFooterHeight }
+            );
             const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
             const innerHeightMm = Math.max(40, metrics.heightMm - pageMargins.top - pageMargins.bottom);
             return getTemplatePageBodyHeightPx({
@@ -2810,7 +2882,7 @@ export const usePrintManager = ({
               showFooter,
               headerHeight,
               footerHeight,
-              signatureHeight: printSignatureSectionHeightPx,
+              signatureHeight: 0,
             });
           })();
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
@@ -2886,6 +2958,8 @@ export const usePrintManager = ({
       });
     };
   }, [
+    measuredSectionHeights.footer,
+    measuredSectionHeights.header,
     selectedStoredTemplate,
     renderedCustomTemplate?.contentHtml,
     renderedCustomTemplate?.footerHtml,
@@ -2895,6 +2969,7 @@ export const usePrintManager = ({
   ]);
 
   const buildPrintCard = useCallback((pageCountOverride?: number | null) => {
+    const shouldRenderMeasurementNodes = pageCountOverride == null;
     const selected = selectedPrintFields[selectedTemplateId] || [];
     const fieldMap = new Map(
       printableFieldsForTemplate.map((field: any) => [String(field?.key || '').trim(), field])
@@ -2973,28 +3048,30 @@ export const usePrintManager = ({
               color: '#111827',
             },
           },
-          React.createElement(
-            'div',
-            {
-              style: {
-                position: 'absolute',
-                insetInlineStart: -99999,
-                top: 0,
-                width: `${bodyWidthMm}mm`,
-                boxSizing: 'border-box',
-                visibility: 'hidden',
-                pointerEvents: 'none',
-                zIndex: -1,
-              },
-              'aria-hidden': true,
-            },
-            React.createElement('div', {
-              ref: bodyMeasureRef,
-              className: 'print-template-body-measure',
-              style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
-              dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
-            }),
-          ),
+          shouldRenderMeasurementNodes
+            ? React.createElement(
+                'div',
+                {
+                  style: {
+                    position: 'absolute',
+                    insetInlineStart: -99999,
+                    top: 0,
+                    width: `${bodyWidthMm}mm`,
+                    boxSizing: 'border-box',
+                    visibility: 'hidden',
+                    pointerEvents: 'none',
+                    zIndex: -1,
+                  },
+                  'aria-hidden': true,
+                },
+                React.createElement('div', {
+                  ref: bodyMeasureRef,
+                  className: 'print-template-body-measure',
+                  style: { padding: PRINT_SECTION_CONTENT_PADDING, boxSizing: 'border-box' },
+                  dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+                }),
+              )
+            : null,
           ...pageStartOffsets.map((pageStartOffset, pageIndex) => {
             const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
             const effectiveBodyStepPx = nextPageStartOffset !== undefined
@@ -3015,6 +3092,7 @@ export const usePrintManager = ({
                   background: '#fff',
                   boxSizing: 'border-box',
                   overflow: 'hidden',
+                  isolation: 'isolate',
                   pageBreakAfter: pageIndex < effectivePageCount - 1 ? 'always' : 'auto',
                   breakAfter: pageIndex < effectivePageCount - 1 ? 'page' : 'auto',
                 },
@@ -3116,13 +3194,30 @@ export const usePrintManager = ({
       const hasSignatureBand = Boolean(printSignatureBandHtml);
       const rawFooterHtml = String(renderedCustomTemplate?.footerHtml || '').trim();
       const hasFooterHtml = hasRenderablePrintFooterHtml(rawFooterHtml);
-      const showFooter = selectedStoredTemplate?.showFooter !== false && hasFooterHtml;
-      const headerHeight = Number(selectedStoredTemplate?.headerHeight || 84);
-      const footerHeight = Number(selectedStoredTemplate?.footerHeight || 62);
-      const headerHeightCss = toCssMm(headerHeight);
-      const footerHeightCss = toCssMm(footerHeight);
+      const showFooter =
+        selectedStoredTemplate?.showFooter !== false &&
+        (hasFooterHtml || hasSignatureBand || PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+      const configuredHeaderHeight = Number(selectedStoredTemplate?.headerHeight || 84);
+      const configuredFooterHeight = Number(selectedStoredTemplate?.footerHeight || 62);
       const signatureHeightPx = hasSignatureBand ? printSignatureSectionHeightPx : 0;
       const signatureHeightCss = toCssMm(signatureHeightPx);
+      const headerHeight = getEffectiveMeasuredSectionHeightPx({
+        enabled: showHeader,
+        configuredHeightPx: configuredHeaderHeight,
+        measuredNode: headerMeasureRef.current,
+        fallbackHeightPx: measuredSectionHeights.header,
+      });
+      const measuredFooterHeight = getEffectiveMeasuredSectionHeightPx({
+        enabled: showFooter,
+        configuredHeightPx: configuredFooterHeight,
+        measuredNode: footerMeasureRef.current,
+        fallbackHeightPx: measuredSectionHeights.footer,
+      });
+      const footerHeight = showFooter
+        ? measuredFooterHeight + signatureHeightPx + PRINT_PAGE_COUNTER_HEIGHT_PX
+        : 0;
+      const headerHeightCss = toCssMm(headerHeight);
+      const footerHeightCss = toCssMm(footerHeight);
       const pageSize = `${selectedStoredTemplate?.paperSize || 'A4'} ${selectedStoredTemplate?.orientation === 'landscape' ? 'landscape' : 'portrait'}`;
       const pageMargins = getResolvedTemplatePageMargins(selectedStoredTemplate);
       const innerWidthMm = Math.max(20, metrics.widthMm - pageMargins.left - pageMargins.right);
@@ -3133,11 +3228,10 @@ export const usePrintManager = ({
         showFooter,
         headerHeight,
         footerHeight,
-        signatureHeight: signatureHeightPx,
+        signatureHeight: 0,
       });
       const pageBodyStepPx = getTemplatePageBodyStepPx(pageBodyHeightPx);
       const isCatalogFullPageTemplate = isCatalogFullPageTemplateId(selectedStoredTemplate?.id || '');
-      const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
       const sectionPadding = isCatalogFullPageTemplate ? '0' : PRINT_SECTION_CONTENT_PADDING;
 
       if (isCatalogFullPageTemplate) {
@@ -3240,33 +3334,63 @@ export const usePrintManager = ({
           'data-page-size': pageSize,
           'data-native-single-page': isCatalogFullPageTemplate ? 'true' : 'false',
         },
-        React.createElement(
-          'div',
-          {
-            style: {
-              position: 'absolute',
-              insetInlineStart: -99999,
-              top: 0,
-              width: `${innerWidthMm}mm`,
-              boxSizing: 'border-box',
-              visibility: 'hidden',
-              pointerEvents: 'none',
-              zIndex: -1,
-            },
-            'aria-hidden': true,
-          },
-          React.createElement('div', {
-            ref: bodyMeasureRef,
-            className: 'print-template-body-measure',
-            style: { padding: sectionPadding, boxSizing: 'border-box' },
-            dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
-          })
-        ),
+          shouldRenderMeasurementNodes
+            ? React.createElement(
+                'div',
+                {
+                  style: {
+                    position: 'absolute',
+                    insetInlineStart: -99999,
+                    top: 0,
+                    width: `${innerWidthMm}mm`,
+                    boxSizing: 'border-box',
+                    visibility: 'hidden',
+                    pointerEvents: 'none',
+                    zIndex: -1,
+                  },
+                  'aria-hidden': true,
+                },
+                showHeader
+                  ? React.createElement('div', {
+                      ref: headerMeasureRef,
+                      className: 'print-template-header-inner print-template-header-measure',
+                      style: {
+                        width: '100%',
+                        padding: sectionPadding,
+                        boxSizing: 'border-box',
+                        overflow: 'visible',
+                      },
+                      dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.headerHtml || '' },
+                    })
+                  : null,
+                showFooter
+                  ? React.createElement('div', {
+                      ref: footerMeasureRef,
+                      className: 'print-template-footer-inner print-template-footer-measure',
+                      style: {
+                        width: '100%',
+                        padding: sectionPadding,
+                        boxSizing: 'border-box',
+                        overflow: 'visible',
+                      },
+                      dangerouslySetInnerHTML: { __html: rawFooterHtml },
+                    })
+                  : null,
+                React.createElement('div', {
+                  ref: bodyMeasureRef,
+                  className: 'print-template-body-measure',
+                  style: { padding: sectionPadding, boxSizing: 'border-box' },
+                  dangerouslySetInnerHTML: { __html: renderedCustomTemplate?.contentHtml || '' },
+                })
+              )
+            : null,
         ...pageStartOffsets.map((pageStartOffset, pageIndex) => {
           // Per-page effective body step: exactly the number of content pixels
           // this page should display. For all pages except the last this equals
           // (nextPageStartOffset - pageStartOffset), so the guard begins right
           // where the next page begins - no overlap, no partial lines.
+          const pageBodyHeightCss = toCssMm(pageBodyHeightPx);
+          const pageCounterHeightCss = toCssMm(PRINT_PAGE_COUNTER_HEIGHT_PX);
           const nextPageStartOffset = pageStartOffsets[pageIndex + 1];
           const effectiveBodyStepPx = nextPageStartOffset !== undefined
             ? Math.min(pageBodyStepPx, Math.max(1, nextPageStartOffset - pageStartOffset))
@@ -3293,10 +3417,11 @@ export const usePrintManager = ({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 0,
-                direction: 'rtl',
-                padding: `${pageMargins.top}mm ${pageMargins.right}mm ${pageMargins.bottom}mm ${pageMargins.left}mm`,
-                pageBreakAfter: pageIndex < effectivePageCount - 1 ? 'always' : 'auto',
-                breakAfter: pageIndex < effectivePageCount - 1 ? 'page' : 'auto',
+                  direction: 'rtl',
+                  padding: `${pageMargins.top}mm ${pageMargins.right}mm ${pageMargins.bottom}mm ${pageMargins.left}mm`,
+                  isolation: 'isolate',
+                  pageBreakAfter: pageIndex < effectivePageCount - 1 ? 'always' : 'auto',
+                  breakAfter: pageIndex < effectivePageCount - 1 ? 'page' : 'auto',
                 breakInside: 'avoid',
                 pageBreakInside: 'avoid',
                 '--print-header-height': showHeader ? headerHeightCss : '0px',
@@ -3324,6 +3449,8 @@ export const usePrintManager = ({
                       maxHeight: headerHeightCss,
                       overflow: 'hidden',
                       padding: 0,
+                      position: 'relative',
+                      zIndex: 1,
                     },
                   },
                   React.createElement('div', {
@@ -3345,6 +3472,8 @@ export const usePrintManager = ({
                   height: pageBodyHeightCss,
                   maxHeight: pageBodyHeightCss,
                   position: 'relative',
+                  zIndex: 2,
+                  background: '#fff',
                   overflow: 'hidden',
                   display: 'flex',
                   flexDirection: 'column',
@@ -3389,23 +3518,6 @@ export const usePrintManager = ({
                 },
               })
             ),
-            hasSignatureBand
-              ? React.createElement('div', {
-                  className: 'print-template-signatures',
-                  style: {
-                    width: '100%',
-                    flex: `0 0 ${signatureHeightCss}`,
-                    minHeight: signatureHeightCss,
-                    height: signatureHeightCss,
-                    maxHeight: signatureHeightCss,
-                    overflow: 'hidden',
-                    display: 'flex',
-                    alignItems: 'flex-end',
-                    justifyContent: 'center',
-                  },
-                  dangerouslySetInnerHTML: { __html: printSignatureBandHtml },
-                })
-              : null,
             showFooter
               ? React.createElement(
                   'div',
@@ -3425,39 +3537,74 @@ export const usePrintManager = ({
                       display: 'flex',
                       flexDirection: 'column',
                       justifyContent: 'flex-end',
+                      position: 'relative',
+                      zIndex: 1,
                     },
                   },
                   React.createElement(
                     'div',
-                    { className: 'print-template-footer-stack', style: { display: 'flex', flexDirection: 'column', gap: 1, width: '100%' } },
-                    React.createElement('div', {
-                      className: 'print-template-footer-inner',
-                      style: { padding: sectionPadding, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
-                      dangerouslySetInnerHTML: { __html: rawFooterHtml },
-                    })
-                  )
-                )
-              : null,
-            effectivePageCount > 1
-              ? React.createElement(
-                  'div',
-                  {
-                    className: 'print-template-page-counter',
-                    style: {
-                      position: 'absolute',
-                      left: `${pageMargins.left}mm`,
-                      right: `${pageMargins.right}mm`,
-                      bottom: `${Math.max(pageMargins.bottom * 0.35, 1.5)}mm`,
-                      display: 'flex',
-                      justifyContent: 'flex-start',
-                      fontSize: 10,
-                      color: '#64748b',
-                      textAlign: 'left',
-                      pointerEvents: 'none',
-                      zIndex: 9,
+                    {
+                      className: 'print-template-footer-stack',
+                      style: {
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 1,
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        paddingBottom: effectivePageCount > 1 ? pageCounterHeightCss : 0,
+                      },
                     },
-                  },
-                  `صفحه ${toPersianNumber(`${pageIndex + 1} از ${effectivePageCount}`)}`
+                    hasSignatureBand
+                      ? React.createElement('div', {
+                          className: 'print-template-signatures',
+                          style: {
+                            width: '100%',
+                            flex: `0 0 ${signatureHeightCss}`,
+                            minHeight: signatureHeightCss,
+                            height: signatureHeightCss,
+                            maxHeight: signatureHeightCss,
+                            overflow: 'hidden',
+                            display: 'flex',
+                            alignItems: 'flex-end',
+                            justifyContent: 'center',
+                          },
+                          dangerouslySetInnerHTML: { __html: printSignatureBandHtml },
+                        })
+                      : null,
+                    hasFooterHtml
+                      ? React.createElement('div', {
+                          className: 'print-template-footer-inner',
+                          style: { padding: sectionPadding, boxSizing: 'border-box', minHeight: 0, maxHeight: '100%', overflow: 'hidden' },
+                          dangerouslySetInnerHTML: { __html: rawFooterHtml },
+                        })
+                      : null
+                  ),
+                  effectivePageCount > 1
+                    ? React.createElement(
+                        'div',
+                        {
+                          className: 'print-template-page-counter',
+                          style: {
+                            position: 'absolute',
+                            insetInlineStart: 0,
+                            insetInlineEnd: 0,
+                            bottom: 0,
+                            height: pageCounterHeightCss,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'flex-start',
+                            padding: '0 10px',
+                            boxSizing: 'border-box',
+                            fontSize: 10,
+                            color: '#64748b',
+                            textAlign: 'left',
+                            pointerEvents: 'none',
+                            zIndex: 2,
+                          },
+                        },
+                        `صفحه ${toPersianNumber(`${pageIndex + 1} از ${effectivePageCount}`)}`
+                      )
+                    : null
                 )
               : null
           );

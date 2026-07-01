@@ -9,6 +9,7 @@ const corsHeaders = {
 const FUNCTION_BUILD = 'taxpayer-system-2026-05-29-settlement-auto';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
+const TAXPAYER_DAY_MEASURE_UNIT_CODE = 'DAY';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -505,9 +506,14 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
   const customer = invoice.customer_id ? first(await select(urlBase, key, 'customers', { id: `eq.${invoice.customer_id}`, select: '*', limit: '1' })) : null;
   const ids = Array.from(new Set((Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : []).map((x: any) => String(x?.product_id || '').trim()).filter(Boolean)));
   let products: Record<string,any> = {};
+  let billboards: Record<string,any> = {};
   if (ids.length) {
-    const rows = await select(urlBase, key, 'products', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,product_identifier,main_unit,taxpayer_measure_unit_code,vat_percentage,is_vat_exempt' });
-    products = rows.reduce((acc: any, p: any) => ({ ...acc, [String(p.id)]: p }), {});
+    const [productRows, billboardRows] = await Promise.all([
+      select(urlBase, key, 'products', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,product_identifier,main_unit,taxpayer_measure_unit_code,vat_percentage,is_vat_exempt' }),
+      select(urlBase, key, 'billboards', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,address,product_identifier,taxpayer_measure_unit_code' }),
+    ]);
+    products = productRows.reduce((acc: any, p: any) => ({ ...acc, [String(p.id)]: p }), {});
+    billboards = billboardRows.reduce((acc: any, b: any) => ({ ...acc, [String(b.id)]: b }), {});
   }
   const receipts = await select(urlBase, key, 'cash_bank_operations', {
     sales_invoice_id: `eq.${invoiceId}`,
@@ -526,10 +532,10 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
     const best = subs.find((s: any) => s.status === 'confirmed' && s.taxid) || subs.find((s: any) => s.taxid);
     originalTaxid = best?.taxid || null;
   }
-  return { invoice, customer, products, receipts: Array.isArray(receipts) ? receipts : [], originalTaxid };
+  return { invoice, customer, products, billboards, receipts: Array.isArray(receipts) ? receipts : [], originalTaxid };
 };
 const invoicePayload = (args: any) => {
-  const { invoice, customer, products, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
+  const { invoice, customer, products, billboards, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
   const invDate = String(invoice.invoice_date || '').slice(0,10);
   const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
   if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
@@ -550,10 +556,14 @@ const invoicePayload = (args: any) => {
   const insp = settlementCode === 2 ? preTbill : settlementCode === 3 ? Math.max(preTbill - (cap || 0), 0) : null;
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
-    const product = products[String(item?.product_id || '')] || {};
-    const sstid = String(product?.product_identifier || '').trim();
+    const itemId = String(item?.product_id || '').trim();
+    const product = products[itemId] || {};
+    const billboard = billboards[itemId] || {};
+    const sourceRecord = product?.id ? product : billboard;
+    const sstid = String(sourceRecord?.product_identifier || '').trim();
     if (!sstid) throw new Error(`شناسه کالا/خدمت در ردیف ${i + 1} فاکتور ثبت نشده است.`);
-    const mu = String(item?.measure_unit_code ?? item?.mu ?? product?.taxpayer_measure_unit_code ?? '').trim();
+    const fallbackMeasureUnitCode = billboard?.id ? TAXPAYER_DAY_MEASURE_UNIT_CODE : sourceRecord?.taxpayer_measure_unit_code;
+    const mu = String(item?.measure_unit_code ?? item?.mu ?? fallbackMeasureUnitCode ?? '').trim();
     if (!mu) throw new Error(`کد واحد اندازه‌گیری مودیان در ردیف ${i + 1} فاکتور ثبت نشده است.`);
     const qty = Number(item?.quantity || 0);
     if (!(qty > 0)) throw new Error(`تعداد در ردیف ${i + 1} فاکتور معتبر نیست.`);
@@ -561,7 +571,7 @@ const invoicePayload = (args: any) => {
     const base = rial(a.base,currency), dis = rial(a.dis,currency), after = rial(a.after,currency), vat = rial(a.vat,currency), total = rial(a.total,currency);
     tprdis += base; tdis += dis; tadis += after; tvam += vat; tbill += total;
     const vop = settlementCode === 3 && cap !== null && preTbill > 0 ? Math.round(vat * cap / preTbill) : null;
-    return { sstid, sstt: String(item?.description || product?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop, tsstam: total };
+    return { sstid, sstt: String(item?.description || billboard?.address || sourceRecord?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop, tsstam: total };
   });
   const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();

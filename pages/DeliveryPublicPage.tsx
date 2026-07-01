@@ -33,7 +33,7 @@ import gregorian from 'react-date-object/calendars/gregorian';
 import gregorian_en from 'react-date-object/locales/gregorian_en';
 import { DEFAULT_BRANDING, BRAND_PALETTE_PRESETS, type BrandingConfig, type BrandingPaletteKey } from '../theme/brandTheme';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
-import { buildImagePreviewUrl, isImageFileLike } from '../utils/imagePreview';
+import { isImageFileLike } from '../utils/imagePreview';
 import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
 
@@ -505,7 +505,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
       <div style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, ${hexToRgba(primaryColor, 0.82)} 100%)` }}>
         <div style={{ maxWidth: 820, margin: '0 auto', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
           {logoUrl ? (
-            <ResilientImage src={logoUrl} preset="gallery" alt={branding.brandName} style={{ width: 52, height: 52, objectFit: 'contain', borderRadius: 10, background: 'rgba(255,255,255,0.15)', padding: 4, flexShrink: 0 }} />
+            <ResilientImage src={logoUrl} preset="gallery" forcePreviewTransform alt={branding.brandName} style={{ width: 52, height: 52, objectFit: 'contain', borderRadius: 10, background: 'rgba(255,255,255,0.15)', padding: 4, flexShrink: 0 }} />
           ) : (
             <Avatar size={52} icon={<ShopOutlined />} style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', flexShrink: 0 }} />
           )}
@@ -568,7 +568,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
                     }}
                   >
                     {isImage ? (
-                      <ResilientImage src={buildImagePreviewUrl(file.url, 'thumb')} preset="thumb" alt={file.name || 'فایل'} style={{ width: '100%', height: 92, objectFit: 'cover', display: 'block' }} />
+                      <ResilientImage src={file.url} preset="thumb" forcePreviewTransform alt={file.name || 'فایل'} style={{ width: '100%', height: 92, objectFit: 'cover', display: 'block' }} />
                     ) : (
                       <div style={{ height: 92, display: 'flex', alignItems: 'center', justifyContent: 'center', color: primaryColor }}>
                         <FileOutlined style={{ fontSize: 28 }} />

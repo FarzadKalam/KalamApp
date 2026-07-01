@@ -23,6 +23,15 @@ describe('getImagePreviewCandidates', () => {
     ]);
   });
 
+  it('can force transformed previews even when the caller opts in explicitly', () => {
+    const url = 'https://example.com/storage/v1/object/public/images/record_files/tasks/1/photo.jpg';
+
+    expect(getImagePreviewCandidates(url, 'thumb', { forceTransform: true })).toEqual([
+      'https://example.com/storage/v1/render/image/public/images/record_files/tasks/1/photo.jpg?width=260&quality=68&resize=cover',
+      url,
+    ]);
+  });
+
   it('returns only original for non-transformable urls', () => {
     const url = 'data:image/png;base64,abc';
     expect(getImagePreviewCandidates(url, 'thumb')).toEqual([url]);

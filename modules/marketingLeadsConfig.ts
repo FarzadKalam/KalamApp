@@ -8,6 +8,12 @@ import {
   ModuleNature,
   ViewMode,
 } from '../types';
+import { createWebFormTemplateRecordSaver } from '../utils/webFormTemplateFormAdapter';
+
+const saveMarketingLeadRecord = createWebFormTemplateRecordSaver({
+  moduleId: 'marketing_leads',
+  table: 'marketing_leads',
+});
 
 export const marketingLeadsModule: ModuleDefinition = {
   id: 'marketing_leads',
@@ -16,6 +22,9 @@ export const marketingLeadsModule: ModuleDefinition = {
   table: 'marketing_leads',
   supportedViewModes: [ViewMode.LIST, ViewMode.KANBAN, ViewMode.GRID],
   defaultViewMode: ViewMode.KANBAN,
+  formAdapter: {
+    save: saveMarketingLeadRecord,
+  },
   fields: [
     {
       key: 'name',
@@ -97,6 +106,22 @@ export const marketingLeadsModule: ModuleDefinition = {
       dynamicOptionsCategory: 'lead_source',
       isTableColumn: true,
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'survey_template_id',
+      labels: { fa: 'قالب وب‌فرم', en: 'Web Form Template' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 6.5,
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+      relationConfig: {
+        targetModule: 'web_forms',
+        filter: {
+          target_module_id: 'marketing_leads',
+          is_active: true,
+        },
+      },
     },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 7, nature: FieldNature.STANDARD, isTableColumn: true },
     //{
@@ -302,6 +327,28 @@ export const marketingLeadsModule: ModuleDefinition = {
       blockId: 'notes',
       order: 1,
       nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'template_field_values',
+      labels: { fa: 'داده‌های قالب', en: 'Template Values' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'notes',
+      order: 90,
+      readonly: true,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
+    },
+    {
+      key: 'template_schema_snapshot',
+      labels: { fa: 'اسنپ‌شات قالب', en: 'Template Snapshot' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'notes',
+      order: 91,
+      readonly: true,
+      hideInCreateForm: true,
+      nature: FieldNature.SYSTEM,
     },
   ],
   blocks: [
