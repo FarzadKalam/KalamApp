@@ -29,6 +29,14 @@ type BuildCopyPayloadParams = {
 
 const MODULES_WITH_DRAFT_COPY_STATUS = new Set(['price_lists', 'product_bundles']);
 
+const slugifyCopyValue = (value: any, copyIndex: number) => {
+  const base = String(value || '').trim();
+  if (!base) return base;
+  const copyToken = Date.now().toString(36);
+  const suffix = copyIndex > 0 ? `-copy-${copyToken}-${copyIndex + 1}` : `-copy-${copyToken}`;
+  return `${base}${suffix}`;
+};
+
 const cloneCopyValue = (value: any) => {
   if (value === null || value === undefined) return value;
   if (Array.isArray(value) || (typeof value === 'object' && value.constructor === Object)) {
@@ -75,6 +83,10 @@ export const buildCopyPayload = (
 
   if (MODULES_WITH_DRAFT_COPY_STATUS.has(String(params.moduleId || '')) && 'status' in payload) {
     payload.status = 'draft';
+  }
+
+  if (String(params.moduleId || '') === 'web_forms' && typeof payload.route_slug === 'string') {
+    payload.route_slug = slugifyCopyValue(payload.route_slug, copyIndex);
   }
 
   return payload;
@@ -208,5 +220,38 @@ export const copyProcessTemplateStagesRelations = async (
   }));
 
   const { error: insertError } = await supabaseClient.from('process_template_stages').insert(payloads);
+  if (insertError) throw insertError;
+};
+
+export const copyWebFormFieldsRelations = async (
+  supabaseClient: any,
+  sourceWebFormId: string,
+  targetWebFormId: string
+) => {
+  if (!supabaseClient || !sourceWebFormId || !targetWebFormId) return;
+
+  const { data: sourceFields, error: sourceError } = await supabaseClient
+    .from('web_form_fields')
+    .select('*')
+    .eq('web_form_id', sourceWebFormId)
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (sourceError) throw sourceError;
+
+  const fieldRows = sourceFields || [];
+  if (!fieldRows.length) return;
+
+  const payloads = fieldRows.map((sourceField: Record<string, any>) => {
+    const payload: Record<string, any> = {};
+    Object.entries(sourceField || {}).forEach(([key, value]) => {
+      if (!key || LINE_OMIT_KEYS.has(key) || key.startsWith('__')) return;
+      if (value === undefined) return;
+      payload[key] = cloneCopyValue(value);
+    });
+    payload.web_form_id = targetWebFormId;
+    return payload;
+  });
+
+  const { error: insertError } = await supabaseClient.from('web_form_fields').insert(payloads);
   if (insertError) throw insertError;
 };

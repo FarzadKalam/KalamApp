@@ -33,7 +33,7 @@ import {
   type PermissionMap,
   type RecordScope,
 } from "../utils/permissions";
-import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, detectCopyNameField } from "../utils/recordCopy";
+import { buildCopyPayload, copyProcessTemplateStagesRelations, copyProductionOrderRelations, copyWebFormFieldsRelations, detectCopyNameField } from "../utils/recordCopy";
 import { attachTaskCompletionIfNeeded } from "../utils/taskCompletion";
 import { getTaskRelationFieldKey, resolveTaskSourceLink } from "../utils/taskMeta";
 import { readCurrencyConfig } from "../utils/currency";
@@ -4212,7 +4212,7 @@ export const ModuleListRefine: React.FC<{
             return;
           }
           const nameField = detectCopyNameField(moduleConfig);
-          if (resolvedModuleId === 'production_orders' || resolvedModuleId === 'process_templates') {
+          if (resolvedModuleId === 'production_orders' || resolvedModuleId === 'process_templates' || resolvedModuleId === 'web_forms') {
             let copiedCount = 0;
             for (let idx = 0; idx < records.length; idx += 1) {
               const record = records[idx];
@@ -4226,8 +4226,10 @@ export const ModuleListRefine: React.FC<{
               if (inserted?.id) {
                 if (resolvedModuleId === 'production_orders') {
                   await copyProductionOrderRelations(supabase, String(record.id), String(inserted.id));
-                } else {
+                } else if (resolvedModuleId === 'process_templates') {
                   await copyProcessTemplateStagesRelations(supabase, String(record.id), String(inserted.id));
+                } else {
+                  await copyWebFormFieldsRelations(supabase, String(record.id), String(inserted.id));
                 }
               }
               copiedCount += 1;
@@ -4310,6 +4312,7 @@ export const ModuleListRefine: React.FC<{
       }
     });
   };
+  void handleCopyViaCreateForm;
 
   const handleCreateGroupOrderFromSelection = () => {
     if (resolvedModuleId !== 'production_orders') return;
@@ -4651,7 +4654,7 @@ export const ModuleListRefine: React.FC<{
                       selectAllPagesLoading={selectAllPagesLoading}
                       selectAllPagesDisabled={selectAllPagesLoading}
                       onEdit={selectedRowKeys.length && canEditModule && (!isSystemManagedModule || !!tagsField || allowSystemManagedFullBulkEdit) ? handleBulkEditOpen : undefined}
-                      onCopy={selectedRowKeys.length && canEditModule && !isSystemManagedModule ? handleCopyViaCreateForm : undefined}
+                      onCopy={selectedRowKeys.length && canEditModule && !isSystemManagedModule ? handleBulkCopy : undefined}
                       onDelete={selectedRowKeys.length && canDeleteModule && (!isSystemManagedModule || allowSystemManagedDelete) ? handleBulkDelete : undefined}
                       onExport={selectedRowKeys.length ? handleExport : undefined}
                       exportMenuItems={selectedRowKeys.length ? exportMenuItems : undefined}
