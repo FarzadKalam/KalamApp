@@ -14,6 +14,9 @@ vi.mock('../../supabaseClient', () => ({
     functions: {
       invoke: (...args: any[]) => invokeMock(...args),
     },
+    auth: {
+      getSession: vi.fn(async () => ({ data: { session: { access_token: 'session-token' } }, error: null })),
+    },
     from: vi.fn(() => ({
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
@@ -81,11 +84,22 @@ vi.mock('./AiCapabilityComposerActions', async () => {
 
 const getBodies = () => invokeMock.mock.calls.map((call) => call[1]?.body).filter(Boolean);
 const findBody = (action: string) => getBodies().find((body) => body?.action === action);
+const getFetchBodies = () => (vi.mocked(fetch).mock.calls || [])
+  .map((call) => {
+    try { return JSON.parse(String(call[1]?.body || '{}')); } catch { return null; }
+  })
+  .filter(Boolean);
+const findFetchBody = (action: string) => getFetchBodies().find((body: any) => body?.action === action);
 
 const waitForBootstrap = async () => {
   await waitFor(() => expect(findBody('get_ai_overview')).toBeTruthy());
   invokeMock.mockClear();
 };
+
+const makeStreamResponse = (answer = 'پاسخ تست') => new Response(
+  `event: done\ndata: ${JSON.stringify({ success: true, threadId: 'thread-1', messageId: 'stream-1', answer })}\n\n`,
+  { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+);
 
 const renderPanel = async () => {
   render(
@@ -116,10 +130,12 @@ const typeAndSend = async (text: string, buttonName: string | RegExp = 'ارسا
 describe('AssistantPanel AI operators', () => {
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
     invokeMock.mockReset();
+    vi.stubGlobal('fetch', vi.fn(async () => makeStreamResponse()));
     invokeMock.mockImplementation(async (_functionName: string, options?: any) => {
       const action = options?.body?.action;
       if (action === 'get_ai_overview') {
@@ -177,9 +193,9 @@ describe('AssistantPanel AI operators', () => {
   });
 
   it.each([
-    ['web_search', 'cap-web_search', 'chat', 'dashboard_chat', 'ارسال'],
-    ['deep_reasoning', 'cap-deep_reasoning', 'chat', 'deep_reasoning', 'ارسال'],
-    ['legal_assistant', 'cap-legal_assistant', 'chat', 'legal_assistant', 'ارسال'],
+    ['web_search', 'cap-web_search', 'chat_stream', 'dashboard_chat', 'ارسال'],
+    ['deep_reasoning', 'cap-deep_reasoning', 'chat_stream', 'deep_reasoning', 'ارسال'],
+    ['legal_assistant', 'cap-legal_assistant', 'chat_stream', 'legal_assistant', 'ارسال'],
     ['process_operation', 'cap-process_operation', 'process_operation_from_prompt', 'record_chat', 'پیشنهاد اقدام'],
     ['record_creation', 'cap-record_creation', 'create_record_from_prompt', 'dashboard_chat', 'پیشنهاد ساخت'],
   ])('sends the %s operator through the expected assistant action', async (_name, capabilityButton, expectedAction, expectedCapability, sendButtonName) => {
@@ -187,6 +203,13 @@ describe('AssistantPanel AI operators', () => {
     fireEvent.click(screen.getAllByText(capabilityButton)[0]);
     await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent(String(capabilityButton).replace('cap-', '')));
     await typeAndSend('درخواست تست عملگر', sendButtonName);
+    if (expectedAction === 'chat_stream') {
+      await waitFor(() => expect(findFetchBody('chat_stream')).toBeTruthy());
+      const body = findFetchBody('chat_stream') as any;
+      expect(body?.capability).toBe(expectedCapability);
+      expect(body?.message).toContain('درخواست تست عملگر');
+      return;
+    }
     await waitFor(() => expect(findBody(expectedAction)).toBeTruthy());
     const body = findBody(expectedAction);
     expect(body?.capability).toBe(expectedCapability);
@@ -198,7 +221,7 @@ describe('AssistantPanel AI operators', () => {
     if (expectedAction === 'process_operation_from_prompt') {
       expect(body?.previewOnly).toBe(true);
     }
-  });
+  }, 10000);
 
   it.each([
     ['image_generation', 'cap-image_generation', 'generate_image', /ساخت تصویر/],
@@ -232,8 +255,27 @@ describe('AssistantPanel AI operators', () => {
     await renderPanel();
     await typeAndSend('یک پاسخ معمولی بده', 'ارسال');
     await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
-    await waitFor(() => expect(findBody('chat')).toBeTruthy());
-    expect(findBody('chat')?.capabilities || []).toEqual([]);
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(findBody('chat')).toBeFalsy();
+  });
+
+  it('does not generate an image automatically when the user only asks for an image prompt', async () => {
+    await renderPanel();
+    await typeAndSend('یک پرامپت برای تولید تصویر بهم بده', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(findBody('generate_image')).toBeFalsy();
+  });
+
+  it('requires confirmation before auto-routed image generation runs', async () => {
+    await renderPanel();
+    await typeAndSend('یک تصویر برای پروپوزال بساز', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('تایید ساخت تصویر')).toBeInTheDocument());
+    expect(findBody('generate_image')).toBeFalsy();
+    fireEvent.click(screen.getByText('تایید و اجرا'));
+    await waitFor(() => expect(findBody('generate_image')).toBeTruthy());
+    expect(findBody('generate_image')?.prompt).toContain('یک تصویر برای پروپوزال بساز');
   });
 
   it('uses auto routing for record creation when no operator is selected', async () => {

@@ -6,12 +6,17 @@ import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from './cashBankLegacyAccountKeys';
 import { shouldSkipModuleListField } from './moduleListFieldSelection';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from './recordReference';
-import { isWorkflowVirtualField } from './moduleFieldVisibility';
+import { isWorkflowVirtualField, shouldRenderInGeneralModuleUi } from './moduleFieldVisibility';
 
 type ModuleFieldLike = {
   key: string;
   type?: FieldType;
   isTableColumn?: boolean;
+  labels?: {
+    fa: string;
+    en?: string;
+  };
+  order?: number;
   dynamicOptionsCategory?: string;
   relationConfig?: {
     targetModule?: string;
@@ -26,6 +31,51 @@ type ModuleFieldLike = {
       tagColor?: string;
     }>;
   };
+};
+
+const MODULE_LIST_SYSTEM_FIELDS: ModuleFieldLike[] = [
+  { key: 'created_at', labels: { fa: 'زمان ایجاد' }, type: FieldType.DATETIME },
+  { key: 'updated_at', labels: { fa: 'زمان ویرایش' }, type: FieldType.DATETIME },
+  { key: 'created_by', labels: { fa: 'ایجاد کننده' }, type: FieldType.USER, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+  { key: 'updated_by', labels: { fa: 'آخرین ویرایشگر' }, type: FieldType.USER, relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+] as const;
+
+const getModuleListSystemFields = (
+  moduleConfig: ModuleDefinition | null | undefined,
+): ModuleFieldLike[] => {
+  if (!moduleConfig) return [];
+  return MODULE_LIST_SYSTEM_FIELDS.filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field.key || '').trim()));
+};
+
+export const getModuleListSelectableFields = (
+  moduleConfig: ModuleDefinition | null | undefined,
+): ModuleFieldLike[] => {
+  if (!moduleConfig) return [];
+
+  const explicitFields = (moduleConfig.fields || [])
+    .filter((field) => !isWorkflowVirtualField(field))
+    .filter((field) => shouldRenderInGeneralModuleUi(field))
+    .filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()))
+    .filter((field) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(field?.key || '').trim()));
+
+  const seen = new Set<string>();
+  const combined: ModuleFieldLike[] = [];
+
+  explicitFields.forEach((field) => {
+    const key = String(field?.key || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    combined.push(field);
+  });
+
+  getModuleListSystemFields(moduleConfig).forEach((field) => {
+    const key = String(field?.key || '').trim();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    combined.push(field);
+  });
+
+  return combined;
 };
 
 export type ModuleListOptionPlan = {
@@ -62,6 +112,7 @@ const buildRelationTargetCacheKey = (
 const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[] => {
   const tableFields = (moduleConfig.fields || [])
     .filter((field) => !isWorkflowVirtualField(field))
+    .filter((field) => shouldRenderInGeneralModuleUi(field))
     .filter((field) => !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()))
     .filter((field) => field.isTableColumn)
     .filter((field) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(field?.key || '').trim()))
@@ -73,6 +124,7 @@ const getDefaultListFields = (moduleConfig: ModuleDefinition): ModuleFieldLike[]
 
   return (moduleConfig.fields || []).filter((field) =>
     !isWorkflowVirtualField(field) &&
+    shouldRenderInGeneralModuleUi(field) &&
     !shouldSkipModuleListField(moduleConfig.id, String(field?.key || '').trim()) &&
     ['name', 'title', 'business_name', 'system_code', 'sell_price', 'stock_quantity', 'status', 'mobile_1', 'rank'].includes(field.key)
   );
@@ -93,7 +145,7 @@ export const normalizeCashBankVisibleColumnKeys = (
   moduleConfig: ModuleDefinition | null | undefined,
   columns?: string[] | null,
 ) => {
-  const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || '').trim()).filter(Boolean));
+  const allowedFieldKeys = new Set(getModuleListSelectableFields(moduleConfig).map((field) => String(field?.key || '').trim()).filter(Boolean));
   const seen = new Set<string>();
   const normalized = [
     ...CASH_BANK_REQUIRED_VISIBLE_FIELD_KEYS,
@@ -128,14 +180,19 @@ export const getModuleListVisibleFields = (
   if (!moduleConfig) return [];
 
   if (Array.isArray(visibleColumns) && visibleColumns.length > 0) {
+    const selectableFieldMap = new Map(
+      getModuleListSelectableFields(moduleConfig)
+        .map((field) => [String(field?.key || '').trim(), field] as const)
+        .filter(([key]) => Boolean(key))
+    );
     const nextVisibleColumns = moduleConfig.id === 'cash_bank_operations'
       ? normalizeCashBankVisibleColumnKeys(moduleConfig, visibleColumns)
       : visibleColumns;
     return prependCashBankImageField(moduleConfig, nextVisibleColumns
       .filter((fieldKey) => !shouldSkipModuleListField(moduleConfig.id, String(fieldKey || '').trim()))
       .filter((fieldKey) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(fieldKey || '').trim()))
-      .map((fieldKey) => moduleConfig.fields.find((field) => field.key === fieldKey))
-      .filter((field) => Boolean(field) && !isWorkflowVirtualField(field)) as ModuleFieldLike[]);
+      .map((fieldKey) => selectableFieldMap.get(String(fieldKey || '').trim()))
+      .filter(Boolean) as ModuleFieldLike[]);
   }
 
   return prependCashBankImageField(moduleConfig, getDefaultListFields(moduleConfig));

@@ -1,0 +1,53 @@
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import AiMessageRenderer from './AiMessageRenderer';
+
+describe('AiMessageRenderer', () => {
+  it('renders safe rich AI text and copy controls without executing raw HTML', () => {
+    const onCopy = vi.fn();
+    render(
+      <AiMessageRenderer
+        text={'**مهم**\n\n- مورد اول\n\n```ts\nconst value = 1;\n```\n\n<script>alert(1)</script>'}
+        onCopyText={onCopy}
+      />
+    );
+
+    expect(screen.getByText('مهم')).toBeInTheDocument();
+    expect(screen.getByText('مورد اول')).toBeInTheDocument();
+    expect(screen.getByText('const value = 1;')).toBeInTheDocument();
+    expect(screen.getByText('<script>alert(1)</script>')).toBeInTheDocument();
+    expect(document.querySelector('script')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('کپی کد'));
+    expect(onCopy).toHaveBeenCalledWith('const value = 1;', 'کد');
+  });
+
+  it('offers one focused copy action for ready document-style text', () => {
+    const onCopy = vi.fn();
+    const proposal = [
+      'بفرمایید این هم پروپوزال شما.',
+      '',
+      'پروپوزال همکاری',
+      'این متن برای ارائه به مشتری آماده شده است.'.repeat(30),
+    ].join('\n');
+    render(<AiMessageRenderer text={proposal} onCopyText={onCopy} />);
+
+    fireEvent.click(screen.getByText('کپی متن پروپوزال'));
+    expect(onCopy).toHaveBeenCalledWith(expect.stringContaining('پروپوزال همکاری'), 'متن پروپوزال');
+  });
+
+  it('shows streaming and retry controls', () => {
+    const onStop = vi.fn();
+    const onRetry = vi.fn();
+    const { rerender } = render(<AiMessageRenderer text="" streaming onStop={onStop} />);
+
+    expect(screen.getByText('در حال آماده‌سازی پاسخ...')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('توقف دریافت پاسخ'));
+    expect(onStop).toHaveBeenCalled();
+
+    rerender(<AiMessageRenderer text="خطا" failed onRetry={onRetry} />);
+    fireEvent.click(screen.getByLabelText('تلاش دوباره'));
+    expect(onRetry).toHaveBeenCalled();
+  });
+});

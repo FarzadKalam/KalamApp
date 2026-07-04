@@ -65,7 +65,9 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
 }) => {
   const [now, setNow] = useState(() => Date.now());
   const recheckRef = useRef(onRecheck);
+  const checkingRef = useRef(checking);
   recheckRef.current = onRecheck;
+  checkingRef.current = checking;
 
   // 1s ticker for the live timer.
   useEffect(() => {
@@ -80,6 +82,7 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
     const id = window.setInterval(() => {
       const maxMs = AUTO_POLL_MAX_MS_BY_KIND[kind] || 300000;
       if (Date.now() - startedAtMs > maxMs) { window.clearInterval(id); return; }
+      if (checkingRef.current) return;
       void recheckRef.current();
     }, AUTO_POLL_MS);
     return () => window.clearInterval(id);

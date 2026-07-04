@@ -32,6 +32,7 @@ import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
+import { parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
@@ -54,7 +55,7 @@ import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
 } from '../../utils/processTaskCustomFields';
-import { markModuleListChanged } from '../../utils/moduleListLive';
+import { markModuleListChanged, subscribeToLocalModuleListInvalidation } from '../../utils/moduleListLive';
 import {
   syncProjectStatusesForProcessContext,
 } from '../../utils/projectProcessStatus';
@@ -66,6 +67,12 @@ import {
   autoAssignProcessV2DraftStages,
   buildProcessV2TemplateContext,
 } from '../../utils/processV2AutoAssign';
+import {
+  findProcessAssigneeFieldReference,
+  getProcessAssigneeFieldKey,
+  normalizeProcessAssigneeFieldReference,
+  resolveProcessAssigneeReference,
+} from '../../utils/processAssigneeReference';
 import ProcessCardsV2, {
   getProcessV2StageMatchIds,
   mapTaskStatusToStageStatus,
@@ -251,6 +258,73 @@ const parseObject = (value: unknown): Record<string, any> => {
   }
 };
 
+const getRuntimeStageTaskId = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const sourceStage = stage?.source_stage && typeof stage.source_stage === 'object' ? stage.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeDbUuid(
+    stage?.task_id
+    || stage?.process_task_id
+    || metadata?.task_id
+    || metadata?.process_task_id
+    || sourceStage?.task_id
+    || sourceStage?.process_task_id
+    || sourceMetadata?.task_id
+    || sourceMetadata?.process_task_id,
+  );
+};
+
+const getRuntimeStageRunId = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const sourceStage = stage?.source_stage && typeof stage.source_stage === 'object' ? stage.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeDbUuid(
+    stage?.process_run_id
+    || metadata?.process_run_id
+    || sourceStage?.process_run_id
+    || sourceMetadata?.process_run_id,
+  );
+};
+
+const getRuntimeStageNodeKey = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const sourceStage = stage?.source_stage && typeof stage.source_stage === 'object' ? stage.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeText(
+    stage?.process_node_key
+    || stage?.[PROCESS_NODE_KEY]
+    || metadata?.process_node_key
+    || metadata?.[PROCESS_NODE_KEY]
+    || sourceStage?.process_node_key
+    || sourceStage?.[PROCESS_NODE_KEY]
+    || sourceMetadata?.process_node_key
+    || sourceMetadata?.[PROCESS_NODE_KEY],
+  );
+};
+
+const getTaskRuntimeNodeKey = (task: any) => {
+  const recurrence = parseObject(task?.recurrence_info);
+  const metadata = parseObject(task?.metadata);
+  return normalizeText(
+    task?.process_node_key
+    || task?.[PROCESS_NODE_KEY]
+    || recurrence?.process_node_key
+    || recurrence?.[PROCESS_NODE_KEY]
+    || metadata?.process_node_key
+    || metadata?.[PROCESS_NODE_KEY],
+  );
+};
+
+const shouldForceActivityStageToDraft = (stage: any, hasRealTask: boolean) => {
+  if (hasRealTask || getRuntimeStageTaskId(stage)) return false;
+  const metadata = parseObject(stage?.metadata);
+  const status = normalizeText(stage?.status || metadata?.status).toLowerCase();
+  if (['done', 'completed', 'customer_approval', 'in_progress', 'active', 'blocked', 'cancelled', 'canceled'].includes(status)) {
+    return false;
+  }
+  return !status || ['todo', 'waiting', 'planned', 'draft', 'template', 'not_assigned', 'unassigned'].includes(status);
+};
+
 const stringifyTemplateValue = (value: unknown): string => {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return value.map(stringifyTemplateValue).filter(Boolean).join('، ');
@@ -278,6 +352,31 @@ const collectStageProcessLinks = (stage: any) => {
   return parseProcessLinkMap(stage?.process_links || recurrence?.process_links || metadata?.process_links || metadata?.process_link_map);
 };
 
+const collectStageAssigneeFieldReference = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
+  return findProcessAssigneeFieldReference(
+    stage?.default_assignee_field,
+    metadata?.default_assignee_field,
+    recurrence?.default_assignee_field,
+    stage?.default_assignee_combo,
+    metadata?.default_assignee_combo,
+    recurrence?.default_assignee_combo,
+    stage?.default_assignee_id,
+    metadata?.default_assignee_id,
+    recurrence?.default_assignee_id,
+    stage?.default_assignee_role_id,
+    metadata?.default_assignee_role_id,
+    recurrence?.default_assignee_role_id,
+    stage?.assignee_id,
+    metadata?.assignee_id,
+    recurrence?.assignee_id,
+    stage?.assignee_role_id,
+    metadata?.assignee_role_id,
+    recurrence?.assignee_role_id,
+  );
+};
+
 const formatDueLabel = (value: unknown) => {
   const raw = normalizeText(value);
   if (!raw) return undefined;
@@ -296,8 +395,8 @@ const mapStageStatus = (status: unknown, kind: 'draft' | 'activity'): ProcessV2S
 
 const resolveFieldAssigneeLabel = (rawValue: unknown, stage: any, fallbackModuleId?: string | null) => {
   const raw = normalizeText(rawValue);
-  if (!raw.startsWith('field:')) return '';
-  const fieldKey = raw.replace(/^field:/, '').trim();
+  if (!normalizeProcessAssigneeFieldReference(raw)) return '';
+  const fieldKey = getProcessAssigneeFieldKey(raw);
   const metadata = parseObject(stage?.metadata);
   const targetModuleIds = [
     ...(Array.isArray(stage?.process_target_module_ids) ? stage.process_target_module_ids : []),
@@ -314,13 +413,49 @@ const resolveFieldAssigneeLabel = (rawValue: unknown, stage: any, fallbackModule
   return normalizeText(field?.labels?.fa || field?.labelFa) || 'مسئول پیش فرض';
 };
 
-const resolveAssignee = (stage: any, directory: AssigneeDirectory | null, fallbackModuleId?: string | null) => {
+const resolveAssignee = (
+  stage: any,
+  directory: AssigneeDirectory | null,
+  fallbackModuleId?: string | null,
+  templateContext?: Record<string, any> | null,
+) => {
   const metadata = parseObject(stage?.metadata);
   const rawUserId = stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id || metadata?.default_assignee_id;
   const rawRoleId = stage?.assignee_role_id || stage?.default_assignee_role_id || metadata?.assignee_role_id || metadata?.default_assignee_role_id;
+  const fieldReference = findProcessAssigneeFieldReference(
+    rawUserId,
+    rawRoleId,
+    stage?.default_assignee_field,
+    metadata?.default_assignee_field,
+    stage?.default_assignee_combo,
+    metadata?.default_assignee_combo,
+  );
+  if (fieldReference && templateContext) {
+    const resolvedReference = resolveProcessAssigneeReference(fieldReference, templateContext);
+    const parsedReference = parseAssigneeValue(resolvedReference, null);
+    const resolvedId = normalizeDbUuid(parsedReference.assigneeId);
+    if (parsedReference.assigneeType === 'role' && resolvedId) {
+      const role = directory?.roles?.find((item) => normalizeText(item.id) === resolvedId);
+      return {
+        label: role?.title || 'نقش مسئول',
+        avatarUrl: undefined,
+      };
+    }
+    if (parsedReference.assigneeType === 'user' && resolvedId) {
+      const user = directory?.users?.find((item) => normalizeText(item.id) === resolvedId);
+      return {
+        label: user?.display_name || user?.full_name || 'کاربر مسئول',
+        avatarUrl: user?.avatar_url || undefined,
+      };
+    }
+  }
   const userId = normalizeDbUuid(rawUserId);
   const roleId = normalizeDbUuid(rawRoleId);
-  const fieldLabel = resolveFieldAssigneeLabel(rawUserId || metadata?.default_assignee_field, stage, fallbackModuleId);
+  const fieldLabel = resolveFieldAssigneeLabel(
+    fieldReference,
+    stage,
+    fallbackModuleId,
+  );
   if (fieldLabel) {
     return {
       label: fieldLabel,
@@ -386,9 +521,9 @@ const mapRawStageToV2 = (
     || metadata?.draft === true
     || ['draft', 'template', 'not_assigned', 'unassigned'].includes(status)
   );
-  const hasRealTask = stage?.__process_v2_has_real_task === true;
-  const effectiveKind = explicitDraft || (kind === 'activity' && !hasRealTask) ? 'draft' : kind;
-  const assignee = resolveAssignee(stage, directory, fallbackModuleId);
+  const hasRealTask = stage?.__process_v2_has_real_task === true || Boolean(getRuntimeStageTaskId(stage));
+  const effectiveKind = explicitDraft || (kind === 'activity' && shouldForceActivityStageToDraft(stage, hasRealTask)) ? 'draft' : kind;
+  const assignee = resolveAssignee(stage, directory, fallbackModuleId, templateContext);
   const rawDue = stage?.planned_due_at || stage?.due_date || metadata?.planned_due_at || metadata?.due_date;
   const automationActionCount = getAutomationActionCount(stage);
   const fallbackActionCount = Number(stage?.action_count ?? metadata?.action_count ?? metadata?.actions_count ?? 0);
@@ -746,6 +881,10 @@ const PROCESS_RUNTIME_TASK_CACHE_TTL_MS = 30_000;
 const processRuntimeTaskCache = new Map<string, { tasks: any[]; savedAt: number }>();
 const processRuntimeTaskQueue: RuntimeTaskBatchRequest[] = [];
 let processRuntimeTaskFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+const clearProcessRuntimeTaskCache = () => {
+  processRuntimeTaskCache.clear();
+};
 
 const buildRuntimeTaskRequestKey = (taskIds: string[], runIds: string[], stageIds: string[]) => JSON.stringify({
   taskIds: [...taskIds].sort(),
@@ -1251,6 +1390,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const refresh = useCallback(async (force = false) => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
+    if (force) clearProcessRuntimeTaskCache();
     if (readOnlyVariant && !force) {
       const cached = processRuntimeBlockCache.get(cacheKey);
       if (cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS) {
@@ -1353,11 +1493,29 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [refresh]);
 
   const scheduleRefresh = useCallback(() => {
+    clearProcessRuntimeTaskCache();
+    processRuntimeBlockCache.delete(cacheKey);
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
       void refreshRef.current(true);
     }, 220);
-  }, []);
+  }, [cacheKey]);
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined') return undefined;
+    return subscribeToLocalModuleListInvalidation({
+      orgId: orgId || recordData?.org_id || null,
+      moduleId: 'tasks',
+      onInvalidate: (payload) => {
+        const taskId = normalizeDbUuid(payload?.record_id);
+        if (taskId) {
+          const belongsToCurrentRuntime = (runtimeRef.current.tasks || []).some((task: any) => normalizeDbUuid(task?.id) === taskId);
+          if (!belongsToCurrentRuntime) return;
+        }
+        scheduleRefresh();
+      },
+    });
+  }, [enabled, orgId, recordData?.org_id, scheduleRefresh]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -1500,6 +1658,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     ]
       .map((stage) => collectStageTemplateSourceText(stage))
       .filter((value) => hasTemplateTokens(value))
+      .concat([
+        ...effectiveDraftStages,
+        ...(runtime.stages || []),
+        ...(runtime.tasks || []),
+      ].map((stage) => collectStageAssigneeFieldReference(stage)).filter(Boolean))
       .join('|')
   ), [effectiveDraftStages, runtime.stages, runtime.tasks]);
   const waitingForTemplateContext = Boolean(
@@ -1515,10 +1678,16 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ...(runtime.tasks || []),
     ];
     const tokenKey = tokenSources
-      .map((stage) => collectStageTemplateSourceText(stage))
-      .filter((value) => hasTemplateTokens(value))
+      .flatMap((stage) => [
+        hasTemplateTokens(collectStageTemplateSourceText(stage)) ? collectStageTemplateSourceText(stage) : '',
+        collectStageAssigneeFieldReference(stage),
+      ])
+      .filter(Boolean)
       .join('|');
-    if (!tokenSources.some((stage) => hasTemplateTokens(collectStageTemplateSourceText(stage)))) {
+    if (!tokenSources.some((stage) => (
+      hasTemplateTokens(collectStageTemplateSourceText(stage))
+      || Boolean(collectStageAssigneeFieldReference(stage))
+    ))) {
       setResolvedTemplateContext(null);
       setTemplateContextResolving(false);
       setTemplateContextResolvedKey('');
@@ -1586,12 +1755,26 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [activatorConditionFields, activatorModal]);
 
   const mergeRuntimeStageWithTask = useCallback((stage: any) => {
-    const stageTaskId = normalizeDbUuid(stage?.task_id);
+    const stageTaskId = getRuntimeStageTaskId(stage);
     const stageRunStageId = normalizeDbUuid(stage?.process_run_stage_id || stage?.id);
+    const stageRunId = getRuntimeStageRunId(stage);
+    const stageNodeKey = getRuntimeStageNodeKey(stage);
+    const stageSortOrder = Number(stage?.sort_order || parseObject(stage?.metadata)?.sort_order || 0);
+    const stageName = normalizeText(stage?.stage_name || stage?.name).toLowerCase();
     const task = (runtime.tasks || []).find((item: any) => (
       (stageTaskId && normalizeDbUuid(item?.id) === stageTaskId)
       || (stageRunStageId && normalizeDbUuid(item?.process_run_stage_id) === stageRunStageId)
-    ));
+    )) || (runtime.tasks || []).find((item: any) => {
+      const recurrence = parseObject(item?.recurrence_info);
+      const taskRunId = normalizeDbUuid(item?.process_run_id || recurrence?.process_run_id);
+      if (stageRunId && taskRunId && stageRunId !== taskRunId) return false;
+      const taskNodeKey = getTaskRuntimeNodeKey(item);
+      if (stageNodeKey && taskNodeKey && stageNodeKey === taskNodeKey) return true;
+      const taskSortOrder = Number(item?.source_stage_sort_order || recurrence?.source_stage_sort_order || 0);
+      if (!stageSortOrder || !taskSortOrder || stageSortOrder !== taskSortOrder) return false;
+      const taskName = normalizeText(item?.name).toLowerCase();
+      return !stageName || !taskName || stageName === taskName;
+    });
     if (!task) return stage;
     return {
       ...stage,
@@ -1738,6 +1921,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [normalizedModuleId, normalizedRecordId, orgId, recordData?.org_id]);
 
   const handleStageStatusChange = useCallback((process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => {
+    clearProcessRuntimeTaskCache();
+    processRuntimeBlockCache.delete(cacheKey);
     const key = cardKey(process);
     const stageStatus = mapTaskStatusToStageStatus(status);
     const displayStatus = stageStatus === 'waiting' && normalizeText(status).toLowerCase() !== 'waiting'
@@ -1790,7 +1975,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     void syncProjectStatusForRuntime(runtimeRef.current).catch((error) => {
       console.warn('Could not sync project status after process v2 stage status change', error);
     });
-  }, [cardKey, directory, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, syncProjectStatusForRuntime]);
+  }, [cacheKey, cardKey, directory, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, syncProjectStatusForRuntime]);
 
   const persistDraftStageList = useCallback(async (nextStages: any[]) => {
     const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
@@ -2781,6 +2966,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         targetGroupId,
       });
       if (result.createdCount > 0) {
+        setCardOverrides((current) => {
+          const next = { ...current };
+          delete next[cardKey(item)];
+          return next;
+        });
         message.success(`${toPersianNumber(result.createdCount)} فعالیت ایجاد شد`);
       } else if (Number(result.missingAssigneeCount || 0) > 0) {
         message.warning(`${toPersianNumber(result.missingAssigneeCount || 0)} مرحله مسئول مشخص ندارد و ارجاع نشد`);
@@ -2811,14 +3001,50 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const handleAutoAssignStage = useCallback(async (stage: ProcessV2Stage, _laneTitle: string, item: ProcessV2CardData, overrides?: Record<string, any>) => {
     if (stage.kind !== 'draft') return;
+    if (item.mode !== 'run') return;
     const sourceStage = stage.source && typeof stage.source === 'object' ? stage.source : {};
     const sourceMeta = parseObject(sourceStage?.metadata);
+    const itemRunId = item.mode === 'run' ? normalizeDbUuid(item.id) : '';
+    const runRow = itemRunId
+      ? (runtimeRef.current.runs || []).find((row: any) => normalizeDbUuid(row?.id) === itemRunId)
+      : null;
+    const runMetadata = parseObject(runRow?.metadata);
+    const runGroupId = normalizeText(runRow?.process_group_id || runMetadata?.process_group_id);
     const targetGroupId = normalizeText(item.id).startsWith('draft:')
       ? normalizeText(item.id).replace(/^draft:/, '')
-      : normalizeText(sourceStage?.process_group_id || sourceMeta?.process_group_id || sourceMeta?.process_group?.id);
+      : normalizeText(runGroupId || sourceStage?.process_group_id || sourceMeta?.process_group_id || sourceMeta?.process_group?.id);
     const itemDraftStages = item.lanes.flatMap((lane) => lane.stages.filter((candidate) => candidate.kind === 'draft'));
-    const sourceDraftStagesBase = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId);
-    const targetDraftStagesBase = resolveRawDraftStagesForV2Stages([stage], targetGroupId);
+    const applyExistingRunContext = (candidate: any) => {
+      if (!runRow) return candidate;
+      const candidateMetadata = parseObject(candidate?.metadata);
+      const candidateRecurrence = parseObject(candidate?.recurrence_info);
+      const processGroupId = targetGroupId || runGroupId || normalizeText(candidate?.process_group_id || candidateMetadata?.process_group_id);
+      const processGroupName = normalizeText(candidate?.process_group_name || candidateMetadata?.process_group_name || runRow?.process_name || item.title) || 'فرآیند';
+      const sourceTemplateId = normalizeText(candidate?.source_template_id || candidateMetadata?.source_template_id || item.templateId || runRow?.template_id || runMetadata?.source_template_id);
+      const sourceTemplateName = normalizeText(candidate?.source_template_name || candidateMetadata?.source_template_name || item.templateTitle || runRow?.template_name || runMetadata?.source_template_name);
+      return {
+        ...candidate,
+        process_group_id: processGroupId || candidate?.process_group_id || null,
+        process_group_name: processGroupName,
+        source_template_id: sourceTemplateId || null,
+        source_template_name: sourceTemplateName || null,
+        process_run_id: itemRunId || candidate?.process_run_id || null,
+        metadata: {
+          ...candidateMetadata,
+          ...(processGroupId ? { process_group_id: processGroupId } : {}),
+          process_group_name: processGroupName,
+          process_run_id: itemRunId || candidateMetadata?.process_run_id || null,
+          source_template_id: sourceTemplateId || candidateMetadata?.source_template_id || null,
+          source_template_name: sourceTemplateName || candidateMetadata?.source_template_name || null,
+        },
+        recurrence_info: {
+          ...candidateRecurrence,
+          process_run_id: itemRunId || candidateRecurrence?.process_run_id || null,
+        },
+      };
+    };
+    const sourceDraftStagesBase = resolveRawDraftStagesForV2Stages(itemDraftStages, targetGroupId).map(applyExistingRunContext);
+    const targetDraftStagesBase = resolveRawDraftStagesForV2Stages([stage], targetGroupId).map(applyExistingRunContext);
     const targetRawStage = targetDraftStagesBase[0] || sourceStage;
     const targetStageId = normalizeText(
       targetRawStage?.process_node_key
@@ -2863,6 +3089,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         targetStageId,
       });
       if (result.createdCount > 0) {
+        setCardOverrides((current) => {
+          const next = { ...current };
+          delete next[cardKey(item)];
+          return next;
+        });
         message.success(`${toPersianNumber(result.createdCount)} فعالیت ایجاد شد`);
       } else if (Number(result.missingAssigneeCount || 0) > 0) {
         message.warning('این مرحله مسئول مشخص ندارد و ارجاع نشد');
@@ -2899,6 +3130,30 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const nextTaskType = normalizeText(patch?.task_type || patchMetadata?.task_type || rawStage?.task_type || currentMetadata?.task_type);
     const nextAssigneeUserId = normalizeDbUuid(patch?.default_assignee_id || patch?.assignee_id || rawStage?.default_assignee_id || rawStage?.assignee_id);
     const nextAssigneeRoleId = normalizeDbUuid(patch?.default_assignee_role_id || patch?.assignee_role_id || rawStage?.default_assignee_role_id || rawStage?.assignee_role_id);
+    const patchHasConcreteAssignee = Boolean(
+      normalizeDbUuid(patch?.default_assignee_id || patch?.assignee_id)
+      || normalizeDbUuid(patch?.default_assignee_role_id || patch?.assignee_role_id)
+    );
+    const nextAssigneeField = patchHasConcreteAssignee
+      ? ''
+      : findProcessAssigneeFieldReference(
+          patch?.default_assignee_field,
+          patchMetadata?.default_assignee_field,
+          patch?.default_assignee_combo,
+          patchMetadata?.default_assignee_combo,
+          patch?.default_assignee_id,
+          patch?.assignee_id,
+          patch?.default_assignee_role_id,
+          patch?.assignee_role_id,
+          rawStage?.default_assignee_field,
+          currentMetadata?.default_assignee_field,
+          rawStage?.default_assignee_combo,
+          currentMetadata?.default_assignee_combo,
+          rawStage?.default_assignee_id,
+          rawStage?.assignee_id,
+          rawStage?.default_assignee_role_id,
+          rawStage?.assignee_role_id,
+        );
     const nextCustomValues = patch?.process_task_custom_field_values || patch?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] || patchMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY];
     const nextMetadata = {
       ...currentMetadata,
@@ -2910,6 +3165,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       tags: Array.isArray(patch?.tags) ? patch.tags : (Array.isArray(patchMetadata?.tags) ? patchMetadata.tags : currentMetadata?.tags),
       wage: Number(patch?.wage ?? patchMetadata?.wage ?? rawStage?.wage ?? currentMetadata?.wage ?? 0) || 0,
       weight: Number(patch?.weight ?? patchMetadata?.weight ?? rawStage?.weight ?? currentMetadata?.weight ?? 0) || 0,
+      default_assignee_field: nextAssigneeField || null,
       ...(nextCustomValues && typeof nextCustomValues === 'object' ? { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextCustomValues } : {}),
     };
     const nextRecurrence = {
@@ -2926,6 +3182,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       task_type: nextTaskType || rawStage?.task_type || null,
       default_assignee_id: nextAssigneeRoleId ? null : (nextAssigneeUserId || null),
       default_assignee_role_id: nextAssigneeRoleId || null,
+      default_assignee_field: nextAssigneeField || null,
       assignee_id: nextAssigneeRoleId ? null : (nextAssigneeUserId || null),
       assignee_role_id: nextAssigneeRoleId || null,
       wage: Number(patch?.wage ?? rawStage?.wage ?? 0) || 0,

@@ -146,12 +146,36 @@ const AiChatSurfaceV2: React.FC = () => {
     );
   }, [search, threads]);
 
+  const activeThreadTitle = useMemo(() => {
+    const activeThread = threads.find((thread) => String(thread.id) === String(activeThreadId || ''));
+    return activeThread ? getThreadTitle(activeThread) : null;
+  }, [activeThreadId, threads]);
+
   const startNewConversation = () => {
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
     setThreadListOpen(false);
     scheduleOverlayLockRelease(0);
   };
+
+  const handleThreadDeleted = useCallback((threadId: string) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    if (!normalizedThreadId) return;
+    setThreads((current) => current.filter((thread) => String(thread.id) !== normalizedThreadId));
+    setActiveThreadId((current) => (String(current || '') === normalizedThreadId ? null : current));
+    setNewConversationSeed((value) => value + 1);
+  }, []);
+
+  const handleThreadRenamed = useCallback((threadId: string, title: string, patchedThread?: any) => {
+    const normalizedThreadId = String(threadId || '').trim();
+    const normalizedTitle = String(title || '').trim();
+    if (!normalizedThreadId || !normalizedTitle) return;
+    setThreads((current) => current.map((thread) => (
+      String(thread.id) === normalizedThreadId
+        ? { ...thread, ...(patchedThread && typeof patchedThread === 'object' ? patchedThread : {}), title: normalizedTitle }
+        : thread
+    )));
+  }, []);
 
   const renderThreadList = (compact = false) => (
     <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex h-full min-h-0 flex-col'}>
@@ -261,6 +285,7 @@ const AiChatSurfaceV2: React.FC = () => {
             key={activeThreadId || `new-${newConversationSeed}-${initialPanelKey}`}
             active
             initialThreadId={activeThreadId}
+            initialThreadTitle={activeThreadTitle}
             initialPrompt={initialPrompt}
             initialInputKind={String(routeState.aiInitialInputKind || 'text')}
             initialCapabilities={initialCapabilities}
@@ -269,6 +294,8 @@ const AiChatSurfaceV2: React.FC = () => {
             initialFiles={initialFiles as any}
             initialFile={initialFile as any}
             autoSubmitInitialPrompt={autoSubmitInitial}
+            onThreadDeleted={handleThreadDeleted}
+            onThreadRenamed={handleThreadRenamed}
           />
         </main>
       </div>

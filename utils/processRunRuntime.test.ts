@@ -61,6 +61,22 @@ describe('process run draft helpers', () => {
     expect(draft[1].default_assignee_role_id).toBeNull();
   });
 
+  it('keeps field-based assignee references when applying template stages to a draft', () => {
+    const draft = mapProcessTemplateStagesToDraft('template-1', [
+      {
+        id: 'stage-1',
+        stage_name: 'پیگیری',
+        default_assignee_id: 'field:__linked__customers__assignee_combo',
+        sort_order: 10,
+      },
+    ]);
+
+    expect(draft[0].default_assignee_id).toBeNull();
+    expect(draft[0].default_assignee_role_id).toBeNull();
+    expect(draft[0].default_assignee_field).toBe('field:__linked__customers__assignee_combo');
+    expect(draft[0].metadata.default_assignee_field).toBe('field:__linked__customers__assignee_combo');
+  });
+
   it('resolves a run stage from the shared group stage map', () => {
     const stage = {
       id: 'draft-stage-1',

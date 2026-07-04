@@ -16,6 +16,7 @@ import {
   materializeLegacyProcessGraph,
 } from './processGraph';
 import { normalizeProcessDueAnchor } from './processSchedule';
+import { findProcessAssigneeFieldReference } from './processAssigneeReference';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
@@ -39,6 +40,16 @@ const serializeProcessTemplateStages = (rawStages: any[]) => {
     const anchor = normalizeProcessDueAnchor(stage);
     const processNodeKey = normalizeText(stage?.[PROCESS_NODE_KEY] || metadata?.[PROCESS_NODE_KEY]);
     const processLaneKey = normalizeText(stage?.[PROCESS_LANE_KEY] || metadata?.[PROCESS_LANE_KEY]) || 'lane_1';
+    const defaultAssigneeField = findProcessAssigneeFieldReference(
+      stage?.default_assignee_field,
+      metadata?.default_assignee_field,
+      stage?.default_assignee_combo,
+      metadata?.default_assignee_combo,
+      stage?.default_assignee_id,
+      metadata?.default_assignee_id,
+      stage?.default_assignee_role_id,
+      metadata?.default_assignee_role_id,
+    );
     return {
       id: isUuid(stage?.id) ? String(stage.id) : null,
       stage_name: normalizeText(stage?.name || stage?.stage_name) || `مرحله ${index + 1}`,
@@ -60,6 +71,7 @@ const serializeProcessTemplateStages = (rawStages: any[]) => {
           stage?.process_task_status_options || metadata?.[PROCESS_TASK_STATUS_OPTIONS_KEY],
         ),
         instruction_ids: normalizeInstructionIdList(stage?.instruction_ids || metadata?.instruction_ids),
+        default_assignee_field: defaultAssigneeField || null,
         weight: Number(stage?.weight || metadata?.weight || 0),
         duration_value: Number(stage?.duration_value || metadata?.duration_value || 0),
         duration_unit: String(stage?.duration_unit || metadata?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',

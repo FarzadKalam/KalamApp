@@ -77,6 +77,7 @@ import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/task
 import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 import { renderProcessV2TemplateValueFromRecord } from '../../utils/processV2AutoAssign';
+import { resolveProcessAssigneeReference } from '../../utils/processAssigneeReference';
 import TagInput from '../TagInput';
 import type { ProcessV2CardData, ProcessV2Stage, ProcessV2TemplateOption } from './ProcessCardsV2';
 
@@ -614,6 +615,25 @@ const collectProcessRelatedRecordRefs = (process: ProcessV2CardData) => {
   return Array.from(refs.values());
 };
 
+const collectProcessTemplateContext = (process: ProcessV2CardData) => {
+  const context: Record<string, any> = {};
+  process.lanes.forEach((lane) => {
+    lane.stages.forEach((item) => {
+      const source = item.source && typeof item.source === 'object' ? item.source : {};
+      const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+      [
+        source?.__process_v2_template_context,
+        sourceStage?.__process_v2_template_context,
+      ].forEach((candidate) => {
+        if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+          Object.assign(context, candidate);
+        }
+      });
+    });
+  });
+  return context;
+};
+
 type InlineEditableFieldProps = {
   label: string;
   value: any;
@@ -941,6 +961,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [templateCopyStagesLoading, setTemplateCopyStagesLoading] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const uploadFilesForTaskRef = useRef<((targetTaskId: string, files: File[], shouldReload?: boolean) => Promise<void>) | null>(null);
+  const initializedModalKeyRef = useRef('');
   const taskTypeField = useMemo(() => getTaskField('task_type'), []);
   const isDraftActivityCreationMode = stage?.kind === 'draft';
   const creationDraftStorageKey = useMemo(
@@ -979,6 +1000,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
   const effectiveSourceStage = effectiveSource?.source_stage && typeof effectiveSource.source_stage === 'object' ? effectiveSource.source_stage : sourceStage;
   const taskRecordId = normalizeDbUuid(source?.task_id || (!isDraftActivityCreationMode ? source?.id : '') || '');
+  const modalInitKey = useMemo(() => (
+    open && stage
+      ? `${process.mode}:${process.id}:${stage.id}:${taskRecordId || 'draft'}:${isDraftActivityCreationMode ? 'draft' : 'activity'}`
+      : ''
+  ), [isDraftActivityCreationMode, open, process.id, process.mode, stage, taskRecordId]);
+  const processTemplateContext = useMemo(() => collectProcessTemplateContext(process), [process]);
+  const processTemplateContextRef = useRef<Record<string, any>>({});
+  processTemplateContextRef.current = processTemplateContext;
   const recurrence = useMemo(() => parseObject(effectiveSource?.recurrence_info), [effectiveSource?.recurrence_info]);
   const effectiveStatusOptions = useMemo(() => buildStatusOptions(effectiveConfigStage), [effectiveConfigStage]);
   const draftSourceStageMetadata = useMemo(() => parseObject(sourceStage?.metadata), [sourceStage?.metadata]);
@@ -1475,6 +1504,8 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           assignee_role_id: parsedAssignee.assigneeType === 'role' ? parsedAssignee.assigneeId : null,
           default_assignee_id: parsedAssignee.assigneeType === 'user' ? parsedAssignee.assigneeId : null,
           default_assignee_role_id: parsedAssignee.assigneeType === 'role' ? parsedAssignee.assigneeId : null,
+          default_assignee_field: null,
+          default_assignee_combo: null,
         } : {}),
         description: String(descriptionDraft || '').trim() || null,
         tags: activityTags,
@@ -1500,6 +1531,10 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         metadata: {
           ...sourceMetadata,
           task_type: nextTaskType,
+          ...(hasSelectableAssignee ? {
+            default_assignee_field: null,
+            default_assignee_combo: null,
+          } : {}),
           description: String(descriptionDraft || '').trim() || null,
           tags: activityTags,
           [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: customFieldValues,
@@ -1791,7 +1826,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     const targetRecurrence = parseObject(targetSource?.recurrence_info);
     const targetSourceStageRecurrence = parseObject(targetSourceStage?.recurrence_info || targetSourceStageMetadata?.recurrence_info);
     const targetTemplateContext = {
+      ...processTemplateContextRef.current,
       ...(targetSource?.__process_v2_template_context && typeof targetSource.__process_v2_template_context === 'object' ? targetSource.__process_v2_template_context : {}),
+      ...(targetSourceStage?.__process_v2_template_context && typeof targetSourceStage.__process_v2_template_context === 'object' ? targetSourceStage.__process_v2_template_context : {}),
       ...targetSource,
       ...targetSourceMetadata,
       ...targetRecurrence,
@@ -1859,12 +1896,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       targetSourceStageMetadata?.default_assignee_field,
       targetSourceStageRecurrence?.default_assignee_field,
     );
-    const resolveAssigneeReference = (value: any) => {
-      const normalized = String(value || '').trim();
-      if (!normalized.startsWith('field:')) return value;
-      const fieldKey = normalized.replace(/^field:/, '').trim();
-      return targetTemplateContext[fieldKey] || '';
-    };
+    const resolveAssigneeReference = (value: any) => resolveProcessAssigneeReference(value, targetTemplateContext);
     const resolvedRoleAssignee = resolveAssigneeReference(rawRoleAssignee);
     const resolvedUserAssignee = resolveAssigneeReference(rawUserAssignee);
     const resolvedReferenceAssignee = resolveAssigneeReference(rawAssigneeReference);
@@ -2090,7 +2122,12 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   }, []);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      initializedModalKeyRef.current = '';
+      return;
+    }
+    if (!modalInitKey || initializedModalKeyRef.current === modalInitKey) return;
+    initializedModalKeyRef.current = modalInitKey;
     setDraftCopyTemplateId(isTemplateBackedDraft ? (templateBackedTemplateId || undefined) : (runProcess?.templateId || undefined));
     setDraftCopyStageId(isTemplateBackedDraft ? (templateBackedStageId || stage?.id || undefined) : undefined);
     setTemplateCopyStages([]);
@@ -2117,7 +2154,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setTaskActionBusy(null);
     setSavingFieldKey(null);
     setLocalTaskPatch({});
-  }, [applyStageSettingsToDraft, creationDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, open, process, stage, templateBackedStageId, templateBackedTemplateId]);
+  }, [applyStageSettingsToDraft, creationDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, modalInitKey, open, runProcess?.templateId, stage, templateBackedStageId, templateBackedTemplateId]);
 
   useLayoutEffect(() => {
     if (!open || !isDraftActivityCreationMode) return;
@@ -2205,7 +2242,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       try {
         const { data, error } = await supabase
           .from('process_template_stages')
-          .select('id, template_id, stage_name, sort_order, wage, default_assignee_id, default_assignee_role_id, metadata')
+          .select('*')
           .eq('template_id', draftCopyTemplateId)
           .order('sort_order', { ascending: true });
         if (error) throw error;

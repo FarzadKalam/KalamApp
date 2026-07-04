@@ -2,6 +2,7 @@
 
 type AssistantAction =
   | 'chat'
+  | 'chat_stream'
   | 'suggest_auto_capabilities'
   | 'chat_with_file'
   | 'analyze_file'
@@ -70,7 +71,8 @@ const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 const IMAGE_PROVIDER_TIMEOUT_MS = 120000;
 const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
-const IMAGE_STATUS_STALE_MS = 900000;
+const IMAGE_STATUS_STALE_MS = 180000;
+const IMAGE_STATUS_WARN_MS = 60000;
 const IMAGE_PROMPT_MAX_CHARS = 4000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
 const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
@@ -2447,6 +2449,28 @@ const extractUsageMetadata = (parsed: any, providerConfig: any) => {
   };
 };
 
+const getChatFinishReason = (parsed: any) =>
+  String(parsed?.choices?.[0]?.finish_reason ?? parsed?.choices?.[0]?.finishReason ?? '').trim();
+
+const isCompleteChatFinishReason = (finishReason: string) => {
+  const normalized = String(finishReason || '').trim();
+  return !normalized || normalized === 'stop' || normalized === 'tool_calls' || normalized === 'function_call';
+};
+
+const buildIncompleteAiResponseError = (finishReason: string, partialContent = '') => {
+  const normalized = String(finishReason || 'unknown').trim() || 'unknown';
+  const error: any = new Error(normalized === 'length'
+    ? 'پاسخ هوش مصنوعی به سقف طول خروجی رسید و کامل نشد. لطفاً درخواست را کوتاه‌تر یا دقیق‌تر ارسال کنید.'
+    : normalized === 'content_filter'
+    ? 'پاسخ هوش مصنوعی به‌دلیل محدودیت ایمنی کامل نشد.'
+    : 'پاسخ هوش مصنوعی کامل دریافت نشد. لطفاً دوباره تلاش کنید.'
+  );
+  error.finishReason = normalized;
+  error.partialContent = String(partialContent || '');
+  error.incomplete = true;
+  return error;
+};
+
 const loadModelPricing = async (supabaseUrl: string, serviceRoleKey: string, model: string) => {
   const modelId = String(model || '').trim();
   if (!modelId) return null;
@@ -2747,18 +2771,149 @@ const callChatCompletions = async (
     }
 
     const content = parsed?.choices?.[0]?.message?.content ?? parsed?.choices?.[0]?.text ?? '';
+    const normalizedContent = normalizeAiContentText(content);
+    const finishReason = getChatFinishReason(parsed);
+    if (!isCompleteChatFinishReason(finishReason)) {
+      throw buildIncompleteAiResponseError(finishReason, normalizedContent);
+    }
     return {
-      content: normalizeAiContentText(content),
+      content: normalizedContent,
       attachments: normalizeAiContentAttachments(content),
       provider: providerConfig.provider,
       model,
       requestId,
       baseUrl,
       raw: parsed,
+      finishReason,
       usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model }),
     };
   }
   throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(lastErrorMessage || 'سرویس در دسترس نیست.')}`);
+};
+
+const parseChatStreamDelta = (parsed: any) => {
+  const choice = Array.isArray(parsed?.choices) ? parsed.choices[0] : null;
+  const delta = choice?.delta?.content ?? choice?.message?.content ?? choice?.text ?? '';
+  return {
+    text: typeof delta === 'string' ? delta : normalizeAiContentText(delta),
+    finishReason: String(choice?.finish_reason ?? choice?.finishReason ?? '').trim(),
+  };
+};
+
+const callChatCompletionsStream = async (
+  providerConfig: any,
+  messages: Array<{ role: string; content: any }>,
+  options: {
+    temperature?: number;
+    maxTokens?: number;
+    maxCompletionTokens?: number;
+    safetyIdentifier?: string;
+    timeoutMs?: number;
+    onDelta?: (text: string) => void | Promise<void>;
+  } = {},
+) => {
+  if (providerConfig?.isActive === false) {
+    throw new Error('اتصال AI برای این سازمان غیرفعال است.');
+  }
+  if (!providerConfig.apiKey) {
+    throw new Error('کلید مرکزی AI تنظیم نشده است. مقدار AI_API_KEY یا AVALAI_API_KEY را در Edge Function secrets ثبت کنید.');
+  }
+
+  const model = String(providerConfig.model || '').trim();
+  if (!model) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
+  const reasoning = isReasoningModel(model);
+  const requestBody: Record<string, any> = {
+    model,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+    safety_identifier: options?.safetyIdentifier || undefined,
+  };
+  if (reasoning) {
+    requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
+  } else {
+    requestBody.temperature = options?.temperature ?? 0.2;
+    requestBody.max_tokens = options?.maxTokens ?? 2000;
+  }
+
+  const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${providerConfig.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
+  }, { disableFallback: true });
+  const response = result.response;
+  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+  if (!response.ok) {
+    const raw = await response.text();
+    const parsed = parseJsonSafe(raw);
+    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
+    throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
+  }
+  if (!response.body) throw new Error('پاسخ جریانی هوش مصنوعی در دسترس نیست.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let doneMarker = false;
+  let finalParsed: any = null;
+  let finishReason = '';
+  let content = '';
+
+  const processEvent = async (eventText: string) => {
+    const dataLines = eventText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .filter(Boolean);
+    for (const dataLine of dataLines) {
+      if (dataLine === '[DONE]') {
+        doneMarker = true;
+        continue;
+      }
+      const parsed = parseJsonSafe(dataLine);
+      if (!parsed || typeof parsed !== 'object') continue;
+      finalParsed = parsed;
+      const delta = parseChatStreamDelta(parsed);
+      if (delta.text) {
+        content += delta.text;
+        await options.onDelta?.(delta.text);
+      }
+      if (delta.finishReason) finishReason = delta.finishReason;
+    }
+  };
+
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const parts = buffer.split(/\r?\n\r?\n/);
+    buffer = parts.pop() || '';
+    for (const part of parts) {
+      if (part.trim()) await processEvent(part);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) await processEvent(buffer);
+
+  if (!doneMarker) throw buildIncompleteAiResponseError('stream_interrupted', content);
+  if (!isCompleteChatFinishReason(finishReason)) throw buildIncompleteAiResponseError(finishReason, content);
+
+  return {
+    content: content.trim(),
+    attachments: [],
+    provider: providerConfig.provider,
+    model,
+    requestId,
+    baseUrl: result.baseUrl,
+    raw: finalParsed,
+    finishReason,
+    usageMetadata: extractUsageMetadata(finalParsed, { ...providerConfig, model }),
+  };
 };
 
 const normalizeBase64Payload = (value: any, mimeType?: string | null) => {
@@ -4340,9 +4495,13 @@ const handleDeleteThread = async (supabaseUrl: string, serviceRoleKey: string, a
   return json(200, { success: true, archived: rows.length > 0 });
 };
 
-const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const message = String(body?.message || '').trim();
-  if (!message) return json(400, { success: false, message: 'متن سوال خالی است.' });
+  if (!message) {
+    const error: any = new Error('متن سوال خالی است.');
+    error.status = 400;
+    throw error;
+  }
 
   const rawContext = normalizeContext(body?.context || {});
   const requestedCapability = String(body?.capability || '').trim();
@@ -4374,7 +4533,6 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
     fetchFinancialAnalyticsContext(supabaseUrl, serviceRoleKey, authContext, message),
   ]);
 
-  // Web search: call only when feature is enabled and query looks like it needs external/current info
   const orgAiSettings = providerConfig.orgAiSettings;
   const webSearchEnabled = orgAiSettings?.feature_flags?.web_search === true
     && isAiCapabilityPlanAvailable(planContext, 'web_search');
@@ -4440,6 +4598,94 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       businessAnalytics,
     },
   );
+
+  return {
+    message,
+    body,
+    selectedCapabilities,
+    selectedCapabilitySet,
+    capability,
+    contextKey,
+    providerConfig,
+    pageContext,
+    knowledgeChunks,
+    companyContext,
+    retrievedContexts,
+    businessAnalytics,
+    webSearchResults,
+    forceWebSearch,
+    thread,
+    userMessage,
+    promptMessages,
+  };
+};
+
+const buildThreadModelOverrides = (thread: any, capability: string, model: string, modelOverride?: string | null) => {
+  const existing = thread?.metadata?.model_overrides && typeof thread.metadata.model_overrides === 'object'
+    ? thread.metadata.model_overrides
+    : {};
+  const requested = String(modelOverride || '').trim();
+  if (!requested) return existing;
+  return {
+    ...existing,
+    [capability || 'dashboard_chat']: String(model || requested).trim() || requested,
+  };
+};
+
+const patchChatThreadAfterAssistant = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  prepared: any,
+  aiResult: any,
+  options: { failed?: boolean; failedContent?: string } = {},
+) => {
+  const inputKind = String(prepared.body?.inputKind || prepared.body?.input_kind || 'text').trim() || 'text';
+  const failed = options.failed === true;
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${prepared.thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    updated_at: new Date().toISOString(),
+    provider: aiResult?.provider || prepared.providerConfig.provider,
+    model: aiResult?.model || prepared.providerConfig.model,
+    context_type: getContextKind(prepared.pageContext.context || {}),
+    module_id: prepared.pageContext.moduleId || null,
+    record_id: prepared.pageContext.recordId || null,
+    metadata: {
+      ...(prepared.thread?.metadata || {}),
+      route: prepared.pageContext.context?.route || null,
+      summary: prepared.pageContext.summary || null,
+      context_kind: getContextKind(prepared.pageContext.context || {}),
+      context_label: buildThreadContextLabel(prepared.pageContext),
+      context: prepared.pageContext.context || null,
+      module_id: prepared.pageContext.moduleId || null,
+      record_id: prepared.pageContext.recordId || null,
+      intent: prepared.pageContext.intent || prepared.pageContext.context?.intent || null,
+      selected_process_id: prepared.pageContext.selectedProcessId || prepared.pageContext.context?.selectedProcessId || prepared.pageContext.context?.selectedProcessGroupId || null,
+      model_overrides: buildThreadModelOverrides(prepared.thread, prepared.capability, aiResult?.model || prepared.providerConfig.model, prepared.body?.modelOverride),
+      last_activity_kind: failed ? `${inputKind}_failed` : inputKind,
+      last_message_preview: failed ? String(options.failedContent || '').slice(0, 300) : prepared.message.slice(0, 300),
+    },
+  });
+};
+
+const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body);
+  const {
+    message,
+    selectedCapabilities,
+    capability,
+    contextKey,
+    providerConfig,
+    pageContext,
+    knowledgeChunks,
+    companyContext,
+    retrievedContexts,
+    businessAnalytics,
+    webSearchResults,
+    forceWebSearch,
+    thread,
+    userMessage,
+    promptMessages,
+  } = prepared;
   let aiResult: any;
   try {
     aiResult = await callChatCompletions(providerConfig, promptMessages, {
@@ -4475,30 +4721,14 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
         failed: true,
         status: 'failed',
         error: providerFailure,
+        incomplete: error?.incomplete === true,
+        finish_reason: error?.finishReason || null,
+        partial_content: error?.partialContent ? String(error.partialContent).slice(0, 4000) : null,
       },
     });
-    const inputKind = String(body?.inputKind || body?.input_kind || 'text').trim() || 'text';
-    await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
-      updated_at: new Date().toISOString(),
-      provider: providerConfig.provider,
-      model: providerConfig.model,
-      context_type: getContextKind(pageContext.context || {}),
-      module_id: pageContext.moduleId || null,
-      record_id: pageContext.recordId || null,
-      metadata: {
-        ...(thread?.metadata || {}),
-        route: pageContext.context?.route || null,
-        summary: pageContext.summary || null,
-        context_kind: getContextKind(pageContext.context || {}),
-        context_label: buildThreadContextLabel(pageContext),
-        context: pageContext.context || null,
-        module_id: pageContext.moduleId || null,
-        record_id: pageContext.recordId || null,
-        intent: pageContext.intent || pageContext.context?.intent || null,
-        selected_process_id: pageContext.selectedProcessId || pageContext.context?.selectedProcessId || pageContext.context?.selectedProcessGroupId || null,
-        last_activity_kind: `${inputKind}_failed`,
-        last_message_preview: failedContent.slice(0, 300),
-      },
+    await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, providerConfig, {
+      failed: true,
+      failedContent,
     }).catch(() => []);
     return json(200, {
       success: false,
@@ -4567,28 +4797,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
 
-  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
-    updated_at: new Date().toISOString(),
-    provider: aiResult.provider,
-    model: aiResult.model,
-    context_type: getContextKind(pageContext.context || {}),
-    module_id: pageContext.moduleId || null,
-    record_id: pageContext.recordId || null,
-    metadata: {
-      ...(thread?.metadata || {}),
-      route: pageContext.context?.route || null,
-      summary: pageContext.summary || null,
-      context_kind: getContextKind(pageContext.context || {}),
-      context_label: buildThreadContextLabel(pageContext),
-      context: pageContext.context || null,
-      module_id: pageContext.moduleId || null,
-      record_id: pageContext.recordId || null,
-      intent: pageContext.intent || pageContext.context?.intent || null,
-      selected_process_id: pageContext.selectedProcessId || pageContext.context?.selectedProcessId || pageContext.context?.selectedProcessGroupId || null,
-      last_activity_kind: String(body?.inputKind || body?.input_kind || 'text').trim() || 'text',
-      last_message_preview: message.slice(0, 300),
-    },
-  });
+  await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, aiResult);
 
   return json(200, {
     success: true,
@@ -4610,6 +4819,165 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       title: chunk?.metadata?.document_title || null,
       chunkIndex: chunk.chunk_index,
     })),
+  });
+};
+
+const ssePayload = (event: string, payload: Record<string, any>) =>
+  `event: ${event}\ndata: ${JSON.stringify({ build: FUNCTION_BUILD, ...payload })}\n\n`;
+
+const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      const send = (event: string, payload: Record<string, any>) => {
+        controller.enqueue(encoder.encode(ssePayload(event, payload)));
+      };
+      (async () => {
+        let prepared: any = null;
+        try {
+          prepared = await prepareChatRequest(supabaseUrl, serviceRoleKey, authContext, body);
+          send('meta', {
+            success: true,
+            threadId: prepared.thread.id,
+            userMessageId: prepared.userMessage?.id || null,
+            provider: prepared.providerConfig.provider,
+            model: prepared.providerConfig.model,
+          });
+
+          const aiResult = await callChatCompletionsStream(prepared.providerConfig, prepared.promptMessages, {
+            safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${prepared.capability}`,
+            onDelta: (text) => {
+              if (text) send('delta', { text });
+            },
+          });
+
+          const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+            thread_id: prepared.thread.id,
+            role: 'assistant',
+            content: aiResult.content,
+            provider: aiResult.provider,
+            model: aiResult.model,
+            metadata: {
+              context_summary: prepared.pageContext.summary,
+              context_key: prepared.contextKey,
+              company_currency_label: prepared.companyContext?.currency_label || null,
+              knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
+              retrieved_context_modules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
+              web_search_used: prepared.webSearchResults.length > 0,
+              capabilities: prepared.selectedCapabilities,
+              attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
+              usage: aiResult.usageMetadata,
+              avalai_request_id: aiResult.requestId || null,
+              capability: prepared.capability,
+              finish_reason: aiResult.finishReason || null,
+              business_analytics: prepared.businessAnalytics ? {
+                intent: prepared.businessAnalytics.intent || null,
+                period: prepared.businessAnalytics.period || null,
+                available: prepared.businessAnalytics.available === true,
+                data_quality: prepared.businessAnalytics.data_quality || null,
+                reason: prepared.businessAnalytics.reason || null,
+              } : null,
+            },
+          });
+
+          const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+            threadId: prepared.thread.id,
+            messageId: assistantMessage?.id || null,
+            requestId: aiResult.requestId,
+            capability: prepared.capability,
+            provider: aiResult.provider,
+            model: aiResult.model,
+            usageMetadata: aiResult.usageMetadata,
+            metadata: {
+              source: 'chat_stream',
+              context_key: prepared.contextKey,
+              knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
+              capabilities: prepared.selectedCapabilities,
+              web_search_forced: prepared.forceWebSearch,
+            },
+          });
+          await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
+          await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, aiResult);
+
+          send('done', {
+            success: true,
+            threadId: prepared.thread.id,
+            userMessageId: prepared.userMessage?.id || null,
+            messageId: assistantMessage?.id || null,
+            answer: aiResult.content,
+            attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
+            provider: aiResult.provider,
+            model: aiResult.model,
+            usage: withCustomerBilling(aiResult.usageMetadata, ledger),
+            ledger,
+            contextSummary: prepared.pageContext.summary,
+            retrievedContextModules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
+            businessAnalytics: prepared.businessAnalytics,
+            knowledgeSources: prepared.knowledgeChunks.map((chunk: any) => ({
+              id: chunk.id,
+              documentId: chunk.document_id,
+              title: chunk?.metadata?.document_title || null,
+              chunkIndex: chunk.chunk_index,
+            })),
+          });
+        } catch (error: any) {
+          const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
+          const failedContent = providerFailure.startsWith('خطای provider')
+            ? providerFailure
+            : `پاسخ هوش مصنوعی ناموفق بود: ${providerFailure}`;
+          let assistantMessage: any = null;
+          if (prepared?.thread?.id) {
+            assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+              thread_id: prepared.thread.id,
+              role: 'assistant',
+              content: failedContent,
+              provider: prepared.providerConfig.provider,
+              model: prepared.providerConfig.model,
+              metadata: {
+                context_summary: prepared.pageContext.summary,
+                context_key: prepared.contextKey,
+                company_currency_label: prepared.companyContext?.currency_label || null,
+                knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
+                retrieved_context_modules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
+                web_search_used: prepared.webSearchResults.length > 0,
+                capabilities: prepared.selectedCapabilities,
+                capability: prepared.capability,
+                failed: true,
+                status: 'failed',
+                error: providerFailure,
+                incomplete: error?.incomplete === true,
+                finish_reason: error?.finishReason || null,
+                partial_content: error?.partialContent ? String(error.partialContent).slice(0, 4000) : null,
+              },
+            }).catch(() => null);
+            await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, prepared.providerConfig, {
+              failed: true,
+              failedContent,
+            }).catch(() => []);
+          }
+          send('error', {
+            success: false,
+            threadId: prepared?.thread?.id || null,
+            userMessageId: prepared?.userMessage?.id || null,
+            messageId: assistantMessage?.id || null,
+            message: failedContent,
+            incomplete: error?.incomplete === true,
+            finishReason: error?.finishReason || null,
+          });
+        } finally {
+          controller.close();
+        }
+      })();
+    },
+  }), {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Kalam-Function-Build': FUNCTION_BUILD,
+    },
   });
 };
 
@@ -5415,6 +5783,27 @@ const AUTO_IMAGE_GENERATION_PATTERNS = [
   /(?:لوگو|بنر|پوستر|کاور).*(?:بساز|طراحی کن)/i,
 ];
 
+const IMAGE_PROMPT_ONLY_PATTERNS = [
+  /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:برای|جهت).*(?:تولید|ساخت|ایجاد).*(?:تصویر|عکس|پوستر|بنر|کاور|image)/i,
+  /(?:برای|جهت).*(?:تولید|ساخت|ایجاد).*(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور).*(?:بنویس|بده|تهیه کن|آماده کن)/i,
+  /(?:پرامپت|prompt).*(?:تصویر|عکس|image).*(?:بنویس|بده|تهیه کن|آماده کن)/i,
+];
+
+const DIRECT_IMAGE_GENERATION_PATTERNS = [
+  /(?:خودت|مستقیماً|مستقیم|همین حالا).*(?:تصویر|عکس|پوستر|بنر|کاور).*(?:بساز|تولید کن|ایجاد کن)/i,
+  /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:را|رو).*(?:بساز|تولید کن|ایجاد کن|طراحی کن)/i,
+];
+
+const IMAGE_PROMPT_WORD_PATTERN = /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:تصویر|عکس|پوستر|بنر|کاور|image)|(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور)/i;
+
+const wantsImagePromptOnly = (text: string) => {
+  const value = String(text || '').trim();
+  const asksForPrompt = IMAGE_PROMPT_ONLY_PATTERNS.some((pattern) => pattern.test(value));
+  const explicitDirectGeneration = DIRECT_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(value))
+    && !IMAGE_PROMPT_WORD_PATTERN.test(value);
+  return asksForPrompt && !explicitDirectGeneration;
+};
+
 const AUTO_VOICE_OUTPUT_PATTERNS = [
   /(?:صدا|ویس|فایل صوتی).*(?:بساز|تولید کن|بخوان|بگو|تبدیل کن)/i,
   /(?:متن|این نوشته).*(?:را|رو).*(?:به صدا|به ویس|صوتی)/i,
@@ -5486,7 +5875,7 @@ const detectHeuristicAutoRoute = (
 
   if (hasVoiceInput) add('voice_input');
   if (hasFileInput) add('document_analysis');
-  if (AUTO_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('image_generation');
+  if (!wantsImagePromptOnly(normalized) && AUTO_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('image_generation');
   if (AUTO_VOICE_OUTPUT_PATTERNS.some((pattern) => pattern.test(normalized))) add('voice_output');
   if (AUTO_DOCUMENT_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('document_generation');
   if (AUTO_PROCESS_OPERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('process_operation');
@@ -5548,6 +5937,7 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر کاربر خواسته از روی ورودی‌ها رکورد ساخته شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده.',
     'اگر کاربر خواسته مرحله، فعالیت یا فرآیند اجرا/تغییر/ارجاع شود، process_operation را انتخاب کن.',
     'اگر کاربر ساخت یا اصلاح تصویر می‌خواهد، image_generation را انتخاب کن؛ مخصوصاً وقتی تصویر مبنا هم فرستاده شده است.',
+    'اگر کاربر فقط پرامپت، متن، توضیح یا دستور برای تولید تصویر می‌خواهد، image_generation را انتخاب نکن؛ این یک گفتگوی متنی عادی است مگر اینکه صریحاً بخواهد خود تصویر همین حالا ساخته شود.',
     'اگر کاربر ساخت فایل Word/Excel/PDF/CSV یا گزارش خروجی می‌خواهد، document_generation را انتخاب کن.',
     'اگر کاربر تبدیل متن به ویس می‌خواهد، voice_output را انتخاب کن.',
     'اگر سوال نیازمند اطلاعات جاری وب است، web_search را انتخاب کن.',
@@ -5599,7 +5989,9 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     const suggestedCapabilities = Array.isArray(parsed?.capabilities)
       ? parsed.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
       : [];
-    const filtered = suggestedCapabilities.filter((capability: string) => availableCapabilities.includes(capability));
+    const filtered = suggestedCapabilities
+      .filter((capability: string) => availableCapabilities.includes(capability))
+      .filter((capability: string) => !(capability === 'image_generation' && wantsImagePromptOnly(prompt.toLowerCase())));
     capabilities = filtered.length ? Array.from(new Set(filtered)) : heuristicCapabilities;
     targetModuleId = pickAutoTargetModuleId(String(parsed?.target_module_id || '').trim() || null, prompt, pageContext, authContext);
     routeReason = String(parsed?.reason || routeReason || '').trim() || routeReason;
@@ -6964,34 +7356,42 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     orientationVertical: imageSettings.orientationVertical === true,
     useOrganizationContext,
   };
+  const backgroundQueuedAt = new Date().toISOString();
+  const pendingImageMetadata = {
+    capability: 'image_generation',
+    capabilities: ['image_generation'],
+    kind: 'image_generation',
+    pending_status: true,
+    recheckable: true,
+    status: 'processing',
+    started_at: Date.now(),
+    prompt,
+    provider_prompt: providerPrompt,
+    prompt_settings: promptSettings,
+    context: pageContext.context,
+    context_key: contextKey,
+    context_summary: pageContext.summary,
+    background_task: {
+      status: 'queued',
+      queued_at: backgroundQueuedAt,
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+    },
+    image_call_options: {
+      size: imageCallOptions.size || null,
+      quality: imageCallOptions.quality || null,
+      n: imageCallOptions.n || null,
+      extraBody: imageCallOptions.extraBody || null,
+      hasSourceImages: sourceImages.length > 0,
+    },
+  };
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
     content: 'در حال ساخت تصویر...',
     provider: providerConfig.provider,
     model: providerConfig.model,
-    metadata: {
-      capability: 'image_generation',
-      capabilities: ['image_generation'],
-      kind: 'image_generation',
-      pending_status: true,
-      recheckable: true,
-      status: 'processing',
-      started_at: Date.now(),
-      prompt,
-      provider_prompt: providerPrompt,
-      prompt_settings: promptSettings,
-      context: pageContext.context,
-      context_key: contextKey,
-      context_summary: pageContext.summary,
-      image_call_options: {
-        size: imageCallOptions.size || null,
-        quality: imageCallOptions.quality || null,
-        n: imageCallOptions.n || null,
-        extraBody: imageCallOptions.extraBody || null,
-        hasSourceImages: sourceImages.length > 0,
-      },
-    },
+    metadata: pendingImageMetadata,
   });
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
     updated_at: new Date().toISOString(),
@@ -7017,6 +7417,20 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
 
   runBackgroundTask((async () => {
     try {
+      const backgroundStartedAt = new Date().toISOString();
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${assistantMessage.id}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        metadata: {
+          ...pendingImageMetadata,
+          background_task: {
+            ...(pendingImageMetadata.background_task || {}),
+            status: 'running',
+            started_at: backgroundStartedAt,
+          },
+        },
+      }).catch(() => []);
       const imageResult = await callImageGeneration(providerConfig, providerPrompt, imageCallOptions);
       const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
       const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedImage, {
@@ -7063,6 +7477,13 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           prompt,
           provider_prompt: providerPrompt,
           prompt_settings: promptSettings,
+          background_task: {
+            ...(pendingImageMetadata.background_task || {}),
+            status: 'completed',
+            queued_at: backgroundQueuedAt,
+            started_at: backgroundStartedAt,
+            completed_at: new Date().toISOString(),
+          },
           image: finalImage,
           usage: withCustomerBilling(imageResult.usageMetadata, ledger),
           avalai_request_id: imageResult.requestId || null,
@@ -7099,7 +7520,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
         id: `eq.${assistantMessage?.id}`,
         org_id: `eq.${authContext.orgId}`,
       }, {
-        content: failureMessage,
+        content: delayedMessage,
         provider: providerConfig.provider,
         model: providerConfig.model,
         metadata: {
@@ -7112,6 +7533,12 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           prompt,
           provider_prompt: providerPrompt,
           prompt_settings: promptSettings,
+          background_task: {
+            ...(pendingImageMetadata.background_task || {}),
+            status: 'failed',
+            queued_at: backgroundQueuedAt,
+            failed_at: new Date().toISOString(),
+          },
           error: rawFailure || 'image_generation_failed',
           failed_note: failureMessage,
         },
@@ -7164,11 +7591,71 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
   const msg = rows[0] || null;
   if (!msg) return json(404, { success: false, message: 'پیام ساخت تصویر پیدا نشد.' });
   const metadata = msg.metadata || {};
+  const recoverableTimedOutImage = metadata?.error === 'image_generation_worker_timeout'
+    && String(metadata?.background_task?.status || '').trim() === 'running';
+  if (recoverableTimedOutImage) {
+    const restoredMessage = [
+      'این درخواست قبلاً به‌خاطر طولانی شدن از حالت انتظار خارج شده بود، اما پردازش آن هنوز قابل بررسی است.',
+      'چند لحظه بعد دوباره «بررسی مجدد» را بزنید؛ اگر خروجی آماده شده باشد، همین کارت به نتیجه نهایی تبدیل می‌شود.',
+      `مدل: ${String(metadata?.background_task?.model || msg.model || 'نامشخص')}`,
+      'وضعیت پردازش: running',
+    ].join('\n');
+    const restoredMetadata = {
+      ...metadata,
+      pending_status: true,
+      status: 'delayed',
+      delayed: true,
+      failed: false,
+      failed_note: restoredMessage,
+      manual_recheck_only: true,
+      error: 'image_generation_delayed',
+      background_task: {
+        ...(metadata.background_task || {}),
+        status: 'running',
+        restored_at: new Date().toISOString(),
+      },
+    };
+    const updatedMessage = { ...msg, content: restoredMessage, metadata: restoredMetadata };
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+      id: `eq.${messageId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      content: restoredMessage,
+      metadata: restoredMetadata,
+    }).catch(() => []);
+    return json(200, {
+      success: true,
+      status: 'delayed',
+      diagnosticMessage: restoredMessage,
+      messageId,
+      threadId: msg.thread_id,
+      message: updatedMessage,
+    });
+  }
   if (metadata.pending_status === true) {
     const startedAt = Number(metadata.started_at || 0);
     const elapsedMs = startedAt ? Date.now() - startedAt : 0;
+    const backgroundTask = metadata.background_task && typeof metadata.background_task === 'object'
+      ? metadata.background_task
+      : {};
+    const backgroundStatus = String(backgroundTask.status || '').trim();
+    const buildDiagnosticMessage = () => {
+      if (backgroundStatus === 'queued') {
+        return 'ساخت تصویر هنوز توسط پردازش پس‌زمینه شروع نشده است. اگر این وضعیت ادامه پیدا کند، احتمالاً worker سرور بعد از ثبت درخواست اجرا نشده یا متوقف شده است.';
+      }
+      if (backgroundStatus === 'running') {
+        return 'ساخت تصویر در حال اجراست، اما هنوز خروجی نهایی از سرویس تصویر یا ذخیره‌سازی دریافت نشده است.';
+      }
+      return 'ساخت تصویر هنوز کامل نشده است. اگر این وضعیت طولانی شود، احتمالاً سرویس تصویر پاسخ نداده یا پردازش پس‌زمینه کامل نشده است.';
+    };
     if (startedAt && elapsedMs > IMAGE_STATUS_STALE_MS) {
-      const failureMessage = 'ساخت تصویر در زمان مورد انتظار کامل نشد. درخواست و کارت گفتگو حفظ شد؛ لطفاً چند لحظه بعد دوباره تلاش کنید یا وضعیت worker سرور را بررسی کنید.';
+      const delayedMessage = [
+        'ساخت تصویر بیشتر از زمان معمول طول کشیده، اما درخواست حذف نشده و هنوز قابل بررسی است.',
+        buildDiagnosticMessage(),
+        'می‌توانید چند لحظه بعد دوباره «بررسی مجدد» را بزنید؛ اگر خروجی بعداً آماده شود، همین کارت به نتیجه نهایی تبدیل می‌شود.',
+        `مدل: ${String(backgroundTask.model || msg.model || 'نامشخص')}`,
+        `وضعیت پردازش: ${backgroundStatus || 'نامشخص'}`,
+      ].join('\n');
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
         id: `eq.${messageId}`,
         org_id: `eq.${authContext.orgId}`,
@@ -7176,21 +7663,33 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
         content: failureMessage,
         metadata: {
           ...metadata,
-          pending_status: false,
-          status: 'failed',
-          failed: true,
-          failed_note: failureMessage,
-          error: 'image_generation_worker_timeout',
+          pending_status: true,
+          status: 'delayed',
+          delayed: true,
+          failed: false,
+          failed_note: delayedMessage,
+          manual_recheck_only: true,
+          error: 'image_generation_delayed',
+          background_task: {
+            ...backgroundTask,
+            status: backgroundStatus || 'delayed',
+            delayed_at: new Date().toISOString(),
+            delay_ms: elapsedMs,
+          },
         },
       }).catch(() => []);
-      return json(200, { success: true, status: 'failed', message: failureMessage, messageId, threadId: msg.thread_id });
+      return json(200, { success: true, status: 'delayed', message: delayedMessage, diagnosticMessage: delayedMessage, messageId, threadId: msg.thread_id });
     }
+    const diagnosticMessage = startedAt && elapsedMs > IMAGE_STATUS_WARN_MS ? buildDiagnosticMessage() : null;
     return json(200, {
       success: true,
       status: 'processing',
       messageId,
       threadId: msg.thread_id,
       message: msg,
+      diagnosticMessage,
+      elapsedMs,
+      backgroundStatus: backgroundStatus || null,
       provider: msg.provider,
       model: msg.model,
     });
@@ -9080,6 +9579,7 @@ Deno.serve(async (req: Request) => {
       if (outputMode === 'process_operation') return await handleProcessOperationFromPrompt(supabaseUrl, serviceRoleKey, authContext, { ...body, autoExecute: true });
       return await handleChat(supabaseUrl, serviceRoleKey, authContext, { ...body, action: 'chat', capability: 'workflow_ai_prompt', forceNewThread: body?.forceNewThread !== false });
     }
+    if (action === 'chat_stream') return handleChatStream(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'chat') return await handleChat(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'chat_with_file' || action === 'analyze_file' || action === 'upload_file' || action === 'send_file') {
       return await handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, body);
@@ -9092,7 +9592,7 @@ Deno.serve(async (req: Request) => {
     return json(400, { success: false, message: 'اقدام درخواستی پشتیبانی نمی‌شود.' });
   } catch (error: any) {
     const message = shortenProviderError(String(error?.message || 'خطای ناشناخته'));
-    const status = message === 'Unauthorized' ? 401 : 500;
+    const status = Number(error?.status || 0) || (message === 'Unauthorized' ? 401 : 500);
     console.error('ai-assistant failed', error);
     return json(status, { success: false, message });
   }

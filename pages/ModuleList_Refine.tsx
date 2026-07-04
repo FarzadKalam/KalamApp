@@ -44,7 +44,7 @@ import { getSingleOptionLabel } from "../utils/optionHelpers";
 import { getCachedAuthUser } from "../utils/sessionCache";
 import { syncRecordTags } from "../utils/recordTags";
 import { mergeOptionMaps, readModuleOptionSnapshot, writeModuleOptionSnapshot } from "../utils/moduleOptionSnapshot";
-import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListVisibleFields, hydrateModuleListRelationOptionsForRows } from "../utils/moduleListOptions";
+import { buildModuleListOptionPlan, fetchModuleListRelationOptions, getModuleListSelectableFields, getModuleListVisibleFields, hydrateModuleListRelationOptionsForRows } from "../utils/moduleListOptions";
 import { resolveModuleListBulkEditOpenState } from "../utils/moduleListBulkEdit";
 import { isWebFormTargetModule } from "../utils/webForms";
 import { isRecycleBinEnabledModule, moveModuleRecordsToRecycleBin } from "../utils/recycleBin";
@@ -256,8 +256,7 @@ const sanitizeModuleVisibleColumns = (
   columns?: string[] | null,
 ) => {
   const allowedFieldKeys = new Set(
-    (moduleConfig?.fields || [])
-      .filter((field) => !isWorkflowVirtualField(field))
+    getModuleListSelectableFields(moduleConfig)
       .map((field) => String(field?.key || "").trim())
       .filter(Boolean)
   );
@@ -294,8 +293,7 @@ const normalizeVisibleColumnsForView = (
     || builtInViewKey.startsWith('default_');
   if (!isDefaultView) return sanitized;
 
-  const allFieldKeys = (moduleConfig?.fields || [])
-    .filter((field) => !isWorkflowVirtualField(field))
+  const allFieldKeys = getModuleListSelectableFields(moduleConfig)
     .map((field) => String(field?.key || '').trim())
     .filter(Boolean)
     .filter((key, index, list) => list.indexOf(key) === index);
@@ -380,7 +378,17 @@ const buildModuleListRowSelect = (
       .map((field) => String(field?.key || "").trim())
       .filter(Boolean)
   );
+  const selectableFieldKeys = new Set(
+    getModuleListSelectableFields(moduleConfig)
+      .map((field) => String(field?.key || "").trim())
+      .filter(Boolean)
+  );
   const extraSelectKeys = new Set(MODULE_LIST_EXTRA_SELECT_KEYS[moduleConfig.id] || []);
+  const hasSyntheticVisibleColumns = (visibleColumns || []).some((key) => {
+    const normalized = String(key || "").trim();
+    return selectableFieldKeys.has(normalized) && !moduleFieldKeys.has(normalized);
+  });
+  if (hasSyntheticVisibleColumns) return "*";
   // ستون‌های assignee فقط برای ماژول‌هایی که از global assignee پشتیبانی می‌کنند اضافه می‌شوند
   const MANAGED_SYSTEM_COLUMNS = new Set(['assignee_type', 'assignee_id', 'assignee_role_id']);
   const moduleSupportsAssignee = GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.id) || GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.table || '');
@@ -390,7 +398,7 @@ const buildModuleListRowSelect = (
   const addKnownKey = (key?: string | null) => {
     const normalized = String(key || "").trim();
     if (shouldSkipModuleListField(moduleConfig.id, normalized)) return;
-    if (normalized === "id" || moduleFieldKeys.has(normalized) || extraSelectKeys.has(normalized) || (MANAGED_SYSTEM_COLUMNS.has(normalized) && moduleSupportsAssignee)) {
+    if (normalized === "id" || moduleFieldKeys.has(normalized) || selectableFieldKeys.has(normalized) || extraSelectKeys.has(normalized) || (MANAGED_SYSTEM_COLUMNS.has(normalized) && moduleSupportsAssignee)) {
       addKey(normalized);
     }
   };

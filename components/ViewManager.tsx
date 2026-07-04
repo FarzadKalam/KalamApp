@@ -41,7 +41,7 @@ import { getWorkflowConditionFields } from '../utils/workflowHelpers';
 import { createWorkflowId, WORKFLOW_ASSIGNEE_FIELD_KEY } from '../utils/workflowTypes';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../utils/popupContainer';
-import { getModuleListVisibleFields, normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
+import { getModuleListSelectableFields, getModuleListVisibleFields, normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { fetchAssigneeDirectory } from '../utils/referenceData';
 import {
@@ -102,13 +102,17 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     () => getModuleListVisibleFields(moduleConfig).map((field) => String(field?.key || '').trim()).filter(Boolean),
     [moduleConfig]
   );
+  const selectableColumnFields = useMemo(
+    () => getModuleListSelectableFields(moduleConfig),
+    [moduleConfig]
+  );
   const getViewColumnKeys = useCallback(
     (columns?: string[] | null) => {
       const sourceColumns = Array.isArray(columns) ? columns : [];
       if (moduleId === 'cash_bank_operations') {
         return normalizeCashBankVisibleColumnKeys(moduleConfig, sourceColumns);
       }
-      const allowedFieldKeys = new Set((moduleConfig?.fields || []).map((field) => String(field?.key || '').trim()).filter(Boolean));
+      const allowedFieldKeys = new Set(selectableColumnFields.map((field) => String(field?.key || '').trim()).filter(Boolean));
       const seen = new Set<string>();
       return sourceColumns
         .map((item) => String(item || '').trim())
@@ -119,11 +123,11 @@ const ViewManager: React.FC<ViewManagerProps> = ({
           return true;
         });
     },
-    [moduleConfig, moduleId]
+    [moduleConfig, moduleId, selectableColumnFields]
   );
   const viewColumnFields = useMemo(
-    () => (moduleConfig?.fields || []).filter((field) => getViewColumnKeys([field.key]).includes(field.key)),
-    [getViewColumnKeys, moduleConfig?.fields]
+    () => selectableColumnFields.filter((field) => getViewColumnKeys([field.key]).includes(field.key)),
+    [getViewColumnKeys, selectableColumnFields]
   );
   const selectedColumnKeys = useMemo(() => {
     const explicitColumns = getViewColumnKeys(config.columns);
@@ -887,7 +891,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                             onClick={() => toggleColumn(field.key)}
                           >
                             <Checkbox checked={config.columns?.includes(field.key)} />
-                            <span className="text-sm">{field.labels.fa}</span>
+                            <span className="text-sm">{String(field.labels?.fa || field.key)}</span>
                           </div>
                         ))}
                       </div>
@@ -904,12 +908,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                           dataSource={selectedColumnKeys}
                           renderItem={(item) => {
                             const colKey = item as string;
-                            const field = moduleConfig.fields.find((f) => f.key === colKey);
+                            const field = selectableColumnFields.find((f) => f.key === colKey);
                             if (!field) return null;
                             const index = selectedColumnKeys.indexOf(colKey);
                             return (
                               <List.Item className="!mb-1.5 !flex !justify-between !rounded-xl !border !border-[rgba(var(--brand-200-rgb),0.55)] !bg-[rgba(var(--brand-50-rgb),0.42)] !px-3 !py-2 shadow-sm transition hover:!border-[rgba(var(--brand-400-rgb),0.85)] dark:!border-[rgba(var(--brand-300-rgb),0.18)] dark:!bg-white/5">
-                                <span className="text-sm font-medium">{field.labels.fa}</span>
+                                <span className="text-sm font-medium">{String(field.labels?.fa || field.key)}</span>
                                 <div className="flex gap-1">
                                   <Button
                                     size="small"

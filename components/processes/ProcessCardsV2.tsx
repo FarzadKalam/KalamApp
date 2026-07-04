@@ -1997,6 +1997,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   const [touchStageDrag, setTouchStageDrag] = useState<TouchStageDragState | null>(null);
   const [activeStageModal, setActiveStageModal] = useState<ActiveStageModal>(null);
   const dropSlotPreviewRef = useRef<DropSlotPreview>(null);
+  const touchStageDragRef = useRef<TouchStageDragState | null>(null);
   const processPreferenceKey = `${item.mode}:${item.id}`;
   const [processCollapsed, setProcessCollapsed] = useState(() => processCollapsePreference.get(processPreferenceKey) ?? false);
   const userTouchedProcessCollapseRef = useRef(false);
@@ -2352,14 +2353,16 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
     event.currentTarget.setPointerCapture(event.pointerId);
     dropSlotPreviewRef.current = null;
     setDropSlotPreview(null);
-    setTouchStageDrag({
+    const nextDragState = {
       pointerId: event.pointerId,
       laneId: payload.laneId,
       stageId: payload.stageId,
       stageTitle: title,
       pointerX: event.clientX,
       pointerY: event.clientY,
-    });
+    };
+    touchStageDragRef.current = nextDragState;
+    setTouchStageDrag(nextDragState);
   }, []);
 
   const handleStageTouchDragMove = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
@@ -2370,23 +2373,22 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
       dropSlotPreviewRef.current = nextPreview;
       setDropSlotPreview(nextPreview);
       event.preventDefault();
-      return {
+      const nextDragState = {
         ...current,
         pointerX: event.clientX,
         pointerY: event.clientY,
       };
+      touchStageDragRef.current = nextDragState;
+      return nextDragState;
     });
   }, []);
 
   const handleStageTouchDragEnd = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.pointerType !== 'touch') return;
-    let dragState: TouchStageDragState | null = null;
-    setTouchStageDrag((current) => {
-      if (!current || current.pointerId !== event.pointerId) return current;
-      dragState = current;
-      return null;
-    });
-    if (!dragState) return;
+    const dragState = touchStageDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    touchStageDragRef.current = null;
+    setTouchStageDrag(null);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }

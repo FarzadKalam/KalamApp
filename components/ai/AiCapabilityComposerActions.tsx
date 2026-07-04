@@ -37,6 +37,7 @@ type CapabilityAvailability = Record<string, { enabled?: boolean; planAvailable?
 
 type AiCapabilityComposerActionsProps = {
   selected: AiComposerCapability[];
+  autoSuggested?: AiComposerCapability[];
   onChange: (next: AiComposerCapability[]) => void;
   capabilityAvailability?: CapabilityAvailability;
   disabled?: boolean;
@@ -95,6 +96,7 @@ const normalizeSelected = (items: AiComposerCapability[]) => Array.from(new Set(
 
 const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = ({
   selected,
+  autoSuggested = [],
   onChange,
   capabilityAvailability,
   disabled = false,
@@ -125,6 +127,9 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const isMobile = !screens.md;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const autoMode = selectedSet.size === 0;
+  const autoSuggestedSet = useMemo(() => new Set(autoSuggested), [autoSuggested]);
+  const effectiveSelected = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
+  const effectiveSelectedSet = useMemo(() => new Set(effectiveSelected), [effectiveSelected]);
   // Only one media-generation capability is active at a time.
   const activeMediaCapability = selectedSet.has('image_generation')
     ? 'image_generation' as const
@@ -151,9 +156,10 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   };
 
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
+    const base = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
     let next = checked
-      ? normalizeSelected([...selected, key])
-      : selected.filter((item) => item !== key);
+      ? normalizeSelected([...base, key])
+      : base.filter((item) => item !== key);
     if (key === 'legal_assistant' && checked) {
       next = normalizeSelected([...next, 'web_search', 'deep_reasoning']);
     }
@@ -167,7 +173,8 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
     <div className="w-full space-y-2 md:grid md:w-[min(92vw,640px)] md:grid-cols-2 md:gap-2 md:space-y-0" dir="rtl">
       {CAPABILITY_META.map((item) => {
         const usable = isCapabilityUsable(capabilityAvailability, item.key);
-        const checked = selectedSet.has(item.key);
+        const checked = effectiveSelectedSet.has(item.key);
+        const autoChecked = autoMode && autoSuggestedSet.has(item.key);
         return (
           <label
             key={item.key}
@@ -184,7 +191,10 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
             />
             <span className="mt-0.5 text-base text-gray-500">{item.icon}</span>
             <span className="min-w-0 flex-1">
-              <span className="block text-sm font-semibold text-gray-800 dark:text-gray-100">{item.label}</span>
+              <span className="flex items-center gap-1 text-sm font-semibold text-gray-800 dark:text-gray-100">
+                <span>{item.label}</span>
+                {autoChecked ? <Tag color="processing" className="m-0 text-[10px]">تشخیص خودکار</Tag> : null}
+              </span>
               <span className="block text-xs leading-5 text-gray-500">{item.description}</span>
             </span>
           </label>
@@ -195,7 +205,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const triggerButton = (
     <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => handleOpenChange(true)} />
+      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" />
     </Tooltip>
   );
 
@@ -240,7 +250,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         {autoMode ? (
           <Tag className="m-0">تصمیم‌گیری خودکار</Tag>
         ) : null}
-        {selected
+        {effectiveSelected
           .filter((key) => CAPABILITY_META.some((item) => item.key === key))
           .map((key) => {
             const meta = CAPABILITY_META.find((item) => item.key === key);
@@ -248,14 +258,15 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
             return (
               <Tag
                 key={key}
-                closable
+                color={autoMode ? 'processing' : undefined}
+                closable={!autoMode}
                 onClose={(event) => {
                   event.preventDefault();
                   setCapability(key, false);
                 }}
                 className="m-0"
               >
-                {meta.label}
+                {autoMode ? `تشخیص: ${meta.label}` : meta.label}
               </Tag>
             );
           })}

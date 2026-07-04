@@ -45,6 +45,7 @@ import {
   parseProcessLinkMap,
 } from './processTargets';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
+import { resolveProcessAssigneeReference } from './processAssigneeReference';
 
 type AutoAssignArgs = {
   supabaseClient: any;
@@ -295,12 +296,7 @@ export const buildProcessV2TemplateContext = async ({
 const resolveStageAssignee = (stage: Record<string, any>, context: Record<string, any>) => {
   const metadata = parseObject(stage?.metadata);
   const recurrence = parseObject(stage?.recurrence_info);
-  const resolveAssigneeReference = (value: any) => {
-    const normalized = normalizeText(value);
-    if (!normalized.startsWith('field:')) return value;
-    const fieldKey = normalized.replace(/^field:/, '').trim();
-    return context[fieldKey] || '';
-  };
+  const resolveAssigneeReference = (value: any) => resolveProcessAssigneeReference(value, context);
   const roleValue = parseAssigneeValue(
     resolveAssigneeReference(stage?.default_assignee_role_id
       || stage?.assignee_role_id

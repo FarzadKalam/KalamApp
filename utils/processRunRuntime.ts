@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { parseAssigneeValue } from './assigneeValue';
+import { findProcessAssigneeFieldReference } from './processAssigneeReference';
 import {
   PROCESS_GRAPH_METADATA_KEY,
   PROCESS_LANE_KEY,
@@ -62,11 +63,13 @@ const toUuidOrNull = (value: unknown) => {
 };
 
 const normalizeStageAssigneeFields = (stage: Record<string, any>) => {
+  const metadata = parseObject(stage?.metadata);
   const roleValue = parseAssigneeValue(stage?.default_assignee_role_id || stage?.assignee_role_id, 'role');
   if (roleValue.assigneeType === 'role' && toUuidOrNull(roleValue.assigneeId)) {
     return {
       defaultAssigneeId: null,
       defaultAssigneeRoleId: toUuidOrNull(roleValue.assigneeId),
+      defaultAssigneeField: null,
     };
   }
 
@@ -75,18 +78,36 @@ const normalizeStageAssigneeFields = (stage: Record<string, any>) => {
     return {
       defaultAssigneeId: null,
       defaultAssigneeRoleId: toUuidOrNull(userValue.assigneeId),
+      defaultAssigneeField: null,
     };
   }
   if (userValue.assigneeType === 'user' && toUuidOrNull(userValue.assigneeId)) {
     return {
       defaultAssigneeId: toUuidOrNull(userValue.assigneeId),
       defaultAssigneeRoleId: null,
+      defaultAssigneeField: null,
     };
   }
+
+  const defaultAssigneeField = findProcessAssigneeFieldReference(
+    stage?.default_assignee_field,
+    metadata?.default_assignee_field,
+    stage?.default_assignee_combo,
+    metadata?.default_assignee_combo,
+    stage?.default_assignee_id,
+    stage?.assignee_id,
+    stage?.default_assignee_role_id,
+    stage?.assignee_role_id,
+    metadata?.default_assignee_id,
+    metadata?.assignee_id,
+    metadata?.default_assignee_role_id,
+    metadata?.assignee_role_id,
+  );
 
   return {
     defaultAssigneeId: null,
     defaultAssigneeRoleId: null,
+    defaultAssigneeField: defaultAssigneeField || null,
   };
 };
 
@@ -169,6 +190,7 @@ export const mapProcessTemplateStagesToDraft = (
       duration_from: normalizeText(metadata?.duration_from) || 'project_start',
       default_assignee_id: assignee.defaultAssigneeId,
       default_assignee_role_id: assignee.defaultAssigneeRoleId,
+      default_assignee_field: assignee.defaultAssigneeField,
       template_stage_id: stage?.id || null,
       source_template_id: normalizeText(templateId) || null,
       source_template_name: normalizeText(options.templateName) || null,
@@ -187,6 +209,7 @@ export const mapProcessTemplateStagesToDraft = (
         start_duration_unit: normalizeText(stage?.start_duration_unit || metadata?.start_duration_unit || metadata?.duration_start_unit || 'day') || 'day',
         start_duration_from: normalizeText(stage?.start_duration_from || metadata?.start_duration_from || metadata?.duration_start_from || 'project_start') || 'project_start',
         start_anchor_stage_node_key: normalizeText(stage?.start_anchor_stage_node_key || metadata?.start_anchor_stage_node_key) || null,
+        default_assignee_field: assignee.defaultAssigneeField,
         [PROCESS_NODE_KEY]: processNodeKey,
         [PROCESS_LANE_KEY]: processLaneKey,
         [PROCESS_GRAPH_METADATA_KEY]: materialized.graph,
@@ -389,6 +412,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
           source_template_id: toUuidOrNull(stage?.source_template_id),
           source_template_name: normalizeText(stage?.source_template_name) || null,
           task_type: normalizeText(stage?.task_type) || null,
+          default_assignee_field: assignee.defaultAssigneeField,
           [PROCESS_NODE_KEY]: getProcessStageNodeKey(stage),
           [PROCESS_LANE_KEY]: getProcessStageLaneKey(stage),
           [PROCESS_GRAPH_METADATA_KEY]: stage?.[PROCESS_GRAPH_METADATA_KEY]

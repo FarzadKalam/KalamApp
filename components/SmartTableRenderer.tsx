@@ -23,7 +23,7 @@ import { getProcessTemplateModuleOptions } from '../utils/workflowHelpers';
 import { getTaskStatusOption } from '../utils/processTaskStatusOptions';
 import { buildConditionalFieldStateMap, filterConditionallyVisibleFieldsForDataset } from '../utils/conditionalFieldRules';
 import { getResolvedModuleConditionalDisplay } from '../utils/moduleSettingsRuntime';
-import { normalizeCashBankVisibleColumnKeys } from '../utils/moduleListOptions';
+import { getModuleListVisibleFields } from '../utils/moduleListOptions';
 import ResilientImage from './common/ResilientImage';
 import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import FileExtensionTile from './files/FileExtensionTile';
@@ -626,12 +626,7 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
 
     // اگر visibleColumns مشخص است، از آن استفاده کن
     if (visibleColumns && visibleColumns.length > 0) {
-      const nextVisibleColumns = moduleConfig.id === 'cash_bank_operations'
-        ? normalizeCashBankVisibleColumnKeys(moduleConfig, visibleColumns)
-        : visibleColumns;
-      fields = nextVisibleColumns
-        .map((colKey: string) => moduleConfig.fields.find((f: any) => f.key === colKey))
-        .filter((f: any) => f !== undefined)
+      fields = getModuleListVisibleFields(moduleConfig, visibleColumns)
         .filter((f: any) => moduleConfig.id !== 'cash_bank_operations' || !CASH_BANK_LEGACY_ACCOUNT_KEYS.has(String(f?.key || '').trim()))
         .filter((f: any) => (canViewField ? canViewField(f.key) !== false : true));
     } else if (fields.length === 0) {

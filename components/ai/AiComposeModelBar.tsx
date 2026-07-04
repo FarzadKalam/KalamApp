@@ -12,9 +12,10 @@ type CapabilityModelInfo = {
 
 type AiComposeModelBarProps = {
   selectedCapabilities: string[];
-  onModelOverrideChange: (model: string | null) => void;
+  onModelOverrideChange: (model: string | null, capability?: string | null) => void;
   fallbackCapability?: string | null;
   refreshKey?: number;
+  persistedOverrides?: Record<string, string> | null;
 };
 
 const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: string | null) => {
@@ -52,6 +53,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
   onModelOverrideChange,
   fallbackCapability,
   refreshKey,
+  persistedOverrides,
 }) => {
   const [capabilities, setCapabilities] = useState<Record<string, CapabilityModelInfo>>({});
   const [override, setOverride] = useState<string | null>(null);
@@ -82,21 +84,32 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
 
   const info = effectiveCapability ? capabilities[effectiveCapability] : null;
 
-  // Reset the per-message override whenever the effective capability changes.
-  useEffect(() => {
-    setOverride(null);
-    onModelOverrideChangeRef.current(null);
-  }, [effectiveCapability]);
-
-  const value = info ? (override || info.model) : null;
+  const options = useMemo(
+    () => (info?.selectable?.length ? info.selectable : (info ? [{ value: info.model, label: info.modelLabel }] : [])),
+    [info],
+  );
+  const optionValues = useMemo(() => new Set(options.map((item) => String(item.value || '').trim()).filter(Boolean)), [options]);
 
   useEffect(() => {
-    if (info) onModelOverrideChangeRef.current(value || null);
-  }, [info, value]);
+    if (!effectiveCapability || !info) return;
+    const persisted = String(persistedOverrides?.[effectiveCapability] || '').trim();
+    if (persisted && optionValues.has(persisted)) {
+      setOverride(persisted);
+      return;
+    }
+    setOverride((current) => (current && optionValues.has(current) ? current : null));
+  }, [effectiveCapability, info, optionValues, persistedOverrides]);
+
+  const persistedValue = effectiveCapability && optionValues.has(String(persistedOverrides?.[effectiveCapability] || '').trim())
+    ? String(persistedOverrides?.[effectiveCapability] || '').trim()
+    : '';
+  const value = info ? (override && optionValues.has(override) ? override : persistedValue || info.model) : null;
+
+  useEffect(() => {
+    if (info) onModelOverrideChangeRef.current(value || null, effectiveCapability);
+  }, [effectiveCapability, info, value]);
 
   if (!info) return null;
-
-  const options = info.selectable?.length ? info.selectable : [{ value: info.model, label: info.modelLabel }];
 
   return (
     <div className="flex items-center gap-1 text-[9px] leading-4 text-gray-400 dark:text-gray-500" dir="rtl">
@@ -114,7 +127,7 @@ const AiComposeModelBar: React.FC<AiComposeModelBarProps> = ({
         onChange={(next) => {
           const model = String(next || '');
           setOverride(model);
-          onModelOverrideChange(model || null);
+          onModelOverrideChange(model || null, effectiveCapability);
         }}
         disabled={info.available === false}
       />
