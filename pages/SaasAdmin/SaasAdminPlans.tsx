@@ -82,6 +82,7 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
     label: 'منابع انسانی',
     modules: [
       { id: 'employees', label: 'کارکنان' },
+      { id: 'job_descriptions', label: 'شرح شغل‌ها' },
       { id: 'attendance_logs', label: 'تردد و حضور' },
       { id: 'work_schedules', label: 'برنامه کاری' },
       { id: 'leave_requests', label: 'مرخصی‌ها' },

@@ -69,6 +69,10 @@ type BuilderFieldValue = {
   is_hidden?: boolean;
   options_text?: string;
   relation_target_module?: string;
+  allow_other?: boolean;
+  allow_none?: boolean;
+  show_progress_bar?: boolean;
+  progress_max?: number;
 };
 
 type BuilderFormValues = {
@@ -96,6 +100,7 @@ const SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS: Array<{ label: string; value: WebFormF
   { label: "متن کوتاه", value: "text" },
   { label: "متن بلند", value: "long_text" },
   { label: "عدد", value: "number" },
+  { label: "درصد", value: "percentage" },
   { label: "تلفن", value: "phone" },
   { label: "تاریخ", value: "date" },
   { label: "زمان", value: "time" },
@@ -110,6 +115,26 @@ const SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS: Array<{ label: string; value: WebFormF
 ];
 
 const SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES = new Set<WebFormFieldType>(["select", "multi_select"]);
+const WEB_FORM_CHOICE_FIELD_TYPES = new Set<WebFormFieldType>(["select", "multi_select"]);
+const WEB_FORM_PROGRESS_FIELD_TYPES = new Set<WebFormFieldType>(["number", "percentage"]);
+
+const normalizeProgressMaxInput = (fieldType: WebFormFieldType, value: unknown) => {
+  if (fieldType === "percentage") return 100;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const buildWebFormFieldBehaviorConfig = (fieldType: WebFormFieldType, field: BuilderFieldValue) => {
+  const isChoiceField = WEB_FORM_CHOICE_FIELD_TYPES.has(fieldType);
+  const isProgressField = WEB_FORM_PROGRESS_FIELD_TYPES.has(fieldType);
+  const showProgressBar = isProgressField && field.show_progress_bar === true;
+  return {
+    allow_other: isChoiceField && field.allow_other === true,
+    allow_none: isChoiceField && field.allow_none === true,
+    show_progress_bar: showProgressBar,
+    progress_max: showProgressBar ? normalizeProgressMaxInput(fieldType, field.progress_max) : undefined,
+  };
+};
 
 const isSurveyTargetModule = (moduleId?: string | null) => String(moduleId || "").trim() === "surveys";
 const supportsTemplateFieldBindingsForModule = (moduleId?: string | null) =>
@@ -444,6 +469,10 @@ const WebFormBuilderPage: React.FC = () => {
                 is_hidden: normalized.is_hidden === true,
                 options_text: formatWebFormOptionsText(normalized.config?.select_options),
                 relation_target_module: String(normalized.config?.relation_target_module || "").trim() || undefined,
+                allow_other: normalized.config?.allow_other === true,
+                allow_none: normalized.config?.allow_none === true,
+                show_progress_bar: normalized.config?.show_progress_bar === true,
+                progress_max: normalized.config?.progress_max,
               })),
           });
         setSlugTouched(true);
@@ -707,7 +736,7 @@ const WebFormBuilderPage: React.FC = () => {
       );
     }
 
-    if (fieldType === "number") {
+    if (fieldType === "number" || fieldType === "percentage") {
       return (
         <Form.Item label="مقدار پیش‌فرض" name={[listFieldName, "default_value"]}>
           <InputNumber className="!w-full" placeholder={targetFieldItem?.label || "مقدار پیش‌فرض"} />
@@ -877,6 +906,7 @@ const WebFormBuilderPage: React.FC = () => {
                 relation_target_module: templateFieldType === "relation"
                   ? (String(item?.relation_target_module || "").trim() || null)
                   : null,
+                ...buildWebFormFieldBehaviorConfig(templateFieldType, item || {}),
               },
               sort_order: Number(item?.sort_order || ((index + 1) * 10)),
               is_required: item?.is_required !== false,
@@ -921,6 +951,7 @@ const WebFormBuilderPage: React.FC = () => {
               default_to_current_employee: defaultToCurrentEmployee,
               relation_target_module: String(targetFieldItem.field?.relationConfig?.targetModule || "").trim() || null,
               dynamic_options_category: String((targetFieldItem.field as any)?.dynamicOptionsCategory || "").trim() || null,
+              ...buildWebFormFieldBehaviorConfig(fieldType, item || {}),
             },
             sort_order: Number(item?.sort_order || ((index + 1) * 10)),
             is_required: item?.is_required !== false,
@@ -1127,6 +1158,9 @@ const WebFormBuilderPage: React.FC = () => {
                         && currentTargetFieldKey !== ""
                         && currentTargetFieldKey === String(duplicateMatchField || "").trim();
                       const templateOptionCount = parseWebFormOptionsText(String(watchedFields?.[index]?.options_text || "")).length;
+                      const isChoiceField = WEB_FORM_CHOICE_FIELD_TYPES.has(inferredType);
+                      const isProgressField = WEB_FORM_PROGRESS_FIELD_TYPES.has(inferredType);
+                      const showProgressBar = watchedFields?.[index]?.show_progress_bar === true;
 
                       return (
                         <Card
@@ -1199,6 +1233,10 @@ const WebFormBuilderPage: React.FC = () => {
                                     form.setFieldValue(["fields", field.name, "field_type"], matched.inferredType);
                                     form.setFieldValue(["fields", field.name, "default_value"], undefined);
                                     form.setFieldValue(["fields", field.name, "default_to_current_employee"], false);
+                                    form.setFieldValue(["fields", field.name, "allow_other"], false);
+                                    form.setFieldValue(["fields", field.name, "allow_none"], false);
+                                    form.setFieldValue(["fields", field.name, "show_progress_bar"], false);
+                                    form.setFieldValue(["fields", field.name, "progress_max"], undefined);
                                   }}
                                 />
                               </Form.Item>
@@ -1210,7 +1248,22 @@ const WebFormBuilderPage: React.FC = () => {
 
                             {bindingType === "template_field" ? (
                               <Form.Item label="نوع فیلد" name={[field.name, "field_type"]} rules={[{ required: true, message: "نوع فیلد را انتخاب کنید." }]}>
-                                <Select options={SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS} />
+                                <Select
+                                  options={SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS}
+                                  onChange={(nextType: WebFormFieldType) => {
+                                    if (!WEB_FORM_CHOICE_FIELD_TYPES.has(nextType)) {
+                                      form.setFieldValue(["fields", field.name, "allow_other"], false);
+                                      form.setFieldValue(["fields", field.name, "allow_none"], false);
+                                      form.setFieldValue(["fields", field.name, "options_text"], "");
+                                    }
+                                    if (!WEB_FORM_PROGRESS_FIELD_TYPES.has(nextType)) {
+                                      form.setFieldValue(["fields", field.name, "show_progress_bar"], false);
+                                      form.setFieldValue(["fields", field.name, "progress_max"], undefined);
+                                    } else if (nextType === "percentage") {
+                                      form.setFieldValue(["fields", field.name, "progress_max"], 100);
+                                    }
+                                  }}
+                                />
                               </Form.Item>
                             ) : null}
 
@@ -1228,6 +1281,53 @@ const WebFormBuilderPage: React.FC = () => {
                               <Form.Item label="ماژول رابطه" name={[field.name, "relation_target_module"]} rules={[{ required: true, message: "ماژول رابطه را انتخاب کنید." }]}>
                                 <Select showSearch optionFilterProp="label" options={moduleOptions} placeholder="انتخاب ماژول" />
                               </Form.Item>
+                            ) : null}
+
+                            {isChoiceField || isProgressField ? (
+                              <div className="md:col-span-2 rounded-2xl border border-dashed border-gray-200 p-4">
+                                {isChoiceField ? (
+                                  <div className="space-y-3">
+                                    <div className="text-sm font-semibold text-gray-700">گزینه‌های تکمیلی انتخاب</div>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                      <Form.Item name={[field.name, "allow_other"]} valuePropName="checked" className="mb-0">
+                                        <Checkbox>گزینه سایر فعال باشد</Checkbox>
+                                      </Form.Item>
+                                      <Form.Item name={[field.name, "allow_none"]} valuePropName="checked" className="mb-0">
+                                        <Checkbox>گزینه هیچ‌کدام فعال باشد</Checkbox>
+                                      </Form.Item>
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {isProgressField ? (
+                                  <div className={isChoiceField ? "mt-4 border-t border-dashed border-gray-200 pt-4" : ""}>
+                                    <Form.Item name={[field.name, "show_progress_bar"]} valuePropName="checked" className="mb-0">
+                                      <Checkbox>نمایش بصورت نوار پیشرفت</Checkbox>
+                                    </Form.Item>
+                                    {showProgressBar && inferredType === "number" ? (
+                                      <Form.Item
+                                        className="mt-3 mb-0"
+                                        label="آخرین عدد نوار"
+                                        name={[field.name, "progress_max"]}
+                                        rules={[{
+                                          validator: async (_: unknown, value: unknown) => {
+                                            const parsed = Number(value);
+                                            if (Number.isFinite(parsed) && parsed > 0) return;
+                                            throw new Error("آخرین عدد نوار را بزرگ‌تر از صفر وارد کنید.");
+                                          },
+                                        }]}
+                                      >
+                                        <InputNumber className="!w-full" min={1} placeholder="مثال: 10 یا 100" />
+                                      </Form.Item>
+                                    ) : null}
+                                    {showProgressBar && inferredType === "percentage" ? (
+                                      <div className="mt-3 text-xs text-gray-500">
+                                        برای فیلد درصد، نوار از ۰ تا ۱۰۰ درصد نمایش داده می‌شود.
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                              </div>
                             ) : null}
 
                             <div className="rounded-2xl border border-gray-200 px-4 py-3 text-sm text-gray-500">
@@ -1276,6 +1376,10 @@ const WebFormBuilderPage: React.FC = () => {
                         is_required: false,
                         is_hidden: false,
                         options_text: "",
+                        allow_other: false,
+                        allow_none: false,
+                        show_progress_bar: false,
+                        progress_max: undefined,
                       })}
                     >
                       افزودن فیلد

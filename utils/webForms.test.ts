@@ -82,6 +82,32 @@ describe('web form utilities', () => {
     ]);
   });
 
+  it('normalizes choice and progress settings for public web form fields', () => {
+    const choiceField = normalizeWebFormFieldRecord({
+      field_key: 'favorite_color',
+      label: 'رنگ مورد علاقه',
+      field_type: 'select',
+      config: {
+        allow_other: true,
+        allow_none: true,
+      },
+    });
+    const progressField = normalizeWebFormFieldRecord({
+      field_key: 'score',
+      label: 'امتیاز',
+      field_type: 'number',
+      config: {
+        show_progress_bar: true,
+        progress_max: '50',
+      },
+    });
+
+    expect(choiceField.config?.allow_other).toBe(true);
+    expect(choiceField.config?.allow_none).toBe(true);
+    expect(progressField.config?.show_progress_bar).toBe(true);
+    expect(progressField.config?.progress_max).toBe(50);
+  });
+
   it('parses and formats option text with Persian labels', () => {
     const options = parseWebFormOptionsText('تهران|tehran\nاصفهان\n\nشیراز|shiraz');
     expect(options).toEqual([
@@ -177,6 +203,7 @@ describe('web form utilities', () => {
     expect(resolveWebFormFieldType('surveys', 'branch_location', 'text')).toBe('location');
     expect(resolveWebFormFieldType('customers', '__record_image__', 'text')).toBe('image');
     expect(resolveWebFormFieldType('customers', '__record_files__', 'text')).toBe('file');
+    expect(resolveWebFormFieldType(undefined, undefined, 'percentage')).toBe('percentage');
     expect(
       normalizeWebFormFieldRecord(
         {

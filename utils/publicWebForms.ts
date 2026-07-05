@@ -32,6 +32,7 @@ const resolveFieldType = (fallbackType: unknown = "text"): WebFormFieldType => {
       "text",
       "long_text",
       "number",
+      "percentage",
       "phone",
       "date",
       "time",
@@ -79,6 +80,7 @@ export const normalizePublicWebFormFieldRecord = (
 ): WebFormFieldRecord => {
   const record = toRecord(value);
   const config = toRecord(record.config);
+  const progressMax = Number(config.progress_max);
 
   return {
     id: String(record.id || "").trim() || undefined,
@@ -98,6 +100,10 @@ export const normalizePublicWebFormFieldRecord = (
       default_to_current_employee: config.default_to_current_employee === true,
       relation_target_module: String(config.relation_target_module || "").trim() || undefined,
       dynamic_options_category: String(config.dynamic_options_category || "").trim() || undefined,
+      allow_other: config.allow_other === true,
+      allow_none: config.allow_none === true,
+      show_progress_bar: config.show_progress_bar === true,
+      progress_max: Number.isFinite(progressMax) && progressMax > 0 ? progressMax : undefined,
     },
   };
 };

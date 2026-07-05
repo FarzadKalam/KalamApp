@@ -79,7 +79,7 @@ const MODULE_CATEGORIES = [
       'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
       'overtime_requests', 'mission_requests', 'employee_advances',
       'employee_bonus_requests', 'employee_penalty_requests',
-      'employee_contracts', 'payroll_slips', 'recruitment_applicants',
+      'employee_contracts', 'payroll_slips', 'recruitment_applicants', 'job_descriptions',
     ],
   },
   {

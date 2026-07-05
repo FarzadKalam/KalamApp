@@ -205,6 +205,7 @@ export interface ModuleField {
     }>;
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
+    populateFields?: Record<string, string>;
   };
   multiRelationConfig?: {
     targetModule: string;
@@ -228,6 +229,7 @@ export interface ModuleField {
     quickCreateFieldKeys?: string[];
     quickCreateDefaults?: Record<string, any>;
     targetPhoneFields?: string[];
+    populateFields?: Record<string, string>;
   };
   defaultValue?: any;
 }

@@ -1034,6 +1034,55 @@ const SmartForm: React.FC<SmartFormProps> = ({
     return formatOptionLabel(value);
   };
 
+  const applyRelationPopulateFields = useCallback(async (field: any, nextValue: any) => {
+    const relationConfig = field?.type === FieldType.MULTI_RELATION
+      ? field?.multiRelationConfig
+      : field?.relationConfig;
+    const populateFields = relationConfig?.populateFields;
+    if (!populateFields || typeof populateFields !== 'object' || Array.isArray(populateFields)) return;
+
+    const mappingEntries = Object.entries(populateFields)
+      .map(([targetFieldKey, sourceFieldKey]) => ({
+        targetFieldKey: String(targetFieldKey || '').trim(),
+        sourceFieldKey: String(sourceFieldKey || '').trim(),
+      }))
+      .filter((entry) => entry.targetFieldKey && entry.sourceFieldKey);
+    if (mappingEntries.length === 0) return;
+
+    const targetModuleId = String(relationConfig?.targetModule || '').trim();
+    const targetTable = MODULES[targetModuleId]?.table || targetModuleId;
+    if (!targetModuleId || !targetTable) return;
+
+    const selectedId = String(Array.isArray(nextValue) ? nextValue[0] : (nextValue || '')).trim();
+    if (!selectedId) {
+      const clearPatch = Object.fromEntries(mappingEntries.map((entry) => [entry.targetFieldKey, null]));
+      form.setFieldsValue(clearPatch);
+      setFormData((prev: any) => ({ ...prev, ...clearPatch }));
+      return;
+    }
+
+    try {
+      const sourceColumns = Array.from(new Set(mappingEntries.map((entry) => entry.sourceFieldKey)));
+      const { data, error } = await supabase
+        .from(targetTable)
+        .select(sourceColumns.join(', '))
+        .eq('id', selectedId)
+        .maybeSingle();
+      if (error) throw error;
+      const sourceRecord = (data || {}) as Record<string, any>;
+
+      const patch = mappingEntries.reduce<Record<string, any>>((acc, entry) => {
+        acc[entry.targetFieldKey] = sourceRecord[entry.sourceFieldKey] ?? null;
+        return acc;
+      }, {});
+      form.setFieldsValue(patch);
+      setFormData((prev: any) => ({ ...prev, ...patch }));
+    } catch (error) {
+      console.warn('Could not populate relation fields', error);
+      messageApi.warning('پر کردن خودکار فیلدهای مرتبط ناموفق بود.');
+    }
+  }, [form, messageApi]);
+
   const buildAutoProductName = (values: any) => {
     const parts: string[] = [];
     const addPart = (part?: string) => {
@@ -2992,6 +3041,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                  ...prev,
                                  [preparedField.key]: val,
                                }));
+                               void applyRelationPopulateFields(preparedField, val);
                              }}
                             forceEditMode={true}
                             options={options}
@@ -3143,6 +3193,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
                                           ...prev,
                                           [preparedField.key]: val,
                                         }));
+                                        void applyRelationPopulateFields(preparedField, val);
                                       }
                                    }}
                                     forceEditMode={true} options={options}

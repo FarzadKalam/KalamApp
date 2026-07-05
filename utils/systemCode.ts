@@ -11,6 +11,7 @@ const MODULES_WITH_SYSTEM_CODE = new Set([
   'expense_documents',
   'instructions',
   'invoices',
+  'job_descriptions',
   'payroll_slips',
   'products',
   'production_boms',

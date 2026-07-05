@@ -17,6 +17,7 @@ import {
   SALARY_TYPE_OPTIONS,
 } from '../utils/payrollSalaryType';
 import { createWebFormTemplateRecordSaver } from '../utils/webFormTemplateFormAdapter';
+import { JOB_DESCRIPTION_POPULATE_FIELDS } from './jobDescriptionsConfig';
 
 const saveEmployeeRecord = createWebFormTemplateRecordSaver({
   moduleId: 'employees',
@@ -371,6 +372,20 @@ export const employeesModule: ModuleDefinition = {
     { key: 'bank_card_number', labels: { fa: 'شماره کارت', en: 'Card Number' }, type: FieldType.TEXT, blockId: 'banking_info', order: 9.2 },
     { key: 'iban', labels: { fa: 'شماره شبا', en: 'IBAN' }, type: FieldType.TEXT, blockId: 'banking_info', order: 9.3 },
 
+    {
+      key: 'job_description_id',
+      labels: { fa: 'شرح شغل', en: 'Job Description' },
+      type: FieldType.RELATION,
+      blockId: 'job_description_info',
+      order: 9.9,
+      relationConfig: {
+        targetModule: 'job_descriptions',
+        targetField: 'name',
+        populateFields: JOB_DESCRIPTION_POPULATE_FIELDS,
+      },
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
     { key: 'job_goal', labels: { fa: 'هدف', en: 'Goal' }, type: FieldType.LONG_TEXT, blockId: 'job_description_info', order: 10 },
     { key: 'job_responsibilities', labels: { fa: 'مسئولیت ها', en: 'Responsibilities' }, type: FieldType.SUPER_LONG_TEXT, blockId: 'job_description_info', order: 10.1 },
     { key: 'job_duties', labels: { fa: 'شرح وظایف', en: 'Duties' }, type: FieldType.SUPER_LONG_TEXT, blockId: 'job_description_info', order: 10.2 },

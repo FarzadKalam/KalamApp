@@ -7,6 +7,7 @@ export type WebFormFieldType =
   | "text"
   | "long_text"
   | "number"
+  | "percentage"
   | "phone"
   | "date"
   | "time"
@@ -64,6 +65,10 @@ export type WebFormFieldConfig = {
   default_to_current_employee?: boolean;
   binding_type?: "record_field" | "template_field";
   relation_target_module?: string;
+  allow_other?: boolean;
+  allow_none?: boolean;
+  show_progress_bar?: boolean;
+  progress_max?: number;
   [key: string]: any;
 };
 
@@ -96,6 +101,7 @@ const WEB_FORM_SUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.SUPER_LONG_TEXT,
   FieldType.NUMBER,
   FieldType.PRICE,
+  FieldType.PERCENTAGE,
   FieldType.PHONE,
   FieldType.DATE,
   FieldType.TIME,
@@ -107,6 +113,9 @@ const WEB_FORM_SUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.SELECT,
   FieldType.STATUS,
 ]);
+
+export const WEB_FORM_OTHER_VALUE = "__web_form_other__";
+export const WEB_FORM_NONE_VALUE = "__web_form_none__";
 
 const WEB_FORM_DUPLICATE_COMPARABLE_FIELD_TYPES = new Set<WebFormFieldType>([
   "text",
@@ -186,6 +195,7 @@ export const inferWebFormFieldType = (field?: ModuleField | null): WebFormFieldT
   if (!field) return "text";
   if (field.type === FieldType.LONG_TEXT || field.type === FieldType.SUPER_LONG_TEXT) return "long_text";
   if (field.type === FieldType.NUMBER || field.type === FieldType.PRICE) return "number";
+  if (field.type === FieldType.PERCENTAGE) return "percentage";
   if (field.type === FieldType.PHONE) return "phone";
   if (field.type === FieldType.DATE) return "date";
   if (field.type === FieldType.TIME) return "time";
@@ -216,6 +226,11 @@ const hasMeaningfulDefaultValue = (value: unknown) => {
   if (value === undefined || value === null) return false;
   if (typeof value === "string") return value.trim() !== "";
   return true;
+};
+
+const normalizeWebFormProgressMax = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 };
 
 const getWebFormSuggestionPriority = (field: Pick<WebFormTargetFieldItem, "isModuleRequired" | "isKeyField" | "isTableColumn" | "isVirtual">) => {
@@ -255,7 +270,7 @@ export const resolveWebFormFieldType = (
   if (String(targetFieldKey || "").trim() === WEB_FORM_RECORD_FILE_TARGET_KEY) return "file";
   const targetField = getWebFormTargetField(moduleId, targetFieldKey);
   if (targetField) return inferWebFormFieldType(targetField);
-  return (["text", "long_text", "number", "phone", "date", "time", "datetime", "image", "file", "multi_select", "location", "checkbox", "select", "relation"].includes(String(fallbackType || ""))
+  return (["text", "long_text", "number", "percentage", "phone", "date", "time", "datetime", "image", "file", "multi_select", "location", "checkbox", "select", "relation"].includes(String(fallbackType || ""))
     ? String(fallbackType)
     : "text") as WebFormFieldType;
 };
@@ -455,6 +470,10 @@ export const normalizeWebFormFieldRecord = (
       ...config,
       select_options: selectOptions,
       default_to_current_employee: config.default_to_current_employee === true,
+      allow_other: config.allow_other === true,
+      allow_none: config.allow_none === true,
+      show_progress_bar: config.show_progress_bar === true,
+      progress_max: normalizeWebFormProgressMax(config.progress_max),
     },
   };
 };

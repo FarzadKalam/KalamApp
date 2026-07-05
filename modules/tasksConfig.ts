@@ -71,6 +71,7 @@ export const tasksModule: ModuleDefinition = {
         { label: 'فیش‌های حقوقی', value: 'payroll_slips' },
         { label: 'قراردادهای کارکنان', value: 'employee_contracts' },
         { label: 'متقاضیان استخدام', value: 'recruitment_applicants' },
+        { label: 'شرح شغل‌ها', value: 'job_descriptions' },
       ],
       validation: { required: false },
       nature: FieldNature.PREDEFINED,

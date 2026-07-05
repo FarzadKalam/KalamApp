@@ -75,7 +75,7 @@ export const GLOBAL_SEARCH_RPC_SUPPORTED_MODULE_IDS = [
   'automation_execution_reports', 'sms_delivery_reports', 'voip_call_reports',
   'counterparty_bot_groups', 'expense_documents', 'employee_advances',
   'employee_bonus_requests', 'employee_penalty_requests', 'payroll_slips',
-  'employee_contracts', 'recruitment_applicants', 'surveys',
+  'employee_contracts', 'recruitment_applicants', 'job_descriptions', 'surveys',
 ] as const;
 
 const searchCache = new Map<string, { expiresAt: number; groups: GlobalSearchGroup[] }>();

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Form, Input, Select, Space, Spin, Typography, Upload } from "antd";
+import { Alert, App, Button, Card, Form, Input, Select, Slider, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../App.css";
@@ -22,7 +22,12 @@ import {
   normalizePublicWebFormConfig,
   normalizePublicWebFormFieldRecord,
 } from "../utils/publicWebForms";
-import type { WebFormAccessScope, WebFormFieldRecord } from "../utils/webForms";
+import {
+  WEB_FORM_NONE_VALUE,
+  WEB_FORM_OTHER_VALUE,
+  type WebFormAccessScope,
+  type WebFormFieldRecord,
+} from "../utils/webForms";
 import {
   buildConditionalFieldStateMap,
   normalizeConditionalFieldSettings,
@@ -70,6 +75,7 @@ type PublicWebFormRpcRow = {
 type PublicChoiceOption = {
   label: string;
   value: string;
+  special?: "other" | "none";
 };
 
 const LEGACY_PREFIX_OPTIONS = [
@@ -79,12 +85,71 @@ const LEGACY_PREFIX_OPTIONS = [
   { label: "مهندس", value: "مهندس" },
 ];
 
+const isChoiceWebFormField = (field: WebFormFieldRecord) =>
+  field.field_type === "select" || field.field_type === "multi_select";
+
+const isProgressWebFormField = (field: WebFormFieldRecord) =>
+  (field.field_type === "number" || field.field_type === "percentage")
+  && field.config?.show_progress_bar === true;
+
+const getChoiceOtherFieldKey = (field: Pick<WebFormFieldRecord, "field_key">) =>
+  `${field.field_key}__other`;
+
+const normalizeChoiceValueList = (value: unknown) =>
+  (Array.isArray(value) ? value : (value === undefined || value === null || value === "" ? [] : [value]))
+    .map((item) => String(item ?? "").trim())
+    .filter(Boolean);
+
+const isChoiceOtherSelected = (field: WebFormFieldRecord, value: unknown) => {
+  if (!isChoiceWebFormField(field)) return false;
+  return normalizeChoiceValueList(value).includes(WEB_FORM_OTHER_VALUE);
+};
+
+const resolvePublicSubmissionRawValue = (field: WebFormFieldRecord, values: Record<string, any>) => {
+  const rawValue = values[field.field_key];
+  if (!isChoiceWebFormField(field)) return rawValue;
+
+  const otherValue = String(values[getChoiceOtherFieldKey(field)] || "").trim();
+  if (field.field_type === "multi_select") {
+    const selectedValues = normalizeChoiceValueList(rawValue);
+    if (selectedValues.includes(WEB_FORM_NONE_VALUE)) return [];
+    return selectedValues
+      .map((item) => (item === WEB_FORM_OTHER_VALUE ? otherValue : item))
+      .filter((item) => item && item !== WEB_FORM_NONE_VALUE);
+  }
+
+  const normalizedValue = String(rawValue ?? "").trim();
+  if (normalizedValue === WEB_FORM_NONE_VALUE) return null;
+  if (normalizedValue === WEB_FORM_OTHER_VALUE) return otherValue || null;
+  return rawValue;
+};
+
+const getProgressMax = (field: WebFormFieldRecord) => {
+  if (field.field_type === "percentage") return 100;
+  const parsed = Number(field.config?.progress_max);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+};
+
+const getProgressStep = (field: WebFormFieldRecord) => {
+  const max = getProgressMax(field);
+  return max <= 10 ? 1 : max / 10;
+};
+
+const formatProgressValue = (field: WebFormFieldRecord, value: unknown) => {
+  const parsed = Number(value);
+  const safeValue = Number.isFinite(parsed) ? parsed : 0;
+  const displayValue = Number.isInteger(safeValue) ? safeValue : Number(safeValue.toFixed(2));
+  return field.field_type === "percentage" ? `${displayValue}%` : String(displayValue);
+};
+
 const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["field_type"]): FieldType => {
   switch (fieldType) {
     case "long_text":
       return FieldType.LONG_TEXT;
     case "number":
       return FieldType.NUMBER;
+    case "percentage":
+      return FieldType.PERCENTAGE;
     case "phone":
       return FieldType.PHONE;
     case "date":
@@ -146,7 +211,8 @@ const isWideField = (field: WebFormFieldRecord) =>
   || field.field_type === "location"
   || field.field_type === "multi_select"
   || field.field_type === "image"
-  || field.field_type === "file";
+  || field.field_type === "file"
+  || isProgressWebFormField(field);
 
 const normalizePublicFieldValue = (field: WebFormFieldRecord, rawValue: any) => {
   if (rawValue === undefined) return undefined;
@@ -182,7 +248,7 @@ const normalizePublicFieldValue = (field: WebFormFieldRecord, rawValue: any) => 
       .filter(Boolean);
   }
 
-  if (field.field_type === "number") {
+  if (field.field_type === "number" || field.field_type === "percentage") {
     if (rawValue === "") return null;
     const parsed = Number(rawValue);
     return Number.isFinite(parsed) ? parsed : null;
@@ -396,6 +462,9 @@ const InquiryForm = () => {
     return (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
       const fieldKey = String(field.field_key || "").trim();
       const targetFieldKey = String(field.target_field_key || "").trim();
+      if (fieldKey && isChoiceWebFormField(field)) {
+        acc[fieldKey] = resolvePublicSubmissionRawValue(field, acc);
+      }
       if (fieldKey && targetFieldKey && Object.prototype.hasOwnProperty.call(acc, fieldKey)) {
         acc[targetFieldKey] = acc[fieldKey];
       }
@@ -761,25 +830,61 @@ const InquiryForm = () => {
     return dynamicOptions.length > 0 ? dynamicOptions : staticOptions;
   };
 
+  const getRenderedChoiceOptions = (field: WebFormFieldRecord) => {
+    const options = [...getChoiceOptions(field)];
+    if (field.config?.allow_other === true) {
+      options.push({ label: "سایر", value: WEB_FORM_OTHER_VALUE, special: "other" });
+    }
+    if (field.config?.allow_none === true) {
+      options.push({ label: "هیچ‌کدام", value: WEB_FORM_NONE_VALUE, special: "none" });
+    }
+    return options;
+  };
+
+  const normalizeNextChoiceValue = (field: WebFormFieldRecord, nextValue: unknown, previousValue: unknown) => {
+    if (field.field_type !== "multi_select") return nextValue;
+    const nextValues = normalizeChoiceValueList(nextValue);
+    const previousValues = normalizeChoiceValueList(previousValue);
+    if (nextValues.includes(WEB_FORM_NONE_VALUE)) {
+      if (!previousValues.includes(WEB_FORM_NONE_VALUE) || nextValues.length === 1) return [WEB_FORM_NONE_VALUE];
+      return nextValues.filter((item) => item !== WEB_FORM_NONE_VALUE);
+    }
+    return nextValues.filter((item) => item !== WEB_FORM_NONE_VALUE);
+  };
+
+  const setChoiceFieldValue = (field: WebFormFieldRecord, nextValue: unknown) => {
+    const normalizedValue = normalizeNextChoiceValue(field, nextValue, form.getFieldValue(field.field_key));
+    setPublicFormFieldValue(field.field_key, normalizedValue);
+    if (!isChoiceOtherSelected(field, normalizedValue)) {
+      form.setFields([{ name: getChoiceOtherFieldKey(field), value: undefined, touched: false }]);
+    }
+  };
+
+  const validatePublicChoiceValue = async (field: WebFormFieldRecord, value: unknown) => {
+    const selectedValues = normalizeChoiceValueList(value);
+    const hasValue = field.field_type === "multi_select"
+      ? selectedValues.length > 0
+      : String(value ?? "").trim() !== "";
+    if (isPublicFieldRequired(field) && !hasValue) {
+      throw new Error(`${field.label} را انتخاب کنید.`);
+    }
+    if (selectedValues.includes(WEB_FORM_OTHER_VALUE)) {
+      const otherValue = String(form.getFieldValue(getChoiceOtherFieldKey(field)) || "").trim();
+      if (!otherValue) throw new Error(`مقدار سایر ${field.label} را وارد کنید.`);
+    }
+  };
+
   const renderSlideChoiceField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
     const isMultiSelect = field.field_type === "multi_select";
-    const choiceOptions = getChoiceOptions(field);
+    const choiceOptions = getRenderedChoiceOptions(field);
     const currentValue = form.getFieldValue(field.field_key);
     const normalizedValues = isMultiSelect
       ? (Array.isArray(currentValue) ? currentValue.map((item) => String(item)) : [])
       : [String(currentValue ?? "")].filter(Boolean);
-    const rules = isPublicFieldRequired(field)
-      ? [{
-          validator: async (_: unknown, value: unknown) => {
-            if (isMultiSelect) {
-              if (Array.isArray(value) && value.length > 0) return;
-            } else if (value !== undefined && value !== null && String(value).trim() !== "") {
-              return;
-            }
-            throw new Error(`${field.label} را انتخاب کنید.`);
-          },
-        }]
-      : [];
+    const isOtherSelected = normalizedValues.includes(WEB_FORM_OTHER_VALUE);
+    const rules = [{
+      validator: async (_: unknown, value: unknown) => validatePublicChoiceValue(field, value),
+    }];
 
     return (
       <Form.Item
@@ -806,10 +911,10 @@ const InquiryForm = () => {
                       const nextValues = isSelected
                         ? normalizedValues.filter((item) => item !== String(option.value))
                         : [...normalizedValues, String(option.value)];
-                      setPublicFormFieldValue(field.field_key, nextValues);
+                      setChoiceFieldValue(field, nextValues);
                       return;
                     }
-                    setPublicFormFieldValue(field.field_key, option.value);
+                    setChoiceFieldValue(field, option.value);
                   }}
                   className="group relative overflow-hidden rounded-[24px] border px-4 py-4 text-right transition duration-200"
                   style={{
@@ -845,7 +950,9 @@ const InquiryForm = () => {
                         style={{ color: isDarkMode ? "rgba(255,255,255,0.56)" : "#6b7280" }}
                       >
                         {isMultiSelect
-                          ? (isSelected ? "برای حذف دوباره لمس کنید" : "برای انتخاب لمس کنید")
+                          ? (option.special === "none"
+                            ? "با انتخاب این گزینه، انتخاب‌های دیگر کنار گذاشته می‌شوند"
+                            : (isSelected ? "برای حذف دوباره لمس کنید" : "برای انتخاب لمس کنید"))
                           : "برای انتخاب این گزینه لمس کنید"}
                       </div>
                     </div>
@@ -858,6 +965,22 @@ const InquiryForm = () => {
             <div className="text-xs" style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
               امکان انتخاب چند گزینه وجود دارد.
             </div>
+          ) : null}
+          {isOtherSelected ? (
+            <Form.Item
+              name={getChoiceOtherFieldKey(field)}
+              className="mb-0"
+              rules={[{ required: true, message: `مقدار سایر ${field.label} را وارد کنید.` }]}
+            >
+              <Input
+                placeholder={`مقدار سایر ${field.label}`}
+                style={{
+                  borderRadius: 18,
+                  background: isDarkMode ? `${palette.darkBg}D9` : "#fff",
+                  color: surfaceStyle.color,
+                }}
+              />
+            </Form.Item>
           ) : null}
         </div>
       </Form.Item>
@@ -903,8 +1026,8 @@ const InquiryForm = () => {
     } else {
       control = (
         <input
-          type={field.field_type === "phone" ? "tel" : field.field_type === "number" ? "number" : "text"}
-          inputMode={field.field_type === "number" ? "decimal" : field.field_type === "phone" ? "tel" : "text"}
+          type={field.field_type === "phone" ? "tel" : field.field_type === "number" || field.field_type === "percentage" ? "number" : "text"}
+          inputMode={field.field_type === "number" || field.field_type === "percentage" ? "decimal" : field.field_type === "phone" ? "tel" : "text"}
           className={sharedClassName}
           placeholder={placeholder}
           style={{
@@ -928,6 +1051,68 @@ const InquiryForm = () => {
         ) : undefined}
       >
         {control}
+      </Form.Item>
+    );
+  };
+
+  const renderProgressField = (field: WebFormFieldRecord, options?: { showHelp?: boolean; showLabel?: boolean }) => {
+    const max = getProgressMax(field);
+    const step = getProgressStep(field);
+    const rules = isPublicFieldRequired(field)
+      ? [{
+          validator: async (_: unknown, value: unknown) => {
+            const parsed = Number(value);
+            if (Number.isFinite(parsed)) return;
+            throw new Error(`${field.label} را انتخاب کنید.`);
+          },
+        }]
+      : [];
+    const marks = {
+      0: field.field_type === "percentage" ? "۰٪" : "۰",
+      [max]: field.field_type === "percentage" ? "۱۰۰٪" : String(max),
+    };
+
+    return (
+      <Form.Item
+        key={field.field_key}
+        label={options?.showLabel === false ? undefined : field.label}
+        required={isPublicFieldRequired(field)}
+        extra={options?.showHelp !== false && field.help_text ? (
+          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+            {field.help_text}
+          </span>
+        ) : undefined}
+      >
+        <div
+          className={isSlideMode ? "rounded-[24px] px-5 py-5 shadow-[0_18px_48px_rgba(15,23,42,0.08)]" : "rounded-2xl border px-4 py-4"}
+          style={{
+            background: isDarkMode ? `${palette.darkBg}D9` : "rgba(255,255,255,0.95)",
+            borderColor: isDarkMode ? `${palette.darkBorder}` : "#e5e7eb",
+            color: surfaceStyle.color,
+          }}
+        >
+          <Form.Item name={field.field_key} noStyle rules={rules} initialValue={field.default_value ?? 0}>
+            <Slider
+              min={0}
+              max={max}
+              step={step}
+              marks={marks}
+              tooltip={{ formatter: (value) => formatProgressValue(field, value) }}
+            />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate>
+            {() => (
+              <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+                <span style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
+                  مقدار انتخاب‌شده
+                </span>
+                <span className="rounded-full px-3 py-1 text-base font-black" style={{ backgroundColor: `${palette.primary}18`, color: palette.primary }}>
+                  {formatProgressValue(field, form.getFieldValue(field.field_key))}
+                </span>
+              </div>
+            )}
+          </Form.Item>
+        </div>
       </Form.Item>
     );
   };
@@ -1072,22 +1257,41 @@ const InquiryForm = () => {
         }]
       : [];
 
+    if (isProgressWebFormField(field)) {
+      return renderProgressField(field, options);
+    }
+
     if (field.field_type === "select" || field.field_type === "multi_select" || field.field_type === "relation") {
-      const selectOptions = getChoiceOptions(field).map((option) => ({
+      const selectOptions = getRenderedChoiceOptions(field).map((option) => ({
         label: option.label,
         value: option.value,
       }));
+      const choiceRules = field.field_type === "select" || field.field_type === "multi_select"
+        ? [{ validator: async (_: unknown, value: unknown) => validatePublicChoiceValue(field, value) }]
+        : rules;
+      const isOtherSelected = isChoiceOtherSelected(field, form.getFieldValue(field.field_key));
       return (
-        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
-          <Select
-            mode={field.field_type === "multi_select" ? "multiple" : undefined}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            options={selectOptions}
-            placeholder={field.placeholder || field.label}
-          />
-        </Form.Item>
+        <div key={field.field_key} className="space-y-2">
+          <Form.Item name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={choiceRules} extra={sharedExtra}>
+            <Select
+              mode={field.field_type === "multi_select" ? "multiple" : undefined}
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={selectOptions}
+              placeholder={field.placeholder || field.label}
+              onChange={(nextValue) => setChoiceFieldValue(field, nextValue)}
+            />
+          </Form.Item>
+          {isOtherSelected ? (
+            <Form.Item
+              name={getChoiceOtherFieldKey(field)}
+              rules={[{ required: true, message: `مقدار سایر ${field.label} را وارد کنید.` }]}
+            >
+              <Input placeholder={`مقدار سایر ${field.label}`} />
+            </Form.Item>
+          ) : null}
+        </div>
       );
     }
 
@@ -1125,8 +1329,8 @@ const InquiryForm = () => {
       );
     }
 
-    const inputType = field.field_type === "phone" ? "tel" : field.field_type === "number" ? "number" : "text";
-    const inputMode = field.field_type === "phone" ? "tel" : field.field_type === "number" ? "decimal" : "text";
+    const inputType = field.field_type === "phone" ? "tel" : field.field_type === "number" || field.field_type === "percentage" ? "number" : "text";
+    const inputMode = field.field_type === "phone" ? "tel" : field.field_type === "number" || field.field_type === "percentage" ? "decimal" : "text";
 
     return (
       <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
@@ -1141,10 +1345,13 @@ const InquiryForm = () => {
     if (field.field_type === "image" || field.field_type === "file") {
       return renderAttachmentField(field, options);
     }
+    if (isProgressWebFormField(field)) {
+      return renderProgressField(field, options);
+    }
     if (isSlideMode && ["select", "multi_select"].includes(field.field_type)) {
       return renderSlideChoiceField(field, options);
     }
-    if (isSlideMode && ["text", "phone", "number", "long_text", "date", "time", "datetime"].includes(field.field_type)) {
+    if (isSlideMode && ["text", "phone", "number", "percentage", "long_text", "date", "time", "datetime"].includes(field.field_type)) {
       return renderSlideTextLikeField(field, options);
     }
     return renderListModeField(field, options);
@@ -1162,7 +1369,7 @@ const InquiryForm = () => {
       if (targetFieldKey && publicFieldRuntimeStateMap[targetFieldKey]?.visible === false) {
         return acc;
       }
-      const value = normalizePublicFieldValue(field, values[field.field_key]);
+      const value = normalizePublicFieldValue(field, resolvePublicSubmissionRawValue(field, values));
       if (value !== undefined) {
         acc[field.field_key] = value;
       } else if (field.default_value !== undefined && field.default_value !== null) {
@@ -1333,6 +1540,7 @@ const InquiryForm = () => {
     if (!isSlideMode || !publicForm?.config.slide_auto_advance || !currentSlideField) return;
     if (!Object.prototype.hasOwnProperty.call(changedValues, currentSlideField.field_key)) return;
     if (!["select", "checkbox"].includes(currentSlideField.field_type)) return;
+    if (currentSlideField.field_type === "select" && changedValues[currentSlideField.field_key] === WEB_FORM_OTHER_VALUE) return;
     window.setTimeout(() => {
       void goToNextSlide();
     }, 140);
