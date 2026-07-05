@@ -18,6 +18,7 @@ export const recruitmentApplicantsConfig: ModuleDefinition = {
   },
   relationDisplay: { labelTemplate: '{{system_code}} - {{name}}', searchFields: ['name', 'system_code', 'mobile', 'email', 'position_title'] },
   fields: [
+    { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0.8, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'نام متقاضی', en: 'Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد متقاضی', en: 'Applicant No.' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     {

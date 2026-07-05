@@ -105,6 +105,8 @@ const SURVEY_TEMPLATE_FIELD_TYPE_OPTIONS: Array<{ label: string; value: WebFormF
   { label: "تیک", value: "checkbox" },
   { label: "موقعیت", value: "location" },
   { label: "رابطه", value: "relation" },
+  { label: "تصویر", value: "image" },
+  { label: "فایل", value: "file" },
 ];
 
 const SURVEY_TEMPLATE_OPTIONS_FIELD_TYPES = new Set<WebFormFieldType>(["select", "multi_select"]);

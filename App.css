@@ -926,6 +926,44 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
   background: rgba(15, 23, 42, 0.85);
 }
 
+.public-web-form--dark .ant-form-item-label > label {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.public-web-form--dark .ant-form-item-extra,
+.public-web-form--dark .ant-checkbox-wrapper {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.public-web-form--dark .ant-input,
+.public-web-form--dark .ant-input-number,
+.public-web-form--dark .ant-input-number-input,
+.public-web-form--dark .ant-select-selector,
+.public-web-form--dark textarea.ant-input {
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  background: rgba(15, 23, 42, 0.82) !important;
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.public-web-form--dark .ant-input::placeholder,
+.public-web-form--dark textarea.ant-input::placeholder,
+.public-web-form--dark .ant-select-selection-placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+}
+
+.public-web-form--dark .ant-select-selection-item,
+.public-web-form--dark .ant-input-number-input::placeholder {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.public-web-form--dark .ant-input:hover,
+.public-web-form--dark .ant-input:focus,
+.public-web-form--dark .ant-input-number:hover,
+.public-web-form--dark .ant-input-number-focused,
+.public-web-form--dark .ant-select-selector:hover {
+  border-color: rgba(var(--brand-300-rgb), 0.7) !important;
+}
+
 .kalam-adaptive-picker__action.is-muted {
   background: #f5f5f5;
   color: rgba(15, 23, 42, 0.7);

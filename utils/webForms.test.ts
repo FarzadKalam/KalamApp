@@ -132,11 +132,15 @@ describe('web form utilities', () => {
   it('adds upload targets and keeps relation fields internal-only', () => {
     const publicTargets = getWebFormTargetFields('customers', { accessScope: 'public' });
     const internalTargets = getWebFormTargetFields('customers', { accessScope: 'internal' });
+    const recruitmentTargets = getWebFormTargetFields('recruitment_applicants', { accessScope: 'public' });
+    const applicantImageField = recruitmentTargets.find((item) => item.value === 'image_url');
 
     expect(publicTargets.map((item) => item.value)).toContain('__record_image__');
     expect(publicTargets.map((item) => item.value)).toContain('__record_files__');
     expect(publicTargets.some((item) => item.inferredType === 'relation')).toBe(false);
     expect(internalTargets.some((item) => item.inferredType === 'relation')).toBe(true);
+    expect(applicantImageField?.inferredType).toBe('image');
+    expect(applicantImageField?.isVirtual).toBe(false);
   });
 
   it('exposes module-required and module-default metadata for managed web form fields', () => {
@@ -159,7 +163,7 @@ describe('web form utilities', () => {
     const leaveTargets = getWebFormTargetFields('leave_requests');
     const leaveStatusField = leaveTargets.find((item) => item.value === 'status');
     const leaveStartDateField = leaveTargets.find((item) => item.value === 'start_date');
-    expect(leaveStatusField?.moduleDefaultValue).toBe('pending');
+    expect(leaveStatusField).toBeUndefined();
     expect(leaveStartDateField?.isModuleRequired).toBe(true);
     expect(formatWebFormTargetFieldLabel(leaveStartDateField!)).toBe('از تاریخ و زمان *');
     expect(getWebFormModuleDefaultValues('leave_requests')).toMatchObject({

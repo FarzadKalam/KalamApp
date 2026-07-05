@@ -1432,7 +1432,13 @@ const InquiryForm = () => {
                 </Space>
               </Card>
             ) : (
-              <Form form={form} layout="vertical" onFinish={handleSubmit} onValuesChange={handleFormValuesChange}>
+              <Form
+                form={form}
+                layout="vertical"
+                className={`public-web-form ${isDarkMode ? "public-web-form--dark" : "public-web-form--light"}`}
+                onFinish={handleSubmit}
+                onValuesChange={handleFormValuesChange}
+              >
                 {isSlideMode && currentSlideField ? (
                   <div className="space-y-6">
                     {publicForm.config.slide_show_progress !== false ? (

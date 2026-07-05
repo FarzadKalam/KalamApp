@@ -334,10 +334,10 @@ export const getSuggestedWebFormTargetFields = (
 export const getWebFormModuleDefaultValues = (
   moduleId?: string | null,
   options?: { accessScope?: WebFormAccessScope | string | null },
-) =>
-  getWebFormTargetFields(moduleId, options).reduce<Record<string, any>>((acc, item) => {
+) => {
+  const normalizedModuleId = String(moduleId || "").trim();
+  const defaults = getWebFormTargetFields(moduleId, options).reduce<Record<string, any>>((acc, item) => {
     if (item.isVirtual || !item.hasModuleDefault) return acc;
-    const normalizedModuleId = String(moduleId || "").trim();
     acc[item.value] =
       normalizedModuleId === "attendance_logs" && item.value === "source_type"
         ? "web_form"
@@ -346,6 +346,11 @@ export const getWebFormModuleDefaultValues = (
           : item.moduleDefaultValue;
     return acc;
   }, {});
+  if (normalizedModuleId === "leave_requests" && !Object.prototype.hasOwnProperty.call(defaults, "status")) {
+    defaults.status = "pending";
+  }
+  return defaults;
+};
 
 export const getWebFormDuplicateFieldOptions = (
   moduleId?: string | null,
