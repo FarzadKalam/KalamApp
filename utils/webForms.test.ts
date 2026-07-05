@@ -160,6 +160,7 @@ describe('web form utilities', () => {
     const internalTargets = getWebFormTargetFields('customers', { accessScope: 'internal' });
     const recruitmentTargets = getWebFormTargetFields('recruitment_applicants', { accessScope: 'public' });
     const applicantImageField = recruitmentTargets.find((item) => item.value === 'image_url');
+    const applicantStatusField = recruitmentTargets.find((item) => item.value === 'status');
 
     expect(publicTargets.map((item) => item.value)).toContain('__record_image__');
     expect(publicTargets.map((item) => item.value)).toContain('__record_files__');
@@ -167,6 +168,8 @@ describe('web form utilities', () => {
     expect(internalTargets.some((item) => item.inferredType === 'relation')).toBe(true);
     expect(applicantImageField?.inferredType).toBe('image');
     expect(applicantImageField?.isVirtual).toBe(false);
+    expect(applicantStatusField?.hasModuleDefault).toBe(true);
+    expect(applicantStatusField?.isManaged).toBe(false);
   });
 
   it('exposes module-required and module-default metadata for managed web form fields', () => {

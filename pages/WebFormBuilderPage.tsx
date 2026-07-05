@@ -17,7 +17,10 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ArrowRightOutlined, CopyOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SaveOutlined, ShareAltOutlined, UpOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, CopyOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, EyeOutlined, HolderOutlined, PlusOutlined, SaveOutlined, ShareAltOutlined, UpOutlined } from "@ant-design/icons";
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
@@ -172,6 +175,37 @@ const formatDateTime = (value?: string | null) => {
   }
 };
 
+const SortableWebFormFieldCard: React.FC<{
+  id: string;
+  children: (dragHandle: React.ReactNode) => React.ReactNode;
+}> = ({ id, children }) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.55 : 1,
+    zIndex: isDragging ? 5 : undefined,
+  };
+  const dragHandle = (
+    <Tooltip title="جابجایی فیلد">
+      <Button
+        type="text"
+        size="small"
+        icon={<HolderOutlined />}
+        className="!cursor-grab active:!cursor-grabbing"
+        aria-label="جابجایی فیلد"
+        {...attributes}
+        {...listeners}
+      />
+    </Tooltip>
+  );
+  return (
+    <div ref={setNodeRef} style={style}>
+      {children(dragHandle)}
+    </div>
+  );
+};
+
 const buildBuilderFieldValueFromTarget = (
   item: WebFormTargetFieldItem,
   index: number,
@@ -208,16 +242,28 @@ const buildSuggestedFields = (
   return orderedTargets.map((item, index) => buildBuilderFieldValueFromTarget(item, index, normalizedTargetModuleId));
 };
 
+const dedupeBuilderFieldsByTarget = (fields: BuilderFieldValue[]) => {
+  const seenTargetKeys = new Set<string>();
+  return fields.filter((field) => {
+    if (String(field?.binding_type || "record_field").trim() === "template_field") return true;
+    const targetFieldKey = String(field?.target_field_key || "").trim();
+    if (!targetFieldKey) return true;
+    if (seenTargetKeys.has(targetFieldKey)) return false;
+    seenTargetKeys.add(targetFieldKey);
+    return true;
+  });
+};
+
 const mergeManagedFields = (
   fields: BuilderFieldValue[] | undefined,
   targetModuleId?: string | null,
   accessScope?: WebFormAccessScope | string | null,
   duplicateMatchField?: string | null,
 ): BuilderFieldValue[] => {
-  const currentFields = (Array.isArray(fields) ? fields : []).filter((field) => {
+  const currentFields = dedupeBuilderFieldsByTarget((Array.isArray(fields) ? fields : []).filter((field) => {
     if (String(field?.binding_type || "record_field").trim() === "template_field") return true;
     return !isWebFormManagedDefaultOnlyField(targetModuleId, String(field?.target_field_key || "").trim());
-  });
+  }));
   const currentByTargetFieldKey = new Map(
     currentFields
       .filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
@@ -287,6 +333,7 @@ const WebFormBuilderPage: React.FC = () => {
   const location = useLocation();
   const { message } = App.useApp();
   const [form] = Form.useForm<BuilderFormValues>();
+  const fieldDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [setupMissing, setSetupMissing] = useState(false);
@@ -322,6 +369,12 @@ const WebFormBuilderPage: React.FC = () => {
     () => Object.fromEntries(targetFieldItems.map((item) => [item.value, item])),
     [targetFieldItems]
   );
+  const usedTargetFieldKeys = useMemo(() => new Set(
+    watchedFields
+      .filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
+      .map((field) => String(field?.target_field_key || "").trim())
+      .filter(Boolean)
+  ), [watchedFields]);
   const getBuilderFieldTitle = useCallback((fieldValue: BuilderFieldValue | undefined, index: number) => {
     const targetFieldKey = String(fieldValue?.target_field_key || "").trim();
     const targetFieldItem = targetFieldMap[targetFieldKey];
@@ -465,7 +518,7 @@ const WebFormBuilderPage: React.FC = () => {
             slide_auto_advance: config.slide_auto_advance === true,
             duplicate_match_field: config.duplicate_match_field || undefined,
             duplicate_strategy: config.duplicate_strategy || "allow",
-            fields: (fieldRows || [])
+            fields: dedupeBuilderFieldsByTarget((fieldRows || [])
               .map((item, index) => normalizeWebFormFieldRecord(item, index, { targetModuleId }))
               .filter((item) => !isWebFormManagedDefaultOnlyField(targetModuleId, item.target_field_key || item.field_key))
               .map((normalized) => ({
@@ -486,7 +539,7 @@ const WebFormBuilderPage: React.FC = () => {
                 allow_none: normalized.config?.allow_none === true,
                 show_progress_bar: normalized.config?.show_progress_bar === true,
                 progress_max: normalized.config?.progress_max,
-              })),
+              }))),
           });
         setSlugTouched(true);
         seededFieldsRef.current = true;
@@ -1153,7 +1206,27 @@ const WebFormBuilderPage: React.FC = () => {
               ) : null}
 
               <Form.List name="fields">
-                {(fields, { add, remove }) => (
+                {(fields, { add, remove }) => {
+                  const visibleFieldIds = fields
+                    .filter((_, listIndex) => {
+                      const query = fieldSearchText.trim().toLowerCase();
+                      if (!query) return true;
+                      return getBuilderFieldTitle(watchedFields?.[listIndex], listIndex).toLowerCase().includes(query);
+                    })
+                    .map((field) => String(field.key));
+                  const handleFieldDragEnd = (event: DragEndEvent) => {
+                    const overId = event.over?.id;
+                    if (!overId || event.active.id === overId) return;
+                    const oldIndex = fields.findIndex((field) => String(field.key) === String(event.active.id));
+                    const newIndex = fields.findIndex((field) => String(field.key) === String(overId));
+                    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+                    const nextFields = arrayMove(watchedFields, oldIndex, newIndex).map((item, itemIndex) => ({
+                      ...item,
+                      sort_order: (itemIndex + 1) * 10,
+                    }));
+                    form.setFieldValue("fields", nextFields);
+                  };
+                  return (
                   <div className="space-y-4">
                     {fields.length > 0 ? (
                       <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
@@ -1213,6 +1286,8 @@ const WebFormBuilderPage: React.FC = () => {
                       return !getBuilderFieldTitle(watchedFields?.[listIndex], listIndex).toLowerCase().includes(query);
                     }) ? <Empty description="فیلدی با این عنوان پیدا نشد." /> : null}
 
+                    <DndContext sensors={fieldDragSensors} collisionDetection={closestCenter} onDragEnd={handleFieldDragEnd}>
+                      <SortableContext items={visibleFieldIds} strategy={verticalListSortingStrategy}>
                     {fields.map((field, index) => {
                       const bindingType = String(watchedFields?.[index]?.binding_type || "record_field").trim();
                       const currentTargetFieldKey = String(watchedFields?.[index]?.target_field_key || "").trim();
@@ -1223,6 +1298,7 @@ const WebFormBuilderPage: React.FC = () => {
                         : (targetFieldItem?.inferredType || inferWebFormFieldType(targetFieldItem?.field));
                       const optionCount = resolveTargetOptions(currentTargetFieldKey).length;
                       const isManagedField = bindingType !== "template_field" && targetFieldItem?.isManaged === true;
+                      const isModuleRequiredField = bindingType !== "template_field" && targetFieldItem?.isModuleRequired === true;
                       const isDuplicateDependency = bindingType !== "template_field"
                         && currentTargetFieldKey !== ""
                         && currentTargetFieldKey === String(duplicateMatchField || "").trim();
@@ -1236,6 +1312,9 @@ const WebFormBuilderPage: React.FC = () => {
                       if (!matchesSearch) return null;
                       const fieldKey = String(field.key);
                       const isOpen = !closedFieldKeys.has(fieldKey);
+                      const targetFieldOptions = targetFieldItems
+                        .filter((item) => item.value === currentTargetFieldKey || !usedTargetFieldKeys.has(item.value))
+                        .map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }));
                       const toggleFieldOpen = () => {
                         setClosedFieldKeys((prev) => {
                           const next = new Set(prev);
@@ -1246,20 +1325,24 @@ const WebFormBuilderPage: React.FC = () => {
                       };
 
                       return (
+                        <SortableWebFormFieldCard key={field.key} id={fieldKey}>
+                          {(dragHandle) => (
                         <Card
-                          key={field.key}
                           size="small"
                           className="rounded-2xl border border-dashed"
                           title={(
-                            <button
-                              type="button"
-                              className="flex w-full min-w-0 items-center gap-2 text-right"
-                              onClick={toggleFieldOpen}
-                              aria-expanded={isOpen}
-                            >
-                              {isOpen ? <UpOutlined className="shrink-0 text-[11px] text-gray-400" /> : <DownOutlined className="shrink-0 text-[11px] text-gray-400" />}
-                              <span className="truncate">{fieldTitle}</span>
-                            </button>
+                            <div className="flex min-w-0 items-center gap-1">
+                              {dragHandle}
+                              <button
+                                type="button"
+                                className="flex min-w-0 flex-1 items-center gap-2 text-right"
+                                onClick={toggleFieldOpen}
+                                aria-expanded={isOpen}
+                              >
+                                {isOpen ? <UpOutlined className="shrink-0 text-[11px] text-gray-400" /> : <DownOutlined className="shrink-0 text-[11px] text-gray-400" />}
+                                <span className="truncate">{fieldTitle}</span>
+                              </button>
+                            </div>
                           )}
                           extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField || isDuplicateDependency} onClick={() => remove(field.name)}>حذف</Button>}
                         >
@@ -1268,6 +1351,7 @@ const WebFormBuilderPage: React.FC = () => {
                             {supportsTemplateFieldBindings ? (
                               <Form.Item label="نوع اتصال" name={[field.name, "binding_type"]} rules={[{ required: true, message: "نوع اتصال را انتخاب کنید." }]}>
                                 <Select
+                                  disabled={isModuleRequiredField}
                                   options={[
                                     { label: "فیلد واقعی رکورد", value: "record_field" },
                                     { label: "فیلد پویا در قالب", value: "template_field" },
@@ -1313,8 +1397,9 @@ const WebFormBuilderPage: React.FC = () => {
                               <Form.Item label="فیلد مقصد" name={[field.name, "target_field_key"]} rules={[{ required: true, message: "فیلد مقصد را انتخاب کنید." }]}>
                                 <Select
                                   showSearch
+                                  disabled={isModuleRequiredField}
                                   optionFilterProp="label"
-                                  options={targetFieldItems.map((item) => ({ label: formatWebFormTargetFieldLabel(item), value: item.value }))}
+                                  options={targetFieldOptions}
                                   placeholder="انتخاب فیلد"
                                   onChange={(value) => {
                                     const matched = targetFieldMap[String(value || "").trim()];
@@ -1461,8 +1546,12 @@ const WebFormBuilderPage: React.FC = () => {
                             </div>
                           )}
                         </Card>
+                          )}
+                        </SortableWebFormFieldCard>
                       );
                     })}
+                      </SortableContext>
+                    </DndContext>
 
                     <Button
                       type="dashed"
@@ -1488,7 +1577,8 @@ const WebFormBuilderPage: React.FC = () => {
                       افزودن فیلد
                     </Button>
                   </div>
-                )}
+                  );
+                }}
               </Form.List>
             </Card>
 

@@ -298,9 +298,7 @@ export const getWebFormTargetFields = (
       const moduleDefaultValue =
         normalized === "attendance_logs" && field.key === "source_type"
           ? "web_form"
-          : normalized === "leave_requests" && field.key === "status"
-            ? "pending"
-            : rawModuleDefaultValue;
+          : rawModuleDefaultValue;
       const isModuleRequired = field.validation?.required === true;
       const hasModuleDefault = hasMeaningfulDefaultValue(moduleDefaultValue);
       const isKeyField = field.isKey === true;
@@ -319,7 +317,7 @@ export const getWebFormTargetFields = (
         isModuleRequired,
         hasModuleDefault,
         moduleDefaultValue,
-        isManaged: isModuleRequired || hasModuleDefault,
+        isManaged: isModuleRequired || (hasModuleDefault && field.key !== "status"),
         isVirtual: false,
         isKeyField,
         isTableColumn,
@@ -356,13 +354,13 @@ export const getWebFormModuleDefaultValues = (
     acc[item.value] =
       normalizedModuleId === "attendance_logs" && item.value === "source_type"
         ? "web_form"
-        : normalizedModuleId === "leave_requests" && item.value === "status"
-          ? "pending"
-          : item.moduleDefaultValue;
+        : item.moduleDefaultValue;
     return acc;
   }, {});
-  if (normalizedModuleId === "leave_requests" && !Object.prototype.hasOwnProperty.call(defaults, "status")) {
-    defaults.status = "pending";
+  for (const field of MODULES[normalizedModuleId]?.fields || []) {
+    if (!field?.key || !isWebFormManagedDefaultOnlyField(normalizedModuleId, field.key)) continue;
+    const defaultValue = resolveModuleFieldDefaultValue(field);
+    if (hasMeaningfulDefaultValue(defaultValue)) defaults[field.key] = defaultValue;
   }
   return defaults;
 };
