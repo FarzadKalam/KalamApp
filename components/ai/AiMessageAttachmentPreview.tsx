@@ -1,10 +1,11 @@
 import React, { useMemo } from 'react';
 import { Button, Image, Space } from 'antd';
-import { CustomerServiceOutlined, DownloadOutlined, EditOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EditOutlined } from '@ant-design/icons';
 import FileExtensionTile from '../files/FileExtensionTile';
 import { supabase, SUPABASE_URL } from '../../supabaseClient';
 import { buildImagePreviewUrl } from '../../utils/imagePreview';
 import { normalizePublicAssetUrl } from '../../utils/assetUrl';
+import AiAudioPlayer from './AiAudioPlayer';
 
 type AiAttachmentLike = {
   url?: string | null;
@@ -157,23 +158,8 @@ const AiMessageAttachmentPreview: React.FC<AiMessageAttachmentPreviewProps> = ({
 
   if (normalized.isAudio) {
     return (
-      <div className="mt-3 w-full max-w-[360px] rounded-lg border border-gray-200 bg-white/80 p-3 dark:border-dark-border dark:bg-dark-surface/80">
-        <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-600 dark:text-gray-300">
-          <CustomerServiceOutlined />
-          <span className="truncate">{normalized.fileName}</span>
-        </div>
-        <audio controls preload="none" src={normalized.url} className="w-full">
-          مرورگر شما از پخش صوت پشتیبانی نمی‌کند.
-        </audio>
-        <div className="mt-2 flex justify-end">
-          <Button
-            size="small"
-            icon={<DownloadOutlined />}
-            onClick={() => downloadAttachment(normalized.url, normalized.fileName)}
-          >
-            دانلود فایل اصلی
-          </Button>
-        </div>
+      <div className="mt-3">
+        <AiAudioPlayer src={normalized.url} title="پاسخ صوتی هوش مصنوعی" subtitle={normalized.fileName} downloadName={normalized.fileName} />
       </div>
     );
   }

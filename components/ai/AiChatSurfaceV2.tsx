@@ -163,11 +163,15 @@ const AiChatSurfaceV2: React.FC = () => {
     return activeThread ? getThreadTitle(activeThread) : null;
   }, [activeThreadId, threads]);
 
+  const closeThreadList = useCallback(() => {
+    setThreadListOpen(false);
+    scheduleOverlayLockRelease(0);
+  }, []);
+
   const startNewConversation = () => {
     setActiveThreadId(null);
     setNewConversationSeed((value) => value + 1);
-    setThreadListOpen(false);
-    scheduleOverlayLockRelease(0);
+    closeThreadList();
   };
 
   const handleThreadDeleted = useCallback((threadId: string) => {
@@ -231,7 +235,7 @@ const AiChatSurfaceV2: React.FC = () => {
                 title={title}
                 onClick={() => {
                   setActiveThreadId(thread.id);
-                  setThreadListOpen(false);
+                  closeThreadList();
                 }}
                 className={`flex w-full flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition ${active ? 'bg-white shadow-[inset_0_0_0_1px_rgba(15,23,42,0.10),0_8px_18px_rgba(15,23,42,0.08)] dark:bg-white/[0.10]' : 'hover:bg-white/80 dark:hover:bg-white/[0.06]'}`}
               >
@@ -250,7 +254,7 @@ const AiChatSurfaceV2: React.FC = () => {
               key={thread.id}
               onClick={() => {
                 setActiveThreadId(thread.id);
-                setThreadListOpen(false);
+                closeThreadList();
               }}
               className={`mb-1.5 flex w-full items-start gap-2.5 rounded-xl border px-2.5 py-2 text-right transition ${active ? 'border-slate-300/80 bg-white shadow-[0_10px_26px_rgba(15,23,42,0.08)] dark:border-white/15 dark:bg-white/[0.085]' : 'border-transparent bg-white/58 hover:bg-white/92 dark:bg-transparent dark:hover:bg-white/[0.055]'}`}
             >
@@ -315,14 +319,13 @@ const AiChatSurfaceV2: React.FC = () => {
       </div>
       <Drawer
         open={threadListOpen}
-        onClose={() => {
-          setThreadListOpen(false);
-          scheduleOverlayLockRelease();
-        }}
+        onClose={closeThreadList}
         placement="right"
         width="min(92vw, 360px)"
         title={null}
         classNames={{ body: '!p-0' }}
+        destroyOnHidden
+        getContainer={typeof document === 'undefined' ? undefined : () => document.body}
         afterOpenChange={(nextOpen) => {
           if (!nextOpen) scheduleOverlayLockRelease();
         }}
@@ -330,7 +333,7 @@ const AiChatSurfaceV2: React.FC = () => {
         <div className="flex h-full min-h-0 flex-col">
           <div className="flex items-center justify-between border-b border-slate-200/70 bg-white px-3 py-2 dark:border-white/[0.07] dark:bg-[#17191c]">
             <div className="text-sm font-bold">گفتگوهای هوش مصنوعی</div>
-            <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={() => setThreadListOpen(false)} aria-label="بستن فهرست گفتگوهای هوش مصنوعی" />
+            <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={closeThreadList} aria-label="بستن فهرست گفتگوهای هوش مصنوعی" />
           </div>
           {renderThreadList(false)}
         </div>

@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import {
-  AudioOutlined,
   DownloadOutlined,
   FileImageOutlined,
   PlayCircleOutlined,
 } from '@ant-design/icons';
-import { Button, Modal, Tooltip } from 'antd';
+import { Button, Modal } from 'antd';
 import ResilientImage from '../common/ResilientImage';
 import FileExtensionTile from '../files/FileExtensionTile';
+import AiAudioPlayer from '../ai/AiAudioPlayer';
 import type { NoteAttachment } from '../../utils/noteContent';
 import { resolveNoteAttachmentFileType } from '../../utils/noteContent';
 import { dedupeAttachments } from '../../utils/messageAttachments';
@@ -19,28 +19,8 @@ type MessageAttachmentGalleryProps = {
 };
 
 const AudioAttachmentPlayer: React.FC<{ name: string; url?: string | null; call?: boolean }> = ({ name, url, call = false }) => (
-  <div className="mt-2 flex w-full max-w-[390px] items-center gap-2 rounded-2xl border border-slate-200 bg-white/92 px-3 py-2 text-[11px] text-slate-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.055] dark:text-slate-200">
-    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[rgba(var(--brand-500-rgb),0.12)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.14)] dark:text-[rgb(var(--brand-200-rgb))]" aria-label={call ? 'پخش ضبط تماس' : 'پخش پیام صوتی'}>
-      <AudioOutlined />
-    </span>
-    <div className="min-w-0 flex-1">
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="truncate font-semibold">{call ? 'ضبط تماس' : 'پیام صوتی'}</span>
-        <span className="truncate text-[10px] text-slate-400">{name}</span>
-      </div>
-      {url ? (
-        <audio controls preload="metadata" src={url} className="h-9 w-full max-w-full" />
-      ) : (
-        <div className="rounded-xl bg-slate-100 px-3 py-2 text-[11px] text-slate-400 dark:bg-white/[0.06]">
-          فایل صوتی اصلی در دسترس نیست.
-        </div>
-      )}
-    </div>
-    <Tooltip title={url ? 'دانلود صوت' : 'فایل صوتی اصلی در دسترس نیست'}>
-      <a href={url || undefined} download={url ? name : undefined} target="_blank" rel="noreferrer" className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-300 dark:hover:bg-white/[0.08] ${url ? '' : 'pointer-events-none opacity-45'}`} aria-label="دانلود صوت">
-        <DownloadOutlined />
-      </a>
-    </Tooltip>
+  <div className="mt-2">
+    <AiAudioPlayer src={url} title={call ? 'ضبط تماس' : 'پیام صوتی'} subtitle={name} downloadName={name} compact />
   </div>
 );
 

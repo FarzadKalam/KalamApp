@@ -28,9 +28,9 @@ export const releaseTransientOverlayLocks = () => {
 
 export const scheduleOverlayLockRelease = (delay = 180) => {
   if (typeof window === 'undefined') return undefined;
-  const first = window.setTimeout(() => {
+  const timers = [delay, delay + 180, delay + 420].map((timeout) => window.setTimeout(() => {
     releaseTransientOverlayLocks();
     window.requestAnimationFrame(() => releaseTransientOverlayLocks());
-  }, delay);
-  return () => window.clearTimeout(first);
+  }, timeout));
+  return () => timers.forEach((timer) => window.clearTimeout(timer));
 };

@@ -1365,12 +1365,43 @@ const buildThreadContextLabel = (pageContext: any) => {
   return 'گفتگوی عمومی';
 };
 
+const normalizeThreadTitleText = (value: string) => String(value || '')
+  .replace(/https?:\/\/\S+/gi, ' ')
+  .replace(/data:[^,\s]+,[A-Za-z0-9+/=]+/gi, ' ')
+  .replace(/[`*_#>()[\]{}]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const trimSmartThreadTitle = (value: string, fallback: string) => {
+  const maxLength = 58;
+  const normalized = normalizeThreadTitleText(value).replace(/[؟?!.،,;:؛]+$/g, '').trim();
+  if (!normalized) return fallback;
+  if (normalized.length <= maxLength) return normalized;
+  const clipped = normalized.slice(0, maxLength + 1);
+  const lastSpace = clipped.lastIndexOf(' ');
+  return `${(lastSpace > 24 ? clipped.slice(0, lastSpace) : clipped.slice(0, maxLength)).trim()}...`;
+};
+
+const buildSmartThreadTitle = (title: string, fallback: string) => {
+  const text = normalizeThreadTitleText(title);
+  if (!text) return fallback;
+  const firstMeaningfulPart = text
+    .split(/[\n\r.؟?!؛;]/)
+    .map((part) => part.trim())
+    .find((part) => part.length >= 3) || text;
+  const cleaned = firstMeaningfulPart
+    .replace(/^(لطفا|لطفاً|خواهشا|خواهشاً)\s+/i, '')
+    .replace(/^(میخوام|می‌خوام|می خوام|میخواهم|می‌خواهم)\s+/i, '')
+    .replace(/^(برای من|برام)\s+/i, '')
+    .trim();
+  return trimSmartThreadTitle(cleaned || firstMeaningfulPart, fallback);
+};
+
 const buildThreadTitle = (title: string, pageContext: any) => {
   const base = String(title || '').trim();
   const label = buildThreadContextLabel(pageContext);
   if (!base) return label.slice(0, 120);
-  if (base.includes(label)) return base.slice(0, 120);
-  return `${base} · ${label}`.slice(0, 120);
+  return buildSmartThreadTitle(base, label).slice(0, 120);
 };
 
 const fetchRowsWithFallback = async (
@@ -3454,22 +3485,47 @@ const AUDIO_SPEECH_VOICES = new Set([
   'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse',
 ]);
 const AUDIO_SPEECH_FORMATS = new Set(['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm']);
+const AUDIO_SPEECH_LANGUAGES = new Set(['fa-IR', 'en-US', 'ar', 'tr', 'auto']);
+const AUDIO_SPEECH_STYLES = new Set(['neutral', 'formal', 'warm', 'energetic', 'calm']);
+const AUDIO_SPEECH_MUSIC_MODES = new Set(['off', 'instrumental', 'song']);
+
+const sanitizeVoiceOutputSettings = (options: any = {}) => {
+  const requestedVoice = String(options?.voice || '').trim().toLowerCase();
+  const requestedFormat = String(options?.responseFormat || options?.format || '').trim().toLowerCase();
+  const requestedLanguage = String(options?.language || '').trim();
+  const requestedStyle = String(options?.voiceStyle || '').trim();
+  const requestedMusicMode = String(options?.musicMode || '').trim();
+  const speed = Number.isFinite(Number(options?.speed))
+    ? Math.min(4, Math.max(0.25, Number(options.speed)))
+    : undefined;
+  return {
+    voice: AUDIO_SPEECH_VOICES.has(requestedVoice) ? requestedVoice : 'alloy',
+    responseFormat: AUDIO_SPEECH_FORMATS.has(requestedFormat) ? requestedFormat : 'mp3',
+    ...(speed !== undefined ? { speed } : {}),
+    language: AUDIO_SPEECH_LANGUAGES.has(requestedLanguage) ? requestedLanguage : 'fa-IR',
+    voiceStyle: AUDIO_SPEECH_STYLES.has(requestedStyle) ? requestedStyle : 'neutral',
+    musicMode: AUDIO_SPEECH_MUSIC_MODES.has(requestedMusicMode) ? requestedMusicMode : 'off',
+    lyrics: String(options?.lyrics || '').trim().slice(0, 4000) || null,
+    referenceVoice: options?.referenceVoiceData ? {
+      mimeType: String(options?.referenceVoiceMimeType || 'audio/mpeg').slice(0, 100),
+      filename: String(options?.referenceVoiceFilename || 'reference-audio').slice(0, 180),
+      hasData: true,
+    } : null,
+  };
+};
 
 const callAudioSpeech = async (
   providerConfig: any,
   text: string,
-  options: { voice?: string; speed?: number; responseFormat?: string } = {},
+  options: any = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای تولید صدا، مدل فعال در تنظیمات سازمان پیدا نشد.');
-  const requestedVoice = String(options.voice || '').trim().toLowerCase();
-  const voice = AUDIO_SPEECH_VOICES.has(requestedVoice) ? requestedVoice : 'alloy';
-  const requestedFormat = String(options.responseFormat || '').trim().toLowerCase();
-  const responseFormat = AUDIO_SPEECH_FORMATS.has(requestedFormat) ? requestedFormat : 'mp3';
-  const speed = Number.isFinite(Number(options.speed))
-    ? Math.min(4, Math.max(0.25, Number(options.speed)))
-    : undefined;
+  const normalized = sanitizeVoiceOutputSettings(options);
+  const voice = normalized.voice;
+  const responseFormat = normalized.responseFormat;
+  const speed = normalized.speed;
   const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/audio/speech', {
     method: 'POST',
     headers: {
@@ -3508,6 +3564,7 @@ const callAudioSpeech = async (
       model,
       capability: 'voice_output',
       input_characters: text.length,
+      settings: normalized,
     },
   };
 };
@@ -4135,11 +4192,12 @@ const ensureThread = async (
     if (existing) return existing;
   }
 
+  const threadTitle = buildThreadTitle(payload.title || '', payload.pageContext);
   const inserted = await restInsert(supabaseUrl, serviceRoleKey, 'ai_threads', [{
     org_id: authContext.orgId,
     user_id: authContext.userId,
     status: 'active',
-    title: buildThreadTitle(payload.title || '', payload.pageContext),
+    title: threadTitle,
     context_type: getContextKind(payload.pageContext?.context || {}),
     context_key: contextKey,
     module_id: payload.pageContext?.moduleId || null,
@@ -4151,6 +4209,7 @@ const ensureThread = async (
       summary: payload.pageContext?.summary || null,
       context_kind: getContextKind(payload.pageContext?.context || {}),
       context_label: buildThreadContextLabel(payload.pageContext),
+      title: threadTitle,
       context: payload.pageContext?.context || null,
       module_id: payload.pageContext?.moduleId || null,
       record_id: payload.pageContext?.recordId || null,
@@ -4390,6 +4449,26 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
         && availability[capability].hasReadyModel !== false : true,
     };
   });
+  const voiceConversationSelectable = models
+    .filter((m: any) => {
+      const tags = Array.isArray(m?.capability_tags) ? m.capability_tags : [];
+      return tags.includes('document_analysis') || tags.includes('dashboard_chat');
+    })
+    .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
+    .filter((opt: any) => opt.value);
+  const resolvedVoiceConversationModel = pickCapabilityModelFromCatalog(settings, 'document_analysis', models)
+    || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models);
+  capabilities.voice_conversation = {
+    model: resolvedVoiceConversationModel,
+    modelLabel: resolvedVoiceConversationModel ? labelOf(resolvedVoiceConversationModel) : 'مدل فعال ندارد',
+    selectable: voiceConversationSelectable,
+    available: availability?.voice_input?.planAvailable !== false
+      && availability?.voice_input?.tenantReady !== false
+      && availability?.voice_input?.hasReadyModel !== false
+      && availability?.voice_output?.planAvailable !== false
+      && availability?.voice_output?.tenantReady !== false
+      && availability?.voice_output?.hasReadyModel !== false,
+  };
   return json(200, { success: true, capabilities });
 };
 
@@ -4880,6 +4959,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       success: false,
       thread,
       threadId: thread.id,
+      threadTitle: thread.title || null,
       userMessageId: userMessage?.id || null,
       messageId: assistantMessage?.id || null,
       message: failedContent,
@@ -4948,6 +5028,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
   return json(200, {
     success: true,
     threadId: thread.id,
+    threadTitle: thread.title || null,
     userMessageId: userMessage?.id || null,
     messageId: assistantMessage?.id || null,
     answer: aiResult.content,
@@ -4985,6 +5066,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           send('meta', {
             success: true,
             threadId: prepared.thread.id,
+            threadTitle: prepared.thread.title || null,
             userMessageId: prepared.userMessage?.id || null,
             provider: prepared.providerConfig.provider,
             model: prepared.providerConfig.model,
@@ -5048,6 +5130,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
           send('done', {
             success: true,
             threadId: prepared.thread.id,
+            threadTitle: prepared.thread.title || null,
             userMessageId: prepared.userMessage?.id || null,
             messageId: assistantMessage?.id || null,
             answer: aiResult.content,
@@ -6196,6 +6279,108 @@ const parseAssistantJsonResponse = async (response: Response) => {
   return parsed && typeof parsed === 'object' ? parsed : { success: false, message: String(text || '').slice(0, 500) };
 };
 
+const createAssistantVoiceOutputMessage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  body: any,
+  threadId: string,
+  pageContext: any,
+  text: string,
+) => {
+  const cleanText = String(text || '').trim();
+  if (!cleanText || !threadId) return null;
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'voice_output', { modelOverride: body?.voiceModelOverride });
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'voice_output');
+  const voiceOptions = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const mergedVoiceOptions = {
+    voice: voiceOptions.voice || body?.voice,
+    speed: voiceOptions.speed ?? body?.speed,
+    responseFormat: voiceOptions.responseFormat || voiceOptions.format || body?.responseFormat,
+    language: voiceOptions.language,
+    voiceStyle: voiceOptions.voiceStyle,
+    musicMode: voiceOptions.musicMode,
+    lyrics: voiceOptions.lyrics,
+    referenceVoiceData: voiceOptions.referenceVoiceData,
+    referenceVoiceMimeType: voiceOptions.referenceVoiceMimeType,
+    referenceVoiceFilename: voiceOptions.referenceVoiceFilename,
+  };
+  const safeVoiceSettings = sanitizeVoiceOutputSettings(mergedVoiceOptions);
+  const voiceResult = await callAudioSpeech(providerConfig, cleanText, mergedVoiceOptions);
+  const extension = String(voiceResult.format || '').trim()
+    || (String(voiceResult.contentType || '').includes('wav') ? 'wav' : 'mp3');
+  const storedVoice = await uploadGeneratedBinaryAsset(supabaseUrl, serviceRoleKey, authContext, voiceResult.bytes, voiceResult.contentType, {
+    prefix: 'voice',
+    extension,
+  });
+  let fileManagerResult: any = null;
+  const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: threadId,
+    role: 'assistant',
+    content: 'پاسخ صوتی آماده شد.',
+    provider: voiceResult.provider,
+    model: voiceResult.model,
+    metadata: {
+      capability: 'voice_output',
+      prompt: cleanText,
+      file: storedVoice,
+      usage: voiceResult.usageMetadata,
+      settings: safeVoiceSettings,
+      avalai_request_id: voiceResult.requestId || null,
+    },
+  });
+  fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedVoice, {
+    displayName: `پاسخ صوتی هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.${extension}`,
+    fileType: 'audio',
+    threadId,
+    messageId: assistantMessage?.id || null,
+    prompt: cleanText,
+  }).catch((error) => {
+    console.warn('Could not register generated voice in file manager', error);
+    return null;
+  });
+  const file = {
+    ...storedVoice,
+    asset_id: fileManagerResult?.asset?.id || null,
+    entry_id: fileManagerResult?.entry?.id || null,
+    folder_id: fileManagerResult?.folder?.id || null,
+  };
+  if (assistantMessage?.id && fileManagerResult) {
+    await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+      id: `eq.${assistantMessage.id}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      metadata: {
+        capability: 'voice_output',
+        prompt: cleanText,
+        file,
+        usage: voiceResult.usageMetadata,
+        settings: safeVoiceSettings,
+        avalai_request_id: voiceResult.requestId || null,
+      },
+    }).catch(() => []);
+  }
+  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    threadId,
+    messageId: assistantMessage?.id || null,
+    requestId: voiceResult.requestId,
+    capability: 'voice_output',
+    provider: voiceResult.provider,
+    model: voiceResult.model,
+    usageMetadata: voiceResult.usageMetadata,
+    metadata: { source: 'voice_conversation_output', storage_path: storedVoice.path, settings: safeVoiceSettings },
+  });
+  await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, voiceResult.usageMetadata, ledger);
+  return {
+    message: assistantMessage,
+    file,
+    provider: voiceResult.provider,
+    model: voiceResult.model,
+    usage: withCustomerBilling(voiceResult.usageMetadata, ledger),
+    ledger,
+  };
+};
+
 const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const selectedCapabilities = Array.from(new Set(Array.isArray(body?.capabilities)
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
@@ -6213,7 +6398,9 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
 
   for (const selectedCapability of selectedCapabilities) {
     if (AI_CAPABILITY_FEATURE_KEYS[selectedCapability]) {
-      const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, selectedCapability, { modelOverride: body?.modelOverride });
+      const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, selectedCapability, {
+        modelOverride: selectedCapability === 'voice_output' ? body?.voiceModelOverride : body?.modelOverride,
+      });
       await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, selectedCapability);
     }
   }
@@ -6366,6 +6553,26 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
 
+  const finalAnswer = finalAnswerParts.filter(Boolean).join('\n\n') || 'نتیجه باندل آماده شد.';
+  let voiceOutput: any = null;
+  if (selectedCapabilitySet.has('voice_input') && selectedCapabilitySet.has('voice_output') && transcripts.length > 0 && workingThreadId) {
+    const rawContext = normalizeContext(body?.context || {});
+    const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+    voiceOutput = await createAssistantVoiceOutputMessage(
+      supabaseUrl,
+      serviceRoleKey,
+      authContext,
+      body,
+      workingThreadId,
+      pageContext,
+      finalAnswer.slice(0, 4000),
+    );
+    if (voiceOutput?.provider) {
+      provider = voiceOutput.provider;
+      model = voiceOutput.model || model;
+    }
+  }
+
   if (workingThreadId) {
     const threadForPatch = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, workingThreadId);
     const taskContext = {
@@ -6394,13 +6601,21 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   return json(200, {
     success: true,
     threadId: workingThreadId,
-    messageId: collectedResults[collectedResults.length - 1]?.messageId || null,
-    answer: finalAnswerParts.filter(Boolean).join('\n\n') || 'نتیجه باندل آماده شد.',
+    messageId: voiceOutput?.message?.id || collectedResults[collectedResults.length - 1]?.messageId || null,
+    answer: finalAnswer,
     proposedAction,
     provider,
     model,
     usage,
     ledger,
+    voiceOutput: voiceOutput ? {
+      messageId: voiceOutput?.message?.id || null,
+      file: voiceOutput?.file || null,
+      provider: voiceOutput?.provider || null,
+      model: voiceOutput?.model || null,
+      usage: voiceOutput?.usage || null,
+      ledger: voiceOutput?.ledger || null,
+    } : null,
     taskBundle: bundleMeta,
     results: collectedResults,
     messages: threadMessages.length ? threadMessages : collectedMessages,
@@ -7308,11 +7523,20 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
     },
   });
   const voiceOptions = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
-  const voiceResult = await callAudioSpeech(providerConfig, text, {
+  const mergedVoiceOptions = {
     voice: voiceOptions.voice || body?.voice,
     speed: voiceOptions.speed ?? body?.speed,
     responseFormat: voiceOptions.responseFormat || voiceOptions.format || body?.responseFormat,
-  });
+    language: voiceOptions.language,
+    voiceStyle: voiceOptions.voiceStyle,
+    musicMode: voiceOptions.musicMode,
+    lyrics: voiceOptions.lyrics,
+    referenceVoiceData: voiceOptions.referenceVoiceData,
+    referenceVoiceMimeType: voiceOptions.referenceVoiceMimeType,
+    referenceVoiceFilename: voiceOptions.referenceVoiceFilename,
+  };
+  const safeVoiceSettings = sanitizeVoiceOutputSettings(mergedVoiceOptions);
+  const voiceResult = await callAudioSpeech(providerConfig, text, mergedVoiceOptions);
   const extension = String(voiceResult.format || '').trim()
     || (String(voiceResult.contentType || '').includes('wav') ? 'wav' : 'mp3');
   const storedVoice = await uploadGeneratedBinaryAsset(supabaseUrl, serviceRoleKey, authContext, voiceResult.bytes, voiceResult.contentType, {
@@ -7331,6 +7555,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
       prompt: text,
       file: storedVoice,
       usage: voiceResult.usageMetadata,
+      settings: safeVoiceSettings,
       avalai_request_id: voiceResult.requestId || null,
     },
   });
@@ -7359,6 +7584,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
           folder_id: fileManagerResult?.folder?.id || null,
         },
         usage: voiceResult.usageMetadata,
+        settings: safeVoiceSettings,
         avalai_request_id: voiceResult.requestId || null,
       },
     }).catch(() => []);
@@ -7371,7 +7597,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
     provider: voiceResult.provider,
     model: voiceResult.model,
     usageMetadata: voiceResult.usageMetadata,
-    metadata: { source: 'voice_output', user_message_id: userMessage?.id || null, storage_path: storedVoice.path },
+    metadata: { source: 'voice_output', user_message_id: userMessage?.id || null, storage_path: storedVoice.path, settings: safeVoiceSettings },
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, voiceResult.usageMetadata, ledger);
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {

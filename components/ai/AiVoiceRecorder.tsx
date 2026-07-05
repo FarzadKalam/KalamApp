@@ -2,12 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { App, Button, Space, Tooltip } from 'antd';
 import { AudioOutlined, CloseOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import AiAudioPlayer from './AiAudioPlayer';
 
 type RecordedVoice = {
   blob: Blob;
   mimeType: string;
   durationMs: number;
   filename: string;
+  previewUrl?: string;
 };
 
 type AiVoiceRecorderProps = {
@@ -33,6 +35,7 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   const [recording, setRecording] = useState(false);
   const [durationMs, setDurationMs] = useState(0);
   const [recorded, setRecorded] = useState<RecordedVoice | null>(null);
+  const [recordedUrl, setRecordedUrl] = useState<string | null>(null);
 
   const cleanupStream = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -49,7 +52,8 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
   useEffect(() => () => {
     clearTimer();
     cleanupStream();
-  }, []);
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+  }, [recordedUrl]);
 
   const startRecording = async () => {
     if (disabled || loading || recording) return;
@@ -68,6 +72,8 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
       chunksRef.current = [];
       startedAtRef.current = Date.now();
       setRecorded(null);
+      if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+      setRecordedUrl(null);
       setDurationMs(0);
       recorder.ondataavailable = (event) => {
         if (event.data?.size) chunksRef.current.push(event.data);
@@ -79,12 +85,15 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
         setRecording(false);
         cleanupStream();
         if (blob.size > 0) {
+          const previewUrl = URL.createObjectURL(blob);
           setRecorded({
             blob,
             mimeType,
             durationMs: finalDuration,
             filename: `voice-${Date.now()}.webm`,
+            previewUrl,
           });
+          setRecordedUrl(previewUrl);
         }
       };
       recorder.start();
@@ -106,19 +115,24 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
 
   const discard = () => {
     setRecorded(null);
+    if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+    setRecordedUrl(null);
     setDurationMs(0);
   };
 
   const send = async () => {
     if (!recorded || loading) return;
-    await onSend(recorded);
+    const queuedPreviewUrl = URL.createObjectURL(recorded.blob);
+    await onSend({ ...recorded, previewUrl: queuedPreviewUrl });
     discard();
   };
 
   if (recorded) {
     return (
       <Space size={4} className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 dark:border-blue-900/50 dark:bg-blue-900/20">
-        <span className="text-xs text-blue-700 dark:text-blue-100">{formatSeconds(recorded.durationMs)}</span>
+        <div className="w-[min(72vw,320px)]">
+          <AiAudioPlayer src={recordedUrl} title="ویس آماده ارسال" subtitle={formatSeconds(recorded.durationMs)} downloadName={recorded.filename} compact />
+        </div>
         <Tooltip title="حذف ویس">
           <Button size="small" type="text" icon={<CloseOutlined />} onClick={discard} disabled={loading} />
         </Tooltip>

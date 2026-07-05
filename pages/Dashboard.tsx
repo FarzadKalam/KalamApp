@@ -62,6 +62,7 @@ import { blobToBase64 } from '../utils/blobBase64';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import { buildAiRecordModuleOptions } from '../utils/aiRecordCreation';
+import { shouldSubmitComposerOnEnter } from '../utils/composeKeyboard';
 
 type DashboardQuickAction = {
   moduleId: string;
@@ -1368,7 +1369,7 @@ const Dashboard: React.FC = () => {
                       value={dashboardAiQuestion}
                       onChange={(event) => setDashboardAiQuestion(event.target.value)}
                       onPressEnter={(event) => {
-                        if (event.shiftKey) return;
+                        if (!shouldSubmitComposerOnEnter(event, isMobile)) return;
                         event.preventDefault();
                         handleSubmitDashboardAiQuestion();
                       }}

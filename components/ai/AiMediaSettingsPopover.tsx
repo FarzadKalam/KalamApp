@@ -1,7 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, Drawer, Grid, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { App, Button, Checkbox, Drawer, Grid, Input, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
-import { CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
+import { AudioOutlined, CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiMediaSourceImage = {
@@ -26,6 +26,14 @@ export type AiMediaSettings = {
   voice?: string;
   speed?: number;
   responseFormat?: string;
+  language?: string;
+  voiceStyle?: string;
+  musicMode?: 'off' | 'instrumental' | 'song';
+  lyrics?: string;
+  referenceVoiceData?: string;
+  referenceVoiceMimeType?: string;
+  referenceVoiceFilename?: string;
+  referenceVoicePreviewUrl?: string;
   // video
   seconds?: number;
   // document
@@ -79,6 +87,28 @@ const AUDIO_FORMAT_OPTIONS = [
   { value: 'aac', label: 'AAC' },
 ];
 
+const VOICE_LANGUAGE_OPTIONS = [
+  { value: 'fa-IR', label: 'فارسی' },
+  { value: 'en-US', label: 'انگلیسی' },
+  { value: 'ar', label: 'عربی' },
+  { value: 'tr', label: 'ترکی' },
+  { value: 'auto', label: 'تشخیص خودکار' },
+];
+
+const VOICE_STYLE_OPTIONS = [
+  { value: 'neutral', label: 'معمولی' },
+  { value: 'formal', label: 'رسمی' },
+  { value: 'warm', label: 'گرم و صمیمی' },
+  { value: 'energetic', label: 'پر انرژی' },
+  { value: 'calm', label: 'آرام' },
+];
+
+const MUSIC_MODE_OPTIONS = [
+  { value: 'off', label: 'فقط گفتار' },
+  { value: 'instrumental', label: 'موسیقی خام' },
+  { value: 'song', label: 'موسیقی با ترانه' },
+];
+
 const blobToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => resolve(String(reader.result || ''));
@@ -100,10 +130,15 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   const screens = Grid.useBreakpoint();
   const [open, setOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const voiceReferenceInputRef = useRef<HTMLInputElement | null>(null);
   const isMobile = !screens.md;
 
   const supportsSourceImages = (capability === 'image_generation' || capability === 'video_generation')
     && typeof onSourceImagesChange === 'function';
+
+  useEffect(() => () => {
+    scheduleOverlayLockRelease(0);
+  }, []);
 
   const update = (patch: AiMediaSettings) => onSettingsChange({ ...settings, ...patch });
 
@@ -151,6 +186,33 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
     }
     if (next.length) onSourceImagesChange([...sourceImages, ...next]);
   };
+
+  const handlePickReferenceVoice = async (files: FileList | null) => {
+    const file = Array.from(files || []).find((item) => item.type.startsWith('audio/'));
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      message.warning('فایل صدای مرجع بزرگ‌تر از ۸ مگابایت است.');
+      return;
+    }
+    try {
+      const dataUrl = await blobToDataUrl(file);
+      update({
+        referenceVoiceData: dataUrl.replace(/^data:[^;]+;base64,/, ''),
+        referenceVoiceMimeType: file.type || 'audio/mpeg',
+        referenceVoiceFilename: file.name,
+        referenceVoicePreviewUrl: dataUrl,
+      });
+    } catch {
+      message.error('خواندن صدای مرجع ناموفق بود.');
+    }
+  };
+
+  const removeReferenceVoice = () => update({
+    referenceVoiceData: undefined,
+    referenceVoiceMimeType: undefined,
+    referenceVoiceFilename: undefined,
+    referenceVoicePreviewUrl: undefined,
+  });
 
   const removeSource = (index: number) => {
     if (!onSourceImagesChange) return;
@@ -224,6 +286,9 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
 
       {capability === 'voice_output' ? (
         <>
+          <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-[10px] leading-5 text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">
+            گزینه‌های پیشرفته فقط برای مدل‌هایی اعمال می‌شوند که همان ویژگی را پشتیبانی می‌کنند.
+          </div>
           <div>
             <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">صدا</div>
             <Select
@@ -233,6 +298,28 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
               options={VOICE_OPTIONS}
               onChange={(value) => update({ voice: String(value) })}
             />
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
+              <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">زبان</div>
+              <Select
+                size="small"
+                className="w-full"
+                value={settings.language || 'fa-IR'}
+                options={VOICE_LANGUAGE_OPTIONS}
+                onChange={(value) => update({ language: String(value) })}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">حالت صدا</div>
+              <Select
+                size="small"
+                className="w-full"
+                value={settings.voiceStyle || 'neutral'}
+                options={VOICE_STYLE_OPTIONS}
+                onChange={(value) => update({ voiceStyle: String(value) })}
+              />
+            </div>
           </div>
           <div>
             <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">
@@ -254,6 +341,57 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
               value={settings.responseFormat || 'mp3'}
               options={AUDIO_FORMAT_OPTIONS}
               onChange={(value) => update({ responseFormat: String(value) })}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">نوع خروجی صوتی</div>
+            <Select
+              size="small"
+              className="w-full"
+              value={settings.musicMode || 'off'}
+              options={MUSIC_MODE_OPTIONS}
+              onChange={(value) => update({ musicMode: value as AiMediaSettings['musicMode'] })}
+            />
+          </div>
+          {settings.musicMode === 'song' ? (
+            <div>
+              <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">متن ترانه</div>
+              <Input.TextArea
+                size="small"
+                value={settings.lyrics || ''}
+                onChange={(event) => update({ lyrics: event.target.value })}
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                placeholder="اگر مدل انتخاب‌شده پشتیبانی کند، از این متن برای ساخت ترانه استفاده می‌شود."
+              />
+            </div>
+          ) : null}
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">صدای مرجع</span>
+              {settings.referenceVoiceFilename ? (
+                <button type="button" className="text-[10px] text-red-500" onClick={removeReferenceVoice}>حذف</button>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => voiceReferenceInputRef.current?.click()}
+              className="flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-500 hover:border-leather-400 hover:text-leather-600 dark:border-white/15 dark:text-gray-300"
+            >
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <AudioOutlined />
+                <span className="truncate">{settings.referenceVoiceFilename || 'افزودن فایل صوتی مرجع'}</span>
+              </span>
+              <span className="shrink-0 text-[10px] text-gray-400">اختیاری</span>
+            </button>
+            <input
+              ref={voiceReferenceInputRef}
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={(event) => {
+                void handlePickReferenceVoice(event.target.files);
+                event.target.value = '';
+              }}
             />
           </div>
         </>
@@ -383,15 +521,19 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   if (isMobile) {
     return (
       <>
-        {renderTriggerButton(() => setOpen(true))}
+        {renderTriggerButton(() => handleOpenChange(true))}
         <Drawer
           title="تنظیمات تولید رسانه"
           placement="bottom"
           open={open}
           onClose={() => handleOpenChange(false)}
           height="min(78vh, 560px)"
-          destroyOnClose
+          destroyOnHidden
+          getContainer={typeof document === 'undefined' ? undefined : () => document.body}
           styles={{ body: { padding: 12, overflowY: 'auto' } }}
+          afterOpenChange={(nextOpen) => {
+            if (!nextOpen) scheduleOverlayLockRelease();
+          }}
         >
           {content}
         </Drawer>

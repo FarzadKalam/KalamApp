@@ -22,6 +22,7 @@ const resolveEffectiveCapability = (selected: Set<string>, fallbackCapability?: 
   if (selected.has('document_generation')) return 'document_generation';
   if (selected.has('video_generation')) return 'video_generation';
   if (selected.has('image_generation')) return 'image_generation';
+  if (selected.has('voice_input') && selected.has('voice_output')) return 'voice_conversation';
   if (selected.has('voice_output')) return 'voice_output';
   if (selected.has('process_operation')) return 'process_operation';
   if (selected.has('record_creation')) return fallbackCapability || 'dashboard_chat';
@@ -37,6 +38,7 @@ const CAPABILITY_FA: Record<string, string> = {
   document_generation: 'ساخت فایل',
   video_generation: 'ساخت ویدیو',
   image_generation: 'ساخت تصویر',
+  voice_conversation: 'مکالمه صوتی',
   voice_output: 'تولید صدا',
   process_operation: 'اقدام فرآیندی',
   dashboard_chat: 'گفتگوی آزاد',

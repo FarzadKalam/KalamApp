@@ -73,6 +73,7 @@ import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { useOptionalNotificationRuntime } from '../NotificationRuntimeProvider';
 import { noteInsertBus } from '../../../utils/communicationRealtimeBus';
 import { useNotificationConversationList } from '../../../hooks/useNotificationConversationList';
+import { shouldSubmitComposerOnEnter } from '../../../utils/composeKeyboard';
 import { useInternalConversationTimeline } from '../../../hooks/useInternalConversationTimeline';
 import {
   CHAT_GROUP_PREFIX,
@@ -1673,10 +1674,9 @@ const MessagingComposerDock: React.FC<{
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onPressEnter={(event) => {
-            if (!event.shiftKey) {
-              event.preventDefault();
-              void submitDraft();
-            }
+            if (!shouldSubmitComposerOnEnter(event)) return;
+            event.preventDefault();
+            void submitDraft();
           }}
           autoSize={{ minRows: 1, maxRows: 4 }}
           placeholder={conversation.channel === 'sms' ? 'متن پیامک...' : 'متن پیام...'}

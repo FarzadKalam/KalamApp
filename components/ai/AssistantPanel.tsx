@@ -17,11 +17,14 @@ import type { AiUploadedFilePrompt } from './AiFileUploadButton';
 import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
+import AiAudioPlayer from './AiAudioPlayer';
 import type { AiMediaSettings, AiMediaSourceImage } from './AiMediaSettingsPopover';
 import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
+import { shouldSubmitComposerOnEnter } from '../../utils/composeKeyboard';
+import { buildSmartAiThreadTitle } from '../../utils/aiThreadTitle';
 import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
@@ -40,6 +43,15 @@ type ChatMessage = {
 type AiBundleInput =
   | { id: string; type: 'file' | 'image'; label: string; file: AiUploadedFilePrompt }
   | { id: string; type: 'voice'; label: string; voice: RecordedVoice };
+
+const revokeBundleInputPreviewUrls = (items: AiBundleInput[]) => {
+  if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+  items.forEach((item) => {
+    if (item.type === 'voice' && item.voice.previewUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(item.voice.previewUrl);
+    }
+  });
+};
 
 const DEFAULT_COMPOSER_CAPABILITIES: AiComposerCapability[] = [];
 const NON_STREAM_CHAT_CAPABILITIES = new Set([
@@ -361,6 +373,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
+  const bundleInputsRef = useRef<AiBundleInput[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [pendingProcessSelectionId, setPendingProcessSelectionId] = useState<string | null>(null);
@@ -386,6 +399,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
   const normalizedInitialInputKind = String(initialInputKind || 'text').trim() || 'text';
+
+  useEffect(() => {
+    bundleInputsRef.current = bundleInputs;
+  }, [bundleInputs]);
+
+  useEffect(() => () => {
+    revokeBundleInputPreviewUrls(bundleInputsRef.current);
+  }, []);
+
+  const applyThreadTitleFromResponse = useCallback((payload: any, fallbackPrompt?: string) => {
+    const nextThreadId = String(payload?.threadId || payload?.thread?.id || '').trim();
+    const nextTitle = String(payload?.threadTitle || payload?.thread?.title || '').trim()
+      || (!threadId && fallbackPrompt ? buildSmartAiThreadTitle(fallbackPrompt) : '');
+    if (!nextTitle) return;
+    setThreadTitle(nextTitle);
+    setDraftThreadTitle(nextTitle);
+    if (nextThreadId) onThreadRenamed?.(nextThreadId, nextTitle, payload?.thread || { id: nextThreadId, title: nextTitle });
+  }, [onThreadRenamed, threadId]);
 
   const sanitizeMediaSourceImagesForPreferences = useCallback((items: AiMediaSourceImage[]) => (
     (Array.isArray(items) ? items : [])
@@ -890,7 +921,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
     }
 
-    if (capabilitySet.has('voice_output')) {
+    if (capabilitySet.has('voice_output') && !capabilitySet.has('voice_input') && bundlePayload.length === 0) {
       const data = await callAssistant({
         action: 'generate_voice_output',
         text: params.messageText,
@@ -944,6 +975,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           forceNewThread: params.forceNewThread === true,
           context: contextWithSelection,
           modelOverride: modelOverrideRef.current,
+          settings: mediaSettings,
           previewOnly: false,
         }
         : {
@@ -989,6 +1021,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         forceNewThread: params.forceNewThread === true,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
         recordCreation: autoRecordSchema,
         previewOnly: true,
       });
@@ -1333,6 +1366,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       : text;
     const shouldStartProcessGuideThread = contextWithSelection.intent === 'process_guide' && !threadId;
     if (rawText === undefined) setInput('');
+    if (!threadId) {
+      const optimisticTitle = buildSmartAiThreadTitle(text);
+      setThreadTitle(optimisticTitle);
+      setDraftThreadTitle(optimisticTitle);
+    }
     setPendingAiAction(null);
     if (selectedCapabilities.length > 0) setAutoSuggestedCapabilities([]);
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', content: text, created_at: new Date().toISOString(), metadata: { input_kind: inputKind } };
@@ -1353,6 +1391,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         await callAssistantStream(streamBody, {
           onMeta: (payload) => {
             if (payload?.threadId) setThreadId(String(payload.threadId));
+            applyThreadTitleFromResponse(payload, text);
             setMessages((prev) => prev.map((item) => {
               if (item.id === userMessage.id) return { ...item, id: payload?.userMessageId || item.id };
               if (item.id === thinkingMessage.id) {
@@ -1380,6 +1419,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
           onDone: (payload) => {
             if (payload?.threadId) setThreadId(String(payload.threadId));
+            applyThreadTitleFromResponse(payload, text);
             setMessages((prev) => prev.map((item) => {
               if (item.id === thinkingMessage.id) {
                 return {
@@ -1521,6 +1561,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       }
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
+      applyThreadTitleFromResponse(data, text);
       if (data?.autoAction === 'generate_image') {
         if (data?.pending) {
           const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
@@ -1643,7 +1684,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, callAssistant, callAssistantStream, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, applyThreadTitleFromResponse, callAssistant, callAssistantStream, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     const prompt = String(initialPrompt || '').trim();
@@ -1893,7 +1934,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, []);
 
   const removeBundleInput = useCallback((id: string) => {
-    setBundleInputs((prev) => prev.filter((item) => item.id !== id));
+    setBundleInputs((prev) => {
+      const removed = prev.filter((item) => item.id === id);
+      revokeBundleInputPreviewUrls(removed);
+      return prev.filter((item) => item.id !== id);
+    });
   }, []);
 
   const bundlePreviewItems = useMemo<ComposerAttachmentChipItem[]>(() => bundleInputs.map((item) => ({
@@ -1902,7 +1947,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     mimeType: item.type === 'voice' ? item.voice.mimeType : item.file.mimeType,
     fileType: item.type === 'voice' ? 'voice' : item.type === 'image' ? 'image' : 'file',
     url: item.type === 'voice'
-      ? null
+      ? (item.voice.previewUrl || null)
       : (item.type === 'image' ? (item.file.data || item.file.url || null) : null),
     subtitle: null,
     sizeText: item.type === 'voice'
@@ -1988,6 +2033,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           threadId,
           context: contextWithSelection,
           modelOverride: modelOverrideRef.current,
+          settings: mediaSettings,
           recordCreation: activeRecordCreationSchema,
           previewOnly: true,
         }));
@@ -2020,7 +2066,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               }
               : item));
           }
-          setBundleInputs([]);
+          setBundleInputs((prev) => {
+            revokeBundleInputPreviewUrls(prev);
+            return [];
+          });
           return;
         }
         const newImageUrl = data?.image ? resolveAiAttachmentUrl(data.image) : '';
@@ -2046,7 +2095,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             },
           }
           : item));
-        setBundleInputs([]);
+        setBundleInputs((prev) => {
+          revokeBundleInputPreviewUrls(prev);
+          return [];
+        });
         return;
       }
       const serverMessages = Array.isArray(data?.messages) ? data.messages as ChatMessage[] : [];
@@ -2071,7 +2123,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
         ]);
       }
-      setBundleInputs([]);
+      setBundleInputs((prev) => {
+        revokeBundleInputPreviewUrls(prev);
+        return [];
+      });
     } catch (error: any) {
       setInput(prompt);
       setMessages((prev) => prev.filter((item) => item.id !== userMessage.id && item.id !== thinkingMessage.id));
@@ -2108,7 +2163,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         if (nextThreadId) {
           await loadThread(nextThreadId);
         }
-        setBundleInputs([]);
+        setBundleInputs((prev) => {
+          revokeBundleInputPreviewUrls(prev);
+          return [];
+        });
         return;
       }
       await callAssistant({ action: 'confirm_action', actionLogId: actionId });
@@ -2581,18 +2639,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         ) : null}
         {bundlePreviewItems.length > 0 ? (
-          <div className="mb-2">
+          <div className="mb-2 space-y-2">
             <ComposerAttachmentChips items={bundlePreviewItems} />
+            {bundleInputs
+              .filter((item) => item.type === 'voice' && item.voice.previewUrl)
+              .map((item) => item.type === 'voice' ? (
+                <AiAudioPlayer
+                  key={`player-${item.id}`}
+                  src={item.voice.previewUrl}
+                  title={item.label || 'ویس آماده ارسال'}
+                  subtitle={item.voice.filename}
+                  downloadName={item.voice.filename}
+                  compact
+                />
+              ) : null)}
           </div>
         ) : null}
         <Input.TextArea
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onPressEnter={(event) => {
-            if (!event.shiftKey) {
-              event.preventDefault();
-              void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
-            }
+            if (!shouldSubmitComposerOnEnter(event)) return;
+            event.preventDefault();
+            void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
           }}
           placeholder="سوال خود را بنویسید..."
           autoSize={{ minRows: 1, maxRows: 3 }}
