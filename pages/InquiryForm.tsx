@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, InputNumber, Select, Slider, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -33,6 +33,7 @@ import {
 import {
   WEB_FORM_NONE_VALUE,
   WEB_FORM_OTHER_VALUE,
+  resolveModuleFieldDefaultValue,
   type WebFormAccessScope,
   type WebFormFieldRecord,
 } from "../utils/webForms";
@@ -224,6 +225,43 @@ const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: stri
 
 const isManagedHiddenPublicWebFormField = (field: WebFormFieldRecord, targetModuleId?: string | null) =>
   isPublicWebFormManagedDefaultOnlyField(targetModuleId, String(field.target_field_key || field.field_key || "").trim());
+
+const isEmptyPublicSaveValue = (value: unknown) =>
+  value === undefined
+  || value === null
+  || (typeof value === "string" && value.trim() === "");
+
+const hasPublicDefaultValue = (value: unknown) => {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return true;
+};
+
+const normalizeEmptyPublicTargetValueForSave = (
+  field: WebFormFieldRecord,
+  targetModuleId: string | null | undefined,
+  value: unknown,
+) => {
+  if (!isEmptyPublicSaveValue(value)) return value;
+  const targetField = getPublicTargetModuleField(field, targetModuleId);
+  const moduleDefaultValue = resolveModuleFieldDefaultValue(targetField);
+  if (hasPublicDefaultValue(moduleDefaultValue)) return moduleDefaultValue;
+
+  const effectiveType = targetField?.type || mapWebFormFieldTypeToModuleFieldType(field.field_type);
+  if (
+    effectiveType === FieldType.NUMBER
+    || effectiveType === FieldType.PRICE
+    || effectiveType === FieldType.PERCENTAGE
+    || effectiveType === FieldType.STOCK
+    || effectiveType === FieldType.PERCENTAGE_OR_AMOUNT
+  ) {
+    return 0;
+  }
+  if (effectiveType === FieldType.CHECKBOX) return false;
+  if (effectiveType === FieldType.JSON) return {};
+  if (effectiveType === FieldType.TAGS || effectiveType === FieldType.MULTI_SELECT || effectiveType === FieldType.CHECKLIST) return [];
+  return value;
+};
 
 const ensurePublicModuleSystemDefaults = (targetModuleId: string | null | undefined, payload: Record<string, any>) => {
   const moduleConfig = MODULES[String(targetModuleId || "").trim()];
@@ -935,6 +973,7 @@ const InquiryForm = () => {
         <Form.Item
           name={field.field_key}
           label={options?.showLabel === false ? undefined : field.label}
+          required={isPublicFieldRequired(field)}
           rules={rules}
           extra={options?.showHelp !== false && field.help_text ? (
             <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
@@ -1116,6 +1155,7 @@ const InquiryForm = () => {
         key={field.field_key}
         name={field.field_key}
         label={options?.showLabel === false ? undefined : field.label}
+        required={isPublicFieldRequired(field)}
         rules={rules}
         extra={options?.showHelp !== false && field.help_text ? (
           <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
@@ -1222,6 +1262,7 @@ const InquiryForm = () => {
         key={field.field_key}
         name={field.field_key}
         label={options?.showLabel === false ? undefined : field.label}
+        required={isPublicFieldRequired(field)}
         rules={rules}
         extra={options?.showHelp !== false && field.help_text ? (
           <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
@@ -1357,7 +1398,7 @@ const InquiryForm = () => {
       const isOtherSelected = isChoiceOtherSelected(field, form.getFieldValue(field.field_key));
       return (
         <div key={field.field_key} className="space-y-2">
-          <Form.Item name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={choiceRules} extra={sharedExtra}>
+          <Form.Item name={field.field_key} label={options?.showLabel === false ? undefined : field.label} required={isPublicFieldRequired(field)} rules={choiceRules} extra={sharedExtra}>
             <Select
               mode={field.field_type === "multi_select" ? "multiple" : undefined}
               allowClear
@@ -1387,6 +1428,7 @@ const InquiryForm = () => {
           name={field.field_key}
           valuePropName="checked"
           label={options?.showLabel === false ? undefined : field.label}
+          required={isPublicFieldRequired(field)}
           rules={rules}
           extra={sharedExtra}
         >
@@ -1397,7 +1439,7 @@ const InquiryForm = () => {
 
     if (field.field_type === "long_text") {
       return (
-        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} required={isPublicFieldRequired(field)} rules={rules} extra={sharedExtra}>
           <Input.TextArea rows={5} placeholder={field.placeholder || field.label} />
         </Form.Item>
       );
@@ -1405,7 +1447,7 @@ const InquiryForm = () => {
 
     if (field.field_type === "date" || field.field_type === "time" || field.field_type === "datetime") {
       return (
-        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} required={isPublicFieldRequired(field)} rules={rules} extra={sharedExtra}>
           <PersianDatePicker
             className="webform-list-date-trigger"
             type={field.field_type === "date" ? "DATE" : field.field_type === "time" ? "TIME" : "DATETIME"}
@@ -1417,7 +1459,7 @@ const InquiryForm = () => {
 
     if (isPublicPriceWebFormField(field, publicForm?.targetModuleId)) {
       return (
-        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} required={isPublicFieldRequired(field)} rules={rules} extra={sharedExtra}>
           <InputNumber
             className="w-full persian-number"
             controls={false}
@@ -1441,7 +1483,7 @@ const InquiryForm = () => {
     const inputMode = field.field_type === "phone" ? "tel" : field.field_type === "number" || field.field_type === "percentage" ? "decimal" : "text";
 
     return (
-      <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+      <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} required={isPublicFieldRequired(field)} rules={rules} extra={sharedExtra}>
         <Input type={inputType} inputMode={inputMode} placeholder={field.placeholder || field.label} />
       </Form.Item>
     );
@@ -1480,9 +1522,10 @@ const InquiryForm = () => {
       }
       const value = normalizePublicFieldValue(field, resolvePublicSubmissionRawValue(field, values));
       if (value !== undefined) {
-        acc[field.field_key] = value;
+        acc[field.field_key] = normalizeEmptyPublicTargetValueForSave(field, publicForm?.targetModuleId, value);
       } else if (field.default_value !== undefined && field.default_value !== null) {
-        acc[field.field_key] = normalizePublicFieldValue(field, field.default_value);
+        const defaultValue = normalizePublicFieldValue(field, field.default_value);
+        acc[field.field_key] = normalizeEmptyPublicTargetValueForSave(field, publicForm?.targetModuleId, defaultValue);
       }
       return acc;
     }, basePayload);
@@ -1533,6 +1576,10 @@ const InquiryForm = () => {
 
   const handleSubmit = async (values: Record<string, any>) => {
     if (!publicForm) return;
+    if (isSlideMode && currentSlideIndex < visibleFields.length - 1) {
+      await goToNextSlide();
+      return;
+    }
     const completeValues = {
       ...form.getFieldsValue(true),
       ...values,
@@ -1647,6 +1694,16 @@ const InquiryForm = () => {
     }
   };
 
+  const handlePublicFormKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if (!isSlideMode || !currentSlideField || submitting) return;
+    if (event.key !== "Enter" || event.defaultPrevented) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest?.(".ant-select")) return;
+    if (target?.tagName === "TEXTAREA" && !event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    void goToNextSlide();
+  };
+
   const handleFormValuesChange = (changedValues: Record<string, any>) => {
     if (!isSlideMode || !publicForm?.config.slide_auto_advance || !currentSlideField) return;
     if (!Object.prototype.hasOwnProperty.call(changedValues, currentSlideField.field_key)) return;
@@ -1756,6 +1813,7 @@ const InquiryForm = () => {
                 layout="vertical"
                 className={`public-web-form ${isDarkMode ? "public-web-form--dark" : "public-web-form--light"}`}
                 onFinish={handleSubmit}
+                onKeyDown={handlePublicFormKeyDown}
                 onValuesChange={handleFormValuesChange}
               >
                 {isSlideMode && currentSlideField ? (
@@ -1793,6 +1851,9 @@ const InquiryForm = () => {
                       <div className="mb-5">
                         <Title level={3} className="!mb-2" style={{ color: surfaceStyle.color }}>
                           {currentSlideField.label}
+                          {isPublicFieldRequired(currentSlideField) ? (
+                            <span className="mr-1 align-middle text-base font-black text-red-500">*</span>
+                          ) : null}
                         </Title>
                         {currentSlideField.help_text ? (
                           <Paragraph className="!mb-0" style={{ color: isDarkMode ? "rgba(255,255,255,0.72)" : "#6b7280" }}>
