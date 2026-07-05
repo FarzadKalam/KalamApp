@@ -1501,6 +1501,161 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }, 220);
   }, [cacheKey]);
 
+  const commitRuntimeRealtimePatch = useCallback((updater: (current: RuntimeState) => RuntimeState) => {
+    clearProcessRuntimeTaskCache();
+    processRuntimeBlockCache.delete(cacheKey);
+    setRuntime((current) => {
+      const next = updater(current);
+      runtimeRef.current = next;
+      publishRuntimeSnapshot(next);
+      return next;
+    });
+  }, [cacheKey, publishRuntimeSnapshot]);
+
+  const applyTaskRealtimePayload = useCallback((payload: any) => {
+    const eventType = normalizeText(payload?.eventType || payload?.event_type).toUpperCase();
+    const row = payload?.new || payload?.old || {};
+    const taskId = normalizeDbUuid(row?.id);
+    if (!taskId) return false;
+
+    let matched = false;
+    commitRuntimeRealtimePatch((current) => {
+      const tasks = Array.isArray(current.tasks) ? current.tasks : [];
+      const existingIndex = tasks.findIndex((task: any) => normalizeDbUuid(task?.id) === taskId);
+      matched = existingIndex >= 0;
+
+      const relatedRunIds = new Set((current.runs || []).map((run: any) => normalizeText(run?.id)).filter(Boolean));
+      const relatedStageIds = new Set((current.stages || []).flatMap((stage: any) => [
+        normalizeText(stage?.id),
+        normalizeText(stage?.process_run_stage_id),
+      ]).filter(Boolean));
+      const sourceLink = resolveTaskSourceLink(row);
+      const belongsToCurrentRecord = normalizeText(sourceLink.moduleId) === normalizedModuleId
+        && normalizeText(sourceLink.recordId) === normalizedRecordId;
+      const belongsToRuntime = relatedRunIds.has(normalizeText(row?.process_run_id))
+        || relatedStageIds.has(normalizeText(row?.process_run_stage_id));
+
+      if (!matched && !belongsToCurrentRecord && !belongsToRuntime) return current;
+      matched = true;
+
+      const nextTasks = eventType === 'DELETE'
+        ? tasks.filter((task: any) => normalizeDbUuid(task?.id) !== taskId)
+        : existingIndex >= 0
+          ? tasks.map((task: any, index: number) => (
+              index === existingIndex
+                ? {
+                    ...task,
+                    ...row,
+                    recurrence_info: {
+                      ...parseObject(task?.recurrence_info),
+                      ...parseObject(row?.recurrence_info),
+                    },
+                    metadata: {
+                      ...parseObject(task?.metadata),
+                      ...parseObject(row?.metadata),
+                    },
+                  }
+                : task
+            ))
+          : [...tasks, row];
+      return { ...current, tasks: nextTasks };
+    });
+    return matched;
+  }, [commitRuntimeRealtimePatch, normalizedModuleId, normalizedRecordId]);
+
+  const applyRunStageRealtimePayload = useCallback((payload: any) => {
+    const eventType = normalizeText(payload?.eventType || payload?.event_type).toUpperCase();
+    const row = payload?.new || payload?.old || {};
+    const stageId = normalizeDbUuid(row?.id || row?.process_run_stage_id);
+    if (!stageId) return false;
+
+    let matched = false;
+    commitRuntimeRealtimePatch((current) => {
+      const stages = Array.isArray(current.stages) ? current.stages : [];
+      const relatedRunIds = new Set((current.runs || []).map((run: any) => normalizeText(run?.id)).filter(Boolean));
+      const belongsToRuntime = relatedRunIds.has(normalizeText(row?.process_run_id));
+      const existingIndex = stages.findIndex((stage: any) => (
+        normalizeDbUuid(stage?.id) === stageId
+        || normalizeDbUuid(stage?.process_run_stage_id) === stageId
+      ));
+      matched = existingIndex >= 0 || belongsToRuntime;
+      if (!matched) return current;
+
+      const nextStages = eventType === 'DELETE'
+        ? stages.filter((stage: any) => normalizeDbUuid(stage?.id) !== stageId && normalizeDbUuid(stage?.process_run_stage_id) !== stageId)
+        : existingIndex >= 0
+          ? stages.map((stage: any, index: number) => (
+              index === existingIndex
+                ? {
+                    ...stage,
+                    ...row,
+                    metadata: {
+                      ...parseObject(stage?.metadata),
+                      ...parseObject(row?.metadata),
+                    },
+                  }
+                : stage
+            ))
+          : [...stages, row];
+      return { ...current, stages: nextStages };
+    });
+    return matched;
+  }, [commitRuntimeRealtimePatch]);
+
+  const applyTemplateStageRealtimePayload = useCallback((payload: any) => {
+    const eventType = normalizeText(payload?.eventType || payload?.event_type).toUpperCase();
+    const row = payload?.new || payload?.old || {};
+    const stageId = normalizeDbUuid(row?.id);
+    if (!stageId) return false;
+    let matched = false;
+    setTemplateStages((current) => {
+      const stages = Array.isArray(current) ? current : [];
+      const existingIndex = stages.findIndex((stage: any) => normalizeDbUuid(stage?.id || stage?.template_stage_id) === stageId);
+      matched = existingIndex >= 0 || eventType !== 'DELETE';
+      if (!matched) return current;
+      const nextStages = eventType === 'DELETE'
+        ? stages.filter((stage: any) => normalizeDbUuid(stage?.id || stage?.template_stage_id) !== stageId)
+        : existingIndex >= 0
+          ? stages.map((stage: any, index: number) => (
+              index === existingIndex
+                ? {
+                    ...stage,
+                    ...parseObject(stage?.metadata),
+                    ...parseObject(row?.metadata),
+                    ...row,
+                    name: row?.stage_name || row?.name || stage?.name,
+                    template_stage_id: row?.id || stage?.template_stage_id,
+                    metadata: {
+                      ...parseObject(stage?.metadata),
+                      ...parseObject(row?.metadata),
+                    },
+                  }
+                : stage
+            ))
+          : [...stages, {
+              ...parseObject(row?.metadata),
+              ...row,
+              name: row?.stage_name || row?.name || 'مرحله',
+              template_stage_id: row?.id,
+            }];
+      templateStagesRef.current = nextStages;
+      processRuntimeBlockCache.delete(cacheKey);
+      return nextStages;
+    });
+    return matched;
+  }, [cacheKey]);
+
+  const applyParentDraftRealtimePayload = useCallback((payload: any) => {
+    const row = payload?.new || {};
+    const normalizedFieldKey = normalizeText(fieldKey);
+    if (!normalizedFieldKey || !row || !Object.prototype.hasOwnProperty.call(row, normalizedFieldKey)) return false;
+    const nextStages = Array.isArray(row?.[normalizedFieldKey]) ? row[normalizedFieldKey] : [];
+    setDraftStagesOverride(nextStages);
+    directDraftStagesRef.current = nextStages;
+    processRuntimeBlockCache.delete(cacheKey);
+    return true;
+  }, [cacheKey, fieldKey]);
+
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') return undefined;
     return subscribeToLocalModuleListInvalidation({
@@ -1544,7 +1699,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       channel.on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'process_template_stages', filter: `template_id=eq.${normalizedRecordId}` },
-        scheduleRefresh,
+        (payload: any) => {
+          applyTemplateStageRealtimePayload(payload);
+          scheduleRefresh();
+        },
       );
       channel.on(
         'postgres_changes',
@@ -1560,7 +1718,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         { event: '*', schema: 'public', table: 'process_run_stages', filter: `org_id=eq.${orgId}` },
         (payload: any) => {
           const runId = normalizeText(payload?.new?.process_run_id || payload?.old?.process_run_id);
-          if (runId === normalizedRecordId) scheduleRefresh();
+          if (runId === normalizedRecordId) {
+            applyRunStageRealtimePayload(payload);
+            scheduleRefresh();
+          }
         },
       );
       channel.on(
@@ -1571,7 +1732,35 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           if (rowId === normalizedRecordId) scheduleRefresh();
         },
       );
+      channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks', filter: `org_id=eq.${orgId}` },
+        (payload: any) => {
+          const row = payload?.new || payload?.old || {};
+          if (normalizeText(row?.process_run_id) === normalizedRecordId) {
+            applyTaskRealtimePayload(payload);
+            scheduleRefresh();
+            return;
+          }
+          const currentRuntime = runtimeRef.current;
+          const relatedStageIds = new Set((currentRuntime.stages || []).flatMap((stage: any) => [
+            normalizeText(stage?.id),
+            normalizeText(stage?.process_run_stage_id),
+          ]).filter(Boolean));
+          if (relatedStageIds.has(normalizeText(row?.process_run_stage_id))) {
+            applyTaskRealtimePayload(payload);
+            scheduleRefresh();
+          }
+        },
+      );
     } else {
+      channel.on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: normalizedModuleId, filter: `id=eq.${normalizedRecordId}` },
+        (payload: any) => {
+          if (applyParentDraftRealtimePayload(payload)) scheduleRefresh();
+        },
+      );
       channel.on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'process_runs', filter: `org_id=eq.${orgId}` },
@@ -1590,7 +1779,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           const runId = normalizeText(row?.process_run_id);
           const currentRuntime = runtimeRef.current;
           const relatedRunIds = new Set((currentRuntime.runs || []).map((run: any) => normalizeText(run?.id)).filter(Boolean));
-          if (runId && relatedRunIds.has(runId)) scheduleRefresh();
+          if (runId && relatedRunIds.has(runId)) {
+            applyRunStageRealtimePayload(payload);
+            scheduleRefresh();
+          }
         },
       );
       channel.on(
@@ -1603,6 +1795,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
             normalizeText(sourceLink.moduleId) === normalizedModuleId
             && normalizeText(sourceLink.recordId) === normalizedRecordId
           ) {
+            applyTaskRealtimePayload(payload);
             scheduleRefresh();
             return;
           }
@@ -1618,6 +1811,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
             || relatedRunIds.has(normalizeText(row?.process_run_id))
             || relatedStageIds.has(normalizeText(row?.process_run_stage_id))
           ) {
+            applyTaskRealtimePayload(payload);
             scheduleRefresh();
           }
         },
@@ -1629,7 +1823,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
       void supabase.removeChannel(channel);
     };
-  }, [enabled, liveRuntimeEnabled, normalizedModuleId, normalizedRecordId, orgId, scheduleRefresh]);
+  }, [applyParentDraftRealtimePayload, applyRunStageRealtimePayload, applyTaskRealtimePayload, applyTemplateStageRealtimePayload, enabled, liveRuntimeEnabled, normalizedModuleId, normalizedRecordId, orgId, scheduleRefresh]);
 
   const fallbackRecordLabel = useMemo(() => {
     const moduleLabel = getModuleLabel(normalizedModuleId);
