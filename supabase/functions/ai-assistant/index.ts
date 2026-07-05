@@ -63,7 +63,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-06-29-01';
+const FUNCTION_BUILD = 'ai-assistant-2026-07-05-01';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -7520,7 +7520,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
         id: `eq.${assistantMessage?.id}`,
         org_id: `eq.${authContext.orgId}`,
       }, {
-        content: delayedMessage,
+        content: failureMessage,
         provider: providerConfig.provider,
         model: providerConfig.model,
         metadata: {
@@ -7660,7 +7660,7 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
         id: `eq.${messageId}`,
         org_id: `eq.${authContext.orgId}`,
       }, {
-        content: failureMessage,
+        content: delayedMessage,
         metadata: {
           ...metadata,
           pending_status: true,

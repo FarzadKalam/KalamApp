@@ -3,6 +3,7 @@ import { Alert, App, Button, Card, Form, Input, Select, Space, Spin, Typography,
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../App.css";
+import { MODULES } from "../moduleRegistry";
 import PersianDatePicker from "../components/PersianDatePicker";
 import { supabase } from "../supabaseClient";
 import { FieldType, type ModuleField } from "../types";
@@ -27,6 +28,7 @@ import {
   normalizeConditionalFieldSettings,
   type ConditionalFieldSettings,
 } from "../utils/conditionalFieldRules";
+import { buildResolvedConditionalFieldSettings } from "../utils/conditionalFieldDefaults";
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -375,21 +377,31 @@ const InquiryForm = () => {
     [currentEmployee?.id, publicForm?.accessScope, publicForm?.fields, publicForm?.targetModuleId]
   );
   const conditionalDisplaySettings = useMemo(
-    () => normalizeConditionalFieldSettings(publicForm?.conditionalDisplay),
-    [publicForm?.conditionalDisplay]
+    () => buildResolvedConditionalFieldSettings(
+      MODULES[String(publicForm?.targetModuleId || "").trim()] || null,
+      publicForm?.conditionalDisplay
+    ),
+    [publicForm?.conditionalDisplay, publicForm?.targetModuleId]
   );
   const publicModuleFields = useMemo(
     () => (publicForm?.fields || []).map((field) => buildPublicModuleField(field, publicForm?.targetModuleId)),
     [publicForm?.fields, publicForm?.targetModuleId]
   );
-  const runtimeEvaluationValues = useMemo(
-    () => ({
+  const runtimeEvaluationValues = useMemo(() => {
+    const baseValues = {
       ...(publicForm?.config.default_record_values || {}),
       ...initialFieldValues,
       ...watchedFormValues,
-    }),
-    [initialFieldValues, publicForm?.config.default_record_values, watchedFormValues]
-  );
+    };
+    return (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
+      const fieldKey = String(field.field_key || "").trim();
+      const targetFieldKey = String(field.target_field_key || "").trim();
+      if (fieldKey && targetFieldKey && Object.prototype.hasOwnProperty.call(acc, fieldKey)) {
+        acc[targetFieldKey] = acc[fieldKey];
+      }
+      return acc;
+    }, { ...baseValues });
+  }, [initialFieldValues, publicForm?.config.default_record_values, publicForm?.fields, watchedFormValues]);
   const publicFieldRuntimeStateMap = useMemo(
     () => buildConditionalFieldStateMap(publicModuleFields, runtimeEvaluationValues, conditionalDisplaySettings),
     [conditionalDisplaySettings, publicModuleFields, runtimeEvaluationValues]
