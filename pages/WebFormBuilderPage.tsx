@@ -17,7 +17,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { ArrowRightOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SaveOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { ArrowRightOutlined, CopyOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, EyeOutlined, PlusOutlined, SaveOutlined, ShareAltOutlined, UpOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import { supabase } from "../supabaseClient";
@@ -294,6 +294,8 @@ const WebFormBuilderPage: React.FC = () => {
   const [recentSubmissions, setRecentSubmissions] = useState<any[]>([]);
   const [dynamicTargetOptions, setDynamicTargetOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationTargetOptions, setRelationTargetOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
+  const [fieldSearchText, setFieldSearchText] = useState("");
+  const [closedFieldKeys, setClosedFieldKeys] = useState<Set<string>>(new Set());
   const seededFieldsRef = useRef(false);
   const qrContainerRef = useRef<HTMLDivElement | null>(null);
 
@@ -320,6 +322,17 @@ const WebFormBuilderPage: React.FC = () => {
     () => Object.fromEntries(targetFieldItems.map((item) => [item.value, item])),
     [targetFieldItems]
   );
+  const getBuilderFieldTitle = useCallback((fieldValue: BuilderFieldValue | undefined, index: number) => {
+    const targetFieldKey = String(fieldValue?.target_field_key || "").trim();
+    const targetFieldItem = targetFieldMap[targetFieldKey];
+    return String(
+      fieldValue?.label
+      || targetFieldItem?.label
+      || fieldValue?.field_key
+      || targetFieldKey
+      || `فیلد ${index + 1}`
+    ).trim();
+  }, [targetFieldMap]);
   const missingRequiredFields = useMemo(
     () => getMissingWebFormRequiredFields(
       targetModuleId,
@@ -1142,7 +1155,63 @@ const WebFormBuilderPage: React.FC = () => {
               <Form.List name="fields">
                 {(fields, { add, remove }) => (
                   <div className="space-y-4">
+                    {fields.length > 0 ? (
+                      <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <Input.Search
+                            allowClear
+                            className="max-w-full lg:max-w-md"
+                            placeholder="جستجو در عنوان فیلدها"
+                            value={fieldSearchText}
+                            onChange={(event) => setFieldSearchText(event.target.value)}
+                          />
+                          <Space wrap>
+                            <Button
+                              onClick={() => {
+                                const visibleKeys = new Set(
+                                  fields
+                                    .filter((_listField, listIndex) => {
+                                      const query = fieldSearchText.trim().toLowerCase();
+                                      if (!query) return true;
+                                      return getBuilderFieldTitle(watchedFields?.[listIndex], listIndex).toLowerCase().includes(query);
+                                    })
+                                    .map((listField) => String(listField.key))
+                                );
+                                setClosedFieldKeys((prev) => {
+                                  const next = new Set(prev);
+                                  visibleKeys.forEach((key) => next.delete(key));
+                                  return next;
+                                });
+                              }}
+                            >
+                              باز کردن همه
+                            </Button>
+                            <Button
+                              onClick={() => {
+                                const visibleKeys = fields
+                                  .filter((_listField, listIndex) => {
+                                    const query = fieldSearchText.trim().toLowerCase();
+                                    if (!query) return true;
+                                    return getBuilderFieldTitle(watchedFields?.[listIndex], listIndex).toLowerCase().includes(query);
+                                  })
+                                  .map((listField) => String(listField.key));
+                                setClosedFieldKeys((prev) => new Set([...Array.from(prev), ...visibleKeys]));
+                              }}
+                            >
+                              بستن همه
+                            </Button>
+                          </Space>
+                        </div>
+                      </div>
+                    ) : null}
+
                     {fields.length === 0 ? <Empty description="هنوز فیلدی برای این فرم تعریف نشده است." /> : null}
+
+                    {fields.length > 0 && fields.every((_, listIndex) => {
+                      const query = fieldSearchText.trim().toLowerCase();
+                      if (!query) return false;
+                      return !getBuilderFieldTitle(watchedFields?.[listIndex], listIndex).toLowerCase().includes(query);
+                    }) ? <Empty description="فیلدی با این عنوان پیدا نشد." /> : null}
 
                     {fields.map((field, index) => {
                       const bindingType = String(watchedFields?.[index]?.binding_type || "record_field").trim();
@@ -1161,15 +1230,40 @@ const WebFormBuilderPage: React.FC = () => {
                       const isChoiceField = WEB_FORM_CHOICE_FIELD_TYPES.has(inferredType);
                       const isProgressField = WEB_FORM_PROGRESS_FIELD_TYPES.has(inferredType);
                       const showProgressBar = watchedFields?.[index]?.show_progress_bar === true;
+                      const fieldTitle = getBuilderFieldTitle(watchedFields?.[index], index);
+                      const searchQuery = fieldSearchText.trim().toLowerCase();
+                      const matchesSearch = !searchQuery || fieldTitle.toLowerCase().includes(searchQuery);
+                      if (!matchesSearch) return null;
+                      const fieldKey = String(field.key);
+                      const isOpen = !closedFieldKeys.has(fieldKey);
+                      const toggleFieldOpen = () => {
+                        setClosedFieldKeys((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(fieldKey)) next.delete(fieldKey);
+                          else next.add(fieldKey);
+                          return next;
+                        });
+                      };
 
                       return (
                         <Card
                           key={field.key}
                           size="small"
                           className="rounded-2xl border border-dashed"
-                          title={<span>فیلد {index + 1}</span>}
+                          title={(
+                            <button
+                              type="button"
+                              className="flex w-full min-w-0 items-center gap-2 text-right"
+                              onClick={toggleFieldOpen}
+                              aria-expanded={isOpen}
+                            >
+                              {isOpen ? <UpOutlined className="shrink-0 text-[11px] text-gray-400" /> : <DownOutlined className="shrink-0 text-[11px] text-gray-400" />}
+                              <span className="truncate">{fieldTitle}</span>
+                            </button>
+                          )}
                           extra={<Button danger type="text" icon={<DeleteOutlined />} disabled={isManagedField || isDuplicateDependency} onClick={() => remove(field.name)}>حذف</Button>}
                         >
+                          {isOpen ? (
                           <div className="grid gap-4 md:grid-cols-2">
                             {supportsTemplateFieldBindings ? (
                               <Form.Item label="نوع اتصال" name={[field.name, "binding_type"]} rules={[{ required: true, message: "نوع اتصال را انتخاب کنید." }]}>
@@ -1357,6 +1451,15 @@ const WebFormBuilderPage: React.FC = () => {
                               <Checkbox>مخفی</Checkbox>
                             </Form.Item>
                           </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                              <span>نوع ورودی: {inferredType || "-"}</span>
+                              {bindingType !== "template_field" && currentTargetFieldKey ? <span>فیلد مقصد: {targetFieldItem?.label || currentTargetFieldKey}</span> : null}
+                              {bindingType === "template_field" ? <span>فیلد پویا</span> : null}
+                              {watchedFields?.[index]?.is_required ? <span className="text-red-500">اجباری</span> : null}
+                              {watchedFields?.[index]?.is_hidden ? <span>مخفی</span> : null}
+                            </div>
+                          )}
                         </Card>
                       );
                     })}
