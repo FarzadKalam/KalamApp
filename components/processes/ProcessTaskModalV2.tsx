@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { App, Badge, Button, Input, Modal, Tag, Tooltip } from 'antd';
+import { App, Badge, Button, Input, Modal, Switch, Tag, Tooltip } from 'antd';
 import {
   CheckOutlined,
   ClockCircleOutlined,
@@ -69,10 +69,12 @@ import {
 } from '../../utils/instructionSupport';
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { syncProcessRunStageFromTask } from '../../utils/processRunRuntime';
+import { insertRecordActivity } from '../../utils/recordActivity';
 import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/taskMeta';
 import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
@@ -649,6 +651,7 @@ type InlineEditableFieldProps = {
   overlayZIndexBase?: number;
   displayNode?: React.ReactNode;
   onOptionsUpdate?: () => void;
+  saving?: boolean;
 };
 
 const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
@@ -666,6 +669,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   overlayZIndexBase = 16020,
   displayNode,
   onOptionsUpdate,
+  saving = false,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draftValue, setDraftValue] = useState<any>(value);
@@ -767,6 +771,22 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     />
   );
 
+  const labelNode = (
+    <span className="flex flex-wrap items-center gap-1.5 text-[11px] font-bold text-gray-500 dark:text-gray-400">
+      <span>{label}</span>
+      {requiredForCreation ? (
+        <Tag className="!m-0 !rounded-full !border-red-200 !bg-red-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-red-700 dark:!border-red-500/30 dark:!bg-red-500/10 dark:!text-red-200">
+          ضروری برای ایجاد
+        </Tag>
+      ) : null}
+      {requiredForCompletion ? (
+        <Tag className="!m-0 !rounded-full !border-amber-200 !bg-amber-50 !px-1.5 !py-0 !text-[10px] !font-bold !text-amber-700 dark:!border-amber-500/30 dark:!bg-amber-500/10 dark:!text-amber-200">
+          ضروری برای تکمیل
+        </Tag>
+      ) : null}
+    </span>
+  );
+
   if (forceEditMode) {
     return (
       <div className="min-w-0 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition focus-within:border-[rgba(var(--brand-200-rgb),0.8)] focus-within:bg-white dark:bg-white/5 dark:focus-within:border-[rgba(var(--brand-300-rgb),0.35)] dark:focus-within:bg-white/10">
@@ -784,6 +804,30 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
           ) : null}
         </div>
         <div className="min-w-0">{fieldNode}</div>
+      </div>
+    );
+  }
+
+  if (normalizedFieldType === FieldType.CHECKBOX) {
+    const checked = Boolean(rendererValue);
+    return (
+      <div className="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-transparent bg-gray-50 px-3 py-2 text-right transition hover:border-[rgba(var(--brand-200-rgb),0.7)] hover:bg-white dark:bg-white/5 dark:hover:border-[rgba(var(--brand-300-rgb),0.25)] dark:hover:bg-white/10">
+        <span className="min-w-0 flex-1">
+          {labelNode}
+          <span className="mt-1 block text-xs font-semibold text-gray-500 dark:text-gray-400">
+            {checked ? 'فعال' : 'غیرفعال'}
+          </span>
+        </span>
+        <Switch
+          checked={checked}
+          loading={saving}
+          checkedChildren="بله"
+          unCheckedChildren="خیر"
+          onChange={(nextChecked) => {
+            setDraftValue(nextChecked);
+            onSave(Boolean(nextChecked));
+          }}
+        />
       </div>
     );
   }
@@ -1285,15 +1329,63 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       && typeof currentRecurrence[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object'
       ? currentRecurrence[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]
       : {};
+    const currentFieldValues = customFields.reduce<Record<string, any>>((acc, field) => {
+      if (field.key) acc[field.key] = field.value;
+      return acc;
+    }, {});
+    const currentField = customFields.find((field) => field.key === fieldKey);
+    const oldValue = currentField?.value;
     const nextValues = {
       ...currentValues,
+      ...currentFieldValues,
       [fieldKey]: nextValue,
     };
     setCustomFields((current) => current.map((item) => (
       item.key === fieldKey ? { ...item, value: nextValue } : item
     )));
-    await persistTaskFieldPatch(fieldKey, {}, { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues });
-  }, [persistTaskFieldPatch, source?.recurrence_info]);
+    await persistTaskFieldPatch(
+      fieldKey,
+      {},
+      { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues },
+      { [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: nextValues, [fieldKey]: nextValue },
+    );
+    if (JSON.stringify(oldValue ?? null) !== JSON.stringify(nextValue ?? null)) {
+      void (async () => {
+        try {
+          const session = await fetchSessionBootstrap(supabase);
+          await insertRecordActivity({
+            supabase,
+            moduleId: 'tasks',
+            recordId: taskRecordId,
+            action: 'update',
+            fieldName: fieldKey,
+            fieldLabel: currentField?.label || fieldKey,
+            oldValue,
+            newValue: nextValue,
+            userId: session.user?.id || null,
+            recordTitle: taskNameValue || stage?.title || null,
+            metadata: {
+              source: 'process_v2_task_modal',
+              changeKind: 'process_task_custom_field',
+              fieldKey,
+              fieldLabel: currentField?.label || fieldKey,
+              fieldType: currentField?.type || FieldType.TEXT,
+              processTaskCustomField: currentField?.field || {
+                key: fieldKey,
+                type: currentField?.type || FieldType.TEXT,
+                labels: { fa: currentField?.label || fieldKey },
+                options: currentField?.options || [],
+              },
+              summary: `«${currentField?.label || fieldKey}» تغییر کرد`,
+            },
+          });
+          setChangelogCount((count) => count + 1);
+        } catch (error) {
+          console.warn('Process task custom field changelog failed:', error);
+        }
+      })();
+    }
+  }, [customFields, persistTaskFieldPatch, source?.recurrence_info, stage?.title, taskNameValue, taskRecordId]);
   const hasFiles = modalFiles.length > 0;
   const mainImageFile = useMemo(
     () => modalFiles.find((file) => file.fileType === 'image' && starredFileIds.has(file.id))
@@ -3173,6 +3265,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                           forceEditMode={isDraftActivityCreationMode}
                           requiredForCompletion={field.requiredForCompletion}
                           requiredForCreation={field.requiredForCreation}
+                          saving={savingFieldKey === field.key}
                           onSave={(nextValue) => {
                             if (isDraftActivityCreationMode) {
                               setCustomFields((current) => current.map((item) => (

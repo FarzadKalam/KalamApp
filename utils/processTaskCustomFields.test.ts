@@ -79,4 +79,35 @@ describe('getMissingRequiredProcessTaskCustomFields', () => {
     expect(creationField?.validation?.required).toBe(false);
     expect(creationField?.requiredForCreation).toBe(true);
   });
+
+  it('requires checked checkbox custom fields when completion is required', () => {
+    const baseTask = {
+      recurrence_info: {
+        process_task_custom_fields: [
+          {
+            key: 'approved',
+            type: FieldType.CHECKBOX,
+            labels: { fa: 'تایید شده' },
+            validation: { required: true },
+          },
+        ],
+      },
+    };
+
+    expect(getMissingRequiredProcessTaskCustomFields({
+      ...baseTask,
+      recurrence_info: {
+        ...baseTask.recurrence_info,
+        process_task_custom_field_values: { approved: false },
+      },
+    }).map((field) => field.key)).toEqual(['approved']);
+
+    expect(getMissingRequiredProcessTaskCustomFields({
+      ...baseTask,
+      recurrence_info: {
+        ...baseTask.recurrence_info,
+        process_task_custom_field_values: { approved: true },
+      },
+    })).toEqual([]);
+  });
 });

@@ -235,7 +235,7 @@ const hasProcessTaskCustomFieldValue = (field: ModuleField, value: unknown): boo
   }
 
   if (typeof value === 'boolean') {
-    return true;
+    return field.type === FieldType.CHECKBOX ? value === true : true;
   }
 
   if (field.type === FieldType.RELATION && typeof value === 'object') {

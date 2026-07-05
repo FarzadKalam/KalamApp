@@ -130,6 +130,31 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
     return moduleConfig?.fields?.find((field: any) => field.key === fieldKey) || null;
   };
 
+  const getCustomFieldDefFromMetadata = (metadata: any, fallbackKey?: string | null) => {
+    const rawField = metadata?.processTaskCustomField || metadata?.customField;
+    const fieldKey = String(rawField?.key || metadata?.fieldKey || fallbackKey || '').trim();
+    const fieldType = String(rawField?.type || metadata?.fieldType || '').trim();
+    const fieldLabel = String(rawField?.labels?.fa || rawField?.labelFa || metadata?.fieldLabel || fieldKey).trim();
+    if (!fieldKey || !fieldType) return null;
+    return {
+      ...(rawField && typeof rawField === 'object' ? rawField : {}),
+      key: fieldKey,
+      type: fieldType,
+      labels: {
+        ...(rawField?.labels || {}),
+        fa: fieldLabel || fieldKey,
+      },
+      options: Array.isArray(rawField?.options)
+        ? rawField.options
+        : (Array.isArray(metadata?.options) ? metadata.options : undefined),
+    };
+  };
+
+  const getLogFieldDef = (log: any) => {
+    const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
+    return getCustomFieldDefFromMetadata(metadata, log?.field_name) || getFieldDef(log?.field_name);
+  };
+
   const getTableDef = (blockId?: string) => (
     moduleConfig?.blocks?.find((block: any) => String(block?.id || '') === String(blockId || ''))
       || null
@@ -175,6 +200,9 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
 
   const formatChangeDisplayValue = (rawValue: unknown, fieldDef: any): string => {
     const value = parseMaybeJson(rawValue);
+    if (String(fieldDef?.type || '').trim() === 'checkbox') {
+      return value === true || String(value).toLowerCase() === 'true' ? 'بله' : 'خیر';
+    }
     return formatRecordDisplayValue(value, fieldDef, changeRelationValueMap, 'خالی');
   };
 
@@ -368,7 +396,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
           const metadata = log?.metadata && typeof log.metadata === 'object' ? log.metadata : {};
           const fieldDef = metadata?.columnKey
             ? getTableColumnDef(log.field_name, metadata.columnKey)
-            : getFieldDef(log.field_name);
+            : getLogFieldDef(log);
           if (fieldDef?.key) {
             directFields.push(fieldDef);
             directRows.push({ [fieldDef.key]: parseMaybeJson(log.old_value) });
@@ -418,7 +446,16 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
           .limit(100);
 
         if (error) throw error;
-        const rows = data || [];
+        const rows = (data || []).filter((row: any) => {
+          const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+          const summary = String(metadata?.summary || '').trim();
+          return !(
+            moduleId === 'tasks'
+            && String(row?.field_name || '').trim() === 'recurrence_info'
+            && String(metadata?.source || '').trim() === 'db_trigger'
+            && summary.includes('یکی از فیلدهای رکورد تغییر کرد')
+          );
+        });
         setItems(rows);
 
         const userIds = Array.from(new Set(rows.map((row: any) => row.user_id).filter(Boolean)));
@@ -952,7 +989,7 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
                     || log.field_label
                     || getActivityFieldLabel(moduleId, log.field_name, log.field_label)
                   , 'فیلد نامشخص');
-                  const fieldDef = columnDef || getFieldDef(log.field_name);
+                  const fieldDef = columnDef || getLogFieldDef(log);
                   const actor = log.user_name || authorNameMap[log.user_id] || 'سیستم';
                   const summary = sanitizeActivityText(
                     metadata?.summary

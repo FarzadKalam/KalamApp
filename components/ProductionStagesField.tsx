@@ -214,6 +214,8 @@ import {
   cloneProcessGraphInto,
   type ProcessGraphCloneResult,
 } from '../utils/processGraphCopy';
+import { syncProcessTemplateStages } from '../utils/processTemplateStages';
+import { insertRecordActivity } from '../utils/recordActivity';
 
 const InstructionQuickCreateModal = React.lazy(() => import('./instructions/InstructionQuickCreateModal'));
 const TaskHandoverModal = React.lazy(() => import('./production/TaskHandoverModal'));
@@ -6263,7 +6265,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     nextStages: any[],
     explicitProcessGraph?: ProcessGraphDefinition | null,
   ) => {
-    const persistedStages = isProcessModule
+    let persistedStages = isProcessModule
       ? (() => {
           const materialized = materializeLegacyProcessGraph(nextStages);
           return attachProcessGraphToStages(
@@ -6272,8 +6274,55 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           );
         })()
       : nextStages;
+    const previousStages = Array.isArray(draftLocalRef.current) ? draftLocalRef.current : [];
     draftLocalRef.current = persistedStages;
     setDraftLocal(persistedStages);
+    if (moduleId === 'process_templates' && recordId) {
+      try {
+        const refreshed = await syncProcessTemplateStages(supabase, String(recordId), persistedStages);
+        if (Array.isArray(refreshed)) {
+          persistedStages = refreshed;
+          draftLocalRef.current = refreshed;
+          setDraftLocal(refreshed);
+        }
+        const previousSignature = JSON.stringify(previousStages || []);
+        const nextSignature = JSON.stringify(persistedStages || []);
+        if (previousSignature !== nextSignature) {
+          void (async () => {
+            try {
+              const session = await fetchSessionBootstrap(supabase);
+              const changedStageNames = (persistedStages || [])
+                .map((stage: any) => String(stage?.name || stage?.stage_name || stage?.title || '').trim())
+                .filter(Boolean)
+                .slice(0, 3);
+              await insertRecordActivity({
+                supabase,
+                moduleId: 'process_templates',
+                recordId: String(recordId),
+                action: 'process_updated',
+                fieldName: 'template_stages_preview',
+                fieldLabel: 'مراحل الگو',
+                oldValue: null,
+                newValue: changedStageNames.join('، ') || 'مراحل فرآیند',
+                userId: session.user?.id || null,
+                recordTitle: null,
+                metadata: {
+                  source: 'process_v2_stage_editor',
+                  changeKind: 'process_v2_stage_saved',
+                  summary: 'تنظیمات مرحله‌های فرآیند به‌روزرسانی شد',
+                  stageCount: persistedStages.length,
+                },
+              });
+            } catch (error) {
+              console.warn('Process template stage changelog failed:', error);
+            }
+          })();
+        }
+      } catch (error: any) {
+        message.error(toFaErrorMessage(error, 'ذخیره مرحله‌های فرآیند ناموفق بود.'));
+        throw error;
+      }
+    }
     if (onDraftStagesChange) await onDraftStagesChange(persistedStages);
     if (moduleId === 'production_boms' && recordId) {
       await supabase.from('production_boms').update({ production_stages_draft: persistedStages }).eq('id', recordId);
@@ -7298,8 +7347,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       ...(existingStage || {}),
       id: existingStage?.id || Date.now(),
       name: stageName,
-      title: existingStage?.title || stageName,
-      stage_name: existingStage?.stage_name || stageName,
+      title: stageName,
+      stage_name: stageName,
       description: stageDescription,
       task_type: stageTaskType,
       sort_order: values.sort_order || existingStage?.sort_order || ((currentDraftCount + 1) * 10),
