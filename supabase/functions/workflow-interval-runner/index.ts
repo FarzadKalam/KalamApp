@@ -1511,6 +1511,7 @@ function getModuleTable(moduleId: string): string {
     overtimeRequests: 'overtime_requests', missionRequests: 'mission_requests',
     employeeAdvances: 'employee_advances', employeeBonusRequests: 'employee_bonus_requests',
     employeePenaltyRequests: 'employee_penalty_requests', employeeContracts: 'employee_contracts',
+    jobDescriptions: 'job_descriptions', jobDescription: 'job_descriptions',
     payrollSlips: 'payroll_slips', recruitmentApplicants: 'recruitment_applicants',
     processTemplates: 'process_templates', processRuns: 'process_runs',
     webForms: 'web_forms', secretariatDocuments: 'secretariat_documents',

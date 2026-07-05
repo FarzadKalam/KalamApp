@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App, Avatar, Button, Empty, Input, Popconfirm, Popover, Select, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ReloadOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, ReloadOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -108,10 +108,13 @@ interface AssistantPanelProps {
   initialCapabilities?: AiComposerCapability[] | null;
   initialRecordCreationTargetModuleId?: string | null;
   initialModelOverride?: string | null;
+  initialMediaSettings?: AiMediaSettings | null;
+  initialMediaSourceImages?: AiMediaSourceImage[] | null;
   initialFiles?: Array<(AiUploadedFilePrompt & { message?: string | null })> | null;
   initialFile?: (AiUploadedFilePrompt & { message?: string | null }) | null;
   autoSubmitInitialPrompt?: boolean;
   openCreateActivityFromMessage?: (input: any) => void | Promise<void>;
+  onForwardMessage?: (input: any) => void | Promise<void>;
   onThreadDeleted?: (threadId: string) => void;
   onThreadRenamed?: (threadId: string, title: string, thread?: any) => void;
 }
@@ -324,10 +327,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   initialCapabilities,
   initialRecordCreationTargetModuleId,
   initialModelOverride,
+  initialMediaSettings,
+  initialMediaSourceImages,
   initialFiles,
   initialFile,
   autoSubmitInitialPrompt = false,
   openCreateActivityFromMessage,
+  onForwardMessage,
   onThreadDeleted,
   onThreadRenamed,
 }) => {
@@ -376,9 +382,68 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
   const modelOverrideRef = useRef<string | null>(null);
+  const composerPreferencesRef = useRef<Record<string, any>>({});
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
   const normalizedInitialInputKind = String(initialInputKind || 'text').trim() || 'text';
+
+  const sanitizeMediaSourceImagesForPreferences = useCallback((items: AiMediaSourceImage[]) => (
+    (Array.isArray(items) ? items : [])
+      .slice(0, 4)
+      .map((item) => ({
+        data: String(item?.data || '').trim(),
+        mimeType: String(item?.mimeType || 'image/png').trim() || 'image/png',
+        filename: String(item?.filename || '').trim() || undefined,
+        previewUrl: String(item?.previewUrl || '').trim(),
+      }))
+      .filter((item) => item.data)
+  ), []);
+
+  const buildComposerPreferences = useCallback(() => ({
+    selectedCapabilities,
+    mediaSettings,
+    mediaSourceImages: sanitizeMediaSourceImagesForPreferences(mediaSourceImages),
+    recordCreationTargetModuleId,
+    processOperationMode,
+    modelOverrides,
+    currentModelOverride: modelOverrideRef.current || null,
+  }), [mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities]);
+
+  useEffect(() => {
+    composerPreferencesRef.current = buildComposerPreferences();
+  }, [buildComposerPreferences]);
+
+  const applyComposerPreferences = useCallback((raw: any, options: { preferCurrentInitial?: boolean } = {}) => {
+    const prefs = raw && typeof raw === 'object' ? raw : {};
+    if (Array.isArray(prefs.selectedCapabilities)) {
+      const nextCapabilities = normalizeInitialCapabilities(prefs.selectedCapabilities);
+      if (nextCapabilities.length || !options.preferCurrentInitial) {
+        setSelectedCapabilities(nextCapabilities);
+        setProcessOperationMode(nextCapabilities.includes('process_operation'));
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(prefs, 'processOperationMode') && !Array.isArray(prefs.selectedCapabilities)) {
+      setProcessOperationMode(prefs.processOperationMode === true);
+    }
+    if (prefs.mediaSettings && typeof prefs.mediaSettings === 'object') {
+      setMediaSettings(prefs.mediaSettings as AiMediaSettings);
+    }
+    if (Array.isArray(prefs.mediaSourceImages)) {
+      setMediaSourceImages(sanitizeMediaSourceImagesForPreferences(prefs.mediaSourceImages as AiMediaSourceImage[]));
+    }
+    if (Object.prototype.hasOwnProperty.call(prefs, 'recordCreationTargetModuleId')) {
+      setRecordCreationTargetModuleId(String(prefs.recordCreationTargetModuleId || '').trim() || null);
+    }
+    const loadedOverrides = prefs.modelOverrides && typeof prefs.modelOverrides === 'object'
+      ? Object.fromEntries(Object.entries(prefs.modelOverrides)
+        .map(([key, value]) => [String(key), String(value || '').trim()])
+        .filter(([, value]) => value))
+      : {};
+    if (prefs.modelOverrides && typeof prefs.modelOverrides === 'object') setModelOverrides(loadedOverrides);
+    if (Object.prototype.hasOwnProperty.call(prefs, 'currentModelOverride')) {
+      modelOverrideRef.current = String(prefs.currentModelOverride || '').trim() || null;
+    }
+  }, [sanitizeMediaSourceImagesForPreferences]);
 
   useEffect(() => {
     if (active) return undefined;
@@ -550,7 +615,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const activeRecordCreationSchema = recordCreationSchema || pendingRecordCreationSchema;
 
   const callAssistant = useCallback(async (body: Record<string, any>) => {
-    const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
+    const requestBody = {
+      ...body,
+      composerPreferences: body.composerPreferences ?? composerPreferencesRef.current,
+    };
+    const { data, error } = await supabase.functions.invoke('ai-assistant', { body: requestBody });
     if (error) throw error;
     if (!data?.success) {
       const nextError: any = new Error(String(data?.message || 'درخواست دستیار ناموفق بود.'));
@@ -571,6 +640,61 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       message?.error?.('کپی کردن متن ناموفق بود.');
     }
   }, [message]);
+
+  const forwardMessage = useCallback(async (input: any) => {
+    if (onForwardMessage) {
+      await onForwardMessage(input);
+      return;
+    }
+    const text = String(input?.content || '').trim();
+    if (!text) return;
+    try {
+      if (typeof navigator.share === 'function') {
+        await navigator.share({ title: 'پیام هوش مصنوعی', text });
+        return;
+      }
+      await copyText(text, 'متن فوروارد');
+    } catch {
+      await copyText(text, 'متن فوروارد');
+    }
+  }, [copyText, onForwardMessage]);
+
+  const createActivityFromMessage = useCallback(async (input: any) => {
+    if (openCreateActivityFromMessage) {
+      await openCreateActivityFromMessage(input);
+      return;
+    }
+    const content = String(input?.content || '').trim();
+    if (!content) return;
+    const relatedModuleId = context.mode === 'record' ? String(context.moduleId || '').trim() : '';
+    const relatedRecordId = context.mode === 'record' ? String(context.recordId || '').trim() : '';
+    if (!relatedModuleId || !relatedRecordId) {
+      message.info('برای ایجاد فعالیت، گفتگو باید روی صفحه یک رکورد باز باشد.');
+      return;
+    }
+    try {
+      const title = content.split(/\r?\n/).find((line) => line.trim())?.trim().slice(0, 90) || 'پیگیری پیام هوش مصنوعی';
+      const description = [
+        `منبع: ${input?.actorName || 'هوش مصنوعی'}`,
+        input?.createdAtLabel ? `زمان پیام: ${input.createdAtLabel}` : '',
+        '',
+        content,
+      ].filter(Boolean).join('\n');
+      const { error } = await supabase.from('tasks').insert({
+        name: title,
+        status: 'todo',
+        priority: 'medium',
+        task_type: 'فعالیت سازمانی',
+        related_to_module: relatedModuleId,
+        source_record_id: relatedRecordId,
+        description,
+      });
+      if (error) throw error;
+      message.success('فعالیت از روی پیام ساخته شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ایجاد فعالیت از روی پیام ناموفق بود.'));
+    }
+  }, [context.mode, context.moduleId, context.recordId, message, openCreateActivityFromMessage]);
 
   const stopActiveStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -598,7 +722,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ ...body, action: 'chat_stream' }),
+      body: JSON.stringify({ ...body, action: 'chat_stream', composerPreferences: body.composerPreferences ?? composerPreferencesRef.current }),
       signal: controller.signal,
     });
     if (!response.ok) {
@@ -947,8 +1071,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             return;
           }
           if (poll?.status === 'failed') {
+            const serverMessage = poll?.message && typeof poll.message === 'object' ? poll.message : null;
+            const failureContent = serverMessage
+              ? normalizeAiMessageText(serverMessage.content) || 'ساخت تصویر ناموفق بود.'
+              : String(poll?.message || poll?.diagnosticMessage || 'ساخت تصویر ناموفق بود.');
             setMessages((prev) => prev.map((m) => m.id === item.id
-              ? { ...m, content: String(poll?.message || 'ساخت تصویر ناموفق بود.'), metadata: { ...m.metadata, pending_status: false, failed: true } }
+              ? {
+                ...m,
+                id: String(serverMessage?.id || m.id),
+                content: failureContent,
+                provider: serverMessage?.provider || m.provider || null,
+                model: serverMessage?.model || m.model || null,
+                metadata: {
+                  ...(m.metadata || {}),
+                  ...(serverMessage?.metadata || {}),
+                  pending_status: false,
+                  failed: true,
+                },
+              }
               : m));
             return;
           }
@@ -1016,6 +1156,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setModelOverrides(Object.fromEntries(Object.entries(loadedOverrides)
         .map(([key, value]) => [String(key), String(value || '').trim()])
         .filter(([, value]) => value)));
+      const loadedComposerPreferences = data?.thread?.metadata?.composer_preferences && typeof data.thread.metadata.composer_preferences === 'object'
+        ? data.thread.metadata.composer_preferences
+        : null;
+      if (loadedComposerPreferences) applyComposerPreferences(loadedComposerPreferences);
       const nextMessages = (Array.isArray(data.messages) ? data.messages : [])
         .filter((item: any) => item?.role === 'user' || item?.role === 'assistant')
         .map((item: any) => ({
@@ -1033,7 +1177,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setLoadingThread(false);
     }
-  }, [active, callAssistant, message, threadId]);
+  }, [active, applyComposerPreferences, callAssistant, message, threadId]);
 
   const loadAiKnowledgeStatus = useCallback(async () => {
     setCheckingAiKnowledge(true);
@@ -1068,6 +1212,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setAutoSuggestedCapabilities([]);
     setRecordCreationTargetModuleId(String(initialRecordCreationTargetModuleId || '').trim() || null);
     setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
+    setMediaSettings(initialMediaSettings && typeof initialMediaSettings === 'object' ? initialMediaSettings : {});
+    setMediaSourceImages(sanitizeMediaSourceImagesForPreferences(Array.isArray(initialMediaSourceImages) ? initialMediaSourceImages : []));
     const seededFiles = (Array.isArray(initialFiles) ? initialFiles : [])
       .concat(initialFile?.fileName ? [initialFile] : [])
       .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
@@ -1081,7 +1227,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setModelOverrides({});
     autoSubmittedInitialPromptRef.current = '';
     autoSubmittedInitialBundleRef.current = '';
-  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialModelOverride, initialRecordCreationTargetModuleId, initialTitle, normalizedInitialThreadId]);
+  }, [active, contextKey, initialCapabilities, initialFile, initialFiles, initialMediaSettings, initialMediaSourceImages, initialModelOverride, initialRecordCreationTargetModuleId, initialTitle, normalizedInitialThreadId, sanitizeMediaSourceImagesForPreferences]);
 
   useEffect(() => {
     if (!active || !normalizedInitialThreadId) return;
@@ -2062,6 +2208,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const isStreaming = !isUser && item.metadata?.streaming === true;
     const isFailed = !isUser && (item.metadata?.failed === true || item.metadata?.incomplete === true);
     const isStopped = !isUser && item.metadata?.stopped === true;
+    const providerRaw = item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null;
+    const providerRawText = providerRaw
+      ? (typeof providerRaw === 'string' ? providerRaw : JSON.stringify(providerRaw, null, 2))
+      : '';
     return (
       <div key={item.id} className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
         {isUser ? (
@@ -2080,6 +2230,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               startedAtMs={Number(item.metadata?.started_at) || Date.now()}
               checking={recheckingId === item.id}
               failedNote={item.metadata?.failed_note || null}
+              providerRaw={item.metadata?.provider_raw_response || item.metadata?.provider_error_raw || item.metadata?.avalai_raw_response || null}
               onRecheck={() => recheckPending(item)}
               onDismiss={() => setMessages((prev) => prev.filter((m) => m.id !== item.id))}
               autoPoll={item.metadata?.manual_recheck_only !== true && item.metadata?.error !== 'image_generation_worker_timeout'}
@@ -2104,6 +2255,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} />
+            {!pendingKind && providerRawText ? (
+              <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
+                <summary className="cursor-pointer text-right font-semibold" dir="rtl">
+                  پاسخ خام سرویس‌دهنده
+                </summary>
+                <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+                  {providerRawText.slice(0, 4000)}
+                </pre>
+              </details>
+            ) : null}
             {!isUser && attachments.length === 1 && String(attachments[0]?.fileType || '').trim() === 'image' && String(attachments[0]?.url || '').trim() ? (
               <div className="mt-2 flex justify-end">
                 <Button size="small" type="primary" ghost onClick={() => handleEditImage(String(attachments[0]?.url || ''))}>
@@ -2118,26 +2279,47 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             {item.created_at ? <span>{toFaDateTime(item.created_at)}</span> : null}
             {!isUser && item.model ? <span>{item.model}</span> : null}
             {!isUser && usageText ? <span>{usageText}</span> : null}
-            {!isUser && messageText ? (
-              <Tooltip title="کپی کل پاسخ">
+            {messageText ? (
+              <Tooltip title={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}>
                 <Button
                   type="text"
                   size="small"
                   className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
                   icon={<CopyOutlined />}
-                  onClick={() => copyText(messageText, 'پاسخ')}
-                  aria-label="کپی کل پاسخ"
+                  onClick={() => copyText(messageText, isUser ? 'پیام' : 'پاسخ')}
+                  aria-label={isUser ? 'کپی پیام' : 'کپی کل پاسخ'}
                 />
               </Tooltip>
             ) : null}
-            {openCreateActivityFromMessage ? (
+            {messageText ? (
+              <Tooltip title="فوروارد">
+                <Button
+                  type="text"
+                  size="small"
+                  className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
+                  icon={<ForwardOutlined />}
+                  onClick={() => void forwardMessage({
+                    channel: 'assistant',
+                    actorName: isUser ? 'شما' : 'دستیار هوشمند',
+                    createdAt: item.created_at || null,
+                    createdAtLabel: item.created_at ? toFaDateTime(item.created_at) : '',
+                    content: messageText,
+                    attachments,
+                    relatedModuleId: context.mode === 'record' ? context.moduleId : null,
+                    relatedRecordId: context.mode === 'record' ? context.recordId : null,
+                  })}
+                  aria-label="فوروارد پیام"
+                />
+              </Tooltip>
+            ) : null}
+            {messageText ? (
               <Tooltip title="ایجاد فعالیت">
                 <Button
                   type="text"
                   size="small"
                   className="!h-5 !px-1 !text-gray-400 hover:!text-[rgb(var(--brand-700-rgb))]"
                   icon={<UserAddOutlined />}
-                  onClick={() => openCreateActivityFromMessage({
+                  onClick={() => void createActivityFromMessage({
                     channel: 'assistant',
                     actorName: isUser ? 'شما' : 'دستیار هوشمند',
                     createdAt: item.created_at || null,
@@ -2425,7 +2607,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             onModelOverrideChange={(model, capability) => {
               modelOverrideRef.current = model;
               const key = String(capability || '').trim();
-              if (key && model) setModelOverrides((prev) => ({ ...prev, [key]: model }));
+              if (key) {
+                setModelOverrides((prev) => {
+                  if (model) return { ...prev, [key]: model };
+                  const next = { ...prev };
+                  delete next[key];
+                  return next;
+                });
+              }
             }}
           />
         </div>

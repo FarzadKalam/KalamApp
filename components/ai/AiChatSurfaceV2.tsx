@@ -102,6 +102,16 @@ const AiChatSurfaceV2: React.FC = () => {
       ? routeState.aiInitialCapabilities.map((item: any) => String(item || '').trim()).filter(Boolean) as AiComposerCapability[]
       : null
   ), [routeState.aiInitialCapabilities]);
+  const initialMediaSettings = useMemo(() => (
+    routeState.aiInitialMediaSettings && typeof routeState.aiInitialMediaSettings === 'object'
+      ? routeState.aiInitialMediaSettings
+      : null
+  ), [routeState.aiInitialMediaSettings]);
+  const initialMediaSourceImages = useMemo(() => (
+    Array.isArray(routeState.aiInitialMediaSourceImages)
+      ? routeState.aiInitialMediaSourceImages.filter((item: any) => item && typeof item === 'object')
+      : []
+  ), [routeState.aiInitialMediaSourceImages]);
   const initialPanelKey = useMemo(() => JSON.stringify({
     prompt: initialPrompt,
     inputKind: routeState.aiInitialInputKind || null,
@@ -109,8 +119,10 @@ const AiChatSurfaceV2: React.FC = () => {
     recordCreationTarget: routeState.aiInitialRecordCreationTargetModuleId || null,
     fileCount: initialFiles.length,
     fileName: initialFile?.fileName || null,
+    mediaSettings: initialMediaSettings || {},
+    mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
-  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialPrompt, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -291,6 +303,8 @@ const AiChatSurfaceV2: React.FC = () => {
             initialCapabilities={initialCapabilities}
             initialRecordCreationTargetModuleId={String(routeState.aiInitialRecordCreationTargetModuleId || '').trim() || null}
             initialModelOverride={String(routeState.aiInitialModelOverride || '').trim() || null}
+            initialMediaSettings={initialMediaSettings as any}
+            initialMediaSourceImages={initialMediaSourceImages as any}
             initialFiles={initialFiles as any}
             initialFile={initialFile as any}
             autoSubmitInitialPrompt={autoSubmitInitial}

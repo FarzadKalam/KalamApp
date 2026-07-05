@@ -50,6 +50,7 @@ type AiGenerationStatusCardProps = {
   onRecheck: () => void | Promise<void>;
   checking?: boolean;
   failedNote?: string | null;
+  providerRaw?: any;
   onDismiss?: () => void;
   autoPoll?: boolean;
 };
@@ -60,6 +61,7 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
   onRecheck,
   checking = false,
   failedNote = null,
+  providerRaw = null,
   onDismiss,
   autoPoll = true,
 }) => {
@@ -90,6 +92,9 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
 
   const elapsed = now - startedAtMs;
   const canRecheck = elapsed >= RECHECK_ENABLE_MS && !checking;
+  const providerRawText = providerRaw
+    ? (typeof providerRaw === 'string' ? providerRaw : JSON.stringify(providerRaw, null, 2))
+    : '';
 
   return (
     <div className="w-full max-w-[320px] rounded-2xl border border-[rgba(var(--brand-200-rgb),0.7)] bg-[rgba(var(--brand-50-rgb),0.85)] p-3 dark:border-white/10 dark:bg-[rgba(var(--app-dark-surface-rgb),0.9)]">
@@ -108,6 +113,17 @@ const AiGenerationStatusCard: React.FC<AiGenerationStatusCardProps> = ({
 
       {failedNote ? (
         <div className="mt-2 text-[10px] leading-4 text-amber-700 dark:text-amber-400">{failedNote}</div>
+      ) : null}
+
+      {providerRawText ? (
+        <details className="mt-2 rounded-lg border border-amber-200/70 bg-white/60 p-2 text-left text-[10px] leading-4 text-gray-600 dark:border-amber-300/20 dark:bg-black/20 dark:text-gray-300" dir="ltr">
+          <summary className="cursor-pointer text-right font-semibold text-amber-700 dark:text-amber-300" dir="rtl">
+            پاسخ خام سرویس‌دهنده
+          </summary>
+          <pre className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono">
+            {providerRawText.slice(0, 4000)}
+          </pre>
+        </details>
       ) : null}
 
       <div className="mt-2 flex items-center justify-end gap-1">

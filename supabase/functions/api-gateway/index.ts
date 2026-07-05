@@ -41,7 +41,7 @@ const PLAN_MODULES: Record<string, string[]> = {
     'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
     'overtime_requests', 'mission_requests', 'employee_advances',
     'employee_bonus_requests', 'employee_penalty_requests',
-    'employee_contracts', 'payroll_slips', 'recruitment_applicants',
+    'employee_contracts', 'job_descriptions', 'payroll_slips', 'recruitment_applicants',
   ],
   enterprise: [
     // همه ماژول‌های professional +
@@ -55,7 +55,7 @@ const PLAN_MODULES: Record<string, string[]> = {
     'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
     'overtime_requests', 'mission_requests', 'employee_advances',
     'employee_bonus_requests', 'employee_penalty_requests',
-    'employee_contracts', 'payroll_slips', 'recruitment_applicants',
+    'employee_contracts', 'job_descriptions', 'payroll_slips', 'recruitment_applicants',
     // فرآیند و تولید
     'projects', 'process_templates', 'process_runs', 'web_forms', 'surveys',
     'secretariat_documents', 'production_orders', 'production_boms',

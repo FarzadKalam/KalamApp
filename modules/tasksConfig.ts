@@ -70,6 +70,7 @@ export const tasksModule: ModuleDefinition = {
         { label: 'مساعده‌ها', value: 'employee_advances' },
         { label: 'فیش‌های حقوقی', value: 'payroll_slips' },
         { label: 'قراردادهای کارکنان', value: 'employee_contracts' },
+        { label: 'کارکنان', value: 'employees' },
         { label: 'متقاضیان استخدام', value: 'recruitment_applicants' },
         { label: 'شرح شغل‌ها', value: 'job_descriptions' },
       ],

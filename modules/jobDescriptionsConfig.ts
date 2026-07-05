@@ -5,8 +5,17 @@ import {
   FieldType,
   ModuleDefinition,
   ModuleNature,
+  type SelectOption,
   ViewMode,
 } from '../types';
+
+const jobDescriptionAiIndexStatusOptions: SelectOption[] = [
+  { label: 'آماده نشده', value: 'not_built', color: 'default' },
+  { label: 'نیازمند بازسازی', value: 'stale', color: 'gold' },
+  { label: 'آماده', value: 'ready', color: 'green' },
+  { label: 'خطا', value: 'failed', color: 'red' },
+  { label: 'غیرفعال', value: 'skipped', color: 'default' },
+];
 
 const JOB_DESCRIPTION_FIELD_KEYS = [
   'job_goal',
@@ -41,6 +50,8 @@ export const jobDescriptionsModule: ModuleDefinition = {
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0.8, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان شرح شغل', en: 'Job Description Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'کد سیستمی', en: 'System Code' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.1, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
+    { key: 'use_for_ai', labels: { fa: 'در اختیار هوش مصنوعی', en: 'Use For AI' }, type: FieldType.CHECKBOX, location: FieldLocation.HEADER, order: 1.2, defaultValue: false, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'ai_index_status', labels: { fa: 'وضعیت آماده‌سازی هوش مصنوعی', en: 'AI Index Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 1.3, options: jobDescriptionAiIndexStatusOptions, defaultValue: 'not_built', readonly: true, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'job_goal', labels: { fa: 'هدف', en: 'Goal' }, type: FieldType.LONG_TEXT, blockId: 'job_description_info', order: 10 },
     { key: 'job_responsibilities', labels: { fa: 'مسئولیت ها', en: 'Responsibilities' }, type: FieldType.SUPER_LONG_TEXT, blockId: 'job_description_info', order: 10.1 },
     { key: 'job_duties', labels: { fa: 'شرح وظایف', en: 'Duties' }, type: FieldType.SUPER_LONG_TEXT, blockId: 'job_description_info', order: 10.2 },
@@ -52,6 +63,8 @@ export const jobDescriptionsModule: ModuleDefinition = {
     { key: 'role_relationships', labels: { fa: 'ارتباط با سایر نقش ها', en: 'Role Relationships' }, type: FieldType.LONG_TEXT, blockId: 'job_description_info', order: 10.8 },
     { key: 'salary_calculation_notes', labels: { fa: 'محاسبه حقوق', en: 'Salary Calculation' }, type: FieldType.SUPER_LONG_TEXT, blockId: 'job_description_info', order: 10.9 },
     { key: 'job_description_notes', labels: { fa: 'توضیحات تکمیلی', en: 'Additional Notes' }, type: FieldType.LONG_TEXT, blockId: 'job_description_info', order: 11 },
+    { key: 'ai_index_updated_at', labels: { fa: 'آخرین بازسازی برای هوش مصنوعی', en: 'AI Rebuilt At' }, type: FieldType.DATETIME, blockId: 'ai_context', order: 1, readonly: true, nature: FieldNature.STANDARD },
+    { key: 'ai_index_error', labels: { fa: 'خطای آماده‌سازی هوش مصنوعی', en: 'AI Index Error' }, type: FieldType.LONG_TEXT, blockId: 'ai_context', order: 2, readonly: true, nature: FieldNature.STANDARD },
     { key: 'created_at', labels: { fa: 'زمان ایجاد', en: 'Created At' }, type: FieldType.DATETIME, blockId: 'system_info', order: 90, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'created_by', labels: { fa: 'ایجاد کننده', en: 'Created By' }, type: FieldType.USER, blockId: 'system_info', order: 90.1, readonly: true, nature: FieldNature.SYSTEM },
     { key: 'updated_at', labels: { fa: 'زمان ویرایش', en: 'Updated At' }, type: FieldType.DATETIME, blockId: 'system_info', order: 90.2, readonly: true, nature: FieldNature.SYSTEM },
@@ -59,7 +72,18 @@ export const jobDescriptionsModule: ModuleDefinition = {
   ],
   blocks: [
     { id: 'job_description_info', titles: { fa: 'شرح شغل', en: 'Job Description' }, type: BlockType.FIELD_GROUP, order: 1 },
+    { id: 'ai_context', titles: { fa: 'آماده‌سازی برای هوش مصنوعی', en: 'AI Context' }, type: BlockType.FIELD_GROUP, order: 2 },
     { id: 'system_info', titles: { fa: 'اطلاعات سیستمی', en: 'System Info' }, type: BlockType.FIELD_GROUP, order: 99 },
+  ],
+  recordActions: [
+    {
+      id: 'rebuild_job_description_ai_context',
+      label: 'بازسازی برای هوش مصنوعی',
+      placement: 'header',
+      variant: 'default',
+      confirmTitle: 'این شرح شغل برای هوش مصنوعی بازسازی شود؟',
+      confirmDescription: 'اطلاعات فعلی شرح شغل به بخش‌های قابل جستجوی هوشمند تبدیل می‌شود و فقط در همین سازمان استفاده خواهد شد.',
+    },
   ],
   relatedTabs: [
     {

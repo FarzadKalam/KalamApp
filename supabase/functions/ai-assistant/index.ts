@@ -34,6 +34,7 @@ type AssistantAction =
   | 'run_task_bundle'
   | 'embed_document_chunks'
   | 'rebuild_instruction_ai_context'
+  | 'rebuild_job_description_ai_context'
   | 'saas_ai';
 
 type RequestContext = {
@@ -72,6 +73,7 @@ const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
 const IMAGE_PROVIDER_TIMEOUT_MS = 120000;
 const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
 const IMAGE_STATUS_STALE_MS = 180000;
+const IMAGE_STATUS_HARD_TIMEOUT_MS = 1800000;
 const IMAGE_STATUS_WARN_MS = 60000;
 const IMAGE_PROMPT_MAX_CHARS = 4000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
@@ -184,6 +186,8 @@ const ALLOWED_MODULES = new Set([
   'employeeBonusRequests',
   'employeePenaltyRequests',
   'employeeContracts',
+  'jobDescriptions',
+  'jobDescription',
   'payrollSlips',
   'recruitmentApplicants',
   'processTemplates',
@@ -221,6 +225,7 @@ const ALLOWED_MODULES = new Set([
   'barters',
   'cash_bank_operations',
   'employees',
+  'job_descriptions',
   'attendance_logs',
   'work_schedules',
   'leave_requests',
@@ -269,6 +274,8 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   employeeBonusRequests: 'employee_bonus_requests',
   employeePenaltyRequests: 'employee_penalty_requests',
   employeeContracts: 'employee_contracts',
+  jobDescriptions: 'job_descriptions',
+  jobDescription: 'job_descriptions',
   payrollSlips: 'payroll_slips',
   recruitmentApplicants: 'recruitment_applicants',
   processTemplates: 'process_templates',
@@ -281,6 +288,7 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   cash_bank_operations: 'cash_bank_operations',
   expense_documents: 'expense_documents',
   employee_advances: 'employee_advances',
+  job_descriptions: 'job_descriptions',
   leave_requests: 'leave_requests',
   overtime_requests: 'overtime_requests',
   mission_requests: 'mission_requests',
@@ -316,6 +324,7 @@ const MODULE_ALIASES: Record<string, string[]> = {
   cheques: ['چک', 'cheque', 'check', 'چک‌ها', 'اسناد'],
   barters: ['تهاتر', 'barter'],
   employees: ['کارمند', 'کارکنان', 'منابع انسانی', 'employee', 'employees', 'پرسنل', 'نیروی انسانی', 'نیرو', 'کارمندم'],
+  job_descriptions: ['شرح شغل', 'شرح شغل‌ها', 'شرح شغلی', 'شناسنامه شغل', 'job description', 'job descriptions', 'job role', 'نقش شغلی'],
   journal_entries: ['سند حسابداری', 'journal', 'journal entry', 'اسناد حسابداری', 'سند مالی'],
   // Warehouse / inventory
   warehouses: ['انبار', 'انبارها', 'warehouse', 'warehouses', 'موجودی انبار', 'انبارم'],
@@ -349,6 +358,7 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   cheques: ['name', 'description', 'system_code', 'cheque_number'],
   barters: ['name', 'description', 'system_code'],
   employees: ['full_name', 'name', 'mobile_1', 'mobile', 'employee_code'],
+  job_descriptions: ['name', 'system_code', 'job_goal', 'job_responsibilities', 'job_duties', 'job_requirements'],
   price_lists: ['name', 'title', 'description', 'system_code'],
   product_bundles: ['name', 'title', 'description', 'system_code'],
   warehouses: ['name', 'title', 'system_code', 'description'],
@@ -440,6 +450,28 @@ const parseJsonSafe = (raw: string) => {
     return raw ? JSON.parse(raw) : null;
   } catch {
     return raw;
+  }
+};
+
+const compactProviderRaw = (raw: any, maxLength = 4000) => {
+  if (raw == null) return null;
+  try {
+    const text = typeof raw === 'string'
+      ? raw
+      : JSON.stringify(raw, (key, value) => {
+        if (typeof value === 'string') {
+          const lowerKey = String(key || '').toLowerCase();
+          if ((lowerKey.includes('b64') || lowerKey.includes('base64') || lowerKey === 'data') && value.length > 120) {
+            return `[base64 omitted: ${value.length} chars]`;
+          }
+          if (value.length > 1200) return `${value.slice(0, 1200)}…`;
+        }
+        return value;
+      }, 2);
+    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
+  } catch {
+    const text = String(raw || '');
+    return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
   }
 };
 
@@ -887,6 +919,16 @@ const canRebuildInstructionAiContext = (authContext: any) => {
   return perm?.view !== false
     && perm?.edit !== false
     && fields?.__action_rebuild_instruction_ai_context !== false;
+};
+
+const canRebuildJobDescriptionAiContext = (authContext: any) => {
+  const permissions = authContext?.permissions;
+  if (!permissions || typeof permissions !== 'object') return true;
+  const perm = permissions?.job_descriptions || {};
+  const fields = perm?.fields || {};
+  return perm?.view !== false
+    && perm?.edit !== false
+    && fields?.__action_rebuild_job_description_ai_context !== false;
 };
 
 const canViewSaasAdmin = (authContext: any) => {
@@ -1409,6 +1451,14 @@ const buildRelatedContexts = async (
     await push('process_runs', { project_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فرآیندها و مراحل پروژه');
     await push('invoices', { project_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فاکتورهای فروش پروژه');
     await push('purchase_invoices', { project_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فاکتورهای خرید پروژه');
+  }
+
+  if (moduleId === 'employees' && recordId) {
+    const profileId = normalizeId(record?.assignee_id);
+    const jobDescriptionId = normalizeId(record?.job_description_id);
+    if (jobDescriptionId) await push('job_descriptions', { id: `eq.${jobDescriptionId}` }, 'شرح شغل انتخاب‌شده کارمند');
+    if (profileId) await push('tasks', { assignee_id: `eq.${profileId}`, order: 'updated_at.desc' }, 'فعالیت‌های ارجاع‌شده به کارمند');
+    await push('tasks', { related_to_module: 'eq.employees', source_record_id: `eq.${recordId}`, order: 'updated_at.desc' }, 'فعالیت‌های مرتبط با پرونده کارمند');
   }
 
   if (moduleId === 'tasks') {
@@ -1986,13 +2036,17 @@ const isOperationalInstructionChunk = (row: any) =>
   String(row?.source_kind || row?.metadata?.source_kind || '').trim() === 'instruction'
   || String(row?.metadata?.document_type || '').trim() === 'module_instruction';
 
+const isJobDescriptionChunk = (row: any) =>
+  String(row?.source_kind || row?.metadata?.source_kind || '').trim() === 'job_description'
+  || String(row?.source_module_id || row?.metadata?.source_module_id || '').trim() === 'job_descriptions'
+  || String(row?.metadata?.document_type || '').trim() === 'job_description';
+
 const isChunkRelevantToModule = (row: any, moduleId?: string | null) => {
-  if (!isOperationalInstructionChunk(row)) return true;
   const normalizedModuleId = String(moduleId || '').trim();
   if (!normalizedModuleId) return true;
   const targets = Array.isArray(row?.source_target_module_ids)
     ? row.source_target_module_ids
-    : Array.isArray(row?.metadata?.module_ids)
+    : isOperationalInstructionChunk(row) && Array.isArray(row?.metadata?.module_ids)
     ? row.metadata.module_ids
     : [];
   const normalizedTargets = targets.map((item: any) => String(item || '').trim()).filter(Boolean);
@@ -2048,6 +2102,40 @@ const filterFreshOperationalInstructionChunks = async (
   });
 };
 
+const filterFreshJobDescriptionChunks = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  rows: any[],
+) => {
+  const jobDescriptionIds = Array.from(new Set(
+    (rows || [])
+      .filter(isJobDescriptionChunk)
+      .map((row: any) => normalizeId(row?.source_record_id || row?.metadata?.source_record_id))
+      .filter(isUuid)
+  ));
+  if (jobDescriptionIds.length === 0) return rows;
+  const perm = getModulePermission(authContext?.permissions, 'job_descriptions');
+  if (!canViewModule(perm)) return (rows || []).filter((row: any) => !isJobDescriptionChunk(row));
+  const recordScope = getRecordScope(perm);
+  const jobRows = await restSelect(supabaseUrl, serviceRoleKey, 'job_descriptions', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `in.(${jobDescriptionIds.join(',')})`,
+    select: 'id,org_id,use_for_ai,ai_index_status,assignee_id,assignee_type,assignee_role_id',
+    limit: 80,
+  }).catch(() => []);
+  const jobById = new Map(jobRows.map((item: any) => [String(item?.id || ''), item]));
+  return (rows || []).filter((row: any) => {
+    if (!isJobDescriptionChunk(row)) return true;
+    const sourceRecordId = normalizeId(row?.source_record_id || row?.metadata?.source_record_id);
+    const jobDescription = jobById.get(sourceRecordId);
+    if (!jobDescription) return false;
+    if (jobDescription?.use_for_ai !== true) return false;
+    if (String(jobDescription?.ai_index_status || '').trim() !== 'ready') return false;
+    return canAccessAssignedRecord(jobDescription, authContext, recordScope);
+  });
+};
+
 const fetchKnowledgeChunks = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -2078,6 +2166,7 @@ const fetchKnowledgeChunks = async (
     return (!!userId && allowedUserIds.includes(userId)) || (!!roleId && allowedRoleIds.includes(roleId));
   }).filter((row: any) => isChunkRelevantToModule(row, moduleId));
   visibleRows = await filterFreshOperationalInstructionChunks(supabaseUrl, serviceRoleKey, authContext, visibleRows, moduleId);
+  visibleRows = await filterFreshJobDescriptionChunks(supabaseUrl, serviceRoleKey, authContext, visibleRows);
   const instructionRows = instructionRowsFor(visibleRows);
   const queryText = String(query || '').trim();
   if (queryText) {
@@ -2109,7 +2198,8 @@ const fetchKnowledgeChunks = async (
           });
         }
         const freshVectorRows = await filterFreshOperationalInstructionChunks(supabaseUrl, serviceRoleKey, authContext, vectorRows || [], moduleId);
-        const filteredVectorRows = freshVectorRows
+        const freshAccessibleVectorRows = await filterFreshJobDescriptionChunks(supabaseUrl, serviceRoleKey, authContext, freshVectorRows || []);
+        const filteredVectorRows = freshAccessibleVectorRows
           .filter((row: any) => isChunkRelevantToModule(row, moduleId))
           .filter((row: any) => Number(row?.similarity || 0) >= (isOperationalInstructionChunk(row) ? INSTRUCTION_MATCH_THRESHOLD : KNOWLEDGE_MATCH_THRESHOLD))
           .filter((row: any) => !instructionRows.some((item: any) => String(item.id) === String(row.id)))
@@ -3488,7 +3578,11 @@ const callImageGeneration = async (
           await sleep(1200);
           continue;
         }
-        throw new Error(lastFailure);
+        const error: any = new Error(lastFailure);
+        error.providerRawResponse = parsed;
+        error.providerStatus = response.status;
+        error.providerRequestId = requestId;
+        throw error;
       }
       const extracted = extractImagePayload(parsed);
       if (!extracted.imageBase64 && !extracted.imageUrl) {
@@ -3497,7 +3591,10 @@ const callImageGeneration = async (
           await sleep(800);
           continue;
         }
-        throw new Error(lastFailure);
+        const error: any = new Error(lastFailure);
+        error.providerRawResponse = parsed;
+        error.providerRequestId = requestId;
+        throw error;
       }
       return {
         imageBase64: extracted.imageBase64,
@@ -3542,7 +3639,11 @@ const callImageGeneration = async (
         await sleep(1200);
         continue;
       }
-      throw new Error(lastFailure);
+      const error: any = new Error(lastFailure);
+      error.providerRawResponse = parsed;
+      error.providerStatus = response.status;
+      error.providerRequestId = requestId;
+      throw error;
     }
     const extracted = extractImagePayload(parsed);
     if (!extracted.imageBase64 && !extracted.imageUrl) {
@@ -3551,7 +3652,10 @@ const callImageGeneration = async (
         await sleep(800);
         continue;
       }
-      throw new Error(lastFailure);
+      const error: any = new Error(lastFailure);
+      error.providerRawResponse = parsed;
+      error.providerRequestId = requestId;
+      throw error;
     }
     return {
       imageBase64: extracted.imageBase64,
@@ -4632,6 +4736,47 @@ const buildThreadModelOverrides = (thread: any, capability: string, model: strin
   };
 };
 
+const buildThreadComposerPreferences = (body: any, thread: any = null) => {
+  const existing = thread?.metadata?.composer_preferences && typeof thread.metadata.composer_preferences === 'object'
+    ? thread.metadata.composer_preferences
+    : {};
+  const incoming = body?.composerPreferences && typeof body.composerPreferences === 'object'
+    ? body.composerPreferences
+    : {};
+  const selectedCapabilities = Array.isArray(incoming.selectedCapabilities)
+    ? Array.from(new Set(incoming.selectedCapabilities.map((item: any) => String(item || '').trim()).filter(Boolean))).slice(0, 12)
+    : Array.isArray(body?.capabilities)
+    ? Array.from(new Set(body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean))).slice(0, 12)
+    : existing.selectedCapabilities || [];
+  const mediaSettings = incoming.mediaSettings && typeof incoming.mediaSettings === 'object'
+    ? incoming.mediaSettings
+    : body?.settings && typeof body.settings === 'object'
+    ? body.settings
+    : existing.mediaSettings || {};
+  const modelOverrides = incoming.modelOverrides && typeof incoming.modelOverrides === 'object'
+    ? incoming.modelOverrides
+    : existing.modelOverrides || {};
+  const hasIncomingRecordCreationTarget = Object.prototype.hasOwnProperty.call(incoming, 'recordCreationTargetModuleId');
+  const recordCreationTargetModuleId = hasIncomingRecordCreationTarget
+    ? String(incoming.recordCreationTargetModuleId || '').trim() || null
+    : String(body?.recordCreation?.moduleId || existing.recordCreationTargetModuleId || '').trim() || null;
+  const hasIncomingCurrentModelOverride = Object.prototype.hasOwnProperty.call(incoming, 'currentModelOverride');
+  const currentModelOverride = hasIncomingCurrentModelOverride
+    ? String(incoming.currentModelOverride || '').trim() || null
+    : String(body?.modelOverride || existing.currentModelOverride || '').trim() || null;
+  return {
+    selectedCapabilities,
+    mediaSettings,
+    recordCreationTargetModuleId,
+    processOperationMode: Object.prototype.hasOwnProperty.call(incoming, 'processOperationMode')
+      ? incoming.processOperationMode === true
+      : existing.processOperationMode === true,
+    modelOverrides,
+    currentModelOverride,
+    updated_at: new Date().toISOString(),
+  };
+};
+
 const patchChatThreadAfterAssistant = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -4661,6 +4806,7 @@ const patchChatThreadAfterAssistant = async (
       intent: prepared.pageContext.intent || prepared.pageContext.context?.intent || null,
       selected_process_id: prepared.pageContext.selectedProcessId || prepared.pageContext.context?.selectedProcessId || prepared.pageContext.context?.selectedProcessGroupId || null,
       model_overrides: buildThreadModelOverrides(prepared.thread, prepared.capability, aiResult?.model || prepared.providerConfig.model, prepared.body?.modelOverride),
+      composer_preferences: buildThreadComposerPreferences(prepared.body, prepared.thread),
       last_activity_kind: failed ? `${inputKind}_failed` : inputKind,
       last_message_preview: failed ? String(options.failedContent || '').slice(0, 300) : prepared.message.slice(0, 300),
     },
@@ -6235,6 +6381,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         task_bundle_context: taskContext,
         last_activity_kind: 'task_bundle',
         last_message_preview: (baseMessage || analysisText || 'باندل هوش مصنوعی').slice(0, 300),
+        composer_preferences: buildThreadComposerPreferences(body, threadForPatch),
       },
       updated_at: new Date().toISOString(),
     }).catch(() => []);
@@ -7249,6 +7396,7 @@ const handleGenerateVoiceOutput = async (supabaseUrl: string, serviceRoleKey: st
       last_file_asset_id: fileManagerResult?.asset?.id || null,
       last_file_entry_id: fileManagerResult?.entry?.id || null,
       ai_files_folder_id: fileManagerResult?.folder?.id || null,
+      composer_preferences: buildThreadComposerPreferences(body, thread),
     },
   });
   return json(200, {
@@ -7412,6 +7560,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       last_activity_kind: 'image_generation_pending',
       last_message_preview: prompt.slice(0, 300),
       pending_message_id: assistantMessage?.id || null,
+      composer_preferences: buildThreadComposerPreferences(body, thread),
     },
   }).catch(() => []);
 
@@ -7487,6 +7636,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           image: finalImage,
           usage: withCustomerBilling(imageResult.usageMetadata, ledger),
           avalai_request_id: imageResult.requestId || null,
+          provider_raw_response: compactProviderRaw(imageResult.raw),
         },
       }).catch(() => []);
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
@@ -7511,10 +7661,12 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           last_file_asset_id: fileManagerResult?.asset?.id || null,
           last_file_entry_id: fileManagerResult?.entry?.id || null,
           ai_files_folder_id: fileManagerResult?.folder?.id || null,
+          composer_preferences: buildThreadComposerPreferences(body, thread),
         },
       }).catch(() => []);
     } catch (error: any) {
       const rawFailure = shortenProviderError(String(error?.message || error || 'image_generation_failed'));
+      const providerRawFailure = compactProviderRaw(error?.providerRawResponse || error?.providerRaw || error?.raw || null);
       const failureMessage = `ساخت تصویر ناموفق بود. سرویس هوش مصنوعی در زمان مناسب پاسخ نداد یا خطا داد. چند لحظه بعد دوباره تلاش کنید.${rawFailure ? `\nجزئیات: ${rawFailure}` : ''}`;
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
         id: `eq.${assistantMessage?.id}`,
@@ -7541,6 +7693,9 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           },
           error: rawFailure || 'image_generation_failed',
           failed_note: failureMessage,
+          provider_status: error?.providerStatus || null,
+          avalai_request_id: error?.providerRequestId || null,
+          provider_error_raw: providerRawFailure || rawFailure,
         },
       }).catch(() => []);
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
@@ -7561,6 +7716,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           record_id: pageContext.recordId || null,
           last_activity_kind: 'image_generation_failed',
           last_message_preview: failureMessage.slice(0, 300),
+          composer_preferences: buildThreadComposerPreferences(body, thread),
         },
       }).catch(() => []);
     }
@@ -7594,6 +7750,50 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
   const recoverableTimedOutImage = metadata?.error === 'image_generation_worker_timeout'
     && String(metadata?.background_task?.status || '').trim() === 'running';
   if (recoverableTimedOutImage) {
+    const restoredStartedAt = Number(metadata.started_at || 0);
+    const restoredElapsedMs = restoredStartedAt ? Date.now() - restoredStartedAt : 0;
+    if (restoredStartedAt && restoredElapsedMs > IMAGE_STATUS_HARD_TIMEOUT_MS) {
+      const hardFailedMessage = [
+        'ساخت تصویر بیشتر از سقف قابل پیگیری طول کشیده و دیگر به‌عنوان درخواست در حال اجرا نگه داشته نمی‌شود.',
+        'پاسخ نهایی از سرویس AvalAI یا مرحله ذخیره‌سازی به سامانه نرسیده است؛ اگر هزینه‌ای در پنل سرویس‌دهنده ثبت شده، با request id زیر قابل پیگیری است.',
+        `مدل: ${String(metadata?.background_task?.model || msg.model || 'نامشخص')}`,
+        'وضعیت ثبت‌شده پردازش: running',
+        metadata?.avalai_request_id ? `Request ID: ${String(metadata.avalai_request_id)}` : '',
+      ].filter(Boolean).join('\n');
+      const failedMetadata = {
+        ...metadata,
+        pending_status: false,
+        status: 'failed',
+        delayed: false,
+        failed: true,
+        failed_note: hardFailedMessage,
+        manual_recheck_only: false,
+        error: 'image_generation_hard_timeout',
+        provider_error_raw: metadata.provider_error_raw || metadata.provider_raw_response || hardFailedMessage,
+        background_task: {
+          ...(metadata.background_task || {}),
+          status: 'failed',
+          failed_at: new Date().toISOString(),
+          timeout_ms: restoredElapsedMs,
+        },
+      };
+      const updatedMessage = { ...msg, content: hardFailedMessage, metadata: failedMetadata };
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${messageId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        content: hardFailedMessage,
+        metadata: failedMetadata,
+      }).catch(() => []);
+      return json(200, {
+        success: true,
+        status: 'failed',
+        diagnosticMessage: hardFailedMessage,
+        messageId,
+        threadId: msg.thread_id,
+        message: updatedMessage,
+      });
+    }
     const restoredMessage = [
       'این درخواست قبلاً به‌خاطر طولانی شدن از حالت انتظار خارج شده بود، اما پردازش آن هنوز قابل بررسی است.',
       'چند لحظه بعد دوباره «بررسی مجدد» را بزنید؛ اگر خروجی آماده شده باشد، همین کارت به نتیجه نهایی تبدیل می‌شود.',
@@ -7609,6 +7809,7 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
       failed_note: restoredMessage,
       manual_recheck_only: true,
       error: 'image_generation_delayed',
+      provider_error_raw: metadata.provider_error_raw || metadata.provider_raw_response || null,
       background_task: {
         ...(metadata.background_task || {}),
         status: 'running',
@@ -7639,6 +7840,7 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
       ? metadata.background_task
       : {};
     const backgroundStatus = String(backgroundTask.status || '').trim();
+    const providerRawResponse = metadata.provider_raw_response || metadata.provider_error_raw || null;
     const buildDiagnosticMessage = () => {
       if (backgroundStatus === 'queued') {
         return 'ساخت تصویر هنوز توسط پردازش پس‌زمینه شروع نشده است. اگر این وضعیت ادامه پیدا کند، احتمالاً worker سرور بعد از ثبت درخواست اجرا نشده یا متوقف شده است.';
@@ -7648,6 +7850,49 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
       }
       return 'ساخت تصویر هنوز کامل نشده است. اگر این وضعیت طولانی شود، احتمالاً سرویس تصویر پاسخ نداده یا پردازش پس‌زمینه کامل نشده است.';
     };
+    if (startedAt && elapsedMs > IMAGE_STATUS_HARD_TIMEOUT_MS) {
+      const hardFailedMessage = [
+        'ساخت تصویر بیشتر از سقف قابل پیگیری طول کشیده و درخواست در حالت انتظار بسته شد.',
+        buildDiagnosticMessage(),
+        'پاسخ نهایی از AvalAI یا مرحله ذخیره‌سازی به سامانه نرسیده است. اگر request id ثبت شده باشد، می‌توانید آن را در پنل سرویس‌دهنده پیگیری کنید.',
+        `مدل: ${String(backgroundTask.model || msg.model || 'نامشخص')}`,
+        `وضعیت ثبت‌شده پردازش: ${backgroundStatus || 'نامشخص'}`,
+        metadata?.avalai_request_id ? `Request ID: ${String(metadata.avalai_request_id)}` : '',
+      ].filter(Boolean).join('\n');
+      const failedMetadata = {
+        ...metadata,
+        pending_status: false,
+        status: 'failed',
+        delayed: false,
+        failed: true,
+        failed_note: hardFailedMessage,
+        manual_recheck_only: false,
+        error: 'image_generation_hard_timeout',
+        provider_error_raw: providerRawResponse || hardFailedMessage,
+        background_task: {
+          ...backgroundTask,
+          status: 'failed',
+          failed_at: new Date().toISOString(),
+          timeout_ms: elapsedMs,
+        },
+      };
+      const updatedMessage = { ...msg, content: hardFailedMessage, metadata: failedMetadata };
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_messages', {
+        id: `eq.${messageId}`,
+        org_id: `eq.${authContext.orgId}`,
+      }, {
+        content: hardFailedMessage,
+        metadata: failedMetadata,
+      }).catch(() => []);
+      return json(200, {
+        success: true,
+        status: 'failed',
+        diagnosticMessage: hardFailedMessage,
+        messageId,
+        threadId: msg.thread_id,
+        message: updatedMessage,
+      });
+    }
     if (startedAt && elapsedMs > IMAGE_STATUS_STALE_MS) {
       const delayedMessage = [
         'ساخت تصویر بیشتر از زمان معمول طول کشیده، اما درخواست حذف نشده و هنوز قابل بررسی است.',
@@ -7670,6 +7915,7 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
           failed_note: delayedMessage,
           manual_recheck_only: true,
           error: 'image_generation_delayed',
+          provider_error_raw: providerRawResponse,
           background_task: {
             ...backgroundTask,
             status: backgroundStatus || 'delayed',
@@ -7678,7 +7924,34 @@ const handleGetImageStatus = async (supabaseUrl: string, serviceRoleKey: string,
           },
         },
       }).catch(() => []);
-      return json(200, { success: true, status: 'delayed', message: delayedMessage, diagnosticMessage: delayedMessage, messageId, threadId: msg.thread_id });
+      return json(200, {
+        success: true,
+        status: 'delayed',
+        message: {
+          ...msg,
+          content: delayedMessage,
+          metadata: {
+            ...metadata,
+            pending_status: true,
+            status: 'delayed',
+            delayed: true,
+            failed: false,
+            failed_note: delayedMessage,
+            manual_recheck_only: true,
+            error: 'image_generation_delayed',
+            provider_error_raw: providerRawResponse,
+            background_task: {
+              ...backgroundTask,
+              status: backgroundStatus || 'delayed',
+              delayed_at: new Date().toISOString(),
+              delay_ms: elapsedMs,
+            },
+          },
+        },
+        diagnosticMessage: delayedMessage,
+        messageId,
+        threadId: msg.thread_id,
+      });
     }
     const diagnosticMessage = startedAt && elapsedMs > IMAGE_STATUS_WARN_MS ? buildDiagnosticMessage() : null;
     return json(200, {
@@ -7930,6 +8203,31 @@ const handleGenerateDocument = async (supabaseUrl: string, serviceRoleKey: strin
     metadata: { source: 'document_generation', format, storage_path: stored.path },
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
+  await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
+    updated_at: new Date().toISOString(),
+    provider: aiResult.provider,
+    model: aiResult.model,
+    context_type: getContextKind(pageContext.context || {}),
+    module_id: pageContext.moduleId || null,
+    record_id: pageContext.recordId || null,
+    metadata: {
+      ...(thread?.metadata || {}),
+      route: pageContext.context?.route || null,
+      summary: pageContext.summary || null,
+      context_kind: getContextKind(pageContext.context || {}),
+      context_label: buildThreadContextLabel(pageContext),
+      context: pageContext.context || null,
+      module_id: pageContext.moduleId || null,
+      record_id: pageContext.recordId || null,
+      last_activity_kind: 'document_generation',
+      last_message_preview: prompt.slice(0, 300),
+      last_file_path: stored.path,
+      last_file_asset_id: fileManagerResult?.asset?.id || null,
+      last_file_entry_id: fileManagerResult?.entry?.id || null,
+      ai_files_folder_id: fileManagerResult?.folder?.id || null,
+      composer_preferences: buildThreadComposerPreferences(body, thread),
+    },
+  }).catch(() => []);
   return json(200, {
     success: true,
     threadId: thread.id,
@@ -7999,7 +8297,12 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
   });
   await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', { id: `eq.${thread.id}`, org_id: `eq.${authContext.orgId}` }, {
     updated_at: new Date().toISOString(),
-    metadata: { ...(thread?.metadata || {}), last_activity_kind: 'video_generation', last_message_preview: prompt.slice(0, 300) },
+    metadata: {
+      ...(thread?.metadata || {}),
+      last_activity_kind: 'video_generation',
+      last_message_preview: prompt.slice(0, 300),
+      composer_preferences: buildThreadComposerPreferences(body, thread),
+    },
   }).catch(() => []);
   return json(200, {
     success: true,
@@ -9010,6 +9313,169 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
   });
 };
 
+const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canRebuildJobDescriptionAiContext(authContext)) {
+    return json(403, { success: false, message: 'دسترسی بازسازی شرح شغل برای هوش مصنوعی را ندارید.' });
+  }
+  const jobDescriptionId = normalizeId(body?.jobDescriptionId || body?.job_description_id);
+  if (!isUuid(jobDescriptionId)) return json(400, { success: false, message: 'شناسه شرح شغل معتبر نیست.' });
+
+  const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'embedding');
+
+  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'job_descriptions', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `eq.${jobDescriptionId}`,
+    select: 'id,org_id,name,system_code,job_goal,job_responsibilities,job_duties,job_requirements,behavioral_traits,career_path,performance_kpi,competency_ksa,role_relationships,salary_calculation_notes,job_description_notes,tags,use_for_ai,assignee_id,assignee_type,assignee_role_id',
+    limit: 1,
+  });
+  const jobDescription = rows[0] || null;
+  if (!jobDescription) return json(404, { success: false, message: 'شرح شغل در این سازمان پیدا نشد.' });
+
+  const perm = getModulePermission(authContext?.permissions, 'job_descriptions');
+  if (!canAccessAssignedRecord(jobDescription, authContext, getRecordScope(perm))) {
+    return json(403, { success: false, message: 'دسترسی به این شرح شغل را ندارید.' });
+  }
+
+  await restDelete(supabaseUrl, serviceRoleKey, 'document_chunks', {
+    org_id: `eq.${authContext.orgId}`,
+    source_kind: 'eq.job_description',
+    source_module_id: 'eq.job_descriptions',
+    source_record_id: `eq.${jobDescriptionId}`,
+  });
+
+  const now = new Date().toISOString();
+  const useForAi = jobDescription?.use_for_ai === true;
+  const tags = Array.isArray(jobDescription?.tags)
+    ? jobDescription.tags.map((item: any) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const title = String(jobDescription?.name || '').trim() || 'شرح شغل بدون عنوان';
+  const content = [
+    `عنوان شرح شغل: ${title}`,
+    jobDescription?.system_code ? `کد سیستمی: ${String(jobDescription.system_code).trim()}` : '',
+    tags.length ? `برچسب‌ها: ${tags.join('، ')}` : '',
+    jobDescription?.job_goal ? `هدف:\n${String(jobDescription.job_goal).trim()}` : '',
+    jobDescription?.job_responsibilities ? `مسئولیت‌ها:\n${String(jobDescription.job_responsibilities).trim()}` : '',
+    jobDescription?.job_duties ? `شرح وظایف:\n${String(jobDescription.job_duties).trim()}` : '',
+    jobDescription?.job_requirements ? `شرایط احراز:\n${String(jobDescription.job_requirements).trim()}` : '',
+    jobDescription?.behavioral_traits ? `ویژگی‌های رفتاری:\n${String(jobDescription.behavioral_traits).trim()}` : '',
+    jobDescription?.career_path ? `مسیر ارتقا:\n${String(jobDescription.career_path).trim()}` : '',
+    jobDescription?.performance_kpi ? `شاخص‌های ارزیابی عملکرد:\n${String(jobDescription.performance_kpi).trim()}` : '',
+    jobDescription?.competency_ksa ? `نظام شایستگی:\n${String(jobDescription.competency_ksa).trim()}` : '',
+    jobDescription?.role_relationships ? `ارتباط با سایر نقش‌ها:\n${String(jobDescription.role_relationships).trim()}` : '',
+    jobDescription?.salary_calculation_notes ? `محاسبه حقوق:\n${String(jobDescription.salary_calculation_notes).trim()}` : '',
+    jobDescription?.job_description_notes ? `توضیحات تکمیلی:\n${String(jobDescription.job_description_notes).trim()}` : '',
+  ].filter(Boolean).join('\n\n').trim();
+  const contentHash = hashText(content);
+
+  if (!useForAi || !content) {
+    await restPatch(supabaseUrl, serviceRoleKey, 'job_descriptions', {
+      id: `eq.${jobDescriptionId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      ai_index_status: 'skipped',
+      ai_index_updated_at: now,
+      ai_index_error: !useForAi ? null : 'متنی برای آماده‌سازی هوش مصنوعی وجود ندارد.',
+      ai_content_hash: contentHash,
+      updated_at: now,
+    });
+    return json(200, {
+      success: true,
+      processed: 0,
+      failed: 0,
+      message: !useForAi
+        ? 'استفاده از این شرح شغل برای هوش مصنوعی غیرفعال است.'
+        : 'متنی برای آماده‌سازی هوش مصنوعی وجود ندارد.',
+    });
+  }
+
+  const providerConfig = getCentralProviderConfig();
+  const chunks = splitTextIntoAiChunks(content, 1200).slice(0, 40);
+  let processed = 0;
+  let failed = 0;
+  const insertRows: Record<string, any>[] = [];
+
+  for (const [index, chunkContent] of chunks.entries()) {
+    const baseRow: Record<string, any> = {
+      org_id: authContext.orgId,
+      document_id: null,
+      chunk_index: index,
+      content: chunkContent,
+      content_hash: hashText(chunkContent),
+      token_estimate: Math.ceil(chunkContent.length / 4),
+      status: 'active',
+      allowed_user_ids: [],
+      allowed_role_ids: [],
+      source_kind: 'job_description',
+      source_module_id: 'job_descriptions',
+      source_record_id: jobDescriptionId,
+      source_target_module_ids: ['job_descriptions', 'employees'],
+      metadata: {
+        document_title: title,
+        document_type: 'job_description',
+        source_kind: 'job_description',
+        source_module_id: 'job_descriptions',
+        source_record_id: jobDescriptionId,
+        tags,
+      },
+    };
+    try {
+      const embeddingResult = await callEmbeddings(providerConfig, chunkContent.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
+      insertRows.push({
+        ...baseRow,
+        embedding: `[${embeddingResult.embedding.join(',')}]`,
+        embedding_model: DEFAULT_EMBEDDING_MODEL,
+        embedding_dimension: 1536,
+        embedding_status: 'ready',
+        embedding_updated_at: now,
+        embedding_error: null,
+      });
+      processed += 1;
+      await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+        capability: 'embedding',
+        provider: providerConfig.provider,
+        model: DEFAULT_EMBEDDING_MODEL,
+        requestId: embeddingResult.requestId,
+        usageMetadata: embeddingResult.usageMetadata,
+        metadata: { source: 'job_description_embedding', job_description_id: jobDescriptionId, chunk_index: index },
+      });
+    } catch (error: any) {
+      failed += 1;
+      insertRows.push({
+        ...baseRow,
+        embedding_status: 'failed',
+        embedding_error: String(error?.message || error).slice(0, 500),
+        embedding_updated_at: now,
+      });
+    }
+  }
+
+  if (insertRows.length > 0) {
+    await restInsert(supabaseUrl, serviceRoleKey, 'document_chunks', insertRows);
+  }
+
+  const finalStatus = failed > 0 ? 'failed' : processed > 0 ? 'ready' : 'skipped';
+  await restPatch(supabaseUrl, serviceRoleKey, 'job_descriptions', {
+    id: `eq.${jobDescriptionId}`,
+    org_id: `eq.${authContext.orgId}`,
+  }, {
+    ai_index_status: finalStatus,
+    ai_index_updated_at: now,
+    ai_index_error: failed > 0 ? `${failed} بخش آماده نشد.` : null,
+    ai_content_hash: contentHash,
+    updated_at: now,
+  });
+
+  return json(200, {
+    success: true,
+    processed,
+    failed,
+    message: failed > 0
+      ? `بازسازی انجام شد، اما ${failed.toLocaleString('fa-IR')} بخش خطا داشت.`
+      : `شرح شغل برای هوش مصنوعی آماده شد؛ ${processed.toLocaleString('fa-IR')} بخش ساخته شد.`,
+  });
+};
+
 const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const userMessage = String(body?.message || '').trim() || 'برای این رکورد یک یادداشت کوتاه و کاربردی پیشنهاد بده.';
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, {
@@ -9564,6 +10030,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'run_task_bundle') return await handleRunTaskBundle(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'suggest_auto_capabilities') return await handleSuggestAutoCapabilities(supabaseUrl, serviceRoleKey, authContext, body);

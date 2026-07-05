@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
+import { App, Button, Checkbox, Drawer, Grid, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
 import { CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
@@ -97,8 +97,10 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   maxSourceImages = 4,
 }) => {
   const { message } = App.useApp();
+  const screens = Grid.useBreakpoint();
   const [open, setOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isMobile = !screens.md;
 
   const supportsSourceImages = (capability === 'image_generation' || capability === 'video_generation')
     && typeof onSourceImagesChange === 'function';
@@ -156,7 +158,7 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   };
 
   const content = useMemo(() => (
-    <div className="w-72 space-y-3" dir="rtl">
+    <div className="w-full max-w-[min(88vw,20rem)] space-y-3 overflow-y-auto px-0.5 pb-1 md:w-72 md:max-w-none" dir="rtl">
       {capability === 'image_generation' ? (
         <>
           <div className="rounded-lg border border-gray-100 p-2 dark:border-white/10">
@@ -370,6 +372,33 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
     if (!nextOpen) scheduleOverlayLockRelease();
   };
 
+  const renderTriggerButton = (onClick?: () => void) => (
+    <Tooltip title="تنظیمات تولید رسانه">
+      <Button size={size} disabled={disabled} icon={<SettingOutlined />} onClick={onClick}>
+        {badge ? <Space size={2}>{badge}</Space> : null}
+      </Button>
+    </Tooltip>
+  );
+
+  if (isMobile) {
+    return (
+      <>
+        {renderTriggerButton(() => setOpen(true))}
+        <Drawer
+          title="تنظیمات تولید رسانه"
+          placement="bottom"
+          open={open}
+          onClose={() => handleOpenChange(false)}
+          height="min(78vh, 560px)"
+          destroyOnClose
+          styles={{ body: { padding: 12, overflowY: 'auto' } }}
+        >
+          {content}
+        </Drawer>
+      </>
+    );
+  }
+
   return (
     <Popover
       open={open}
@@ -377,14 +406,11 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
       placement="topRight"
       trigger="click"
       content={content}
+      overlayStyle={{ maxWidth: 'calc(100vw - 24px)' }}
       getPopupContainer={() => document.body}
       destroyOnHidden
     >
-      <Tooltip title="تنظیمات تولید رسانه">
-        <Button size={size} disabled={disabled} icon={<SettingOutlined />}>
-          {badge ? <Space size={2}>{badge}</Space> : null}
-        </Button>
-      </Tooltip>
+      {renderTriggerButton()}
     </Popover>
   );
 };

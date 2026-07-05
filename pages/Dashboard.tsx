@@ -1156,7 +1156,7 @@ const Dashboard: React.FC = () => {
           forceNewThread: true,
         },
       });
-  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, navigate]);
+  }, [dashboardAiCapabilities, dashboardAiQuestion, dashboardMediaSettings, dashboardMediaSourceImages, dashboardNeedsRecordModule, dashboardRecordCreationTargetModuleId, message, navigate]);
 
   const handleSubmitDashboardVoice = useCallback(async (voice: RecordedVoice) => {
     if (dashboardVoiceSending) return;
@@ -1195,7 +1195,7 @@ const Dashboard: React.FC = () => {
     } finally {
       setDashboardVoiceSending(false);
     }
-  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, navigate]);
+  }, [dashboardAiCapabilities, dashboardMediaSettings, dashboardMediaSourceImages, dashboardRecordCreationTargetModuleId, dashboardVoiceSending, message, navigate]);
 
   const handleSubmitDashboardFiles = useCallback(async (filePrompts: AiUploadedFilePrompt[]) => {
     if (dashboardFileSending) return;
@@ -1363,15 +1363,18 @@ const Dashboard: React.FC = () => {
                 <div className="rounded-lg bg-white p-2 dark:bg-dark-surface">
                   <div className="flex items-center gap-2">
                     <AiSparkleIcon className="h-5 w-5 shrink-0 text-leather-500" />
-                    <Input
+                    <Input.TextArea
                       variant="borderless"
                       value={dashboardAiQuestion}
                       onChange={(event) => setDashboardAiQuestion(event.target.value)}
                       onPressEnter={(event) => {
                         if (event.shiftKey) return;
+                        event.preventDefault();
                         handleSubmitDashboardAiQuestion();
                       }}
                       placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
+                      autoSize={{ minRows: 1, maxRows: 4 }}
+                      className="!leading-6"
                     />
                     <Button
                       type="primary"

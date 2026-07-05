@@ -27,6 +27,11 @@ alter table public.job_descriptions
   add column if not exists role_relationships text,
   add column if not exists salary_calculation_notes text,
   add column if not exists job_description_notes text,
+  add column if not exists use_for_ai boolean not null default false,
+  add column if not exists ai_index_status text not null default 'not_built',
+  add column if not exists ai_index_updated_at timestamptz,
+  add column if not exists ai_index_error text,
+  add column if not exists ai_content_hash text,
   add column if not exists assignee_id uuid references public.profiles(id) on delete set null,
   add column if not exists assignee_type text,
   add column if not exists assignee_role_id uuid,
@@ -50,6 +55,10 @@ create unique index if not exists idx_job_descriptions_org_system_code
 
 create index if not exists idx_job_descriptions_org_assignee
   on public.job_descriptions(org_id, assignee_id);
+
+create index if not exists idx_job_descriptions_org_ai
+  on public.job_descriptions(org_id, use_for_ai, ai_index_status)
+  where use_for_ai is true;
 
 create index if not exists idx_employees_org_job_description
   on public.employees(org_id, job_description_id)

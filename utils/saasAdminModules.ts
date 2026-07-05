@@ -138,6 +138,26 @@ export const executeSaasModuleAction = async (
     };
   }
 
+  if (moduleId === 'job_descriptions' && actionId === 'rebuild_job_description_ai_context') {
+    const jobDescriptionId = normalizeText(record.id);
+    if (!jobDescriptionId) {
+      throw new Error('شناسه شرح شغل پیدا نشد.');
+    }
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body: {
+        action: 'rebuild_job_description_ai_context',
+        jobDescriptionId,
+      },
+    });
+    if (error) throw error;
+    if (data?.success === false) {
+      throw new Error(String(data?.message || 'بازسازی شرح شغل برای هوش مصنوعی ناموفق بود.'));
+    }
+    return {
+      message: String(data?.message || 'شرح شغل برای هوش مصنوعی بازسازی شد.'),
+    };
+  }
+
   if (moduleId === 'saas_orgs' && actionId === 'convert_request_to_org') {
     const requestId = normalizeText(record.request_id || record.id);
     if (!requestId) {
