@@ -926,6 +926,30 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
   background: rgba(15, 23, 42, 0.85);
 }
 
+.webform-list-date-trigger .kalam-adaptive-picker__trigger {
+  width: 100%;
+  min-height: 32px;
+  height: 32px;
+  border-radius: 6px;
+}
+
+.public-web-form--dark .webform-list-date-trigger .kalam-adaptive-picker__trigger,
+.public-web-form--dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
+  border-color: rgba(148, 163, 184, 0.35) !important;
+  background: rgba(15, 23, 42, 0.82) !important;
+  color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.public-web-form--dark .kalam-adaptive-picker__trigger-text {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.webform-slide-price-input .ant-input-number-input {
+  min-height: 62px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
 .public-web-form--dark .ant-form-item-label > label {
   color: rgba(255, 255, 255, 0.88);
 }
@@ -962,6 +986,41 @@ html.dark .webform-slide-date-trigger .kalam-adaptive-picker__trigger {
 .public-web-form--dark .ant-input-number-focused,
 .public-web-form--dark .ant-select-selector:hover {
   border-color: rgba(var(--brand-300-rgb), 0.7) !important;
+}
+
+.public-web-form-progress-slider .ant-slider-rail {
+  background-color: rgba(100, 116, 139, 0.36) !important;
+  height: 8px;
+}
+
+.public-web-form-progress-slider .ant-slider-track {
+  height: 8px;
+}
+
+.public-web-form-progress-slider .ant-slider-handle::after {
+  box-shadow: 0 0 0 2px rgb(var(--brand-500-rgb));
+}
+
+.public-web-form--dark .public-web-form-progress-slider .ant-slider-rail {
+  background-color: rgba(226, 232, 240, 0.28) !important;
+}
+
+.public-web-form--dark .public-web-form-progress-slider .ant-slider-track {
+  background-color: rgb(var(--brand-300-rgb)) !important;
+}
+
+.public-web-form--dark .public-web-form-progress-slider .ant-slider-handle::after {
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgb(var(--brand-300-rgb));
+}
+
+.public-web-form--dark .public-web-form-progress-slider .ant-slider-dot {
+  border-color: rgba(226, 232, 240, 0.42);
+  background-color: #0f172a;
+}
+
+.public-web-form--dark .public-web-form-progress-slider .ant-slider-dot-active {
+  border-color: rgb(var(--brand-300-rgb));
 }
 
 .kalam-adaptive-picker__action.is-muted {

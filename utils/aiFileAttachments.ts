@@ -11,21 +11,12 @@ import {
 import { fetchRecordReferenceLabels } from './recordReference';
 import { fetchSessionBootstrap } from './sessionCache';
 import { uploadFileWithProgress } from './uploadFileWithProgress';
+import { joinStoragePath, sanitizeStorageFileName } from './storagePath';
 
 type UploadAiFileAttachmentOptions = {
   moduleId?: string | null;
   recordId?: string | null;
   folderId?: string | null;
-};
-
-const normalizeFileName = (file: File) => {
-  const ext = String(file.name.split('.').pop() || '').trim();
-  const baseName = String(file.name || 'file')
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .slice(-120);
-
-  if (!ext || baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) return baseName;
-  return `${baseName}.${ext}`;
 };
 
 export const uploadAiFileAttachments = async (
@@ -57,10 +48,10 @@ export const uploadAiFileAttachments = async (
   const uploaded: NoteAttachment[] = [];
 
   for (const file of files) {
-    const storedName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${normalizeFileName(file)}`;
+    const storedName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || 'file')}`;
     const filePath = hasRecordScope
-      ? `record_files/${normalizedModuleId}/${normalizedRecordId}/ai/${storedName}`
-      : `ai_files/${orgId}/${storedName}`;
+      ? joinStoragePath('record_files', normalizedModuleId, normalizedRecordId, 'ai', storedName)
+      : joinStoragePath('ai_files', orgId, storedName);
 
     await uploadFileWithProgress({
       client: fileStorageClient,

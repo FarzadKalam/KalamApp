@@ -55,6 +55,7 @@ import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/syst
 import { buildCopyPayload, detectCopyNameField } from '../utils/recordCopy';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
@@ -3534,10 +3535,8 @@ const ModuleShow: React.FC = () => {
     }
     setUploadingImage(true);
     try {
-      const ext = String(file.name.split('.').pop() || '').trim();
-      const baseName = String(file.name || 'image').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
-      const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${baseName}${ext && !baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`) ? `.${ext}` : ''}`;
-      const filePath = `record_files/${moduleId}/${id}/${fileName}`;
+      const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || 'image')}`;
+      const filePath = joinStoragePath('record_files', moduleId, id, fileName);
       await uploadFileWithProgress({
         client: fileStorageClient,
         bucket: FILE_STORAGE_BUCKET,
@@ -3671,7 +3670,7 @@ const ModuleShow: React.FC = () => {
     const fileName = sanitizePrintFileName(rawFileName);
     const displayName = buildDirectPrintDisplayName(templateTitle);
     const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
-    const filePath = `record_files/${moduleId}/${id}/prints/${Date.now()}_${fileName}`;
+    const filePath = joinStoragePath('record_files', moduleId, id, 'prints', `${Date.now()}_${sanitizeStorageFileName(fileName)}`);
     tracker?.addMetadata({
       uploadFileName: fileName,
       displayFileName: displayName,

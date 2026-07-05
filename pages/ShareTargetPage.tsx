@@ -7,6 +7,7 @@ import { getSharedInboxPayload, removeSharedInboxPayload, sharedInboxFileToFile,
 import { serializeNoteContent } from '../utils/noteContent';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
+import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { loadProfilesWithCompat } from '../utils/profileDirectory';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
@@ -47,14 +48,6 @@ const buildSenderPayload = (userId: string, users: Array<Record<string, any>>) =
     sender_display_name: String(user?.full_name || user?.email || user?.mobile_1 || '').trim() || null,
     sender_avatar_url: String(user?.avatar_url || '').trim() || null,
   };
-};
-
-const sanitizeFileName = (value: string) => {
-  const raw = String(value || '').trim();
-  return (raw || `share-${Date.now()}`)
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim();
 };
 
 const ShareTargetPage: React.FC = () => {
@@ -317,8 +310,8 @@ const ShareTargetPage: React.FC = () => {
 
       for (const item of shareFiles) {
         const file = sharedInboxFileToFile(item);
-        const safeName = sanitizeFileName(file.name);
-        const filePath = `share_inbox/${currentOrgId}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`;
+        const safeName = sanitizeStorageFileName(file.name || `share-${Date.now()}`);
+        const filePath = joinStoragePath('share_inbox', currentOrgId, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeName}`);
         const { error: uploadError } = await fileStorageClient.storage
           .from(FILE_STORAGE_BUCKET)
           .upload(filePath, file, {

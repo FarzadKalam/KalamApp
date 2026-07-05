@@ -11,6 +11,7 @@ import {
   setRecordFilesTableAvailability,
 } from '../utils/recordFilesAvailability';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
+import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { parseNoteContent, serializeNoteContent } from '../utils/noteContent';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { normalizeNoteScope } from '../utils/noteScope';
@@ -139,11 +140,6 @@ const getFileType = (file: File): RecordFileType => {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
   return 'file';
-};
-
-const safeFileName = (name: string): string => {
-  const clean = name.replace(/[^a-zA-Z0-9._-]/g, '_');
-  return clean.slice(-120);
 };
 
 const getDisplayFileName = (item: Pick<RecordFileItem, 'file_name' | 'file_url'>): string => {
@@ -856,7 +852,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     const desiredBase = ext && rawDesired.toLowerCase().endsWith(`.${ext.toLowerCase()}`)
       ? rawDesired.slice(0, -1 * (ext.length + 1))
       : rawDesired;
-    const cleanDesired = safeFileName(desiredBase || 'file');
+    const cleanDesired = sanitizeStorageFileName(desiredBase || 'file');
     const finalBase = ext ? `${cleanDesired}.${ext}` : cleanDesired;
     return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${finalBase}`;
   };
@@ -864,7 +860,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   const uploadToStorage = async (file: File, desiredName: string): Promise<string> => {
     if (!recordId) throw new Error('Record id is required');
     const storedFileName = buildStoredFileName(file, desiredName);
-    const filePath = `record_files/${moduleId}/${recordId}/${storedFileName}`;
+    const filePath = joinStoragePath('record_files', moduleId, recordId, storedFileName);
     await uploadFileWithProgress({
       client: fileStorageClient,
       bucket: FILE_STORAGE_BUCKET,
@@ -1618,8 +1614,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
     if (!recordId || !moduleId) throw new Error('record_required');
     const finalFileName = String(fileName || '').trim() || `files-${Date.now()}.zip`;
     const file = new File([blob], finalFileName, { type: 'application/zip' });
-    const storedFileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeFileName(finalFileName)}`;
-    const filePath = `record_files/${moduleId}/${recordId}/archives/${storedFileName}`;
+    const storedFileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(finalFileName)}`;
+    const filePath = joinStoragePath('record_files', moduleId, recordId, 'archives', storedFileName);
     await uploadFileWithProgress({
       client: fileStorageClient,
       bucket: FILE_STORAGE_BUCKET,
@@ -2405,6 +2401,4 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 };
 
 export default RecordFilesManager;
-
-
 

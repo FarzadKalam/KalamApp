@@ -41,6 +41,7 @@ import ResilientImage from './common/ResilientImage';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../utils/autoName';
 import { useCurrencyConfig } from '../utils/currency';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
+import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
@@ -1208,11 +1209,10 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const handleImageUpload = async (file: File) => {
     try {
       setUploading(true);
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}_${sanitizeStorageFileName(file.name || 'image')}`;
       const modulePath = moduleId || 'misc';
       const recordPath = recordId || 'draft';
-      const filePath = `record_files/${modulePath}/${recordPath}/${fileName}`;
+      const filePath = joinStoragePath('record_files', modulePath, recordPath, fileName);
 
       await uploadFileWithProgress({
         client: fileStorageClient,

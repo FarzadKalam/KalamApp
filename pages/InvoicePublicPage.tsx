@@ -46,6 +46,7 @@ import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
 import { buildInvoiceAdjustmentDisplay, hasInvoiceAdjustmentValue, resolveInvoiceGlobalDiscountAmount, resolveInvoiceRowBaseAmount } from '../utils/invoicePresentation';
 import { FILE_STORAGE_BUCKET, fileStorageClient } from '../utils/storageClient';
+import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { parseNoteContent, resolveNoteAttachmentFileType } from '../utils/noteContent';
 import SharedNoteCard from '../components/notes/SharedNoteCard';
@@ -565,15 +566,8 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     if (!code) return false;
     setReceiptUploading(true);
     try {
-      const extension = String(file.name.split('.').pop() || '').trim().toLowerCase();
-      const safeBaseName = String(file.name || 'receipt')
-        .replace(/\.[^.]+$/, '')
-        .trim()
-        .replace(/[^0-9a-zA-Z._\-\u0600-\u06FF]+/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '') || 'receipt';
-      const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeBaseName}${extension ? `.${extension}` : ''}`;
-      const filePath = `record_files/public_invoices/${moduleId}/${code}/receipts/${finalName}`;
+      const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || 'receipt')}`;
+      const filePath = joinStoragePath('record_files', 'public_invoices', moduleId, code, 'receipts', finalName);
       await uploadFileWithProgress({
         client: fileStorageClient,
         bucket: FILE_STORAGE_BUCKET,

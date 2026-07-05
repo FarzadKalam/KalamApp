@@ -4,16 +4,7 @@ import { resolveNoteAttachmentFileType, type NoteAttachment } from './noteConten
 import { createFileManagerOriginForUpload, createFileManagerShortcut, detectFileManagerTables } from './fileManagerService';
 import { fetchRecordReferenceLabels } from './recordReference';
 import { uploadFileWithProgress } from './uploadFileWithProgress';
-
-const normalizeFileName = (file: File) => {
-  const ext = String(file.name.split('.').pop() || '').trim();
-  const baseName = String(file.name || 'file')
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .slice(-120);
-
-  if (!ext || baseName.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) return baseName;
-  return `${baseName}.${ext}`;
-};
+import { joinStoragePath, sanitizeStorageFileName } from './storagePath';
 
 export const uploadNoteAttachments = async (
   moduleId: string | null | undefined,
@@ -32,10 +23,10 @@ export const uploadNoteAttachments = async (
   const uploaded: NoteAttachment[] = [];
 
   for (const file of files) {
-    const storedName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${normalizeFileName(file)}`;
+    const storedName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || 'file')}`;
     const filePath = hasRelatedRecord
-      ? `record_files/${normalizedModuleId}/${normalizedRecordId}/${storedName}`
-      : `record_files/notes/unlinked/${storedName}`;
+      ? joinStoragePath('record_files', normalizedModuleId, normalizedRecordId, storedName)
+      : joinStoragePath('record_files', 'notes', 'unlinked', storedName);
 
     await uploadFileWithProgress({
       client: fileStorageClient,

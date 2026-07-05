@@ -45,6 +45,14 @@ export const parseNumericInput = (raw: any): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+export const normalizePriceString = (raw: any): string => {
+  const normalized = normalizeNumericString(raw);
+  if (!normalized || normalized === '-' || normalized === '.' || normalized === '-.') return normalized;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return normalized;
+  return String(Math.round(parsed));
+};
+
 type KeyDownLikeEvent = {
   key: string;
   ctrlKey?: boolean;

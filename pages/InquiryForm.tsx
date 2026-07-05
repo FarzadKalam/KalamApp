@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Form, Input, Select, Slider, Space, Spin, Typography, Upload } from "antd";
+import { Alert, App, Button, Card, Form, Input, InputNumber, Select, Slider, Space, Spin, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../App.css";
@@ -12,9 +12,17 @@ import { readRuntimeBranding } from "../utils/brandingRuntime";
 import { normalizeCompanyAssetFields } from "../utils/companySettings";
 import { normalizePublicAssetUrl } from "../utils/assetUrl";
 import { FILE_STORAGE_BUCKET, fileStorageClient } from "../utils/storageClient";
+import { joinStoragePath, sanitizeStorageFileName } from "../utils/storagePath";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import ResilientImage from "../components/common/ResilientImage";
+import { toPersianNumber } from "../utils/persianNumberFormatter";
+import {
+  formatNumericForInput,
+  normalizeNumericString,
+  preventNonNumericKeyDown,
+  preventNonNumericPaste,
+} from "../utils/persianNumericInput";
 import {
   isPublicWebFormManagedDefaultOnlyField,
   isPublicWebFormCurrentEmployeeDefaultField,
@@ -139,7 +147,7 @@ const formatProgressValue = (field: WebFormFieldRecord, value: unknown) => {
   const parsed = Number(value);
   const safeValue = Number.isFinite(parsed) ? parsed : 0;
   const displayValue = Number.isInteger(safeValue) ? safeValue : Number(safeValue.toFixed(2));
-  return field.field_type === "percentage" ? `${displayValue}%` : String(displayValue);
+  return field.field_type === "percentage" ? `${toPersianNumber(displayValue)}٪` : toPersianNumber(displayValue);
 };
 
 const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["field_type"]): FieldType => {
@@ -175,25 +183,40 @@ const mapWebFormFieldTypeToModuleFieldType = (fieldType: WebFormFieldRecord["fie
   }
 };
 
-const buildPublicModuleField = (field: WebFormFieldRecord, _targetModuleId?: string | null): ModuleField => {
+const getPublicTargetModuleField = (field: WebFormFieldRecord, targetModuleId?: string | null): ModuleField | null => {
+  if (isPublicWebFormTemplateField(field)) return null;
+  const targetFieldKey = String(field.target_field_key || field.field_key || "").trim();
+  const moduleConfig = MODULES[String(targetModuleId || "").trim()];
+  if (!targetFieldKey || !moduleConfig) return null;
+  return (moduleConfig.fields || []).find((item: ModuleField) => String(item.key || "").trim() === targetFieldKey) || null;
+};
+
+const getEffectivePublicModuleFieldType = (field: WebFormFieldRecord, targetModuleId?: string | null): FieldType =>
+  getPublicTargetModuleField(field, targetModuleId)?.type || mapWebFormFieldTypeToModuleFieldType(field.field_type);
+
+const isPublicPriceWebFormField = (field: WebFormFieldRecord, targetModuleId?: string | null) =>
+  field.field_type === "number" && getEffectivePublicModuleFieldType(field, targetModuleId) === FieldType.PRICE;
+
+const buildPublicModuleField = (field: WebFormFieldRecord, targetModuleId?: string | null): ModuleField => {
   const isTemplateField = isPublicWebFormTemplateField(field);
   const targetFieldKey = String((isTemplateField ? field.field_key : (field.target_field_key || field.field_key)) || "").trim();
+  const targetModuleField = getPublicTargetModuleField(field, targetModuleId);
   const configuredOptions = Array.isArray(field.config?.select_options) ? field.config.select_options : [];
   const relationTargetModule = String(field.config?.relation_target_module || "").trim();
   const dynamicOptionsCategory = String(field.config?.dynamic_options_category || "").trim();
   return {
     key: targetFieldKey || field.field_key,
-    type: mapWebFormFieldTypeToModuleFieldType(field.field_type),
+    type: targetModuleField?.type || mapWebFormFieldTypeToModuleFieldType(field.field_type),
     labels: {
       fa: field.label,
       en: undefined,
     },
-    options: configuredOptions,
+    options: configuredOptions.length > 0 ? configuredOptions : targetModuleField?.options,
     validation: {
       required: field.is_required === true,
     },
-    dynamicOptionsCategory: dynamicOptionsCategory || undefined,
-    relationConfig: relationTargetModule ? { targetModule: relationTargetModule } : undefined,
+    dynamicOptionsCategory: dynamicOptionsCategory || targetModuleField?.dynamicOptionsCategory || undefined,
+    relationConfig: relationTargetModule ? { targetModule: relationTargetModule } : targetModuleField?.relationConfig,
     readonly: false,
     hideInCreateForm: false,
   };
@@ -201,6 +224,26 @@ const buildPublicModuleField = (field: WebFormFieldRecord, _targetModuleId?: str
 
 const isManagedHiddenPublicWebFormField = (field: WebFormFieldRecord, targetModuleId?: string | null) =>
   isPublicWebFormManagedDefaultOnlyField(targetModuleId, String(field.target_field_key || field.field_key || "").trim());
+
+const ensurePublicModuleSystemDefaults = (targetModuleId: string | null | undefined, payload: Record<string, any>) => {
+  const moduleConfig = MODULES[String(targetModuleId || "").trim()];
+  if (!moduleConfig) return payload;
+  const nextPayload = { ...payload };
+  for (const field of moduleConfig.fields || []) {
+    const key = String(field?.key || "").trim();
+    if (!key || Object.prototype.hasOwnProperty.call(nextPayload, key)) continue;
+    if (
+      key === "execution_process_draft"
+      || key === "marketing_process_draft"
+      || key === "production_stages_draft"
+      || key === "template_stages_preview"
+      || key === "run_stages_preview"
+    ) {
+      nextPayload[key] = {};
+    }
+  }
+  return nextPayload;
+};
 
 const getSlideFieldHeightClass = (field: WebFormFieldRecord) =>
   field.field_type === "long_text" ? "min-h-[180px]" : "min-h-[64px]";
@@ -213,6 +256,13 @@ const isWideField = (field: WebFormFieldRecord) =>
   || field.field_type === "image"
   || field.field_type === "file"
   || isProgressWebFormField(field);
+
+const resolveFormatterSourceValue = (inputValue: any, currentValue: any) => {
+  if (inputValue === "" && currentValue !== null && currentValue !== undefined && String(currentValue) !== "") {
+    return currentValue;
+  }
+  return inputValue ?? currentValue;
+};
 
 const normalizePublicFieldValue = (field: WebFormFieldRecord, rawValue: any) => {
   if (rawValue === undefined) return undefined;
@@ -692,6 +742,7 @@ const InquiryForm = () => {
 
   const palette = branding.palette || DEFAULT_BRANDING.palette;
   const companySettings = publicForm?.companySettings || {};
+  const currencyLabel = String(companySettings.currency_label || "تومان").trim() || "تومان";
   const brandTitle =
     String(companySettings.trade_name || companySettings.company_full_name || companySettings.company_name || "").trim()
     || branding.shortName
@@ -758,15 +809,8 @@ const InquiryForm = () => {
   } as const;
 
   const buildPublicUploadPath = (field: WebFormFieldRecord, file: File) => {
-    const extension = String(file.name.split(".").pop() || "").trim().toLowerCase();
-    const safeBaseName = String(file.name || "file")
-      .replace(/\.[^.]+$/, "")
-      .trim()
-      .replace(/[^0-9a-zA-Z._\-\u0600-\u06FF]+/g, "_")
-      .replace(/_+/g, "_")
-      .replace(/^_+|_+$/g, "") || "file";
-    const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeBaseName}${extension ? `.${extension}` : ""}`;
-    return `record_files/web_forms/${publicForm?.slug || "public"}/${field.field_key}/${finalName}`;
+    const finalName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${sanitizeStorageFileName(file.name || "file")}`;
+    return joinStoragePath("record_files", "web_forms", publicForm?.slug || "public", field.field_key, finalName);
   };
 
   const uploadPublicAttachment = async (field: WebFormFieldRecord, file: File): Promise<PublicUploadedAsset | null> => {
@@ -887,103 +931,104 @@ const InquiryForm = () => {
     }];
 
     return (
-      <Form.Item
-        key={field.field_key}
-        name={field.field_key}
-        label={options?.showLabel === false ? undefined : field.label}
-        rules={rules}
-        extra={options?.showHelp !== false && field.help_text ? (
-          <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
-            {field.help_text}
-          </span>
-        ) : undefined}
-      >
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            {choiceOptions.map((option, index) => {
-              const isSelected = normalizedValues.includes(String(option.value));
-              return (
-                <button
-                  key={`${field.field_key}_${option.value}_${index}`}
-                  type="button"
-                  onClick={() => {
-                    if (isMultiSelect) {
-                      const nextValues = isSelected
-                        ? normalizedValues.filter((item) => item !== String(option.value))
-                        : [...normalizedValues, String(option.value)];
-                      setChoiceFieldValue(field, nextValues);
-                      return;
-                    }
-                    setChoiceFieldValue(field, option.value);
-                  }}
-                  className="group relative overflow-hidden rounded-[24px] border px-4 py-4 text-right transition duration-200"
-                  style={{
-                    borderColor: isSelected
-                      ? palette.primary
-                      : (isDarkMode ? `${palette.darkBorder}` : `${palette.primary}22`),
-                    background: isSelected
-                      ? `linear-gradient(135deg, ${palette.primary}18 0%, ${palette.secondary}14 100%)`
-                      : (isDarkMode ? `${palette.darkBg}CC` : "#fff"),
-                    boxShadow: isSelected ? `0 16px 34px ${palette.primary}22` : "none",
-                    color: surfaceStyle.color,
-                  }}
-                >
-                  <div
-                    className="absolute inset-y-0 right-0 w-1.5 rounded-r-[24px] transition-opacity"
-                    style={{ backgroundColor: palette.primary, opacity: isSelected ? 1 : 0 }}
-                  />
-                  <div className="flex items-start gap-3">
+      <div key={field.field_key} className="space-y-3">
+        <Form.Item
+          name={field.field_key}
+          label={options?.showLabel === false ? undefined : field.label}
+          rules={rules}
+          extra={options?.showHelp !== false && field.help_text ? (
+            <span style={{ color: isDarkMode ? "rgba(255,255,255,0.64)" : "#6b7280" }}>
+              {field.help_text}
+            </span>
+          ) : undefined}
+        >
+          <div className="space-y-3">
+            <div className="grid gap-3 md:grid-cols-2">
+              {choiceOptions.map((option, index) => {
+                const isSelected = normalizedValues.includes(String(option.value));
+                return (
+                  <button
+                    key={`${field.field_key}_${option.value}_${index}`}
+                    type="button"
+                    onClick={() => {
+                      if (isMultiSelect) {
+                        const nextValues = isSelected
+                          ? normalizedValues.filter((item) => item !== String(option.value))
+                          : [...normalizedValues, String(option.value)];
+                        setChoiceFieldValue(field, nextValues);
+                        return;
+                      }
+                      setChoiceFieldValue(field, option.value);
+                    }}
+                    className="group relative overflow-hidden rounded-[24px] border px-4 py-4 text-right transition duration-200"
+                    style={{
+                      borderColor: isSelected
+                        ? palette.primary
+                        : (isDarkMode ? `${palette.darkBorder}` : `${palette.primary}22`),
+                      background: isSelected
+                        ? `linear-gradient(135deg, ${palette.primary}18 0%, ${palette.secondary}14 100%)`
+                        : (isDarkMode ? `${palette.darkBg}CC` : "#fff"),
+                      boxShadow: isSelected ? `0 16px 34px ${palette.primary}22` : "none",
+                      color: surfaceStyle.color,
+                    }}
+                  >
                     <div
-                      className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border text-xs font-black"
-                      style={{
-                        borderColor: isSelected ? palette.primary : (isDarkMode ? `${palette.darkBorder}` : "#d1d5db"),
-                        backgroundColor: isSelected ? palette.primary : "transparent",
-                        color: isSelected ? "#fff" : surfaceStyle.color,
-                      }}
-                    >
-                      {isSelected ? "✓" : index + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-base font-semibold">{option.label}</div>
+                      className="absolute inset-y-0 right-0 w-1.5 rounded-r-[24px] transition-opacity"
+                      style={{ backgroundColor: palette.primary, opacity: isSelected ? 1 : 0 }}
+                    />
+                    <div className="flex items-start gap-3">
                       <div
-                        className="mt-1 text-xs"
-                        style={{ color: isDarkMode ? "rgba(255,255,255,0.56)" : "#6b7280" }}
+                        className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl border text-xs font-black"
+                        style={{
+                          borderColor: isSelected ? palette.primary : (isDarkMode ? `${palette.darkBorder}` : "#d1d5db"),
+                          backgroundColor: isSelected ? palette.primary : "transparent",
+                          color: isSelected ? "#fff" : surfaceStyle.color,
+                        }}
                       >
-                        {isMultiSelect
-                          ? (option.special === "none"
-                            ? "با انتخاب این گزینه، انتخاب‌های دیگر کنار گذاشته می‌شوند"
-                            : (isSelected ? "برای حذف دوباره لمس کنید" : "برای انتخاب لمس کنید"))
-                          : "برای انتخاب این گزینه لمس کنید"}
+                        {isSelected ? "✓" : toPersianNumber(index + 1)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-base font-semibold">{option.label}</div>
+                        <div
+                          className="mt-1 text-xs"
+                          style={{ color: isDarkMode ? "rgba(255,255,255,0.56)" : "#6b7280" }}
+                        >
+                          {isMultiSelect
+                            ? (option.special === "none"
+                              ? "با انتخاب این گزینه، انتخاب‌های دیگر کنار گذاشته می‌شوند"
+                              : (isSelected ? "برای حذف دوباره لمس کنید" : "برای انتخاب لمس کنید"))
+                            : "برای انتخاب این گزینه لمس کنید"}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-          {isMultiSelect ? (
-            <div className="text-xs" style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
-              امکان انتخاب چند گزینه وجود دارد.
+                  </button>
+                );
+              })}
             </div>
-          ) : null}
-          {isOtherSelected ? (
-            <Form.Item
-              name={getChoiceOtherFieldKey(field)}
-              className="mb-0"
-              rules={[{ required: true, message: `مقدار سایر ${field.label} را وارد کنید.` }]}
-            >
-              <Input
-                placeholder={`مقدار سایر ${field.label}`}
-                style={{
-                  borderRadius: 18,
-                  background: isDarkMode ? `${palette.darkBg}D9` : "#fff",
-                  color: surfaceStyle.color,
-                }}
-              />
-            </Form.Item>
-          ) : null}
-        </div>
-      </Form.Item>
+            {isMultiSelect ? (
+              <div className="text-xs" style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
+                امکان انتخاب چند گزینه وجود دارد.
+              </div>
+            ) : null}
+          </div>
+        </Form.Item>
+        {isOtherSelected ? (
+          <Form.Item
+            name={getChoiceOtherFieldKey(field)}
+            className="mb-0"
+            rules={[{ required: true, message: `مقدار سایر ${field.label} را وارد کنید.` }]}
+          >
+            <Input
+              placeholder={`مقدار سایر ${field.label}`}
+              style={{
+                borderRadius: 18,
+                background: isDarkMode ? `${palette.darkBg}D9` : "#fff",
+                color: surfaceStyle.color,
+              }}
+            />
+          </Form.Item>
+        ) : null}
+      </div>
     );
   };
 
@@ -996,6 +1041,7 @@ const InquiryForm = () => {
       : [];
     const sharedClassName = `w-full rounded-[24px] border-0 bg-white/90 px-5 text-[16px] font-medium shadow-[0_18px_48px_rgba(15,23,42,0.08)] outline-none transition focus:shadow-[0_22px_54px_rgba(15,23,42,0.12)] ${getSlideFieldHeightClass(field)}`;
     const placeholder = field.placeholder || field.label;
+    const isPriceField = isPublicPriceWebFormField(field, publicForm?.targetModuleId);
 
     let control: JSX.Element;
     if (field.field_type === "long_text") {
@@ -1023,6 +1069,33 @@ const InquiryForm = () => {
       control = <PersianDatePicker type="TIME" placeholder={placeholder} className="webform-slide-date-trigger" />;
     } else if (field.field_type === "datetime") {
       control = <PersianDatePicker type="DATETIME" placeholder={placeholder} className="webform-slide-date-trigger" />;
+    } else if (isPriceField) {
+      control = (
+        <InputNumber
+          className="w-full persian-number webform-slide-price-input"
+          controls={false}
+          stringMode
+          inputMode="decimal"
+          suffix={currencyLabel}
+          placeholder={placeholder}
+          formatter={(val, info) => formatNumericForInput(
+            resolveFormatterSourceValue(info?.input, val),
+            true,
+          )}
+          parser={(val) => normalizeNumericString(val)}
+          onKeyDown={preventNonNumericKeyDown}
+          onPaste={preventNonNumericPaste}
+          style={{
+            width: "100%",
+            minHeight: 64,
+            borderRadius: 24,
+            background: isDarkMode ? `${palette.darkBg}D9` : "rgba(255,255,255,0.92)",
+            color: surfaceStyle.color,
+            boxShadow: "0 18px 48px rgba(15,23,42,0.08)",
+            border: "none",
+          }}
+        />
+      );
     } else {
       control = (
         <input
@@ -1067,9 +1140,13 @@ const InquiryForm = () => {
           },
         }]
       : [];
+    const markLabelStyle = {
+      color: isDarkMode ? "rgba(226,232,240,0.82)" : "#64748b",
+      fontWeight: 700,
+    } as const;
     const marks = {
-      0: field.field_type === "percentage" ? "۰٪" : "۰",
-      [max]: field.field_type === "percentage" ? "۱۰۰٪" : String(max),
+      0: { label: field.field_type === "percentage" ? "۰٪" : "۰", style: markLabelStyle },
+      [max]: { label: field.field_type === "percentage" ? "۱۰۰٪" : toPersianNumber(max), style: markLabelStyle },
     };
 
     return (
@@ -1093,6 +1170,7 @@ const InquiryForm = () => {
         >
           <Form.Item name={field.field_key} noStyle rules={rules} initialValue={field.default_value ?? 0}>
             <Slider
+              className="public-web-form-progress-slider"
               min={0}
               max={max}
               step={step}
@@ -1106,7 +1184,14 @@ const InquiryForm = () => {
                 <span style={{ color: isDarkMode ? "rgba(255,255,255,0.62)" : "#6b7280" }}>
                   مقدار انتخاب‌شده
                 </span>
-                <span className="rounded-full px-3 py-1 text-base font-black" style={{ backgroundColor: `${palette.primary}18`, color: palette.primary }}>
+                <span
+                  className="rounded-full px-3 py-1 text-base font-black"
+                  style={{
+                    backgroundColor: isDarkMode ? "rgba(255,255,255,0.12)" : `${palette.primary}18`,
+                    color: isDarkMode ? "rgba(255,255,255,0.96)" : palette.primary,
+                    border: isDarkMode ? `1px solid ${palette.darkBorder}` : undefined,
+                  }}
+                >
                   {formatProgressValue(field, form.getFieldValue(field.field_key))}
                 </span>
               </div>
@@ -1322,8 +1407,31 @@ const InquiryForm = () => {
       return (
         <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
           <PersianDatePicker
+            className="webform-list-date-trigger"
             type={field.field_type === "date" ? "DATE" : field.field_type === "time" ? "TIME" : "DATETIME"}
             placeholder={field.placeholder || field.label}
+          />
+        </Form.Item>
+      );
+    }
+
+    if (isPublicPriceWebFormField(field, publicForm?.targetModuleId)) {
+      return (
+        <Form.Item key={field.field_key} name={field.field_key} label={options?.showLabel === false ? undefined : field.label} rules={rules} extra={sharedExtra}>
+          <InputNumber
+            className="w-full persian-number"
+            controls={false}
+            stringMode
+            inputMode="decimal"
+            suffix={currencyLabel}
+            placeholder={field.placeholder || field.label}
+            formatter={(val, info) => formatNumericForInput(
+              resolveFormatterSourceValue(info?.input, val),
+              true,
+            )}
+            parser={(val) => normalizeNumericString(val)}
+            onKeyDown={preventNonNumericKeyDown}
+            onPaste={preventNonNumericPaste}
           />
         </Form.Item>
       );
@@ -1357,8 +1465,9 @@ const InquiryForm = () => {
     return renderListModeField(field, options);
   };
 
-  const buildSubmissionPayload = (values: Record<string, any>) =>
-    (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
+  const buildSubmissionPayload = (values: Record<string, any>) => {
+    const basePayload = { ...(publicForm?.config.default_record_values || {}) };
+    const fieldPayload = (publicForm?.fields || []).reduce<Record<string, any>>((acc, field) => {
       if (isPublicWebFormCurrentEmployeeDefaultField(field, publicForm?.accessScope)) {
         if (currentEmployee?.id) {
           acc[field.field_key] = currentEmployee.id;
@@ -1376,7 +1485,9 @@ const InquiryForm = () => {
         acc[field.field_key] = normalizePublicFieldValue(field, field.default_value);
       }
       return acc;
-    }, {});
+    }, basePayload);
+    return ensurePublicModuleSystemDefaults(publicForm?.targetModuleId, fieldPayload);
+  };
 
   const submitLegacyInquiry = async (values: Record<string, any>) => {
     const payload: Record<string, unknown> = {
