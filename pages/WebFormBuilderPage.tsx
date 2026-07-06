@@ -219,7 +219,7 @@ const buildBuilderFieldValueFromTarget = (
   default_value: item.hasModuleDefault ? item.moduleDefaultValue : undefined,
   sort_order: (index + 1) * 10,
   is_required: item.isModuleRequired,
-  is_hidden: isWebFormManagedDefaultOnlyField(targetModuleId, item.value),
+  is_hidden: item.hasModuleDefault || isWebFormManagedDefaultOnlyField(targetModuleId, item.value),
 });
 
 const buildSuggestedFields = (
