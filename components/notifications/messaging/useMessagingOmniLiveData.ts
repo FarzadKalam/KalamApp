@@ -3,7 +3,7 @@ import { supabase } from '../../../supabaseClient';
 import { MODULES } from '../../../moduleRegistry';
 import { fetchSessionBootstrap } from '../../../utils/sessionCache';
 import { resolveVoipAccessPermissions } from '../../../utils/permissions';
-import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
+import { isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { isMissingRpcError } from '../../../utils/notificationConversationRpc';
 import {
   buildSmsThreads,
@@ -110,6 +110,7 @@ type BotGroupRow = {
   updated_at?: string | null;
   last_inbound_at?: string | null;
   last_outbound_at?: string | null;
+  created_by?: string | null;
   metadata?: Record<string, any> | null;
 };
 
@@ -137,6 +138,8 @@ type BotDirectThreadRow = {
   customer_id?: string | null;
   supplier_id?: string | null;
   employee_id?: string | null;
+  profile_id?: string | null;
+  created_by?: string | null;
   display_name?: string | null;
   username?: string | null;
   phone_number?: string | null;
@@ -468,7 +471,9 @@ const canSeeRestrictedBotRow = (row: any, profile: LiveProfile) => {
   const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
     ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
     : [];
-  if (!allowedUserIds.length && !allowedRoleIds.length) return true;
+  const ownerId = String(row?.created_by || row?.profile_id || '').trim();
+  if (!allowedUserIds.length && !allowedRoleIds.length) return Boolean(profile.id && ownerId === profile.id);
+  if (profile.id && ownerId === profile.id) return true;
   if (profile.id && allowedUserIds.includes(profile.id)) return true;
   if (profile.roleId && allowedRoleIds.includes(profile.roleId)) return true;
   return false;
@@ -672,17 +677,7 @@ const fetchSmsMessages = async () => {
   const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
   if (!rpcResult.error) return rpcResult.data || [];
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
-
-  const { data, error } = await supabase
-    .from('sms_delivery_reports')
-    .select('id, title, module_id, record_id, related_module_id, related_record_id, customer_id, assignee_id, assignee_type, assignee_role_id, direction, provider, provider_message_id, sender, recipient, phone_number, phone_number_id, phone_match_status, message_text, status, error_message, metadata, sent_at, received_at, message_at, created_at, updated_at')
-    .order('message_at', { ascending: false })
-    .limit(80);
-  if (error) {
-    if (isMissingTableLikeError(error) || isMissingColumnError(error, 'direction') || isMissingColumnError(error, 'message_at')) return [];
-    throw error;
-  }
-  return data || [];
+  return [];
 };
 
 const fetchVoipCalls = async (profile: LiveProfile) => {
@@ -716,7 +711,7 @@ const fetchVoipCalls = async (profile: LiveProfile) => {
 const fetchBotGroups = async (profile: LiveProfile) => {
   const { data, error } = await supabase
     .from('counterparty_bot_groups')
-    .select('id,target_type,customer_id,supplier_id,employee_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,metadata')
+    .select('id,target_type,customer_id,supplier_id,employee_id,channel_type,status,group_title,group_join_link,bot_chat_id,updated_at,last_inbound_at,last_outbound_at,created_by,metadata')
     .eq('status', 'active')
     .order('updated_at', { ascending: false, nullsFirst: false })
     .limit(160);
@@ -764,7 +759,7 @@ const fetchBotDirectThreads = async (profile: LiveProfile) => {
   const [{ data, error }, { data: groupData, error: groupError }] = await Promise.all([
     supabase
       .from('counterparty_bot_direct_threads')
-      .select('id,binding_id,channel_type,chat_id,target_module_id,target_record_id,customer_id,supplier_id,employee_id,profile_id,display_name,username,phone_number,last_seen_at,last_inbound_at,last_outbound_at,last_message_at,last_message_preview,metadata')
+      .select('id,binding_id,channel_type,chat_id,target_module_id,target_record_id,customer_id,supplier_id,employee_id,profile_id,display_name,username,phone_number,last_seen_at,last_inbound_at,last_outbound_at,last_message_at,last_message_preview,created_by,metadata')
       .order('last_message_at', { ascending: false, nullsFirst: false })
       .order('last_seen_at', { ascending: false, nullsFirst: false })
       .order('display_name', { ascending: true })

@@ -20,6 +20,7 @@ type AssistantAction =
   | 'get_ai_settings'
   | 'save_ai_settings'
   | 'get_ai_overview'
+  | 'get_ai_credit_summary'
   | 'test_provider'
   | 'list_models'
   | 'get_credit'
@@ -2525,10 +2526,11 @@ const buildPromptMessages = (
         ? ' حالت تفکر عمیق فعال است و کاربر قبلاً زمینه را داده/تایید کرده است: حالا مسئله را عمیق و مرحله‌ای تحلیل کن، اما فقط جمع‌بندی نهایی، فرض‌ها، ریسک‌ها و اقدام پیشنهادی را نشان بده.'
         : ' حالت تفکر عمیق فعال است و این اولین پیام است: هنوز تحلیل کامل را شروع نکن. ابتدا (۱) برداشت کوتاهت از خواسته را بگو، (۲) حداکثر ۳ تا ۵ سوال دقیق برای رفع ابهام بپرس، (۳) یک طرح کوتاه از مراحل کاری که انجام خواهی داد ارائه بده، و در پایان صریح از کاربر بخواه که تایید کند یا اطلاعات بدهد تا تفکر عمیق را شروع کنی. تا تایید نگرفته‌ای وارد تحلیل عمیق نشو.')
     : '';
+  const copyableOutputInstruction = ' اگر بخشی از خروجی متن آماده استفاده برای کپی کردن است، مثل متن اصلی نامه، شرح شغل، قرارداد، پیام، پرامپت، آگهی، دستورالعمل یا هر متن نهایی قابل استفاده، آن بخش را با Markdown blockquote و شروع هر خط با > بفرست. اگر خروجی کد، JSON، SQL، قالب فنی یا متن ساختاریافته ماشینی است، آن را داخل code fence سه‌تایی با زبان مناسب بفرست. توضیح و راهنمایی را بیرون از blockquote/code نگه دار و فقط متن نهایی قابل کپی را داخل آن‌ها قرار بده.';
 
   const systemContent = pageContext.intent === 'process_guide'
-    ? 'شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد. ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.'
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+    ? `شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد.${copyableOutputInstruction} ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.`
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -3021,7 +3023,9 @@ const callChatCompletionsStream = async (
   buffer += decoder.decode();
   if (buffer.trim()) await processEvent(buffer);
 
-  if (!doneMarker) throw buildIncompleteAiResponseError('stream_interrupted', content);
+  if (!doneMarker && !isCompleteChatFinishReason(finishReason)) {
+    throw buildIncompleteAiResponseError('stream_interrupted', content);
+  }
   if (!isCompleteChatFinishReason(finishReason)) throw buildIncompleteAiResponseError(finishReason, content);
 
   return {
@@ -6143,19 +6147,27 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     : String(body?.message || body?.prompt || '').trim();
   if (!prompt) return json(400, { success: false, message: 'متن یا ورودی کافی برای تصمیم‌گیری خودکار دریافت نشد.' });
 
+  const heuristicCapabilities = detectHeuristicAutoRoute(prompt, inputs, transcripts, availableCapabilities);
+  if (inputs.length === 0 && heuristicCapabilities.length === 0) {
+    return json(200, {
+      success: true,
+      capabilities: [],
+      targetModuleId: null,
+      capability: baseCapability,
+      reason: 'plain_chat',
+      confidence: 'low',
+      provider: providerConfig.provider,
+      model: providerConfig.model,
+      usage: null,
+      ledger: null,
+    });
+  }
+
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const previousMessages = existingThread
     ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, existingThread.id, 20)
     : [];
-  const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const [knowledgeChunks, companyContext, orgPeopleContext, retrievedContexts] = await Promise.all([
-    canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
-    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
-    loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
-    fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext),
-  ]);
 
-  const heuristicCapabilities = detectHeuristicAutoRoute(prompt, inputs, transcripts, availableCapabilities);
   const routerSystemPrompt = [
     'شما فقط موتور تصمیم‌گیرنده برای انتخاب عملگرهای هوش مصنوعی هستید.',
     'پاسخ شما باید فقط JSON معتبر باشد و هیچ متن اضافه‌ای نداشته باشد.',
@@ -6193,23 +6205,10 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
   let usageWithBilling: any = null;
   let ledger: any = null;
   try {
-    const routingMessages = buildPromptMessages(
-      routingUserPrompt,
-      pageContext,
-      knowledgeChunks,
-      companyContext,
-      orgPeopleContext,
-      authContext,
-      retrievedContexts,
-      previousMessages,
-      [],
-      {
-        legalMode: false,
-        deepReasoning: false,
-        selectedCapabilities: heuristicCapabilities,
-      },
-    );
-    routingMessages.unshift({ role: 'system', content: routerSystemPrompt });
+    const routingMessages = [
+      { role: 'system', content: routerSystemPrompt },
+      { role: 'user', content: routingUserPrompt },
+    ];
     const routeResult = await callChatCompletions(providerConfig, routingMessages, {
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${baseCapability}_auto_router`,
       responseFormat: { type: 'json_object' },
@@ -9292,6 +9291,51 @@ const handleGetCredit = async (supabaseUrl: string, serviceRoleKey: string, auth
   });
 };
 
+const handleGetAiCreditSummary = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const canSeeProviderCredit = canViewSaasAdmin(authContext);
+  const [walletRows, providerCredit, companyContext] = await Promise.all([
+    authContext.orgId
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+          org_id: `eq.${authContext.orgId}`,
+          select: '*',
+          limit: 1,
+        })
+      : Promise.resolve([]),
+    canSeeProviderCredit
+      ? fetchAvalaiCredit(getCentralProviderConfig()).catch((error: any) => ({
+          available: false,
+          message: String(error?.message || error || 'اعتبار AvalAI دریافت نشد.'),
+        }))
+      : Promise.resolve(null),
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  const wallet = walletRows[0] || null;
+  const normalizedCredit = canSeeProviderCredit && (providerCredit as any)?.available ? normalizeCreditPayload((providerCredit as any).credit) : null;
+  const walletRemainingIrt = wallet
+    ? Math.max(0, numberFrom(wallet.balance_irt, 0) + numberFrom(wallet.included_quota_irt, 0) - numberFrom(wallet.reserved_irt, 0))
+    : null;
+  const remainingIrt = walletRemainingIrt !== null ? walletRemainingIrt : null;
+  const rawRemainingTokens = normalizedCredit?.token
+    ?? wallet?.metadata?.tokens
+    ?? wallet?.metadata?.remaining_tokens
+    ?? wallet?.metadata?.token_balance
+    ?? null;
+  const remainingTokens = rawRemainingTokens === null || rawRemainingTokens === undefined || rawRemainingTokens === ''
+    ? null
+    : Math.max(0, numberFrom(rawRemainingTokens, 0));
+  return json(200, {
+    success: true,
+    remainingTokens,
+    remainingIrt,
+    wallet,
+    providerCredit: canSeeProviderCredit ? {
+      ...(providerCredit as any),
+      credit: normalizedCredit,
+    } : null,
+    company: companyContext,
+  });
+};
+
 const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی بازسازی embedding اسناد را ندارید.' });
@@ -10238,6 +10282,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_ai_overview') return await handleGetAiOverview(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'get_ai_credit_summary') return await handleGetAiCreditSummary(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'get_compose_models') return await handleGetComposeModels(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_models') return await handleListModels(supabaseUrl, serviceRoleKey, authContext, body);

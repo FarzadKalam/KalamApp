@@ -22,6 +22,22 @@ const clearCachedUser = () => {
   cachedUserState.promise = null;
 };
 
+const ensureProfileIsActive = async (userId?: string | null) => {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) return false;
+
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("id, is_active")
+    .eq("id", normalizedUserId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+  return profile?.is_active !== false;
+};
+
 const getCachedUser = async () => {
   const now = Date.now();
   if (cachedUserState.user && cachedUserState.expiresAt > now) {
@@ -92,6 +108,19 @@ export const authProvider: AuthBindings = {
 
     const expiresAt = session?.expires_at ? session.expires_at * 1000 : 0;
     if (session && (!expiresAt || expiresAt > Date.now())) {
+      const isActive = await ensureProfileIsActive(session.user?.id);
+      if (!isActive) {
+        clearCachedUser();
+        await signOutLocalSession();
+        return {
+          authenticated: false,
+          redirectTo: "/login",
+          error: {
+            name: "InactiveUser",
+            message: "حساب کاربری شما غیرفعال است و امکان ورود وجود ندارد.",
+          },
+        };
+      }
       cachedUserState.user = session.user || cachedUserState.user;
       cachedUserState.expiresAt = Date.now() + USER_CACHE_TTL_MS;
       cachedUserState.promise = null;

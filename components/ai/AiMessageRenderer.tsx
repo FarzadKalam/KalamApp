@@ -14,6 +14,7 @@ type AiMessageRendererProps = {
 
 type Block =
   | { type: 'paragraph'; text: string }
+  | { type: 'quote'; text: string }
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
   | { type: 'code'; text: string; language?: string }
@@ -68,12 +69,17 @@ const parseBlocks = (text: string): Block[] => {
   let paragraph: string[] = [];
   let listType: 'ul' | 'ol' | null = null;
   let listItems: string[] = [];
+  let quote: string[] = [];
   let codeLines: string[] | null = null;
   let codeLanguage = '';
 
   const flushParagraph = () => {
     if (paragraph.length) blocks.push({ type: 'paragraph', text: paragraph.join('\n').trim() });
     paragraph = [];
+  };
+  const flushQuote = () => {
+    if (quote.length) blocks.push({ type: 'quote', text: quote.join('\n').trim() });
+    quote = [];
   };
   const flushList = () => {
     if (listType && listItems.length) blocks.push({ type: listType, items: listItems });
@@ -90,6 +96,7 @@ const parseBlocks = (text: string): Block[] => {
         codeLanguage = '';
       } else {
         flushParagraph();
+        flushQuote();
         flushList();
         codeLines = [];
         codeLanguage = fence[1] || '';
@@ -102,18 +109,28 @@ const parseBlocks = (text: string): Block[] => {
     }
     if (/^\s*$/.test(line)) {
       flushParagraph();
+      flushQuote();
       flushList();
       return;
     }
     if (/^\s*---+\s*$/.test(line)) {
       flushParagraph();
+      flushQuote();
       flushList();
       blocks.push({ type: 'hr' });
+      return;
+    }
+    const quoted = line.match(/^\s*>\s?(.*)$/);
+    if (quoted) {
+      flushParagraph();
+      flushList();
+      quote.push(quoted[1]);
       return;
     }
     const unordered = line.match(/^\s*[-*]\s+(.+)$/);
     if (unordered) {
       flushParagraph();
+      flushQuote();
       if (listType && listType !== 'ul') flushList();
       listType = 'ul';
       listItems.push(unordered[1]);
@@ -122,18 +139,21 @@ const parseBlocks = (text: string): Block[] => {
     const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (ordered) {
       flushParagraph();
+      flushQuote();
       if (listType && listType !== 'ol') flushList();
       listType = 'ol';
       listItems.push(ordered[1]);
       return;
     }
     flushList();
+    flushQuote();
     paragraph.push(line);
   });
 
   const remainingCodeLines = codeLines as unknown as string[] | null;
   if (remainingCodeLines) blocks.push({ type: 'code', text: remainingCodeLines.join('\n'), language: codeLanguage });
   flushParagraph();
+  flushQuote();
   flushList();
   return blocks.length ? blocks : [{ type: 'paragraph', text: String(text || '').trim() }];
 };
@@ -151,24 +171,6 @@ const CopyButton: React.FC<{ text: string; title: string; onCopy?: (text: string
   </Tooltip>
 );
 
-const getCopyableDocumentSection = (text: string) => {
-  const normalized = String(text || '').trim();
-  if (normalized.length < 500) return null;
-  const label = /پروپوزال|proposal/i.test(normalized)
-    ? 'متن پروپوزال'
-    : /پرامپت|prompt/i.test(normalized)
-    ? 'پرامپت'
-    : /قرارداد|نامه|ایمیل|پیام آماده|متن آماده/i.test(normalized)
-    ? 'متن آماده'
-    : null;
-  if (!label) return null;
-  const parts = normalized.split(/\n\s*\n/).filter((part) => part.trim());
-  if (parts.length < 2) return { label, text: normalized };
-  const first = parts[0].trim();
-  const firstLooksLikeIntro = first.length < 220 && /(?:بفرمایید|در ادامه|این هم|آماده|نسخه|متن کامل)/i.test(first);
-  return { label, text: (firstLooksLikeIntro ? parts.slice(1) : parts).join('\n\n').trim() || normalized };
-};
-
 const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
   text,
   streaming,
@@ -180,7 +182,6 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
 }) => {
   const blocks = parseBlocks(text);
   const hasText = String(text || '').trim().length > 0;
-  const copyableDocument = getCopyableDocumentSection(text);
   return (
     <div className="ai-message-renderer min-w-0">
       <div className="mb-1 flex items-center justify-end gap-1">
@@ -215,6 +216,16 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
                 </div>
               );
             }
+            if (block.type === 'quote') {
+              return (
+                <blockquote key={`quote-${index}`} className="m-0 rounded-md border-s-4 border-[rgb(var(--brand-500-rgb))] bg-slate-50 px-3 py-2 text-slate-800 dark:bg-white/5 dark:text-slate-100">
+                  <div className="mb-1 flex justify-end">
+                    <CopyButton text={block.text} title="کپی متن" label="متن" onCopy={onCopyText} />
+                  </div>
+                  <div className="whitespace-pre-wrap leading-7">{renderInline(block.text)}</div>
+                </blockquote>
+              );
+            }
             if (block.type === 'ul' || block.type === 'ol') {
               const Tag = block.type;
               return (
@@ -227,17 +238,6 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
               <p key={`p-${index}`} className="m-0 min-w-0 whitespace-pre-wrap">{renderInline(block.text)}</p>
             );
           })}
-          {copyableDocument && onCopyText ? (
-            <div className="flex justify-end pt-1">
-              <Button
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={() => onCopyText(copyableDocument.text, copyableDocument.label)}
-              >
-                کپی {copyableDocument.label}
-              </Button>
-            </div>
-          ) : null}
           {streaming ? <span className="inline-block h-4 w-1 animate-pulse rounded bg-[rgb(var(--brand-600-rgb))] align-middle" /> : null}
         </div>
       )}

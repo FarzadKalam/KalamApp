@@ -2784,6 +2784,7 @@ const ModuleShow: React.FC = () => {
       telegram: { ...DEFAULT_BOT_PLATFORM_STATE },
       bale: { ...DEFAULT_BOT_PLATFORM_STATE },
     };
+    const currentProfileId = String(currentUserId || '').trim();
     for (const channel of BOT_CHANNELS) {
       const row = rowMap.get(channel) || null;
       const metadata = (row?.metadata && typeof row.metadata === 'object') ? row.metadata : {};
@@ -2791,6 +2792,9 @@ const ModuleShow: React.FC = () => {
       const rowId = String(row?.id || '').trim();
       const inbound = rowId ? inboundMap.get(rowId) : null;
       const rawStatus = String(row?.status || 'pending_join').trim();
+      const rawAllowedUserIds = Array.isArray(metadata?.allowed_user_ids)
+        ? metadata.allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
       platforms[channel] = {
         groupTitle: String(row?.group_title || '').trim(),
         groupJoinLink: String(row?.group_join_link || '').trim(),
@@ -2799,7 +2803,7 @@ const ModuleShow: React.FC = () => {
         activationCode: existingCode || createBotActivationCode(counterpartyEnglishName, orgPrefix),
         lastInboundAt: String(inbound?.created_at || row?.last_inbound_at || '').trim(),
         lastInboundText: String(inbound?.content_text || '').trim(),
-        allowedUserIds: Array.isArray(metadata?.allowed_user_ids) ? metadata.allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [],
+        allowedUserIds: rawAllowedUserIds.length > 0 ? rawAllowedUserIds : (currentProfileId ? [currentProfileId] : []),
         allowedRoleIds: Array.isArray(metadata?.allowed_role_ids) ? metadata.allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [],
         aiAutoReplyEnabled: Boolean(metadata?.ai_auto_reply_enabled),
         aiCounterpartyGuide: String(metadata?.ai_counterparty_guide || '').trim(),
@@ -2810,7 +2814,7 @@ const ModuleShow: React.FC = () => {
     setBotStatusDefaultChannel(defaultChannel);
     setBotStatusFallbackToActive(Boolean(prefRow?.fallback_to_active));
     setBotStatusActiveTab(defaultChannel);
-  }, [data?.business_name_en, data?.company_name_en, data?.english_name, data?.full_name_en, data?.legal_name_en, data?.name_en]);
+  }, [currentUserId, data?.business_name_en, data?.company_name_en, data?.english_name, data?.full_name_en, data?.legal_name_en, data?.name_en]);
 
   const saveBotStatusSettings = useCallback(async (options?: { forceCapture?: boolean; captureChannel?: BotChannel; captureSeconds?: number }) => {
     const context = botStatusModalContext;

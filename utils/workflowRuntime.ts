@@ -47,6 +47,7 @@ import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
 import { lockRecord } from './recordLockRuntime';
 import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 import { buildTaskSourceInitialValues } from './taskMeta';
+import { filterActiveGroupMentionTargets, filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
 
 type WorkflowEvent = 'create' | 'upsert';
 type WorkflowRunType = 'event' | 'scheduled';
@@ -235,6 +236,9 @@ const normalizePhone = (value: any): string => {
 };
 
 const isValidIranMobile = (phone: string) => /^09\d{9}$/.test(String(phone || ''));
+
+const isInactiveProfileRecord = (moduleId: string, record: Record<string, any>) =>
+  String(moduleId || '').trim() === 'profiles' && record?.is_active === false;
 
 const parseDate = (value: any): Date | null => {
   if (!value) return null;
@@ -1373,11 +1377,11 @@ const sendSms = async ({
 type CommunicationChannel = 'sms' | 'email' | 'telegram' | 'bale' | 'rubika';
 
 const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
-  if (channel === 'sms') return 'id, mobile_1';
-  if (channel === 'email') return 'id, email';
-  if (channel === 'telegram') return 'id, telegram_chat_id';
-  if (channel === 'bale') return 'id, bale_chat_id';
-  return 'id, rubika_chat_id';
+  if (channel === 'sms') return 'id, is_active, mobile_1';
+  if (channel === 'email') return 'id, is_active, email';
+  if (channel === 'telegram') return 'id, is_active, telegram_chat_id';
+  if (channel === 'bale') return 'id, is_active, bale_chat_id';
+  return 'id, is_active, rubika_chat_id';
 };
 
 const isMissingColumnError = (error: any, columnName: string) => {
@@ -1404,7 +1408,9 @@ const queryProfilesWithCommunicationFallback = async (
     .from('profiles')
     .select(primarySelect)
     .in(filterField, values);
-  if (!primaryResult.error) return (primaryResult.data || []) as Array<Record<string, any>>;
+  if (!primaryResult.error) {
+    return ((primaryResult.data || []) as Array<Record<string, any>>).filter(isActiveProfileRow);
+  }
 
   const fallbackColumn = channel === 'rubika'
     ? 'rubika_chat_id'
@@ -1903,13 +1909,22 @@ export const resolveNoteRecipientsFromFields = async ({
     group.userIds.forEach((id) => userIds.add(id));
     group.roleIds.forEach((id) => roleIds.add(id));
   });
+  const activeDirectTargets = await filterActiveMentionTargets(supabase, {
+    userIds: directUserIds,
+    roleIds: directRoleIds,
+  });
+  const activeSmsTargets = await filterActiveMentionTargets(supabase, {
+    userIds: Array.from(userIds),
+    roleIds: Array.from(roleIds),
+  });
+  const activeGroupTargets = await filterActiveGroupMentionTargets(supabase, groupTargets);
 
   return {
-    mentionUserIds: directUserIds,
-    mentionRoleIds: directRoleIds,
-    groupTargets,
-    smsMentionUserIds: Array.from(userIds),
-    smsMentionRoleIds: Array.from(roleIds),
+    mentionUserIds: activeDirectTargets.userIds,
+    mentionRoleIds: activeDirectTargets.roleIds,
+    groupTargets: activeGroupTargets,
+    smsMentionUserIds: activeSmsTargets.userIds,
+    smsMentionRoleIds: activeSmsTargets.roleIds,
   };
 };
 
@@ -2503,7 +2518,9 @@ export const executeWorkflowAction = async (
     const fallbackRecipients =
       recipientsFromFields.length > 0 || recipientsManual.length > 0
         ? []
-        : [currentRecord?.mobile_1, currentRecord?.mobile_2, currentRecord?.phone]
+        : isInactiveProfileRecord(moduleId, currentRecord)
+          ? []
+          : [currentRecord?.mobile_1, currentRecord?.mobile_2, currentRecord?.phone]
             .map((phone) => normalizePhone(phone))
             .filter(Boolean);
     const recipients = Array.from(
@@ -2746,11 +2763,13 @@ export const executeWorkflowAction = async (
     const recipientsManual = asArray(config.manual_chat_ids)
       .map((chatId) => String(chatId || '').trim())
       .filter(Boolean);
-    const directFallbackChatId = isRubika
-      ? String(currentRecord?.rubika_chat_id || '').trim()
-      : isTelegram
-        ? String(currentRecord?.telegram_chat_id || '').trim()
-        : String(currentRecord?.bale_chat_id || '').trim();
+    const directFallbackChatId = isInactiveProfileRecord(moduleId, currentRecord)
+      ? ''
+      : isRubika
+        ? String(currentRecord?.rubika_chat_id || '').trim()
+        : isTelegram
+          ? String(currentRecord?.telegram_chat_id || '').trim()
+          : String(currentRecord?.bale_chat_id || '').trim();
     const hasExplicitRecipients = configuredRecipientFields.length > 0 || configuredRecipientAssignees.length > 0;
     const canUseCounterpartyFallbackForExplicitRecipients = isRubika
       && configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey))
@@ -2812,10 +2831,12 @@ export const executeWorkflowAction = async (
     const body = (await renderWorkflowTemplate(String(config.body || ''), currentRecord, moduleId)).trim();
     if (!subject && !body) return;
     const manuals = asArray(config.manual_emails).map((v) => String(v || '').trim()).filter(Boolean);
-    const fromFields = asArray(config.recipient_fields).flatMap((fieldKey) => {
-      const val = currentRecord?.[String(fieldKey || '').trim()];
-      return Array.isArray(val) ? val.map(String) : [String(val || '')];
-    }).filter(Boolean);
+    const fromFields = isInactiveProfileRecord(moduleId, currentRecord)
+      ? []
+      : asArray(config.recipient_fields).flatMap((fieldKey) => {
+        const val = currentRecord?.[String(fieldKey || '').trim()];
+        return Array.isArray(val) ? val.map(String) : [String(val || '')];
+      }).filter(Boolean);
     const to = Array.from(new Set([...manuals, ...fromFields])).filter((v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
     if (to.length === 0) return;
     await sendEmailViaGateway({ to, subject, body, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });

@@ -20,7 +20,6 @@ const relationOptionsPromiseCache = new Map<string, Promise<any[]>>();
 const RPC_RELATION_MODULES = new Set([
   'customers',
   'suppliers',
-  'profiles',
   'org_roles',
   'roles',
   'shelves',
@@ -669,6 +668,12 @@ export const fetchRelationOptionsForField = async (
         scopedFilter = {
           ...(scopedFilter || {}),
           org_id: orgId,
+        };
+      }
+      if (source.moduleName === 'profiles' && !exactId) {
+        scopedFilter = {
+          ...(scopedFilter || {}),
+          is_active: true,
         };
       }
 

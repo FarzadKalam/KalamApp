@@ -1002,6 +1002,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     setTemplateModalTarget({ actionId, fieldKey, title });
   }, []);
 
+  const templateModalZIndex = Math.max(overlayZIndexBase + 260, 0);
+
   const renderMessageTemplateButton = useCallback((actionId: string, fieldKey: string, title: string) => (
     <Button
       size="small"
@@ -3335,6 +3337,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           moduleId={currentModuleId || null}
           templateOnlyTitle={templateModalTarget.title}
           templateVariableOptions={templateVariableOptions}
+          zIndex={templateModalZIndex}
           onCancel={() => setTemplateModalTarget(null)}
           onApplyTemplate={(value) => {
             appendTemplateTextToActionField(templateModalTarget.actionId, templateModalTarget.fieldKey, value);

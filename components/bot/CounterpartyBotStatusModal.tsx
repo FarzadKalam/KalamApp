@@ -240,7 +240,7 @@ const PlatformTabContent: React.FC<{
           className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
           optionFilterProp="label"
           optionLabelProp="label"
-          placeholder="اگر خالی باشد، همه کاربران مجازند"
+          placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
           getPopupContainer={resolveSelectPopupContainer}
           popupMatchSelectWidth={false}
           styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
@@ -258,7 +258,7 @@ const PlatformTabContent: React.FC<{
           className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
           optionFilterProp="label"
           optionLabelProp="label"
-          placeholder="اگر خالی باشد، همه نقش‌ها مجازند"
+          placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
           getPopupContainer={resolveSelectPopupContainer}
           popupMatchSelectWidth={false}
           styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}

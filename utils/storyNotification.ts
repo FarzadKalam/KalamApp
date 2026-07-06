@@ -3,6 +3,7 @@
 
 import { supabase } from '../supabaseClient';
 import { sendSmsViaGateway } from './smsGateway';
+import { isActiveProfileRow } from './activeProfileRecipients';
 
 /**
  * دریافت شماره موبایل کاربران بر اساس آی‌دی‌هایشان
@@ -12,13 +13,14 @@ async function resolvePhoneNumbers(userIds: string[]): Promise<string[]> {
 
   const { data, error } = await supabase
     .from('profiles')
-    .select('mobile_1')
+    .select('mobile_1, is_active')
     .in('id', userIds)
     .not('mobile_1', 'is', null);
 
   if (error || !data) return [];
 
   return data
+    .filter(isActiveProfileRow)
     .map((row: { mobile_1: string | null }) => (row.mobile_1 || '').trim())
     .filter(Boolean);
 }

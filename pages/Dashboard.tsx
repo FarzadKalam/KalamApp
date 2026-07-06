@@ -307,6 +307,11 @@ const countRows = async (table: string, apply?: (query: any) => any) => {
   return Number(count || 0);
 };
 
+const canUseDashboardServerCounts = (
+  moduleId: string,
+  recordAccess: CurrentUserRecordAccessContext
+) => getModuleRecordScope(recordAccess.permissions, moduleId) === 'all';
+
 const mergeDashboardRowsById = <TRow extends { id?: string | null }>(rows: TRow[]) => {
   const map = new Map<string, TRow>();
   (rows || []).forEach((row) => {
@@ -695,6 +700,16 @@ const loadCardForModule = async (
     }
 
     case 'customers_new_mine': {
+      if (canUseDashboardServerCounts(moduleId, recordAccess)) {
+        const newCount = await countRows('customers', (query) => query.gte('created_at', recentSince));
+        return {
+          moduleId,
+          title,
+          value: newCount,
+          kind: 'number',
+          subtitle: `${toPersianNumber(newCount)} عدد جدید`,
+        };
+      }
       const { data } = await fetchScopedDashboardRows('customers', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const newCount = scopedRows.filter((row: any) => String(row?.created_at || '') >= recentSince).length;
@@ -727,6 +742,19 @@ const loadCardForModule = async (
     }
 
     case 'billboards_opening': {
+      if (canUseDashboardServerCounts(moduleId, recordAccess)) {
+        const [openingCount, freeCount] = await Promise.all([
+          countRows('billboards', (query) => query.eq('status', 'opening')),
+          countRows('billboards', (query) => query.eq('status', 'free')),
+        ]);
+        return {
+          moduleId,
+          title,
+          value: openingCount,
+          kind: 'number',
+          subtitle: `تعداد ${toPersianNumber(freeCount)} عدد تابلوی آزاد`,
+        };
+      }
       const { data } = await fetchScopedDashboardRows('billboards', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'status'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const openingCount = scopedRows.filter((row: any) => String(row?.status || '') === 'opening').length;
@@ -741,6 +769,19 @@ const loadCardForModule = async (
     }
 
     case 'products_total': {
+      if (canUseDashboardServerCounts(moduleId, recordAccess)) {
+        const [totalCount, newCount] = await Promise.all([
+          countRows('products'),
+          countRows('products', (query) => query.gte('created_at', recentSince)),
+        ]);
+        return {
+          moduleId,
+          title,
+          value: totalCount,
+          kind: 'number',
+          subtitle: `${toPersianNumber(newCount)} عدد محصول جدید`,
+        };
+      }
       const { data } = await fetchScopedDashboardRows('products', moduleId, ['id', 'org_id', 'assignee_id', 'assignee_role_id', 'assignee_type', 'created_at'], recordAccess);
       const scopedRows = filterRowsByRecordScope(data || [], moduleId, recordAccess);
       const totalCount = scopedRows.length;
@@ -755,6 +796,20 @@ const loadCardForModule = async (
     }
 
     default: {
+      if (canUseDashboardServerCounts(moduleId, recordAccess)) {
+        const tableName = module.table || moduleId;
+        const [totalCount, newCount] = await Promise.all([
+          countRows(tableName),
+          countRows(tableName, (query) => query.gte('created_at', recentSince)),
+        ]);
+        return {
+          moduleId,
+          title,
+          value: totalCount,
+          kind: 'number',
+          subtitle: `${toPersianNumber(newCount)} مورد جدید`,
+        };
+      }
       const selectFields = moduleSupportsScopedRecords(moduleId)
         ? 'id, org_id, assignee_id, assignee_role_id, assignee_type, created_at'
         : 'id, created_at';

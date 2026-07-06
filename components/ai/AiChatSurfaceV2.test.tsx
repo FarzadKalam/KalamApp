@@ -92,6 +92,17 @@ describe('AiChatSurfaceV2', () => {
       if (action === 'get_ai_overview') {
         return { data: { success: true, capabilityAvailability: {} }, error: null };
       }
+      if (action === 'get_ai_credit_summary') {
+        return {
+          data: {
+            success: true,
+            remainingTokens: 12000,
+            remainingIrt: 450000,
+            company: { currency_code: 'IRT', currency_label: 'تومان' },
+          },
+          error: null,
+        };
+      }
       if (action === 'suggest_auto_capabilities') {
         return { data: { success: true, capabilities: [], targetModuleId: null }, error: null };
       }
@@ -111,6 +122,7 @@ describe('AiChatSurfaceV2', () => {
 
     expect(screen.getByTestId('ai-chat-v2')).toBeInTheDocument();
     expect(screen.getAllByText('هوش مصنوعی تازه سیستم')[0]).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText(/اعتبار باقیمانده هوش مصنوعی:/)[0]).toHaveTextContent('۱۲,۰۰۰ توکن'));
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({ body: expect.objectContaining({ action: 'list_threads' }) }));
 

@@ -40,6 +40,7 @@ import {
   materializeLegacyProcessGraph,
 } from './processGraph';
 import { primeRecycleBinGuardCache, shouldSkipRecordForAutomation } from './recycleBinGuards';
+import { filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
 
 type AutomationActor = {
   id?: string | null;
@@ -79,6 +80,41 @@ const getTaskAutomationBaseFieldKey = (fieldKey?: string | null) =>
 const normalizeTaskStatus = (value: unknown) => String(value || '').trim().toLowerCase();
 const COMPLETED_TASK_STATUSES = new Set(['done', 'completed']);
 const PROCESS_AUTOMATION_LOG_RUN_TYPE = 'process_automation';
+const PROCESS_AUTOMATION_INTERVAL_TASK_SELECT = [
+  'id',
+  'name',
+  'status',
+  'task_type',
+  'priority',
+  'due_date',
+  'start_date',
+  'completed_at',
+  'assignee_id',
+  'assignee_role_id',
+  'assignee_type',
+  'source_module_id',
+  'source_record_id',
+  'related_to_module',
+  'related_product',
+  'related_production_order',
+  'project_id',
+  'marketing_lead_id',
+  'related_customer',
+  'related_supplier',
+  'related_invoice',
+  'purchase_invoice_id',
+  'production_line_id',
+  'source_template_id',
+  'process_group_id',
+  'process_run_id',
+  'process_run_stage_id',
+  'process_node_key',
+  'process_lane_key',
+  'recurrence_info',
+  'updated_at',
+  'created_at',
+  'image_url',
+].join(',');
 const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
   'is_true',
   'is_false',
@@ -355,7 +391,7 @@ const getRequestedCommunicationChannels = (actions: any[]): Set<CommunicationCha
 };
 
 const getProfileCommunicationSelect = (channels: Set<CommunicationChannel>) => {
-  const columns = ['id'];
+  const columns = ['id', 'is_active'];
   if (channels.has('sms')) columns.push('mobile_1');
   if (channels.has('email')) columns.push('email');
   if (channels.has('telegram')) columns.push('telegram_chat_id');
@@ -442,12 +478,13 @@ const resolveCommunicationTargets = async (
   }
 
   const allUsers = [...directUsers, ...roleUsers];
+  const activeUsers = allUsers.filter(isActiveProfileRow);
   return {
-    phones: Array.from(new Set(allUsers.map((row) => String(row?.mobile_1 || '').trim()).filter(Boolean))),
-    emails: Array.from(new Set(allUsers.map((row) => String(row?.email || '').trim()).filter(Boolean))),
-    telegramChatIds: Array.from(new Set(allUsers.map((row) => String(row?.telegram_chat_id || '').trim()).filter(Boolean))),
-    baleChatIds: Array.from(new Set(allUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
-    rubikaChatIds: Array.from(new Set(allUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
+    phones: Array.from(new Set(activeUsers.map((row) => String(row?.mobile_1 || '').trim()).filter(Boolean))),
+    emails: Array.from(new Set(activeUsers.map((row) => String(row?.email || '').trim()).filter(Boolean))),
+    telegramChatIds: Array.from(new Set(activeUsers.map((row) => String(row?.telegram_chat_id || '').trim()).filter(Boolean))),
+    baleChatIds: Array.from(new Set(activeUsers.map((row) => String(row?.bale_chat_id || '').trim()).filter(Boolean))),
+    rubikaChatIds: Array.from(new Set(activeUsers.map((row) => String(row?.rubika_chat_id || '').trim()).filter(Boolean))),
   };
 };
 
@@ -825,7 +862,10 @@ const insertAutomationNote = async (
   );
   if (!scope.hasLinkedRecord) return;
 
-  const mentionTarget = await expandChatGroupsToMentionTarget(mergeMentionTargets(target));
+  const mentionTarget = await filterActiveMentionTargets(
+    supabase,
+    await expandChatGroupsToMentionTarget(mergeMentionTargets(target))
+  );
   if (mentionTarget.userIds.length === 0 && mentionTarget.roleIds.length === 0) {
     console.info('Skipped process automation system note without explicit recipients.', {
       processAutomationRuleId: String(rule?.id || '').trim() || null,
@@ -1265,14 +1305,14 @@ export const runProcessAutomationsIntervalTick = async ({
     const limit = Math.min(normalizedBatchSize, normalizedMaxTasks - offset);
     const { data, error } = await supabase
       .from('tasks')
-      .select('*')
+      .select(PROCESS_AUTOMATION_INTERVAL_TASK_SELECT)
       .not('recurrence_info', 'is', null)
       .not('status', 'in', '(done,completed)')
       .order('updated_at', { ascending: false })
       .range(offset, offset + limit - 1);
     if (error) throw error;
 
-    const rows = Array.isArray(data) ? data : [];
+    const rows = (Array.isArray(data) ? data : []) as Record<string, any>[];
     if (rows.length === 0) break;
     await primeRecycleBinGuardCache(buildRecycleGuardPrimeEntriesForTasks(rows));
 

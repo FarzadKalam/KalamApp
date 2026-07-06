@@ -1154,6 +1154,62 @@ async function expandChatGroupsIntoSets(
   }).filter((group) => Boolean(group.groupId));
 }
 
+function isActiveProfileRow(row: any): boolean {
+  return row?.is_active !== false;
+}
+
+async function filterActiveMentionTargets(
+  url: string,
+  key: string,
+  orgId: string,
+  userIds: string[],
+  roleIds: string[],
+): Promise<{ userIds: string[]; roleIds: string[] }> {
+  const requestedUserIds = Array.from(new Set((userIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  const requestedRoleIds = Array.from(new Set((roleIds || []).map((id) => String(id || '').trim()).filter(Boolean)));
+  const activeUserIds = new Set<string>();
+
+  if (requestedUserIds.length > 0) {
+    const rows = await dbGet(url, key, `profiles?id=in.(${requestedUserIds.join(',')})&select=id,is_active`).catch(() => []);
+    const knownIds = new Set(rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean));
+    rows.filter(isActiveProfileRow).forEach((row: any) => {
+      const id = String(row?.id || '').trim();
+      if (id) activeUserIds.add(id);
+    });
+    requestedUserIds.filter((id) => !knownIds.has(id)).forEach((id) => activeUserIds.add(id));
+  }
+
+  const rolesWithProfiles = new Set<string>();
+  if (requestedRoleIds.length > 0) {
+    const rows = await dbGet(url, key, `profiles?role_id=in.(${requestedRoleIds.join(',')})&org_id=eq.${orgId}&select=id,role_id,is_active`).catch(() => []);
+    rows.forEach((row: any) => {
+      const roleId = String(row?.role_id || '').trim();
+      if (roleId) rolesWithProfiles.add(roleId);
+      if (!isActiveProfileRow(row)) return;
+      const id = String(row?.id || '').trim();
+      if (id) activeUserIds.add(id);
+    });
+  }
+
+  return {
+    userIds: Array.from(activeUserIds),
+    roleIds: requestedRoleIds.filter((roleId) => !rolesWithProfiles.has(roleId)),
+  };
+}
+
+async function filterActiveGroupMentionTargets(
+  url: string,
+  key: string,
+  orgId: string,
+  groups: Array<{ groupId: string; userIds: string[]; roleIds: string[] }>,
+): Promise<Array<{ groupId: string; userIds: string[]; roleIds: string[] }>> {
+  const filtered = await Promise.all((groups || []).map(async (group) => {
+    const target = await filterActiveMentionTargets(url, key, orgId, group.userIds || [], group.roleIds || []);
+    return { ...group, userIds: target.userIds, roleIds: target.roleIds };
+  }));
+  return filtered.filter((group) => group.userIds.length > 0 || group.roleIds.length > 0);
+}
+
 async function resolveAssigneesToSmsRecipients(
   url: string, key: string, orgId: string,
   recipientAssignees: any[], recipientFields: any[], record: Record<string, any>
@@ -1185,16 +1241,18 @@ async function resolveAssigneesToSmsRecipients(
 
   if (userIds.size > 0) {
     const ids = Array.from(userIds).join(',');
-    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=mobile_1,mobile_2,mobile`).catch(() => []);
+    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=mobile_1,mobile_2,mobile,is_active`).catch(() => []);
     profiles.forEach((p: any) => {
+      if (!isActiveProfileRow(p)) return;
       [p.mobile_1, p.mobile_2, p.mobile].map(normalizePhone).filter(isValidIranMobile).forEach((ph) => phones.push(ph));
     });
   }
 
   if (roleIds.size > 0) {
     const ids = Array.from(roleIds).join(',');
-    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=mobile_1,mobile_2,mobile`).catch(() => []);
+    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=mobile_1,mobile_2,mobile,is_active`).catch(() => []);
     profiles.forEach((p: any) => {
+      if (!isActiveProfileRow(p)) return;
       [p.mobile_1, p.mobile_2, p.mobile].map(normalizePhone).filter(isValidIranMobile).forEach((ph) => phones.push(ph));
     });
   }
@@ -1225,7 +1283,7 @@ async function resolveAssigneesToMentionTargets(
   }
 
   const groupRows = await loadChatGroups(url, key, Array.from(groupIds));
-  const groupTargets = groupRows.map((group: any) => {
+  const groupTargetsRaw = groupRows.map((group: any) => {
     const groupId = String(group?.id || '').trim();
     if (!groupId) return null;
     return {
@@ -1234,10 +1292,12 @@ async function resolveAssigneesToMentionTargets(
       roleIds: asArray(group?.role_ids).map((id) => String(id || '').trim()).filter(Boolean),
     };
   }).filter(Boolean) as Array<{ groupId: string; userIds: string[]; roleIds: string[] }>;
+  const activeDirectTargets = await filterActiveMentionTargets(url, key, orgId, Array.from(userIds), Array.from(roleIds));
+  const groupTargets = await filterActiveGroupMentionTargets(url, key, orgId, groupTargetsRaw);
 
   return {
-    mentionUserIds: Array.from(userIds),
-    mentionRoleIds: Array.from(roleIds),
+    mentionUserIds: activeDirectTargets.userIds,
+    mentionRoleIds: activeDirectTargets.roleIds,
     groupTargets,
   };
 }
@@ -1278,13 +1338,13 @@ async function resolveAssigneesToBotChatIds(
   const allUserIds = new Set(userIds);
   if (roleIds.size > 0) {
     const ids = Array.from(roleIds).join(',');
-    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=id`).catch(() => []);
-    profiles.forEach((p: any) => { if (p.id) allUserIds.add(String(p.id)); });
+    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=id,is_active`).catch(() => []);
+    profiles.filter(isActiveProfileRow).forEach((p: any) => { if (p.id) allUserIds.add(String(p.id)); });
   }
   if (allUserIds.size > 0) {
     const ids = Array.from(allUserIds).join(',');
-    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=${chatIdField}`).catch(() => []);
-    profiles.forEach((p: any) => { const v = String(p?.[chatIdField] || '').trim(); if (v) chatIds.push(v); });
+    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=${chatIdField},is_active`).catch(() => []);
+    profiles.filter(isActiveProfileRow).forEach((p: any) => { const v = String(p?.[chatIdField] || '').trim(); if (v) chatIds.push(v); });
   }
 
   return Array.from(new Set(chatIds.filter(Boolean)));

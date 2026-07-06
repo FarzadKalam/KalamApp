@@ -2,12 +2,10 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
-const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const normalizeDbUuid = (value: unknown) => {
+const normalizeProcessReferenceId = (value: unknown) => {
   const raw = normalizeText(value);
   if (!raw) return '';
-  const stripped = raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task)[_:]/i, '');
-  return UUID_LIKE_RE.test(stripped) ? stripped : '';
+  return raw.replace(/^(process_run_stage|process_run|process_template_stage|process_template|task)[_:]/i, '').trim();
 };
 const RECYCLE_BIN_CHECK_CACHE_TTL_MS = 5 * 60_000;
 
@@ -165,8 +163,8 @@ export const isRecordInRecycleBinUncached = async ({
 const getTaskProcessIds = (task?: Record<string, any> | null) => {
   const recurrence = parseObject(task?.recurrence_info);
   return {
-    processRunId: normalizeDbUuid(task?.process_run_id || recurrence?.process_run_id),
-    processRunStageId: normalizeDbUuid(task?.process_run_stage_id || recurrence?.process_run_stage_id),
+    processRunId: normalizeProcessReferenceId(task?.process_run_id || recurrence?.process_run_id),
+    processRunStageId: normalizeProcessReferenceId(task?.process_run_stage_id || recurrence?.process_run_stage_id),
   };
 };
 

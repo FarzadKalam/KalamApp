@@ -23,6 +23,7 @@ import { getOtpErrorMessage, normalizeOtpToken } from '../../utils/otpAuth';
 import { assertPhoneAvailableForOrg, getPhoneOtpStatusMeta, getPhoneOwnershipErrorMessage, lookupPhoneLoginCandidate, lookupPhoneSignupInvite } from '../../utils/phoneAuth';
 import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phoneNumber';
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
+import { clearReferenceDataCache } from '../../utils/referenceData';
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
@@ -307,6 +308,7 @@ const UsersTab: React.FC = () => {
     if (record.id === currentUserId) {
       clearSessionBootstrapCache();
     }
+    clearReferenceDataCache();
     message.success('وضعیت کاربر بروزرسانی شد');
     fetchData();
   };
@@ -525,6 +527,7 @@ const UsersTab: React.FC = () => {
             fullName: String(values.full_name || editingUser.full_name || '').trim() || null,
           });
         }
+        clearReferenceDataCache();
         message.success('اطلاعات کاربر بروزرسانی شد');
         await fetchData();
         const updatedRecord = rows.find((row) => row._rowType === 'profile' && row.id === editingUser.id) || editingUser;
@@ -548,6 +551,7 @@ const UsersTab: React.FC = () => {
         });
 
         message.success('کاربر با موفقیت ایجاد شد. حالا می‌توانید شماره او را همین‌جا تایید کنید.');
+        clearReferenceDataCache();
         await fetchData();
         const createdId = String(created?.profile?.id || created?.user?.id || '').trim();
         if (createdId) {

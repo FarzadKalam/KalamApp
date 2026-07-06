@@ -242,6 +242,60 @@ describe('workflow action recipients', () => {
     }));
   });
 
+  it('filters inactive users from workflow SMS recipients', async () => {
+    mocks.profilesByUser = [
+      { id: USER_ID, mobile_1: '09111111111', is_active: false },
+      { id: DIRECT_USER_ID, mobile_1: '09333333333', is_active: true },
+    ];
+    mocks.profilesByRole = [
+      { id: '66666666-6666-4666-8666-666666666666', role_id: ROLE_ID, mobile_1: '09222222222', is_active: false },
+      { id: '77777777-7777-4777-8777-777777777777', role_id: ROLE_ID, mobile_1: '09444444444', is_active: true },
+    ];
+
+    await executeWorkflowAction(
+      {
+        id: 'action-active-sms',
+        type: 'send_sms',
+        config: {
+          recipient_assignees: [`user:${USER_ID}`, `user:${DIRECT_USER_ID}`, `role:${ROLE_ID}`],
+          message: 'سلام',
+        },
+      },
+      'customers',
+      { id: '55555555-5555-4555-8555-555555555555' }
+    );
+
+    expect(mocks.sendSmsViaGateway).toHaveBeenCalledTimes(1);
+    expect(mocks.sendSmsViaGateway).toHaveBeenCalledWith(expect.objectContaining({
+      to: ['09333333333', '09444444444'],
+    }));
+  });
+
+  it('skips workflow system notes when all resolved user recipients are inactive', async () => {
+    mocks.profilesByUser = [
+      { id: USER_ID, is_active: false },
+    ];
+    mocks.profilesByRole = [
+      { id: '66666666-6666-4666-8666-666666666666', role_id: ROLE_ID, is_active: false },
+    ];
+
+    await executeWorkflowAction(
+      {
+        id: 'action-inactive-note',
+        type: 'send_note_sms',
+        config: {
+          recipient_assignees: [`user:${USER_ID}`, `role:${ROLE_ID}`],
+          note_text: 'پیام تست',
+        },
+      },
+      'customers',
+      { id: '55555555-5555-4555-8555-555555555555' }
+    );
+
+    expect(mocks.insertNotesWithFallback).not.toHaveBeenCalled();
+    expect(mocks.sendNoteSmsNotifications).not.toHaveBeenCalled();
+  });
+
   it('publishes workflow stories with system identity and mention users', async () => {
     mocks.rowsByTable = {
       company_settings: [

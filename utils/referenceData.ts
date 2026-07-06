@@ -26,6 +26,7 @@ export type AssigneeDirectory = {
     voip_extension?: string | null;
     avatar_url?: string | null;
     role_id?: string | null;
+    is_active?: boolean | null;
     display_name: string;
   }>;
   roles: Array<{
@@ -646,6 +647,7 @@ export const fetchAssigneeDirectory = async (
         orgId: orgId || null,
         limit: 300,
         cacheKey: orgId ? 'assignee-directory:users:org' : 'assignee-directory:users:global',
+        activeOnly: true,
       }),
       buildRoleQuery('org', preferTreeSchema),
       orgId ? buildRoleQuery('extra', preferTreeSchema) : Promise.resolve({ data: [] as any[], error: null }),

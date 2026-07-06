@@ -39,6 +39,7 @@ export const loadProfilesWithCompat = async (
     cacheKey?: string;
     orderByFullName?: boolean;
     allowGlobalScope?: boolean;
+    activeOnly?: boolean;
   }
 ) => {
   const normalizedOrgId = String(options?.orgId || '').trim() || null;
@@ -54,14 +55,25 @@ export const loadProfilesWithCompat = async (
     cacheKey: options?.cacheKey || (normalizedOrgId ? 'profiles:directory:org' : 'profiles:directory:global'),
     columns: PROFILE_DIRECTORY_SAFE_COLUMNS,
     execute: (selectExpr) => {
-      let query = supabaseClient.from('profiles').select(selectExpr).limit(limit);
-      if (normalizedOrgId) {
-        query = query.eq('org_id', normalizedOrgId);
+      const applyFilters = (baseQuery: any) => {
+        let query = baseQuery;
+        if (normalizedOrgId && typeof query?.eq === 'function') {
+          query = query.eq('org_id', normalizedOrgId);
+        }
+        if (options?.activeOnly && typeof query?.eq === 'function') {
+          query = query.eq('is_active', true);
+        }
+        if (options?.orderByFullName && typeof query?.order === 'function') {
+          query = query.order('full_name', { ascending: true });
+        }
+        return query;
+      };
+
+      const selected = supabaseClient.from('profiles').select(selectExpr);
+      if (typeof selected?.eq === 'function') {
+        return applyFilters(selected).limit(limit);
       }
-      if (options?.orderByFullName) {
-        query = query.order('full_name', { ascending: true });
-      }
-      return query;
+      return applyFilters(selected.limit(limit));
     },
   });
 

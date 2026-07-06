@@ -393,22 +393,22 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     if (key && !fieldsByKey.has(key)) fieldsByKey.set(key, field);
   });
   const rawValues = {
-    ...getProcessTaskCustomFieldValuesFromRecurrence(recurrence),
     ...getProcessTaskCustomFieldValuesFromRecurrence(sourceStageRecurrence),
-    ...(source?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
-    ...(sourceMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
-    ...(source?.custom_field_values && typeof source.custom_field_values === 'object' ? source.custom_field_values : {}),
-    ...(source?.customFields && typeof source.customFields === 'object' ? source.customFields : {}),
-    ...(sourceMetadata?.custom_field_values && typeof sourceMetadata.custom_field_values === 'object' ? sourceMetadata.custom_field_values : {}),
-    ...(sourceMetadata?.customFields && typeof sourceMetadata.customFields === 'object' ? sourceMetadata.customFields : {}),
-    ...(recurrence?.custom_field_values && typeof recurrence.custom_field_values === 'object' ? recurrence.custom_field_values : {}),
-    ...(recurrence?.customFields && typeof recurrence.customFields === 'object' ? recurrence.customFields : {}),
     ...(sourceStage?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceStage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceStage[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
     ...(sourceStageMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceStageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceStageMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
     ...(sourceStage?.custom_field_values && typeof sourceStage.custom_field_values === 'object' ? sourceStage.custom_field_values : {}),
     ...(sourceStage?.customFields && typeof sourceStage.customFields === 'object' ? sourceStage.customFields : {}),
     ...(sourceStageMetadata?.custom_field_values && typeof sourceStageMetadata.custom_field_values === 'object' ? sourceStageMetadata.custom_field_values : {}),
     ...(sourceStageMetadata?.customFields && typeof sourceStageMetadata.customFields === 'object' ? sourceStageMetadata.customFields : {}),
+    ...(sourceMetadata?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? sourceMetadata[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(sourceMetadata?.custom_field_values && typeof sourceMetadata.custom_field_values === 'object' ? sourceMetadata.custom_field_values : {}),
+    ...(sourceMetadata?.customFields && typeof sourceMetadata.customFields === 'object' ? sourceMetadata.customFields : {}),
+    ...(source?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] && typeof source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] === 'object' ? source[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY] : {}),
+    ...(source?.custom_field_values && typeof source.custom_field_values === 'object' ? source.custom_field_values : {}),
+    ...(source?.customFields && typeof source.customFields === 'object' ? source.customFields : {}),
+    ...getProcessTaskCustomFieldValuesFromRecurrence(recurrence),
+    ...(recurrence?.custom_field_values && typeof recurrence.custom_field_values === 'object' ? recurrence.custom_field_values : {}),
+    ...(recurrence?.customFields && typeof recurrence.customFields === 'object' ? recurrence.customFields : {}),
   };
   Object.keys(rawValues).forEach((key) => {
     if (!fieldsByKey.has(key)) {
@@ -424,12 +424,12 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     const key = String(field?.key || '').trim();
     if (!key) return acc;
     const value = pickCustomFieldValue(key, [
+      recurrence,
       source,
       sourceMetadata,
-      recurrence,
+      sourceStageRecurrence,
       sourceStage,
       sourceStageMetadata,
-      sourceStageRecurrence,
     ]);
     if (value !== undefined) acc[key] = value;
     return acc;
@@ -1007,15 +1007,21 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const uploadFilesForTaskRef = useRef<((targetTaskId: string, files: File[], shouldReload?: boolean) => Promise<void>) | null>(null);
   const initializedModalKeyRef = useRef('');
   const taskTypeField = useMemo(() => getTaskField('task_type'), []);
-  const isDraftActivityCreationMode = stage?.kind === 'draft';
-  const creationDraftStorageKey = useMemo(
-    () => (isDraftActivityCreationMode ? buildCreationDraftStorageKey(process, stage) : ''),
-    [isDraftActivityCreationMode, process, stage],
-  );
   const runProcess = process.mode === 'run' ? process as Extract<ProcessV2CardData, { mode: 'run' }> : null;
   const rawSource: Record<string, any> = stage?.source && typeof stage.source === 'object'
     ? stage.source as Record<string, any>
     : {};
+  const rawTaskRecordId = normalizeDbUuid(
+    rawSource?.task_id
+    || rawSource?.process_task_id
+    || (stage?.kind !== 'draft' ? rawSource?.id : '')
+    || ''
+  );
+  const isDraftActivityCreationMode = stage?.kind === 'draft' && !rawTaskRecordId;
+  const creationDraftStorageKey = useMemo(
+    () => (isDraftActivityCreationMode ? buildCreationDraftStorageKey(process, stage) : ''),
+    [isDraftActivityCreationMode, process, stage],
+  );
   const rawSourceRecurrence = parseObject(rawSource?.recurrence_info);
   const localPatchRecurrence = parseObject(localTaskPatch?.recurrence_info);
   const source: Record<string, any> = {
@@ -1043,7 +1049,13 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const effectiveSource = effectiveConfigStage?.source && typeof effectiveConfigStage.source === 'object' ? effectiveConfigStage.source : source;
   const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
   const effectiveSourceStage = effectiveSource?.source_stage && typeof effectiveSource.source_stage === 'object' ? effectiveSource.source_stage : sourceStage;
-  const taskRecordId = normalizeDbUuid(source?.task_id || (!isDraftActivityCreationMode ? source?.id : '') || '');
+  const taskRecordId = normalizeDbUuid(
+    source?.task_id
+    || source?.process_task_id
+    || rawTaskRecordId
+    || (!isDraftActivityCreationMode ? source?.id : '')
+    || ''
+  );
   const modalInitKey = useMemo(() => (
     open && stage
       ? `${process.mode}:${process.id}:${stage.id}:${taskRecordId || 'draft'}:${isDraftActivityCreationMode ? 'draft' : 'activity'}`
@@ -1209,7 +1221,11 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     recurrencePatch?: Record<string, any>,
     sourcePatch?: Record<string, any>,
   ) => {
-    if (isDraftActivityCreationMode || !taskRecordId) return;
+    if (isDraftActivityCreationMode) return;
+    if (!taskRecordId) {
+      message.error('شناسه فعالیت برای ذخیره تغییرات پیدا نشد.');
+      throw new Error('PROCESS_TASK_ID_MISSING');
+    }
     const currentRecurrence = parseObject(source?.recurrence_info);
     const nextPatch: Record<string, any> = {
       ...patch,
@@ -1246,21 +1262,24 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         .select('id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,due_date,start_date,actual_start_at,completed_at,description,task_report,wage,weight,recurrence_info,process_run_stage_id,process_node_key,process_lane_key,source_template_id,source_module_id,source_record_id,process_group_id')
         .maybeSingle();
       if (error) throw error;
+      if (!data?.id) {
+        throw new Error('ذخیره فعالیت روی سرور اعمال نشد.');
+      }
       const updatedTask = {
         ...source,
         ...nextPatch,
-        ...(data || {}),
+        ...data,
         ...(sourcePatch || {}),
         id: taskRecordId,
-        process_run_stage_id: (data as any)?.process_run_stage_id || source?.process_run_stage_id || sourceStage?.id,
+        process_run_stage_id: data?.process_run_stage_id || source?.process_run_stage_id || sourceStage?.id,
       };
       setLocalTaskPatch((current) => ({
         ...current,
-        ...(data || nextPatch),
+        ...data,
         recurrence_info: {
           ...parseObject(current?.recurrence_info),
           ...parseObject(nextPatch?.recurrence_info),
-          ...parseObject((data as any)?.recurrence_info),
+          ...parseObject(data?.recurrence_info),
         },
       }));
       await syncProcessRunStageFromTask({

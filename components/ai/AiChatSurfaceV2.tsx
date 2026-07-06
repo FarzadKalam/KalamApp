@@ -6,6 +6,7 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
+import { formatPersianPrice } from '../../utils/persianNumberFormatter';
 import AssistantPanel from './AssistantPanel';
 import AiSparkleIcon from './AiSparkleIcon';
 import type { AiComposerCapability } from './AiCapabilityComposerActions';
@@ -20,6 +21,15 @@ type AiThreadRow = {
   module_id?: string | null;
   record_id?: string | null;
   metadata?: Record<string, any> | null;
+};
+
+type AiCreditSummary = {
+  remainingTokens?: number | null;
+  remainingIrt?: number | null;
+  company?: {
+    currency_code?: string | null;
+    currency_label?: string | null;
+  } | null;
 };
 
 const THREAD_LIMIT = 80;
@@ -56,6 +66,21 @@ const formatThreadTime = (value?: string | null) => {
   return new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric' }).format(date);
 };
 
+const formatAiCreditSummary = (summary?: AiCreditSummary | null) => {
+  if (!summary) return 'در حال دریافت...';
+  const hasTokenValue = summary.remainingTokens !== null && summary.remainingTokens !== undefined;
+  const tokenValue = Number(summary.remainingTokens || 0);
+  const tokenText = hasTokenValue && Number.isFinite(tokenValue) ? formatPersianPrice(Math.max(0, Math.floor(tokenValue))) : 'نامشخص';
+  const currencyCode = String(summary.company?.currency_code || 'IRT').toUpperCase();
+  const currencyLabel = String(summary.company?.currency_label || (currencyCode === 'IRR' ? 'ریال' : 'تومان')).trim() || 'تومان';
+  const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
+  const amount = summary.remainingIrt === null || summary.remainingIrt === undefined
+    ? null
+    : Math.max(0, Number(summary.remainingIrt || 0)) * currencyMultiplier;
+  const amountText = amount === null ? 'نامشخص' : `${formatPersianPrice(amount)} ${currencyLabel}`;
+  return `${tokenText} توکن (${amountText})`;
+};
+
 const isHiddenAssistantThread = (thread?: AiThreadRow | null) => {
   const metadata = thread?.metadata && typeof thread.metadata === 'object' ? thread.metadata : {};
   const contextKey = String(thread?.context_key || metadata.context_key || '').trim();
@@ -82,6 +107,7 @@ const AiChatSurfaceV2: React.FC = () => {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadListOpen, setThreadListOpen] = useState(false);
   const [loadingThreads, setLoadingThreads] = useState(true);
+  const [aiCreditSummary, setAiCreditSummary] = useState<AiCreditSummary | null>(null);
   const [search, setSearch] = useState('');
   const [newConversationSeed, setNewConversationSeed] = useState(0);
   const searchInputRef = useRef<any>(null);
@@ -150,6 +176,28 @@ const AiChatSurfaceV2: React.FC = () => {
     void loadThreads();
   }, [loadThreads]);
 
+  useEffect(() => {
+    let mounted = true;
+    const loadCreditSummary = async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_ai_credit_summary' } });
+        if (error) throw error;
+        if ((data as any)?.success === false) throw new Error(String((data as any)?.message || 'دریافت اعتبار هوش مصنوعی ناموفق بود.'));
+        if (mounted) setAiCreditSummary(data as AiCreditSummary);
+      } catch {
+        if (mounted) setAiCreditSummary({
+          remainingTokens: null,
+          remainingIrt: null,
+          company: { currency_code: 'IRT', currency_label: 'تومان' },
+        });
+      }
+    };
+    void loadCreditSummary();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const filteredThreads = useMemo(() => {
     const normalized = search.trim().toLocaleLowerCase('fa');
     if (!normalized) return threads;
@@ -198,7 +246,12 @@ const AiChatSurfaceV2: React.FC = () => {
       {!compact ? (
         <div className="border-b border-slate-200/60 bg-white/88 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
           <div className="flex items-center justify-between gap-2">
-            <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">هوش مصنوعی تازه سیستم</div>
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">هوش مصنوعی تازه سیستم</div>
+              <div className="mt-0.5 truncate text-[10.5px] leading-4 text-slate-500 dark:text-slate-400">
+                اعتبار باقیمانده هوش مصنوعی: {formatAiCreditSummary(aiCreditSummary)}
+              </div>
+            </div>
             <div className="flex shrink-0 items-center gap-1">
               <Tooltip title="جستجوی گفتگوها">
                 <Button type="text" shape="circle" icon={<SearchOutlined />} aria-label="جستجوی گفتگوهای هوش مصنوعی" onClick={() => searchInputRef.current?.focus?.()} />

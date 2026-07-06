@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { sendSmsViaGateway } from './smsGateway';
+import { isActiveProfileRow } from './activeProfileRecipients';
 
 const NOTE_OPTIONAL_INSERT_COLUMNS = ['author_name', 'metadata', 'reply_to', 'mention_role_ids', 'mention_user_ids'] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -209,7 +210,7 @@ export const sendNoteSmsNotifications = async ({
     profileQueries.push(
       supabase
         .from('profiles')
-        .select('id, mobile_1')
+        .select('id, mobile_1, is_active')
         .in('id', userIds)
     );
   }
@@ -217,7 +218,7 @@ export const sendNoteSmsNotifications = async ({
     profileQueries.push(
       supabase
         .from('profiles')
-        .select('id, mobile_1')
+        .select('id, mobile_1, is_active')
         .in('role_id', roleIds)
     );
   }
@@ -225,7 +226,9 @@ export const sendNoteSmsNotifications = async ({
   const results = await Promise.all(profileQueries);
   const phones = results.flatMap((result: any) => {
     if (result?.error) throw result.error;
-    return Array.isArray(result?.data) ? result.data.map((row: any) => normalizePhone(row?.mobile_1)) : [];
+    return Array.isArray(result?.data)
+      ? result.data.filter(isActiveProfileRow).map((row: any) => normalizePhone(row?.mobile_1))
+      : [];
   });
 
   const recipients = Array.from(new Set(phones.filter(isValidIranMobile)));

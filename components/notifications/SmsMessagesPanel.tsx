@@ -1,8 +1,8 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { App, Badge, Button, Empty, Skeleton } from 'antd';
 import { EditOutlined, EyeOutlined } from '@ant-design/icons';
-import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
-import { sendSmsViaGateway } from '../../utils/smsGateway';
+import { formatPersianPrice, safeJalaliFormat } from '../../utils/persianNumberFormatter';
+import { getSmsBalanceViaGateway, sendSmsViaGateway } from '../../utils/smsGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import {
   normalizePhoneThreadValue,
@@ -180,9 +180,34 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
 }) => {
   const { message } = App.useApp();
   const smsMessagesScrollContainerRef = useRef<HTMLDivElement>(null);
+  const [smsBalance, setSmsBalance] = useState<number | null>(null);
+  const [smsBalanceLoaded, setSmsBalanceLoaded] = useState(false);
   const isDesktop = layout === 'desktop';
   const activeThread = selectedSmsThread;
   const threadMessages = displayedSmsMessages;
+
+  useEffect(() => {
+    let mounted = true;
+    const loadSmsBalance = async () => {
+      try {
+        const result = await getSmsBalanceViaGateway();
+        const numeric = Number(String(result?.balance ?? '').replace(/,/g, '').trim());
+        if (mounted) {
+          setSmsBalance(Number.isFinite(numeric) ? Math.max(0, Math.floor(numeric)) : null);
+          setSmsBalanceLoaded(true);
+        }
+      } catch {
+        if (mounted) {
+          setSmsBalance(null);
+          setSmsBalanceLoaded(true);
+        }
+      }
+    };
+    void loadSmsBalance();
+    return () => {
+      mounted = false;
+    };
+  }, []);
   const handleSelectThreadKey = useCallback((thread: SmsThreadItem) => {
     setSelectedSmsThreadKey(thread.id);
     if (thread.phone) setSmsRecipient(thread.phone);
@@ -420,6 +445,9 @@ const SmsMessagesPanel: React.FC<SmsMessagesPanelProps> = ({
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
                   {activeThread?.title || 'ارسال پیامک'}
+                </div>
+                <div className="mt-1 truncate text-[11px] text-gray-500">
+                  اعتبار باقیمانده پیامک: {smsBalanceLoaded && smsBalance !== null ? `${formatPersianPrice(smsBalance)} پیامک` : 'نامشخص'}
                 </div>
                 <div className="mt-1 truncate text-[11px] text-gray-500" dir="ltr">
                   <button

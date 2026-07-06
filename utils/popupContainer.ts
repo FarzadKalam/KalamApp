@@ -34,7 +34,7 @@ const VIEWPORT_SENSITIVE_OVERLAY_SELECTOR = [
 
 export const KALAM_SELECT_FIELD_CLASSNAME = 'kalam-select-field';
 export type AdaptivePickerMode = 'auto' | 'desktop' | 'mobile-sheet';
-const KALAM_POPUP_ROOT_Z_INDEX = 40000;
+export const KALAM_POPUP_ROOT_Z_INDEX = 40000;
 
 export const mergeClassNames = (...parts: Array<string | null | undefined | false>) =>
   parts.filter(Boolean).join(' ');

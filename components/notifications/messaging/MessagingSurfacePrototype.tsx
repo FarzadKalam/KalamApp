@@ -30,7 +30,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import { App, Avatar, Badge, Button, Checkbox, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
-import { BOT_CHANNEL_LABELS_FA, BOT_CHANNELS, getBotPlatformAvatarSrc, isBotTargetModuleId, type BotTargetModuleId } from '../../../utils/botPlatform';
+import { BOT_CHANNEL_LABELS_FA, BOT_CHANNELS, getBotChatIdFieldKey, getBotPlatformAvatarSrc, isBotTargetModuleId, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
 import { MODULES } from '../../../moduleRegistry';
 import { useMessagingOmniLiveData } from './useMessagingOmniLiveData';
@@ -86,11 +86,13 @@ import {
 import type { NotificationConversationSummary } from '../../../utils/notificationConversationRpc';
 import ProfileAvatar from '../../common/ProfileAvatar';
 import MessageAttachmentGallery from '../../messaging/MessageAttachmentGallery';
+import type { BotPlatformState } from '../../bot/CounterpartyBotStatusModal';
 
 const ForwardMessageModalRuntime = React.lazy(() => import('../ForwardMessageModalRuntime'));
 const SmartForm = React.lazy(() => import('../../SmartForm'));
 const MessageComposerModal = React.lazy(() => import('../../MessageComposerModal'));
 const BotChatIdentityBindModal = React.lazy(() => import('../BotChatIdentityBindModal'));
+const CounterpartyBotStatusModal = React.lazy(() => import('../../bot/CounterpartyBotStatusModal'));
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 type EventKind = 'message' | 'sms' | 'call';
@@ -171,6 +173,8 @@ type TimelineEvent = {
   caller?: string;
   responder?: string;
   callType?: string;
+  relatedModuleId?: string | null;
+  relatedRecordId?: string | null;
 };
 
 type ComposerSendPayload = {
@@ -657,6 +661,57 @@ const buildBotSmsNotificationText = (orgName: string, platformLabel: string) => 
   return `سلام، یک پیام جدید از طرف ${safeOrgName} در ${safePlatformLabel} برای شما ارسال شد.\nلطفاً پیام‌رسان خود را بررسی کنید.`;
 };
 
+const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
+  groupTitle: '',
+  groupJoinLink: '',
+  directChatId: '',
+  currentStatus: 'pending_join',
+  activationCode: '',
+  lastInboundAt: '',
+  lastInboundText: '',
+  allowedUserIds: [],
+  allowedRoleIds: [],
+  aiAutoReplyEnabled: false,
+  aiCounterpartyGuide: '',
+};
+
+const BOT_BIND_CAPTURE_SECONDS = 60;
+
+const buildEnglishActivationBase = (value: any) => {
+  const ascii = String(value || '')
+    .normalize('NFKD')
+    .replace(/[^\x00-\x7F]/g, ' ')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toUpperCase();
+  if (!ascii) return '';
+  return ascii.split(/\s+/).filter(Boolean).slice(0, 3).join('-').slice(0, 20);
+};
+
+const createBotActivationCode = (englishName?: string, orgPrefix?: string) => {
+  const prefix = String(orgPrefix || 'TAZESYSTEM').toUpperCase();
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const base = buildEnglishActivationBase(englishName);
+  return base ? `${prefix}-${base}-${random}` : `${prefix}-${random}`;
+};
+
+const loadOrgBotPrefix = async (): Promise<string> => {
+  try {
+    const result = await loadScopedCompanySettings(supabase);
+    const nameEn = String(result?.data?.company_name_en || result?.data?.name_en || '').trim();
+    if (!nameEn) return 'TAZESYSTEM';
+    const ascii = nameEn
+      .normalize('NFKD')
+      .replace(/[^\x00-\x7F]/g, '')
+      .replace(/[^a-zA-Z0-9]+/g, '')
+      .toUpperCase()
+      .slice(0, 8);
+    return ascii || 'TAZESYSTEM';
+  } catch {
+    return 'TAZESYSTEM';
+  }
+};
+
 const BotSmsNotificationConfirmContent: React.FC<{
   initialText: string;
   onChange: (value: { text: string; remember: boolean }) => void;
@@ -873,7 +928,13 @@ const getModuleLabelFa = (moduleId?: string | null) => {
   return MODULES[key]?.titles?.fa || key;
 };
 
-const getRelatedContextParts = (conversation: Pick<Conversation, 'relatedModuleId' | 'relatedRecordTitle' | 'relatedScope' | 'relatedLabelPrefix'>) => {
+const buildRecordHref = (moduleId?: string | null, recordId?: string | null) => {
+  const moduleKey = String(moduleId || '').trim();
+  const id = String(recordId || '').trim();
+  return moduleKey && id ? `/${moduleKey}/${id}` : '';
+};
+
+const getRelatedContextParts = (conversation: Pick<Conversation, 'relatedModuleId' | 'relatedRecordId' | 'relatedRecordTitle' | 'relatedScope' | 'relatedLabelPrefix'>) => {
   const moduleLabel = getModuleLabelFa(conversation.relatedModuleId);
   const recordTitle = String(conversation.relatedRecordTitle || '').trim();
   if (!moduleLabel && !recordTitle) return null;
@@ -881,7 +942,11 @@ const getRelatedContextParts = (conversation: Pick<Conversation, 'relatedModuleI
     || (conversation.relatedScope === 'page' ? 'صفحه مرتبط' : conversation.relatedScope === 'module' ? 'بخش مرتبط' : 'رکورد مرتبط');
   if (conversation.relatedScope === 'module') return { prefix, text: moduleLabel };
   if (conversation.relatedScope === 'page') return { prefix, text: moduleLabel };
-  return { prefix, text: [moduleLabel, recordTitle].filter(Boolean).join(' - ') };
+  return {
+    prefix,
+    text: [moduleLabel, recordTitle].filter(Boolean).join(' - '),
+    href: buildRecordHref(conversation.relatedModuleId, conversation.relatedRecordId),
+  };
 };
 
 const getPrimaryActions = (conversation: Conversation) => {
@@ -1220,6 +1285,13 @@ const TimelineEventCard: React.FC<{
     ? 'text-sky-50 underline decoration-sky-100/55 underline-offset-4 hover:text-white hover:decoration-white'
     : 'text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 hover:text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-300-rgb))] dark:hover:text-[rgb(var(--brand-200-rgb))]';
   const canRetryRubikaMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableRubikaMedia(item);
+  const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
+  const relatedRecordHref = showRelatedRecordLink
+    ? buildRecordHref(
+      item.relatedModuleId || item.sourceRow?.module_id || item.sourceRow?.related_module_id || activeConversation.relatedModuleId,
+      item.relatedRecordId || item.sourceRow?.record_id || item.sourceRow?.related_record_id || activeConversation.relatedRecordId,
+    )
+    : '';
   const copyMessageText = async () => {
     const text = String(item.text || '').trim();
     if (!text) return;
@@ -1336,15 +1408,18 @@ const TimelineEventCard: React.FC<{
             <VoipRecordingPlayer call={item.sourceRow} compact />
           </div>
         ) : item.attachments?.length ? <MediaAttachmentPreview attachments={item.attachments} call={isCall} /> : null}
-        {item.relatedRecordLabel ? (
-          <button
-            type="button"
+        {showRelatedRecordLink ? (
+          <a
+            href={relatedRecordHref || undefined}
             className="mt-3 inline-flex max-w-full items-center gap-1.5 text-[11px] font-semibold transition"
+            onClick={(event) => {
+              if (!relatedRecordHref) event.preventDefault();
+            }}
           >
             <LinkOutlined className={relatedRecordPrefixClassName} />
             <span className={relatedRecordPrefixClassName}>رکورد مرتبط:</span>
             <span className={`min-w-0 truncate ${relatedRecordTextClassName}`}>{item.relatedRecordLabel}</span>
-          </button>
+          </a>
         ) : null}
         {!isCall ? <div className={actionRowClassName}>
           {activeConversation.actions.includes('reply') ? <TimelineIconButton title="پاسخ" icon={<RollbackOutlined />} inverse={outgoing} onClick={() => onReply?.(item)} /> : null}
@@ -1377,6 +1452,7 @@ const MessagingHeader: React.FC<{
   onSearch?: () => void;
   onStartCall?: (conversation: Conversation) => void;
   onEditInternalGroup?: (conversation: Conversation) => void;
+  onEditBotGroup?: (conversation: Conversation) => void;
   searchOpen?: boolean;
   searchValue?: string;
   onSearchValueChange?: (value: string) => void;
@@ -1386,6 +1462,7 @@ const MessagingHeader: React.FC<{
   onSearch,
   onStartCall,
   onEditInternalGroup,
+  onEditBotGroup,
   searchOpen = false,
   searchValue = '',
   onSearchValueChange,
@@ -1427,9 +1504,15 @@ const MessagingHeader: React.FC<{
                   <span className="hidden sm:inline">·</span>
                   <span className="hidden min-w-0 truncate sm:inline">
                     <span className="text-slate-500 dark:text-slate-400">{relatedContext.prefix}: </span>
-                    <span className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 dark:text-[rgb(var(--brand-300-rgb))]">
+                    <a
+                      href={relatedContext.href || undefined}
+                      className="font-semibold text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 dark:text-[rgb(var(--brand-300-rgb))]"
+                      onClick={(event) => {
+                        if (!relatedContext.href) event.preventDefault();
+                      }}
+                    >
                       {relatedContext.text}
-                    </span>
+                    </a>
                   </span>
                 </>
               ) : (
@@ -1445,6 +1528,11 @@ const MessagingHeader: React.FC<{
           {conversation.channel === 'internal' && conversation.internalKind === 'group' ? (
             <Tooltip title="ویرایش گروه">
               <Button type="text" size="small" shape="circle" icon={<EditOutlined />} aria-label="ویرایش گروه" onClick={() => onEditInternalGroup?.(conversation)} />
+            </Tooltip>
+          ) : null}
+          {conversation.channel === 'bot_group' ? (
+            <Tooltip title="ویرایش اتصال بات">
+              <Button type="text" size="small" shape="circle" icon={<EditOutlined />} aria-label="ویرایش اتصال بات" onClick={() => onEditBotGroup?.(conversation)} />
             </Tooltip>
           ) : null}
           {primaryActions.map((action) => (
@@ -1714,6 +1802,12 @@ type BotIdentityBindDraft = {
   existingBinding: BotIdentityBindingRow | null;
 };
 
+type BotStatusModalContext = {
+  targetType: BotTargetModuleId;
+  counterpartyId: string;
+  counterpartyLabel: string;
+};
+
 type MessageActivityDraft = {
   initialValues: Record<string, any>;
   attachments: NoteAttachment[];
@@ -1779,10 +1873,25 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [internalGroupRoleIds, setInternalGroupRoleIds] = useState<string[]>([]);
   const [internalGroupSaving, setInternalGroupSaving] = useState(false);
   const [editingInternalGroupId, setEditingInternalGroupId] = useState<string | null>(null);
+  const [botStatusModalOpen, setBotStatusModalOpen] = useState(false);
+  const [botStatusModalLoading, setBotStatusModalLoading] = useState(false);
+  const [botStatusModalSaving, setBotStatusModalSaving] = useState(false);
+  const [botStatusModalContext, setBotStatusModalContext] = useState<BotStatusModalContext | null>(null);
+  const [botStatusActiveTab, setBotStatusActiveTab] = useState<BotChannel>('rubika');
+  const [botStatusDefaultChannel, setBotStatusDefaultChannel] = useState<BotChannel>('rubika');
+  const [botStatusFallbackToActive, setBotStatusFallbackToActive] = useState(false);
+  const [botStatusPlatformData, setBotStatusPlatformData] = useState<Record<BotChannel, BotPlatformState>>({
+    rubika: { ...DEFAULT_BOT_PLATFORM_STATE },
+    telegram: { ...DEFAULT_BOT_PLATFORM_STATE },
+    bale: { ...DEFAULT_BOT_PLATFORM_STATE },
+  });
+  const [botStatusCountdown, setBotStatusCountdown] = useState(0);
+  const [botStatusWatchingChannel, setBotStatusWatchingChannel] = useState<BotChannel | null>(null);
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
   const lastTimelineConversationRef = useRef('');
   const markReadDedupeRef = useRef('');
   const runtimeRevisionRef = useRef(notificationRuntime.revisions);
+  const botStatusWatchTimerRef = useRef<number | null>(null);
   const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready });
   const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
   const loadInternalConversationFallback = useMemo(() => {
@@ -2234,6 +2343,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         mentionRoles,
         avatarUrl: resolveInternalAvatarUrl(row, directoryUserMap),
         relatedRecordLabel: relatedRecordLabel || undefined,
+        relatedModuleId: String(row?.module_id || '').trim() || null,
+        relatedRecordId: String(row?.record_id || '').trim() || null,
         liked: Boolean(currentUserId && likes[currentUserId]),
       };
     });
@@ -2284,15 +2395,25 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
-    const normalizedLiveEvents = liveData.events.map((item) => (
-      item.direction === 'outbound'
-        ? {
+    const normalizedLiveEvents = liveData.events.map((item) => {
+      if (item.direction !== 'outbound') return item;
+      const isBotEvent = String(item.conversationKey || '').startsWith('live:bot_group:')
+        || String(item.conversationKey || '').startsWith('live:bot_direct:');
+      const senderId = String((item as any)?.sourceRow?.created_by || '').trim();
+      const senderUser = senderId ? directoryUserMap[senderId] : null;
+      if (isBotEvent) {
+        return {
           ...item,
-          author: String(currentUser?.display_name || item.author || '').trim() || 'من',
-          avatarUrl: String((item as any).avatarUrl || currentUser?.avatar_url || '').trim() || null,
-        }
-        : item
-    ));
+          author: String(senderUser?.display_name || item.author || '').trim() || 'کاربر سازمان',
+          avatarUrl: String((item as any).avatarUrl || senderUser?.avatar_url || '').trim() || null,
+        };
+      }
+      return {
+        ...item,
+        author: String(currentUser?.display_name || item.author || '').trim() || 'من',
+        avatarUrl: String((item as any).avatarUrl || currentUser?.avatar_url || '').trim() || null,
+      };
+    });
     return [
       ...liveInternalEvents,
       ...normalizedLiveEvents,
@@ -2676,7 +2797,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         value: initialTargetRecordId,
         label: initialDisplayName,
       }] : []);
-      setBotIdentityAllowedUserIds(Array.isArray((metadata as any)?.allowed_user_ids) ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : []);
+      const rawAllowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
+        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const currentProfileId = String(liveData.profile.id || '').trim();
+      setBotIdentityAllowedUserIds(rawAllowedUserIds.length > 0 ? rawAllowedUserIds : (currentProfileId ? [currentProfileId] : []));
       setBotIdentityAllowedRoleIds(Array.isArray((metadata as any)?.allowed_role_ids) ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : []);
       setBotIdentityAiAutoReplyEnabled(Boolean((metadata as any)?.ai_auto_reply_enabled));
       setBotIdentityAiCounterpartyGuide(String((metadata as any)?.ai_counterparty_guide || '').trim());
@@ -2839,6 +2964,313 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       label: String(role.title || '').trim() || 'نقش',
     }))
     .filter((role) => role.value), [assigneeDirectory.roles]);
+
+  const applyBotStatusTargetFilter = (query: any, context: Pick<BotStatusModalContext, 'targetType' | 'counterpartyId'>) => {
+    if (context.targetType === 'customers') return query.eq('customer_id', context.counterpartyId);
+    if (context.targetType === 'suppliers') return query.eq('supplier_id', context.counterpartyId);
+    return query.eq('employee_id', context.counterpartyId);
+  };
+
+  const getBotGroupContextFromConversation = (conversation: Conversation): BotStatusModalContext | null => {
+    const groupId = String(conversation.key || '').replace(/^live:bot_group:/, '').trim();
+    const groupRow = groupId
+      ? (liveData.botGroups || []).find((row: any) => String(row?.id || '').trim() === groupId)
+      : null;
+    const rawTargetType = String(
+      (groupRow as any)?.target_type
+      || conversation.relatedModuleId
+      || ''
+    ).trim();
+    const targetType = isBotTargetModuleId(rawTargetType) ? rawTargetType : null;
+    const counterpartyId = String(
+      (targetType === 'customers' ? (groupRow as any)?.customer_id : null)
+      || (targetType === 'suppliers' ? (groupRow as any)?.supplier_id : null)
+      || (targetType === 'employees' ? (groupRow as any)?.employee_id : null)
+      || conversation.relatedRecordId
+      || ''
+    ).trim();
+    if (!targetType || !counterpartyId) return null;
+    return {
+      targetType,
+      counterpartyId,
+      counterpartyLabel: String(conversation.relatedRecordTitle || conversation.title || (groupRow as any)?.group_title || '').trim(),
+    };
+  };
+
+  const clearBotStatusWatchTimer = () => {
+    if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(botStatusWatchTimerRef.current);
+      botStatusWatchTimerRef.current = null;
+    }
+  };
+
+  const loadBotStatusRow = async (context: BotStatusModalContext, options?: { activeTab?: BotChannel | null }) => {
+    const groupQueryBase = supabase
+      .from('counterparty_bot_groups')
+      .select('id, channel_type, status, group_title, group_join_link, metadata, last_inbound_at, bot_chat_id')
+      .limit(10);
+    const prefQueryBase = supabase
+      .from('counterparty_bot_config')
+      .select('default_channel, fallback_to_active')
+      .limit(1);
+    const targetSelect = BOT_CHANNELS.map((channel) => getBotChatIdFieldKey(channel)).join(',');
+    const [orgPrefix, groupResult, prefResult, targetRecordResult] = await Promise.all([
+      loadOrgBotPrefix(),
+      applyBotStatusTargetFilter(groupQueryBase, context),
+      applyBotStatusTargetFilter(prefQueryBase, context).maybeSingle(),
+      supabase.from(context.targetType).select(targetSelect).eq('id', context.counterpartyId).maybeSingle(),
+    ]);
+    if (groupResult.error) throw groupResult.error;
+    if (prefResult.error) throw prefResult.error;
+    if (targetRecordResult.error) throw targetRecordResult.error;
+
+    const rows = groupResult.data || [];
+    const rowMap = new Map<string, any>(rows.map((row: any) => [String(row?.channel_type || '').trim(), row] as const));
+    const defaultChannel = (BOT_CHANNELS.includes(String(prefResult.data?.default_channel || '') as BotChannel)
+      ? prefResult.data!.default_channel
+      : 'rubika') as BotChannel;
+
+    const groupIds = rows.map((row: any) => String(row?.id || '').trim()).filter(Boolean);
+    const inboundMap = new Map<string, { created_at: string; content_text: string }>();
+    if (groupIds.length > 0) {
+      const { data: inboundRows } = await supabase
+        .from('counterparty_bot_messages')
+        .select('created_at, content_text, bot_group_id')
+        .in('bot_group_id', groupIds)
+        .eq('direction', 'inbound')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      (inboundRows || []).forEach((row: any) => {
+        const groupId = String(row?.bot_group_id || '').trim();
+        if (groupId && !inboundMap.has(groupId)) inboundMap.set(groupId, row);
+      });
+    }
+
+    const platforms: Record<BotChannel, BotPlatformState> = {
+      rubika: { ...DEFAULT_BOT_PLATFORM_STATE },
+      telegram: { ...DEFAULT_BOT_PLATFORM_STATE },
+      bale: { ...DEFAULT_BOT_PLATFORM_STATE },
+    };
+    const currentProfileId = String(liveData.profile.id || '').trim();
+    for (const channel of BOT_CHANNELS) {
+      const row = rowMap.get(channel) || null;
+      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const rawAllowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
+        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const rowId = String(row?.id || '').trim();
+      const inbound = rowId ? inboundMap.get(rowId) : null;
+      const rawStatus = String(row?.status || 'pending_join').trim();
+      platforms[channel] = {
+        groupTitle: String(row?.group_title || '').trim(),
+        groupJoinLink: String(row?.group_join_link || '').trim(),
+        directChatId: String((targetRecordResult.data as any)?.[getBotChatIdFieldKey(channel)] || '').trim(),
+        currentStatus: rawStatus === 'pending_join_link' ? 'pending_join' : (rawStatus || 'pending_join'),
+        activationCode: String((metadata as any)?.activation_code || '').trim().toUpperCase() || createBotActivationCode(context.counterpartyLabel, orgPrefix),
+        lastInboundAt: String(inbound?.created_at || row?.last_inbound_at || '').trim(),
+        lastInboundText: String(inbound?.content_text || '').trim(),
+        allowedUserIds: rawAllowedUserIds.length > 0 ? rawAllowedUserIds : (currentProfileId ? [currentProfileId] : []),
+        allowedRoleIds: Array.isArray((metadata as any)?.allowed_role_ids) ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [],
+        aiAutoReplyEnabled: Boolean((metadata as any)?.ai_auto_reply_enabled),
+        aiCounterpartyGuide: String((metadata as any)?.ai_counterparty_guide || '').trim(),
+      };
+    }
+
+    setBotStatusPlatformData(platforms);
+    setBotStatusDefaultChannel(defaultChannel);
+    setBotStatusFallbackToActive(Boolean(prefResult.data?.fallback_to_active));
+    setBotStatusActiveTab(options?.activeTab || defaultChannel);
+  };
+
+  const saveBotStatusSettings = async (options?: { forceCapture?: boolean; captureChannel?: BotChannel; captureSeconds?: number }) => {
+    const context = botStatusModalContext;
+    const orgId = String(liveData.profile.orgId || '').trim();
+    const currentProfileId = String(liveData.profile.id || '').trim();
+    if (!context || !orgId) return;
+    const forceCapture = options?.forceCapture === true;
+    const captureChannel = options?.captureChannel || botStatusActiveTab;
+    const captureSeconds = Number(options?.captureSeconds || BOT_BIND_CAPTURE_SECONDS);
+    const nowIso = new Date().toISOString();
+    const captureExpiresAt = forceCapture ? new Date(Date.now() + Math.max(10, captureSeconds) * 1000).toISOString() : null;
+
+    for (const channel of BOT_CHANNELS) {
+      const platformState = botStatusPlatformData[channel];
+      if (!platformState) continue;
+      const isCapturing = forceCapture && channel === captureChannel;
+      let existingQuery = supabase
+        .from('counterparty_bot_groups')
+        .select('id, status, bot_chat_id, metadata')
+        .eq('channel_type', channel)
+        .limit(1);
+      existingQuery = applyBotStatusTargetFilter(existingQuery, context);
+      const { data: existingRows, error: existingError } = await existingQuery;
+      if (existingError) throw existingError;
+      const existingRow = Array.isArray(existingRows) ? existingRows[0] : null;
+      const existingStatus = String(existingRow?.status || '').trim() === 'pending_join_link' ? 'pending_join' : String(existingRow?.status || '').trim();
+      const existingChatId = String(existingRow?.bot_chat_id || '').trim();
+      const existingMetadata = existingRow?.metadata && typeof existingRow.metadata === 'object' ? existingRow.metadata : {};
+      const nextStatus = isCapturing ? 'pending_join' : ((existingStatus === 'active' && existingChatId) ? 'active' : 'pending_join');
+      const payload: Record<string, any> = {
+        target_type: context.targetType,
+        channel_type: channel,
+        status: nextStatus,
+        group_title: String(platformState.groupTitle || '').trim() || null,
+        group_join_link: String(platformState.groupJoinLink || '').trim() || null,
+        metadata: {
+          ...existingMetadata,
+          activation_code: String(platformState.activationCode || '').trim().toUpperCase(),
+          activation_required: true,
+          capture_mode: isCapturing,
+          capture_started_at: isCapturing ? nowIso : null,
+          capture_expires_at: isCapturing ? captureExpiresAt : null,
+          last_capture_channel: isCapturing ? channel : (existingMetadata as any)?.last_capture_channel,
+          allowed_user_ids: platformState.allowedUserIds,
+          allowed_role_ids: platformState.allowedRoleIds,
+          ai_auto_reply_enabled: platformState.aiAutoReplyEnabled,
+          ai_counterparty_guide: String(platformState.aiCounterpartyGuide || '').trim() || null,
+          activation_confirmation_sent: isCapturing ? false : Boolean((existingMetadata as any)?.activation_confirmation_sent),
+          last_capture_error: isCapturing ? null : (existingMetadata as any)?.last_capture_error,
+          activation_updated_at: nowIso,
+        },
+        updated_by: currentProfileId || null,
+        customer_id: context.targetType === 'customers' ? context.counterpartyId : null,
+        supplier_id: context.targetType === 'suppliers' ? context.counterpartyId : null,
+        employee_id: context.targetType === 'employees' ? context.counterpartyId : null,
+      };
+      if (existingRow?.id) {
+        const { error } = await supabase.from('counterparty_bot_groups').update(payload).eq('id', String(existingRow.id));
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('counterparty_bot_groups').insert([{ org_id: orgId, created_by: currentProfileId || null, ...payload }]);
+        if (error) throw error;
+      }
+
+      await syncBotDirectChatIdForTarget({
+        client: supabase,
+        orgId,
+        moduleId: context.targetType,
+        recordId: context.counterpartyId,
+        channel,
+        chatId: String(platformState.directChatId || '').trim() || null,
+      });
+    }
+
+    const configPayload = {
+      org_id: orgId,
+      default_channel: botStatusDefaultChannel,
+      fallback_to_active: botStatusFallbackToActive,
+      customer_id: context.targetType === 'customers' ? context.counterpartyId : null,
+      supplier_id: context.targetType === 'suppliers' ? context.counterpartyId : null,
+      employee_id: context.targetType === 'employees' ? context.counterpartyId : null,
+    };
+    let existingConfigQuery = supabase.from('counterparty_bot_config').select('id').limit(1);
+    existingConfigQuery = applyBotStatusTargetFilter(existingConfigQuery, context);
+    const { data: existingConfigRow, error: existingConfigError } = await existingConfigQuery.maybeSingle();
+    if (existingConfigError) throw existingConfigError;
+    if (existingConfigRow?.id) {
+      const { error } = await supabase.from('counterparty_bot_config').update(configPayload).eq('id', String(existingConfigRow.id));
+      if (error) throw error;
+    } else {
+      const { error } = await supabase.from('counterparty_bot_config').insert([configPayload]);
+      if (error) throw error;
+    }
+    await liveData.refresh();
+  };
+
+  const openBotStatusModalFromConversation = async (conversation: Conversation) => {
+    const context = getBotGroupContextFromConversation(conversation);
+    if (!context) {
+      message.warning('برای این گفتگوی بات، رکورد مرتبط پیدا نشد.');
+      return;
+    }
+    setBotStatusModalContext(context);
+    setBotStatusModalOpen(true);
+    setBotStatusModalLoading(true);
+    clearBotStatusWatchTimer();
+    setBotStatusWatchingChannel(null);
+    setBotStatusCountdown(0);
+    try {
+      await loadBotStatusRow(context, { activeTab: conversation.platform || null });
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'خواندن تنظیم گروه بات ناموفق بود.'));
+    } finally {
+      setBotStatusModalLoading(false);
+    }
+  };
+
+  const closeBotStatusModal = () => {
+    clearBotStatusWatchTimer();
+    setBotStatusWatchingChannel(null);
+    setBotStatusCountdown(0);
+    setBotStatusModalOpen(false);
+  };
+
+  const saveBotStatusModal = async () => {
+    if (!botStatusModalContext) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings();
+      await loadBotStatusRow(botStatusModalContext, { activeTab: botStatusActiveTab });
+      message.success('وضعیت گروه بات ذخیره شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ذخیره وضعیت گروه بات ناموفق بود.'));
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  };
+
+  const startBotBindWatch = async (channel: BotChannel) => {
+    if (!botStatusModalContext) return;
+    try {
+      setBotStatusModalSaving(true);
+      await saveBotStatusSettings({ forceCapture: true, captureChannel: channel, captureSeconds: BOT_BIND_CAPTURE_SECONDS });
+      await loadBotStatusRow(botStatusModalContext, { activeTab: channel });
+      clearBotStatusWatchTimer();
+      setBotStatusWatchingChannel(channel);
+      setBotStatusCountdown(BOT_BIND_CAPTURE_SECONDS);
+      let remaining = BOT_BIND_CAPTURE_SECONDS;
+      botStatusWatchTimerRef.current = window.setInterval(async () => {
+        remaining -= 1;
+        setBotStatusCountdown(Math.max(remaining, 0));
+        if (remaining % 2 === 0 && botStatusModalContext) {
+          try {
+            await loadBotStatusRow(botStatusModalContext, { activeTab: channel });
+          } catch {
+            // ignore temporary polling errors
+          }
+        }
+        if (remaining <= 0) {
+          clearBotStatusWatchTimer();
+          setBotStatusWatchingChannel(null);
+          setBotStatusCountdown(0);
+          message.info('زمان انتظار bind تمام شد. در صورت نیاز دوباره شروع کنید.');
+        }
+      }, 1000);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'شروع حالت انتظار bind ناموفق بود.'));
+      setBotStatusWatchingChannel(null);
+      setBotStatusCountdown(0);
+    } finally {
+      setBotStatusModalSaving(false);
+    }
+  };
+
+  const copyBotActivationCode = async (channel: BotChannel) => {
+    try {
+      const code = String(botStatusPlatformData[channel]?.activationCode || '').trim();
+      await navigator.clipboard.writeText(code);
+      message.success('کد فعال‌سازی کپی شد.');
+    } catch {
+      message.error('کپی کد فعال‌سازی ناموفق بود.');
+    }
+  };
+
+  useEffect(() => () => {
+    if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
+      window.clearInterval(botStatusWatchTimerRef.current);
+      botStatusWatchTimerRef.current = null;
+    }
+  }, []);
 
   const chatGroupMap = useMemo(() => {
     const map: Record<string, ChatGroupRow> = {};
@@ -3712,6 +4144,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 onSearch={toggleConversationSearch}
                 onStartCall={startConversationCall}
                 onEditInternalGroup={openEditInternalGroupModal}
+                onEditBotGroup={(conversation) => void openBotStatusModalFromConversation(conversation)}
                 searchOpen={conversationSearchOpen}
                 searchValue={conversationSearchValue}
                 onSearchValueChange={setConversationSearchValue}
@@ -3826,6 +4259,46 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             }] : []}
             onClose={closeBotIdentityBindModal}
             onSave={saveBotIdentityBind}
+          />
+        </React.Suspense>
+      ) : null}
+      {botStatusModalOpen ? (
+        <React.Suspense fallback={null}>
+          <CounterpartyBotStatusModal
+            open={botStatusModalOpen}
+            loading={botStatusModalLoading}
+            saving={botStatusModalSaving}
+            watchingChannel={botStatusWatchingChannel}
+            countdown={botStatusCountdown}
+            activeTab={botStatusActiveTab}
+            defaultChannel={botStatusDefaultChannel}
+            fallbackToActive={botStatusFallbackToActive}
+            counterpartyType={
+              botStatusModalContext?.targetType === 'customers'
+                ? 'customer'
+                : botStatusModalContext?.targetType === 'suppliers'
+                  ? 'supplier'
+                  : 'employee'
+            }
+            platforms={botStatusPlatformData}
+            userOptions={internalGroupUserOptions}
+            roleOptions={internalGroupRoleOptions}
+            onClose={closeBotStatusModal}
+            onSave={() => void saveBotStatusModal()}
+            onChangeTab={setBotStatusActiveTab}
+            onChangeDefaultChannel={setBotStatusDefaultChannel}
+            onChangeFallbackToActive={setBotStatusFallbackToActive}
+            onStartBindWatch={(channel) => void startBotBindWatch(channel)}
+            onCopyActivationCode={(channel) => void copyBotActivationCode(channel)}
+            onChangePlatform={(channel, key, value) => {
+              setBotStatusPlatformData((prev) => ({
+                ...prev,
+                [channel]: {
+                  ...prev[channel],
+                  [key]: value,
+                },
+              }));
+            }}
           />
         </React.Suspense>
       ) : null}

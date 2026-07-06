@@ -23,18 +23,13 @@ describe('AiMessageRenderer', () => {
     expect(onCopy).toHaveBeenCalledWith('const value = 1;', 'کد');
   });
 
-  it('offers one focused copy action for ready document-style text', () => {
+  it('renders quote-like output with its own copy action', () => {
     const onCopy = vi.fn();
-    const proposal = [
-      'بفرمایید این هم پروپوزال شما.',
-      '',
-      'پروپوزال همکاری',
-      'این متن برای ارائه به مشتری آماده شده است.'.repeat(30),
-    ].join('\n');
-    render(<AiMessageRenderer text={proposal} onCopyText={onCopy} />);
+    render(<AiMessageRenderer text={'> متن آماده برای استفاده\n> خط دوم'} onCopyText={onCopy} />);
 
-    fireEvent.click(screen.getByText('کپی متن پروپوزال'));
-    expect(onCopy).toHaveBeenCalledWith(expect.stringContaining('پروپوزال همکاری'), 'متن پروپوزال');
+    expect(screen.getByText(/متن آماده برای استفاده/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('کپی متن'));
+    expect(onCopy).toHaveBeenCalledWith('متن آماده برای استفاده\nخط دوم', 'متن');
   });
 
   it('shows streaming and retry controls', () => {

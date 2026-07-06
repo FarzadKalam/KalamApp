@@ -14,6 +14,7 @@ type SessionBootstrapSnapshot = {
 
 const AUTH_USER_TTL_MS = 60_000;
 const SESSION_BOOTSTRAP_TTL_MS = 5 * 60_000;
+const SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS = 12_000;
 
 const EMPTY_SNAPSHOT: SessionBootstrapSnapshot = {
   user: null,
@@ -83,6 +84,34 @@ const sessionCacheStore = globalSessionCache.__kalamSessionCacheStore || {
 globalSessionCache.__kalamSessionCacheStore = sessionCacheStore;
 
 const { authUserCache, sessionBootstrapCache } = sessionCacheStore;
+
+const isTransientBootstrapError = (error: any) => {
+  const text = [
+    error?.name,
+    error?.message,
+    error?.details,
+    error?.hint,
+    error?.code,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+  return text.includes('abort')
+    || text.includes('timeout')
+    || text.includes('failed to fetch')
+    || text.includes('networkerror')
+    || text.includes('network request failed')
+    || text.includes('err_failed');
+};
+
+const getReusableBootstrapSnapshot = (userId: string): SessionBootstrapSnapshot | null => {
+  if (
+    sessionBootstrapCache.cacheKey === userId &&
+    sessionBootstrapCache.snapshot &&
+    sessionBootstrapCache.snapshot.user?.id === userId &&
+    sessionBootstrapCache.snapshot.orgId
+  ) {
+    return sessionBootstrapCache.snapshot;
+  }
+  return null;
+};
 
 export const clearSessionBootstrapCache = () => {
   authUserCache.user = null;
@@ -165,19 +194,28 @@ export const fetchSessionBootstrap = async (
         cacheKey: 'session-bootstrap:profile',
         columns: SESSION_PROFILE_COLUMNS,
         execute: (selectExpr) =>
-          runWithSupabaseTimeout((signal) =>
-            attachAbortSignalIfSupported(
-              supabaseClient
-                .from('profiles')
-                .select(selectExpr),
-              signal,
-            )
-              .eq('id', user.id)
-              .maybeSingle()
+          runWithSupabaseTimeout(
+            (signal) =>
+              attachAbortSignalIfSupported(
+                supabaseClient
+                  .from('profiles')
+                  .select(selectExpr),
+                signal,
+              )
+                .eq('id', user.id)
+                .maybeSingle(),
+            SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS,
           ),
       });
 
       if (profileResult.error) {
+        const reusable = isTransientBootstrapError(profileResult.error)
+          ? getReusableBootstrapSnapshot(cacheKey)
+          : null;
+        if (reusable) {
+          sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
+          return reusable;
+        }
         return {
           user,
           profile: null,
@@ -203,19 +241,28 @@ export const fetchSessionBootstrap = async (
           cacheKey: 'session-bootstrap:role',
           columns: SESSION_ROLE_COLUMNS,
           execute: (selectExpr) =>
-            runWithSupabaseTimeout((signal) =>
-              attachAbortSignalIfSupported(
-                supabaseClient
-                  .from('org_roles')
-                  .select(selectExpr),
-                signal,
-              )
-                .eq('id', profile.role_id)
-                .maybeSingle()
+            runWithSupabaseTimeout(
+              (signal) =>
+                attachAbortSignalIfSupported(
+                  supabaseClient
+                    .from('org_roles')
+                    .select(selectExpr),
+                  signal,
+                )
+                  .eq('id', profile.role_id)
+                  .maybeSingle(),
+              SESSION_BOOTSTRAP_REQUEST_TIMEOUT_MS,
             ),
         });
 
         if (roleResult.error) {
+          const reusable = isTransientBootstrapError(roleResult.error)
+            ? getReusableBootstrapSnapshot(cacheKey)
+            : null;
+          if (reusable) {
+            sessionBootstrapCache.expiresAt = Date.now() + SESSION_BOOTSTRAP_TTL_MS;
+            return reusable;
+          }
           const snapshot: SessionBootstrapSnapshot = {
             user,
             profile: profile || null,

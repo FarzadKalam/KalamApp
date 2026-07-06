@@ -522,7 +522,9 @@ const mapRawStageToV2 = (
     || ['draft', 'template', 'not_assigned', 'unassigned'].includes(status)
   );
   const hasRealTask = stage?.__process_v2_has_real_task === true || Boolean(getRuntimeStageTaskId(stage));
-  const effectiveKind = explicitDraft || (kind === 'activity' && shouldForceActivityStageToDraft(stage, hasRealTask)) ? 'draft' : kind;
+  const effectiveKind = hasRealTask
+    ? 'activity'
+    : (explicitDraft || (kind === 'activity' && shouldForceActivityStageToDraft(stage, hasRealTask)) ? 'draft' : kind);
   const assignee = resolveAssignee(stage, directory, fallbackModuleId, templateContext);
   const rawDue = stage?.planned_due_at || stage?.due_date || metadata?.planned_due_at || metadata?.due_date;
   const automationActionCount = getAutomationActionCount(stage);

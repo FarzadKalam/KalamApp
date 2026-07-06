@@ -27,10 +27,10 @@ import { sendBotMessageViaGateway } from '../utils/botGateway';
 import AdaptiveSelectField from './AdaptiveSelectField';
 import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { resolveOverlayPopupContainer } from '../utils/popupContainer';
+import { KALAM_POPUP_ROOT_Z_INDEX, resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 
-const MESSAGE_COMPOSER_MODAL_Z_INDEX = 30000;
+const MESSAGE_COMPOSER_MODAL_Z_INDEX = KALAM_POPUP_ROOT_Z_INDEX + 100;
 
 type ReadyTextRow = {
   id: string;
@@ -51,6 +51,7 @@ type MessageComposerModalProps = {
   onApplyTemplate?: (value: string) => void;
   onInsertVariable?: (token: string) => void;
   templateVariableOptions?: Array<{ key: string; label: string; token: string }>;
+  zIndex?: number;
 };
 
 const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
@@ -65,6 +66,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   onApplyTemplate,
   onInsertVariable,
   templateVariableOptions,
+  zIndex,
 }) => {
   const { message: msg } = App.useApp();
   const messageInputRef = useRef<any>(null);
@@ -101,6 +103,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const globalScopedModuleId = getReadyTextScopeModuleId(null, 'message');
   const isTemplateMode = mode === 'template';
   const isBulkSmsMode = mode === 'sms' && Array.isArray(smsRecipients) && smsRecipients.length > 0;
+  const modalZIndex = Math.max(
+    typeof zIndex === 'number' ? zIndex : MESSAGE_COMPOSER_MODAL_Z_INDEX,
+    MESSAGE_COMPOSER_MODAL_Z_INDEX
+  );
 
   const phoneOptions = useMemo(
     () =>
@@ -160,7 +166,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     popupMatchSelectWidth: false,
     listHeight: 240,
     virtual: false,
-    overlayZIndexBase: MESSAGE_COMPOSER_MODAL_Z_INDEX + 100,
+    overlayZIndexBase: modalZIndex + 100,
   };
 
   useEffect(() => {
@@ -529,9 +535,9 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       onCancel={onCancel}
       width={1080}
       destroyOnHidden
-      zIndex={MESSAGE_COMPOSER_MODAL_Z_INDEX}
+      zIndex={modalZIndex}
       maskClosable={false}
-      getContainer={() => document.body}
+      getContainer={() => resolveOverlayPopupContainer()}
       modalRender={(node) => (
         <div
           onMouseDown={(event) => event.stopPropagation()}
