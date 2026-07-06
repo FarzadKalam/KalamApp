@@ -6,10 +6,10 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-05-29-settlement-auto';
+const FUNCTION_BUILD = 'taxpayer-system-2026-07-06-billboard-day-unit-code';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
-const TAXPAYER_DAY_MEASURE_UNIT_CODE = 'DAY';
+const TAXPAYER_DAY_MEASURE_UNIT_CODE = '16104';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -28,6 +28,12 @@ const faDigitMap: Record<string, string> = {
   '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
 };
 const numericId = (value: any) => String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => faDigitMap[digit] || digit).replace(/\D/g, '');
+const normalizeMeasureUnitCode = (value: any) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  if (raw.toUpperCase() === 'DAY') return TAXPAYER_DAY_MEASURE_UNIT_CODE;
+  return numericId(raw);
+};
 const isValidIranNationalCode = (value: string) => {
   const code = numericId(value);
   if (!/^\d{10}$/.test(code) || /^(\d)\1{9}$/.test(code)) return false;
@@ -563,7 +569,7 @@ const invoicePayload = (args: any) => {
     const sstid = String(sourceRecord?.product_identifier || '').trim();
     if (!sstid) throw new Error(`شناسه کالا/خدمت در ردیف ${i + 1} فاکتور ثبت نشده است.`);
     const fallbackMeasureUnitCode = billboard?.id ? TAXPAYER_DAY_MEASURE_UNIT_CODE : sourceRecord?.taxpayer_measure_unit_code;
-    const mu = String(item?.measure_unit_code ?? item?.mu ?? fallbackMeasureUnitCode ?? '').trim();
+    const mu = normalizeMeasureUnitCode(item?.measure_unit_code ?? item?.mu ?? fallbackMeasureUnitCode);
     if (!mu) throw new Error(`کد واحد اندازه‌گیری مودیان در ردیف ${i + 1} فاکتور ثبت نشده است.`);
     const qty = Number(item?.quantity || 0);
     if (!(qty > 0)) throw new Error(`تعداد در ردیف ${i + 1} فاکتور معتبر نیست.`);
