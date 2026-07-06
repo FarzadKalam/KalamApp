@@ -254,7 +254,7 @@ export const invoicesConfig: ModuleDefinition = {
   },
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  permanentFilters: [{ field: 'taxpayer_invoice_pattern', operator: 'ne', value: '2' }],
+  permanentFilters: [{ field: 'taxpayer_invoice_subject', operator: 'ne', value: '4' }],
 
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },

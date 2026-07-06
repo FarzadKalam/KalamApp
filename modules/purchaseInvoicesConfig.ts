@@ -236,7 +236,7 @@ export const purchaseInvoicesConfig: ModuleDefinition = {
   table: 'purchase_invoices',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  permanentFilters: [{ field: 'taxpayer_invoice_pattern', operator: 'ne', value: '2' }],
+  permanentFilters: [{ field: 'taxpayer_invoice_subject', operator: 'ne', value: '4' }],
   fields: [
     { key: 'image_url', labels: { fa: 'تصویر', en: 'Image' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فاکتور', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isTableColumn: true },

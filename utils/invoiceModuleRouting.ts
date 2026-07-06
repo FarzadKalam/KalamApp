@@ -1,5 +1,6 @@
-const RETURN_TAXPAYER_INVOICE_PATTERN = '2';
 const DEFAULT_TAXPAYER_INVOICE_PATTERN = '1';
+const DEFAULT_TAXPAYER_INVOICE_SUBJECT = '1';
+const RETURN_TAXPAYER_INVOICE_SUBJECT = '4';
 
 export const normalizeTaxpayerInvoicePattern = (value: unknown, fallback = DEFAULT_TAXPAYER_INVOICE_PATTERN) => {
   const normalized = String(value || '').trim();
@@ -17,8 +18,23 @@ export const getTaxpayerInvoicePatternForModule = (
   fallback = DEFAULT_TAXPAYER_INVOICE_PATTERN,
 ) => (
   isReturnInvoiceModuleId(moduleId)
-    ? RETURN_TAXPAYER_INVOICE_PATTERN
+    ? DEFAULT_TAXPAYER_INVOICE_PATTERN
     : normalizeTaxpayerInvoicePattern(fallback, DEFAULT_TAXPAYER_INVOICE_PATTERN)
+);
+
+export const normalizeTaxpayerInvoiceSubject = (value: unknown, fallback = DEFAULT_TAXPAYER_INVOICE_SUBJECT) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  return normalized;
+};
+
+export const getTaxpayerInvoiceSubjectForModule = (
+  moduleId: string | null | undefined,
+  fallback = DEFAULT_TAXPAYER_INVOICE_SUBJECT,
+) => (
+  isReturnInvoiceModuleId(moduleId)
+    ? RETURN_TAXPAYER_INVOICE_SUBJECT
+    : normalizeTaxpayerInvoiceSubject(fallback, DEFAULT_TAXPAYER_INVOICE_SUBJECT)
 );
 
 export const resolveInvoiceModuleIdForRecord = (
@@ -31,12 +47,15 @@ export const resolveInvoiceModuleIdForRecord = (
     return normalizedSource;
   }
 
-  const pattern = normalizeTaxpayerInvoicePattern(record?.taxpayer_invoice_pattern, DEFAULT_TAXPAYER_INVOICE_PATTERN);
+  const subject = normalizeTaxpayerInvoiceSubject(record?.taxpayer_invoice_subject, DEFAULT_TAXPAYER_INVOICE_SUBJECT);
+  const isLegacyReturnPattern = normalizeTaxpayerInvoicePattern(record?.taxpayer_invoice_pattern, DEFAULT_TAXPAYER_INVOICE_PATTERN) === '2'
+    && !!record?.source_invoice_id;
+  const isReturnRecord = subject === RETURN_TAXPAYER_INVOICE_SUBJECT || isLegacyReturnPattern;
   if (normalizedSource === 'invoices') {
-    return pattern === RETURN_TAXPAYER_INVOICE_PATTERN ? 'sales_return_invoices' : 'invoices';
+    return isReturnRecord ? 'sales_return_invoices' : 'invoices';
   }
   if (normalizedSource === 'purchase_invoices') {
-    return pattern === RETURN_TAXPAYER_INVOICE_PATTERN ? 'purchase_return_invoices' : 'purchase_invoices';
+    return isReturnRecord ? 'purchase_return_invoices' : 'purchase_invoices';
   }
   return normalizedSource;
 };

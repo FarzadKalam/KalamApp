@@ -19,7 +19,7 @@ import { normalizeOperationalDocumentTotals } from "../utils/operationalDocument
 import { shouldAutoSyncInvoiceAccounting } from "../utils/invoiceAccountingPolicy";
 import { buildInstructionModuleConfig, buildInstructionModuleOptions, INSTRUCTIONS_MODULE_ID } from "../utils/instructionSupport";
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from "../utils/processTemplateStages";
-import { getTaxpayerInvoicePatternForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
+import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule, isReturnInvoiceModuleId } from "../utils/invoiceModuleRouting";
 import { fetchAssigneeDirectory } from "../utils/referenceData";
 import { applyInvoicePaymentAllocation } from "../utils/invoicePaymentAllocationRuntime";
 
@@ -266,6 +266,7 @@ export const ModuleCreate = () => {
                 const invoiceValues = {
                   ...values,
                   taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, values?.taxpayer_invoice_pattern),
+                  taxpayer_invoice_subject: getTaxpayerInvoiceSubjectForModule(moduleId, values?.taxpayer_invoice_subject),
                 };
                 let insertResult = await supabase
                   .from(moduleConfig.table)

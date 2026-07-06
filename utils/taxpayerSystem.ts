@@ -22,6 +22,9 @@ export const TAXPAYER_INVOICE_PATTERN_OPTIONS = [
 
 export const TAXPAYER_INVOICE_SUBJECT_OPTIONS = [
   { label: 'اصلی', value: '1' },
+  { label: 'اصلاحی', value: '2' },
+  { label: 'ابطالی', value: '3' },
+  { label: 'برگشت از فروش', value: '4' },
 ];
 
 export const TAXPAYER_SETTLEMENT_METHOD_OPTIONS = [
@@ -85,6 +88,62 @@ const PERSIAN_ARABIC_DIGITS: Record<string, string> = {
 export const normalizeTaxpayerNumericId = (value: unknown) =>
   String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => PERSIAN_ARABIC_DIGITS[digit] || digit).replace(/\D/g, '');
 
+const normalizeTaxpayerDigits = (value: unknown) =>
+  String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => PERSIAN_ARABIC_DIGITS[digit] || digit);
+
+const pad2 = (value: number) => String(value).padStart(2, '0');
+
+const jalaliToGregorian = (jy: number, jm: number, jd: number) => {
+  const div = (a: number, b: number) => Math.floor(a / b);
+  jy += 1595;
+  let days = -355668 + (365 * jy) + (div(jy, 33) * 8) + div(((jy % 33) + 3), 4) + jd;
+  days += jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186;
+
+  let gy = 400 * div(days, 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * div(--days, 36524);
+    days %= 36524;
+    if (days >= 365) days += 1;
+  }
+  gy += 4 * div(days, 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += div(days - 1, 365);
+    days = (days - 1) % 365;
+  }
+
+  let gd = days + 1;
+  const leap = (gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0;
+  const monthDays = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 1;
+  while (gm <= 12 && gd > monthDays[gm]) {
+    gd -= monthDays[gm];
+    gm += 1;
+  }
+
+  return { year: gy, month: gm, day: gd };
+};
+
+export const normalizeTaxpayerInvoiceDate = (value: unknown) => {
+  const raw = normalizeTaxpayerDigits(value).trim();
+  const dateMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (dateMatch) {
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    if (year >= 1300 && year <= 1499) {
+      const gregorian = jalaliToGregorian(year, month, day);
+      return `${gregorian.year}-${pad2(gregorian.month)}-${pad2(gregorian.day)}`;
+    }
+    if (year >= 1900 && year <= 2200) return `${year}-${pad2(month)}-${pad2(day)}`;
+  }
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
+  const parsed = new Date(normalized);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  throw new Error('تاریخ فاکتور برای ارسال به سامانه مودیان معتبر نیست.');
+};
+
 export const isValidIranNationalCode = (value: unknown) => {
   const code = normalizeTaxpayerNumericId(value);
   if (!/^\d{10}$/.test(code) || /^(\d)\1{9}$/.test(code)) return false;
@@ -105,7 +164,7 @@ const parseDateUtc = (date: string | Date) => {
   if (date instanceof Date) {
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
   }
-  const [year, month, day] = String(date || '').slice(0, 10).split('-').map((part) => Number(part));
+  const [year, month, day] = normalizeTaxpayerInvoiceDate(date).split('-').map((part) => Number(part));
   if (!year || !month || !day) throw new Error('تاریخ فاکتور برای ساخت شماره مالیاتی معتبر نیست.');
   return Date.UTC(year, month - 1, day);
 };

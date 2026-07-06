@@ -239,7 +239,7 @@ export const salesReturnInvoicesConfig: ModuleDefinition = {
   table: 'invoices',
   supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
   defaultViewMode: ViewMode.LIST,
-  permanentFilters: [{ field: 'taxpayer_invoice_pattern', operator: 'eq', value: '2' }],
+  permanentFilters: [{ field: 'taxpayer_invoice_subject', operator: 'eq', value: '4' }],
 
   relationDisplay: {
     labelTemplate: '{{name}} - {{total_invoice_amount}}',

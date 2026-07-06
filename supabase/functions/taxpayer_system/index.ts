@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-07-07-cash-settlement-cap';
+const FUNCTION_BUILD = 'taxpayer-system-2026-07-07-invoice-date-normalization';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
 const TAXPAYER_DAY_MEASURE_UNIT_CODE = '16104';
@@ -28,6 +28,54 @@ const faDigitMap: Record<string, string> = {
   '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4', '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
 };
 const numericId = (value: any) => String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => faDigitMap[digit] || digit).replace(/\D/g, '');
+const englishDigits = (value: any) => String(value || '').replace(/[۰-۹٠-٩]/g, (digit) => faDigitMap[digit] || digit);
+const pad2 = (value: number) => String(value).padStart(2, '0');
+const jalaliToGregorian = (jy: number, jm: number, jd: number) => {
+  const div = (a: number, b: number) => Math.floor(a / b);
+  jy += 1595;
+  let days = -355668 + (365 * jy) + (div(jy, 33) * 8) + div(((jy % 33) + 3), 4) + jd;
+  days += jm < 7 ? (jm - 1) * 31 : ((jm - 7) * 30) + 186;
+  let gy = 400 * div(days, 146097);
+  days %= 146097;
+  if (days > 36524) {
+    gy += 100 * div(--days, 36524);
+    days %= 36524;
+    if (days >= 365) days += 1;
+  }
+  gy += 4 * div(days, 1461);
+  days %= 1461;
+  if (days > 365) {
+    gy += div(days - 1, 365);
+    days = (days - 1) % 365;
+  }
+  let gd = days + 1;
+  const leap = (gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0;
+  const monthDays = [0, 31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  let gm = 1;
+  while (gm <= 12 && gd > monthDays[gm]) {
+    gd -= monthDays[gm];
+    gm += 1;
+  }
+  return { year: gy, month: gm, day: gd };
+};
+const normalizeInvoiceDate = (value: any) => {
+  const raw = englishDigits(value).trim();
+  const dateMatch = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (dateMatch) {
+    const year = Number(dateMatch[1]);
+    const month = Number(dateMatch[2]);
+    const day = Number(dateMatch[3]);
+    if (year >= 1300 && year <= 1499) {
+      const gregorian = jalaliToGregorian(year, month, day);
+      return `${gregorian.year}-${pad2(gregorian.month)}-${pad2(gregorian.day)}`;
+    }
+    if (year >= 1900 && year <= 2200) return `${year}-${pad2(month)}-${pad2(day)}`;
+  }
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(raw) ? raw.replace(' ', 'T') : raw;
+  const parsed = new Date(normalized);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  throw new Error('تاریخ فاکتور برای ارسال به سامانه مودیان معتبر نیست.');
+};
 const normalizeMeasureUnitCode = (value: any) => {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
@@ -179,8 +227,19 @@ const signTextB64Url = async (privateKeyPem: string, text: string) => {
 const d = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],[5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0],[9,8,7,6,5,4,3,2,1,0]];
 const p = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],[4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
 const inv = [0,4,3,2,1,5,6,7,8,9];
-const check = (input: string) => { let c = 0; String(input).split('').reverse().forEach((ch, i) => { c = d[c][p[(i + 1) % 8][Number(ch)]]; }); return inv[c]; };
-const epochDays = (date: string) => { const [y,m,day] = String(date || '').slice(0,10).split('-').map(Number); if (!y || !m || !day) throw new Error('تاریخ فاکتور معتبر نیست.'); return Math.floor((Date.UTC(y,m-1,day)-Date.UTC(1970,0,1))/86400000); };
+const check = (input: string) => {
+  const digits = String(input || '').trim();
+  if (!/^\d+$/.test(digits)) throw new Error('ورودی ساخت رقم کنترل شماره مالیاتی معتبر نیست.');
+  let c = 0;
+  digits.split('').reverse().forEach((ch, i) => { c = d[c][p[(i + 1) % 8][Number(ch)]]; });
+  return inv[c];
+};
+const epochDays = (date: string) => {
+  const [y,m,day] = normalizeInvoiceDate(date).split('-').map(Number);
+  const days = Math.floor((Date.UTC(y,m-1,day)-Date.UTC(1970,0,1))/86400000);
+  if (!Number.isFinite(days) || days < 0) throw new Error('تاریخ فاکتور برای ارسال به سامانه مودیان معتبر نیست.');
+  return days;
+};
 const taxId = (fid: string, date: string, serial: bigint) => {
   const f = fiscal(fid); if (f.length !== 6) throw new Error('شناسه یکتای حافظه مالیاتی باید دقیقا ۶ کاراکتر باشد.');
   const days = epochDays(date);
@@ -528,21 +587,32 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
     select: 'id,amount,payment_type,status',
   });
   let originalTaxid: string | null = null;
-  if (invoice.source_invoice_id) {
+  const invoiceSubject = Number(invoice.taxpayer_invoice_subject || 1);
+  const referenceInvoiceId = invoice.source_invoice_id
+    ? String(invoice.source_invoice_id)
+    : [2, 3].includes(invoiceSubject)
+      ? invoiceId
+      : '';
+  if (referenceInvoiceId) {
     const subs = await select(urlBase, key, 'taxpayer_invoice_submissions', {
-      invoice_id: `eq.${invoice.source_invoice_id}`,
-      select: 'taxid,status',
+      invoice_id: `eq.${referenceInvoiceId}`,
+      select: 'taxid,status,invoice_subject',
       order: 'created_at.desc',
-      limit: '5',
+      limit: '10',
     });
-    const best = subs.find((s: any) => s.status === 'confirmed' && s.taxid) || subs.find((s: any) => s.taxid);
+    const valid = subs.filter((s: any) => {
+      const taxid = String(s?.taxid || '').trim();
+      const status = String(s?.status || '').trim().toLowerCase();
+      return !!taxid && !['failed', 'rejected', 'sending'].includes(status);
+    });
+    const best = valid.find((s: any) => String(s?.invoice_subject || '1') === '1') || valid[0] || subs.find((s: any) => s.taxid);
     originalTaxid = best?.taxid || null;
   }
   return { invoice, customer, products, billboards, receipts: Array.isArray(receipts) ? receipts : [], originalTaxid };
 };
 const invoicePayload = (args: any) => {
   const { invoice, customer, products, billboards, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
-  const invDate = String(invoice.invoice_date || '').slice(0,10);
+  const invDate = normalizeInvoiceDate(invoice.invoice_date);
   const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
   if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
   const currency = String(company?.currency_code || 'IRT');
@@ -553,16 +623,16 @@ const invoicePayload = (args: any) => {
   const bpc = numericId(customer?.postal_code || '') || null;
   if (!buyerId && !tinb) throw new Error(nationalCodeInvalid ? 'کد ملی خریدار معتبر نیست و شماره اقتصادی نیز ثبت نشده است. برای ارسال فاکتور، یکی از این دو الزامی است.' : 'مشتری باید کد ملی معتبر یا شماره اقتصادی داشته باشد تا فاکتور به سامانه مودیان ارسال شود.');
   const inp = Number(invoice.taxpayer_invoice_pattern || 1);
-  const orif = inp === 2 ? (originalTaxid || null) : null;
-  if (inp === 2 && !orif) throw new Error('برای فاکتور برگشت از فروش، کد مالیاتی فاکتور اصلی (orif) الزامی است. مطمئن شوید فاکتور اصلی به سامانه مودیان ارسال و تأیید شده است.');
+  const ins = Number(invoice.taxpayer_invoice_subject || 1);
+  const irtaxid = [2, 3, 4].includes(ins) ? (originalTaxid || null) : null;
+  if ([2, 3, 4].includes(ins) && !irtaxid) {
+    const subjectLabel = ins === 2 ? 'اصلاحی' : ins === 3 ? 'ابطالی' : 'برگشت از فروش';
+    throw new Error(`برای ارسال صورتحساب ${subjectLabel} به سامانه مودیان، شماره مالیاتی صورتحساب مرجع (irtaxid) الزامی است. مطمئن شوید صورتحساب مرجع قبلاً به سامانه مودیان ارسال شده است.`);
+  }
   let preTbill = 0;
   for (const it of items) { preTbill += rial(rowAmounts(it).total, currency); }
   const receivedBase = cashOverride !== null && cashOverride !== undefined ? cashOverride : rial(invoice.total_received_amount || 0, currency);
-  const cap = settlementCode === 1
-    ? preTbill
-    : settlementCode === 3
-      ? Math.min(Math.max(receivedBase, 0), preTbill)
-      : null;
+  const cap = settlementCode === 3 ? Math.min(Math.max(receivedBase, 0), preTbill) : null;
   const insp = settlementCode === 2 ? preTbill : settlementCode === 3 ? Math.max(preTbill - (cap || 0), 0) : null;
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
@@ -585,8 +655,8 @@ const invoicePayload = (args: any) => {
   });
   const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  const header: Record<string, any> = { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: null, inty: Number(invoice.taxpayer_invoice_type || 1), inp, ins: Number(invoice.taxpayer_invoice_subject || 1), tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb, bpc, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop, tax17: null };
-  if (orif) header.orif = orif;
+  const header: Record<string, any> = { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: null, inty: Number(invoice.taxpayer_invoice_type || 1), inp, ins, tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb, bpc, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop, tax17: null };
+  if (irtaxid) header.irtaxid = irtaxid;
   return { packetType: 'INVOICE.V01', data: { header, body, payments: [] } };
 };
 

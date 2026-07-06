@@ -5,6 +5,7 @@ import {
   buildTaxpayerVerhoeffInput,
   isValidIranNationalCode,
   mapTaxpayerSettlementMethodToSetm,
+  normalizeTaxpayerInvoiceDate,
   normalizeTaxpayerNumericId,
   normalizeTaxpayerMoneyToRial,
   normalizeTaxpayerLegacySignatureValue,
@@ -22,6 +23,14 @@ describe('taxpayerSystem', () => {
     expect(buildTaxpayerVerhoeffInput('DEF5GH', '2020-07-20', 12)).toBe('68697057172018463000000000012');
     expect(buildTaxpayerTaxId({ fiscalId: 'DEF5GH', invoiceDate: '2020-07-20', internalSerial: 12 })).toBe(
       'DEF5GH0481F000000000C2'
+    );
+  });
+
+  it('normalizes jalali invoice dates before building taxpayer tax ids', () => {
+    expect(normalizeTaxpayerInvoiceDate('1405/04/01')).toBe('2026-06-22');
+    expect(normalizeTaxpayerInvoiceDate('۱۴۰۵/۰۴/۱۶')).toBe('2026-07-07');
+    expect(buildTaxpayerTaxId({ fiscalId: 'A38MRA', invoiceDate: '1405/04/01', internalSerial: 455 })).toBe(
+      'A38MRA0509200000001C76'
     );
   });
 

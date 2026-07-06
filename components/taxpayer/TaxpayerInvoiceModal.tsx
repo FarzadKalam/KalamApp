@@ -11,7 +11,7 @@ import {
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { FieldNature, FieldType, ModuleField } from '../../types';
-import { getTaxpayerInvoicePatternForModule } from '../../utils/invoiceModuleRouting';
+import { getTaxpayerInvoicePatternForModule, getTaxpayerInvoiceSubjectForModule, isReturnInvoiceModuleId } from '../../utils/invoiceModuleRouting';
 
 type TaxpayerSubmission = {
   id: string;
@@ -121,9 +121,11 @@ const TAXPAYER_FIELDS: ModuleField[] = [
 const getInitialTaxpayerValues = (moduleId: Props['moduleId'], invoiceRecord: any) => ({
   taxpayer_invoice_type: String(invoiceRecord?.taxpayer_invoice_type || '1'),
   taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, invoiceRecord?.taxpayer_invoice_pattern),
-  taxpayer_invoice_subject: String(invoiceRecord?.taxpayer_invoice_subject || '1'),
+  taxpayer_invoice_subject: getTaxpayerInvoiceSubjectForModule(moduleId, invoiceRecord?.taxpayer_invoice_subject),
   taxpayer_settlement_method: String(invoiceRecord?.taxpayer_settlement_method || ''),
 });
+
+const isReferenceSubject = (value: string) => ['2', '3', '4'].includes(String(value || '').trim());
 
 const resolveInvokeErrorMessage = async (error: any, fallback: string) => {
   const context = error?.context;
@@ -158,16 +160,37 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
   const invoiceStatus = String(invoiceRecord?.status || '').trim();
   const canSendInvoice = ['confirmed', 'final', 'settled', 'completed'].includes(invoiceStatus);
   const settlementMethod = String(formValues.taxpayer_settlement_method || '').trim();
+  const isReturnInvoiceModule = isReturnInvoiceModuleId(moduleId);
+  const selectedSubject = getTaxpayerInvoiceSubjectForModule(moduleId, formValues.taxpayer_invoice_subject);
+  const needsReferenceInvoice = isReferenceSubject(selectedSubject);
+  const hasPriorTaxpayerSubmission = history.some((item) => {
+    const taxid = String(item?.taxid || '').trim();
+    const status = String(item?.status || '').trim().toLowerCase();
+    return !!taxid && !['failed', 'rejected', 'sending'].includes(status);
+  });
+  const hasReferenceInvoice = isReturnInvoiceModule
+    ? !!String(invoiceRecord?.source_invoice_id || '').trim()
+    : hasPriorTaxpayerSubmission;
   const overlayZIndexBase = 1400;
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => {
     const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
     return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
   }, []);
-  const renderEditableField = useCallback((field: ModuleField) => (
+  const renderEditableField = useCallback((field: ModuleField) => {
+    const isLockedReturnSubject = isReturnInvoiceModule && field.key === 'taxpayer_invoice_subject';
+    const fieldOptions = field.key === 'taxpayer_invoice_subject'
+      ? (isReturnInvoiceModule
+        ? TAXPAYER_INVOICE_SUBJECT_OPTIONS.filter((option) => option.value === '4')
+        : TAXPAYER_INVOICE_SUBJECT_OPTIONS.filter((option) => option.value !== '4'))
+      : field.options;
+    const effectiveField = fieldOptions === field.options && !isLockedReturnSubject
+      ? field
+      : { ...field, options: fieldOptions, readonly: isLockedReturnSubject || field.readonly };
+    return (
     <div key={field.key} className="space-y-1">
       <Typography.Text className="block">{field.labels.fa}</Typography.Text>
       <SmartFieldRenderer
-        field={field}
+        field={effectiveField}
         value={formValues[field.key]}
         onChange={(value) => {
           setFormValues((prev) => ({
@@ -177,7 +200,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         }}
         forceEditMode
         compactMode
-        options={field.options}
+        options={fieldOptions}
         moduleId={moduleId}
         allValues={formValues}
         overlayZIndexBase={overlayZIndexBase}
@@ -185,7 +208,8 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         preferLocalPopupContainer
       />
     </div>
-  ), [formValues, moduleId, popupContainer]);
+    );
+  }, [formValues, isReturnInvoiceModule, moduleId, popupContainer]);
 
   useEffect(() => {
     if (!open) return;
@@ -231,8 +255,15 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
       setLastError('');
       const nextInvoiceType = String(formValues.taxpayer_invoice_type || '1');
       const nextInvoicePattern = getTaxpayerInvoicePatternForModule(moduleId, formValues.taxpayer_invoice_pattern);
-      const nextInvoiceSubject = String(formValues.taxpayer_invoice_subject || '1');
+      const nextInvoiceSubject = getTaxpayerInvoiceSubjectForModule(moduleId, formValues.taxpayer_invoice_subject);
       const nextSettlementMethod = String(settlementMethod || '').trim();
+      if (isReferenceSubject(nextInvoiceSubject) && !hasReferenceInvoice) {
+        const referenceMessage = isReturnInvoiceModule
+          ? 'برای برگشت از فروش، انتخاب فاکتور فروش اصلی الزامی است.'
+          : 'برای ارسال اصلاحی یا ابطالی، ابتدا باید همین فاکتور یک ارسال موفق یا دارای شماره مالیاتی داشته باشد.';
+        message.warning(referenceMessage);
+        return;
+      }
       const updatePayload: Record<string, string> = {};
       if (String(invoiceRecord?.taxpayer_invoice_type || '1') !== nextInvoiceType) {
         updatePayload.taxpayer_invoice_type = nextInvoiceType;
@@ -347,8 +378,20 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
           type="info"
           showIcon
           message="ارسال مستقیم توسط خود مودی"
-          description="نوع صورتحساب مودیان بر اساس همین فاکتور به‌صورت خودکار تعیین می‌شود و فقط کافی است روش تسویه را مشخص کنید."
+          description="نوع، موضوع و روش تسویه صورتحساب را بر اساس وضعیت همین فاکتور انتخاب کنید. برای اصلاحی، ابطالی و برگشت از فروش، شماره مالیاتی صورتحساب مرجع به‌صورت خودکار از ارسال‌های قبلی یا فاکتور اصلی خوانده می‌شود."
         />
+        {needsReferenceInvoice ? (
+          <Alert
+            type={hasReferenceInvoice ? 'success' : 'warning'}
+            showIcon
+            message={hasReferenceInvoice ? 'مرجع صورتحساب آماده است.' : 'مرجع صورتحساب پیدا نشد.'}
+            description={
+              isReturnInvoiceModule
+                ? 'برای برگشت از فروش، فاکتور فروش اصلی باید در همین رکورد انتخاب شده باشد و قبلاً به سامانه مودیان ارسال شده باشد.'
+                : 'برای اصلاحی یا ابطالی، همین فاکتور باید قبلاً به سامانه مودیان ارسال شده و شماره مالیاتی داشته باشد.'
+            }
+          />
+        ) : null}
         {!canSendInvoice ? (
           <Alert
             type="warning"
