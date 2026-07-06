@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-07-06-billboard-day-unit-code';
+const FUNCTION_BUILD = 'taxpayer-system-2026-07-07-cash-settlement-cap';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
 const TAXPAYER_DAY_MEASURE_UNIT_CODE = '16104';
@@ -558,7 +558,11 @@ const invoicePayload = (args: any) => {
   let preTbill = 0;
   for (const it of items) { preTbill += rial(rowAmounts(it).total, currency); }
   const receivedBase = cashOverride !== null && cashOverride !== undefined ? cashOverride : rial(invoice.total_received_amount || 0, currency);
-  const cap = settlementCode === 3 ? Math.min(Math.max(receivedBase, 0), preTbill) : null;
+  const cap = settlementCode === 1
+    ? preTbill
+    : settlementCode === 3
+      ? Math.min(Math.max(receivedBase, 0), preTbill)
+      : null;
   const insp = settlementCode === 2 ? preTbill : settlementCode === 3 ? Math.max(preTbill - (cap || 0), 0) : null;
   let tprdis=0, tdis=0, tadis=0, tvam=0, tbill=0;
   const body = items.map((item: any, i: number) => {
