@@ -33,7 +33,7 @@ import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { parseAssigneeValue } from '../../utils/assigneeValue';
-import { resolveTaskSourceLink } from '../../utils/taskMeta';
+import { applyTaskSourceRecordFilter, resolveTaskSourceLink } from '../../utils/taskMeta';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
@@ -806,24 +806,120 @@ const mergeRuntimeDraftStageForAutoAssign = (
   };
 };
 
+const collectProcessGroupIdentityKeys = (value: any) => {
+  const metadata = parseObject(value?.metadata);
+  const recurrence = parseObject(value?.recurrence_info || metadata?.recurrence_info);
+  const processGroup = parseObject(value?.process_group || metadata?.process_group || recurrence?.process_group);
+  return [
+    value?.process_group_id,
+    metadata?.process_group_id,
+    recurrence?.process_group_id,
+    processGroup?.id,
+    value?.process_run_id,
+    metadata?.process_run_id,
+    recurrence?.process_run_id,
+    value?.source_template_id,
+    metadata?.source_template_id,
+    recurrence?.source_template_id,
+    processGroup?.template_id,
+  ].map(normalizeText).filter(Boolean);
+};
+
+const mapRuntimeTaskToStage = (task: any, index = 0) => {
+  const recurrence = parseObject(task?.recurrence_info);
+  const metadata = parseObject(task?.metadata);
+  const nodeKey = normalizeText(
+    task?.process_node_key
+    || task?.[PROCESS_NODE_KEY]
+    || recurrence?.process_node_key
+    || recurrence?.[PROCESS_NODE_KEY]
+    || metadata?.process_node_key
+    || metadata?.[PROCESS_NODE_KEY]
+    || task?.process_run_stage_id
+    || task?.id
+  ) || `task_${index + 1}`;
+  const laneKey = normalizeText(
+    task?.process_lane_key
+    || task?.[PROCESS_LANE_KEY]
+    || recurrence?.process_lane_key
+    || recurrence?.[PROCESS_LANE_KEY]
+    || metadata?.process_lane_key
+    || metadata?.[PROCESS_LANE_KEY]
+  ) || 'lane_1';
+  return {
+    ...task,
+    id: normalizeText(task?.process_run_stage_id || task?.id) || nodeKey,
+    task_id: task?.id || null,
+    stage_name: task?.name || task?.stage_name || `مرحله ${toPersianNumber(index + 1)}`,
+    process_node_key: nodeKey,
+    process_lane_key: laneKey,
+    __process_v2_has_real_task: true,
+  };
+};
+
+const buildTaskBackedRunCards = (
+  tasks: any[],
+  runtimeRuns: any[],
+  directory: AssigneeDirectory | null,
+  fallbackRecordLabel: string,
+  templateNameById: Map<string, string>,
+  templateContext: Record<string, any>,
+): ProcessV2CardData[] => {
+  const runIds = new Set((runtimeRuns || []).map((run: any) => normalizeText(run?.id)).filter(Boolean));
+  const groups = new Map<string, { run: any; tasks: any[]; firstSort: number }>();
+  (tasks || []).forEach((task: any, index: number) => {
+    const runId = normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id);
+    if (runId && runIds.has(runId)) return;
+    const keys = collectProcessGroupIdentityKeys(task);
+    const groupId = runId || keys[0] || normalizeText(task?.source_template_id) || 'task_process_group';
+    if (!groups.has(groupId)) {
+      const templateId = normalizeText(task?.source_template_id || parseObject(task?.recurrence_info)?.source_template_id);
+      groups.set(groupId, {
+        run: {
+          id: groupId,
+          template_id: templateId || null,
+          process_group_id: normalizeText(task?.process_group_id) || groupId,
+          process_name: templateId ? templateNameById.get(templateId) : '',
+          status: 'active',
+          module_id: normalizeText(task?.source_module_id),
+          record_id: normalizeText(task?.source_record_id),
+          created_at: task?.created_at || task?.updated_at || null,
+          updated_at: task?.updated_at || null,
+          __process_v2_task_backed: true,
+        },
+        tasks: [],
+        firstSort: Number(task?.sort_order || task?.source_stage_sort_order || index + 1),
+      });
+    }
+    groups.get(groupId)!.tasks.push(mapRuntimeTaskToStage(task, index));
+  });
+
+  return Array.from(groups.values())
+    .sort((left, right) => left.firstSort - right.firstSort)
+    .map((group) => buildRunCard(group.run, group.tasks, directory, fallbackRecordLabel, templateNameById, templateContext))
+    .filter((item): item is ProcessV2CardData => Boolean(item));
+};
+
 const buildDraftProcessCards = (
   draftStages: any[],
   directory: AssigneeDirectory | null,
   templateNameById: Map<string, string>,
   runtimeRuns: any[],
+  runtimeTasks: any[],
   templateContext: Record<string, any>,
   fallbackModuleId?: string | null,
 ): ProcessV2CardData[] => {
   const runtimeGroupIds = new Set(
-    (runtimeRuns || [])
-      .map((run: any) => normalizeText(run?.process_group_id))
+    [...(runtimeRuns || []), ...(runtimeTasks || [])]
+      .flatMap((item: any) => collectProcessGroupIdentityKeys(item))
       .filter(Boolean),
   );
   const groups = new Map<string, { id: string; label: string; templateId: string; templateName: string; stages: any[]; firstSort: number }>();
 
   (Array.isArray(draftStages) ? draftStages : []).forEach((stage: any, index: number) => {
     const meta = resolveDraftGroupMeta(stage);
-    if (runtimeGroupIds.has(meta.groupId)) return;
+    const stageGroupKeys = new Set([meta.groupId, meta.templateId, ...collectProcessGroupIdentityKeys(stage)].filter(Boolean));
+    if (Array.from(stageGroupKeys).some((key) => runtimeGroupIds.has(key))) return;
     const sortOrder = Number(stage?.sort_order || ((index + 1) * 10));
     if (!groups.has(meta.groupId)) {
       groups.set(meta.groupId, {
@@ -869,11 +965,17 @@ const TASK_RUNTIME_COLUMNS = [
   'source_record_id',
   'source_template_id',
   'source_stage_sort_order',
+  'process_node_key',
+  'process_lane_key',
   'due_date',
+  'created_at',
+  'updated_at',
 ] as const;
 
 type RuntimeTaskBatchRequest = {
   key: string;
+  moduleId: string;
+  recordId: string;
   taskIds: Set<string>;
   runIds: Set<string>;
   stageIds: Set<string>;
@@ -891,7 +993,9 @@ const clearProcessRuntimeTaskCache = () => {
   processRuntimeTaskCache.clear();
 };
 
-const buildRuntimeTaskRequestKey = (taskIds: string[], runIds: string[], stageIds: string[]) => JSON.stringify({
+const buildRuntimeTaskRequestKey = (moduleId: string, recordId: string, taskIds: string[], runIds: string[], stageIds: string[]) => JSON.stringify({
+  moduleId,
+  recordId,
   taskIds: [...taskIds].sort(),
   runIds: [...runIds].sort(),
   stageIds: [...stageIds].sort(),
@@ -920,17 +1024,22 @@ const isMissingRuntimeTasksRpcError = (error: any) => {
     code === '42883'
     || code === 'PGRST202'
     || code === 'PGRST204'
+    || message.includes('get_process_runtime_tasks_for_record')
     || message.includes('get_process_runtime_tasks_for_context')
     || message.includes('could not find the function')
   );
 };
 
 const fetchRuntimeTasksWithRpc = async (
+  moduleId: string,
+  recordId: string,
   taskIds: string[],
   runIds: string[],
   stageIds: string[],
 ) => {
-  const { data, error } = await supabase.rpc('get_process_runtime_tasks_for_context', {
+  const { data, error } = await supabase.rpc('get_process_runtime_tasks_for_record', {
+    p_module_id: moduleId,
+    p_record_id: recordId,
     p_task_ids: taskIds,
     p_process_run_ids: runIds,
     p_process_run_stage_ids: stageIds,
@@ -941,10 +1050,33 @@ const fetchRuntimeTasksWithRpc = async (
   return [];
 };
 
+const fetchRuntimeTasksForRecordFallback = async (
+  moduleId: string,
+  recordId: string,
+) => {
+  if (!moduleId || !recordId) return [];
+  const sourceResult = await runSelectWithCompatibleColumns<any[]>({
+    cacheKey: `process-v2-runtime:tasks:record:${moduleId}:${recordId}`,
+    columns: TASK_RUNTIME_COLUMNS,
+    execute: (selectExpr) => applyTaskSourceRecordFilter(
+      supabase.from('tasks').select(selectExpr),
+      moduleId,
+      recordId,
+    ).order('sort_order', { ascending: true }),
+  });
+  if (sourceResult.error) throw sourceResult.error;
+  return Array.isArray(sourceResult.data) ? sourceResult.data : [];
+};
+
 const taskMatchesRuntimeRequest = (task: any, request: RuntimeTaskBatchRequest) => (
   request.taskIds.has(normalizeDbUuid(task?.id))
   || request.runIds.has(normalizeDbUuid(task?.process_run_id))
   || request.stageIds.has(normalizeDbUuid(task?.process_run_stage_id))
+  || (
+    normalizeText(resolveTaskSourceLink(task).moduleId) === request.moduleId
+    && normalizeText(resolveTaskSourceLink(task).recordId) === request.recordId
+  )
+  || normalizeText(parseObject(task?.recurrence_info)?.process_links?.[request.moduleId]) === request.recordId
 );
 
 const flushRuntimeTaskQueue = async () => {
@@ -952,63 +1084,77 @@ const flushRuntimeTaskQueue = async () => {
   processRuntimeTaskFlushTimer = null;
   if (queue.length === 0) return;
 
-  const taskIds = Array.from(new Set(queue.flatMap((item) => Array.from(item.taskIds))));
-  const runIds = Array.from(new Set(queue.flatMap((item) => Array.from(item.runIds))));
-  const stageIds = Array.from(new Set(queue.flatMap((item) => Array.from(item.stageIds))));
-
   try {
-    const byId = new Map<string, any>();
-    try {
-      const rpcTasks = await fetchRuntimeTasksWithRpc(taskIds, runIds, stageIds);
-      rpcTasks.forEach((task: any) => {
-        const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
-        if (id) byId.set(id, task);
-      });
-    } catch (rpcError) {
-      if (!isMissingRuntimeTasksRpcError(rpcError)) throw rpcError;
-      const results = await Promise.allSettled([
-        taskIds.length
-          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:id', 'id', taskIds)
-          : Promise.resolve({ data: [], error: null }),
-        runIds.length
-          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:process-run', 'process_run_id', runIds)
-          : Promise.resolve({ data: [], error: null }),
-        stageIds.length
-          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:run-stage', 'process_run_stage_id', stageIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-      results.forEach((result) => {
-        if (result.status !== 'fulfilled') return;
-        const value = result.value as { data?: any[]; error?: any };
-        if (value.error || !Array.isArray(value.data)) return;
-        value.data.forEach((task) => {
-          const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
-          if (id) byId.set(id, task);
+    await Promise.all(queue.map(async (request) => {
+      try {
+        const tasks = await fetchRuntimeTasksWithRpc(
+          request.moduleId,
+          request.recordId,
+          Array.from(request.taskIds),
+          Array.from(request.runIds),
+          Array.from(request.stageIds),
+        );
+        if (!request.force) {
+          processRuntimeTaskCache.set(request.key, { tasks, savedAt: Date.now() });
+        }
+        request.resolve(tasks);
+      } catch (rpcError) {
+        if (!isMissingRuntimeTasksRpcError(rpcError)) throw rpcError;
+        const taskIds = Array.from(request.taskIds);
+        const runIds = Array.from(request.runIds);
+        const stageIds = Array.from(request.stageIds);
+        const results = await Promise.allSettled([
+          taskIds.length
+            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:id:${request.key}`, 'id', taskIds)
+            : Promise.resolve({ data: [], error: null }),
+          runIds.length
+            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:process-run:${request.key}`, 'process_run_id', runIds)
+            : Promise.resolve({ data: [], error: null }),
+          stageIds.length
+            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:run-stage:${request.key}`, 'process_run_stage_id', stageIds)
+            : Promise.resolve({ data: [], error: null }),
+          fetchRuntimeTasksForRecordFallback(request.moduleId, request.recordId).then((data) => ({ data, error: null })),
+        ]);
+        const byId = new Map<string, any>();
+        results.forEach((result) => {
+          if (result.status !== 'fulfilled') return;
+          const value = result.value as { data?: any[]; error?: any };
+          if (value.error || !Array.isArray(value.data)) return;
+          value.data.forEach((task: any) => {
+            if (!taskMatchesRuntimeRequest(task, request)) return;
+            const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
+            if (id) byId.set(id, task);
+          });
         });
-      });
-    }
-    const allTasks = Array.from(byId.values());
-    queue.forEach((request) => {
-      const tasks = allTasks.filter((task) => taskMatchesRuntimeRequest(task, request));
-      if (!request.force) {
-        processRuntimeTaskCache.set(request.key, { tasks, savedAt: Date.now() });
+        const tasks = Array.from(byId.values());
+        if (!request.force) {
+          processRuntimeTaskCache.set(request.key, { tasks, savedAt: Date.now() });
+        }
+        request.resolve(tasks);
       }
-      request.resolve(tasks);
-    });
+    }));
   } catch (error) {
     queue.forEach((request) => request.reject(error));
   }
 };
 
-const fetchRuntimeTasks = async (runs: any[], stages: any[], options?: { force?: boolean }) => {
+const fetchRuntimeTasks = async (
+  moduleId: string,
+  recordId: string,
+  runs: any[],
+  stages: any[],
+  options?: { force?: boolean },
+) => {
+  const normalizedModuleId = normalizeText(moduleId);
+  const normalizedRecordId = normalizeText(recordId);
   const taskIds = Array.from(new Set((stages || []).map((stage: any) => normalizeDbUuid(stage?.task_id)).filter(Boolean)));
   const runIds = Array.from(new Set((runs || []).map((run: any) => normalizeDbUuid(run?.id)).filter(Boolean)));
   const stageIds = Array.from(new Set((stages || []).flatMap((stage: any) => [
     normalizeDbUuid(stage?.id),
     normalizeDbUuid(stage?.process_run_stage_id),
   ]).filter(Boolean)));
-  if (taskIds.length === 0 && runIds.length === 0 && stageIds.length === 0) return [];
-  const key = buildRuntimeTaskRequestKey(taskIds, runIds, stageIds);
+  if (!normalizedModuleId || !normalizedRecordId) return [];
+  const key = buildRuntimeTaskRequestKey(normalizedModuleId, normalizedRecordId, taskIds, runIds, stageIds);
   const cached = processRuntimeTaskCache.get(key);
   if (!options?.force && cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_TASK_CACHE_TTL_MS) {
     return cached.tasks;
@@ -1017,6 +1163,8 @@ const fetchRuntimeTasks = async (runs: any[], stages: any[], options?: { force?:
   return new Promise<any[]>((resolve, reject) => {
     processRuntimeTaskQueue.push({
       key,
+      moduleId: normalizedModuleId,
+      recordId: normalizedRecordId,
       taskIds: new Set(taskIds),
       runIds: new Set(runIds),
       stageIds: new Set(stageIds),
@@ -1477,7 +1625,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (isProcessRunModule(normalizedModuleId)) {
         const stages = await fetchRunStages(normalizedRecordId, force ? { force: true } : undefined);
         const runs = [recordDataRef.current].filter(Boolean);
-        const tasks = readOnlyVariant ? [] : await fetchRuntimeTasks(runs, stages, { force });
+        const tasks = await fetchRuntimeTasks(normalizedModuleId, normalizedRecordId, runs, stages, { force });
         const nextRuntime = {
           runs,
           stages,
@@ -1508,7 +1656,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         snapshot.stages || [],
         force ? { force: true } : undefined,
       );
-      const tasks = readOnlyVariant ? [] : await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
+      const tasks = await fetchRuntimeTasks(normalizedModuleId, normalizedRecordId, snapshot.runs || [], snapshotStages, { force });
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
         loadLegacyLinkedDrafts
@@ -2051,7 +2199,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return card ? [card] : [];
     }
     if (!hasLoadedRuntime) {
-      return buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, [], templateContext, normalizedModuleId);
+      return buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, [], [], templateContext, normalizedModuleId);
     }
 
     const runRows = (isProcessRunModule(normalizedModuleId)
@@ -2063,19 +2211,31 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         - new Date(left?.created_at || left?.started_at || left?.updated_at || 0).getTime()
       ));
     const stageRows = runtime.stages || [];
+    const runtimeTasks = runtime.tasks || [];
     const runCards = runRows
       .map((run: any) => {
         const runId = normalizeText(run?.id);
-        const runStages = stageRows
+        const taskStages = runtimeTasks
+          .filter((task: any) => normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id) === runId)
+          .map(mapRuntimeTaskToStage);
+        const runStages = [
+          ...stageRows
           .filter((stage: any) => normalizeText(stage?.process_run_id) === runId)
-          .map(mergeRuntimeStageWithTask);
+            .map(mergeRuntimeStageWithTask),
+          ...taskStages.filter((taskStage: any) => !stageRows.some((stage: any) => (
+            normalizeDbUuid(stage?.id || stage?.process_run_stage_id) === normalizeDbUuid(taskStage?.process_run_stage_id || taskStage?.id)
+            || (getRuntimeStageNodeKey(stage) && getRuntimeStageNodeKey(stage) === getRuntimeStageNodeKey(taskStage))
+          ))),
+        ];
         return buildRunCard(run, runStages, directory, fallbackRecordLabel, templateNameById, templateContext);
       })
       .filter((item): item is ProcessV2CardData => Boolean(item));
-    if (isProcessRunModule(normalizedModuleId)) return runCards;
+    const taskBackedRunCards = buildTaskBackedRunCards(runtimeTasks, runRows, directory, fallbackRecordLabel, templateNameById, templateContext);
+    if (isProcessRunModule(normalizedModuleId)) return [...runCards, ...taskBackedRunCards];
     return [
       ...runCards,
-      ...buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, runtime.runs, templateContext, normalizedModuleId),
+      ...taskBackedRunCards,
+      ...buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, runtime.runs, runtimeTasks, templateContext, normalizedModuleId),
     ];
   }, [directory, effectiveDraftStages, enabled, fallbackRecordLabel, hasLoadedRuntime, mergeRuntimeStageWithTask, normalizedModuleId, normalizedRecordId, readOnlyVariant, recordData, runtime.runs, runtime.stages, templateContext, templateNameById, templateStages, waitingForTemplateContext]);
 
