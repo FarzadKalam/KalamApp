@@ -100,6 +100,7 @@ type ProcessCardsV2RuntimeBlockProps = {
   enabled?: boolean;
   highlightedTaskId?: string | null;
   highlightedRunStageId?: string | null;
+  loadLegacyLinkedDrafts?: boolean;
 };
 
 type RuntimeState = {
@@ -1178,6 +1179,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   enabled = true,
   highlightedTaskId,
   highlightedRunStageId,
+  loadLegacyLinkedDrafts = false,
 }) => {
   const { message } = App.useApp();
   const normalizedModuleId = normalizeText(moduleId);
@@ -1458,7 +1460,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
-        (snapshot.runs || []).length === 0
+        loadLegacyLinkedDrafts
+        && variant === 'full'
+        && (snapshot.runs || []).length === 0
         && snapshotStages.length === 0
         && directDrafts.length === 0
       );
@@ -1466,6 +1470,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         ? await fetchLinkedProcessDraftStagesForRecord(supabase, normalizedModuleId, normalizedRecordId, {
           excludeModuleId: normalizedModuleId,
           excludeRecordId: normalizedRecordId,
+          allowGlobalScan: true,
         }).catch(() => [])
         : [];
       const nextRuntime = { runs: snapshot.runs || [], stages: snapshotStages, tasks };
@@ -1487,7 +1492,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setHasLoadedRuntime(true);
       setLoading(false);
     }
-  }, [cacheKey, enabled, liveRuntimeEnabled, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime]);
+  }, [cacheKey, enabled, liveRuntimeEnabled, loadLegacyLinkedDrafts, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime, variant]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => {

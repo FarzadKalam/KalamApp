@@ -2,7 +2,6 @@ import { supabase } from '../supabaseClient';
 import { applyTaskSourceRecordFilter } from './taskMeta';
 import { isTaskDoneStatus, normalizeTaskStatus } from './taskCompletion';
 import { parseProcessLinkMap } from './processTargets';
-import { fetchLinkedProcessDraftStagesForRecord } from './processLinkedDraftLookup';
 
 export type ProjectProcessStatus =
   | 'draft'
@@ -228,19 +227,7 @@ export const syncProjectStatusWithProcessState = async (
       .maybeSingle();
     if (projectError) throw projectError;
     if (!projectRow) return null;
-    const linkedDraftStages = await fetchLinkedProcessDraftStagesForRecord(
-      supabase,
-      PROJECTS_MODULE_ID,
-      normalizedProjectId,
-      {
-        excludeModuleId: PROJECTS_MODULE_ID,
-        excludeRecordId: normalizedProjectId,
-      },
-    ).catch(() => []);
-    projectDraftStages = [
-      ...parseDraftStages(projectRow.execution_process_draft),
-      ...(Array.isArray(linkedDraftStages) ? linkedDraftStages : []),
-    ];
+    projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
   }
 
   const projectTasks = options?.tasks || await fetchProjectProcessTasks(normalizedProjectId);

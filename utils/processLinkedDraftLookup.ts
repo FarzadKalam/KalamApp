@@ -13,14 +13,23 @@ const LINKED_DRAFT_LOOKUP_EXCLUDED_TABLES = new Set([
   'automation_execution_reports',
   'sms_delivery_reports',
   'voip_call_logs',
+  'saas_admin_org_candidates_view',
+  'saas_admin_users_view',
+  'saas_onboarding_requests',
 ]);
 
 const LINKED_DRAFT_CACHE_TTL_MS = 30_000;
 const LINKED_DRAFT_UNSUPPORTED_TTL_MS = 120_000;
 const linkedDraftCache = new Map<string, { savedAt: number; stages: Record<string, any>[] }>();
+const linkedDraftInFlight = new Map<string, Promise<Record<string, any>[]>>();
 const unsupportedLinkedDraftSpecs = new Map<string, number>();
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const normalizeList = (value: unknown): string[] => (
+  Array.isArray(value)
+    ? Array.from(new Set(value.map((item) => normalizeText(item)).filter(Boolean))).sort()
+    : []
+);
 
 const parseObject = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -93,17 +102,33 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
     excludeModuleId?: string | null;
     excludeRecordId?: string | null;
     limitPerModule?: number;
+    sourceModuleIds?: string[] | null;
+    allowGlobalScan?: boolean;
   },
 ) => {
   const normalizedModuleId = normalizeText(moduleId);
   const normalizedRecordId = normalizeText(recordId);
   if (!supabaseClient || !normalizedModuleId || !normalizedRecordId) return [];
 
-  const cacheKey = `linked-drafts:${normalizedModuleId}:${normalizedRecordId}`;
+  const sourceModuleIds = normalizeList(options?.sourceModuleIds);
+  if (sourceModuleIds.length === 0 && options?.allowGlobalScan !== true) return [];
+
+  const cacheKey = [
+    'linked-drafts',
+    normalizedModuleId,
+    normalizedRecordId,
+    normalizeText(options?.excludeModuleId),
+    normalizeText(options?.excludeRecordId),
+    sourceModuleIds.join(','),
+    options?.allowGlobalScan === true ? 'global' : 'targeted',
+    String(Math.max(1, Math.min(Number(options?.limitPerModule || 12), 40))),
+  ].join(':');
   const cached = linkedDraftCache.get(cacheKey);
   if (cached && Date.now() - cached.savedAt < LINKED_DRAFT_CACHE_TTL_MS) {
     return cached.stages;
   }
+  const existingPromise = linkedDraftInFlight.get(cacheKey);
+  if (existingPromise) return existingPromise;
 
   const specs = Object.values(MODULES)
     .map((module: any) => {
@@ -111,6 +136,7 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
       const tableName = normalizeText(module?.table || sourceModuleId);
       const fieldKey = getDraftFieldKey(module);
       if (LINKED_DRAFT_LOOKUP_EXCLUDED_TABLES.has(tableName)) return null;
+      if (sourceModuleIds.length > 0 && !sourceModuleIds.includes(sourceModuleId)) return null;
       if (!sourceModuleId || !tableName || !fieldKey) return null;
       return { moduleId: sourceModuleId, tableName, fieldKey };
     })
@@ -121,52 +147,67 @@ export const fetchLinkedProcessDraftStagesForRecord = async (
   const containsPayload = [{ process_link_map: { [normalizedModuleId]: normalizedRecordId } }];
   const metadataContainsPayload = [{ metadata: { process_link_map: { [normalizedModuleId]: normalizedRecordId } } }];
 
-  await runWithConcurrency(specs, 4, async (spec) => {
-    if (
-      normalizeText(options?.excludeModuleId) === spec.moduleId
-      && normalizeText(options?.excludeRecordId) === normalizedRecordId
-    ) return;
-    const specKey = `${spec.tableName}:${spec.fieldKey}`;
-    const unsupportedAt = unsupportedLinkedDraftSpecs.get(specKey);
-    if (unsupportedAt && Date.now() - unsupportedAt < LINKED_DRAFT_UNSUPPORTED_TTL_MS) return;
+  const lookupPromise = (async () => {
+    await runWithConcurrency(specs, 4, async (spec) => {
+      if (
+        normalizeText(options?.excludeModuleId) === spec.moduleId
+        && normalizeText(options?.excludeRecordId) === normalizedRecordId
+      ) return;
+      const specKey = `${spec.tableName}:${spec.fieldKey}`;
+      const unsupportedAt = unsupportedLinkedDraftSpecs.get(specKey);
+      if (unsupportedAt && Date.now() - unsupportedAt < LINKED_DRAFT_UNSUPPORTED_TTL_MS) return;
 
-    const queryRows = async (payload: any[]) => {
-      const { data, error } = await supabaseClient
-        .from(spec.tableName)
-        .select(`id, process_template_id, ${spec.fieldKey}`)
-        .filter(spec.fieldKey, 'cs', JSON.stringify(payload))
-        .limit(limitPerModule);
-      if (error) {
-        if (isMissingColumnLikeError(error)) unsupportedLinkedDraftSpecs.set(specKey, Date.now());
-        return [];
-      }
-      if (!Array.isArray(data)) return [];
-      return data;
-    };
+      const queryRows = async (payload: any[]) => {
+        const { data, error } = await supabaseClient
+          .from(spec.tableName)
+          .select(`id, process_template_id, ${spec.fieldKey}`)
+          .filter(spec.fieldKey, 'cs', JSON.stringify(payload))
+          .limit(limitPerModule);
+        if (error) {
+          if (isMissingColumnLikeError(error)) unsupportedLinkedDraftSpecs.set(specKey, Date.now());
+          return [];
+        }
+        if (!Array.isArray(data)) return [];
+        return data;
+      };
 
-    const rows = [
-      ...await queryRows(containsPayload),
-      ...await queryRows(metadataContainsPayload),
-    ];
+      const rows = [
+        ...await queryRows(containsPayload),
+        ...await queryRows(metadataContainsPayload),
+      ];
 
-    rows.forEach((row: any) => {
-      const ownerRecordId = normalizeText(row?.id);
-      const stages = Array.isArray(row?.[spec.fieldKey]) ? row[spec.fieldKey] : [];
-      stages.forEach((stage: any, index: number) => {
-        if (!stage || typeof stage !== 'object') return;
-        if (!stageMatchesRecord(stage, normalizedModuleId, normalizedRecordId)) return;
-        const key = getStageDedupeKey(stage, spec.moduleId, ownerRecordId, index);
-        found.set(key, {
-          ...stage,
-          __process_v2_linked_owner_module_id: spec.moduleId,
-          __process_v2_linked_owner_record_id: ownerRecordId,
-          __process_v2_linked_owner_field_key: spec.fieldKey,
+      rows.forEach((row: any) => {
+        const ownerRecordId = normalizeText(row?.id);
+        const stages = Array.isArray(row?.[spec.fieldKey]) ? row[spec.fieldKey] : [];
+        stages.forEach((stage: any, index: number) => {
+          if (!stage || typeof stage !== 'object') return;
+          if (!stageMatchesRecord(stage, normalizedModuleId, normalizedRecordId)) return;
+          const key = getStageDedupeKey(stage, spec.moduleId, ownerRecordId, index);
+          found.set(key, {
+            ...stage,
+            __process_v2_linked_owner_module_id: spec.moduleId,
+            __process_v2_linked_owner_record_id: ownerRecordId,
+            __process_v2_linked_owner_field_key: spec.fieldKey,
+          });
         });
       });
     });
-  });
 
-  const stages = Array.from(found.values());
-  linkedDraftCache.set(cacheKey, { savedAt: Date.now(), stages });
-  return stages;
+    const stages = Array.from(found.values());
+    linkedDraftCache.set(cacheKey, { savedAt: Date.now(), stages });
+    return stages;
+  })();
+
+  linkedDraftInFlight.set(cacheKey, lookupPromise);
+  try {
+    return await lookupPromise;
+  } finally {
+    linkedDraftInFlight.delete(cacheKey);
+  }
+};
+
+export const clearLinkedProcessDraftLookupCaches = () => {
+  linkedDraftCache.clear();
+  linkedDraftInFlight.clear();
+  unsupportedLinkedDraftSpecs.clear();
 };
