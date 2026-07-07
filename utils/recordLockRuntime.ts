@@ -28,6 +28,9 @@ export const EMPTY_RECORD_LOCK_STATE: RecordLockState = {
 };
 
 export const RECORD_LOCKED_ERROR_CODE = 'record_locked';
+const RECORD_LOCK_MAP_TTL_MS = 15_000;
+const recordLockMapCache = new Map<string, { savedAt: number; rows: Array<[string, RecordLockState]> }>();
+const recordLockMapInFlight = new Map<string, Promise<Map<string, RecordLockState>>>();
 
 export const normalizeRecordLockState = (value: any): RecordLockState => {
   if (!value) return EMPTY_RECORD_LOCK_STATE;
@@ -88,26 +91,43 @@ export const fetchRecordLockMap = async (
   const ids = Array.from(new Set(recordIds.map((id) => String(id || '').trim()).filter(Boolean)));
   const map = new Map<string, RecordLockState>();
   if (!moduleId || ids.length === 0) return map;
-
-  const { data, error } = await supabase.rpc('get_record_lock_map', {
-    p_module_id: moduleId,
-    p_record_ids: ids,
-  });
-  if (error) {
-    console.warn('Could not load record lock map', error);
-    return map;
+  const cacheKey = `${String(moduleId || '').trim()}:${ids.slice().sort().join(',')}`;
+  const cached = recordLockMapCache.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt < RECORD_LOCK_MAP_TTL_MS) {
+    return new Map(cached.rows);
   }
+  const inFlight = recordLockMapInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
 
-  (Array.isArray(data) ? data : []).forEach((row: any) => {
-    const recordId = String(row?.record_id || '').trim();
-    if (!recordId) return;
-    map.set(recordId, normalizeRecordLockState({
-      ...row,
-      is_locked: true,
-      module_id: row?.module_id || moduleId,
-    }));
-  });
-  return map;
+  const promise = (async () => {
+    const { data, error } = await supabase.rpc('get_record_lock_map', {
+      p_module_id: moduleId,
+      p_record_ids: ids,
+    });
+    if (error) {
+      console.warn('Could not load record lock map', error);
+      return map;
+    }
+
+    (Array.isArray(data) ? data : []).forEach((row: any) => {
+      const recordId = String(row?.record_id || '').trim();
+      if (!recordId) return;
+      map.set(recordId, normalizeRecordLockState({
+        ...row,
+        is_locked: true,
+        module_id: row?.module_id || moduleId,
+      }));
+    });
+    recordLockMapCache.set(cacheKey, { savedAt: Date.now(), rows: Array.from(map.entries()) });
+    return map;
+  })();
+
+  recordLockMapInFlight.set(cacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    recordLockMapInFlight.delete(cacheKey);
+  }
 };
 
 export const fetchRecordLockState = async (

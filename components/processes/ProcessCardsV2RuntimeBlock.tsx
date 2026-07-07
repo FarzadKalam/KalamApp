@@ -134,11 +134,13 @@ type ProcessRuntimeReferenceCache = {
   templates: ProcessV2TemplateOption[];
   savedAt: number;
 };
+type ProcessRuntimeReferencePayload = Omit<ProcessRuntimeReferenceCache, 'savedAt'>;
 
 const PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS = 30_000;
 const PROCESS_RUNTIME_REFERENCE_CACHE_TTL_MS = 90_000;
 const processRuntimeBlockCache = new Map<string, ProcessRuntimeBlockCacheEntry>();
 let processRuntimeReferenceCache: ProcessRuntimeReferenceCache | null = null;
+let processRuntimeReferencePromise: Promise<ProcessRuntimeReferencePayload> | null = null;
 const EMPTY_RUNTIME_STATE: RuntimeState = { runs: [], stages: [], tasks: [] };
 const EMPTY_STAGE_LIST: any[] = [];
 
@@ -911,6 +913,34 @@ const fetchRuntimeTasksByColumn = async (
   });
 };
 
+const isMissingRuntimeTasksRpcError = (error: any) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  const message = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return (
+    code === '42883'
+    || code === 'PGRST202'
+    || code === 'PGRST204'
+    || message.includes('get_process_runtime_tasks_for_context')
+    || message.includes('could not find the function')
+  );
+};
+
+const fetchRuntimeTasksWithRpc = async (
+  taskIds: string[],
+  runIds: string[],
+  stageIds: string[],
+) => {
+  const { data, error } = await supabase.rpc('get_process_runtime_tasks_for_context', {
+    p_task_ids: taskIds,
+    p_process_run_ids: runIds,
+    p_process_run_stage_ids: stageIds,
+  });
+  if (error) throw error;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object' && Array.isArray((data as any).tasks)) return (data as any).tasks;
+  return [];
+};
+
 const taskMatchesRuntimeRequest = (task: any, request: RuntimeTaskBatchRequest) => (
   request.taskIds.has(normalizeDbUuid(task?.id))
   || request.runIds.has(normalizeDbUuid(task?.process_run_id))
@@ -927,27 +957,36 @@ const flushRuntimeTaskQueue = async () => {
   const stageIds = Array.from(new Set(queue.flatMap((item) => Array.from(item.stageIds))));
 
   try {
-    const results = await Promise.allSettled([
-      taskIds.length
-        ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:id', 'id', taskIds)
-        : Promise.resolve({ data: [], error: null }),
-      runIds.length
-        ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:process-run', 'process_run_id', runIds)
-        : Promise.resolve({ data: [], error: null }),
-      stageIds.length
-        ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:run-stage', 'process_run_stage_id', stageIds)
-        : Promise.resolve({ data: [], error: null }),
-    ]);
     const byId = new Map<string, any>();
-    results.forEach((result) => {
-      if (result.status !== 'fulfilled') return;
-      const value = result.value as { data?: any[]; error?: any };
-      if (value.error || !Array.isArray(value.data)) return;
-      value.data.forEach((task) => {
+    try {
+      const rpcTasks = await fetchRuntimeTasksWithRpc(taskIds, runIds, stageIds);
+      rpcTasks.forEach((task: any) => {
         const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
         if (id) byId.set(id, task);
       });
-    });
+    } catch (rpcError) {
+      if (!isMissingRuntimeTasksRpcError(rpcError)) throw rpcError;
+      const results = await Promise.allSettled([
+        taskIds.length
+          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:id', 'id', taskIds)
+          : Promise.resolve({ data: [], error: null }),
+        runIds.length
+          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:process-run', 'process_run_id', runIds)
+          : Promise.resolve({ data: [], error: null }),
+        stageIds.length
+          ? fetchRuntimeTasksByColumn('process-v2-runtime:tasks:run-stage', 'process_run_stage_id', stageIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') return;
+        const value = result.value as { data?: any[]; error?: any };
+        if (value.error || !Array.isArray(value.data)) return;
+        value.data.forEach((task) => {
+          const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
+          if (id) byId.set(id, task);
+        });
+      });
+    }
     const allTasks = Array.from(byId.values());
     queue.forEach((request) => {
       const tasks = allTasks.filter((task) => taskMatchesRuntimeRequest(task, request));
@@ -1312,37 +1351,49 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [cacheKey]);
 
   const loadDirectoryAndTemplates = useCallback(async () => {
+    const applyReferencePayload = (payload: ProcessRuntimeReferencePayload) => {
+      setOrgId(payload.orgId);
+      if (payload.directory) setDirectory(payload.directory);
+      setTemplates(payload.templates);
+    };
     if (
       processRuntimeReferenceCache
       && Date.now() - processRuntimeReferenceCache.savedAt < PROCESS_RUNTIME_REFERENCE_CACHE_TTL_MS
     ) {
-      setOrgId(processRuntimeReferenceCache.orgId);
-      if (processRuntimeReferenceCache.directory) setDirectory(processRuntimeReferenceCache.directory);
-      setTemplates(processRuntimeReferenceCache.templates);
+      applyReferencePayload(processRuntimeReferenceCache);
       return;
     }
-    const [bootstrap, assignees, templateRows] = await Promise.all([
-      fetchSessionBootstrap(supabase),
-      fetchAssigneeDirectory(supabase).catch(() => null),
-      fetchProcessTemplateRows(supabase).catch(() => []),
-    ]);
-    const nextOrgId = normalizeText(bootstrap?.orgId);
-    const nextTemplates = (templateRows || [])
-      .filter((row: any) => row?.is_active !== false)
-      .map((row: any) => ({
-        id: normalizeText(row?.id),
-        title: normalizeText(row?.name) || 'الگوی فرآیند',
-        moduleId: normalizeText(row?.module_id) || null,
-        moduleIds: normalizeProcessTargetModuleIds(row?.module_ids, row?.module_id),
-      }))
-      .filter((item) => item.id);
-    setOrgId(nextOrgId);
-    if (assignees) setDirectory(assignees);
-    setTemplates(nextTemplates);
+    if (!processRuntimeReferencePromise) {
+      processRuntimeReferencePromise = (async () => {
+        const [bootstrap, assignees, templateRows] = await Promise.all([
+          fetchSessionBootstrap(supabase),
+          fetchAssigneeDirectory(supabase).catch(() => null),
+          fetchProcessTemplateRows(supabase).catch(() => []),
+        ]);
+        const nextOrgId = normalizeText(bootstrap?.orgId);
+        const nextTemplates = (templateRows || [])
+          .filter((row: any) => row?.is_active !== false)
+          .map((row: any) => ({
+            id: normalizeText(row?.id),
+            title: normalizeText(row?.name) || 'الگوی فرآیند',
+            moduleId: normalizeText(row?.module_id) || null,
+            moduleIds: normalizeProcessTargetModuleIds(row?.module_ids, row?.module_id),
+          }))
+          .filter((item) => item.id);
+        return {
+          orgId: nextOrgId,
+          directory: assignees || null,
+          templates: nextTemplates,
+        };
+      })().finally(() => {
+        processRuntimeReferencePromise = null;
+      });
+    }
+
+    const payload = await processRuntimeReferencePromise;
+    applyReferencePayload(payload);
     processRuntimeReferenceCache = {
-      orgId: nextOrgId,
-      directory: assignees || null,
-      templates: nextTemplates,
+      ...payload,
       savedAt: Date.now(),
     };
   }, []);
@@ -1426,7 +1477,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (isProcessRunModule(normalizedModuleId)) {
         const stages = await fetchRunStages(normalizedRecordId, force ? { force: true } : undefined);
         const runs = [recordDataRef.current].filter(Boolean);
-        const tasks = await fetchRuntimeTasks(runs, stages, { force });
+        const tasks = readOnlyVariant ? [] : await fetchRuntimeTasks(runs, stages, { force });
         const nextRuntime = {
           runs,
           stages,
@@ -1457,7 +1508,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         snapshot.stages || [],
         force ? { force: true } : undefined,
       );
-      const tasks = await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
+      const tasks = readOnlyVariant ? [] : await fetchRuntimeTasks(snapshot.runs || [], snapshotStages, { force });
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
         loadLegacyLinkedDrafts
@@ -1999,7 +2050,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       const card = buildTemplateCard(recordData || { id: normalizedRecordId }, templateStages, directory, templateContext, false);
       return card ? [card] : [];
     }
-    if (!hasLoadedRuntime) return [];
+    if (!hasLoadedRuntime) {
+      return buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, [], templateContext, normalizedModuleId);
+    }
 
     const runRows = (isProcessRunModule(normalizedModuleId)
       ? [recordData].filter(Boolean)
