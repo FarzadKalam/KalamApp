@@ -146,7 +146,11 @@ const normalizeStageName = (value: any, fallbackIndex: number) =>
   String(value || '').trim() || `مرحله ${fallbackIndex + 1}`;
 
 const buildProcessId = (stage: any, sourceKind: 'template' | 'run' | 'draft') => {
-  const groupId = String(stage?.process_group_id || stage?.source_template_id || '').trim();
+  const groupId = String(
+    sourceKind === 'run'
+      ? (stage?.process_run_id || stage?.process_group_id || stage?.source_template_id || '')
+      : (stage?.process_group_id || stage?.source_template_id || '')
+  ).trim();
   if (groupId) return groupId;
   if (sourceKind === 'template') return 'current_process_template';
   if (sourceKind === 'run') return 'current_process_run';
@@ -455,7 +459,11 @@ const normalizeNameForMatch = (value: any) => String(value || '').trim().toLower
 const getStageProcessId = (stage: any, sourceKind: 'template' | 'run' | 'draft') => buildProcessId(stage, sourceKind);
 
 const getTaskProcessId = (task: any, sourceKind: 'template' | 'run' | 'draft') =>
-  String(task?.process_group_id || task?.source_template_id || '').trim()
+  String(
+    sourceKind === 'run'
+      ? (task?.process_run_id || task?.process_group_id || task?.source_template_id || '')
+      : (task?.process_group_id || task?.source_template_id || '')
+  ).trim()
   || (sourceKind === 'template' ? 'current_process_template' : sourceKind === 'run' ? 'current_process_run' : 'default_process_group');
 
 const findLinkedTaskForStage = (stage: any, index: number, tasks: any[], sourceKind: 'template' | 'run' | 'draft') => {
@@ -505,6 +513,7 @@ const buildSyntheticStageFromTask = (task: any) => ({
   assignee_id: String(task?.assignee_id || '').trim() || null,
   assignee_role_id: String(task?.assignee_role_id || '').trim() || null,
   process_group_id: String(task?.process_group_id || task?.source_template_id || '').trim() || null,
+  process_run_id: String(task?.process_run_id || '').trim() || null,
   source_template_id: String(task?.source_template_id || '').trim() || null,
   automation_rules: Array.isArray(task?.recurrence_info?.process_automation_rules)
     ? task.recurrence_info.process_automation_rules
@@ -568,9 +577,20 @@ const summarizeStage = (
   };
 };
 
-const detectSourceKind = (moduleId?: string | null, fieldKey?: string | null): 'template' | 'run' | 'draft' => {
+const detectSourceKind = (
+  moduleId?: string | null,
+  fieldKey?: string | null,
+  stages: any[] = [],
+  tasks: any[] = [],
+): 'template' | 'run' | 'draft' => {
   if (moduleId === 'process_templates' || fieldKey === 'template_stages_preview') return 'template';
   if (moduleId === 'process_runs' || fieldKey === 'run_stages_preview') return 'run';
+  if (
+    (Array.isArray(stages) && stages.some((stage) => String(stage?.process_run_id || stage?.process_run_stage_id || stage?.task_id || '').trim()))
+    || (Array.isArray(tasks) && tasks.some((task) => String(task?.process_run_id || task?.process_run_stage_id || '').trim()))
+  ) {
+    return 'run';
+  }
   return 'draft';
 };
 
@@ -592,7 +612,7 @@ export const buildProcessGuideContext = ({
   assigneeDirectory?: AssigneeDirectory | null;
 }): ProcessGuideContext => {
   const grouped = new Map<string, { label: string; templateId: string | null; templateName: string | null; stages: any[] }>();
-  const sourceKind = detectSourceKind(moduleId, fieldKey);
+  const sourceKind = detectSourceKind(moduleId, fieldKey, stages, tasks);
   const assigneeLookup = buildAssigneeLookup(assigneeDirectory);
 
   (Array.isArray(stages) ? stages : [])

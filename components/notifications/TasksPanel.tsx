@@ -15,6 +15,7 @@ type CreatedSortDirection = 'desc' | 'asc';
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
+  { key: 'not_done', label: 'انجام نشده‌ها' },
   { key: 'overdue', label: 'سررسیدگذشته‌ها' },
   { key: 'in_progress', label: 'در حال انجام' },
   { key: 'upcoming', label: 'فعالیت‌های پیش‌رو' },

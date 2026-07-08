@@ -18,7 +18,7 @@ import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapa
 import AiComposeModelBar from './AiComposeModelBar';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import AiAudioPlayer from './AiAudioPlayer';
-import type { AiMediaSettings, AiMediaSourceImage } from './AiMediaSettingsPopover';
+import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
 import { resolveAiAttachmentUrl } from './AiMessageAttachmentPreview';
 import { blobToBase64 } from '../../utils/blobBase64';
 import { buildAiRecordCreationSchema, buildAiRecordModuleOptions } from '../../utils/aiRecordCreation';
@@ -239,14 +239,18 @@ const formatDraftValue = (value: any): string => {
 const getGenerationConfirmationTitle = (kind: string) => {
   if (kind === 'image_generation') return 'تایید ساخت تصویر';
   if (kind === 'video_generation') return 'تایید ساخت ویدیو';
+  if (kind === 'voice_output') return 'تایید تولید صدا';
   if (kind === 'document_generation') return 'تایید ساخت فایل';
+  if (kind === 'deep_reasoning') return 'تایید تفکر عمیق';
   return 'تایید ساخت خروجی';
 };
 
 const getGenerationOutputLabel = (kind: string, settings?: AiMediaSettings | null) => {
   if (kind === 'image_generation') return Number(settings?.n || 1) > 1 ? 'تصاویر' : 'تصویر';
   if (kind === 'video_generation') return 'ویدیو';
+  if (kind === 'voice_output') return 'فایل صوتی';
   if (kind === 'document_generation') return 'فایل';
+  if (kind === 'deep_reasoning') return 'تحلیل عمیق';
   return 'خروجی';
 };
 
@@ -255,16 +259,28 @@ const buildGenerationSettingsRows = (kind: string, settings?: AiMediaSettings | 
   if (kind === 'image_generation') {
     rows.push({ label: 'اندازه', value: String(settings?.size || 'خودکار') });
     rows.push({ label: 'کیفیت', value: String(settings?.quality || 'خودکار') });
+    rows.push({ label: 'فرمت خروجی', value: String(settings?.imageOutputFormat || 'png').toUpperCase() });
     rows.push({ label: 'تعداد', value: Number(settings?.n || 1).toLocaleString('fa-IR') });
+    rows.push({ label: 'اطلاعات سازمان', value: settings?.useOrganizationContext === true ? 'استفاده شود' : 'استفاده نشود' });
     if (extra?.sourceImageCount) rows.push({ label: 'تصویر مبنا', value: `${Number(extra.sourceImageCount).toLocaleString('fa-IR')} تصویر` });
   }
   if (kind === 'video_generation') {
+    rows.push({ label: 'ابعاد', value: String(settings?.size || 'پیش‌فرض') });
     rows.push({ label: 'مدت', value: settings?.seconds ? `${Number(settings.seconds).toLocaleString('fa-IR')} ثانیه` : 'پیش‌فرض' });
     if (extra?.sourceImageCount) rows.push({ label: 'تصویر مبنا', value: `${Number(extra.sourceImageCount).toLocaleString('fa-IR')} تصویر` });
+  }
+  if (kind === 'voice_output') {
+    rows.push({ label: 'صدا', value: String(settings?.voice || 'alloy') });
+    rows.push({ label: 'زبان', value: String(settings?.language || 'fa-IR') });
+    rows.push({ label: 'فرمت خروجی', value: String(settings?.responseFormat || 'mp3').toUpperCase() });
+    rows.push({ label: 'سرعت', value: `${Number(settings?.speed || 1).toLocaleString('fa-IR')}×` });
   }
   if (kind === 'document_generation') {
     rows.push({ label: 'قالب فایل', value: String(extra?.format || settings?.format || 'docx').toUpperCase() });
     if (extra?.bundleInputCount) rows.push({ label: 'ورودی پیوست', value: `${Number(extra.bundleInputCount).toLocaleString('fa-IR')} مورد` });
+  }
+  if (kind === 'deep_reasoning') {
+    rows.push({ label: 'حالت', value: 'تحلیل عمیق مرحله‌ای' });
   }
   return rows;
 };
@@ -284,7 +300,7 @@ const buildGenerationConfirmationText = (kind: string, prompt: string, rows: Arr
 };
 
 const buildLocalGenerationConfirmation = (params: {
-  kind: 'image_generation' | 'video_generation' | 'document_generation';
+  kind: 'image_generation' | 'video_generation' | 'voice_output' | 'document_generation' | 'deep_reasoning';
   prompt: string;
   settings?: AiMediaSettings | null;
   confirmBody: Record<string, any>;
@@ -922,16 +938,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
 
     if (capabilitySet.has('voice_output') && !capabilitySet.has('voice_input') && bundlePayload.length === 0) {
-      const data = await callAssistant({
-        action: 'generate_voice_output',
-        text: params.messageText,
-        threadId: params.forceNewThread ? null : threadId,
-        forceNewThread: params.forceNewThread === true,
-        context: contextWithSelection,
-        modelOverride: modelOverrideRef.current,
+      const prompt = params.messageText || 'این متن را به فایل صوتی تبدیل کن.';
+      return buildLocalGenerationConfirmation({
+        kind: 'voice_output',
+        prompt,
         settings: mediaSettings,
+        rows: buildGenerationSettingsRows('voice_output', mediaSettings),
+        confirmBody: {
+          action: 'generate_voice_output',
+          text: prompt,
+          capabilities: routeCapabilities,
+          inputKind: params.inputKind,
+          threadId: params.forceNewThread ? null : threadId,
+          forceNewThread: params.forceNewThread === true,
+          context: contextWithSelection,
+          modelOverride: modelOverrideRef.current,
+          settings: mediaSettings,
+        },
       });
-      return { ...data, autoAction: 'generate_voice_output' };
     }
 
     if (capabilitySet.has('video_generation')) {
@@ -2155,10 +2179,35 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           ? pendingAiAction.confirmBody
           : null;
         if (!confirmBody?.action) throw new Error('دستور ساخت برای تایید کامل نیست.');
-        const data = await callAssistant(confirmBody);
+        const generationKind = String(pendingAiAction?.generationKind || '').trim();
+        const finalConfirmBody: Record<string, any> = {
+          ...confirmBody,
+          modelOverride: modelOverrideRef.current || confirmBody.modelOverride || null,
+          composerPreferences: buildComposerPreferences(),
+        };
+        if (generationKind === 'image_generation') {
+          finalConfirmBody.settings = mediaSettings;
+          finalConfirmBody.sourceImages = Array.isArray(confirmBody.sourceImages) && confirmBody.sourceImages.length
+            ? confirmBody.sourceImages
+            : mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+          finalConfirmBody.sourceImageUrls = Array.isArray(confirmBody.sourceImageUrls) && confirmBody.sourceImageUrls.length
+            ? confirmBody.sourceImageUrls
+            : imageEditSourceUrl ? [imageEditSourceUrl] : [];
+        } else if (generationKind === 'video_generation') {
+          finalConfirmBody.settings = mediaSettings;
+          finalConfirmBody.sourceImages = Array.isArray(confirmBody.sourceImages) && confirmBody.sourceImages.length
+            ? confirmBody.sourceImages
+            : mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+        } else if (generationKind === 'voice_output') {
+          finalConfirmBody.settings = mediaSettings;
+        } else if (generationKind === 'document_generation') {
+          finalConfirmBody.settings = mediaSettings;
+          finalConfirmBody.format = String(mediaSettings.format || confirmBody.format || 'docx');
+        }
+        const data = await callAssistant(finalConfirmBody);
         message.success('درخواست تایید شد و اجرا شد.');
         setPendingAiAction(null);
-        const nextThreadId = String(data?.threadId || confirmBody?.threadId || threadId || '').trim();
+        const nextThreadId = String(data?.threadId || finalConfirmBody?.threadId || threadId || '').trim();
         if (data?.threadId) setThreadId(String(data.threadId));
         if (nextThreadId) {
           await loadThread(nextThreadId);
@@ -2178,7 +2227,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setConfirmingAiAction(false);
     }
-  }, [callAssistant, loadThread, message, pendingAiAction, threadId]);
+  }, [buildComposerPreferences, callAssistant, imageEditSourceUrl, loadThread, mediaSettings, mediaSourceImages, message, pendingAiAction, threadId]);
 
   const saveThreadTitle = useCallback(async () => {
     if (renamingThreadRef.current) return;
@@ -2396,6 +2445,25 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     );
   };
 
+  const pendingGenerationKind = String(pendingAiAction?.generationKind || '').trim();
+  const pendingGenerationCanChooseModel = pendingAiAction?.actionType === 'confirm_generation'
+    && ['image_generation', 'video_generation', 'voice_output', 'document_generation', 'deep_reasoning'].includes(pendingGenerationKind);
+  const pendingGenerationSourceImageCount = useMemo(() => {
+    const body = pendingAiAction?.confirmBody && typeof pendingAiAction.confirmBody === 'object' ? pendingAiAction.confirmBody : {};
+    const bodySources = Array.isArray(body?.sourceImages) ? body.sourceImages.length : 0;
+    const bodySourceUrls = Array.isArray(body?.sourceImageUrls) ? body.sourceImageUrls.length : 0;
+    return bodySources + bodySourceUrls + (bodySources || bodySourceUrls ? 0 : mediaSourceImages.length + (imageEditSourceUrl ? 1 : 0));
+  }, [imageEditSourceUrl, mediaSourceImages.length, pendingAiAction]);
+  const pendingGenerationSettingsRows = useMemo(() => {
+    if (!pendingGenerationCanChooseModel) return [];
+    const body = pendingAiAction?.confirmBody && typeof pendingAiAction.confirmBody === 'object' ? pendingAiAction.confirmBody : {};
+    return buildGenerationSettingsRows(pendingGenerationKind, mediaSettings, {
+      format: mediaSettings.format || body?.format,
+      sourceImageCount: pendingGenerationSourceImageCount,
+      bundleInputCount: Array.isArray(body?.bundle?.inputs) ? body.bundle.inputs.length : 0,
+    });
+  }, [mediaSettings, pendingAiAction, pendingGenerationCanChooseModel, pendingGenerationKind, pendingGenerationSourceImageCount]);
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
       <div className="border-b border-slate-200/65 bg-white/92 px-3 py-2.5 backdrop-blur dark:border-white/[0.07] dark:bg-[#17191c]/95">
@@ -2557,7 +2625,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </div>
         ) : null}
         {pendingAiAction ? (
-          <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm">
+          <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm dark:border-amber-400/20 dark:bg-[#241a0d] dark:text-amber-100">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <div className="font-bold">
@@ -2567,7 +2635,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     ? `پیش‌نویس ساخت ${String(pendingAiAction?.title || 'رکورد').trim()}`
                     : 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.'}
                 </div>
-                <div className="mt-1 text-amber-800">
+                <div className="mt-1 text-amber-800 dark:text-amber-200/85">
                   {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                     ? 'قبل از ساخت، دستور و تنظیمات را بررسی کنید؛ اجرا فقط بعد از تایید شما انجام می‌شود.'
                     : 'اطلاعات فهمیده‌شده را بررسی کنید؛ می‌توانید تایید کنید، رد کنید یا با پیام/ویس توضیح تکمیلی بدهید.'}
@@ -2575,39 +2643,83 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               </div>
             </div>
             {String(pendingAiAction?.actionType || '') === 'confirm_generation' ? (
-              <div className="mt-2 space-y-2 rounded-xl border border-amber-200/70 bg-white/72 p-2">
+              <div className="mt-2 space-y-2 rounded-xl border border-amber-200/70 bg-white/72 p-2 dark:border-amber-300/15 dark:bg-white/[0.045]">
                 <div>
-                  <div className="font-semibold text-amber-900">دستور ساخت</div>
-                  <div className="mt-1 whitespace-pre-wrap rounded-lg bg-amber-50/80 p-2 text-amber-900">
+                  <div className="font-semibold text-amber-900 dark:text-amber-100">دستور ساخت</div>
+                  <div className="mt-1 whitespace-pre-wrap rounded-lg bg-amber-50/80 p-2 text-amber-900 dark:bg-black/20 dark:text-amber-50">
                     {String(pendingAiAction?.prompt || pendingAiAction?.confirmBody?.prompt || pendingAiAction?.confirmBody?.message || '').trim() || 'درخواست کاربر'}
                   </div>
                 </div>
-                {Array.isArray(pendingAiAction?.settingsRows) && pendingAiAction.settingsRows.length > 0 ? (
+                {pendingGenerationCanChooseModel ? (
+                  <div className="rounded-lg border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
+                    <div className="mb-1 font-semibold text-amber-900 dark:text-amber-100">موتور هوش مصنوعی</div>
+                    <AiComposeModelBar
+                      selectedCapabilities={[pendingGenerationKind]}
+                      fallbackCapability={contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat'}
+                      persistedOverrides={modelOverrides}
+                      onModelOverrideChange={(model, capability) => {
+                        modelOverrideRef.current = model;
+                        const key = String(capability || pendingGenerationKind || '').trim();
+                        if (!key) return;
+                        setModelOverrides((prev) => {
+                          if (model) return { ...prev, [key]: model };
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        });
+                        setPendingAiAction((prev: any) => prev?.actionType === 'confirm_generation'
+                          ? {
+                            ...prev,
+                            confirmBody: {
+                              ...(prev.confirmBody || {}),
+                              modelOverride: model || null,
+                            },
+                          }
+                          : prev);
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {pendingGenerationCanChooseModel && ['image_generation', 'video_generation', 'voice_output', 'document_generation'].includes(pendingGenerationKind) ? (
+                  <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-100/80 bg-white/60 p-2 dark:border-white/10 dark:bg-white/[0.035]">
+                    <span className="font-semibold text-amber-900 dark:text-amber-100">تنظیمات خاص خروجی</span>
+                    <AiMediaSettingsPopover
+                      capability={pendingGenerationKind as 'image_generation' | 'voice_output' | 'video_generation' | 'document_generation'}
+                      settings={mediaSettings}
+                      onSettingsChange={setMediaSettings}
+                      sourceImages={pendingGenerationKind === 'image_generation' || pendingGenerationKind === 'video_generation' ? mediaSourceImages : undefined}
+                      onSourceImagesChange={pendingGenerationKind === 'image_generation' || pendingGenerationKind === 'video_generation' ? setMediaSourceImages : undefined}
+                      maxSourceImages={pendingGenerationKind === 'video_generation' ? 1 : 4}
+                      size="small"
+                    />
+                  </div>
+                ) : null}
+                {pendingGenerationSettingsRows.length > 0 ? (
                   <div>
-                    <div className="font-semibold text-amber-900">تنظیمات</div>
+                    <div className="font-semibold text-amber-900 dark:text-amber-100">تنظیمات</div>
                     <div className="mt-1 space-y-1">
-                      {pendingAiAction.settingsRows.map((row: any, rowIndex: number) => (
-                        <div key={`${String(row?.label || 'setting')}-${rowIndex}`} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0">
-                          <span className="shrink-0 font-semibold text-amber-900">{String(row?.label || 'تنظیم')}</span>
-                          <span className="min-w-0 text-left text-amber-800">{String(row?.value || 'پیش‌فرض')}</span>
+                      {pendingGenerationSettingsRows.map((row: any, rowIndex: number) => (
+                        <div key={`${String(row?.label || 'setting')}-${rowIndex}`} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0 dark:border-white/10">
+                          <span className="shrink-0 font-semibold text-amber-900 dark:text-amber-100">{String(row?.label || 'تنظیم')}</span>
+                          <span className="min-w-0 text-left text-amber-800 dark:text-amber-200/85">{String(row?.value || 'پیش‌فرض')}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 ) : null}
-                <div className="font-semibold text-amber-900">آیا تایید می‌کنید؟</div>
+                <div className="font-semibold text-amber-900 dark:text-amber-100">آیا تایید می‌کنید؟</div>
               </div>
             ) : null}
             {pendingAiAction?.proposedPayload?.payload ? (
-              <div className="mt-2 space-y-1 rounded-xl border border-amber-200/70 bg-white/72 p-2">
+              <div className="mt-2 space-y-1 rounded-xl border border-amber-200/70 bg-white/72 p-2 dark:border-amber-300/15 dark:bg-white/[0.045]">
                 {Object.entries(pendingAiAction.proposedPayload.payload).slice(0, 12).map(([key, value]) => {
                   const field = Array.isArray(pendingAiAction?.schema?.fields)
                     ? pendingAiAction.schema.fields.find((item: any) => String(item?.key || '') === key)
                     : null;
                   return (
-                    <div key={key} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0">
-                      <span className="shrink-0 font-semibold text-amber-900">{String(field?.label || key)}</span>
-                      <span className="min-w-0 text-left text-amber-800">{formatDraftValue(value)}</span>
+                    <div key={key} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0 dark:border-white/10">
+                      <span className="shrink-0 font-semibold text-amber-900 dark:text-amber-100">{String(field?.label || key)}</span>
+                      <span className="min-w-0 text-left text-amber-800 dark:text-amber-200/85">{formatDraftValue(value)}</span>
                     </div>
                   );
                 })}

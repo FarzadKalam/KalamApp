@@ -22,6 +22,7 @@ export type AiMediaSettings = {
   orientationHorizontal?: boolean;
   orientationVertical?: boolean;
   useOrganizationContext?: boolean;
+  imageOutputFormat?: string;
   // voice
   voice?: string;
   speed?: number;
@@ -78,6 +79,12 @@ const IMAGE_QUALITY_OPTIONS = [
   { value: 'high', label: 'بالا' },
   { value: 'medium', label: 'متوسط' },
   { value: 'low', label: 'اقتصادی' },
+];
+
+const IMAGE_OUTPUT_FORMAT_OPTIONS = [
+  { value: 'png', label: 'PNG' },
+  { value: 'jpeg', label: 'JPEG' },
+  { value: 'webp', label: 'WEBP' },
 ];
 
 const AUDIO_FORMAT_OPTIONS = [
@@ -225,7 +232,7 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
         <>
           <div className="rounded-lg border border-gray-100 p-2 dark:border-white/10">
             <Checkbox
-              checked={settings.useOrganizationContext !== false}
+              checked={settings.useOrganizationContext === true}
               onChange={(event) => update({ useOrganizationContext: event.target.checked })}
             >
               استفاده از اطلاعات سازمان
@@ -249,6 +256,16 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
               value={settings.quality || 'auto'}
               options={IMAGE_QUALITY_OPTIONS}
               onChange={(value) => update({ quality: String(value) })}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">فرمت خروجی</div>
+            <Select
+              size="small"
+              className="w-full"
+              value={settings.imageOutputFormat || 'png'}
+              options={IMAGE_OUTPUT_FORMAT_OPTIONS}
+              onChange={(value) => update({ imageOutputFormat: String(value) })}
             />
           </div>
           <div>

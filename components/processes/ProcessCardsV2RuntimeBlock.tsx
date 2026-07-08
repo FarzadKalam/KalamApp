@@ -101,6 +101,7 @@ type ProcessCardsV2RuntimeBlockProps = {
   highlightedTaskId?: string | null;
   highlightedRunStageId?: string | null;
   loadLegacyLinkedDrafts?: boolean;
+  snapshotOnly?: boolean;
 };
 
 type RuntimeState = {
@@ -1367,6 +1368,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   highlightedTaskId,
   highlightedRunStageId,
   loadLegacyLinkedDrafts = false,
+  snapshotOnly = false,
 }) => {
   const { message } = App.useApp();
   const normalizedModuleId = normalizeText(moduleId);
@@ -1374,7 +1376,16 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const cacheKey = `${normalizedModuleId}:${normalizedRecordId}`;
   const cachedRuntimeBlock = processRuntimeBlockCache.get(cacheKey);
   const cacheFresh = Boolean(cachedRuntimeBlock && Date.now() - cachedRuntimeBlock.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
-  const initialRuntimeSnapshot = variant === 'full' ? EMPTY_RUNTIME_STATE : (runtimeSnapshot || EMPTY_RUNTIME_STATE);
+  const runtimeSnapshotReady = Boolean(
+    variant !== 'full'
+    && runtimeSnapshot
+    && runtimeSnapshot.loaded !== false
+    && normalizeText(runtimeSnapshot.moduleId) === normalizedModuleId
+    && normalizeText(runtimeSnapshot.recordId) === normalizedRecordId
+  );
+  const initialRuntimeSnapshot = variant === 'full'
+    ? EMPTY_RUNTIME_STATE
+    : (runtimeSnapshotReady && runtimeSnapshot ? runtimeSnapshot : EMPTY_RUNTIME_STATE);
   const [orgId, setOrgId] = useState<string>('');
   const [templateStages, setTemplateStages] = useState<any[]>(() => (
     cacheFresh && cachedRuntimeBlock ? cachedRuntimeBlock.templateStages : (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST)
@@ -1387,7 +1398,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const [templates, setTemplates] = useState<ProcessV2TemplateOption[]>([]);
   const [directory, setDirectory] = useState<AssigneeDirectory | null>(null);
   const [loading, setLoading] = useState(false);
-  const [hasLoadedRuntime, setHasLoadedRuntime] = useState(cacheFresh);
+  const [hasLoadedRuntime, setHasLoadedRuntime] = useState(cacheFresh || runtimeSnapshotReady);
   const [errorText, setErrorText] = useState('');
   const [cardOverrides, setCardOverrides] = useState<Record<string, ProcessV2CardData>>({});
   const [extraCards, setExtraCards] = useState<ProcessV2CardData[]>([]);
@@ -1491,12 +1502,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   useEffect(() => {
     const cached = processRuntimeBlockCache.get(cacheKey);
-    setHasLoadedRuntime(Boolean(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS));
-    setLinkedDraftStages(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS ? cached.linkedDraftStages || [] : []);
+    const nextCacheFresh = Boolean(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
+    setHasLoadedRuntime(nextCacheFresh || runtimeSnapshotReady);
+    setLinkedDraftStages(nextCacheFresh ? cached?.linkedDraftStages || [] : []);
     setResolvedTemplateContext(null);
     setTemplateContextResolving(false);
     setTemplateContextResolvedKey('');
-  }, [cacheKey]);
+  }, [cacheKey, runtimeSnapshotReady]);
 
   const loadDirectoryAndTemplates = useCallback(async () => {
     const applyReferencePayload = (payload: ProcessRuntimeReferencePayload) => {
@@ -1885,6 +1897,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   useEffect(() => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
+    if (snapshotOnly && readOnlyVariant) return;
     if (
       runtimeSnapshot
       && normalizeText(runtimeSnapshot.moduleId) === normalizedModuleId
@@ -1895,7 +1908,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return;
     }
     void refresh(false);
-  }, [enabled, normalizedModuleId, normalizedRecordId, readOnlyVariant, refresh, runtimeSnapshot]);
+  }, [enabled, normalizedModuleId, normalizedRecordId, readOnlyVariant, refresh, runtimeSnapshot, snapshotOnly]);
 
   useEffect(() => {
     if (!enabled || !liveRuntimeEnabled || !orgId || !normalizedModuleId || !normalizedRecordId) return undefined;

@@ -27,6 +27,7 @@ const TASK_SELECT_COLUMNS = [
   'created_at', 'start_date', 'due_date',
   'assignee_id', 'assignee_role_id', 'assignee_type',
   'process_group_id', 'process_run_id', 'process_run_stage_id',
+  'process_node_key', 'process_lane_key',
   'source_template_id', 'source_stage_sort_order',
   'recurrence_info', 'metadata',
   'production_line_id', 'related_to_module',

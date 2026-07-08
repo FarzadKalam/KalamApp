@@ -935,10 +935,16 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       let response: { data: unknown; error: any };
       try {
-        response = await supabase.rpc('get_notification_overlay_feed_v3', {
+        response = await supabase.rpc('get_notification_overlay_feed_v4', {
           p_before_cursor: beforeCursor,
           p_limit: 20,
         });
+        if (isMissingRpcError(response.error)) {
+          response = await supabase.rpc('get_notification_overlay_feed_v3', {
+            p_before_cursor: beforeCursor,
+            p_limit: 20,
+          });
+        }
         if (isMissingRpcError(response.error)) {
           response = await loadLegacyOverlayFeed();
         }

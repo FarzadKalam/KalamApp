@@ -1782,6 +1782,10 @@ const fetchModuleRowsForQuery = async (
   const recordScope = getRecordScope(perm);
   const terms = getSearchTerms(message);
   const searchFields = MODULE_SEARCH_FIELDS[moduleId] || ['name', 'title', 'system_code', 'description'];
+  const normalizedMessage = normalizeFaDigits(message).toLowerCase();
+  const analyticalRangeQuery = /(سه\s*ماه|3\s*ماه|دو\s*ماه|2\s*ماه|ماه\s*گذشته|اخیر|گزارش|تحلیل|بررسی|مرور)/i.test(normalizedMessage);
+  const resultLimit = analyticalRangeQuery && (moduleId === 'projects' || moduleId === 'tasks' || moduleId === 'process_runs') ? 24 : 8;
+  const fetchLimit = analyticalRangeQuery && (moduleId === 'projects' || moduleId === 'tasks' || moduleId === 'process_runs') ? 120 : 40;
 
   for (const term of terms) {
     const safeTerm = term.replace(/[(),*]/g, ' ').trim();
@@ -1792,11 +1796,11 @@ const fetchModuleRowsForQuery = async (
         select: '*',
         or: `(${orExpr})`,
         order: 'updated_at.desc',
-        limit: 20,
+        limit: Math.max(20, fetchLimit),
       });
       const permittedRows = (rows || [])
         .filter((row) => canAccessAssignedRecord(row, authContext, recordScope))
-        .slice(0, 8)
+        .slice(0, resultLimit)
         .map((row) => sanitizeRecord(row, perm));
       if (permittedRows.length) return permittedRows;
     } catch {
@@ -1807,13 +1811,80 @@ const fetchModuleRowsForQuery = async (
   const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, moduleId, {
     select: '*',
     order: 'updated_at.desc',
-    limit: 40,
+    limit: fetchLimit,
   });
   return (rows || [])
     .filter((row) => canAccessAssignedRecord(row, authContext, recordScope))
     .filter((row) => rowMatchesTerms(row, terms))
-    .slice(0, 8)
+    .slice(0, resultLimit)
     .map((row) => sanitizeRecord(row, perm));
+};
+
+const fetchRelevantReportContexts = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  message: string,
+  moduleIds: string[],
+) => {
+  if (!canViewReports(authContext)) return [];
+  const normalizedMessage = normalizeFaDigits(message).toLowerCase();
+  const wantsReports = /(گزارش|report|داشبورد|تحلیل|بررسی|اسنپ\s*شات|snapshot|اینفوگرافیک|پاورپوینت|powerpoint|ppt)/i.test(normalizedMessage);
+  const candidateModules = Array.from(new Set((moduleIds || []).filter(Boolean)));
+  if (!wantsReports && !candidateModules.includes('projects')) return [];
+  const reportRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'report_definitions', {
+    org_id: `eq.${authContext.orgId}`,
+    is_active: 'eq.true',
+    select: 'id,name,description,module_id,report_type,config,updated_at',
+    order: 'updated_at.desc',
+    limit: 24,
+  }).catch(() => []);
+  const relevantReports = (reportRows || [])
+    .filter((report: any) => {
+      const moduleId = String(report?.module_id || '').trim();
+      return !candidateModules.length || candidateModules.includes(moduleId) || (candidateModules.includes('projects') && moduleId === 'tasks');
+    })
+    .slice(0, 4);
+  if (!relevantReports.length) {
+    return wantsReports || candidateModules.includes('projects')
+      ? [{
+          moduleId: 'reports',
+          summary: 'گزارش مرتبط آماده‌ای برای این پرسش پیدا نشد. اگر کاربر تحلیل دوره‌ای، اینفوگرافیک، تصویر، پاورپوینت یا خروجی مدیریتی خواست، پیشنهاد بده از بخش گزارشات پیشرفته یک گزارش جدید بسازد یا گزارش موجود را انتخاب کند.',
+          records: [],
+          recommendation: 'برای پاسخ دقیق‌تر، از بخش گزارشات پیشرفته گزارش دوره‌ای بسازید یا گزارش مرتبط را انتخاب کنید.',
+        }]
+      : [];
+  }
+  const contexts: any[] = [];
+  for (const report of relevantReports) {
+    const moduleId = String(report?.module_id || '').trim();
+    const sampleRows = moduleId
+      ? await fetchPermittedRows(supabaseUrl, serviceRoleKey, authContext, moduleId, {
+          order: 'updated_at.desc',
+        }, moduleId === 'projects' ? 18 : 10).catch(() => [])
+      : [];
+    contexts.push({
+      moduleId: 'reports',
+      summary: `آخرین تعریف/نتیجه قابل بازسازی گزارش «${String(report?.name || 'گزارش').trim()}» برای ماژول ${moduleId || 'نامشخص'}. از sample_rows فقط به‌عنوان snapshot سبک و مجاز استفاده کن؛ اگر کافی نبود، ساخت گزارش جدید در گزارشات پیشرفته را پیشنهاد بده.`,
+      report: {
+        name: report?.name || null,
+        description: report?.description || null,
+        module_id: moduleId || null,
+        report_type: report?.report_type || null,
+        updated_at: report?.updated_at || null,
+        config_summary: report?.config && typeof report.config === 'object' ? {
+          columns: Array.isArray(report.config.columns) ? report.config.columns.slice(0, 12) : undefined,
+          group_bys: Array.isArray(report.config.group_bys) ? report.config.group_bys.slice(0, 6) : undefined,
+          metric_type: report.config.metric_type || undefined,
+          metric_fields: Array.isArray(report.config.metric_fields) ? report.config.metric_fields.slice(0, 8) : undefined,
+          row_limit: report.config.row_limit || undefined,
+        } : null,
+      },
+      records: sampleRows,
+      output_guidance: 'اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس همین گزارش‌ها پیشنهاد ساخت اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.',
+    });
+  }
+  return contexts;
 };
 
 const fetchRelevantModuleContexts = async (
@@ -1837,6 +1908,14 @@ const fetchRelevantModuleContexts = async (
       });
     }
   }
+  const reportContexts = await fetchRelevantReportContexts(
+    supabaseUrl,
+    serviceRoleKey,
+    authContext,
+    message,
+    Array.from(new Set([...modules, pageContext?.moduleId].filter(Boolean))),
+  );
+  contexts.push(...reportContexts);
   return contexts;
 };
 
@@ -2319,6 +2398,33 @@ const buildUserPromptContext = (authContext: any) => ({
   subordinate_roles: (authContext?.subordinateRoles || []).slice(0, 20),
 });
 
+const buildPersianCalendarPromptContext = () => {
+  const now = new Date();
+  const tehranDateTime = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+    timeZone: 'Asia/Tehran',
+    dateStyle: 'full',
+    timeStyle: 'short',
+  }).format(now);
+  const tehranWeekday = new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+    timeZone: 'Asia/Tehran',
+    weekday: 'long',
+  }).format(now);
+  const gregorianDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  return {
+    calendar: 'jalali',
+    timezone: 'Asia/Tehran',
+    tehran_now_jalali: tehranDateTime,
+    tehran_weekday_fa: tehranWeekday,
+    tehran_today_gregorian: gregorianDate,
+    guidance: 'در پاسخ به کاربر، تاریخ‌ها را شمسی/جلالی و فارسی بیان کن. اگر تاریخ ورودی میلادی است، آن را برای مخاطب به شمسی توضیح بده. برای مناسبت‌ها فقط وقتی داده معتبر در context داری قطعی بگو؛ در غیر این صورت با احتیاط پیشنهاد بده تقویم سازمان بررسی شود.',
+  };
+};
+
 const matchesDirectoryKeywords = (values: Array<unknown>, keywords: string[]) => {
   const haystack = values
     .map((value) => String(value || '').trim().toLowerCase())
@@ -2487,6 +2593,7 @@ const buildPromptMessages = (
   );
   const contextPayload = {
     company: companyContext,
+    calendar: buildPersianCalendarPromptContext(),
     current_user: buildUserPromptContext(authContext),
     organization_directory: orgPeopleContext,
     current_page: {
@@ -2527,10 +2634,11 @@ const buildPromptMessages = (
         : ' حالت تفکر عمیق فعال است و این اولین پیام است: هنوز تحلیل کامل را شروع نکن. ابتدا (۱) برداشت کوتاهت از خواسته را بگو، (۲) حداکثر ۳ تا ۵ سوال دقیق برای رفع ابهام بپرس، (۳) یک طرح کوتاه از مراحل کاری که انجام خواهی داد ارائه بده، و در پایان صریح از کاربر بخواه که تایید کند یا اطلاعات بدهد تا تفکر عمیق را شروع کنی. تا تایید نگرفته‌ای وارد تحلیل عمیق نشو.')
     : '';
   const copyableOutputInstruction = ' اگر بخشی از خروجی متن آماده استفاده برای کپی کردن است، مثل متن اصلی نامه، شرح شغل، قرارداد، پیام، پرامپت، آگهی، دستورالعمل یا هر متن نهایی قابل استفاده، آن بخش را با Markdown blockquote و شروع هر خط با > بفرست. اگر خروجی کد، JSON، SQL، قالب فنی یا متن ساختاریافته ماشینی است، آن را داخل code fence سه‌تایی با زبان مناسب بفرست. توضیح و راهنمایی را بیرون از blockquote/code نگه دار و فقط متن نهایی قابل کپی را داخل آن‌ها قرار بده.';
+  const jalaliAndReportsInstruction = ' تاریخ و زمان را برای مخاطب فارسی‌زبان با تقویم شمسی/جلالی و منطقه زمانی تهران بیان کن؛ تاریخ میلادی را فقط وقتی لازم است کنار تاریخ شمسی بیاور. روز هفته و روز/ماه شمسی را از calendar context بشناس. برای مناسبت‌ها فقط با داده معتبر context یا دانش قطعی عمومی پیشنهاد بده و اگر مطمئن نیستی صریح بگو نیاز به بررسی تقویم سازمان است. اگر retrieved_permitted_contexts شامل reports بود، برای سوال‌های تحلیلی و مدیریتی اول از گزارش‌ها و sample_rows همان گزارش استفاده کن؛ اگر گزارش مرتبط موجود نبود، به کاربر پیشنهاد بده از بخش گزارشات پیشرفته گزارش جدید بسازد یا گزارش موجود را انتخاب کند. اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس گزارش‌ها پیشنهاد اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.';
 
   const systemContent = pageContext.intent === 'process_guide'
-    ? `شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد.${copyableOutputInstruction} ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.`
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+    ? `شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد.${copyableOutputInstruction}${jalaliAndReportsInstruction} ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.`
+    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -2822,6 +2930,49 @@ const extractImagePayload = (raw: any): {
 };
 
 const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
+const CHAT_COMPLETION_CONTINUATION_LIMIT = 3;
+
+const buildContinuationMessages = (
+  messages: Array<{ role: string; content: any }>,
+  partialContent: string,
+) => [
+  ...messages,
+  {
+    role: 'assistant',
+    content: String(partialContent || '').trim(),
+  },
+  {
+    role: 'user',
+    content: 'پاسخ قبلی به سقف خروجی همان درخواست رسید. دقیقاً از همان نقطه ادامه بده و بخش‌های تکراری را دوباره ننویس. پاسخ را با زبان فارسی و همان ساختار قبلی ادامه بده.',
+  },
+];
+
+const mergeChatUsageMetadata = (items: any[], providerConfig: any) => {
+  const valid = (items || []).filter(Boolean);
+  if (!valid.length) return null;
+  const usageTotals: Record<string, number> = {};
+  const costTotals: Record<string, number> = {};
+  valid.forEach((item) => {
+    const usage = item?.usage && typeof item.usage === 'object' ? item.usage : {};
+    Object.entries(usage).forEach(([key, value]) => {
+      const numberValue = Number(value);
+      if (Number.isFinite(numberValue)) usageTotals[key] = Number(usageTotals[key] || 0) + numberValue;
+    });
+    const cost = item?.cost && typeof item.cost === 'object' ? item.cost : {};
+    Object.entries(cost).forEach(([key, value]) => {
+      const numberValue = Number(value);
+      if (Number.isFinite(numberValue)) costTotals[key] = Number(costTotals[key] || 0) + numberValue;
+    });
+  });
+  return {
+    provider: providerConfig.provider,
+    model: providerConfig.model,
+    capability: providerConfig.capability || null,
+    usage: Object.keys(usageTotals).length ? usageTotals : valid[valid.length - 1]?.usage || null,
+    cost: Object.keys(costTotals).length ? costTotals : valid[valid.length - 1]?.cost || null,
+    partial_requests: valid.length,
+  };
+};
 
 const callChatCompletions = async (
   providerConfig: any,
@@ -2850,66 +3001,139 @@ const callChatCompletions = async (
   for (let attempt = 0; attempt < modelsToTry.length; attempt += 1) {
     const model = modelsToTry[attempt];
     const reasoning = isReasoningModel(model);
-    const requestBody: Record<string, any> = {
-      model,
-      messages,
-      safety_identifier: options?.safetyIdentifier || undefined,
-    };
-    if (options?.responseFormat && typeof options.responseFormat === 'object') {
-      requestBody.response_format = options.responseFormat;
-    }
-    if (reasoning) {
-      requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
-    } else {
-      requestBody.temperature = options?.temperature ?? 0.2;
-      requestBody.max_tokens = options?.maxTokens ?? 2000;
-    }
+    let currentMessages = messages;
+    let accumulatedContent = '';
+    let accumulatedAttachments: any[] = [];
+    let finalParsed: any = null;
+    let finalBaseUrl = '';
+    let finalFinishReason = '';
+    const requestIds: string[] = [];
+    const usageParts: any[] = [];
 
-    let response: Response;
-    let baseUrl: string;
-    try {
-      const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${providerConfig.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
-      }, { disableFallback: true });
-      response = result.response;
-      baseUrl = result.baseUrl;
-    } catch (error: any) {
-      lastErrorMessage = String(error?.message || 'اتصال به سرویس هوش مصنوعی برقرار نشد.');
-      continue;
-    }
+    for (let continuation = 0; continuation <= CHAT_COMPLETION_CONTINUATION_LIMIT; continuation += 1) {
+      const requestBody: Record<string, any> = {
+        model,
+        messages: currentMessages,
+        safety_identifier: options?.safetyIdentifier || undefined,
+      };
+      if (options?.responseFormat && typeof options.responseFormat === 'object') {
+        requestBody.response_format = options.responseFormat;
+      }
+      if (reasoning) {
+        requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
+      } else {
+        requestBody.temperature = options?.temperature ?? 0.2;
+        requestBody.max_tokens = options?.maxTokens ?? 2000;
+      }
 
-    const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
-    const raw = await response.text();
-    const parsed = parseJsonSafe(raw);
-    if (!response.ok) {
-      const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
-      lastErrorMessage = String(message);
-      throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
-    }
+      let response: Response;
+      let baseUrl: string;
+      try {
+        const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${providerConfig.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
+        }, { disableFallback: true });
+        response = result.response;
+        baseUrl = result.baseUrl;
+      } catch (error: any) {
+        lastErrorMessage = String(error?.message || 'اتصال به سرویس هوش مصنوعی برقرار نشد.');
+        if (accumulatedContent.trim()) {
+          return {
+            content: accumulatedContent.trim(),
+            attachments: accumulatedAttachments,
+            provider: providerConfig.provider,
+            model,
+            requestId: requestIds[requestIds.length - 1] || null,
+            requestIds,
+            baseUrl: finalBaseUrl,
+            raw: finalParsed,
+            finishReason: 'stream_interrupted',
+            incomplete: true,
+            usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(finalParsed, { ...providerConfig, model }),
+          };
+        }
+        continue;
+      }
 
-    const content = parsed?.choices?.[0]?.message?.content ?? parsed?.choices?.[0]?.text ?? '';
-    const normalizedContent = normalizeAiContentText(content);
-    const finishReason = getChatFinishReason(parsed);
-    if (!isCompleteChatFinishReason(finishReason)) {
-      throw buildIncompleteAiResponseError(finishReason, normalizedContent);
+      const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+      if (requestId) requestIds.push(requestId);
+      finalBaseUrl = baseUrl;
+      const raw = await response.text();
+      const parsed = parseJsonSafe(raw);
+      finalParsed = parsed;
+      if (!response.ok) {
+        const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
+        lastErrorMessage = String(message);
+        throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
+      }
+
+      const content = parsed?.choices?.[0]?.message?.content ?? parsed?.choices?.[0]?.text ?? '';
+      const normalizedContent = normalizeAiContentText(content);
+      const nextAttachments = normalizeAiContentAttachments(content);
+      if (normalizedContent) {
+        accumulatedContent = accumulatedContent
+          ? `${accumulatedContent}\n${normalizedContent}`
+          : normalizedContent;
+      }
+      if (nextAttachments.length) accumulatedAttachments = [...accumulatedAttachments, ...nextAttachments];
+      usageParts.push(extractUsageMetadata(parsed, { ...providerConfig, model }));
+      const finishReason = getChatFinishReason(parsed);
+      finalFinishReason = finishReason;
+      if (String(finishReason || '').trim() === 'length' && continuation < CHAT_COMPLETION_CONTINUATION_LIMIT && accumulatedContent.trim()) {
+        currentMessages = buildContinuationMessages(messages, accumulatedContent);
+        continue;
+      }
+      if (!isCompleteChatFinishReason(finishReason)) {
+        if (accumulatedContent.trim() && String(finishReason || '').trim() === 'length') {
+          return {
+            content: `${accumulatedContent.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`,
+            attachments: accumulatedAttachments,
+            provider: providerConfig.provider,
+            model,
+            requestId: requestIds[requestIds.length - 1] || null,
+            requestIds,
+            baseUrl,
+            raw: parsed,
+            finishReason,
+            incomplete: true,
+            usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(parsed, { ...providerConfig, model }),
+          };
+        }
+        throw buildIncompleteAiResponseError(finishReason, accumulatedContent || normalizedContent);
+      }
+      return {
+        content: accumulatedContent.trim() || normalizedContent,
+        attachments: accumulatedAttachments,
+        provider: providerConfig.provider,
+        model,
+        requestId: requestIds[requestIds.length - 1] || null,
+        requestIds,
+        baseUrl,
+        raw: parsed,
+        finishReason,
+        usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(parsed, { ...providerConfig, model }),
+      };
     }
-    return {
-      content: normalizedContent,
-      attachments: normalizeAiContentAttachments(content),
-      provider: providerConfig.provider,
-      model,
-      requestId,
-      baseUrl,
-      raw: parsed,
-      finishReason,
-      usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model }),
-    };
+    if (accumulatedContent.trim()) {
+      return {
+        content: `${accumulatedContent.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`,
+        attachments: accumulatedAttachments,
+        provider: providerConfig.provider,
+        model,
+        requestId: requestIds[requestIds.length - 1] || null,
+        requestIds,
+        baseUrl: finalBaseUrl,
+        raw: finalParsed,
+        finishReason: finalFinishReason || 'length',
+        incomplete: true,
+        usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(finalParsed, { ...providerConfig, model }),
+      };
+    }
   }
   throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(lastErrorMessage || 'سرویس در دسترس نیست.')}`);
 };
@@ -2945,99 +3169,122 @@ const callChatCompletionsStream = async (
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای این قابلیت هوش مصنوعی، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const reasoning = isReasoningModel(model);
-  const requestBody: Record<string, any> = {
-    model,
-    messages,
-    stream: true,
-    stream_options: { include_usage: true },
-    safety_identifier: options?.safetyIdentifier || undefined,
-  };
-  if (reasoning) {
-    requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
-  } else {
-    requestBody.temperature = options?.temperature ?? 0.2;
-    requestBody.max_tokens = options?.maxTokens ?? 2000;
-  }
-
-  const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${providerConfig.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
-  }, { disableFallback: true });
-  const response = result.response;
-  const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
-  if (!response.ok) {
-    const raw = await response.text();
-    const parsed = parseJsonSafe(raw);
-    const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
-    throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
-  }
-  if (!response.body) throw new Error('پاسخ جریانی هوش مصنوعی در دسترس نیست.');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let doneMarker = false;
   let finalParsed: any = null;
   let finishReason = '';
   let content = '';
+  let baseUrl = '';
+  let currentMessages = messages;
+  const requestIds: string[] = [];
+  const usageParts: any[] = [];
 
-  const processEvent = async (eventText: string) => {
-    const dataLines = eventText
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trim())
-      .filter(Boolean);
-    for (const dataLine of dataLines) {
-      if (dataLine === '[DONE]') {
-        doneMarker = true;
-        continue;
-      }
-      const parsed = parseJsonSafe(dataLine);
-      if (!parsed || typeof parsed !== 'object') continue;
-      finalParsed = parsed;
-      const delta = parseChatStreamDelta(parsed);
-      if (delta.text) {
-        content += delta.text;
-        await options.onDelta?.(delta.text);
-      }
-      if (delta.finishReason) finishReason = delta.finishReason;
+  for (let continuation = 0; continuation <= CHAT_COMPLETION_CONTINUATION_LIMIT; continuation += 1) {
+    const requestBody: Record<string, any> = {
+      model,
+      messages: currentMessages,
+      stream: true,
+      stream_options: { include_usage: true },
+      safety_identifier: options?.safetyIdentifier || undefined,
+    };
+    if (reasoning) {
+      requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
+    } else {
+      requestBody.temperature = options?.temperature ?? 0.2;
+      requestBody.max_tokens = options?.maxTokens ?? 2000;
     }
-  };
 
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    const parts = buffer.split(/\r?\n\r?\n/);
-    buffer = parts.pop() || '';
-    for (const part of parts) {
-      if (part.trim()) await processEvent(part);
+    const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${providerConfig.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
+    }, { disableFallback: true });
+    baseUrl = result.baseUrl;
+    const response = result.response;
+    const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
+    if (requestId) requestIds.push(requestId);
+    if (!response.ok) {
+      const raw = await response.text();
+      const parsed = parseJsonSafe(raw);
+      const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
+      throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
     }
-  }
-  buffer += decoder.decode();
-  if (buffer.trim()) await processEvent(buffer);
+    if (!response.body) throw new Error('پاسخ جریانی هوش مصنوعی در دسترس نیست.');
 
-  if (!doneMarker && !isCompleteChatFinishReason(finishReason)) {
-    throw buildIncompleteAiResponseError('stream_interrupted', content);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let doneMarker = false;
+    finishReason = '';
+
+    const processEvent = async (eventText: string) => {
+      const dataLines = eventText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim())
+        .filter(Boolean);
+      for (const dataLine of dataLines) {
+        if (dataLine === '[DONE]') {
+          doneMarker = true;
+          continue;
+        }
+        const parsed = parseJsonSafe(dataLine);
+        if (!parsed || typeof parsed !== 'object') continue;
+        finalParsed = parsed;
+        usageParts.push(extractUsageMetadata(parsed, { ...providerConfig, model }));
+        const delta = parseChatStreamDelta(parsed);
+        if (delta.text) {
+          content += delta.text;
+          await options.onDelta?.(delta.text);
+        }
+        if (delta.finishReason) finishReason = delta.finishReason;
+      }
+    };
+
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        if (part.trim()) await processEvent(part);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) await processEvent(buffer);
+
+    if (!doneMarker && !isCompleteChatFinishReason(finishReason)) {
+      if (content.trim()) break;
+      throw buildIncompleteAiResponseError('stream_interrupted', content);
+    }
+    if (String(finishReason || '').trim() === 'length' && continuation < CHAT_COMPLETION_CONTINUATION_LIMIT && content.trim()) {
+      currentMessages = buildContinuationMessages(messages, content);
+      continue;
+    }
+    break;
   }
-  if (!isCompleteChatFinishReason(finishReason)) throw buildIncompleteAiResponseError(finishReason, content);
+  if (!isCompleteChatFinishReason(finishReason) && String(finishReason || '').trim() !== 'length') {
+    if (!content.trim()) throw buildIncompleteAiResponseError(finishReason, content);
+  }
 
   return {
-    content: content.trim(),
+    content: String(finishReason || '').trim() === 'length'
+      ? `${content.trim()}\n\n[پاسخ به سقف خروجی رسید؛ ادامه کامل‌تری لازم است.]`
+      : content.trim(),
     attachments: [],
     provider: providerConfig.provider,
     model,
-    requestId,
-    baseUrl: result.baseUrl,
+    requestId: requestIds[requestIds.length - 1] || null,
+    requestIds,
+    baseUrl,
     raw: finalParsed,
     finishReason,
-    usageMetadata: extractUsageMetadata(finalParsed, { ...providerConfig, model }),
+    incomplete: String(finishReason || '').trim() === 'length',
+    usageMetadata: mergeChatUsageMetadata(usageParts, { ...providerConfig, model }) || extractUsageMetadata(finalParsed, { ...providerConfig, model }),
   };
 };
 
@@ -3580,6 +3827,7 @@ const callImageGeneration = async (
     sourceImages?: Array<{ data: string; mimeType?: string; filename?: string }>;
     size?: string;
     quality?: string;
+    outputFormat?: string;
     n?: number;
     extraBody?: Record<string, any>;
   } = {},
@@ -3591,18 +3839,23 @@ const callImageGeneration = async (
     ? options.sourceImages.filter((src) => String(src?.data || '').trim())
     : [];
 
+  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', 'auto']);
+  const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
+  const allowedOutputFormats = new Set(['png', 'jpeg', 'webp']);
+  const outputFormat = allowedOutputFormats.has(String(options.outputFormat || '').trim().toLowerCase())
+    ? String(options.outputFormat).trim().toLowerCase()
+    : 'png';
+  const n = Math.min(4, Math.max(1, Number(options.n) || 1));
+
   // Gemini Nano Banana models -> native /v1beta generateContent (handles both
   // generation and editing-with-source-images via inline_data parts).
   if (isGeminiImageModel(model)) {
-    return await callGeminiImageGenerate({ ...providerConfig, model }, prompt, {
+    const result = await callGeminiImageGenerate({ ...providerConfig, model }, prompt, {
       sourceImages,
       extraConfig: options.extraBody,
     });
+    return { ...result, outputFormat };
   }
-
-  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', 'auto']);
-  const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
-  const n = Math.min(4, Math.max(1, Number(options.n) || 1));
 
   // OpenAI-family image models with source image(s) -> /v1/images/edits (multipart).
   if (sourceImages.length > 0) {
@@ -3611,6 +3864,7 @@ const callImageGeneration = async (
     formData.append('prompt', prompt);
     formData.append('n', String(n));
     formData.append('size', size);
+    formData.append('output_format', outputFormat);
     sourceImages.forEach((src, index) => {
       const bytes = base64ToUint8Array(src.data);
       const mime = src.mimeType || 'image/png';
@@ -3665,6 +3919,7 @@ const callImageGeneration = async (
         requestId,
         baseUrl,
         raw: parsed,
+        outputFormat,
         usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
       };
     }
@@ -3684,6 +3939,7 @@ const callImageGeneration = async (
         model,
         prompt,
         ...(options.quality && String(options.quality) !== 'auto' ? { quality: options.quality } : {}),
+        output_format: outputFormat,
         ...(options.extraBody && typeof options.extraBody === 'object' ? { extra_body: options.extraBody } : {}),
         n,
         size,
@@ -3726,6 +3982,7 @@ const callImageGeneration = async (
       requestId,
       baseUrl,
       raw: parsed,
+      outputFormat,
       usageMetadata: extractUsageMetadata(parsed, { ...providerConfig, model, capability: 'image_generation' }),
     };
   }
@@ -3834,6 +4091,9 @@ const uploadGeneratedImage = async (
   let contentType = 'image/png';
   if (imageResult?.imageBase64) {
     bytes = base64ToUint8Array(imageResult.imageBase64);
+    const requestedFormat = String(imageResult?.outputFormat || '').trim().toLowerCase();
+    if (requestedFormat === 'jpeg') contentType = 'image/jpeg';
+    else if (requestedFormat === 'webp') contentType = 'image/webp';
   } else if (imageResult?.imageUrl) {
     const imageResponse = await fetch(imageResult.imageUrl);
     if (!imageResponse.ok) throw new Error('دریافت تصویر ساخته‌شده ناموفق بود.');
@@ -3841,7 +4101,7 @@ const uploadGeneratedImage = async (
     bytes = new Uint8Array(await imageResponse.arrayBuffer());
   }
   if (!bytes?.length) throw new Error('خروجی تصویر معتبر نیست.');
-  const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
+  const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : contentType.includes('webp') ? 'webp' : 'png';
   const objectPath = `ai_generated/${orgId}/${Date.now()}_${crypto.randomUUID()}.${ext}`;
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/storage/v1/object/images/${objectPath}`, {
     method: 'POST',
@@ -7652,7 +7912,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
-  const useOrganizationContext = imageSettings.useOrganizationContext !== false;
+  const useOrganizationContext = imageSettings.useOrganizationContext === true;
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [companyContext, knowledgeChunks] = await Promise.all([
     useOrganizationContext ? loadCompanyContext(supabaseUrl, serviceRoleKey, authContext) : Promise.resolve(null),
@@ -7718,6 +7978,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     sourceImages,
     size: imageSettings.size || body?.size,
     quality: imageSettings.quality || body?.quality,
+    outputFormat: imageSettings.imageOutputFormat || imageSettings.outputFormat || body?.imageOutputFormat || body?.outputFormat,
     n: imageSettings.n || body?.n,
     extraBody: imageSettings.extraBody || imageSettings.extra_body,
   };
@@ -7728,6 +7989,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     orientationHorizontal: imageSettings.orientationHorizontal === true,
     orientationVertical: imageSettings.orientationVertical === true,
     useOrganizationContext,
+    imageOutputFormat: imageCallOptions.outputFormat || 'png',
   };
   const backgroundQueuedAt = new Date().toISOString();
   const pendingImageMetadata = {
@@ -7753,6 +8015,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     image_call_options: {
       size: imageCallOptions.size || null,
       quality: imageCallOptions.quality || null,
+      outputFormat: imageCallOptions.outputFormat || null,
       n: imageCallOptions.n || null,
       extraBody: imageCallOptions.extraBody || null,
       hasSourceImages: sourceImages.length > 0,

@@ -638,6 +638,7 @@ const isRpcSchemaCompatibilityError = (error: any) => {
 
 const TASK_VIEW_PRESETS = [
   { key: 'all', label: 'همه فعالیت‌ها' },
+  { key: 'not_done', label: 'انجام نشده‌ها' },
   { key: 'overdue', label: 'سررسیدگذشته‌ها' },
   { key: 'in_progress', label: 'در حال انجام' },
   { key: 'upcoming', label: 'فعالیت‌های پیش‌رو' },
@@ -4830,6 +4831,8 @@ useEffect(() => {
       if (isCanceled(task)) return false;
       const dueAt = parseTime(task?.due_date);
       switch (taskViewKey) {
+        case 'not_done':
+          return !isDone(task);
         case 'overdue':
           return !isDone(task)
             && String(task?.status || '').toLowerCase() !== 'in_progress'
