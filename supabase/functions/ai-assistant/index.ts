@@ -28,6 +28,8 @@ type AssistantAction =
   | 'list_threads'
   | 'rename_thread'
   | 'archive_thread'
+  | 'toggle_thread_pin'
+  | 'compress_thread_context'
   | 'share_thread'
   | 'transcribe_voice'
   | 'generate_voice_output'
@@ -84,7 +86,7 @@ const DEFAULT_AI_DAILY_TOKEN_LIMIT = 80000;
 const AI_USAGE_WARNING_RATIO = 0.1;
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const AI_AUTHOR_NAME = 'دستیار هوشمند';
-const MAX_PAGE_CONTEXT_RECORDS = 10;
+const MAX_PAGE_CONTEXT_RECORDS = 50;
 const MAX_RETRIEVED_CONTEXTS = 4;
 const KNOWLEDGE_MATCH_THRESHOLD = 0.52;
 const INSTRUCTION_MATCH_THRESHOLD = 0.46;
@@ -2570,6 +2572,7 @@ const buildPromptMessages = (
     deepReasoning?: boolean;
     selectedCapabilities?: string[];
     businessAnalytics?: any;
+    compressedContext?: any;
   } = {},
 ) => {
   const knowledge = knowledgeChunks.map((chunk, index) => ({
@@ -2620,6 +2623,7 @@ const buildPromptMessages = (
     business_analytics: options.businessAnalytics || null,
     web_search_results: webSearchResults.length ? webSearchResults : undefined,
     selected_ai_capabilities: options.selectedCapabilities || [],
+    compressed_chat_memory: options.compressedContext?.summary ? options.compressedContext : null,
     ai_instructions: aiInstructions,
     operational_instructions: operationalInstructions,
     organization_knowledge: otherKnowledge,
@@ -2640,9 +2644,7 @@ const buildPromptMessages = (
   const copyableOutputInstruction = ' اگر بخشی از خروجی متن آماده استفاده برای کپی کردن است، مثل متن اصلی نامه، شرح شغل، قرارداد، پیام، پرامپت، آگهی، دستورالعمل یا هر متن نهایی قابل استفاده، آن بخش را با Markdown blockquote و شروع هر خط با > بفرست. اگر خروجی کد، JSON، SQL، قالب فنی یا متن ساختاریافته ماشینی است، آن را داخل code fence سه‌تایی با زبان مناسب بفرست. توضیح و راهنمایی را بیرون از blockquote/code نگه دار و فقط متن نهایی قابل کپی را داخل آن‌ها قرار بده.';
   const jalaliAndReportsInstruction = ' تاریخ و زمان را برای مخاطب فارسی‌زبان با تقویم شمسی/جلالی و منطقه زمانی تهران بیان کن؛ تاریخ میلادی را فقط وقتی لازم است کنار تاریخ شمسی بیاور. روز هفته و روز/ماه شمسی را از calendar context بشناس. برای مناسبت‌ها فقط با داده معتبر context یا دانش قطعی عمومی پیشنهاد بده و اگر مطمئن نیستی صریح بگو نیاز به بررسی تقویم سازمان است. اگر retrieved_permitted_contexts شامل reports بود، برای سوال‌های تحلیلی و مدیریتی اول از گزارش‌ها و sample_rows همان گزارش استفاده کن؛ اگر گزارش مرتبط موجود نبود، به کاربر پیشنهاد بده از بخش گزارشات پیشرفته گزارش جدید بسازد یا گزارش موجود را انتخاب کند. اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس گزارش‌ها پیشنهاد اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.';
 
-  const systemContent = pageContext.intent === 'process_guide'
-    ? `شما دستیار سازمانی KalamApp هستید. کاربر راهنمای آموزشی/تحلیلی یک فرآیند را می‌خواهد. اول فقط از process_guide.process_guide_context و سپس از ai_instructions، operational_instructions، اطلاعات شرکت، context صفحه و دانش سازمان استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل. پاسخ باید فارسی، دقیق، آموزشی و اجرایی باشد.${copyableOutputInstruction}${jalaliAndReportsInstruction} ترتیب پاسخ: 1) نمای کلی کوتاه فرآیند 2) توضیح مرحله‌به‌مرحله با رعایت sort_order 3) برای هر مرحله صریح بگویید پیش‌نویس/ارجاع‌نشده است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد status/status_label، فیلدهای عمومی، فیلدهای اختصاصی، وضعیت‌های اختصاصی و اینکه به شخص یا نقش/تیم ارجاع شده را ذکر کنید 4) زمان‌ها و موعدها مثل due_date، planned_due_at، started_at، completed_at و duration را بگویید 5) برای هر اتوماسیون، conditions_all/conditions_any را به‌عنوان شرط اجرا و actions را به‌عنوان اقدام‌های بعد از اجرا با label فارسی و گیرنده/پیام/فیلد هدف توضیح دهید 6) هر ابهام یا داده ناقص را صریح اعلام کنید. اگر اتوماسیونی پیدا نشد، شفاف بگویید که پیدا نشد و چیزی حدس نزنید.`
-    : `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -2651,12 +2653,17 @@ const buildPromptMessages = (
       role: String(item.role),
       content: String(item.content || '').slice(0, 3000),
     }));
+  const compressedSummary = String(options.compressedContext?.summary || '').trim();
 
   return [
     {
       role: 'system',
       content: systemContent,
     },
+    ...(compressedSummary ? [{
+      role: 'assistant',
+      content: `خلاصه فشرده زمینه گفتگو تا اینجا:\n${compressedSummary}`,
+    }] : []),
     ...historyMessages,
     {
       role: 'user',
@@ -5217,7 +5224,12 @@ const handleListThreads = async (supabaseUrl: string, serviceRoleKey: string, au
       ...row,
       is_owner: normalizeId(row.user_id) === normalizeId(authContext.userId),
     }])).values())
-    .sort((a: any, b: any) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .sort((a: any, b: any) => {
+      const aPinned = a?.pinned_at ? 1 : 0;
+      const bPinned = b?.pinned_at ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+    })
     .slice(0, limit);
   return json(200, { success: true, threads: rows });
 };
@@ -5251,6 +5263,31 @@ const handleArchiveThread = async (supabaseUrl: string, serviceRoleKey: string, 
     updated_at: new Date().toISOString(),
   });
   return json(200, { success: true, archived: rows.length > 0 });
+};
+
+const handleToggleThreadPin = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه گفتگو معتبر نیست.' });
+  const rows = await restSelect(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+    status: 'eq.active',
+    select: '*',
+    limit: 1,
+  });
+  const thread = rows[0] || null;
+  if (!thread) return json(404, { success: false, message: 'گفتگو پیدا نشد یا مالک آن نیستید.' });
+  const nextPinnedAt = thread?.pinned_at ? null : new Date().toISOString();
+  const patched = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${threadId}`,
+    org_id: `eq.${authContext.orgId}`,
+    user_id: `eq.${authContext.userId}`,
+  }, {
+    pinned_at: nextPinnedAt,
+    updated_at: new Date().toISOString(),
+  });
+  return json(200, { success: true, pinned: Boolean(nextPinnedAt), thread: patched[0] || null });
 };
 
 const normalizeUuidArray = (value: any) =>
@@ -5327,6 +5364,77 @@ const handleDeleteThread = async (supabaseUrl: string, serviceRoleKey: string, a
   return json(200, { success: true, archived: rows.length > 0 });
 };
 
+const buildThreadCompressionSource = (messages: any[]) => (messages || [])
+  .filter((item: any) => ['user', 'assistant'].includes(String(item?.role || '')))
+  .slice(-80)
+  .map((item: any) => `${String(item.role) === 'user' ? 'کاربر' : 'دستیار'}: ${String(item.content || '').slice(0, 2500)}`)
+  .join('\n\n');
+
+const handleCompressThreadContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId);
+  if (!isUuid(threadId)) return json(400, { success: false, message: 'شناسه گفتگو معتبر نیست.' });
+  const thread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, threadId);
+  if (!thread) return json(404, { success: false, message: 'گفتگو پیدا نشد.' });
+  const messages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 120);
+  const source = buildThreadCompressionSource(messages);
+  if (!source.trim()) return json(400, { success: false, message: 'متنی برای فشرده‌سازی زمینه گفتگو وجود ندارد.' });
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, thread.module_id ? 'record_chat' : 'dashboard_chat', {
+    modelOverride: body?.modelOverride || thread?.metadata?.composer_preferences?.currentModelOverride || null,
+  });
+  const promptMessages = [
+    {
+      role: 'system',
+      content: [
+        'گفتگوی زیر را برای ادامه همان گفتگو فشرده کن.',
+        'خلاصه باید فارسی، کوتاه، دقیق و عملیاتی باشد.',
+        'تصمیم‌ها، داده‌های قطعی، محدودیت‌ها، نام رکوردها/ماژول‌ها، خواسته‌های باز و ترجیحات کاربر را نگه دار.',
+        'جزئیات کم‌ارزش، تعارف‌ها و تکرارها را حذف کن.',
+      ].join('\n'),
+    },
+    { role: 'user', content: source },
+  ];
+  const result = await callChatCompletions(providerConfig, promptMessages, {
+    maxTokens: 1400,
+    safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_thread_${thread.id}_compress`,
+  });
+  const summary = String(result.content || '').trim();
+  const metadata = {
+    ...(thread.metadata || {}),
+    compressed_context: {
+      summary,
+      compressed_at: new Date().toISOString(),
+      message_count: messages.length,
+      model: result.model,
+      provider: result.provider,
+    },
+  };
+  const patched = await restPatch(supabaseUrl, serviceRoleKey, 'ai_threads', {
+    id: `eq.${thread.id}`,
+    org_id: `eq.${authContext.orgId}`,
+  }, {
+    metadata,
+    updated_at: new Date().toISOString(),
+  });
+  const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: thread.id,
+    requestId: result.requestId,
+    capability: 'dashboard_chat',
+    provider: result.provider,
+    model: result.model,
+    usageMetadata: result.usageMetadata,
+    metadata: { source: 'thread_context_compression', message_count: messages.length },
+  });
+  return json(200, {
+    success: true,
+    thread: patched[0] || { ...thread, metadata },
+    summary,
+    provider: result.provider,
+    model: result.model,
+    usage: withCustomerBilling(result.usageMetadata, ledger),
+    ledger,
+  });
+};
+
 const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const message = String(body?.message || '').trim();
   if (!message) {
@@ -5388,6 +5496,9 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     forceNew: body?.forceNewThread === true,
   });
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
+  const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
+    ? thread.metadata.compressed_context
+    : null;
 
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
@@ -5429,6 +5540,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       deepReasoning: selectedCapabilitySet.has('deep_reasoning') || capability === 'deep_reasoning',
       selectedCapabilities,
       businessAnalytics,
+      compressedContext,
     },
   );
 
@@ -5486,6 +5598,9 @@ const buildThreadComposerPreferences = (body: any, thread: any = null) => {
   const modelOverrides = incoming.modelOverrides && typeof incoming.modelOverrides === 'object'
     ? incoming.modelOverrides
     : existing.modelOverrides || {};
+  const skipGenerationConfirmationByKind = incoming.skipGenerationConfirmationByKind && typeof incoming.skipGenerationConfirmationByKind === 'object'
+    ? incoming.skipGenerationConfirmationByKind
+    : existing.skipGenerationConfirmationByKind || {};
   const hasIncomingRecordCreationTarget = Object.prototype.hasOwnProperty.call(incoming, 'recordCreationTargetModuleId');
   const recordCreationTargetModuleId = hasIncomingRecordCreationTarget
     ? String(incoming.recordCreationTargetModuleId || '').trim() || null
@@ -5502,6 +5617,7 @@ const buildThreadComposerPreferences = (body: any, thread: any = null) => {
       ? incoming.processOperationMode === true
       : existing.processOperationMode === true,
     modelOverrides,
+    skipGenerationConfirmationByKind,
     currentModelOverride,
     updated_at: new Date().toISOString(),
   };
@@ -6096,6 +6212,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       legalMode: selectedCapabilitySet.has('legal_assistant'),
       deepReasoning: selectedCapabilitySet.has('deep_reasoning'),
       selectedCapabilities,
+      compressedContext,
     },
   );
   const lastUserIndex = promptMessages.map((item) => item.role).lastIndexOf('user');
@@ -6344,6 +6461,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext),
     fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 20),
   ]);
+  const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
+    ? thread.metadata.compressed_context
+    : null;
 
   const userMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
@@ -6375,6 +6495,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       selectedCapabilities: Array.isArray(body?.capabilities)
         ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
         : ['record_creation'],
+      compressedContext,
     },
   );
   mutationMessages.unshift({ role: 'system', content: systemPrompt });
@@ -6909,7 +7030,8 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
   const existingThread = body?.threadId
     ? await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, String(body.threadId))
     : null;
-  const previousTaskContext = existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
+  const useConversationHistoryForBundle = body?.settings?.useConversationHistory === true || body?.useConversationHistory === true;
+  const previousTaskContext = useConversationHistoryForBundle && existingThread?.metadata?.task_bundle_context && typeof existingThread.metadata.task_bundle_context === 'object'
     ? existingThread.metadata.task_bundle_context
     : null;
   const inputs = normalizeTaskBundleInputs(body);
@@ -11141,6 +11263,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'list_threads') return await handleListThreads(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rename_thread') return await handleRenameThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'archive_thread') return await handleArchiveThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'toggle_thread_pin') return await handleToggleThreadPin(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'share_thread') return await handleShareThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'transcribe_voice') return await handleTranscribeVoice(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'generate_voice_output') return await handleGenerateVoiceOutput(supabaseUrl, serviceRoleKey, authContext, body);
@@ -11154,6 +11277,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'compress_thread_context') return await handleCompressThreadContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'suggest_auto_capabilities') return await handleSuggestAutoCapabilities(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'create_record_from_prompt' || action === 'update_record_from_prompt') {

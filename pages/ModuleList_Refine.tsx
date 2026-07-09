@@ -5308,7 +5308,7 @@ export const ModuleListRefine: React.FC<{
         destroyOnHidden
         getContainer={typeof document === "undefined" ? undefined : () => document.body}
       >
-        <AssistantPanel active={isListAiDrawerOpen} initialPrompt={listAiInitialPrompt} />
+        <AssistantPanel active={isListAiDrawerOpen} initialPrompt={listAiInitialPrompt} showThreadListButton />
       </Drawer>
       {saasUserDrawerRecord && useSaasUserDrawer ? (
         <React.Suspense fallback={null}>

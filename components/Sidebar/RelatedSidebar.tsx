@@ -739,7 +739,7 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
         >
             <div className={activeKey === 'ai_assistant' ? 'h-full bg-slate-100 dark:bg-[#101113]' : 'h-full p-4 bg-gray-50 dark:bg-[#121212]'}>
                 {activeKey === 'ai_assistant' && (
-                    <AssistantPanel active={activeKey === 'ai_assistant'} />
+                    <AssistantPanel active={activeKey === 'ai_assistant'} showThreadListButton />
                 )}
                 {(activeKey === 'notes' || activeKey === 'tasks' || activeKey === 'changelogs') && (
                     <ActivityPanel

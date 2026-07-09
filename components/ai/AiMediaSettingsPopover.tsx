@@ -22,6 +22,7 @@ export type AiMediaSettings = {
   orientationHorizontal?: boolean;
   orientationVertical?: boolean;
   useOrganizationContext?: boolean;
+  useConversationHistory?: boolean;
   imageOutputFormat?: string;
   // voice
   voice?: string;
@@ -228,6 +229,14 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
 
   const content = useMemo(() => (
     <div className="w-full max-w-[min(88vw,20rem)] space-y-3 overflow-y-auto px-0.5 pb-1 md:w-72 md:max-w-none" dir="rtl">
+      <div className="rounded-lg border border-gray-100 p-2 dark:border-white/10">
+        <Checkbox
+          checked={settings.useConversationHistory === true}
+          onChange={(event) => update({ useConversationHistory: event.target.checked })}
+        >
+          استفاده از تاریخچه گفتگوی فعلی
+        </Checkbox>
+      </div>
       {capability === 'image_generation' ? (
         <>
           <div className="rounded-lg border border-gray-100 p-2 dark:border-white/10">

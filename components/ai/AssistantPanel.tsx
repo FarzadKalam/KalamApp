@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App, Avatar, Button, Empty, Input, Popconfirm, Popover, Select, Space, Spin, Tag, Tooltip } from 'antd';
-import { CheckOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, ReloadOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
+import { App, Avatar, Button, Checkbox, Drawer, Empty, Input, Popconfirm, Popover, Progress, Space, Spin, Tag, Tooltip } from 'antd';
+import { CheckOutlined, CloseOutlined, CompressOutlined, CopyOutlined, DeleteOutlined, EditOutlined, ForwardOutlined, MenuOutlined, SendOutlined, UserAddOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -111,6 +111,18 @@ const getPendingGenerationKind = (item: { metadata?: Record<string, any> | null 
   return GENERATION_PENDING_KINDS.has(kind) ? kind : null;
 };
 
+const estimateAiMessageTokens = (messages: ChatMessage[]) =>
+  Math.ceil((messages || []).reduce((sum, item) => sum + normalizeAiMessageText(item.content).length, 0) / 3.8);
+
+const estimateModelContextLimit = (model?: string | null) => {
+  const value = String(model || '').toLowerCase();
+  if (value.includes('gemini')) return 1000000;
+  if (value.includes('gpt-5') || value.includes('gpt-4.1')) return 128000;
+  if (value.includes('gpt-4o') || value.includes('o4') || value.includes('o3')) return 128000;
+  if (value.includes('claude')) return 200000;
+  return 128000;
+};
+
 interface AssistantPanelProps {
   active: boolean;
   initialThreadId?: string | null;
@@ -129,6 +141,8 @@ interface AssistantPanelProps {
   onForwardMessage?: (input: any) => void | Promise<void>;
   onThreadDeleted?: (threadId: string) => void;
   onThreadRenamed?: (threadId: string, title: string, thread?: any) => void;
+  onThreadUpserted?: (thread: any) => void;
+  showThreadListButton?: boolean;
 }
 
 const parseRouteContext = (pathname: string, search: string): AssistantContext => {
@@ -193,24 +207,6 @@ const buildRecoverableStreamContent = (currentContent: any, payload: any, fallba
   return baseText.includes(PARTIAL_STREAM_NOTICE) ? baseText : `${baseText}\n\n${PARTIAL_STREAM_NOTICE}`;
 };
 
-const buildProcessGuidePrompt = (context: AssistantContext) => {
-  const processLabel = Array.isArray(context.availableProcesses)
-    ? context.availableProcesses.find((item) => String(item?.id || '') === String(context.selectedProcessId || ''))?.label
-    : null;
-  const processTitle = String(processLabel || 'این فرآیند').trim() || 'این فرآیند';
-  return [
-    `این ${processTitle} را برای آموزش کارکنان توضیح بده.`,
-    'اول یک نمای کلی کوتاه بده.',
-    'بعد مرحله به مرحله توضیح بده هر مرحله چه کاری است.',
-    'برای هر مرحله مشخص کن پیش‌نویس است یا فعالیت واقعی دارد؛ اگر فعالیت واقعی دارد وضعیت فعلی آن را هم بگو.',
-    'اگر فعالیت واقعی به نقش/تیم ارجاع شده و هنوز شخص مشخص ندارد، این موضوع را صریح بگو.',
-    'فیلدهای عمومی فعالیت، فیلدهای اختصاصی فعالیت و وضعیت‌های اختصاصی فعالیت را اگر در context آمده‌اند با لیبل فارسی توضیح بده.',
-    'برای هر مرحله بگو زمان‌بندی، موعد، شروع، پایان یا مدت انجام آن چیست، اگر داده‌ای وجود دارد.',
-    'برای اتوماسیون‌ها، شرط‌های اجرای هر اتوماسیون و اکشن‌های بعد از اجرا را جدا و دقیق توضیح بده.',
-    'اگر بخشی از مسئول، پیام، شرط، اکشن، موعد یا اتوماسیون در داده‌ها نامشخص است، همان ابهام را صریح بگو.',
-  ].join('\n');
-};
-
 const toFaDateTime = (value?: string | null) => {
   if (!value) return '';
   try {
@@ -271,6 +267,7 @@ const getGenerationOutputLabel = (kind: string, settings?: AiMediaSettings | nul
 
 const buildGenerationSettingsRows = (kind: string, settings?: AiMediaSettings | null, extra?: Record<string, any>) => {
   const rows: Array<{ label: string; value: string }> = [];
+  rows.push({ label: 'تاریخچه گفتگوی فعلی', value: settings?.useConversationHistory === true ? 'استفاده شود' : 'استفاده نشود' });
   if (kind === 'image_generation') {
     rows.push({ label: 'اندازه', value: String(settings?.size || 'خودکار') });
     rows.push({ label: 'کیفیت', value: String(settings?.quality || 'خودکار') });
@@ -379,6 +376,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   onForwardMessage,
   onThreadDeleted,
   onThreadRenamed,
+  onThreadUpserted,
+  showThreadListButton = false,
 }) => {
   const { message } = App.useApp();
   const location = useLocation();
@@ -412,21 +411,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [processOperationMode, setProcessOperationMode] = useState(false);
   const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
+  const [rememberGenerationPreference, setRememberGenerationPreference] = useState(false);
+  const [skipGenerationConfirmationByKind, setSkipGenerationConfirmationByKind] = useState<Record<string, boolean>>({});
   const [modelOverrides, setModelOverrides] = useState<Record<string, string>>({});
   const initialTitle = String(initialThreadTitle || '').trim() || 'گفتگوی هوش مصنوعی';
   const [threadTitle, setThreadTitle] = useState(initialTitle);
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
   const [draftThreadTitle, setDraftThreadTitle] = useState(initialTitle);
   const [renamingThread, setRenamingThread] = useState(false);
+  const [compressingContext, setCompressingContext] = useState(false);
+  const [threadListOpen, setThreadListOpen] = useState(false);
+  const [drawerThreads, setDrawerThreads] = useState<any[]>([]);
+  const [drawerThreadsLoading, setDrawerThreadsLoading] = useState(false);
   const renamingThreadRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
   const streamAbortRef = useRef<AbortController | null>(null);
-  const lastAutoPromptSignatureRef = useRef<string>('');
   const autoSubmittedInitialPromptRef = useRef('');
   const autoSubmittedInitialBundleRef = useRef('');
   const modelOverrideRef = useRef<string | null>(null);
   const composerPreferencesRef = useRef<Record<string, any>>({});
+  const autoCompressedSignatureRef = useRef('');
   const appliedInitialPromptRef = useRef('');
   const normalizedInitialThreadId = String(initialThreadId || '').trim() || null;
   const normalizedInitialInputKind = String(initialInputKind || 'text').trim() || 'text';
@@ -446,8 +451,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (!nextTitle) return;
     setThreadTitle(nextTitle);
     setDraftThreadTitle(nextTitle);
+    if (nextThreadId) onThreadUpserted?.({
+      ...(payload?.thread && typeof payload.thread === 'object' ? payload.thread : {}),
+      id: nextThreadId,
+      title: nextTitle,
+      module_id: payload?.thread?.module_id || null,
+      record_id: payload?.thread?.record_id || null,
+      updated_at: payload?.thread?.updated_at || new Date().toISOString(),
+    });
     if (nextThreadId) onThreadRenamed?.(nextThreadId, nextTitle, payload?.thread || { id: nextThreadId, title: nextTitle });
-  }, [onThreadRenamed, threadId]);
+  }, [onThreadRenamed, onThreadUpserted, threadId]);
 
   const sanitizeMediaSourceImagesForPreferences = useCallback((items: AiMediaSourceImage[]) => (
     (Array.isArray(items) ? items : [])
@@ -468,8 +481,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     recordCreationTargetModuleId,
     processOperationMode,
     modelOverrides,
+    skipGenerationConfirmationByKind,
     currentModelOverride: modelOverrideRef.current || null,
-  }), [mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities]);
+  }), [mediaSettings, mediaSourceImages, modelOverrides, processOperationMode, recordCreationTargetModuleId, sanitizeMediaSourceImagesForPreferences, selectedCapabilities, skipGenerationConfirmationByKind]);
 
   useEffect(() => {
     composerPreferencesRef.current = buildComposerPreferences();
@@ -505,7 +519,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (Object.prototype.hasOwnProperty.call(prefs, 'currentModelOverride')) {
       modelOverrideRef.current = String(prefs.currentModelOverride || '').trim() || null;
     }
+    if (prefs.skipGenerationConfirmationByKind && typeof prefs.skipGenerationConfirmationByKind === 'object') {
+      setSkipGenerationConfirmationByKind(Object.fromEntries(Object.entries(prefs.skipGenerationConfirmationByKind)
+        .map(([key, value]) => [String(key), value === true])
+        .filter(([, value]) => value)));
+    }
   }, [sanitizeMediaSourceImagesForPreferences]);
+
+  useEffect(() => {
+    if (pendingAiAction?.actionType === 'confirm_generation') setRememberGenerationPreference(false);
+  }, [pendingAiAction?.id, pendingAiAction?.actionType]);
 
   useEffect(() => {
     if (active) return undefined;
@@ -929,6 +952,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           })),
       ];
       const prompt = params.messageText || 'این تصویر را با توجه به درخواست کاربر اصلاح یا کامل کن.';
+      const confirmBody = {
+        action: 'generate_image',
+        prompt,
+        capabilities: routeCapabilities,
+        inputKind: params.inputKind,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: autoSourceImages,
+        sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
+      };
+      if (skipGenerationConfirmationByKind.image_generation === true) return await callAssistant(confirmBody);
       return buildLocalGenerationConfirmation({
         kind: 'image_generation',
         prompt,
@@ -936,46 +973,49 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         rows: buildGenerationSettingsRows('image_generation', mediaSettings, {
           sourceImageCount: autoSourceImages.length + (imageEditSourceUrl ? 1 : 0),
         }),
-        confirmBody: {
-          action: 'generate_image',
-          prompt,
-          capabilities: routeCapabilities,
-          inputKind: params.inputKind,
-          threadId: params.forceNewThread ? null : threadId,
-          forceNewThread: params.forceNewThread === true,
-          context: contextWithSelection,
-          modelOverride: modelOverrideRef.current,
-          settings: mediaSettings,
-          sourceImages: autoSourceImages,
-          sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
-        },
+        confirmBody,
       });
     }
 
     if (capabilitySet.has('voice_output') && !capabilitySet.has('voice_input') && bundlePayload.length === 0) {
       const prompt = params.messageText || 'این متن را به فایل صوتی تبدیل کن.';
+      const confirmBody = {
+        action: 'generate_voice_output',
+        text: prompt,
+        capabilities: routeCapabilities,
+        inputKind: params.inputKind,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+      };
+      if (skipGenerationConfirmationByKind.voice_output === true) return await callAssistant(confirmBody);
       return buildLocalGenerationConfirmation({
         kind: 'voice_output',
         prompt,
         settings: mediaSettings,
         rows: buildGenerationSettingsRows('voice_output', mediaSettings),
-        confirmBody: {
-          action: 'generate_voice_output',
-          text: prompt,
-          capabilities: routeCapabilities,
-          inputKind: params.inputKind,
-          threadId: params.forceNewThread ? null : threadId,
-          forceNewThread: params.forceNewThread === true,
-          context: contextWithSelection,
-          modelOverride: modelOverrideRef.current,
-          settings: mediaSettings,
-        },
+        confirmBody,
       });
     }
 
     if (capabilitySet.has('video_generation')) {
       const prompt = params.messageText || 'با توجه به درخواست کاربر ویدیو بساز.';
       const autoSourceImages = mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+      const confirmBody = {
+        action: 'generate_video',
+        prompt,
+        capabilities: routeCapabilities,
+        inputKind: params.inputKind,
+        threadId: params.forceNewThread ? null : threadId,
+        forceNewThread: params.forceNewThread === true,
+        context: contextWithSelection,
+        modelOverride: modelOverrideRef.current,
+        settings: mediaSettings,
+        sourceImages: autoSourceImages,
+      };
+      if (skipGenerationConfirmationByKind.video_generation === true) return await callAssistant(confirmBody);
       return buildLocalGenerationConfirmation({
         kind: 'video_generation',
         prompt,
@@ -983,18 +1023,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         rows: buildGenerationSettingsRows('video_generation', mediaSettings, {
           sourceImageCount: autoSourceImages.length,
         }),
-        confirmBody: {
-          action: 'generate_video',
-          prompt,
-          capabilities: routeCapabilities,
-          inputKind: params.inputKind,
-          threadId: params.forceNewThread ? null : threadId,
-          forceNewThread: params.forceNewThread === true,
-          context: contextWithSelection,
-          modelOverride: modelOverrideRef.current,
-          settings: mediaSettings,
-          sourceImages: autoSourceImages,
-        },
+        confirmBody,
       });
     }
 
@@ -1029,6 +1058,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current,
           settings: mediaSettings,
         };
+      if (skipGenerationConfirmationByKind.document_generation === true) return await callAssistant(confirmBody);
       return buildLocalGenerationConfirmation({
         kind: 'document_generation',
         prompt,
@@ -1083,7 +1113,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
     });
-  }, [callAssistant, contextWithSelection, imageEditSourceUrl, mediaSettings, mediaSourceImages, requestAutoRoute, threadId]);
+  }, [callAssistant, contextWithSelection, imageEditSourceUrl, mediaSettings, mediaSourceImages, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
@@ -1218,6 +1248,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         threadId: requestedThreadId,
       });
       setThreadId(data.threadId ? String(data.threadId) : null);
+      if (data?.thread) onThreadUpserted?.(data.thread);
       const loadedThreadTitle = String(data?.thread?.title || '').trim() || 'گفتگوی هوش مصنوعی';
       setThreadTitle(loadedThreadTitle);
       setDraftThreadTitle(loadedThreadTitle);
@@ -1249,7 +1280,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setLoadingThread(false);
     }
-  }, [active, applyComposerPreferences, callAssistant, message, threadId]);
+  }, [active, applyComposerPreferences, callAssistant, message, onThreadUpserted, threadId]);
 
   const loadAiKnowledgeStatus = useCallback(async () => {
     setCheckingAiKnowledge(true);
@@ -1379,31 +1410,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     shouldStickToBottomRef.current = node.scrollHeight - node.scrollTop - node.clientHeight < 96;
   }, []);
 
-  useEffect(() => {
-    if (!active || loadingThread || submitting || context.intent !== 'process_guide') return;
-    const availableCount = processGuideAvailableProcesses.length;
-    if (availableCount > 1 && !selectedProcessId) return;
-    const scopedContext = contextWithSelection;
-    if (!scopedContext.processGuideContext) return;
-    const prompt = buildProcessGuidePrompt(scopedContext);
-    const signature = JSON.stringify({
-      contextKey,
-      fieldKey: scopedContext.processFieldKey || null,
-      selectedProcessId: scopedContext.selectedProcessId || null,
-      processGuideContext: scopedContext.processGuideContext || null,
-    });
-    if (lastAutoPromptSignatureRef.current === signature) return;
-    lastAutoPromptSignatureRef.current = signature;
-    setInput((current) => String(current || '').trim() ? current : prompt);
-  }, [active, context.intent, contextKey, contextWithSelection, loadingThread, processGuideAvailableProcesses.length, selectedProcessId, submitting]);
-
   const submitChat = useCallback(async (rawText?: string, inputKind = 'text') => {
     const text = String(rawText ?? input).trim();
     if (!text || submitting) return;
     const assistantText = pendingAiAction && activeRecordCreationSchema
       ? buildPendingActionRevisionPrompt(pendingAiAction, text)
       : text;
-    const shouldStartProcessGuideThread = contextWithSelection.intent === 'process_guide' && !threadId;
+    const shouldStartProcessGuideThread = false;
     if (rawText === undefined) setInput('');
     if (!threadId) {
       const optimisticTitle = buildSmartAiThreadTitle(text);
@@ -2008,11 +2021,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const assistantPrompt = pendingAiAction && activeRecordCreationSchema && prompt
       ? buildPendingActionRevisionPrompt(pendingAiAction, prompt)
       : prompt;
-    const effectiveCapabilities = selectedCapabilities.length > 0
-      && bundleInputs.some((item) => item.type === 'file' || item.type === 'image')
-      && !selectedCapabilities.includes('document_analysis')
-      ? [...selectedCapabilities, 'document_analysis' as AiComposerCapability]
-      : selectedCapabilities;
+    const effectiveCapabilities = (() => {
+      const next = [...selectedCapabilities];
+      if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'file' || item.type === 'image') && !next.includes('document_analysis')) {
+        next.push('document_analysis' as AiComposerCapability);
+      }
+      if (selectedCapabilities.length > 0 && bundleInputs.some((item) => item.type === 'voice') && !next.includes('voice_input')) {
+        next.push('voice_input' as AiComposerCapability);
+      }
+      return next;
+    })();
     setInput('');
     setPendingAiAction(null);
     const bundleSummary = bundleInputs.map((item) => {
@@ -2205,6 +2223,17 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current || confirmBody.modelOverride || null,
           composerPreferences: buildComposerPreferences(),
         };
+        if (rememberGenerationPreference && generationKind) {
+          const nextSkipPreferences = {
+            ...skipGenerationConfirmationByKind,
+            [generationKind]: true,
+          };
+          setSkipGenerationConfirmationByKind(nextSkipPreferences);
+          finalConfirmBody.composerPreferences = {
+            ...finalConfirmBody.composerPreferences,
+            skipGenerationConfirmationByKind: nextSkipPreferences,
+          };
+        }
         if (generationKind === 'image_generation') {
           finalConfirmBody.settings = mediaSettings;
           finalConfirmBody.sourceImages = Array.isArray(confirmBody.sourceImages) && confirmBody.sourceImages.length
@@ -2247,7 +2276,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setConfirmingAiAction(false);
     }
-  }, [buildComposerPreferences, callAssistant, imageEditSourceUrl, loadThread, mediaSettings, mediaSourceImages, message, pendingAiAction, threadId]);
+  }, [buildComposerPreferences, callAssistant, imageEditSourceUrl, loadThread, mediaSettings, mediaSourceImages, message, pendingAiAction, rememberGenerationPreference, skipGenerationConfirmationByKind, threadId]);
 
   const saveThreadTitle = useCallback(async () => {
     if (renamingThreadRef.current) return;
@@ -2322,6 +2351,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       setDeletingThread(false);
     }
   }, [callAssistant, message, onThreadDeleted, threadId]);
+
+  const compressThreadContext = useCallback(async () => {
+    if (!threadId || compressingContext) return;
+    setCompressingContext(true);
+    try {
+      const data = await callAssistant({
+        action: 'compress_thread_context',
+        threadId,
+        modelOverride: modelOverrideRef.current,
+      });
+      if (data?.thread) onThreadUpserted?.(data.thread);
+      message.success?.('زمینه گفتگو فشرده شد و برای ادامه همین گفتگو ذخیره شد.');
+    } catch (error: any) {
+      message.error?.(toFaErrorMessage(error, 'فشرده‌سازی زمینه گفتگو ناموفق بود.'));
+    } finally {
+      setCompressingContext(false);
+    }
+  }, [callAssistant, compressingContext, message, onThreadUpserted, threadId]);
 
   const renderMessage = (item: ChatMessage, index: number) => {
     const isUser = item.role === 'user';
@@ -2483,6 +2530,38 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       bundleInputCount: Array.isArray(body?.bundle?.inputs) ? body.bundle.inputs.length : 0,
     });
   }, [mediaSettings, pendingAiAction, pendingGenerationCanChooseModel, pendingGenerationKind, pendingGenerationSourceImageCount]);
+  const activeModelForContext = useMemo(() => {
+    const latestModel = [...messages].reverse().find((item) => item.model)?.model;
+    return latestModel || modelOverrideRef.current || null;
+  }, [messages]);
+  const estimatedContextTokens = useMemo(() => estimateAiMessageTokens(messages), [messages]);
+  const estimatedContextLimit = estimateModelContextLimit(activeModelForContext);
+  const estimatedContextPercent = Math.max(0, Math.min(100, Math.round((estimatedContextTokens / Math.max(1, estimatedContextLimit)) * 100)));
+  const loadDrawerThreads = useCallback(async () => {
+    if (!showThreadListButton) return;
+    setDrawerThreadsLoading(true);
+    try {
+      const data = await callAssistant({ action: 'list_threads', limit: 80 });
+      const rows = Array.isArray(data?.threads) ? data.threads : [];
+      setDrawerThreads(rows);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'دریافت فهرست گفتگوها ناموفق بود.'));
+    } finally {
+      setDrawerThreadsLoading(false);
+    }
+  }, [callAssistant, message, showThreadListButton]);
+
+  useEffect(() => {
+    if (threadListOpen) void loadDrawerThreads();
+  }, [loadDrawerThreads, threadListOpen]);
+
+  useEffect(() => {
+    if (!threadId || compressingContext || estimatedContextPercent < 90 || messages.length < 8) return;
+    const signature = `${threadId}:${messages.length}:${estimatedContextPercent}`;
+    if (autoCompressedSignatureRef.current === signature) return;
+    autoCompressedSignatureRef.current = signature;
+    void compressThreadContext();
+  }, [compressThreadContext, compressingContext, estimatedContextPercent, messages.length, threadId]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
@@ -2553,6 +2632,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             </div>
           </div>
           <Space size={4}>
+            {showThreadListButton ? (
+              <Tooltip title="فهرست گفتگوها">
+                <Button type="text" size="small" icon={<MenuOutlined />} onClick={() => setThreadListOpen(true)} aria-label="فهرست گفتگوهای هوش مصنوعی" />
+              </Tooltip>
+            ) : null}
             {!checkingAiKnowledge && !aiKnowledgeConfigured ? (
               <Popover
                 trigger="click"
@@ -2571,17 +2655,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 <Button type="text" size="small" danger icon={<WarningOutlined />} aria-label="هشدار تکمیل دانش سازمان" />
               </Popover>
             ) : null}
-            <Popconfirm
-              title="گفتگو دوباره بارگذاری شود؟"
-              description="تغییرات ذخیره‌نشده داخل کادر پیام حفظ نمی‌شود."
-              okText="بارگذاری دوباره"
-              cancelText="انصراف"
-              onConfirm={() => void loadThread()}
-            >
-              <Tooltip title="بارگذاری دوباره">
-                <Button type="text" size="small" icon={<ReloadOutlined spin={loadingThread} />} aria-label="بارگذاری دوباره گفتگو" />
-              </Tooltip>
-            </Popconfirm>
+            <Tooltip title={`زمینه گفتگو: حدود ${estimatedContextTokens.toLocaleString('fa-IR')} توکن`}>
+              <span className="inline-flex h-6 w-6 items-center justify-center">
+                <Progress
+                  type="circle"
+                  percent={estimatedContextPercent}
+                  size={22}
+                  strokeWidth={12}
+                  showInfo={false}
+                  strokeColor={estimatedContextPercent > 85 ? '#dc2626' : estimatedContextPercent > 65 ? '#d97706' : '#2563eb'}
+                />
+              </span>
+            </Tooltip>
+            <Tooltip title="فشرده‌سازی زمینه گفتگو">
+              <Button
+                type="text"
+                size="small"
+                icon={<CompressOutlined />}
+                loading={compressingContext}
+                disabled={!threadId || messages.length < 4}
+                onClick={() => void compressThreadContext()}
+                aria-label="فشرده‌سازی زمینه گفتگو"
+              />
+            </Tooltip>
             <Popconfirm
               title="این گفتگوی هوش مصنوعی حذف شود؟"
               description="این گفتگو از فهرست گفتگوهای شما حذف می‌شود."
@@ -2618,32 +2714,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       </div>
 
       <div className="max-h-[48vh] shrink-0 overflow-y-auto border-t border-slate-200/65 bg-white/95 px-3 py-2.5 dark:border-white/[0.07] dark:bg-[#17191c]">
-        {context.intent === 'process_guide' ? (
-          <div className="mb-3">
-            <Alert
-              type="warning"
-              showIcon
-              message="راهنمای هوشمند فرآیند"
-              description={processGuideAvailableProcesses.length > 1 && !selectedProcessId
-                ? 'برای تولید راهنمای دقیق، اول فرآیند موردنظر را انتخاب کنید.'
-                : 'شما در حال ارسال درخواست خلاصه‌سازی فرآیند به هوش مصنوعی هستید؛ این اقدام ممکن است توکن زیادی از شارژ هوش مصنوعی شما را بسوزاند.'}
-            />
-            {processGuideAvailableProcesses.length > 1 ? (
-              <div className="mt-2">
-                <Select
-                  value={selectedProcessId || undefined}
-                  onChange={(value) => setPendingProcessSelectionId(String(value || '').trim() || null)}
-                  placeholder="انتخاب فرآیند"
-                  className="w-full"
-                  options={processGuideAvailableProcesses.map((process) => ({
-                    label: `${process.label}${process.stageCount ? ` · ${Number(process.stageCount).toLocaleString('fa-IR')} مرحله` : ''}`,
-                    value: process.id,
-                  }))}
-                />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         {pendingAiAction ? (
           <div className="mb-2 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950 shadow-sm dark:border-amber-400/20 dark:bg-[#241a0d] dark:text-amber-100">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -2728,6 +2798,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                   </div>
                 ) : null}
                 <div className="font-semibold text-amber-900 dark:text-amber-100">آیا تایید می‌کنید؟</div>
+                <Checkbox
+                  checked={rememberGenerationPreference}
+                  onChange={(event) => setRememberGenerationPreference(event.target.checked)}
+                  className="text-xs text-amber-900 dark:text-amber-100"
+                >
+                  این اطلاعات را برای این عملکرد ({getGenerationConfirmationTitle(pendingGenerationKind).replace(/^تایید\s*/, '')}) در این گفتگو ذخیره کن و دیگر نپرس.
+                </Checkbox>
               </div>
             ) : null}
             {pendingAiAction?.proposedPayload?.payload ? (
@@ -2796,9 +2873,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat());
           }}
           placeholder="سوال خود را بنویسید..."
-          autoSize={{ minRows: 1, maxRows: 3 }}
+          autoSize={{ minRows: 1, maxRows: 8 }}
           className="!rounded-2xl !border-slate-200/70 !bg-slate-50/85 !px-3 !py-2 !text-[12px] !leading-6 !shadow-none dark:!border-white/[0.08] dark:!bg-white/[0.045]"
-          disabled={context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId}
         />
         <div className="mt-1">
           <AiComposeModelBar
@@ -2847,7 +2923,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             icon={<SendOutlined />}
             className="shrink-0"
             loading={shouldUseTaskBundle ? submitting : documentMode ? generatingDocument : videoMode ? generatingVideo : voiceOutputMode ? generatingVoiceOutput : imageMode ? generatingImage : submitting}
-            disabled={(!input.trim() && bundleInputs.length === 0) || (context.intent === 'process_guide' && processGuideAvailableProcesses.length > 1 && !selectedProcessId)}
+            disabled={!input.trim() && bundleInputs.length === 0}
             onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
@@ -2855,6 +2931,48 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </Button>
         </div>
       </div>
+      <Drawer
+        open={threadListOpen}
+        onClose={() => setThreadListOpen(false)}
+        placement="right"
+        width="min(92vw, 360px)"
+        title="گفتگوهای هوش مصنوعی"
+        classNames={{ body: '!p-0' }}
+        destroyOnHidden
+        getContainer={typeof document === 'undefined' ? undefined : () => document.body}
+      >
+        <div className="h-full overflow-y-auto bg-slate-50 p-2 dark:bg-[#131518]">
+          {drawerThreadsLoading ? (
+            <div className="flex justify-center py-10"><Spin /></div>
+          ) : drawerThreads.length === 0 ? (
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="گفتگویی پیدا نشد." />
+          ) : drawerThreads.map((thread) => {
+            const nextThreadId = String(thread?.id || '').trim();
+            const activeThread = nextThreadId && nextThreadId === threadId;
+            return (
+              <button
+                key={nextThreadId}
+                type="button"
+                className={`mb-1.5 flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-right transition ${activeThread ? 'border-slate-300 bg-white dark:border-white/15 dark:bg-white/10' : 'border-transparent bg-white/70 hover:bg-white dark:bg-white/[0.035] dark:hover:bg-white/[0.07]'}`}
+                onClick={() => {
+                  setThreadListOpen(false);
+                  void loadThread(nextThreadId);
+                }}
+              >
+                <Avatar size={30} className="!bg-[rgba(var(--brand-100-rgb),0.88)] !text-[rgb(var(--brand-700-rgb))] dark:!bg-[rgba(var(--brand-600-rgb),0.18)] dark:!text-[rgb(var(--brand-200-rgb))]">
+                  <AiSparkleIcon className="h-3.5 w-3.5" />
+                </Avatar>
+                <span className="min-w-0 flex-1">
+                  <span className="line-clamp-2 text-[12px] font-bold text-slate-800 dark:text-slate-100">{String(thread?.title || 'گفتگوی هوش مصنوعی')}</span>
+                  <span className="mt-0.5 line-clamp-1 text-[10px] text-slate-500 dark:text-slate-300">
+                    {thread?.updated_at ? new Intl.DateTimeFormat('fa-IR', { month: 'short', day: 'numeric' }).format(new Date(thread.updated_at)) : ''}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Drawer>
     </div>
   );
 };

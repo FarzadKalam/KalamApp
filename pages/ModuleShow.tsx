@@ -5931,12 +5931,7 @@ const ModuleShow: React.FC = () => {
         ? `flex w-full min-w-0 flex-col gap-2 ${isSuperLongTextField ? 'items-stretch' : ''}`
         : `flex w-full min-w-[150px] gap-1 ${isSuperLongTextField ? 'items-start' : 'items-center'}`;
       return (
-        <div
-          className={inlineEditorClassName}
-          onClickCapture={(event) => event.stopPropagation()}
-          onMouseDownCapture={(event) => event.stopPropagation()}
-          onPointerDownCapture={(event) => event.stopPropagation()}
-        >
+        <div className={inlineEditorClassName}>
           <div className="min-w-0 flex-1">
             <SmartFieldRenderer
               field={field}

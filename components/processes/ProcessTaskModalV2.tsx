@@ -2782,9 +2782,6 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         data-module-id={primaryProcessRecordLink?.moduleId || undefined}
         data-record-id={primaryProcessRecordLink?.recordId || undefined}
         data-task-id={taskRecordId || undefined}
-        onClickCapture={(event) => event.stopPropagation()}
-        onMouseDownCapture={(event) => event.stopPropagation()}
-        onPointerDownCapture={(event) => event.stopPropagation()}
         className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
         dir="rtl"
         style={{
@@ -3083,7 +3080,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 {sideTab === 'ai' ? (
                   !isDraftActivityCreationMode && taskRecordId ? (
                     <div className="h-[24rem] max-h-[52vh] min-h-[18rem] overflow-hidden rounded-lg bg-slate-100 dark:bg-[#101113]">
-                      <AssistantPanel active={sideTab === 'ai'} />
+                      <AssistantPanel active={sideTab === 'ai'} showThreadListButton />
                     </div>
                   ) : (
                     <div className="px-2 py-4 text-xs leading-6 text-gray-400">

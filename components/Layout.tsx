@@ -227,6 +227,12 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     if (!resolvedHref) return;
     const latestNavigationState = latestNavigationStateRef.current;
     const targetPath = String(resolvedHref).split(/[?#]/)[0] || resolvedHref;
+    if (targetPath === '/ai') {
+      if (latestNavigationState.isMobile) setCollapsed(true);
+      navigate('/ai', { state: { forceNewThread: true, aiEntrySource: 'layout' } });
+      window.setTimeout(() => { sidebarNavigationRef.current = ''; }, 350);
+      return;
+    }
     if (latestNavigationState.pathname === targetPath && latestNavigationState.search === (resolvedHref.includes('?') ? `?${resolvedHref.split('?')[1].split('#')[0]}` : '')) {
       if (latestNavigationState.isMobile) setCollapsed(true);
       return;

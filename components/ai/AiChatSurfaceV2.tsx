@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Avatar, Badge, Button, Drawer, Empty, Input, Spin, Tooltip } from 'antd';
-import { CloseOutlined, MenuOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { CloseOutlined, MenuOutlined, PlusOutlined, PushpinFilled, PushpinOutlined, SearchOutlined } from '@ant-design/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
@@ -18,6 +18,7 @@ type AiThreadRow = {
   context_key?: string | null;
   updated_at?: string | null;
   created_at?: string | null;
+  pinned_at?: string | null;
   module_id?: string | null;
   record_id?: string | null;
   metadata?: Record<string, any> | null;
@@ -52,6 +53,13 @@ type AiCreditSummary = {
 };
 
 const THREAD_LIMIT = 80;
+
+const sortAiThreads = (items: AiThreadRow[]) => [...items].sort((a, b) => {
+  const aPinned = a.pinned_at ? 1 : 0;
+  const bPinned = b.pinned_at ? 1 : 0;
+  if (aPinned !== bPinned) return bPinned - aPinned;
+  return String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || ''));
+});
 
 const getModuleTitleFa = (moduleId?: string | null) => {
   const key = String(moduleId || '').trim();
@@ -183,7 +191,8 @@ const AiChatSurfaceV2: React.FC = () => {
     mediaSettings: initialMediaSettings || {},
     mediaSourceImageCount: initialMediaSourceImages.length,
     forceNewThread,
-  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
+    locationKey: location.key || '',
+  }), [forceNewThread, initialCapabilities, initialFile?.fileName, initialFiles.length, initialMediaSettings, initialMediaSourceImages.length, initialPrompt, location.key, routeState.aiInitialInputKind, routeState.aiInitialRecordCreationTargetModuleId]);
 
   const loadThreads = useCallback(async (preferredThreadId?: string | null) => {
     setLoadingThreads(true);
@@ -193,7 +202,7 @@ const AiChatSurfaceV2: React.FC = () => {
       if ((data as any)?.success === false) throw new Error(String((data as any)?.message || 'دریافت گفتگوها ناموفق بود.'));
       const nextThreads = (Array.isArray((data as any)?.threads) ? (data as any).threads as AiThreadRow[] : [])
         .filter((thread) => !isHiddenAssistantThread(thread));
-      setThreads(nextThreads);
+      setThreads(sortAiThreads(nextThreads));
       setActiveThreadId((current) => {
         if (preferredThreadId && nextThreads.some((thread) => String(thread.id) === String(preferredThreadId))) return preferredThreadId;
         if (current && nextThreads.some((thread) => String(thread.id) === String(current))) return current;
@@ -210,6 +219,12 @@ const AiChatSurfaceV2: React.FC = () => {
   useEffect(() => {
     void loadThreads();
   }, [loadThreads]);
+
+  useEffect(() => {
+    if (!forceNewThread) return;
+    setActiveThreadId(null);
+    setNewConversationSeed((value) => value + 1);
+  }, [forceNewThread, location.key]);
 
   useEffect(() => {
     let mounted = true;
@@ -270,12 +285,52 @@ const AiChatSurfaceV2: React.FC = () => {
     const normalizedThreadId = String(threadId || '').trim();
     const normalizedTitle = String(title || '').trim();
     if (!normalizedThreadId || !normalizedTitle) return;
-    setThreads((current) => current.map((thread) => (
+    setThreads((current) => sortAiThreads(current.map((thread) => (
       String(thread.id) === normalizedThreadId
         ? { ...thread, ...(patchedThread && typeof patchedThread === 'object' ? patchedThread : {}), title: normalizedTitle }
         : thread
-    )));
+    ))));
   }, []);
+
+  const handleThreadUpserted = useCallback((thread: any) => {
+    const threadId = String(thread?.id || thread?.threadId || '').trim();
+    if (!threadId || isHiddenAssistantThread(thread)) return;
+    setThreads((current) => {
+      const normalized: AiThreadRow = {
+        ...(thread || {}),
+        id: threadId,
+        title: thread?.title || thread?.threadTitle || getThreadTitle(thread),
+        updated_at: thread?.updated_at || thread?.updatedAt || new Date().toISOString(),
+      };
+      const exists = current.some((item) => String(item.id) === threadId);
+      return sortAiThreads(exists
+        ? current.map((item) => (String(item.id) === threadId ? { ...item, ...normalized } : item))
+        : [normalized, ...current]);
+    });
+  }, []);
+
+  const toggleThreadPin = useCallback(async (event: React.MouseEvent, thread: AiThreadRow) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const threadId = String(thread?.id || '').trim();
+    if (!threadId) return;
+    const previous = threads;
+    const optimisticPinnedAt = thread.pinned_at ? null : new Date().toISOString();
+    setThreads((current) => sortAiThreads(current.map((item) => (
+      String(item.id) === threadId ? { ...item, pinned_at: optimisticPinnedAt } : item
+    ))));
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-assistant', {
+        body: { action: 'toggle_thread_pin', threadId },
+      });
+      if (error) throw error;
+      if ((data as any)?.success === false) throw new Error(String((data as any)?.message || 'تغییر وضعیت پین ناموفق بود.'));
+      if ((data as any)?.thread) handleThreadUpserted((data as any).thread);
+    } catch (error: any) {
+      setThreads(previous);
+      message.error(toFaErrorMessage(error, 'تغییر وضعیت پین گفتگو ناموفق بود.'));
+    }
+  }, [handleThreadUpserted, message, threads]);
 
   const renderThreadList = (compact = false) => (
     <div className={compact ? 'flex h-full flex-col gap-1 overflow-y-auto px-1 py-1.5' : 'flex h-full min-h-0 flex-col'}>
@@ -331,11 +386,18 @@ const AiChatSurfaceV2: React.FC = () => {
           const title = getThreadTitle(thread);
           if (compact) {
             return (
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 key={thread.id}
                 title={title}
                 onClick={() => {
+                  setActiveThreadId(thread.id);
+                  closeThreadList();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
                   setActiveThreadId(thread.id);
                   closeThreadList();
                 }}
@@ -346,15 +408,30 @@ const AiChatSurfaceV2: React.FC = () => {
                     <AiSparkleIcon className="h-4 w-4" />
                   </Avatar>
                 </Badge>
+                <button
+                  type="button"
+                  onClick={(event) => void toggleThreadPin(event, thread)}
+                  className="rounded-full p-0.5 text-[10px] text-slate-400 hover:bg-white hover:text-[rgb(var(--brand-700-rgb))] dark:hover:bg-white/10"
+                  aria-label={thread.pinned_at ? 'برداشتن پین گفتگو' : 'پین کردن گفتگو'}
+                >
+                  {thread.pinned_at ? <PushpinFilled /> : <PushpinOutlined />}
+                </button>
                 <span className="line-clamp-2 min-h-7 text-center text-[9.5px] leading-3.5 text-slate-500 dark:text-slate-400">{title}</span>
-              </button>
+              </div>
             );
           }
           return (
-            <button
-              type="button"
+            <div
+              role="button"
+              tabIndex={0}
               key={thread.id}
               onClick={() => {
+                setActiveThreadId(thread.id);
+                closeThreadList();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
                 setActiveThreadId(thread.id);
                 closeThreadList();
               }}
@@ -366,11 +443,21 @@ const AiChatSurfaceV2: React.FC = () => {
               <span className="min-w-0 flex-1">
                 <span className="flex min-w-0 items-center justify-between gap-2">
                   <span className="line-clamp-2 text-[13px] font-bold leading-5 text-slate-800 dark:text-slate-100">{title}</span>
-                  <span className="shrink-0 text-[10px] text-slate-400">{formatThreadTime(thread.updated_at || thread.created_at)}</span>
+                  <span className="flex shrink-0 items-center gap-1 text-[10px] text-slate-400">
+                    <button
+                      type="button"
+                      onClick={(event) => void toggleThreadPin(event, thread)}
+                      className="rounded-full p-1 hover:bg-slate-100 hover:text-[rgb(var(--brand-700-rgb))] dark:hover:bg-white/10"
+                      aria-label={thread.pinned_at ? 'برداشتن پین گفتگو' : 'پین کردن گفتگو'}
+                    >
+                      {thread.pinned_at ? <PushpinFilled /> : <PushpinOutlined />}
+                    </button>
+                    {formatThreadTime(thread.updated_at || thread.created_at)}
+                  </span>
                 </span>
                 <span className="mt-1 line-clamp-1 text-[11px] leading-5 text-slate-500 dark:text-slate-300">{getThreadSubtitle(thread)}</span>
               </span>
-            </button>
+            </div>
           );
         })}
       </div>
@@ -416,6 +503,7 @@ const AiChatSurfaceV2: React.FC = () => {
             autoSubmitInitialPrompt={autoSubmitInitial}
             onThreadDeleted={handleThreadDeleted}
             onThreadRenamed={handleThreadRenamed}
+            onThreadUpserted={handleThreadUpserted}
           />
         </main>
       </div>
