@@ -181,8 +181,6 @@ const SEEN_TASKS_STORAGE_KEY = 'notif_seen_tasks_v1';
 const SEEN_RESP_STORAGE_KEY = 'notif_seen_responsibilities_v1';
 const SEEN_COMPLETED_TASKS_STORAGE_KEY = 'notif_seen_completed_tasks_v1';
 const SEEN_BOT_MESSAGES_STORAGE_KEY = 'notif_seen_bot_messages_v1';
-const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
-const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
 // Module-level directory cache: keeps users/roles across popover open-close cycles
 // so avatars load instantly on re-open instead of re-fetching each time.
 const _notifDirectoryCache: {
@@ -663,9 +661,7 @@ const resolveStatusLabelFallback = (value: unknown) => {
 const toNotificationStateSection = (section: NotificationSectionKey): NotificationStateSectionKey => (
   section === 'sms_messages'
     ? 'sms'
-    : section === 'bot_direct_messages'
-      ? 'bot_messages'
-      : section
+    : section
 );
 
 const buildNotificationStateKey = (
@@ -1034,8 +1030,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [seenResponsibilityIds, setSeenResponsibilityIds] = useState<Set<string>>(() => loadSeenSet(SEEN_RESP_STORAGE_KEY));
   const [seenCompletedTaskIds, setSeenCompletedTaskIds] = useState<Set<string>>(() => loadSeenSet(SEEN_COMPLETED_TASKS_STORAGE_KEY));
   const [seenBotMessageIds, setSeenBotMessageIds] = useState<Set<string>>(() => loadSeenSet(SEEN_BOT_MESSAGES_STORAGE_KEY));
-  const [seenSmsMessageIds, setSeenSmsMessageIds] = useState<Set<string>>(() => loadSeenSet(SEEN_SMS_MESSAGES_STORAGE_KEY));
-  const [seenVoipCallIds, setSeenVoipCallIds] = useState<Set<string>>(() => loadSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY));
+  const [seenSmsMessageIds, setSeenSmsMessageIds] = useState<Set<string>>(() => new Set());
+  const [seenVoipCallIds, setSeenVoipCallIds] = useState<Set<string>>(() => new Set());
   const [dismissedUiNotificationIds, setDismissedUiNotificationIds] = useState<Set<string>>(() => new Set());
   const [notificationStateMap, setNotificationStateMap] = useState<Record<string, NotificationStateEntry>>({});
   const [notificationReadStateReady, setNotificationReadStateReady] = useState(false);
@@ -2246,14 +2242,6 @@ useEffect(() => {
   }, [seenBotMessageIds]);
 
   useEffect(() => {
-    persistSeenSet(SEEN_SMS_MESSAGES_STORAGE_KEY, seenSmsMessageIds);
-  }, [seenSmsMessageIds]);
-
-  useEffect(() => {
-    persistSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY, seenVoipCallIds);
-  }, [seenVoipCallIds]);
-
-  useEffect(() => {
     if (variant !== 'chat') {
       setVoipCalls([]);
     }
@@ -2314,6 +2302,22 @@ useEffect(() => {
       );
     });
     if (deduped.size === 0) return;
+    const rpcResult = await supabase.rpc('mark_messaging_read_v2', {
+      p_channel: null,
+      p_conversation_key: null,
+      p_read_through_at: null,
+      p_read_through_id: null,
+      p_entries: Array.from(deduped.values()).map((row) => ({
+        section: row.section,
+        source_type: row.source_type,
+        source_id: row.source_id,
+      })),
+    });
+    if (!rpcResult.error) return;
+    if (!isMissingRpcError(rpcResult.error)) {
+      console.warn('Could not persist notification read states through central RPC', rpcResult.error);
+      return;
+    }
     const { error } = await supabase
       .from('notification_read_states')
       .upsert(Array.from(deduped.values()), { onConflict: 'org_id,user_id,source_type,source_id' });
@@ -2333,12 +2337,17 @@ useEffect(() => {
     setNotificationReadStateReady(false);
     setNotificationReadStateFallbackMode(false);
     const loadNotificationReadStates = async () => {
+      const stateSections = Array.from(new Set([
+        ...relevantNotificationStateSections,
+        ...(relevantNotificationStateSections.includes('bot_direct_messages') ? ['bot_messages' as NotificationStateSectionKey] : []),
+        ...(relevantNotificationStateSections.includes('sms') ? ['sms_messages' as any] : []),
+      ]));
       const { data, error } = await supabase
         .from('notification_read_states')
         .select('section, source_type, source_id, read_at, dismissed_at, updated_at')
         .eq('org_id', profile.org_id)
         .eq('user_id', profile.id)
-        .in('section', relevantNotificationStateSections)
+        .in('section', stateSections)
         .order('updated_at', { ascending: false })
         .limit(1000);
       if (error) {
@@ -2388,6 +2397,16 @@ useEffect(() => {
     const key = buildNotificationStateKey(toNotificationStateSection(section), sourceType, sourceId);
     const entry = notificationStateMap[key];
     if (entry?.dismissedAt || entry?.readAt) return true;
+    if (section === 'bot_direct_messages') {
+      const legacyKey = buildNotificationStateKey('bot_messages', sourceType, sourceId);
+      const legacyEntry = notificationStateMap[legacyKey];
+      if (legacyEntry?.dismissedAt || legacyEntry?.readAt) return true;
+    }
+    if (section === 'sms_messages') {
+      const canonicalKey = buildNotificationStateKey('sms_messages' as any, sourceType, sourceId);
+      const canonicalEntry = notificationStateMap[canonicalKey];
+      if (canonicalEntry?.dismissedAt || canonicalEntry?.readAt) return true;
+    }
     return Boolean(fallbackSeen && (!notificationReadStateReady || notificationReadStateFallbackMode));
   }, [notificationReadStateFallbackMode, notificationReadStateReady, notificationStateMap]);
 
@@ -2409,12 +2428,13 @@ useEffect(() => {
       setUnreadSummary((prev) => {
         const next = { ...prev };
         normalized.forEach((entry) => {
-          const section = entry.section === 'sms_messages'
-            ? 'sms_messages'
-            : entry.section === 'bot_direct_messages'
-              ? 'bot_messages'
-              : entry.section;
+          const section = entry.section === 'sms_messages' ? 'sms_messages' : entry.section;
           next[section] = Math.max(0, Number(next[section] || 0) - 1);
+          if (section === 'bot_direct_messages') {
+            next.bot_messages = Math.max(0, Number(next.bot_messages || 0) - 1);
+          } else if (section === 'bot_messages') {
+            next.bot_group_messages = Math.max(0, Number(next.bot_group_messages || 0) - 1);
+          }
         });
         return next;
       });
@@ -2431,15 +2451,18 @@ useEffect(() => {
       await runtimeRefreshSummary();
       return;
     }
-    const { data, error } = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: variant });
-    if (error) {
-      if (!isMissingRpcError(error)) {
-        console.warn('Could not refresh notification unread summary', error);
+    let response = await supabase.rpc('get_notification_unread_summary_v2', { p_variant: variant });
+    if (isMissingRpcError(response.error)) {
+      response = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: variant });
+    }
+    if (response.error) {
+      if (!isMissingRpcError(response.error)) {
+        console.warn('Could not refresh notification unread summary', response.error);
       }
       setUnreadSummaryAvailable(false);
       return;
     }
-    setUnreadSummary(normalizeNotificationUnreadSummary(data));
+    setUnreadSummary(normalizeNotificationUnreadSummary(response.data));
     setUnreadSummaryAvailable(true);
   }, [managedByRuntime, profile.id, profile.org_id, runtimeRefreshSummary, variant]);
 
@@ -6109,12 +6132,22 @@ useEffect(() => {
     if (existingRequest) return existingRequest;
 
     const request = (async () => {
-      const { data, error } = await supabase.rpc('mark_communication_read', {
+      let response = await supabase.rpc('mark_messaging_read_v2', {
         p_channel: channel,
         p_conversation_key: conversationKey,
         p_read_through_at: latest.createdAt,
         p_read_through_id: latest.id,
+        p_entries: [],
       });
+      if (isMissingRpcError(response.error)) {
+        response = await supabase.rpc('mark_communication_read', {
+          p_channel: channel,
+          p_conversation_key: conversationKey,
+          p_read_through_at: latest.createdAt,
+          p_read_through_id: latest.id,
+        });
+      }
+      const { data, error } = response;
       if (error) {
         if (!isMissingRpcError(error)) {
           console.warn('Could not persist communication read cursor', error);

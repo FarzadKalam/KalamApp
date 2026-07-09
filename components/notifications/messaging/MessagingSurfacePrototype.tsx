@@ -2357,7 +2357,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     selectedInternalSourceKey,
   ]);
   const displayConversations = useMemo(() => {
-    if (reelInitialLoading) return [];
+    if (reelInitialLoading || liveData.loading) return [];
     const liveInternal = liveInternalConversations;
     const liveBotGroups = liveData.conversations.filter((conversation) => conversation.channel === 'bot_group');
     const liveBotDirect = liveData.conversations.filter((conversation) => conversation.channel === 'bot_direct');
@@ -2370,15 +2370,21 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveSms,
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
-  }, [liveData.conversations, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  }, [liveData.conversations, liveData.loading, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
   const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
     const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
     const savedConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'saved');
+    const botGroupFallback = displayConversations
+      .filter((conversation) => conversation.channel === 'bot_group')
+      .reduce((sum, conversation) => sum + Math.max(0, Number(conversation.unread || 0)), 0);
+    const botDirectFallback = displayConversations
+      .filter((conversation) => conversation.channel === 'bot_direct')
+      .reduce((sum, conversation) => sum + Math.max(0, Number(conversation.unread || 0)), 0);
     return {
       all: Math.max(0, Number(notificationRuntime.communicationUnread || 0)),
       internal: Math.max(0, Number(notificationRuntime.summary.notes || 0)),
-      bot_group: Math.max(0, Number(notificationRuntime.summary.bot_messages || 0)),
-      bot_direct: Math.max(0, Number(notificationRuntime.summary.bot_messages || 0)),
+      bot_group: Math.max(0, Number(notificationRuntime.summary.bot_group_messages || botGroupFallback || 0)),
+      bot_direct: Math.max(0, Number(notificationRuntime.summary.bot_direct_messages || botDirectFallback || 0)),
       sms: Math.max(0, Number(notificationRuntime.summary.sms_messages || 0)),
       call: Math.max(0, Number(notificationRuntime.summary.voip_calls || 0)),
       system: Math.max(0, Number(systemConversation?.unread || 0)),
@@ -2388,6 +2394,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     displayConversations,
     notificationRuntime.communicationUnread,
     notificationRuntime.summary.bot_messages,
+    notificationRuntime.summary.bot_direct_messages,
+    notificationRuntime.summary.bot_group_messages,
     notificationRuntime.summary.notes,
     notificationRuntime.summary.sms_messages,
     notificationRuntime.summary.voip_calls,

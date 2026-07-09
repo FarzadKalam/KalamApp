@@ -3046,8 +3046,9 @@ const ModuleShow: React.FC = () => {
         if (remaining % 2 === 0) {
           try {
             if (captureConnectionId) {
+              const activationCode = String(botStatusPlatformData[channel]?.activationCode || '').trim().toUpperCase();
               const { data: pollData } = await supabase.functions.invoke('bot-admin', {
-                body: { action: 'poll_updates', channel, connectionId: captureConnectionId, cursor: captureCursor },
+                body: { action: 'poll_updates', channel, connectionId: captureConnectionId, cursor: captureCursor, activationCode },
               });
               if (pollData?.success && Object.prototype.hasOwnProperty.call(pollData, 'cursor')) {
                 captureCursor = pollData?.cursor ?? captureCursor;
@@ -3062,7 +3063,6 @@ const ModuleShow: React.FC = () => {
                 const isGroupByType = ['group', 'supergroup', 'channel'].includes(chatType);
                 const chatIdLower = polledChatId.toLowerCase();
                 const isGroup = isGroupByType || chatIdLower.startsWith('g0') || chatIdLower.startsWith('c0') || chatIdLower.startsWith('ch') || Boolean(chatTitle);
-                const activationCode = String(botStatusPlatformData[channel]?.activationCode || '').trim().toUpperCase();
                 const hasActivationCode = !activationCode || String(polledText || '').toUpperCase().includes(activationCode);
                 const allowRubikaActivationBind = channel === 'rubika' && hasActivationCode && Boolean(polledChatId);
                 if ((isGroup && hasActivationCode) || allowRubikaActivationBind) {

@@ -7,6 +7,8 @@ type BotAdminBody = {
   channel?: BotChannel | string;
   connectionId?: string;
   cursor?: string | number | null;
+  activationCode?: string;
+  activation_code?: string;
   chatId?: string;
   text?: string;
   fallbackText?: string;
@@ -772,6 +774,49 @@ const extractContact = (payload: Record<string, any>): InboundContact => {
   };
 };
 
+const getUpdateOrderKey = (payload: any) => {
+  const candidates = [
+    payload?.update_id,
+    payload?.updateId,
+    payload?.message_id,
+    payload?.messageId,
+    payload?.new_message?.message_id,
+    payload?.new_message?.messageId,
+    payload?.update?.update_id,
+    payload?.update?.message_id,
+    payload?.update?.new_message?.message_id,
+    payload?.message?.message_id,
+    payload?.message?.messageId,
+  ];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  const dateCandidates = [
+    payload?.date,
+    payload?.timestamp,
+    payload?.created_at,
+    payload?.new_message?.date,
+    payload?.new_message?.created_at,
+    payload?.update?.date,
+    payload?.update?.new_message?.date,
+    payload?.message?.date,
+  ];
+  for (const candidate of dateCandidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+    const parsed = Date.parse(String(candidate || ''));
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+};
+
+const sortProviderUpdates = (updates: any[]) => (
+  Array.isArray(updates)
+    ? [...updates].sort((left, right) => getUpdateOrderKey(left) - getUpdateOrderKey(right))
+    : []
+);
+
 const upsertInboundContact = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1191,22 +1236,33 @@ const primeChannelCursor = async (
   };
 };
 
-const pickLatestContact = (updates: any[]) => {
+const pickLatestContact = (updates: any[], activationCode?: string | null) => {
   if (!Array.isArray(updates) || updates.length === 0) return null;
   let latestAny: { contact: InboundContact; payload: Record<string, any> } | null = null;
-  for (let index = updates.length - 1; index >= 0; index -= 1) {
-    const item = updates[index];
+  let latestActivationMatch: { contact: InboundContact; payload: Record<string, any> } | null = null;
+  let latestGroup: { contact: InboundContact; payload: Record<string, any> } | null = null;
+  const normalizedActivationCode = String(activationCode || '').trim().toUpperCase();
+  const orderedUpdates = sortProviderUpdates(updates);
+  for (let index = orderedUpdates.length - 1; index >= 0; index -= 1) {
+    const item = orderedUpdates[index];
     const contact = extractContact(item || {});
     if (contact.chatId) {
       const candidate = {
         contact,
         payload: item,
       };
-      if (contact.isGroup === true) return candidate;
       if (!latestAny) latestAny = candidate;
+      if (contact.isGroup === true && !latestGroup) latestGroup = candidate;
+      if (
+        normalizedActivationCode
+        && String(contact.text || '').toUpperCase().includes(normalizedActivationCode)
+      ) {
+        latestActivationMatch = candidate;
+        break;
+      }
     }
   }
-  return latestAny;
+  return latestActivationMatch || latestGroup || latestAny;
 };
 
 const saveInboundContact = async (
@@ -1238,27 +1294,32 @@ const pollChannelUpdates = async (
   serviceRoleKey: string,
   integration: Record<string, any>,
   channel: BotChannel,
-  cursor?: string | number | null
+  cursor?: string | number | null,
+  options?: { activationCode?: string | null }
 ) => {
   const settings = integration?.settings || {};
   const result = channel === 'rubika'
     ? await callRubikaGetUpdates(settings, cursor)
     : await callTelegramLikeGetUpdates(channel as 'telegram' | 'bale', settings, cursor);
+  const orderedUpdates = sortProviderUpdates(result.updates);
+  const latestUpdateId = orderedUpdates.length > 0 ? getUpdateOrderKey(orderedUpdates[orderedUpdates.length - 1]) : null;
 
   const raw = (result as any)?.raw || {};
   const debug = {
     status: String(raw?.status || '').trim() || null,
     message: String(raw?.message || raw?.description || '').trim() || null,
     has_updates_array: Array.isArray(raw?.updates) || Array.isArray(raw?.data?.updates) || Array.isArray(raw?.result?.updates),
+    activation_code_checked: Boolean(String(options?.activationCode || '').trim()),
+    latest_update_id: latestUpdateId || null,
   };
 
-  const found = pickLatestContact(result.updates);
+  const found = pickLatestContact(orderedUpdates, options?.activationCode || null);
   if (!found) {
     return {
       found: false,
       cursor: result.nextCursor,
       contact: null,
-      provider_result_count: Array.isArray(result.updates) ? result.updates.length : 0,
+      provider_result_count: orderedUpdates.length,
       provider_debug: debug,
     };
   }
@@ -1284,7 +1345,7 @@ const pollChannelUpdates = async (
       sender_id: found.contact.senderId || null,
       last_payload: found.payload,
     },
-    provider_result_count: Array.isArray(result.updates) ? result.updates.length : 0,
+    provider_result_count: orderedUpdates.length,
     provider_debug: debug,
   };
 };
@@ -1733,6 +1794,7 @@ const uploadRubikaFileBytes = async ({
   const attempts: Array<Record<string, any>> = [];
   const normalizedAttempts = Math.min(Math.max(Number(maxAttempts || 3), 1), 5);
   const urlDiagnostic = describeExternalUrl(uploadUrl);
+  const allowRawHttpFallback = String(Deno.env.get('RUBIKA_RAW_HTTP_FALLBACK') || '').trim() === '1';
 
   for (let attempt = 1; attempt <= normalizedAttempts; attempt += 1) {
     const uploadFileName = safeFileName(String(fileName || 'file').trim() || 'file');
@@ -1746,7 +1808,7 @@ const uploadRubikaFileBytes = async ({
       const payload = await parseResponse(response);
       if (!response.ok) {
         const transient = isTransientProviderStatus(response.status);
-        if (transient) {
+        if (transient && allowRawHttpFallback) {
           try {
             const rawUpload = await rawHttpsPostRubikaMultipart({
               uploadUrl,
@@ -3572,7 +3634,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const result = await pollChannelUpdates(supabaseUrl, serviceRoleKey, integration, channel, cursor);
+    const activationCode = pick(body?.activationCode, body?.activation_code);
+    const result = await pollChannelUpdates(supabaseUrl, serviceRoleKey, integration, channel, cursor, { activationCode });
     return json(200, {
       success: true,
       channel,

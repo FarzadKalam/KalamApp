@@ -162,8 +162,6 @@ type BotIdentityBindingRow = {
   phone_number?: string | null;
 };
 
-const SEEN_SMS_MESSAGES_STORAGE_KEY = 'notif_seen_sms_messages_v1';
-const SEEN_VOIP_CALLS_STORAGE_KEY = 'notif_seen_voip_calls_v1';
 const RUBIKA_MEDIA_AUTO_HYDRATION_BATCH_SIZE = 5;
 const RUBIKA_MEDIA_HYDRATION_BACKOFF_MS = 5 * 60 * 1000;
 const RUBIKA_MEDIA_HYDRATION_MAX_FAILURES = 2;
@@ -173,19 +171,7 @@ const buildReadStateKey = (section: string, sourceType: string, sourceId: string
 
 const normalizeReadStateSection = (section: string) => {
   const normalized = String(section || '').trim();
-  if (normalized === 'sms_messages') return 'sms';
-  if (normalized === 'bot_direct_messages') return 'bot_messages';
   return normalized;
-};
-
-const readSeenSet = (key: string) => {
-  if (typeof window === 'undefined') return new Set<string>();
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
-    return new Set<string>((Array.isArray(parsed) ? parsed : []).map((item) => String(item || '').trim()).filter(Boolean));
-  } catch {
-    return new Set<string>();
-  }
 };
 
 const formatTime = (value: any) => safeJalaliFormat(value, 'MM/DD HH:mm') || '';
@@ -492,13 +478,15 @@ const createNotificationReadChecker = (readStateKeys: Set<string>): Notification
   if (!normalizedSourceId) return true;
   const normalizedSection = normalizeReadStateSection(section);
   if (readStateKeys.has(buildReadStateKey(normalizedSection, sourceType, normalizedSourceId))) return true;
+  if (
+    section === 'sms_messages'
+    && readStateKeys.has(buildReadStateKey('sms', sourceType, normalizedSourceId))
+  ) return true;
+  if (
+    section === 'bot_direct_messages'
+    && readStateKeys.has(buildReadStateKey('bot_messages', sourceType, normalizedSourceId))
+  ) return true;
   if (fallbackRead) return true;
-  if (section === 'sms_messages' && sourceType === 'inbound_sms') {
-    return readSeenSet(SEEN_SMS_MESSAGES_STORAGE_KEY).has(normalizedSourceId);
-  }
-  if (section === 'voip_calls' && sourceType === 'voip_call') {
-    return readSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY).has(normalizedSourceId);
-  }
   return false;
 };
 
@@ -509,8 +497,8 @@ const fetchNotificationReadStateKeys = async (profile: LiveProfile) => {
     .select('section,source_type,source_id')
     .eq('org_id', profile.orgId)
     .eq('user_id', profile.id)
-    .in('section', ['sms', 'voip_calls', 'bot_messages', 'bot_direct_messages'])
-    .limit(1200);
+    .in('section', ['sms', 'sms_messages', 'voip_calls', 'bot_messages', 'bot_direct_messages'])
+    .limit(3000);
   if (error) {
     if (isMissingTableLikeError(error)) return new Set<string>();
     throw error;
@@ -845,7 +833,7 @@ const buildSmsLiveModels = (smsMessages: any[], recordTitleMap: Record<string, s
   const smsThreads = buildSmsThreads({
     messages: smsMessages,
     recordTitleMap,
-    seenSmsMessageIds: readSeenSet(SEEN_SMS_MESSAGES_STORAGE_KEY),
+    seenSmsMessageIds: new Set<string>(),
     isNotificationRead,
   });
 
@@ -918,7 +906,7 @@ const buildVoipLiveModels = (voipCalls: any[], recordTitleMap: Record<string, st
   const voipThreads = buildVoipThreads({
     calls: voipCalls,
     recordTitleMap,
-    seenVoipCallIds: readSeenSet(SEEN_VOIP_CALLS_STORAGE_KEY),
+    seenVoipCallIds: new Set<string>(),
     isNotificationRead,
   });
 

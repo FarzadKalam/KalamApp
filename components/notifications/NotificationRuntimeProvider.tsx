@@ -107,6 +107,7 @@ const wait = (delayMs: number) => new Promise<void>((resolve) => {
 const EMPTY_REVISIONS: RuntimeRevisions = {
   notes: 0,
   bot_messages: 0,
+  bot_group_messages: 0,
   bot_direct_messages: 0,
   sms_messages: 0,
   voip_calls: 0,
@@ -115,18 +116,14 @@ const EMPTY_REVISIONS: RuntimeRevisions = {
 };
 
 const toReadStateSection = (section: RuntimeSection) => (
-  section === 'sms_messages'
-    ? 'sms'
-    : section === 'bot_direct_messages'
-      ? 'bot_messages'
-      : section
+  section
 );
 
 const toSummarySection = (section: RuntimeSection): NotificationUnreadSection | null => {
-  if (section === 'bot_direct_messages') return 'bot_messages';
   if (
     section === 'notes'
     || section === 'bot_messages'
+    || section === 'bot_direct_messages'
     || section === 'sms_messages'
     || section === 'voip_calls'
     || section === 'tasks'
@@ -409,7 +406,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
             .select('source_id')
             .eq('org_id', identity.orgId)
             .eq('user_id', identity.userId)
-            .eq('section', 'bot_messages')
+            .in('section', ['bot_direct_messages', 'bot_messages'])
             .eq('source_type', 'counterparty_bot_direct_message')
             .in('source_id', messageIds)
         : Promise.resolve({ data: [], error: null }),
@@ -513,16 +510,24 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     const request = (async () => {
       do {
         summaryRefreshQueuedRef.current = false;
-        const { data, error } = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: null });
-        if (error) {
-          if (!isMissingRpcError(error) && !isAbortRequestError(error)) {
-            console.warn('Could not refresh central notification summary', error);
+        let response = await supabase.rpc('get_notification_unread_summary_v2', { p_variant: null });
+        let usedFallbackSummary = false;
+        if (isMissingRpcError(response.error)) {
+          response = await supabase.rpc('get_notification_unread_summary_v1', { p_variant: null });
+          usedFallbackSummary = true;
+        }
+        if (response.error) {
+          if (!isMissingRpcError(response.error) && !isAbortRequestError(response.error)) {
+            console.warn('Could not refresh central notification summary', response.error);
           }
           continue;
         }
-        const nextSummary = normalizeNotificationUnreadSummary(data);
+        const nextSummary = normalizeNotificationUnreadSummary(response.data);
         const directOverlayData = await loadBotDirectOverlayData();
-        nextSummary.bot_messages += directOverlayData.unreadCount;
+        if (usedFallbackSummary) {
+          nextSummary.bot_direct_messages = directOverlayData.unreadCount;
+          nextSummary.bot_messages += directOverlayData.unreadCount;
+        }
         setSummary((current) => (
           areNotificationUnreadSummariesEqual(current, nextSummary) ? current : nextSummary
         ));
@@ -558,12 +563,22 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return result;
     }, null);
     if (!latest) return false;
-    const { data, error } = await supabase.rpc('mark_communication_read', {
+    let response = await supabase.rpc('mark_messaging_read_v2', {
       p_channel: channel,
       p_conversation_key: normalizedConversationKey,
       p_read_through_at: latest.createdAt,
       p_read_through_id: latest.id,
+      p_entries: [],
     });
+    if (isMissingRpcError(response.error)) {
+      response = await supabase.rpc('mark_communication_read', {
+        p_channel: channel,
+        p_conversation_key: normalizedConversationKey,
+        p_read_through_at: latest.createdAt,
+        p_read_through_id: latest.id,
+      });
+    }
+    const { data, error } = response;
     if (error) {
       if (!isMissingRpcError(error)) {
         console.warn('Could not persist communication read cursor', error);
@@ -597,11 +612,38 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     setSummary((current) => {
       const next = { ...current };
       deduped.forEach((row) => {
-        const summarySection = toSummarySection(row.section === 'sms' ? 'sms_messages' : row.section);
-        if (summarySection) next[summarySection] = Math.max(0, Number(next[summarySection] || 0) - 1);
+        const summarySection = toSummarySection(row.section);
+        if (!summarySection) return;
+        next[summarySection] = Math.max(0, Number(next[summarySection] || 0) - 1);
+        if (summarySection === 'bot_direct_messages') {
+          next.bot_messages = Math.max(0, Number(next.bot_messages || 0) - 1);
+        } else if (summarySection === 'bot_messages') {
+          next.bot_group_messages = Math.max(0, Number(next.bot_group_messages || 0) - 1);
+        }
       });
       return next;
     });
+    const rpcEntries = Array.from(deduped.values()).map((row) => ({
+      section: row.section,
+      source_type: row.source_type,
+      source_id: row.source_id,
+    }));
+    const rpcResult = await supabase.rpc('mark_messaging_read_v2', {
+      p_channel: null,
+      p_conversation_key: null,
+      p_read_through_at: null,
+      p_read_through_id: null,
+      p_entries: rpcEntries,
+    });
+    if (!rpcResult.error) {
+      void refreshSummary();
+      return;
+    }
+    if (!isMissingRpcError(rpcResult.error)) {
+      console.warn('Could not persist notification read states through central RPC', rpcResult.error);
+      await refreshSummary();
+      return;
+    }
     const { error } = await supabase
       .from('notification_read_states')
       .upsert(Array.from(deduped.values()), { onConflict: 'org_id,user_id,source_type,source_id' });
@@ -660,12 +702,22 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
     row: OverlayFeedRow,
   ) => {
     if (!row.created_at) return;
-    const { error } = await supabase.rpc('mark_communication_read', {
+    let response = await supabase.rpc('mark_messaging_read_v2', {
       p_channel: channel,
       p_conversation_key: conversationKey,
       p_read_through_at: row.created_at,
       p_read_through_id: row.source_id,
+      p_entries: [],
     });
+    if (isMissingRpcError(response.error)) {
+      response = await supabase.rpc('mark_communication_read', {
+        p_channel: channel,
+        p_conversation_key: conversationKey,
+        p_read_through_at: row.created_at,
+        p_read_through_id: row.source_id,
+      });
+    }
+    const { error } = response;
     if (error && !isMissingRpcError(error)) {
       console.warn('Could not mark quick-replied notification as read', error);
     }

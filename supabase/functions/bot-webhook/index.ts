@@ -16,7 +16,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-06-17-ai-auto-reply';
+const BOT_WEBHOOK_BUILD = 'bot-webhook-2026-07-10-rubika-media-import-v2';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 
@@ -1395,6 +1395,63 @@ const uploadBinaryToStorage = async ({
   return buildPublicObjectUrl(publicBaseUrl, bucket, objectPath);
 };
 
+const inferMimeTypeFromFileName = (fileName: string) => {
+  const lower = String(fileName || '').trim().toLowerCase();
+  if (!lower) return '';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.bmp')) return 'image/bmp';
+  if (lower.endsWith('.svg')) return 'image/svg+xml';
+  if (lower.endsWith('.mp4') || lower.endsWith('.m4v')) return 'video/mp4';
+  if (lower.endsWith('.mov')) return 'video/quicktime';
+  if (lower.endsWith('.webm')) return 'video/webm';
+  if (lower.endsWith('.3gp')) return 'video/3gpp';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.ogg') || lower.endsWith('.oga') || lower.endsWith('.opus')) return 'audio/ogg';
+  if (lower.endsWith('.wav')) return 'audio/wav';
+  if (lower.endsWith('.m4a') || lower.endsWith('.aac')) return 'audio/aac';
+  if (lower.endsWith('.flac')) return 'audio/flac';
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.zip')) return 'application/zip';
+  if (lower.endsWith('.rar')) return 'application/vnd.rar';
+  if (lower.endsWith('.7z')) return 'application/x-7z-compressed';
+  if (lower.endsWith('.doc')) return 'application/msword';
+  if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (lower.endsWith('.xls')) return 'application/vnd.ms-excel';
+  if (lower.endsWith('.xlsx')) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (lower.endsWith('.ppt')) return 'application/vnd.ms-powerpoint';
+  if (lower.endsWith('.pptx')) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  return '';
+};
+
+const detectMimeTypeFromBytes = (bytes: Uint8Array) => {
+  if (!bytes?.length) return '';
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes.length >= 6) {
+    const gif = Array.from(bytes.slice(0, 6)).map((item) => String.fromCharCode(item)).join('');
+    if (gif === 'GIF87a' || gif === 'GIF89a') return 'image/gif';
+  }
+  if (bytes.length >= 12) {
+    const riff = Array.from(bytes.slice(0, 4)).map((item) => String.fromCharCode(item)).join('');
+    const webp = Array.from(bytes.slice(8, 12)).map((item) => String.fromCharCode(item)).join('');
+    if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp';
+    const ftyp = Array.from(bytes.slice(4, 8)).map((item) => String.fromCharCode(item)).join('');
+    if (ftyp === 'ftyp') return 'video/mp4';
+  }
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'application/pdf';
+  if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) return 'application/zip';
+  if (bytes.length >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) return 'audio/mpeg';
+  if (bytes.length >= 4) {
+    const ogg = Array.from(bytes.slice(0, 4)).map((item) => String.fromCharCode(item)).join('');
+    if (ogg === 'OggS') return 'audio/ogg';
+  }
+  return '';
+};
+
 const shouldTreatAsBinaryFile = (fileName?: string | null, messageType?: string | null) => {
   const ext = String(fileName || '').trim().toLowerCase().split('.').pop() || '';
   if (messageType === 'image') return true;
@@ -1415,6 +1472,17 @@ const looksLikeImageBytes = (bytes: Uint8Array) => {
     && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
   const isBmp = bytes[0] === 0x42 && bytes[1] === 0x4d;
   return isJpg || isPng || isGif || isWebp || isBmp;
+};
+
+const looksLikeExpectedMediaBytes = (bytes: Uint8Array, messageType?: string | null, contentType?: string | null, fileName?: string | null) => {
+  const detectedMime = detectMimeTypeFromBytes(bytes);
+  const effectiveMime = String(detectedMime || contentType || inferMimeTypeFromFileName(String(fileName || '')) || '').toLowerCase();
+  const normalizedType = String(messageType || '').trim().toLowerCase();
+  if (!normalizedType || normalizedType === 'file') return true;
+  if (normalizedType === 'image') return effectiveMime.startsWith('image/') || looksLikeImageBytes(bytes);
+  if (normalizedType === 'video') return effectiveMime.startsWith('video/');
+  if (normalizedType === 'audio' || normalizedType === 'voice') return effectiveMime.startsWith('audio/') || effectiveMime.startsWith('video/');
+  return true;
 };
 
 const downloadBinaryFromUrl = async (
@@ -1462,11 +1530,11 @@ const downloadBinaryFromUrl = async (
         continue;
       }
 
-      if (options?.messageType === 'image' && !lowerType.startsWith('image/') && !looksLikeImageBytes(bytes)) {
+      if (!looksLikeExpectedMediaBytes(bytes, options?.messageType || null, lowerType, options?.fileName || null)) {
         continue;
       }
 
-      return { bytes, contentType };
+      return { bytes, contentType: detectMimeTypeFromBytes(bytes) || contentType };
     } catch {
       // try next header profile
     }
@@ -1579,12 +1647,49 @@ const resolveAndStoreInboundMedia = async ({
     fileId: string | null;
   };
 }) => {
+  const buildMediaImportFailure = ({
+    fileUrl,
+    fileName,
+    mimeType,
+    errorCode,
+    message,
+    retryable = true,
+    diagnostic = null,
+  }: {
+    fileUrl?: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+    errorCode: string;
+    message: string;
+    retryable?: boolean;
+    diagnostic?: Record<string, any> | null;
+  }) => ({
+    fileUrl: fileUrl || null,
+    fileName: fileName ?? mediaInfo.fileName,
+    mimeType: mimeType || mediaInfo.mimeType || null,
+    stored: false,
+    mediaImportStatus: 'failed',
+    mediaImportErrorCode: errorCode,
+    mediaImportErrorMessage: message,
+    mediaImportRetryable: retryable,
+    mediaDownloadDiagnostic: diagnostic,
+    storagePath: null,
+    storageBucket: null,
+  });
+
   if (mediaInfo.messageType === 'text') {
     return {
       fileUrl: null as string | null,
       fileName: mediaInfo.fileName,
       mimeType: mediaInfo.mimeType,
       stored: false,
+      mediaImportStatus: null,
+      mediaImportErrorCode: null,
+      mediaImportErrorMessage: null,
+      mediaImportRetryable: null,
+      mediaDownloadDiagnostic: null,
+      storagePath: null,
+      storageBucket: null,
     };
   }
 
@@ -1621,6 +1726,21 @@ const resolveAndStoreInboundMedia = async ({
       if (byFileId.bytes?.length) bytes = byFileId.bytes;
       if (byFileId.contentType) resolvedMime = String(byFileId.contentType || '').trim() || resolvedMime;
     }
+  }
+
+  if (channel === 'rubika' && normalizedFileId && resolvedUrls.length === 0) {
+    return buildMediaImportFailure({
+      fileUrl: null,
+      fileName: mediaInfo.fileName,
+      mimeType: resolvedMime,
+      errorCode: 'rubika_file_resolve_failed',
+      message: 'Rubika getFile لینک دانلود برنگرداند.',
+      retryable: true,
+      diagnostic: {
+        file_id: normalizedFileId,
+        provider_method: 'getFile',
+      },
+    });
   }
 
   if (!bytes && resolvedUrls.length > 0) {
@@ -1671,12 +1791,19 @@ const resolveAndStoreInboundMedia = async ({
     const safeFallbackUrl = channel === 'rubika' && isRubikaHostedUrl(resolvedUrl)
       ? null
       : (resolvedUrl || null);
-    return {
+    return buildMediaImportFailure({
       fileUrl: safeFallbackUrl,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime || mediaInfo.mimeType || null,
-      stored: false,
-    };
+      errorCode: channel === 'rubika' ? 'rubika_file_download_failed' : 'media_download_failed',
+      message: 'دانلود فایل ورودی ناموفق بود.',
+      retryable: true,
+      diagnostic: {
+        file_id: normalizedFileId || null,
+        candidate_count: resolvedUrls.length,
+        has_fallback_url: Boolean(safeFallbackUrl),
+      },
+    });
   }
 
   const objectPath = buildStorageObjectPath({
@@ -1687,22 +1814,43 @@ const resolveAndStoreInboundMedia = async ({
   });
   const publicBaseUrl = pickPublicApiBaseUrl(requestUrl, requestHeaders, integrationSettings || {});
   if (!publicBaseUrl) {
-    return {
+    return buildMediaImportFailure({
       fileUrl: null as string | null,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime || mediaInfo.mimeType || null,
-      stored: false,
-    };
+      errorCode: 'public_api_base_url_missing',
+      message: 'آدرس عمومی API برای ساخت لینک پایدار فایل در دسترس نیست.',
+      retryable: false,
+      diagnostic: {
+        file_id: normalizedFileId || null,
+      },
+    });
   }
-  const publicUrl = await uploadBinaryToStorage({
-    supabaseUrl,
-    serviceRoleKey,
-    publicBaseUrl,
-    bucket: DEFAULT_FILE_STORAGE_BUCKET,
-    objectPath,
-    bytes,
-    contentType: resolvedMime || mediaInfo.mimeType || 'application/octet-stream',
-  });
+  let publicUrl = '';
+  try {
+    publicUrl = await uploadBinaryToStorage({
+      supabaseUrl,
+      serviceRoleKey,
+      publicBaseUrl,
+      bucket: DEFAULT_FILE_STORAGE_BUCKET,
+      objectPath,
+      bytes,
+      contentType: resolvedMime || mediaInfo.mimeType || 'application/octet-stream',
+    });
+  } catch (error: any) {
+    return buildMediaImportFailure({
+      fileUrl: null,
+      fileName: mediaInfo.fileName,
+      mimeType: resolvedMime || mediaInfo.mimeType || null,
+      errorCode: 'storage_upload_failed',
+      message: String(error?.message || error || 'آپلود فایل در Storage ناموفق بود.'),
+      retryable: true,
+      diagnostic: {
+        file_id: normalizedFileId || null,
+        storage_path: objectPath,
+      },
+    });
+  }
 
   return {
     fileUrl: publicUrl,
@@ -1711,6 +1859,11 @@ const resolveAndStoreInboundMedia = async ({
     stored: true,
     storagePath: objectPath,
     storageBucket: DEFAULT_FILE_STORAGE_BUCKET,
+    mediaImportStatus: 'succeeded',
+    mediaImportErrorCode: null,
+    mediaImportErrorMessage: null,
+    mediaImportRetryable: false,
+    mediaDownloadDiagnostic: null,
   };
 };
 
@@ -2472,6 +2625,13 @@ const normalizeBotPayloadAttachment = (value: any) => {
     media_file_id: fileId || null,
     provider_message_id: String(value?.provider_message_id || value?.providerMessageId || '').trim() || null,
     media_group_id: String(value?.media_group_id || value?.mediaGroupId || '').trim() || null,
+    media_import_status: String(value?.media_import_status || value?.mediaImportStatus || '').trim() || null,
+    media_import_error_code: String(value?.media_import_error_code || value?.mediaImportErrorCode || '').trim() || null,
+    media_import_error_message: String(value?.media_import_error_message || value?.mediaImportErrorMessage || '').trim() || null,
+    media_import_retryable: typeof value?.media_import_retryable === 'boolean'
+      ? value.media_import_retryable
+      : (typeof value?.mediaImportRetryable === 'boolean' ? value.mediaImportRetryable : null),
+    media_storage_path: String(value?.media_storage_path || value?.mediaStoragePath || '').trim() || null,
   };
 };
 
@@ -2501,6 +2661,11 @@ const mergeBotPayloadAttachments = (currentItems: any[], incomingItems: any[]) =
       media_file_id: normalized.media_file_id || existing.media_file_id || null,
       provider_message_id: normalized.provider_message_id || existing.provider_message_id || null,
       media_group_id: normalized.media_group_id || existing.media_group_id || null,
+      media_import_status: normalized.media_import_status || existing.media_import_status || null,
+      media_import_error_code: normalized.media_import_error_code || existing.media_import_error_code || null,
+      media_import_error_message: normalized.media_import_error_message || existing.media_import_error_message || null,
+      media_import_retryable: typeof normalized.media_import_retryable === 'boolean' ? normalized.media_import_retryable : existing.media_import_retryable ?? null,
+      media_storage_path: normalized.media_storage_path || existing.media_storage_path || null,
     });
   });
   return Array.from(byKey.values());
@@ -3230,11 +3395,18 @@ Deno.serve(async (req) => {
             media_file_id: mediaInfo.fileId,
             provider_message_id: providerMessageIds[0] || null,
             media_group_id: mediaEnvelope.mediaGroupId || null,
+            media_import_status: mediaStored?.mediaImportStatus || (mediaStored?.stored ? 'succeeded' : null),
+            media_import_error_code: mediaStored?.mediaImportErrorCode || null,
+            media_import_error_message: mediaStored?.mediaImportErrorMessage || null,
+            media_import_retryable: typeof mediaStored?.mediaImportRetryable === 'boolean' ? mediaStored.mediaImportRetryable : null,
+            media_storage_path: mediaStored?.storagePath || null,
           });
         })
         .filter(Boolean);
 
       const primaryStoredEntry = resolvedMediaEntries.find((entry) => Boolean(entry?.mediaStored?.stored)) || null;
+      const primaryFailedEntry = resolvedMediaEntries.find((entry) => entry?.mediaStored?.mediaImportStatus === 'failed') || null;
+      const primaryMediaStateEntry = primaryStoredEntry || primaryFailedEntry || resolvedMediaEntries[0] || null;
       const primaryAttachment = attachmentEntries[0] || null;
       const mergeTarget = mediaGroupTarget || existingMessage || null;
       const rawPayload = payload && typeof payload === 'object' ? payload : {};
@@ -3290,6 +3462,13 @@ Deno.serve(async (req) => {
             media_stored: Boolean((existingPayload as any)?.media_stored) || Boolean(primaryStoredEntry?.mediaStored?.stored),
             media_storage_bucket: primaryStoredEntry?.mediaStored?.storageBucket || (existingPayload as any)?.media_storage_bucket || null,
             media_storage_path: primaryStoredEntry?.mediaStored?.storagePath || (existingPayload as any)?.media_storage_path || null,
+            media_import_status: primaryMediaStateEntry?.mediaStored?.mediaImportStatus || (primaryStoredEntry ? 'succeeded' : ((existingPayload as any)?.media_import_status || null)),
+            media_import_error_code: primaryMediaStateEntry?.mediaStored?.mediaImportErrorCode || null,
+            media_import_error_message: primaryMediaStateEntry?.mediaStored?.mediaImportErrorMessage || null,
+            media_import_retryable: typeof primaryMediaStateEntry?.mediaStored?.mediaImportRetryable === 'boolean'
+              ? primaryMediaStateEntry.mediaStored.mediaImportRetryable
+              : null,
+            media_download_diagnostic: primaryMediaStateEntry?.mediaStored?.mediaDownloadDiagnostic || null,
             attachments: mergedAttachments,
             provider_message_id: String((existingPayload as any)?.provider_message_id || messageIdentity.providerMessageId || '').trim() || null,
             provider_message_ids: mergedProviderMessageIds,
@@ -3327,6 +3506,13 @@ Deno.serve(async (req) => {
             media_stored: Boolean(primaryStoredEntry?.mediaStored?.stored),
             media_storage_bucket: primaryStoredEntry?.mediaStored?.storageBucket || null,
             media_storage_path: primaryStoredEntry?.mediaStored?.storagePath || null,
+            media_import_status: primaryMediaStateEntry?.mediaStored?.mediaImportStatus || (primaryStoredEntry ? 'succeeded' : null),
+            media_import_error_code: primaryMediaStateEntry?.mediaStored?.mediaImportErrorCode || null,
+            media_import_error_message: primaryMediaStateEntry?.mediaStored?.mediaImportErrorMessage || null,
+            media_import_retryable: typeof primaryMediaStateEntry?.mediaStored?.mediaImportRetryable === 'boolean'
+              ? primaryMediaStateEntry.mediaStored.mediaImportRetryable
+              : null,
+            media_download_diagnostic: primaryMediaStateEntry?.mediaStored?.mediaDownloadDiagnostic || null,
             attachments: attachmentEntries,
             provider_message_id: messageIdentity.providerMessageId || null,
             provider_message_ids: providerMessageIds,
