@@ -1482,7 +1482,47 @@ async function auditSmsBatch(url: string, key: string, payload: {
   }
 }
 
-async function sendSmsViaProvider(settings: any, to: string[], text: string): Promise<string[]> {
+async function sendSmsViaGatewayFunction(
+  url: string,
+  key: string,
+  settings: any,
+  recipients: string[],
+  text: string
+): Promise<string[]> {
+  const functionUrl = `${url.replace(/\/+$/, '')}/functions/v1/send-sms`;
+  const response = await fetch(functionUrl, {
+    method: 'POST',
+    headers: {
+      ...dbHeaders(key),
+      'x-kalam-internal': 'workflow-interval-runner',
+    },
+    body: JSON.stringify({
+      action: 'send',
+      to: recipients,
+      text,
+      overrideSettings: settings,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const raw = await response.text();
+  let parsed: any = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!response.ok || parsed?.success === false) {
+    throw new Error(String(parsed?.message || raw || `پاسخ پیامک خطا: ${response.status}`));
+  }
+  const accepted = new Set(
+    (Array.isArray(parsed?.provider_results) ? parsed.provider_results : [])
+      .map((item: any) => normalizePhone(String(item?.recipient || '')))
+      .filter(isValidIranMobile)
+  );
+  return accepted.size > 0 ? recipients.filter((recipient) => accepted.has(recipient)) : recipients;
+}
+
+async function sendSmsViaProvider(settings: any, to: string[], text: string, url?: string, key?: string): Promise<string[]> {
   const username = String(settings.username || '').trim();
   const password = String(settings.password || settings.api_key || '').trim();
   const apiKey = String(settings.api_key || '').trim();
@@ -1490,10 +1530,27 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string): Pr
   if (!senderNumber || (!username && !apiKey)) throw new Error('تنظیمات پیامک ناقص است');
   if (!text.trim()) throw new Error('متن پیامک خالی است');
 
+  const recipients = Array.from(new Set(
+    (to || [])
+      .map((recipient) => normalizePhone(recipient))
+      .filter((phone) => {
+        if (isValidIranMobile(phone)) return true;
+        if (phone) console.warn('[workflow-runner] Invalid phone:', phone);
+        return false;
+      })
+  ));
+  if (recipients.length === 0) return [];
+
+  if (url && key) {
+    try {
+      return await sendSmsViaGatewayFunction(url, key, settings, recipients, text);
+    } catch (gatewayError: any) {
+      console.warn('[workflow-runner] send-sms gateway failed, falling back to direct SOAP:', String(gatewayError?.message || gatewayError));
+    }
+  }
+
   const sentRecipients: string[] = [];
-  for (const recipient of to) {
-    const phone = normalizePhone(recipient);
-    if (!isValidIranMobile(phone)) { console.warn('[workflow-runner] Invalid phone:', phone); continue; }
+  for (const phone of recipients) {
     const form = new URLSearchParams({
       UserName: username, PassWord: password || apiKey,
       To: phone, From: senderNumber, Text: text, IsFlash: 'false',
@@ -2533,7 +2590,7 @@ async function executeAction(
       return actionResult(action, 'skipped', 'تنظیمات پیامک فعال نیست.', { recipient_count: allRecipients.length });
     }
     try {
-      const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text);
+      const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text, url, key);
       await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, sentRecipients.length > 0 ? 'success' : 'skipped', sentRecipients.length > 0 ? undefined : 'هیچ شماره معتبری ارسال نشد.', { recipient_count: sentRecipients.length });
     } catch (e: any) {
@@ -2580,7 +2637,7 @@ async function executeAction(
         const smsSettings = await getOrgSmsSettings(url, key, orgId);
         if (smsSettings) {
           try {
-            const sentRecipients = await sendSmsViaProvider(smsSettings, recipients, smsText);
+            const sentRecipients = await sendSmsViaProvider(smsSettings, recipients, smsText, url, key);
             smsRecipientCount = sentRecipients.length;
             await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text: smsText, status: 'provider_accepted', metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
           } catch (e: any) {

@@ -178,6 +178,21 @@ const buildClientContextKey = (context: AssistantContext) => {
   return 'page:unknown';
 };
 
+const PARTIAL_STREAM_NOTICE = 'ادامه پاسخ کامل دریافت نشد، اما متن دریافت‌شده حفظ شد. برای ادامه می‌توانید پیام «ادامه بده» را ارسال کنید.';
+
+const isRecoverableStreamError = (payload: any) => {
+  const finishReason = String(payload?.finishReason || payload?.finish_reason || '').trim();
+  return payload?.incomplete === true || finishReason === 'length' || finishReason === 'stream_interrupted';
+};
+
+const buildRecoverableStreamContent = (currentContent: any, payload: any, fallbackText: string) => {
+  const currentText = normalizeAiMessageText(currentContent);
+  const partialText = normalizeAiMessageText(payload?.partialContent || payload?.partial_content || payload?.answer);
+  const baseText = currentText || partialText;
+  if (!baseText) return fallbackText || PARTIAL_STREAM_NOTICE;
+  return baseText.includes(PARTIAL_STREAM_NOTICE) ? baseText : `${baseText}\n\n${PARTIAL_STREAM_NOTICE}`;
+};
+
 const buildProcessGuidePrompt = (context: AssistantContext) => {
   const processLabel = Array.isArray(context.availableProcesses)
     ? context.availableProcesses.find((item) => String(item?.id || '') === String(context.selectedProcessId || ''))?.label
@@ -1467,19 +1482,20 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           onError: (payload) => {
             serverError = payload;
             const errorText = toFaErrorMessage(payload, String(payload?.message || 'ارتباط با دستیار ناموفق بود.'));
+            const recoverableError = isRecoverableStreamError(payload);
             if (payload?.threadId) setThreadId(String(payload.threadId));
             setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id
               ? {
                 ...item,
                 id: payload?.messageId || item.id,
-                content: errorText,
+                content: recoverableError ? buildRecoverableStreamContent(item.content, payload, errorText) : errorText,
                 metadata: {
                   ...(item.metadata || {}),
                   pending_status: false,
                   streaming: false,
-                  failed: true,
-                  incomplete: payload?.incomplete === true,
-                  finish_reason: payload?.finishReason || null,
+                  failed: !recoverableError,
+                  incomplete: recoverableError || payload?.incomplete === true,
+                  finish_reason: payload?.finishReason || payload?.finish_reason || null,
                   source_user_text: text,
                 },
               }
@@ -1487,7 +1503,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           },
         });
         if (serverError) {
-          message?.error?.(toFaErrorMessage(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
+          if (isRecoverableStreamError(serverError)) {
+            message?.warning?.(PARTIAL_STREAM_NOTICE);
+          } else {
+            message?.error?.(toFaErrorMessage(serverError, String(serverError?.message || 'ارتباط با دستیار ناموفق بود.')));
+          }
         }
       };
 

@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'payment-gateway-2026-06-27-online-payment-workflows';
+const FUNCTION_BUILD = 'payment-gateway-2026-07-09-ai-credit-topup';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -70,6 +70,23 @@ const rest = async (urlBase: string, key: string, path: string, init: RequestIni
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!res.ok) throw new Error(typeof data?.message === 'string' ? data.message : text || `REST ${res.status}`);
   return data;
+};
+
+const getAuthenticatedProfile = async (req: Request, urlBase: string, key: string) => {
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+  const token = String(authHeader).replace(/^Bearer\s+/i, '').trim();
+  if (!token) throw new Error('نشست کاربر معتبر نیست.');
+  const userRes = await fetch(`${trimSlashEnd(urlBase)}/auth/v1/user`, {
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const user = await userRes.json().catch(() => null);
+  if (!userRes.ok || !user?.id) throw new Error('نشست کاربر معتبر نیست.');
+  const profile = first(await rest(urlBase, key, `profiles?select=id,org_id,role_id,full_name,email,mobile_1&id=eq.${enc(user.id)}&limit=1`));
+  if (!profile?.id || !profile?.org_id) throw new Error('پروفایل سازمانی کاربر پیدا نشد.');
+  return { user, profile };
 };
 
 const rpc = async (urlBase: string, key: string, name: string, body: Record<string, any>) => {
@@ -239,6 +256,157 @@ const buildInvoiceReturnUrl = (tx: any, status: string) => {
   return `${publicOrigin}${publicPath}${suffix}payment=${enc(status)}`;
 };
 
+const buildAiTopupReturnUrl = (tx: any, status: string) => {
+  const origin = trimSlashEnd(String(tx?.metadata?.return_origin || Deno.env.get('APP_ORIGIN') || Deno.env.get('PUBLIC_SITE_URL') || '').trim());
+  const safeOrigin = normalizeSafeReturnOrigin(origin);
+  const base = safeOrigin || '/settings';
+  const path = base.startsWith('http') ? `${base}/settings` : base;
+  const suffix = path.includes('?') ? '&' : '?';
+  return `${path}${suffix}tab=ai&ai_credit=${enc(status)}`;
+};
+
+const buildPaymentReturnUrl = (tx: any, status: string) =>
+  String(tx?.purpose || '') === 'ai_topup'
+    ? buildAiTopupReturnUrl(tx, status)
+    : buildInvoiceReturnUrl(tx, status);
+
+const creditAiWalletFromTransaction = async (urlBase: string, key: string, tx: any) => {
+  if (String(tx?.purpose || '') !== 'ai_topup') return null;
+  if (String(tx?.metadata?.ai_wallet_credited || '') === 'true') return null;
+  const orgId = String(tx?.org_id || '').trim();
+  const amount = Math.max(0, Number(tx?.metadata?.wallet_amount_irt ?? tx?.amount ?? 0));
+  if (!orgId || !Number.isFinite(amount) || amount <= 0) throw new Error('اطلاعات شارژ اعتبار هوش مصنوعی معتبر نیست.');
+  const existingWallet = first(await rest(urlBase, key, `org_ai_wallets?select=*&org_id=eq.${enc(orgId)}&limit=1`).catch(() => []));
+  if (existingWallet?.id) {
+    await rest(urlBase, key, `org_ai_wallets?id=eq.${enc(existingWallet.id)}&org_id=eq.${enc(orgId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        balance_irt: Number(existingWallet.balance_irt || 0) + amount,
+        status: 'active',
+        updated_at: new Date().toISOString(),
+        metadata: {
+          ...(existingWallet.metadata || {}),
+          last_topup_transaction_id: tx.id,
+          last_topup_amount_irt: amount,
+          last_topup_at: new Date().toISOString(),
+        },
+      }),
+    });
+  } else {
+    await rest(urlBase, key, 'org_ai_wallets', {
+      method: 'POST',
+      body: JSON.stringify([{
+        org_id: orgId,
+        balance_irt: amount,
+        included_quota_irt: 0,
+        reserved_irt: 0,
+        status: 'active',
+        metadata: {
+          created_by_payment: true,
+          last_topup_transaction_id: tx.id,
+          last_topup_amount_irt: amount,
+          last_topup_at: new Date().toISOString(),
+        },
+      }]),
+    });
+  }
+  await rest(urlBase, key, 'org_ai_credit_grants', {
+    method: 'POST',
+    body: JSON.stringify([{
+      org_id: orgId,
+      amount_irt: amount,
+      reason: 'شارژ آنلاین اعتبار هوش مصنوعی',
+      granted_by: tx?.created_by || null,
+      metadata: {
+        source: 'central_payment_gateway',
+        payment_transaction_id: tx.id,
+        authority: tx.authority || null,
+        ref_id: tx.ref_id || null,
+      },
+    }]),
+  }).catch(() => null);
+  await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      metadata: {
+        ...(tx.metadata || {}),
+        ai_wallet_credited: 'true',
+        ai_wallet_credited_at: new Date().toISOString(),
+        wallet_amount_irt: amount,
+      },
+    }),
+  }).catch(() => null);
+  return { amount_irt: amount };
+};
+
+const createAiCreditTopup = async (req: Request, urlBase: string, key: string, centralMerchantId: string, body: any) => {
+  const { profile } = await getAuthenticatedProfile(req, urlBase, key);
+  const amountIrt = Math.round(Number(body?.amount_irt ?? body?.amountToman ?? body?.amount ?? 0));
+  if (!Number.isFinite(amountIrt) || amountIrt < 10000) {
+    return json(400, { success: false, message: 'حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان است.' });
+  }
+  if (!centralMerchantId) return json(500, { success: false, message: 'Merchant ID درگاه مرکزی تازه سیستم تنظیم نشده است.' });
+  const mode = String(Deno.env.get('ZARINPAL_MODE') || 'production') === 'sandbox' ? 'sandbox' : 'production';
+  const paymentDomain = trimSlashEnd(String(Deno.env.get('PAYMENT_PUBLIC_URL') || Deno.env.get('PUBLIC_FUNCTIONS_URL') || '').trim());
+  const callbackPath = normalizeCallbackPath(Deno.env.get('PAYMENT_CALLBACK_PATH') || '/payment/callback');
+  if (!paymentDomain) return json(500, { success: false, message: 'دامنه callback درگاه مرکزی تنظیم نشده است.' });
+  const returnOrigin = normalizeSafeReturnOrigin(body?.return_origin);
+  const [tx] = await rest(urlBase, key, 'payment_transactions', {
+    method: 'POST',
+    body: JSON.stringify([{
+      org_id: profile.org_id,
+      created_by: profile.id,
+      gateway_scope: 'system',
+      provider: 'zarinpal',
+      purpose: 'ai_topup',
+      module_id: null,
+      record_id: null,
+      amount: amountIrt,
+      currency: 'IRT',
+      status: 'pending',
+      callback_url: '',
+      description: `شارژ اعتبار هوش مصنوعی ${amountIrt.toLocaleString('fa-IR')} تومان`,
+      metadata: {
+        return_origin: returnOrigin,
+        wallet_amount_irt: amountIrt,
+        mode,
+        source: 'org_ai_settings',
+      },
+    }]),
+  });
+  const callbackUrl = `${paymentDomain}${callbackPath}?tx=${enc(tx.id)}`;
+  try {
+    const zp = await zarinpalRequest(centralMerchantId, mode, {
+      amount: amountIrt,
+      currency: 'IRT',
+      callback_url: callbackUrl,
+      description: tx.description,
+      metadata: { order_id: tx.id, purpose: 'ai_topup' },
+    });
+    const data = zp?.data || {};
+    const authority = String(data?.authority || '').trim();
+    if (Number(data?.code) !== 100 || !authority) throw new Error(zp?.errors?.message || 'درگاه مرکزی درخواست شارژ را نپذیرفت.');
+    const paymentUrl = `${zarinpalBase(mode)}/pg/StartPay/${authority}`;
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        status: 'redirected',
+        authority,
+        callback_url: callbackUrl,
+        start_url: paymentUrl,
+        request_payload: zp,
+      }),
+    });
+    return json(200, { success: true, payment_url: paymentUrl, transaction_id: tx.id });
+  } catch (err: any) {
+    await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'failed', callback_url: callbackUrl, error_message: String(err?.message || err) }),
+    }).catch(() => null);
+    throw err;
+  }
+};
+
 const createInvoicePayment = async (urlBase: string, key: string, centralMerchantId: string, body: any) => {
   const code = String(body?.system_code || body?.code || '').trim();
   const module = normalizeModule(body?.module);
@@ -364,10 +532,10 @@ const handleCallback = async (urlBase: string, key: string, merchantId: string, 
   if (!tx && authority) tx = first(await rest(urlBase, key, `payment_transactions?select=*&provider=eq.zarinpal&authority=eq.${enc(authority)}&limit=1`));
   if (!tx) return redirectHtml('/tazesystem', 'تراکنش پیدا نشد.');
 
-  const returnUrl = (nextStatus: string) => buildInvoiceReturnUrl(tx, nextStatus);
+  const returnUrl = (nextStatus: string) => buildPaymentReturnUrl(tx, nextStatus);
   const mode = String(tx?.metadata?.mode || 'production') === 'sandbox' ? 'sandbox' : 'production';
   const gatewayScope = normalizeGatewayScope(tx?.gateway_scope);
-  const gatewaySettings = tx?.org_id ? await getGatewaySettingsForOrg(urlBase, key, tx.org_id) : {};
+  const gatewaySettings = tx?.org_id && String(tx?.purpose || '') !== 'ai_topup' ? await getGatewaySettingsForOrg(urlBase, key, tx.org_id) : {};
   const resolvedMerchantId = resolveGatewayMerchantId(gatewayScope, gatewaySettings, merchantId);
 
   if (status !== 'OK') {
@@ -411,11 +579,15 @@ const handleCallback = async (urlBase: string, key: string, merchantId: string, 
       }),
     });
 
-    const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
-    const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
-      p_transaction_id: tx.id,
-    });
-    await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
+    if (String(tx?.purpose || '') === 'ai_topup') {
+      await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
+    } else {
+      const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
+      const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+        p_transaction_id: tx.id,
+      });
+      await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
+    }
 
     return redirectHtml(returnUrl('success'), 'پرداخت با موفقیت ثبت شد.');
   } catch (err: any) {
@@ -440,10 +612,10 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
   if (!tx && authority) tx = first(await rest(urlBase, key, `payment_transactions?select=*&provider=eq.zarinpal&authority=eq.${enc(authority)}&limit=1`));
   if (!tx) return json(404, { success: false, message: 'تراکنش پیدا نشد.', return_url: '/tazesystem' });
 
-  const returnUrl = buildInvoiceReturnUrl(tx, status === 'OK' ? 'success' : 'failed');
+  const returnUrl = buildPaymentReturnUrl(tx, status === 'OK' ? 'success' : 'failed');
   const mode = String(tx?.metadata?.mode || 'production') === 'sandbox' ? 'sandbox' : 'production';
   const gatewayScope = normalizeGatewayScope(tx?.gateway_scope);
-  const gatewaySettings = tx?.org_id ? await getGatewaySettingsForOrg(urlBase, key, tx.org_id) : {};
+  const gatewaySettings = tx?.org_id && String(tx?.purpose || '') !== 'ai_topup' ? await getGatewaySettingsForOrg(urlBase, key, tx.org_id) : {};
   const resolvedMerchantId = resolveGatewayMerchantId(gatewayScope, gatewaySettings, merchantId);
 
   if (status !== 'OK') {
@@ -451,7 +623,7 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
       method: 'PATCH',
       body: JSON.stringify({ status: 'cancelled', error_message: 'پرداخت توسط کاربر لغو شد یا ناموفق بود.' }),
     }).catch(() => null);
-    return json(200, { success: false, message: 'پرداخت لغو شد یا ناموفق بود.', return_url: buildInvoiceReturnUrl(tx, 'cancelled') });
+    return json(200, { success: false, message: 'پرداخت لغو شد یا ناموفق بود.', return_url: buildPaymentReturnUrl(tx, 'cancelled') });
   }
   if (!resolvedMerchantId) {
     await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
@@ -461,7 +633,7 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
     return json(200, {
       success: false,
       message: 'تنظیمات درگاه کامل نیست.',
-      return_url: buildInvoiceReturnUrl(tx, 'failed'),
+      return_url: buildPaymentReturnUrl(tx, 'failed'),
     });
   }
 
@@ -491,16 +663,20 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
       }),
     });
 
-    const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
-    const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
-      p_transaction_id: tx.id,
-    });
-    await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
+    if (String(tx?.purpose || '') === 'ai_topup') {
+      await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
+    } else {
+      const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
+      const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+        p_transaction_id: tx.id,
+      });
+      await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
+    }
 
     return json(200, {
       success: true,
       message: 'پرداخت با موفقیت ثبت شد.',
-      return_url: buildInvoiceReturnUrl(tx, 'success'),
+      return_url: buildPaymentReturnUrl(tx, 'success'),
     });
   } catch (err: any) {
     await rest(urlBase, key, `payment_transactions?id=eq.${enc(tx.id)}`, {
@@ -513,7 +689,7 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
     return json(200, {
       success: false,
       message: String(err?.message || 'تأیید پرداخت ناموفق بود.'),
-      return_url: buildInvoiceReturnUrl(tx, 'failed'),
+      return_url: buildPaymentReturnUrl(tx, 'failed'),
     });
   }
 };
@@ -535,6 +711,9 @@ Deno.serve(async (req: Request) => {
     const action = String(body?.action || '').trim();
     if (action === 'create_invoice_payment') {
       return await createInvoicePayment(urlBase, serviceKey, merchantId, body);
+    }
+    if (action === 'create_ai_credit_topup') {
+      return await createAiCreditTopup(req, urlBase, serviceKey, merchantId, body);
     }
     if (action === 'verify_callback') {
       return await verifyCallbackPayload(urlBase, serviceKey, merchantId, body);

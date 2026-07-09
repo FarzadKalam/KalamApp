@@ -96,6 +96,7 @@ type LiveProfile = {
   roleId: string | null;
   voipExtension: string | null;
   canViewAllCalls: boolean;
+  canViewAllSms: boolean;
 };
 
 type BotGroupRow = {
@@ -536,6 +537,13 @@ const isRpcSchemaCompatibilityError = (error: any) => {
   );
 };
 
+const resolveCanViewAllSms = (permissions: any) => {
+  const modulePerm = permissions?.sms_delivery_reports || {};
+  if (modulePerm?.view === false) return false;
+  const recordScope = String(modulePerm?.record_scope ?? (modulePerm?.view === false ? 'own' : 'all')).trim().toLowerCase();
+  return recordScope === 'all';
+};
+
 const safeLiveFetch = async <T,>(label: string, loader: () => Promise<T>, fallback: T): Promise<T> => {
   try {
     return await loader();
@@ -673,11 +681,35 @@ const shouldHydrateBotDirectMessageMedia = (
   return true;
 };
 
-const fetchSmsMessages = async () => {
+const fetchSmsMessagesFallback = async (profile: LiveProfile) => {
+  if (!profile.id || !profile.orgId || !profile.canViewAllSms) return [];
+  const { data, error } = await supabase
+    .from('outbound_messages')
+    .select('id,title,module_id,record_id,related_module_id,related_record_id,customer_id,assignee_id,assignee_type,assignee_role_id,direction,provider,provider_message_id,sender,recipient,phone_number_id,phone_match_status,message_text,status,error_message,metadata,sent_at,received_at,created_at,updated_at')
+    .eq('org_id', profile.orgId)
+    .eq('channel_type', 'sms')
+    .order('created_at', { ascending: false })
+    .limit(80);
+  if (error) {
+    if (isMissingTableLikeError(error) || isRpcSchemaCompatibilityError(error)) return [];
+    throw error;
+  }
+  return (data || []).map((row: any) => ({
+    ...row,
+    phone_number: String(row?.direction || '').trim() === 'inbound' ? row?.sender : row?.recipient,
+    message_at: row?.received_at || row?.sent_at || row?.created_at || null,
+  }));
+};
+
+const fetchSmsMessages = async (profile: LiveProfile) => {
   const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
-  if (!rpcResult.error) return rpcResult.data || [];
+  if (!rpcResult.error) {
+    const rows = rpcResult.data || [];
+    if (rows.length > 0 || !profile.canViewAllSms) return rows;
+    return fetchSmsMessagesFallback(profile);
+  }
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
-  return [];
+  return fetchSmsMessagesFallback(profile);
 };
 
 const fetchVoipCalls = async (profile: LiveProfile) => {
@@ -1145,6 +1177,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     roleId: null,
     voipExtension: null,
     canViewAllCalls: false,
+    canViewAllSms: false,
   });
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
@@ -1166,12 +1199,14 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     void fetchSessionBootstrap(supabase).then((snapshot) => {
       if (disposed) return;
       const voipAccess = resolveVoipAccessPermissions(snapshot.permissions || null);
+      const canViewAllSms = resolveCanViewAllSms(snapshot.permissions || null);
       setProfile({
         id: snapshot.profile?.id ? String(snapshot.profile.id) : null,
         orgId: snapshot.orgId ? String(snapshot.orgId) : null,
         roleId: snapshot.roleId ? String(snapshot.roleId) : null,
         voipExtension: snapshot.profile?.voip_extension ? String(snapshot.profile.voip_extension) : null,
         canViewAllCalls: voipAccess.canViewAllCallNotifications,
+        canViewAllSms,
       });
     }).catch(() => {
       if (!disposed) setLoading(false);
@@ -1191,7 +1226,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           setReadStateKeys(nextReadStateKeys || new Set());
           return nextReadStateKeys;
         });
-      const smsPromise = safeLiveFetch('sms', fetchSmsMessages, [] as any[])
+      const smsPromise = safeLiveFetch('sms', () => fetchSmsMessages(profile), [] as any[])
         .then((rows) => {
           setSmsMessages(rows || []);
           return rows || [];

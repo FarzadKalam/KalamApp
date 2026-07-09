@@ -2504,6 +2504,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const id = String(item.sourceRow?.id || '').trim();
       if (!id) return false;
       if (activeConversation.channel === 'internal') {
+        if (item.direction === 'system') return true;
         return item.direction !== 'outbound' && String(item.sourceRow?.author_id || '').trim() !== currentUserId;
       }
       if (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') {

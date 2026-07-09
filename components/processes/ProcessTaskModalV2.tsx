@@ -35,7 +35,7 @@ import AssistantPanel from '../ai/AssistantPanel';
 import AiSparkleIcon from '../ai/AiSparkleIcon';
 import TaskInstructionsModal from '../tasks/TaskInstructionsModal';
 import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistantEvents';
-import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { FieldNature, FieldType, type ModuleField } from '../../types';
 import {
@@ -80,6 +80,10 @@ import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assign
 import { resolveSelectPopupContainer } from '../../utils/popupContainer';
 import { renderProcessV2TemplateValueFromRecord } from '../../utils/processV2AutoAssign';
 import { resolveProcessAssigneeReference } from '../../utils/processAssigneeReference';
+import {
+  formatProcessStageDueLabel,
+  getProcessTaskCustomFieldLabelFa,
+} from '../../utils/processStageCardLabels';
 import TagInput from '../TagInput';
 import type { ProcessV2CardData, ProcessV2Stage, ProcessV2TemplateOption } from './ProcessCardsV2';
 
@@ -439,10 +443,10 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
     ...fallbackValues,
   });
 
-  return fields.map((field: any) => {
+  return fields.map((field: any, index) => {
     const key = String(field?.key || '').trim();
     const type = mapFieldType(field?.type);
-    const label = String(field?.labels?.fa || field?.labelFa || key).trim() || key;
+    const label = getProcessTaskCustomFieldLabelFa(field, index, 'tasks');
     const options = Array.isArray(field?.options)
       ? field.options.map((option: any) => ({
         value: String(option?.value ?? option?.label ?? '').trim(),
@@ -2478,8 +2482,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   }, [isInsideRouter]);
   const formattedStageDueLabel = useMemo(() => {
     const rawDue = String(source?.due_date || source?.planned_due_at || stage?.dueLabel || '').trim();
-    if (!rawDue) return '';
-    return toPersianNumber(safeJalaliFormat(rawDue, rawDue.includes(':') ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD') || rawDue);
+    return formatProcessStageDueLabel(rawDue) || '';
   }, [source?.due_date, source?.planned_due_at, stage?.dueLabel]);
   const reloadTaskFiles = useCallback(async () => {
     if (!taskRecordId) {

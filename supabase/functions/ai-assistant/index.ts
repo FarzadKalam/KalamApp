@@ -21,6 +21,7 @@ type AssistantAction =
   | 'save_ai_settings'
   | 'get_ai_overview'
   | 'get_ai_credit_summary'
+  | 'get_ai_usage_summary'
   | 'test_provider'
   | 'list_models'
   | 'get_credit'
@@ -65,7 +66,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-07-05-01';
+const FUNCTION_BUILD = 'ai-assistant-2026-07-08-02';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
@@ -79,6 +80,9 @@ const IMAGE_STATUS_WARN_MS = 60000;
 const IMAGE_PROMPT_MAX_CHARS = 4000;
 const DEFAULT_AI_MARGIN_PERCENT = 30;
 const DEFAULT_AI_EXCHANGE_RATE_IRT = 115000;
+const DEFAULT_AI_DAILY_TOKEN_LIMIT = 80000;
+const AI_USAGE_WARNING_RATIO = 0.1;
+const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const AI_AUTHOR_NAME = 'دستیار هوشمند';
 const MAX_PAGE_CONTEXT_RECORDS = 10;
 const MAX_RETRIEVED_CONTEXTS = 4;
@@ -961,12 +965,10 @@ const loadTenantAiPlanContext = async (supabaseUrl: string, serviceRoleKey: stri
   const orgSettings = orgRows[0] || null;
   if (!orgSettings) {
     return {
-      available: canViewSaasAdmin(authContext),
+      available: true,
       planCode: null,
-      features: canViewSaasAdmin(authContext)
-        ? Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true]))
-        : {},
-      reason: canViewSaasAdmin(authContext) ? 'saas_admin_internal' : 'missing_saas_org_settings',
+      features: Object.fromEntries(Object.values(AI_CAPABILITY_FEATURE_KEYS).map((key) => [key, true])),
+      reason: canViewSaasAdmin(authContext) ? 'saas_admin_internal' : 'missing_saas_org_settings_fallback',
     };
   }
   const planCode = String(orgSettings?.plan_code || '').trim();
@@ -1191,6 +1193,7 @@ const getCentralProviderConfig = () => {
     fallbackBaseUrls: Array.isArray(envConfig.fallbackBaseUrls) ? envConfig.fallbackBaseUrls : [DEFAULT_AI_FALLBACK_BASE_URL],
     model: String(envConfig.model || DEFAULT_AI_MODEL).trim() || DEFAULT_AI_MODEL,
     apiKey: String(envConfig.apiKey || '').trim(),
+    serviceTier: String(Deno.env.get('AVALAI_SERVICE_TIER') || Deno.env.get('AI_SERVICE_TIER') || 'default').trim() || 'default',
     isActive: true,
     source: 'central',
   };
@@ -1216,6 +1219,7 @@ const resolveProviderConfig = async (
     ...centralConfig,
     model,
     capability,
+    serviceTier: String(settings?.metadata?.service_tier || centralConfig.serviceTier || 'default').trim() || 'default',
     orgAiSettings: settings,
   };
 };
@@ -2702,6 +2706,19 @@ const buildIncompleteAiResponseError = (finishReason: string, partialContent = '
   return error;
 };
 
+const PARTIAL_AI_RESPONSE_NOTICE = 'ادامه پاسخ به سقف خروجی مدل رسید، اما متن دریافت‌شده حفظ شد. برای ادامه، پیام «ادامه بده» را ارسال کنید.';
+
+const getRecoverablePartialAiContent = (error: any) => {
+  if (error?.incomplete !== true) return '';
+  return String(error?.partialContent || error?.partial_content || '').trim();
+};
+
+const buildPartialAiResponseContent = (partialContent: any) => {
+  const partial = String(partialContent || '').trim();
+  if (!partial) return PARTIAL_AI_RESPONSE_NOTICE;
+  return partial.includes(PARTIAL_AI_RESPONSE_NOTICE) ? partial : `${partial}\n\n${PARTIAL_AI_RESPONSE_NOTICE}`;
+};
+
 const loadModelPricing = async (supabaseUrl: string, serviceRoleKey: string, model: string) => {
   const modelId = String(model || '').trim();
   if (!modelId) return null;
@@ -2720,6 +2737,203 @@ const loadModelPricing = async (supabaseUrl: string, serviceRoleKey: string, mod
 const numberFrom = (value: any, fallback = 0) => {
   const next = Number(value);
   return Number.isFinite(next) ? next : fallback;
+};
+
+const extractAiUsageTokens = (usageMetadata: any) => {
+  const usage = usageMetadata?.usage && typeof usageMetadata.usage === 'object' ? usageMetadata.usage : {};
+  const total = numberFrom(
+    usage.total_tokens
+      ?? usage.total
+      ?? usage.tokens
+      ?? usage.totalTokens,
+    NaN,
+  );
+  if (Number.isFinite(total)) return Math.max(0, Math.ceil(total));
+  const input = numberFrom(usage.prompt_tokens ?? usage.prompt ?? usage.input_tokens ?? usage.input ?? usage.promptTokens, 0);
+  const output = numberFrom(usage.completion_tokens ?? usage.completion ?? usage.output_tokens ?? usage.output ?? usage.completionTokens, 0);
+  return Math.max(0, Math.ceil(input + output));
+};
+
+const getTehranDayBoundsIso = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tehran',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  const day = `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`;
+  const start = new Date(`${day}T00:00:00+03:30`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { day, startIso: start.toISOString(), endIso: end.toISOString() };
+};
+
+const normalizeAiUsagePolicyRow = (row: any, fallback: Record<string, any> = {}) => ({
+  id: row?.id || null,
+  subjectType: String(row?.subject_type || fallback.subjectType || 'default').trim() || 'default',
+  subjectId: normalizeId(row?.subject_id || fallback.subjectId || NIL_UUID) || NIL_UUID,
+  aiEnabled: row?.ai_enabled !== false,
+  dailyTokenLimit: Math.max(0, Math.floor(numberFrom(row?.daily_token_limit, numberFrom(fallback.dailyTokenLimit, DEFAULT_AI_DAILY_TOKEN_LIMIT)))),
+  dailyIrtLimit: row?.daily_irt_limit === null || row?.daily_irt_limit === undefined ? null : Math.max(0, numberFrom(row.daily_irt_limit, 0)),
+  metadata: row?.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+});
+
+const loadAiUsagePolicies = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
+  if (!orgId) return [];
+  return safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_policies', {
+    org_id: `eq.${orgId}`,
+    select: '*',
+    limit: 3000,
+  }).catch(() => []);
+};
+
+const resolveAiUsagePolicy = (policies: any[], authContext: any) => {
+  const normalized = (policies || []).map((row) => normalizeAiUsagePolicyRow(row));
+  const userId = normalizeId(authContext?.userId);
+  const roleId = normalizeId(authContext?.roleId);
+  const userPolicy = normalized.find((row) => row.subjectType === 'user' && row.subjectId === userId);
+  if (userPolicy) return { ...userPolicy, source: 'user' };
+  const rolePolicy = normalized.find((row) => row.subjectType === 'role' && row.subjectId === roleId);
+  if (rolePolicy) return { ...rolePolicy, source: 'role' };
+  const defaultPolicy = normalized.find((row) => row.subjectType === 'default');
+  if (defaultPolicy) return { ...defaultPolicy, source: 'default' };
+  return normalizeAiUsagePolicyRow(null, { subjectType: 'default', subjectId: NIL_UUID, dailyTokenLimit: DEFAULT_AI_DAILY_TOKEN_LIMIT, aiEnabled: true, source: 'fallback' });
+};
+
+const summarizeAiDailyUsage = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  policy: any,
+) => {
+  const bounds = getTehranDayBoundsIso();
+  const rows = authContext?.orgId && authContext?.userId
+    ? await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+        org_id: `eq.${authContext.orgId}`,
+        user_id: `eq.${authContext.userId}`,
+        created_at: `gte.${bounds.startIso}`,
+        select: 'id,status,billed_amount_irt,usage,created_at',
+        limit: 1000,
+      }).catch(() => [])
+    : [];
+  const todayRows = (rows || []).filter((row: any) => {
+    const createdAt = new Date(row?.created_at || 0).getTime();
+    return Number.isFinite(createdAt) && createdAt >= new Date(bounds.startIso).getTime() && createdAt < new Date(bounds.endIso).getTime();
+  });
+  const finalized = todayRows.filter((row: any) => String(row?.status || '') === 'finalized');
+  const usedTokens = finalized.reduce((sum: number, row: any) => sum + extractAiUsageTokens(row?.usage), 0);
+  const usedIrt = finalized.reduce((sum: number, row: any) => sum + numberFrom(row?.billed_amount_irt, 0), 0);
+  const dailyTokenLimit = Math.max(0, numberFrom(policy?.dailyTokenLimit, DEFAULT_AI_DAILY_TOKEN_LIMIT));
+  const remainingTokens = dailyTokenLimit > 0 ? Math.max(0, dailyTokenLimit - usedTokens) : 0;
+  const ratioRemaining = dailyTokenLimit > 0 ? remainingTokens / dailyTokenLimit : 0;
+  return {
+    day: bounds.day,
+    usedTokens,
+    usedIrt,
+    requestCount: finalized.length,
+    dailyTokenLimit,
+    remainingTokens,
+    percentUsed: dailyTokenLimit > 0 ? Math.min(100, Math.round((usedTokens / dailyTokenLimit) * 100)) : 100,
+    warning: dailyTokenLimit > 0 && ratioRemaining <= AI_USAGE_WARNING_RATIO,
+    exhausted: dailyTokenLimit <= 0 || usedTokens >= dailyTokenLimit,
+  };
+};
+
+const getOrgAiWalletSummary = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
+  if (!orgId) return null;
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+    org_id: `eq.${orgId}`,
+    select: '*',
+    limit: 1,
+  }).catch(() => []);
+  const wallet = rows[0] || null;
+  if (!wallet) return null;
+  const remainingIrt = Math.max(0, numberFrom(wallet.balance_irt, 0) + numberFrom(wallet.included_quota_irt, 0) - numberFrom(wallet.reserved_irt, 0));
+  return {
+    ...wallet,
+    remainingIrt,
+    warning: remainingIrt > 0 && remainingIrt <= Math.max(10000, numberFrom(wallet.included_quota_irt, 0) * AI_USAGE_WARNING_RATIO),
+    exhausted: remainingIrt <= 0 || String(wallet.status || 'active') !== 'active',
+  };
+};
+
+const applyOrgAiWalletCharge = async (supabaseUrl: string, serviceRoleKey: string, orgId: string, amountIrt: number) => {
+  const amount = Math.max(0, Math.ceil(numberFrom(amountIrt, 0)));
+  if (!orgId || amount <= 0) return null;
+  const rows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+    org_id: `eq.${orgId}`,
+    select: '*',
+    limit: 1,
+  }).catch(() => []);
+  const wallet = rows[0] || null;
+  if (!wallet?.id) return null;
+  const balance = numberFrom(wallet.balance_irt, 0);
+  const included = numberFrom(wallet.included_quota_irt, 0);
+  let nextBalance = balance;
+  let nextIncluded = included;
+  if (nextBalance >= amount) {
+    nextBalance -= amount;
+  } else {
+    const remaining = amount - Math.max(0, nextBalance);
+    nextBalance = 0;
+    nextIncluded = Math.max(0, nextIncluded - remaining);
+  }
+  await restPatch(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+    id: `eq.${wallet.id}`,
+    org_id: `eq.${orgId}`,
+  }, {
+    balance_irt: nextBalance,
+    included_quota_irt: nextIncluded,
+    updated_at: new Date().toISOString(),
+    metadata: {
+      ...(wallet?.metadata && typeof wallet.metadata === 'object' ? wallet.metadata : {}),
+      last_ai_charge_irt: amount,
+      last_ai_charge_at: new Date().toISOString(),
+    },
+  }).catch((error: any) => console.warn('AI wallet charge skipped', error));
+  return { ...wallet, balance_irt: nextBalance, included_quota_irt: nextIncluded };
+};
+
+const buildAiUsageAccessSummary = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const policies = await loadAiUsagePolicies(supabaseUrl, serviceRoleKey, authContext?.orgId);
+  const policy = resolveAiUsagePolicy(policies, authContext);
+  const [dailyUsage, orgWallet] = await Promise.all([
+    summarizeAiDailyUsage(supabaseUrl, serviceRoleKey, authContext, policy),
+    getOrgAiWalletSummary(supabaseUrl, serviceRoleKey, authContext?.orgId),
+  ]);
+  const orgWalletBlocks = orgWallet?.exhausted === true;
+  const allowed = policy.aiEnabled !== false && !dailyUsage.exhausted && !orgWalletBlocks;
+  return {
+    allowed,
+    reason: policy.aiEnabled === false
+      ? 'user_disabled'
+      : dailyUsage.exhausted
+      ? 'daily_limit_exhausted'
+      : orgWalletBlocks
+      ? 'org_credit_exhausted'
+      : null,
+    policy,
+    dailyUsage,
+    orgWallet,
+    canManageAiSettings: canManageAiSettings(authContext),
+    canViewSaasAdmin: canViewSaasAdmin(authContext),
+  };
+};
+
+const assertAiUsageAllowed = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
+  const summary = await buildAiUsageAccessSummary(supabaseUrl, serviceRoleKey, authContext);
+  if (!summary.allowed) {
+    const error: any = new Error(summary.reason === 'user_disabled'
+      ? 'دسترسی شما به هوش مصنوعی برای این سازمان فعال نیست.'
+      : summary.reason === 'daily_limit_exhausted'
+      ? 'سقف مصرف روزانه هوش مصنوعی شما تمام شده است.'
+      : 'اعتبار هوش مصنوعی این سازمان به پایان رسیده است.'
+    );
+    error.status = 403;
+    error.aiUsageSummary = summary;
+    throw error;
+  }
+  return summary;
 };
 
 const estimateAiCharge = (usageMetadata: any, pricing: any, fallbackMargin = DEFAULT_AI_MARGIN_PERCENT) => {
@@ -2749,6 +2963,83 @@ const estimateAiCharge = (usageMetadata: any, pricing: any, fallbackMargin = DEF
   };
 };
 
+const extractAvalaiTransactionCost = (payload: any) => {
+  const candidates = Array.isArray(payload?.transactions)
+    ? payload.transactions
+    : Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.results)
+    ? payload.results
+    : [];
+  const first = candidates[0] || payload?.transaction || payload?.data || payload || {};
+  const cost = first?.cost || first?.estimated_cost || first?.billing || first?.amount || first?.charge || {};
+  const rawUnit = numberFrom(
+    cost.unit ?? cost.usd ?? cost.amount_usd ?? first.cost_unit ?? first.cost_usd ?? first.amount_usd,
+    NaN,
+  );
+  const rawIrt = numberFrom(
+    cost.irt ?? cost.rial ?? cost.rials ?? cost.amount_rial ?? cost.amount_irt ?? first.cost_irt ?? first.amount_irt ?? first.amount_rial,
+    NaN,
+  );
+  const exchangeRate = numberFrom(cost.exchange_rate ?? first.exchange_rate, DEFAULT_AI_EXCHANGE_RATE_IRT);
+  return {
+    rawCostUnit: Number.isFinite(rawUnit) ? Number(rawUnit.toFixed(10)) : null,
+    rawCostIrt: Number.isFinite(rawIrt) ? Math.ceil(rawIrt) : null,
+    exchangeRate,
+    raw: payload,
+  };
+};
+
+const lookupAvalaiTransactionCost = async (providerConfig: any, requestId: string) => {
+  const normalizedRequestId = String(requestId || '').trim();
+  if (!providerConfig?.apiKey || !normalizedRequestId) return null;
+  const { response } = await requestAvalaiWithFallback(providerConfig, '/user/v1/transactions/lookup', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${providerConfig.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ transaction_ids: [normalizedRequestId] }),
+    signal: AbortSignal.timeout(30000),
+  }, { stripVersionForPath: true, disableFallback: true });
+  const parsed = parseJsonSafe(await response.text());
+  if (!response.ok) throw new Error(typeof parsed === 'string' ? parsed : parsed?.message || 'AvalAI transaction lookup failed.');
+  return extractAvalaiTransactionCost(parsed);
+};
+
+const reconcileAiUsageLedgerWithAvalai = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  ledger: any,
+  providerConfig: any,
+) => {
+  const requestId = String(ledger?.avalai_request_id || '').trim();
+  if (!ledger?.id || !requestId) return;
+  await sleep(35000);
+  const exact = await lookupAvalaiTransactionCost(providerConfig, requestId).catch((error: any) => {
+    console.warn('AvalAI transaction lookup skipped', error);
+    return null;
+  });
+  if (!exact || exact.rawCostIrt === null) return;
+  const marginPercent = numberFrom(ledger?.margin_percent, DEFAULT_AI_MARGIN_PERCENT);
+  const billedAmountIrt = Math.ceil(Math.max(0, exact.rawCostIrt) * (1 + Math.max(0, marginPercent) / 100));
+  await restPatch(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
+    id: `eq.${ledger.id}`,
+    org_id: `eq.${ledger.org_id}`,
+  }, {
+    raw_cost_unit: exact.rawCostUnit ?? ledger.raw_cost_unit ?? 0,
+    raw_cost_irt: exact.rawCostIrt,
+    billed_amount_irt: billedAmountIrt,
+    exchange_rate_irt: exact.exchangeRate,
+    metadata: {
+      ...(ledger?.metadata && typeof ledger.metadata === 'object' ? ledger.metadata : {}),
+      avalai_reconciled: true,
+      avalai_reconciled_at: new Date().toISOString(),
+      avalai_transaction: exact.raw,
+    },
+  }).catch((error: any) => console.warn('AI ledger reconcile patch skipped', error));
+};
+
 const recordAiUsageLedger = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -2770,6 +3061,7 @@ const recordAiUsageLedger = async (
     const settings = await loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
     const pricing = await loadModelPricing(supabaseUrl, serviceRoleKey, args.model);
     const charge = estimateAiCharge(args.usageMetadata, pricing, numberFrom(settings?.default_margin_percent, DEFAULT_AI_MARGIN_PERCENT));
+    const tokenCount = extractAiUsageTokens(args.usageMetadata);
     const rows = await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', [{
       org_id: authContext.orgId,
       user_id: authContext.userId || null,
@@ -2786,9 +3078,18 @@ const recordAiUsageLedger = async (
       margin_percent: charge.marginPercent,
       exchange_rate_irt: charge.exchangeRate,
       usage: args.usageMetadata || {},
-      metadata: args.metadata || {},
+      metadata: { ...(args.metadata || {}), token_count: tokenCount },
       finalized_at: new Date().toISOString(),
     }]);
+    await applyOrgAiWalletCharge(supabaseUrl, serviceRoleKey, authContext.orgId, charge.billedAmountIrt);
+    if (rows[0]?.avalai_request_id) {
+      runBackgroundTask(reconcileAiUsageLedgerWithAvalai(
+        supabaseUrl,
+        serviceRoleKey,
+        rows[0],
+        getCentralProviderConfig(),
+      ));
+    }
     return rows[0] || null;
   } catch (error) {
     console.warn('AI usage ledger insert skipped', error);
@@ -2930,7 +3231,9 @@ const extractImagePayload = (raw: any): {
 };
 
 const CHAT_COMPLETIONS_TIMEOUT_MS = PROVIDER_REQUEST_TIMEOUT_MS;
-const CHAT_COMPLETION_CONTINUATION_LIMIT = 3;
+const CHAT_COMPLETION_CONTINUATION_LIMIT = 5;
+const DEFAULT_CHAT_MAX_TOKENS = 3500;
+const DEFAULT_REASONING_MAX_TOKENS = 4500;
 
 const buildContinuationMessages = (
   messages: Array<{ role: string; content: any }>,
@@ -3016,14 +3319,16 @@ const callChatCompletions = async (
         messages: currentMessages,
         safety_identifier: options?.safetyIdentifier || undefined,
       };
+      const serviceTier = String(providerConfig?.serviceTier || '').trim();
+      if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
       if (options?.responseFormat && typeof options.responseFormat === 'object') {
         requestBody.response_format = options.responseFormat;
       }
       if (reasoning) {
-        requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
+        requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? DEFAULT_REASONING_MAX_TOKENS;
       } else {
         requestBody.temperature = options?.temperature ?? 0.2;
-        requestBody.max_tokens = options?.maxTokens ?? 2000;
+        requestBody.max_tokens = options?.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS;
       }
 
       let response: Response;
@@ -3185,11 +3490,13 @@ const callChatCompletionsStream = async (
       stream_options: { include_usage: true },
       safety_identifier: options?.safetyIdentifier || undefined,
     };
+    const serviceTier = String(providerConfig?.serviceTier || '').trim();
+    if (serviceTier === 'default' || serviceTier === 'flex') requestBody.service_tier = serviceTier;
     if (reasoning) {
-      requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? 2500;
+      requestBody.max_completion_tokens = options?.maxCompletionTokens ?? options?.maxTokens ?? DEFAULT_REASONING_MAX_TOKENS;
     } else {
       requestBody.temperature = options?.temperature ?? 0.2;
-      requestBody.max_tokens = options?.maxTokens ?? 2000;
+      requestBody.max_tokens = options?.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS;
     }
 
     const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
@@ -4602,6 +4909,43 @@ const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string,
     created_by: existing?.created_by || authContext.userId,
     updated_by: authContext.userId,
   }], 'org_id');
+  const incomingPolicies = incoming.usage_policies || incoming.usagePolicies || {};
+  const policyRows: Record<string, any>[] = [];
+  const pushPolicy = (subjectType: string, subjectId: any, policy: any) => {
+    if (!policy || typeof policy !== 'object') return;
+    const normalizedSubjectId = subjectType === 'default' ? NIL_UUID : normalizeId(subjectId || policy.subject_id || policy.subjectId);
+    if (subjectType !== 'default' && !isUuid(normalizedSubjectId)) return;
+    policyRows.push({
+      org_id: authContext.orgId,
+      subject_type: subjectType,
+      subject_id: normalizedSubjectId,
+      ai_enabled: policy.ai_enabled !== false && policy.aiEnabled !== false,
+      daily_token_limit: Math.max(0, Math.floor(numberFrom(policy.daily_token_limit ?? policy.dailyTokenLimit, DEFAULT_AI_DAILY_TOKEN_LIMIT))),
+      daily_irt_limit: policy.daily_irt_limit ?? policy.dailyIrtLimit ?? null,
+      metadata: policy.metadata && typeof policy.metadata === 'object' ? policy.metadata : {},
+      created_by: authContext.userId,
+      updated_by: authContext.userId,
+      updated_at: new Date().toISOString(),
+    });
+  };
+  pushPolicy('default', NIL_UUID, incomingPolicies.default || { ai_enabled: true, daily_token_limit: DEFAULT_AI_DAILY_TOKEN_LIMIT });
+  const incomingUserPolicies = Array.isArray(incomingPolicies.users)
+    ? incomingPolicies.users
+    : Object.entries(incomingPolicies.users || {}).map(([subjectId, policy]: [string, any]) => ({ ...(policy || {}), subject_id: subjectId }));
+  const incomingRolePolicies = Array.isArray(incomingPolicies.roles)
+    ? incomingPolicies.roles
+    : Object.entries(incomingPolicies.roles || {}).map(([subjectId, policy]: [string, any]) => ({ ...(policy || {}), subject_id: subjectId }));
+  incomingUserPolicies.forEach((item: any) => {
+    pushPolicy('user', item?.subject_id || item?.subjectId || item?.user_id || item?.userId, item);
+  });
+  incomingRolePolicies.forEach((item: any) => {
+    pushPolicy('role', item?.subject_id || item?.subjectId || item?.role_id || item?.roleId, item);
+  });
+  if (policyRows.length > 0) {
+    await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_policies', policyRows, 'org_id,subject_type,subject_id').catch((error: any) => {
+      console.warn('AI usage policy save skipped', error);
+    });
+  }
   return json(200, { success: true, settings: rows[0] || existing });
 };
 
@@ -4609,7 +4953,7 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
   if (!canManageAiSettings(authContext)) {
     return json(403, { success: false, message: 'دسترسی مشاهده تنظیمات هوش مصنوعی را ندارید.' });
   }
-  const [settings, rawModels, wallets, ledgerRows] = await Promise.all([
+  const [settings, rawModels, wallets, ledgerRows, usagePolicies, users, roles] = await Promise.all([
     ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
       is_active: 'eq.true',
@@ -4627,9 +4971,26 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     authContext.orgId
       ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
           org_id: `eq.${authContext.orgId}`,
-          select: 'id,capability,model,status,raw_cost_irt,billed_amount_irt,usage,created_at',
+          select: 'id,user_id,capability,model,status,raw_cost_irt,billed_amount_irt,usage,created_at',
           order: 'created_at.desc',
           limit: 200,
+        })
+      : Promise.resolve([]),
+    authContext.orgId ? loadAiUsagePolicies(supabaseUrl, serviceRoleKey, authContext.orgId) : Promise.resolve([]),
+    authContext.orgId
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'profiles', {
+          org_id: `eq.${authContext.orgId}`,
+          select: 'id,full_name,email,mobile_1,role_id,is_active',
+          order: 'full_name.asc',
+          limit: 1000,
+        })
+      : Promise.resolve([]),
+    authContext.orgId
+      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_roles', {
+          org_id: `eq.${authContext.orgId}`,
+          select: 'id,title',
+          order: 'title.asc',
+          limit: 300,
         })
       : Promise.resolve([]),
   ]);
@@ -4647,13 +5008,20 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     acc.by_capability[capability] = (acc.by_capability[capability] || 0) + numberFrom(row?.billed_amount_irt, 0);
     return acc;
   }, { billed_amount_irt: 0, raw_cost_irt: 0, requests: 0, by_model: {}, by_capability: {} });
-  const [providerCredit, companyContext] = await Promise.all([
-    fetchAvalaiCredit(getCentralProviderConfig()).catch((error: any) => ({
-      available: false,
-      message: String(error?.message || error || 'اعتبار AvalAI دریافت نشد.'),
-    })),
-    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
-  ]);
+  const companyContext = await loadCompanyContext(supabaseUrl, serviceRoleKey, authContext);
+  const policyBySubject = new Map((usagePolicies || []).map((row: any) => [`${row.subject_type}:${normalizeId(row.subject_id) || NIL_UUID}`, normalizeAiUsagePolicyRow(row)]));
+  const defaultPolicy = policyBySubject.get(`default:${NIL_UUID}`) || normalizeAiUsagePolicyRow(null, { subjectType: 'default', subjectId: NIL_UUID });
+  const usageByUser = new Map<string, { usedTokens: number; usedIrt: number; requests: number }>();
+  (ledgerRows || []).forEach((row: any) => {
+    if (String(row?.status || '') !== 'finalized') return;
+    const userId = normalizeId(row?.user_id);
+    if (!userId) return;
+    const entry = usageByUser.get(userId) || { usedTokens: 0, usedIrt: 0, requests: 0 };
+    entry.usedTokens += extractAiUsageTokens(row?.usage);
+    entry.usedIrt += numberFrom(row?.billed_amount_irt, 0);
+    entry.requests += 1;
+    usageByUser.set(userId, entry);
+  });
   return json(200, {
     success: true,
     settings,
@@ -4664,11 +5032,28 @@ const handleGetAiOverview = async (supabaseUrl: string, serviceRoleKey: string, 
     },
     capabilityAvailability: availability,
     wallet: wallets[0] || null,
+    usagePolicies: {
+      default: defaultPolicy,
+      users: (users || []).map((user: any) => {
+        const id = normalizeId(user?.id);
+        return {
+          ...user,
+          policy: policyBySubject.get(`user:${id}`) || null,
+          recentUsage: usageByUser.get(id) || { usedTokens: 0, usedIrt: 0, requests: 0 },
+        };
+      }),
+      roles: (roles || []).map((role: any) => {
+        const id = normalizeId(role?.id);
+        return {
+          ...role,
+          policy: policyBySubject.get(`role:${id}`) || null,
+        };
+      }),
+    },
     usage: {
       totals,
       recent: ledgerRows || [],
     },
-    providerCredit,
     company: companyContext,
   });
 };
@@ -4968,6 +5353,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, selectedCapability);
     }
   }
+  const aiUsageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [knowledgeChunks, companyContext, orgPeopleContext] = await Promise.all([
@@ -5061,6 +5447,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     businessAnalytics,
     webSearchResults,
     forceWebSearch,
+    aiUsageAccess,
     thread,
     userMessage,
     promptMessages,
@@ -5181,6 +5568,69 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_cap_${capability}`,
     });
   } catch (error: any) {
+    const partialContent = getRecoverablePartialAiContent(error);
+    if (partialContent) {
+      const finalPartialContent = buildPartialAiResponseContent(partialContent);
+      const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+        thread_id: thread.id,
+        role: 'assistant',
+        content: finalPartialContent,
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        metadata: {
+          context_summary: pageContext.summary,
+          context_key: contextKey,
+          company_currency_label: companyContext?.currency_label || null,
+          knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
+          retrieved_context_modules: retrievedContexts.map((ctx) => ctx.moduleId),
+          web_search_used: webSearchResults.length > 0,
+          capabilities: selectedCapabilities,
+          capability,
+          business_analytics: businessAnalytics ? {
+            intent: businessAnalytics.intent || null,
+            period: businessAnalytics.period || null,
+            available: businessAnalytics.available === true,
+            data_quality: businessAnalytics.data_quality || null,
+            reason: businessAnalytics.reason || null,
+          } : null,
+          incomplete: true,
+          status: 'partial',
+          finish_reason: error?.finishReason || null,
+          partial_content: partialContent.slice(0, 4000),
+        },
+      });
+      await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, {
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        content: finalPartialContent,
+        finishReason: error?.finishReason || 'length',
+        incomplete: true,
+      }).catch(() => []);
+      return json(200, {
+        success: true,
+        incomplete: true,
+        threadId: thread.id,
+        threadTitle: thread.title || null,
+        userMessageId: userMessage?.id || null,
+        messageId: assistantMessage?.id || null,
+        answer: finalPartialContent,
+        partialContent,
+        message: PARTIAL_AI_RESPONSE_NOTICE,
+        provider: providerConfig.provider,
+        model: providerConfig.model,
+        usage: null,
+        ledger: null,
+        contextSummary: pageContext.summary,
+        retrievedContextModules: retrievedContexts.map((ctx) => ctx.moduleId),
+        businessAnalytics,
+        knowledgeSources: knowledgeChunks.map((chunk) => ({
+          id: chunk.id,
+          documentId: chunk.document_id,
+          title: chunk?.metadata?.document_title || null,
+          chunkIndex: chunk.chunk_index,
+        })),
+      });
+    }
     const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
     const failedContent = providerFailure.startsWith('خطای provider')
       ? providerFailure
@@ -5414,6 +5864,70 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             })),
           });
         } catch (error: any) {
+          const partialContent = getRecoverablePartialAiContent(error);
+          if (prepared?.thread?.id && partialContent) {
+            const finalPartialContent = buildPartialAiResponseContent(partialContent);
+            const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+              thread_id: prepared.thread.id,
+              role: 'assistant',
+              content: finalPartialContent,
+              provider: prepared.providerConfig.provider,
+              model: prepared.providerConfig.model,
+              metadata: {
+                context_summary: prepared.pageContext.summary,
+                context_key: prepared.contextKey,
+                company_currency_label: prepared.companyContext?.currency_label || null,
+                knowledge_chunk_ids: prepared.knowledgeChunks.map((chunk: any) => chunk.id),
+                retrieved_context_modules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
+                web_search_used: prepared.webSearchResults.length > 0,
+                capabilities: prepared.selectedCapabilities,
+                capability: prepared.capability,
+                incomplete: true,
+                status: 'partial',
+                finish_reason: error?.finishReason || null,
+                partial_content: partialContent.slice(0, 4000),
+                business_analytics: prepared.businessAnalytics ? {
+                  intent: prepared.businessAnalytics.intent || null,
+                  period: prepared.businessAnalytics.period || null,
+                  available: prepared.businessAnalytics.available === true,
+                  data_quality: prepared.businessAnalytics.data_quality || null,
+                  reason: prepared.businessAnalytics.reason || null,
+                } : null,
+              },
+            }).catch(() => null);
+            await patchChatThreadAfterAssistant(supabaseUrl, serviceRoleKey, authContext, prepared, {
+              provider: prepared.providerConfig.provider,
+              model: prepared.providerConfig.model,
+              content: finalPartialContent,
+              finishReason: error?.finishReason || 'length',
+              incomplete: true,
+            }).catch(() => []);
+            send('done', {
+              success: true,
+              incomplete: true,
+              threadId: prepared.thread.id,
+              threadTitle: prepared.thread.title || null,
+              userMessageId: prepared.userMessage?.id || null,
+              messageId: assistantMessage?.id || null,
+              answer: finalPartialContent,
+              partialContent,
+              message: PARTIAL_AI_RESPONSE_NOTICE,
+              provider: prepared.providerConfig.provider,
+              model: prepared.providerConfig.model,
+              usage: null,
+              ledger: null,
+              contextSummary: prepared.pageContext.summary,
+              retrievedContextModules: prepared.retrievedContexts.map((ctx: any) => ctx.moduleId),
+              businessAnalytics: prepared.businessAnalytics,
+              knowledgeSources: prepared.knowledgeChunks.map((chunk: any) => ({
+                id: chunk.id,
+                documentId: chunk.document_id,
+                title: chunk?.metadata?.document_title || null,
+                chunkIndex: chunk.chunk_index,
+              })),
+            });
+            return;
+          }
           const providerFailure = shortenProviderError(String(error?.message || error || 'chat_failed'));
           const failedContent = providerFailure.startsWith('خطای provider')
             ? providerFailure
@@ -9521,6 +10035,9 @@ const handleTestProvider = async (supabaseUrl: string, serviceRoleKey: string, a
 
 const normalizeCreditPayload = (payload: any) => {
   const flat = payload && typeof payload === 'object' ? payload : { value: payload };
+  const data = flat?.data && typeof flat.data === 'object' ? flat.data : {};
+  const wallet = flat?.wallet && typeof flat.wallet === 'object' ? flat.wallet : {};
+  const balance = flat?.balance && typeof flat.balance === 'object' ? flat.balance : {};
   const candidates = [
     flat.balance,
     flat.credit,
@@ -9528,16 +10045,25 @@ const normalizeCreditPayload = (payload: any) => {
     flat.remaining,
     flat.remaining_credit,
     flat.total_available,
-    flat?.data?.balance,
-    flat?.data?.credit,
-    flat?.data?.remaining,
+    data.balance,
+    data.credit,
+    data.remaining,
+    wallet.balance,
+    wallet.credit,
+    balance.value,
+    balance.amount,
   ].filter((item) => item !== null && item !== undefined && item !== '');
+  const rial = flat.rial || flat.rials || flat.amount_rial || flat.remaining_rial || data.rial || data.rials || data.amount_rial || data.remaining_rial || wallet.rial || balance.rial || null;
+  const toman = flat.toman || flat.tomans || flat.amount_toman || flat.remaining_toman || data.toman || data.tomans || data.amount_toman || data.remaining_toman || wallet.toman || balance.toman || null;
+  const token = flat.token || flat.tokens || flat.remaining_tokens || flat.credit_tokens || data.token || data.tokens || data.remaining_tokens || wallet.tokens || balance.tokens || null;
+  const unitCredit = flat.unit_credit || flat.unit || flat.credit_unit || data.unit_credit || data.unit || wallet.unit_credit || null;
   return {
     value: candidates[0] ?? null,
-    currency: flat.currency || flat?.data?.currency || flat.unit || null,
-    rial: flat.rial || flat.rials || flat.amount_rial || flat?.data?.rial || flat?.data?.amount_rial || null,
-    toman: flat.toman || flat.tomans || flat.amount_toman || flat?.data?.toman || flat?.data?.amount_toman || null,
-    token: flat.token || flat.tokens || flat.remaining_tokens || flat?.data?.tokens || null,
+    currency: flat.currency || data.currency || balance.currency || null,
+    rial,
+    toman,
+    token,
+    unitCredit,
     raw: payload,
   };
 };
@@ -9555,46 +10081,25 @@ const handleGetCredit = async (supabaseUrl: string, serviceRoleKey: string, auth
 };
 
 const handleGetAiCreditSummary = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
-  const canSeeProviderCredit = canViewSaasAdmin(authContext);
-  const [walletRows, providerCredit, companyContext] = await Promise.all([
-    authContext.orgId
-      ? safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
-          org_id: `eq.${authContext.orgId}`,
-          select: '*',
-          limit: 1,
-        })
-      : Promise.resolve([]),
-    canSeeProviderCredit
-      ? fetchAvalaiCredit(getCentralProviderConfig()).catch((error: any) => ({
-          available: false,
-          message: String(error?.message || error || 'اعتبار AvalAI دریافت نشد.'),
-        }))
-      : Promise.resolve(null),
+  const [summary, companyContext] = await Promise.all([
+    buildAiUsageAccessSummary(supabaseUrl, serviceRoleKey, authContext),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
-  const wallet = walletRows[0] || null;
-  const normalizedCredit = canSeeProviderCredit && (providerCredit as any)?.available ? normalizeCreditPayload((providerCredit as any).credit) : null;
-  const walletRemainingIrt = wallet
-    ? Math.max(0, numberFrom(wallet.balance_irt, 0) + numberFrom(wallet.included_quota_irt, 0) - numberFrom(wallet.reserved_irt, 0))
-    : null;
-  const remainingIrt = walletRemainingIrt !== null ? walletRemainingIrt : null;
-  const rawRemainingTokens = normalizedCredit?.token
-    ?? wallet?.metadata?.tokens
-    ?? wallet?.metadata?.remaining_tokens
-    ?? wallet?.metadata?.token_balance
-    ?? null;
-  const remainingTokens = rawRemainingTokens === null || rawRemainingTokens === undefined || rawRemainingTokens === ''
-    ? null
-    : Math.max(0, numberFrom(rawRemainingTokens, 0));
   return json(200, {
     success: true,
-    remainingTokens,
-    remainingIrt,
-    wallet,
-    providerCredit: canSeeProviderCredit ? {
-      ...(providerCredit as any),
-      credit: normalizedCredit,
-    } : null,
+    access: {
+      allowed: summary.allowed,
+      reason: summary.reason,
+      canManageAiSettings: summary.canManageAiSettings,
+      canViewSaasAdmin: summary.canViewSaasAdmin,
+    },
+    dailyUsage: summary.dailyUsage,
+    policy: summary.policy,
+    orgWallet: summary.canManageAiSettings || summary.canViewSaasAdmin
+      ? summary.orgWallet
+      : summary.orgWallet
+        ? { warning: summary.orgWallet.warning, exhausted: summary.orgWallet.exhausted }
+        : null,
     company: companyContext,
   });
 };
@@ -9611,7 +10116,7 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
     org_id: `eq.${authContext.orgId}`,
     document_id: `eq.${documentId}`,
     status: 'eq.active',
-    select: 'id,content,embedding_status',
+    select: 'id,content,content_hash,embedding_status,embedding_model',
     order: 'chunk_index.asc',
     limit: 80,
   });
@@ -9628,11 +10133,16 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
   }]).catch(() => []);
   const job = jobRows[0] || null;
   let processed = 0;
+  let skipped = 0;
   let failed = 0;
   for (const chunk of chunks.slice(0, 40)) {
     const chunkId = normalizeId(chunk?.id);
     const content = String(chunk?.content || '').trim();
     if (!chunkId || !content) continue;
+    if (String(chunk?.embedding_status || '') === 'ready' && String(chunk?.embedding_model || '') === DEFAULT_EMBEDDING_MODEL) {
+      skipped += 1;
+      continue;
+    }
     try {
       const embeddingResult = await callEmbeddings(providerConfig, content.slice(0, 8000), DEFAULT_EMBEDDING_MODEL);
       await restPatch(supabaseUrl, serviceRoleKey, 'document_chunks', {
@@ -9678,7 +10188,7 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
       updated_at: new Date().toISOString(),
     }).catch(() => []);
   }
-  return json(200, { success: true, processed, failed });
+  return json(200, { success: true, processed, skipped, failed });
 };
 
 const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
@@ -10166,7 +10676,7 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
   const subAction = String(body?.sub || '').trim();
 
   if (subAction === 'overview') {
-    const [allUsage, models, providerCredit, orgRows] = await Promise.all([
+    const [allUsage, models, providerCredit, orgRows, walletRows, grantRows] = await Promise.all([
       safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_usage_ledger', {
         select: 'id,org_id,capability,model,provider,status,raw_cost_irt,billed_amount_irt,margin_percent,created_at',
         order: 'created_at.desc',
@@ -10182,13 +10692,45 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         select: 'id,name,slug',
         limit: 2000,
       }),
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+        select: 'org_id,balance_irt,included_quota_irt,reserved_irt,status,updated_at',
+        limit: 3000,
+      }),
+      safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_credit_grants', {
+        select: 'org_id,amount_irt,created_at',
+        order: 'created_at.desc',
+        limit: 3000,
+      }),
     ]);
     const orgNameById = new Map((orgRows || []).map((row: any) => [
       normalizeId(row?.id),
       String(row?.name || row?.slug || '').trim() || 'سازمان بدون نام',
     ]));
+    const walletByOrg = new Map((walletRows || []).map((row: any) => {
+      const balance = numberFrom(row?.balance_irt, 0);
+      const included = numberFrom(row?.included_quota_irt, 0);
+      const reserved = numberFrom(row?.reserved_irt, 0);
+      return [normalizeId(row?.org_id), {
+        ...row,
+        balance_irt: balance,
+        included_quota_irt: included,
+        reserved_irt: reserved,
+        remaining_irt: Math.max(0, balance + included - reserved),
+      }];
+    }));
+    const lastGiftByOrg = new Map<string, { amount_irt: number; created_at: string | null }>();
+    for (const row of grantRows || []) {
+      const orgId = normalizeId(row?.org_id);
+      if (!orgId || lastGiftByOrg.has(orgId)) continue;
+      lastGiftByOrg.set(orgId, { amount_irt: numberFrom(row?.amount_irt, 0), created_at: row?.created_at || null });
+    }
 
     const byOrg = new Map<string, { org_id: string; org_name: string; requests: number; billed_irt: number; raw_irt: number; models: Set<string> }>();
+    for (const row of orgRows || []) {
+      const orgId = normalizeId(row?.id);
+      if (!orgId) continue;
+      byOrg.set(orgId, { org_id: orgId, org_name: orgNameById.get(orgId) || 'سازمان بدون نام', requests: 0, billed_irt: 0, raw_irt: 0, models: new Set() });
+    }
     for (const row of allUsage) {
       const orgId = normalizeId(row.org_id);
       if (!orgId) continue;
@@ -10202,6 +10744,14 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     const orgSummaries = Array.from(byOrg.values()).map((item) => ({
       ...item,
       models: Array.from(item.models),
+      wallet: walletByOrg.get(item.org_id) || null,
+      wallet_balance_irt: numberFrom(walletByOrg.get(item.org_id)?.balance_irt, 0),
+      wallet_included_quota_irt: numberFrom(walletByOrg.get(item.org_id)?.included_quota_irt, 0),
+      wallet_reserved_irt: numberFrom(walletByOrg.get(item.org_id)?.reserved_irt, 0),
+      wallet_remaining_irt: numberFrom(walletByOrg.get(item.org_id)?.remaining_irt, 0),
+      wallet_status: String(walletByOrg.get(item.org_id)?.status || 'active'),
+      last_gift_irt: lastGiftByOrg.get(item.org_id)?.amount_irt || 0,
+      last_gift_at: lastGiftByOrg.get(item.org_id)?.created_at || null,
     })).sort((a, b) => b.billed_irt - a.billed_irt);
 
     const finalized = allUsage.filter((row) => String(row.status) === 'finalized');
@@ -10233,6 +10783,44 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
         credit: (providerCredit as any).available ? normalizeCreditPayload((providerCredit as any).credit) : null,
       },
     });
+  }
+
+  if (subAction === 'gift_credit') {
+    const orgIds = Array.isArray(body?.orgIds)
+      ? body.orgIds.map((id: any) => normalizeId(id)).filter(Boolean)
+      : [];
+    const uniqueOrgIds = Array.from(new Set(orgIds));
+    const amountIrt = Math.round(numberFrom(body?.amount_irt ?? body?.amountIrt ?? body?.amount, 0));
+    const reason = String(body?.reason || 'اعتبار هدیه هوش مصنوعی').trim() || 'اعتبار هدیه هوش مصنوعی';
+    if (uniqueOrgIds.length === 0) return json(400, { success: false, message: 'حداقل یک سازمان را انتخاب کنید.' });
+    if (!Number.isFinite(amountIrt) || amountIrt <= 0) return json(400, { success: false, message: 'مبلغ اعتبار هدیه معتبر نیست.' });
+
+    const existingRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'org_ai_wallets', {
+      org_id: `in.(${uniqueOrgIds.map((id) => `"${id}"`).join(',')})`,
+      select: 'org_id,balance_irt,included_quota_irt,reserved_irt,status',
+      limit: uniqueOrgIds.length,
+    });
+    const existingByOrg = new Map((existingRows || []).map((row: any) => [normalizeId(row?.org_id), row]));
+    const walletRows = uniqueOrgIds.map((orgId) => {
+      const existing = existingByOrg.get(orgId) || {};
+      return {
+        org_id: orgId,
+        balance_irt: numberFrom(existing?.balance_irt, 0) + amountIrt,
+        included_quota_irt: numberFrom(existing?.included_quota_irt, 0),
+        reserved_irt: numberFrom(existing?.reserved_irt, 0),
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      };
+    });
+    await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_wallets', walletRows, 'org_id');
+    await restInsert(supabaseUrl, serviceRoleKey, 'org_ai_credit_grants', uniqueOrgIds.map((orgId) => ({
+      org_id: orgId,
+      amount_irt: amountIrt,
+      reason,
+      granted_by: authContext?.userId || null,
+      metadata: { source: 'saas_admin_gift_credit' },
+    })));
+    return json(200, { success: true, count: uniqueOrgIds.length, amount_irt: amountIrt });
   }
 
   if (subAction === 'sync_models') {
@@ -10545,7 +11133,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'get_ai_settings') return await handleGetAiSettings(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'save_ai_settings') return await handleSaveAiSettings(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_ai_overview') return await handleGetAiOverview(supabaseUrl, serviceRoleKey, authContext);
-    if (action === 'get_ai_credit_summary') return await handleGetAiCreditSummary(supabaseUrl, serviceRoleKey, authContext);
+    if (action === 'get_ai_credit_summary' || action === 'get_ai_usage_summary') return await handleGetAiCreditSummary(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'get_compose_models') return await handleGetComposeModels(supabaseUrl, serviceRoleKey, authContext);
     if (action === 'test_provider') return await handleTestProvider(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'list_models') return await handleListModels(supabaseUrl, serviceRoleKey, authContext, body);

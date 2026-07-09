@@ -6,7 +6,9 @@ import {
   Collapse,
   Empty,
   Form,
+  Input,
   InputNumber,
+  Modal,
   Select,
   Space,
   Statistic,
@@ -14,7 +16,7 @@ import {
   Table,
   Tag,
 } from 'antd';
-import { ReloadOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { CreditCardOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined, UserOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiKnowledgeTab from './AiKnowledgeTab';
@@ -82,12 +84,24 @@ const PRIMARY_MODEL_ALLOWED_IDS = new Set(PRIMARY_MODEL_PREFERRED_IDS);
 const formatUnit = (value: unknown) =>
   Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 8 });
 
+const DEFAULT_DAILY_TOKEN_LIMIT = 80000;
+
+const normalizePolicyDraft = (policy?: any) => ({
+  ai_enabled: policy?.ai_enabled !== false && policy?.aiEnabled !== false,
+  daily_token_limit: Number(policy?.daily_token_limit ?? policy?.dailyTokenLimit ?? DEFAULT_DAILY_TOKEN_LIMIT),
+  daily_irt_limit: policy?.daily_irt_limit ?? policy?.dailyIrtLimit ?? null,
+});
+
 const AiSettingsTab: React.FC = () => {
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [overview, setOverview] = useState<Record<string, any> | null>(null);
+  const [usagePolicyDraft, setUsagePolicyDraft] = useState<Record<string, any>>({ default: normalizePolicyDraft() });
+  const [topupOpen, setTopupOpen] = useState(false);
+  const [topupAmount, setTopupAmount] = useState<number | null>(500000);
+  const [topupLoading, setTopupLoading] = useState(false);
 
   const callAssistant = async (body: Record<string, any>) => {
     const { data, error } = await supabase.functions.invoke('ai-assistant', { body });
@@ -101,6 +115,17 @@ const AiSettingsTab: React.FC = () => {
     try {
       const data = await callAssistant({ action: 'get_ai_overview' });
       setOverview(data);
+      setUsagePolicyDraft({
+        default: normalizePolicyDraft(data?.usagePolicies?.default),
+        users: Object.fromEntries((data?.usagePolicies?.users || []).map((user: any) => [
+          String(user?.id || ''),
+          normalizePolicyDraft(user?.policy || data?.usagePolicies?.default),
+        ]).filter(([id]: [string]) => id)),
+        roles: Object.fromEntries((data?.usagePolicies?.roles || []).map((role: any) => [
+          String(role?.id || ''),
+          normalizePolicyDraft(role?.policy || data?.usagePolicies?.default),
+        ]).filter(([id]: [string]) => id)),
+      });
       const selectedModels = data?.settings?.selected_models || {};
       form.setFieldsValue({
         selected_models: selectedModels,
@@ -179,6 +204,7 @@ const AiSettingsTab: React.FC = () => {
           monthly_limit_irt: values.monthly_limit_irt ?? null,
           require_human_approval: values.require_human_approval !== false,
         },
+        usage_policies: usagePolicyDraft,
       });
       message.success('تنظیمات هوش مصنوعی ذخیره شد.');
       await loadOverview();
@@ -191,12 +217,68 @@ const AiSettingsTab: React.FC = () => {
   };
 
   const totals = overview?.usage?.totals || {};
+  const usagePolicies = overview?.usagePolicies || {};
+  const wallet = overview?.wallet || {};
 
   const currencyCode = String(overview?.company?.currency_code || 'IRT').toUpperCase();
   const currencyLabel = String(overview?.company?.currency_label || 'تومان');
   const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
   const formatCurrency = (value: unknown) =>
     `${(Number(value || 0) * currencyMultiplier).toLocaleString('fa-IR')} ${currencyLabel}`;
+
+  const updateDefaultPolicy = (patch: Record<string, any>) => {
+    setUsagePolicyDraft((current) => ({
+      ...current,
+      default: { ...normalizePolicyDraft(current.default), ...patch },
+    }));
+  };
+
+  const updateUserPolicy = (userId: string, patch: Record<string, any>) => {
+    setUsagePolicyDraft((current) => ({
+      ...current,
+      users: {
+        ...(current.users || {}),
+        [userId]: { ...normalizePolicyDraft(current.users?.[userId] || current.default), ...patch },
+      },
+    }));
+  };
+
+  const updateRolePolicy = (roleId: string, patch: Record<string, any>) => {
+    setUsagePolicyDraft((current) => ({
+      ...current,
+      roles: {
+        ...(current.roles || {}),
+        [roleId]: { ...normalizePolicyDraft(current.roles?.[roleId] || current.default), ...patch },
+      },
+    }));
+  };
+
+  const handleTopup = async () => {
+    const amount = Math.round(Number(topupAmount || 0));
+    if (!Number.isFinite(amount) || amount < 10000) {
+      message.error('حداقل مبلغ شارژ اعتبار هوش مصنوعی ۱۰٬۰۰۰ تومان است.');
+      return;
+    }
+    setTopupLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('payment-gateway', {
+        body: {
+          action: 'create_ai_credit_topup',
+          amount_irt: amount,
+          return_origin: window.location.origin,
+        },
+      });
+      if (error) throw error;
+      if (!(data as any)?.success) throw new Error(String((data as any)?.message || 'ایجاد پرداخت شارژ هوش مصنوعی ناموفق بود.'));
+      const paymentUrl = String((data as any)?.payment_url || '').trim();
+      if (paymentUrl) window.location.href = paymentUrl;
+      else message.success('درخواست شارژ اعتبار ثبت شد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'ایجاد پرداخت شارژ هوش مصنوعی ناموفق بود.'));
+    } finally {
+      setTopupLoading(false);
+    }
+  };
 
   const modelColumns = [
     {
@@ -231,6 +313,94 @@ const AiSettingsTab: React.FC = () => {
     },
   ];
 
+  const userUsageColumns = [
+    {
+      title: 'کاربر',
+      dataIndex: 'full_name',
+      render: (_: unknown, row: any) => (
+        <div>
+          <div className="font-semibold">{row.full_name || row.email || row.mobile_1 || 'کاربر بدون نام'}</div>
+          <div className="text-xs text-gray-400">{row.email || row.mobile_1 || ''}</div>
+        </div>
+      ),
+    },
+    {
+      title: 'دسترسی به AI',
+      width: 130,
+      render: (_: unknown, row: any) => {
+        const userId = String(row?.id || '');
+        const policy = normalizePolicyDraft(usagePolicyDraft.users?.[userId] || row?.policy || usagePolicyDraft.default);
+        return (
+          <Switch
+            checked={policy.ai_enabled}
+            checkedChildren="دارد"
+            unCheckedChildren="ندارد"
+            onChange={(checked) => updateUserPolicy(userId, { ai_enabled: checked })}
+          />
+        );
+      },
+    },
+    {
+      title: 'سقف روزانه توکن',
+      width: 180,
+      render: (_: unknown, row: any) => {
+        const userId = String(row?.id || '');
+        const policy = normalizePolicyDraft(usagePolicyDraft.users?.[userId] || row?.policy || usagePolicyDraft.default);
+        return (
+          <InputNumber
+            min={1000}
+            step={5000}
+            className="w-full"
+            value={policy.daily_token_limit}
+            onChange={(value) => updateUserPolicy(userId, { daily_token_limit: Number(value || DEFAULT_DAILY_TOKEN_LIMIT) })}
+          />
+        );
+      },
+    },
+    {
+      title: 'مصرف اخیر',
+      width: 130,
+      render: (_: unknown, row: any) => `${Number(row?.recentUsage?.usedTokens || 0).toLocaleString('fa-IR')} توکن`,
+    },
+  ];
+
+  const roleUsageColumns = [
+    { title: 'نقش', dataIndex: 'title', render: (value: string) => <span className="font-semibold">{value || 'نقش بدون نام'}</span> },
+    {
+      title: 'دسترسی به AI',
+      width: 130,
+      render: (_: unknown, row: any) => {
+        const roleId = String(row?.id || '');
+        const policy = normalizePolicyDraft(usagePolicyDraft.roles?.[roleId] || row?.policy || usagePolicyDraft.default);
+        return (
+          <Switch
+            checked={policy.ai_enabled}
+            checkedChildren="دارد"
+            unCheckedChildren="ندارد"
+            onChange={(checked) => updateRolePolicy(roleId, { ai_enabled: checked })}
+          />
+        );
+      },
+    },
+    {
+      title: 'سقف روزانه توکن',
+      width: 180,
+      render: (_: unknown, row: any) => {
+        const roleId = String(row?.id || '');
+        const policy = normalizePolicyDraft(usagePolicyDraft.roles?.[roleId] || row?.policy || usagePolicyDraft.default);
+        return (
+          <InputNumber
+            min={1000}
+            step={5000}
+            className="w-full"
+            value={policy.daily_token_limit}
+            onChange={(value) => updateRolePolicy(roleId, { daily_token_limit: Number(value || DEFAULT_DAILY_TOKEN_LIMIT) })}
+          />
+        );
+      },
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -250,18 +420,26 @@ const AiSettingsTab: React.FC = () => {
         </Space>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="مصرف ثبت‌شده" value={totals.billed_amount_irt || 0} formatter={formatCurrency} />
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="تعداد درخواست‌ها" value={totals.requests || 0} />
         </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+          <div className="flex items-start justify-between gap-2">
+            <Statistic title="اعتبار سازمان" value={Number(wallet?.balance_irt || 0) + Number(wallet?.included_quota_irt || 0) - Number(wallet?.reserved_irt || 0)} formatter={formatCurrency} />
+            <Button size="small" icon={<CreditCardOutlined />} onClick={() => setTopupOpen(true)}>
+              شارژ اعتبار
+            </Button>
+          </div>
+        </div>
       </div>
 
       <Form form={form} layout="vertical">
         <Collapse
-          defaultActiveKey={['models', 'policy']}
+          defaultActiveKey={['models', 'policy', 'user_usage']}
           items={[
             {
               key: 'models',
@@ -357,6 +535,71 @@ const AiSettingsTab: React.FC = () => {
               ),
             },
             {
+              key: 'user_usage',
+              label: (
+                <span className="inline-flex items-center gap-2">
+                  <UserOutlined />
+                  مدیریت مصرف کاربران
+                </span>
+              ),
+              children: (
+                <div className="space-y-4">
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="سقف مصرف روزانه بر اساس توکن مدیریت می‌شود؛ پرداخت و شارژ اعتبار سازمان با تومان انجام می‌شود."
+                    description="مقدار پیش‌فرض ۸۰٬۰۰۰ توکن در روز برای هر کاربر است. سیاست اختصاصی کاربر از نقش و سپس پیش‌فرض سازمان دقیق‌تر است."
+                  />
+                  <div className="rounded-lg border border-gray-200 p-3 dark:border-white/10">
+                    <div className="mb-2 font-semibold text-gray-800 dark:text-gray-100">پیش‌فرض سازمان</div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:items-end">
+                      <div>
+                        <div className="mb-1 text-xs text-gray-500">دسترسی عمومی</div>
+                        <Switch
+                          checked={normalizePolicyDraft(usagePolicyDraft.default).ai_enabled}
+                          checkedChildren="فعال"
+                          unCheckedChildren="غیرفعال"
+                          onChange={(checked) => updateDefaultPolicy({ ai_enabled: checked })}
+                        />
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs text-gray-500">سقف روزانه توکن</div>
+                        <InputNumber
+                          min={1000}
+                          step={5000}
+                          className="w-full"
+                          value={normalizePolicyDraft(usagePolicyDraft.default).daily_token_limit}
+                          onChange={(value) => updateDefaultPolicy({ daily_token_limit: Number(value || DEFAULT_DAILY_TOKEN_LIMIT) })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-2 font-semibold text-gray-800 dark:text-gray-100">کاربران</div>
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      dataSource={usagePolicies.users || []}
+                      columns={userUsageColumns}
+                      pagination={{ pageSize: 8 }}
+                      locale={{ emptyText: <Empty description="کاربری پیدا نشد." /> }}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-2 font-semibold text-gray-800 dark:text-gray-100">نقش‌ها</div>
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      dataSource={usagePolicies.roles || []}
+                      columns={roleUsageColumns}
+                      pagination={{ pageSize: 8 }}
+                      locale={{ emptyText: <Empty description="نقشی پیدا نشد." /> }}
+                    />
+                  </div>
+                </div>
+              ),
+            },
+            {
               key: 'usage',
               label: 'مصرف اخیر',
               children: (
@@ -397,6 +640,41 @@ const AiSettingsTab: React.FC = () => {
           ]}
         />
       </Form>
+      <Modal
+        title="شارژ اعتبار هوش مصنوعی"
+        open={topupOpen}
+        onCancel={() => setTopupOpen(false)}
+        onOk={() => void handleTopup()}
+        okText="پرداخت و شارژ"
+        cancelText="انصراف"
+        confirmLoading={topupLoading}
+      >
+        <div className="space-y-3">
+          <Alert
+            type="info"
+            showIcon
+            message="پرداخت از درگاه مرکزی تازه سیستم انجام می‌شود."
+            description="اعتبار هوش مصنوعی سازمان با تومان شارژ می‌شود؛ هزینه هر درخواست پس از محاسبه واقعی AvalAI و حاشیه مصوب از همین اعتبار کم می‌شود."
+          />
+          <div>
+            <div className="mb-1 text-xs text-gray-500">مبلغ شارژ (تومان)</div>
+            <InputNumber
+              min={10000}
+              step={100000}
+              className="w-full"
+              value={topupAmount}
+              formatter={(value) => `${value || ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+              parser={(value) => Number(String(value || '').replace(/,/g, ''))}
+              onChange={(value) => setTopupAmount(Number(value || 0))}
+            />
+          </div>
+          <Input.TextArea
+            value="شارژ اعتبار هوش مصنوعی سازمان"
+            readOnly
+            rows={2}
+          />
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -3,7 +3,7 @@ import { Alert, App, Button, Modal, Skeleton } from 'antd';
 import { FieldType, type ModuleField } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
-import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { fetchProcessRuntimeBatchForRecord } from '../../utils/processRuntimeBatch';
 import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
 import { isProcessExecutionStarted, type ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
@@ -38,7 +38,6 @@ import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
   createProcessTriggerKey,
-  getProcessStageLaneKey,
   getProcessStageNodeKey,
   getProcessStagesByLane,
   materializeLegacyProcessGraph,
@@ -67,6 +66,10 @@ import {
   autoAssignProcessV2DraftStages,
   buildProcessV2TemplateContext,
 } from '../../utils/processV2AutoAssign';
+import {
+  formatProcessStageDueLabel,
+  resolveProcessStageDueValue,
+} from '../../utils/processStageCardLabels';
 import {
   findProcessAssigneeFieldReference,
   getProcessAssigneeFieldKey,
@@ -381,11 +384,7 @@ const collectStageAssigneeFieldReference = (stage: any) => {
   );
 };
 
-const formatDueLabel = (value: unknown) => {
-  const raw = normalizeText(value);
-  if (!raw) return undefined;
-  return toPersianNumber(safeJalaliFormat(raw, raw.includes(':') ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD') || raw);
-};
+const formatDueLabel = (value: unknown) => formatProcessStageDueLabel(value);
 
 const mapStageStatus = (status: unknown, kind: 'draft' | 'activity'): ProcessV2StageStatus => {
   if (kind === 'draft') return 'draft';
@@ -424,15 +423,18 @@ const resolveAssignee = (
   templateContext?: Record<string, any> | null,
 ) => {
   const metadata = parseObject(stage?.metadata);
-  const rawUserId = stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id || metadata?.default_assignee_id;
-  const rawRoleId = stage?.assignee_role_id || stage?.default_assignee_role_id || metadata?.assignee_role_id || metadata?.default_assignee_role_id;
+  const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
+  const rawUserId = stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id || metadata?.assignee_id || metadata?.default_assignee_id || recurrence?.assignee_user_id || recurrence?.assignee_id || recurrence?.default_assignee_id;
+  const rawRoleId = stage?.assignee_role_id || stage?.default_assignee_role_id || metadata?.assignee_role_id || metadata?.default_assignee_role_id || recurrence?.assignee_role_id || recurrence?.default_assignee_role_id;
   const fieldReference = findProcessAssigneeFieldReference(
     rawUserId,
     rawRoleId,
     stage?.default_assignee_field,
     metadata?.default_assignee_field,
+    recurrence?.default_assignee_field,
     stage?.default_assignee_combo,
     metadata?.default_assignee_combo,
+    recurrence?.default_assignee_combo,
   );
   if (fieldReference && templateContext) {
     const resolvedReference = resolveProcessAssigneeReference(fieldReference, templateContext);
@@ -453,8 +455,26 @@ const resolveAssignee = (
       };
     }
   }
-  const userId = normalizeDbUuid(rawUserId);
-  const roleId = normalizeDbUuid(rawRoleId);
+  const roleCandidate = parseAssigneeValue(rawRoleId, 'role');
+  const userCandidate = parseAssigneeValue(rawUserId, 'user');
+  const comboCandidate = parseAssigneeValue(
+    stage?.default_assignee_combo
+    || metadata?.default_assignee_combo
+    || recurrence?.default_assignee_combo,
+    null,
+  );
+  const roleId = normalizeDbUuid(
+    roleCandidate.assigneeType === 'role' ? roleCandidate.assigneeId : (
+      userCandidate.assigneeType === 'role' ? userCandidate.assigneeId : (
+        comboCandidate.assigneeType === 'role' ? comboCandidate.assigneeId : ''
+      )
+    )
+  );
+  const userId = roleId ? '' : normalizeDbUuid(
+    userCandidate.assigneeType === 'user' ? userCandidate.assigneeId : (
+      comboCandidate.assigneeType === 'user' ? comboCandidate.assigneeId : ''
+    )
+  );
   const fieldLabel = resolveFieldAssigneeLabel(
     fieldReference,
     stage,
@@ -516,6 +536,8 @@ const mapRawStageToV2 = (
   templateContext: Record<string, any>,
   fallbackModuleId?: string | null,
   renderTemplateVariables = true,
+  allStages: any[] = [],
+  graph?: any,
 ): ProcessV2Stage => {
   const metadata = parseObject(stage?.metadata);
   const status = normalizeText(stage?.status || metadata?.status).toLowerCase();
@@ -530,7 +552,12 @@ const mapRawStageToV2 = (
     ? 'activity'
     : (explicitDraft || (kind === 'activity' && shouldForceActivityStageToDraft(stage, hasRealTask)) ? 'draft' : kind);
   const assignee = resolveAssignee(stage, directory, fallbackModuleId, templateContext);
-  const rawDue = stage?.planned_due_at || stage?.due_date || metadata?.planned_due_at || metadata?.due_date;
+  const rawDue = resolveProcessStageDueValue({
+    stage,
+    stages: allStages,
+    graph,
+    processStartedAt: stage?.process_started_at || stage?.started_at || stage?.created_at || null,
+  });
   const automationActionCount = getAutomationActionCount(stage);
   const fallbackActionCount = Number(stage?.action_count ?? metadata?.action_count ?? metadata?.actions_count ?? 0);
   const actionCount = automationActionCount > 0 ? automationActionCount : fallbackActionCount;
@@ -576,7 +603,17 @@ const buildLanesFromStages = (
           ...stage,
           [PROCESS_LANE_KEY]: stage?.[PROCESS_LANE_KEY] || lane.key,
         };
-        return mapRawStageToV2(stageWithGraphKeys, stageIndex, kind, directory, templateContext, fallbackModuleId, renderTemplateVariables);
+        return mapRawStageToV2(
+          stageWithGraphKeys,
+          stageIndex,
+          kind,
+          directory,
+          templateContext,
+          fallbackModuleId,
+          renderTemplateVariables,
+          materialized.stages,
+          materialized.graph,
+        );
       }),
     }))
     .filter((lane) => lane.stages.length > 0);
@@ -755,6 +792,220 @@ const collectV2StageAutoAssignIds = (stage: ProcessV2Stage, index = 0) => {
     getProcessStageNodeKey(sourceStage, index),
     getProcessStageNodeKey(source, index),
   ].map(normalizeText).filter(Boolean);
+};
+
+const getV2StageLayoutSlot = (stage: ProcessV2Stage, fallbackIndex: number) => (
+  typeof stage.layoutSlot === 'number' && Number.isFinite(stage.layoutSlot)
+    ? Math.max(0, Math.floor(stage.layoutSlot))
+    : fallbackIndex
+);
+
+const getV2StageSourceLaneKey = (stage: ProcessV2Stage) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const metadata = parseObject(source?.metadata);
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeText(
+    source?.process_lane_key
+    || source?.[PROCESS_LANE_KEY]
+    || metadata?.process_lane_key
+    || metadata?.[PROCESS_LANE_KEY]
+    || sourceStage?.process_lane_key
+    || sourceStage?.[PROCESS_LANE_KEY]
+    || sourceMetadata?.process_lane_key
+    || sourceMetadata?.[PROCESS_LANE_KEY],
+  );
+};
+
+const getV2StageSourceSortOrder = (stage: ProcessV2Stage) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const metadata = parseObject(source?.metadata);
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return Number(
+    source?.sort_order
+    || source?.source_stage_sort_order
+    || metadata?.sort_order
+    || metadata?.source_stage_sort_order
+    || sourceStage?.sort_order
+    || sourceStage?.source_stage_sort_order
+    || sourceMetadata?.sort_order
+    || 0
+  ) || 0;
+};
+
+const getV2StageTaskId = (stage: ProcessV2Stage) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const metadata = parseObject(source?.metadata);
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeDbUuid(
+    source?.task_id
+    || source?.process_task_id
+    || (source?.__process_v2_has_real_task === true || stage.kind === 'activity' ? source?.id : '')
+    || metadata?.task_id
+    || metadata?.process_task_id
+    || sourceStage?.task_id
+    || sourceStage?.process_task_id
+    || sourceMetadata?.task_id,
+  );
+};
+
+const getV2StageRunStageId = (stage: ProcessV2Stage) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const metadata = parseObject(source?.metadata);
+  return normalizeDbUuid(
+    source?.process_run_stage_id
+    || source?.run_stage_id
+    || sourceStage?.id
+    || sourceStage?.process_run_stage_id
+    || metadata?.process_run_stage_id
+    || metadata?.run_stage_id
+    || (source?.process_run_id ? source?.id : ''),
+  );
+};
+
+const getRawStageLaneKey = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  return normalizeText(stage?.process_lane_key || stage?.[PROCESS_LANE_KEY] || metadata?.process_lane_key || metadata?.[PROCESS_LANE_KEY]);
+};
+
+const getRawStageSortOrder = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
+  return Number(
+    stage?.source_stage_sort_order
+    || stage?.sort_order
+    || metadata?.source_stage_sort_order
+    || metadata?.sort_order
+    || recurrence?.source_stage_sort_order
+    || 0
+  ) || 0;
+};
+
+const getRawStageTitleKey = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  return normalizeText(stage?.stage_name || stage?.name || stage?.title || metadata?.stage_name || metadata?.name).toLowerCase();
+};
+
+const rawDraftCandidateMatchesV2StagePoint = (candidate: any, candidateIndex: number, stage: ProcessV2Stage, stageIndex = 0) => {
+  if (rawStageMatchesV2Stage(candidate, stage, candidateIndex)) return true;
+  const wantedIds = new Set(collectV2StageAutoAssignIds(stage, stageIndex));
+  if (collectRawStageIdentityIds(candidate, candidateIndex).some((id) => wantedIds.has(id))) return true;
+
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
+  const sourceMetadata = parseObject(source?.metadata);
+  const candidateMeta = resolveDraftGroupMeta(candidate);
+  const sourceMeta = resolveDraftGroupMeta(source);
+  const targetGroupId = normalizeText(
+    source?.process_group_id
+    || sourceMetadata?.process_group_id
+    || source?.source_template_id
+    || sourceMeta.groupId,
+  );
+  if (targetGroupId && candidateMeta.groupId && targetGroupId !== candidateMeta.groupId) return false;
+
+  const targetStrongIds = new Set([
+    source?.process_node_key,
+    source?.[PROCESS_NODE_KEY],
+    sourceMetadata?.process_node_key,
+    sourceMetadata?.[PROCESS_NODE_KEY],
+    source?.template_stage_id,
+    source?.source_template_stage_id,
+    sourceStage?.template_stage_id,
+    sourceStage?.id,
+    sourceStage?.process_node_key,
+    getProcessStageNodeKey(source, stageIndex),
+  ].map(normalizeText).filter(Boolean));
+  if (targetStrongIds.size > 0 && collectRawStageIdentityIds(candidate, candidateIndex).some((id) => targetStrongIds.has(id))) {
+    return true;
+  }
+
+  const targetLaneKey = normalizeText(
+    source?.process_lane_key
+    || source?.[PROCESS_LANE_KEY]
+    || sourceMetadata?.process_lane_key
+    || sourceMetadata?.[PROCESS_LANE_KEY],
+  );
+  const targetSortOrder = Number(source?.source_stage_sort_order || source?.sort_order || sourceMetadata?.source_stage_sort_order || sourceMetadata?.sort_order || 0) || 0;
+  if (targetLaneKey && targetSortOrder > 0) {
+    return getRawStageLaneKey(candidate) === targetLaneKey && getRawStageSortOrder(candidate) === targetSortOrder;
+  }
+
+  const targetTitle = normalizeText(source?.stage_name || source?.name || stage.title).toLowerCase();
+  return Boolean(targetGroupId && targetSortOrder > 0 && targetTitle)
+    && getRawStageSortOrder(candidate) === targetSortOrder
+    && getRawStageTitleKey(candidate) === targetTitle;
+};
+
+const collectV2CardStagePositions = (card: ProcessV2CardData) => (
+  card.lanes.flatMap((lane) => (
+    [...(lane.stages || [])]
+      .sort((left, right) => {
+        const leftSlot = getV2StageLayoutSlot(left, 0);
+        const rightSlot = getV2StageLayoutSlot(right, 0);
+        if (leftSlot !== rightSlot) return leftSlot - rightSlot;
+        return normalizeText(left.id).localeCompare(normalizeText(right.id));
+      })
+      .map((stage, index) => ({
+        stage,
+        laneKey: normalizeText(lane.id) || 'lane_1',
+        sortOrder: (index + 1) * 10,
+      }))
+  ))
+);
+
+const patchV2StageSourcePosition = (stage: ProcessV2Stage, laneKey: string, sortOrder: number): ProcessV2Stage => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  const metadata = parseObject(source?.metadata);
+  const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : null;
+  const patchedSourceStage = sourceStage
+    ? {
+        ...sourceStage,
+        sort_order: sortOrder,
+        source_stage_sort_order: sortOrder,
+        [PROCESS_LANE_KEY]: laneKey,
+        metadata: {
+          ...parseObject(sourceStage?.metadata),
+          [PROCESS_LANE_KEY]: laneKey,
+        },
+      }
+    : sourceStage;
+  return {
+    ...stage,
+    layoutSlot: Math.max(0, Math.floor(sortOrder / 10) - 1),
+    source: {
+      ...source,
+      sort_order: sortOrder,
+      source_stage_sort_order: sortOrder,
+      [PROCESS_LANE_KEY]: laneKey,
+      ...(patchedSourceStage ? { source_stage: patchedSourceStage } : {}),
+      metadata: {
+        ...metadata,
+        [PROCESS_LANE_KEY]: laneKey,
+        sort_order: sortOrder,
+      },
+    },
+  };
+};
+
+const patchV2CardStageSourcePositions = (card: ProcessV2CardData): ProcessV2CardData => {
+  const positionByStageId = new Map<string, { laneKey: string; sortOrder: number }>();
+  collectV2CardStagePositions(card).forEach((entry) => {
+    positionByStageId.set(entry.stage.id, { laneKey: entry.laneKey, sortOrder: entry.sortOrder });
+  });
+  return {
+    ...card,
+    lanes: card.lanes.map((lane) => ({
+      ...lane,
+      stages: lane.stages.map((stage) => {
+        const position = positionByStageId.get(stage.id);
+        return position ? patchV2StageSourcePosition(stage, position.laneKey, position.sortOrder) : stage;
+      }),
+    })),
+  } as ProcessV2CardData;
 };
 
 const mergeRuntimeDraftStageForAutoAssign = (
@@ -1336,6 +1587,83 @@ const processV2SaveDraftStageSafely = async ({
   });
   if (error) throw error;
   return data || null;
+};
+
+const moveProcessRunStagePositionSafely = async (
+  stageId: string,
+  laneKey: string,
+  sortOrder: number,
+) => {
+  const normalizedStageId = normalizeDbUuid(stageId);
+  if (!normalizedStageId) return false;
+  const normalizedLaneKey = normalizeText(laneKey) || 'lane_1';
+  const normalizedSortOrder = Math.max(1, Number(sortOrder || 10));
+  const rpcResult = await supabase.rpc('move_process_run_stage', {
+    p_process_run_stage_id: normalizedStageId,
+    p_lane_key: normalizedLaneKey,
+    p_sort_order: normalizedSortOrder,
+  });
+  if (!rpcResult.error) return true;
+
+  const withLane = await (supabase.from('process_run_stages' as any) as any)
+    .update({
+      process_lane_key: normalizedLaneKey,
+      sort_order: normalizedSortOrder,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', normalizedStageId);
+  if (!withLane.error) return true;
+
+  const sortOnly = await (supabase.from('process_run_stages' as any) as any)
+    .update({
+      sort_order: normalizedSortOrder,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', normalizedStageId);
+  if (sortOnly.error) throw sortOnly.error;
+  return true;
+};
+
+const updateTaskProcessPositionSafely = async (
+  taskId: string,
+  laneKey: string,
+  sortOrder: number,
+  currentRecurrence: Record<string, any> = {},
+) => {
+  const normalizedTaskId = normalizeDbUuid(taskId);
+  if (!normalizedTaskId) return false;
+  const normalizedLaneKey = normalizeText(laneKey) || 'lane_1';
+  const normalizedSortOrder = Math.max(1, Number(sortOrder || 10));
+  const recurrenceInfo = {
+    ...currentRecurrence,
+    [PROCESS_LANE_KEY]: normalizedLaneKey,
+    source_stage_sort_order: normalizedSortOrder,
+  };
+
+  const withLane = await (supabase.from('tasks' as any) as any)
+    .update({
+      process_lane_key: normalizedLaneKey,
+      sort_order: normalizedSortOrder,
+      source_stage_sort_order: normalizedSortOrder,
+      recurrence_info: recurrenceInfo,
+    })
+    .eq('id', normalizedTaskId);
+  if (!withLane.error) return true;
+
+  const withoutLane = await (supabase.from('tasks' as any) as any)
+    .update({
+      sort_order: normalizedSortOrder,
+      source_stage_sort_order: normalizedSortOrder,
+      recurrence_info: recurrenceInfo,
+    })
+    .eq('id', normalizedTaskId);
+  if (!withoutLane.error) return true;
+
+  const sortOnly = await (supabase.from('tasks' as any) as any)
+    .update({ sort_order: normalizedSortOrder })
+    .eq('id', normalizedTaskId);
+  if (sortOnly.error) throw sortOnly.error;
+  return true;
 };
 
 const recycleOrDeleteProcessRows = async (
@@ -2211,9 +2539,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       const card = buildTemplateCard(recordData || { id: normalizedRecordId }, templateStages, directory, templateContext, false);
       return card ? [card] : [];
     }
-    if (!hasLoadedRuntime) {
-      return buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, [], [], templateContext, normalizedModuleId);
-    }
+    if (!hasLoadedRuntime) return [];
 
     const runRows = (isProcessRunModule(normalizedModuleId)
       ? [recordData].filter(Boolean)
@@ -2292,13 +2618,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       })
       .map((stage) => stage.id);
   }, [highlightedRunStageId, highlightedTaskId]);
-
-  const handleCardChange = useCallback((next: ProcessV2CardData) => {
-    setCardOverrides((current) => ({
-      ...current,
-      [cardKey(next)]: next,
-    }));
-  }, [cardKey]);
 
   const markRuntimeModuleListsChanged = useCallback((options?: {
     taskId?: string | null;
@@ -2428,10 +2747,213 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     void syncProjectStatusForRuntime(runtimeRef.current, normalizedStages);
   }, [cacheKey, fieldKey, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, onDraftStagesChange, syncProjectStatusForRuntime]);
 
+  const persistCardStagePositions = useCallback(async (card: ProcessV2CardData) => {
+    const positionEntries = collectV2CardStagePositions(card);
+    if (positionEntries.length === 0) return;
+
+    const changedEntries = positionEntries.filter(({ stage, laneKey, sortOrder }) => (
+      getV2StageSourceLaneKey(stage) !== laneKey
+      || Number(getV2StageSourceSortOrder(stage) || 0) !== Number(sortOrder)
+    ));
+    if (changedEntries.length === 0) return;
+
+    clearProcessRuntimeTaskCache();
+    processRuntimeBlockCache.delete(cacheKey);
+
+    const draftPositions = changedEntries
+      .filter(({ stage }) => stage.kind === 'draft' || !getV2StageTaskId(stage))
+      .map((entry) => ({ ...entry, wantedIds: new Set(collectV2StageAutoAssignIds(entry.stage)) }));
+
+    const directStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
+    let directChanged = false;
+    const nextDirectStages = directStages.map((candidate, index) => {
+      const match = draftPositions.find((entry) => (
+        rawStageMatchesV2Stage(candidate, entry.stage, index)
+        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+      ));
+      if (!match) return candidate;
+      directChanged = true;
+      const metadata = parseObject(candidate?.metadata);
+      return {
+        ...candidate,
+        sort_order: match.sortOrder,
+        [PROCESS_LANE_KEY]: match.laneKey,
+        metadata: {
+          ...metadata,
+          [PROCESS_LANE_KEY]: match.laneKey,
+          sort_order: match.sortOrder,
+        },
+      };
+    });
+    if (directChanged) {
+      await persistDraftStageList(nextDirectStages);
+    }
+
+    const linkedStages = Array.isArray(linkedDraftStagesRef.current) ? linkedDraftStagesRef.current : [];
+    const linkedUpdates = new Map<string, {
+      ownerModuleId: string;
+      ownerRecordId: string;
+      ownerFieldKey: string;
+      entries: typeof draftPositions;
+    }>();
+    linkedStages.forEach((candidate, index) => {
+      const match = draftPositions.find((entry) => (
+        rawStageMatchesV2Stage(candidate, entry.stage, index)
+        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+      ));
+      if (!match) return;
+      const ownerModuleId = normalizeText(candidate?.__process_v2_linked_owner_module_id);
+      const ownerRecordId = normalizeDbUuid(candidate?.__process_v2_linked_owner_record_id);
+      const ownerFieldKey = normalizeText(candidate?.__process_v2_linked_owner_field_key);
+      if (!ownerModuleId || !ownerRecordId || !ownerFieldKey) return;
+      const ownerKey = `${ownerModuleId}:${ownerRecordId}:${ownerFieldKey}`;
+      const existing = linkedUpdates.get(ownerKey) || {
+        ownerModuleId,
+        ownerRecordId,
+        ownerFieldKey,
+        entries: [],
+      };
+      existing.entries.push(match);
+      linkedUpdates.set(ownerKey, existing);
+    });
+
+    for (const owner of linkedUpdates.values()) {
+      const { data, error } = await (supabase.from(owner.ownerModuleId as any) as any)
+        .select(owner.ownerFieldKey)
+        .eq('id', owner.ownerRecordId)
+        .maybeSingle();
+      if (error) throw error;
+      const ownerStages = Array.isArray(data?.[owner.ownerFieldKey]) ? data[owner.ownerFieldKey] : [];
+      let ownerChanged = false;
+      const nextOwnerStages = ownerStages.map((candidate: any, index: number) => {
+        const match = owner.entries.find((entry) => (
+          rawStageMatchesV2Stage(candidate, entry.stage, index)
+          || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+        ));
+        if (!match) return candidate;
+        ownerChanged = true;
+        const metadata = parseObject(candidate?.metadata);
+        return {
+          ...candidate,
+          sort_order: match.sortOrder,
+          [PROCESS_LANE_KEY]: match.laneKey,
+          metadata: {
+            ...metadata,
+            [PROCESS_LANE_KEY]: match.laneKey,
+            sort_order: match.sortOrder,
+          },
+        };
+      });
+      if (!ownerChanged) continue;
+      const { error: updateError } = await (supabase.from(owner.ownerModuleId as any) as any)
+        .update({ [owner.ownerFieldKey]: nextOwnerStages })
+        .eq('id', owner.ownerRecordId);
+      if (updateError) throw updateError;
+      markModuleListChanged({
+        org_id: orgId || recordDataRef.current?.org_id || null,
+        module_id: owner.ownerModuleId,
+        record_id: owner.ownerRecordId,
+        action: 'update',
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    const runtimePositionUpdates = changedEntries.map(({ stage, laneKey, sortOrder }) => ({
+      taskId: getV2StageTaskId(stage),
+      runStageId: getV2StageRunStageId(stage),
+      laneKey,
+      sortOrder,
+      recurrenceInfo: parseObject((stage.source && typeof stage.source === 'object' ? stage.source : {})?.recurrence_info),
+    }));
+
+    await Promise.all(runtimePositionUpdates.map(async (entry) => {
+      if (entry.runStageId) {
+        await moveProcessRunStagePositionSafely(entry.runStageId, entry.laneKey, entry.sortOrder);
+      }
+      if (entry.taskId) {
+        await updateTaskProcessPositionSafely(entry.taskId, entry.laneKey, entry.sortOrder, entry.recurrenceInfo);
+      }
+    }));
+
+    setRuntime((current) => {
+      const next = {
+        runs: current.runs,
+        stages: current.stages.map((stageRow: any) => {
+          const match = runtimePositionUpdates.find((entry) => entry.runStageId && normalizeDbUuid(stageRow?.id || stageRow?.process_run_stage_id) === entry.runStageId);
+          if (!match) return stageRow;
+          const metadata = parseObject(stageRow?.metadata);
+          return {
+            ...stageRow,
+            sort_order: match.sortOrder,
+            [PROCESS_LANE_KEY]: match.laneKey,
+            metadata: {
+              ...metadata,
+              [PROCESS_LANE_KEY]: match.laneKey,
+              sort_order: match.sortOrder,
+            },
+          };
+        }),
+        tasks: current.tasks.map((task: any) => {
+          const match = runtimePositionUpdates.find((entry) => entry.taskId && normalizeDbUuid(task?.id) === entry.taskId);
+          if (!match) return task;
+          const recurrence = parseObject(task?.recurrence_info);
+          return {
+            ...task,
+            sort_order: match.sortOrder,
+            source_stage_sort_order: match.sortOrder,
+            [PROCESS_LANE_KEY]: match.laneKey,
+            recurrence_info: {
+              ...recurrence,
+              [PROCESS_LANE_KEY]: match.laneKey,
+              source_stage_sort_order: match.sortOrder,
+            },
+          };
+        }),
+      };
+      runtimeRef.current = next;
+      return next;
+    });
+
+    setLinkedDraftStages((current) => current.map((candidate, index) => {
+      const match = draftPositions.find((entry) => (
+        rawStageMatchesV2Stage(candidate, entry.stage, index)
+        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+      ));
+      if (!match) return candidate;
+      const metadata = parseObject(candidate?.metadata);
+      return {
+        ...candidate,
+        sort_order: match.sortOrder,
+        [PROCESS_LANE_KEY]: match.laneKey,
+        metadata: {
+          ...metadata,
+          [PROCESS_LANE_KEY]: match.laneKey,
+          sort_order: match.sortOrder,
+        },
+      };
+    }));
+
+    markRuntimeModuleListsChanged({
+      processRunId: card.mode === 'run' && !normalizeText(card.id).startsWith('draft:') ? card.id : undefined,
+      templateId: card.mode === 'run' ? card.templateId : undefined,
+    });
+  }, [cacheKey, markRuntimeModuleListsChanged, orgId, persistDraftStageList]);
+
+  const handleCardChange = useCallback((next: ProcessV2CardData) => {
+    const patchedNext = patchV2CardStageSourcePositions(next);
+    setCardOverrides((current) => ({
+      ...current,
+      [cardKey(next)]: patchedNext,
+    }));
+    void persistCardStagePositions(next).catch((error: any) => {
+      message.error(normalizeText(error?.message || error?.details) || 'ذخیره جایگاه مرحله فرآیند ناموفق بود');
+    });
+  }, [cardKey, message, persistCardStagePositions]);
+
   const removeDraftStagesByPredicate = useCallback(async (
     predicate: (stage: any, index: number) => boolean,
   ) => {
-    const currentStages = Array.isArray(effectiveDraftStages) ? effectiveDraftStages : [];
+    const currentStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
     const nextStages = currentStages.filter((stage, index) => !predicate(stage, index));
     if (nextStages.length === currentStages.length) {
       message.warning('مرحله پیش‌نویس متناظر برای حذف پیدا نشد.');
@@ -2439,7 +2961,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }
     await persistDraftStageList(nextStages);
     return true;
-  }, [effectiveDraftStages, message, persistDraftStageList]);
+  }, [message, persistDraftStageList]);
 
   const resolveRawDraftStagesForV2Stages = useCallback((
     stages: ProcessV2Stage[],
@@ -2529,9 +3051,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     const targetStages = Array.isArray(stages) ? stages : [];
     if (targetStages.length === 0) return false;
     const matchesTarget = (candidate: any, index: number) => targetStages.some((stage, stageIndex) => {
-      if (rawStageMatchesV2Stage(candidate, stage, index)) return true;
-      const wantedIds = new Set(collectV2StageAutoAssignIds(stage, stageIndex));
-      return collectRawStageIdentityIds(candidate, index).some((id) => wantedIds.has(id));
+      return rawDraftCandidateMatchesV2StagePoint(candidate, index, stage, stageIndex);
     });
 
     const directStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
@@ -2832,15 +3352,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const deleteProcessRecordCompletely = useCallback(async (process: ProcessV2CardData) => {
     if (normalizeText(process.id).startsWith('draft:')) {
-      const targetGroupId = normalizeText(process.id).replace(/^draft:/, '');
       const removedBySource = await removeDraftSourceForV2Stages(process.lanes.flatMap((lane) => lane.stages));
-      const removed = removedBySource || await removeDraftStagesByPredicate((stage) => (
-        resolveDraftGroupMeta(stage).groupId === targetGroupId
-      ));
-      if (removed) {
+      if (removedBySource) {
         setHiddenCardIds((current) => new Set([...Array.from(current), cardKey(process)]));
       }
-      return removed;
+      return removedBySource;
     }
 
     if (process.mode === 'template') {
@@ -2880,7 +3396,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     processRuntimeBlockCache.delete(cacheKey);
     await refresh(true);
     return true;
-  }, [cacheKey, cardKey, deleteTemplateStages, message, refresh, removeDraftSourceForV2Stages, removeDraftStagesByPredicate]);
+  }, [cacheKey, cardKey, deleteTemplateStages, message, refresh, removeDraftSourceForV2Stages]);
 
   const handleBulkDeleteChoice = useCallback(async (mode: StageDeleteMode) => {
     if (!bulkDeleteRequest || bulkDeleteBusy) return;
@@ -2912,15 +3428,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
                 console.warn('Could not remove process v2 draft sources after deleting lane', error);
               });
             } else {
-              const targetGroupId = normalizeText(process.id).startsWith('draft:')
-                ? normalizeText(process.id).replace(/^draft:/, '')
-                : '';
-              const targetLaneId = normalizeText(lane.id);
-              await removeDraftStagesByPredicate((candidate) => {
-                const meta = resolveDraftGroupMeta(candidate);
-                if (targetGroupId && meta.groupId !== targetGroupId) return false;
-                return getProcessStageLaneKey(candidate) === targetLaneId;
-              });
+              const removed = await removeDraftSourceForV2Stages(lane.stages);
+              if (!removed) {
+                message.warning('مرحله پیش‌نویس متناظر برای این ردیف پیدا نشد؛ حذف وسیع انجام نشد.');
+                return;
+              }
             }
           }
           setCardOverrides((current) => {
@@ -3013,7 +3525,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     message,
     normalizedModuleId,
     refresh,
-    removeDraftStagesByPredicate,
     removeDraftSourceForV2Stages,
     deleteRunDraftStages,
     deleteTemplateStages,

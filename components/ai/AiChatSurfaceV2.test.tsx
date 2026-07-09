@@ -92,12 +92,13 @@ describe('AiChatSurfaceV2', () => {
       if (action === 'get_ai_overview') {
         return { data: { success: true, capabilityAvailability: {} }, error: null };
       }
-      if (action === 'get_ai_credit_summary') {
+      if (action === 'get_ai_credit_summary' || action === 'get_ai_usage_summary') {
         return {
           data: {
             success: true,
-            remainingTokens: 12000,
-            remainingIrt: 450000,
+            access: { allowed: true, canManageAiSettings: true },
+            dailyUsage: { usedTokens: 12000, dailyTokenLimit: 80000, remainingTokens: 68000 },
+            orgWallet: { remainingIrt: 450000, warning: false, exhausted: false },
             company: { currency_code: 'IRT', currency_label: 'تومان' },
           },
           error: null,
@@ -122,7 +123,7 @@ describe('AiChatSurfaceV2', () => {
 
     expect(screen.getByTestId('ai-chat-v2')).toBeInTheDocument();
     expect(screen.getAllByText('هوش مصنوعی تازه سیستم')[0]).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText(/اعتبار باقیمانده هوش مصنوعی:/)[0]).toHaveTextContent('۱۲,۰۰۰ توکن'));
+    await waitFor(() => expect(screen.getAllByText(/مصرف امروز:/)[0]).toHaveTextContent('۱۲,۰۰۰'));
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({ body: expect.objectContaining({ action: 'list_threads' }) }));
 
@@ -205,7 +206,7 @@ describe('AiChatSurfaceV2', () => {
     })).toBe(false);
   }, 15000);
 
-  it('shows an incomplete stream as an error instead of keeping the partial answer', async () => {
+  it('keeps the partial answer when an incomplete stream reaches the output limit', async () => {
     fetchMock.mockResolvedValueOnce(streamResponse([
       'event: meta\ndata: {"success":true,"threadId":"new-thread","userMessageId":"user-msg","provider":"avalai","model":"gpt-test"}\n\n',
       'event: delta\ndata: {"text":"پاسخ نصفه"}\n\n',
@@ -224,8 +225,9 @@ describe('AiChatSurfaceV2', () => {
       </MemoryRouter>
     );
 
-    await waitFor(() => expect(screen.getByText('پاسخ هوش مصنوعی کامل دریافت نشد.')).toBeInTheDocument());
-    expect(screen.queryByText('پاسخ نصفه')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/پاسخ نصفه/)).toBeInTheDocument());
+    expect(screen.getByText(/متن دریافت‌شده حفظ شد/)).toBeInTheDocument();
+    expect(screen.queryByText('پاسخ هوش مصنوعی کامل دریافت نشد.')).not.toBeInTheDocument();
   }, 15000);
 
   it('renames the active thread inline from the conversation header', async () => {

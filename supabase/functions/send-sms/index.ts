@@ -37,7 +37,7 @@ type AuthHookPayload = {
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-kalam-internal',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
@@ -1339,6 +1339,10 @@ Deno.serve(async (req) => {
     const hookPhone = extractHookPhone(body as any);
     const hasHookSecret = !!hookSecret && requestHookSecret === hookSecret;
     const hasBearerToken = authHeader.startsWith('Bearer ');
+    const token = hasBearerToken ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
+    const isInternalServiceRequest =
+      token === serviceRoleKey &&
+      String(req.headers.get('x-kalam-internal') || '').trim() === 'workflow-interval-runner';
     const action = String(body?.action || 'send').trim();
     const isSupabaseAuthHookPayload = !hasBearerToken && !!body?.user && (!!body?.sms || !!hookOtp);
     const isHookSmsPayload =
@@ -1401,15 +1405,16 @@ Deno.serve(async (req) => {
         return authHookError(400, message);
       }
     }
-    if (!authHeader.startsWith('Bearer ')) {
+    if (!hasBearerToken) {
       return json(401, { success: false, message: 'Missing bearer token' });
     }
 
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    try {
-      await verifyUserToken(supabaseUrl, serviceRoleKey, token);
-    } catch {
-      return json(401, { success: false, message: 'Unauthorized' });
+    if (!isInternalServiceRequest) {
+      try {
+        await verifyUserToken(supabaseUrl, serviceRoleKey, token);
+      } catch {
+        return json(401, { success: false, message: 'Unauthorized' });
+      }
     }
 
     const settings = await getSmsSettings(supabaseUrl, serviceRoleKey, body?.overrideSettings);

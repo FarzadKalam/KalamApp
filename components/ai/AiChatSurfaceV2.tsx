@@ -24,8 +24,27 @@ type AiThreadRow = {
 };
 
 type AiCreditSummary = {
-  remainingTokens?: number | null;
-  remainingIrt?: number | null;
+  access?: {
+    allowed?: boolean;
+    reason?: string | null;
+    canManageAiSettings?: boolean;
+    canViewSaasAdmin?: boolean;
+  } | null;
+  dailyUsage?: {
+    usedTokens?: number | null;
+    dailyTokenLimit?: number | null;
+    remainingTokens?: number | null;
+    usageRatio?: number | null;
+    warning?: boolean;
+    exhausted?: boolean;
+  } | null;
+  orgWallet?: {
+    remainingIrt?: number | null;
+    balanceIrt?: number | null;
+    includedQuotaIrt?: number | null;
+    warning?: boolean;
+    exhausted?: boolean;
+  } | null;
   company?: {
     currency_code?: string | null;
     currency_label?: string | null;
@@ -68,17 +87,32 @@ const formatThreadTime = (value?: string | null) => {
 
 const formatAiCreditSummary = (summary?: AiCreditSummary | null) => {
   if (!summary) return 'در حال دریافت...';
-  const hasTokenValue = summary.remainingTokens !== null && summary.remainingTokens !== undefined;
-  const tokenValue = Number(summary.remainingTokens || 0);
-  const tokenText = hasTokenValue && Number.isFinite(tokenValue) ? formatPersianPrice(Math.max(0, Math.floor(tokenValue))) : 'نامشخص';
+  if (summary.access?.allowed === false) return 'دسترسی هوش مصنوعی ندارید';
+  const daily = summary.dailyUsage || {};
+  const usedTokens = Math.max(0, Math.floor(Number(daily.usedTokens || 0)));
+  const limitTokens = Math.max(0, Math.floor(Number(daily.dailyTokenLimit || 0)));
+  const usageText = limitTokens > 0
+    ? `مصرف امروز: ${formatPersianPrice(usedTokens)} از ${formatPersianPrice(limitTokens)} توکن`
+    : `مصرف امروز: ${formatPersianPrice(usedTokens)} توکن`;
+  if (!summary.access?.canManageAiSettings && !summary.access?.canViewSaasAdmin) return usageText;
   const currencyCode = String(summary.company?.currency_code || 'IRT').toUpperCase();
   const currencyLabel = String(summary.company?.currency_label || (currencyCode === 'IRR' ? 'ریال' : 'تومان')).trim() || 'تومان';
   const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
-  const amount = summary.remainingIrt === null || summary.remainingIrt === undefined
+  const amount = summary.orgWallet?.remainingIrt === null || summary.orgWallet?.remainingIrt === undefined
     ? null
-    : Math.max(0, Number(summary.remainingIrt || 0)) * currencyMultiplier;
+    : Math.max(0, Number(summary.orgWallet?.remainingIrt || 0)) * currencyMultiplier;
   const amountText = amount === null ? 'نامشخص' : `${formatPersianPrice(amount)} ${currencyLabel}`;
-  return `${tokenText} توکن (${amountText})`;
+  return `${usageText} | اعتبار سازمان: ${amountText}`;
+};
+
+const getAiUsageWarningText = (summary?: AiCreditSummary | null) => {
+  if (!summary) return '';
+  if (summary.access?.allowed === false) return 'شما به هوش مصنوعی دسترسی ندارید. برای فعال‌سازی با مدیر سازمان هماهنگ کنید.';
+  if (summary.orgWallet?.exhausted) return 'اعتبار هوش مصنوعی سازمان تمام شده است.';
+  if (summary.dailyUsage?.exhausted) return 'سقف مصرف روزانه هوش مصنوعی شما تمام شده است.';
+  if (summary.orgWallet?.warning) return 'اعتبار هوش مصنوعی سازمان رو به اتمام است.';
+  if (summary.dailyUsage?.warning) return 'کمتر از ده درصد سقف مصرف روزانه هوش مصنوعی شما باقی مانده است.';
+  return '';
 };
 
 const isHiddenAssistantThread = (thread?: AiThreadRow | null) => {
@@ -108,6 +142,7 @@ const AiChatSurfaceV2: React.FC = () => {
   const [threadListOpen, setThreadListOpen] = useState(false);
   const [loadingThreads, setLoadingThreads] = useState(true);
   const [aiCreditSummary, setAiCreditSummary] = useState<AiCreditSummary | null>(null);
+  const [dismissedAiWarning, setDismissedAiWarning] = useState(false);
   const [search, setSearch] = useState('');
   const [newConversationSeed, setNewConversationSeed] = useState(0);
   const searchInputRef = useRef<any>(null);
@@ -180,14 +215,14 @@ const AiChatSurfaceV2: React.FC = () => {
     let mounted = true;
     const loadCreditSummary = async () => {
       try {
-        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_ai_credit_summary' } });
+        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_ai_usage_summary' } });
         if (error) throw error;
         if ((data as any)?.success === false) throw new Error(String((data as any)?.message || 'دریافت اعتبار هوش مصنوعی ناموفق بود.'));
         if (mounted) setAiCreditSummary(data as AiCreditSummary);
       } catch {
         if (mounted) setAiCreditSummary({
-          remainingTokens: null,
-          remainingIrt: null,
+          access: { allowed: true },
+          dailyUsage: { usedTokens: 0, dailyTokenLimit: null, remainingTokens: null },
           company: { currency_code: 'IRT', currency_label: 'تومان' },
         });
       }
@@ -210,6 +245,7 @@ const AiChatSurfaceV2: React.FC = () => {
     const activeThread = threads.find((thread) => String(thread.id) === String(activeThreadId || ''));
     return activeThread ? getThreadTitle(activeThread) : null;
   }, [activeThreadId, threads]);
+  const aiUsageWarningText = useMemo(() => getAiUsageWarningText(aiCreditSummary), [aiCreditSummary]);
 
   const closeThreadList = useCallback(() => {
     setThreadListOpen(false);
@@ -249,7 +285,7 @@ const AiChatSurfaceV2: React.FC = () => {
             <div className="min-w-0">
               <div className="truncate text-[13px] font-bold text-slate-800 dark:text-slate-100">هوش مصنوعی تازه سیستم</div>
               <div className="mt-0.5 truncate text-[10.5px] leading-4 text-slate-500 dark:text-slate-400">
-                اعتبار باقیمانده هوش مصنوعی: {formatAiCreditSummary(aiCreditSummary)}
+                {formatAiCreditSummary(aiCreditSummary)}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
@@ -270,6 +306,19 @@ const AiChatSurfaceV2: React.FC = () => {
             prefix={<SearchOutlined className="text-slate-400" />}
             className="mt-2"
           />
+          {aiUsageWarningText && !dismissedAiWarning ? (
+            <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[10.5px] leading-5 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+              <span>{aiUsageWarningText}</span>
+              <Button
+                type="text"
+                size="small"
+                icon={<CloseOutlined />}
+                aria-label="بستن هشدار هوش مصنوعی"
+                className="!h-5 !w-5 !min-w-5 !p-0 !text-red-700 dark:!text-red-200"
+                onClick={() => setDismissedAiWarning(true)}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
       <div className={compact ? 'space-y-1' : 'min-h-0 flex-1 overflow-y-auto p-1.5'}>

@@ -4,7 +4,6 @@ import {
   App,
   Button,
   Collapse,
-  Descriptions,
   Empty,
   Form,
   Input,
@@ -22,9 +21,9 @@ import {
 import {
   CloudSyncOutlined,
   EditOutlined,
+  GiftOutlined,
   PlusOutlined,
   ReloadOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
@@ -88,6 +87,11 @@ const SaasAdminAiSettings: React.FC = () => {
   const [editModel, setEditModel] = useState<AiModel | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
+  const [selectedOrgIds, setSelectedOrgIds] = useState<React.Key[]>([]);
+  const [giftOpen, setGiftOpen] = useState(false);
+  const [giftAmount, setGiftAmount] = useState<number | null>(250000);
+  const [giftReason, setGiftReason] = useState('اعتبار هدیه هوش مصنوعی');
+  const [giftSaving, setGiftSaving] = useState(false);
   const [form] = Form.useForm<ModelFormValues>();
 
   const loadOverview = useCallback(async () => {
@@ -110,8 +114,15 @@ const SaasAdminAiSettings: React.FC = () => {
   const totals = overview?.totals || {};
   const providerCredit = overview?.providerCredit || {};
   const providerBalance = providerCredit?.credit?.toman
+    ?? providerCredit?.credit?.irt
+    ?? providerCredit?.credit?.rial
     ?? providerCredit?.credit?.remaining_irt
     ?? providerCredit?.credit?.remaining
+    ?? null;
+  const providerTokenBalance = providerCredit?.credit?.token
+    ?? providerCredit?.credit?.tokens
+    ?? providerCredit?.credit?.unit
+    ?? providerCredit?.credit?.credit
     ?? null;
 
   const handleSyncModels = async () => {
@@ -194,6 +205,36 @@ const SaasAdminAiSettings: React.FC = () => {
         : prev);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'تغییر وضعیت مدل ناموفق بود.'));
+    }
+  };
+
+  const grantGiftCredit = async () => {
+    const amount = Math.round(Number(giftAmount || 0));
+    if (selectedOrgIds.length === 0) {
+      message.error('حداقل یک سازمان را انتخاب کنید.');
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      message.error('مبلغ اعتبار هدیه معتبر نیست.');
+      return;
+    }
+    setGiftSaving(true);
+    try {
+      const data = await callAi({
+        action: 'saas_ai',
+        sub: 'gift_credit',
+        orgIds: selectedOrgIds.map(String),
+        amount_irt: amount,
+        reason: giftReason || 'اعتبار هدیه هوش مصنوعی',
+      });
+      message.success(`برای ${Number(data?.count || selectedOrgIds.length).toLocaleString('fa-IR')} سازمان اعتبار هدیه ثبت شد.`);
+      setGiftOpen(false);
+      setSelectedOrgIds([]);
+      await loadOverview();
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ثبت اعتبار هدیه ناموفق بود.'));
+    } finally {
+      setGiftSaving(false);
     }
   };
 
@@ -282,10 +323,28 @@ const SaasAdminAiSettings: React.FC = () => {
 
   const orgColumns = [
     { title: 'سازمان', dataIndex: 'org_name', render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
+    { title: 'اعتبار باقی‌مانده', dataIndex: 'wallet_remaining_irt', render: (v: number) => formatIrt(v) },
     { title: 'تعداد درخواست', dataIndex: 'requests' },
     { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
     { title: 'هزینه خام (تومان)', dataIndex: 'raw_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
+    { title: 'آخرین هدیه', dataIndex: 'last_gift_irt', render: (v: number) => v ? formatIrt(v) : '-' },
     { title: 'مدل‌های استفاده‌شده', dataIndex: 'models', render: (v: string[]) => <Space wrap size={2}>{(v || []).slice(0, 4).map((m) => <Tag key={m} className="text-[10px] m-0">{m}</Tag>)}</Space> },
+    {
+      title: '',
+      width: 80,
+      render: (_: unknown, row: any) => (
+        <Button
+          size="small"
+          icon={<GiftOutlined />}
+          onClick={() => {
+            setSelectedOrgIds([row.org_id]);
+            setGiftOpen(true);
+          }}
+        >
+          هدیه
+        </Button>
+      ),
+    },
   ];
 
   return (
@@ -318,6 +377,11 @@ const SaasAdminAiSettings: React.FC = () => {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="اعتبار AvalAI" value={providerBalance || 0} formatter={formatIrt} />
+          {providerTokenBalance !== null && providerTokenBalance !== undefined ? (
+            <div className="mt-1 text-xs text-gray-500">
+              واحد/توکن: {Number(providerTokenBalance || 0).toLocaleString('fa-IR')}
+            </div>
+          ) : null}
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-white/10 dark:bg-white/5">
           <Statistic title="کل درآمد ثبت‌شده" value={totals.billed_irt || 0} formatter={formatIrt} />
@@ -342,31 +406,6 @@ const SaasAdminAiSettings: React.FC = () => {
       <Collapse
         defaultActiveKey={['models', 'usage_all']}
         items={[
-          {
-            key: 'provider',
-            label: (
-              <span className="inline-flex items-center gap-2">
-                <ThunderboltOutlined /> اطلاعات Provider مرکزی
-              </span>
-            ),
-            children: (
-              <Descriptions bordered size="small" column={1}>
-                <Descriptions.Item label="Provider">AvalAI (مرکزی TazeSystem)</Descriptions.Item>
-                <Descriptions.Item label="کلید API">از طریق secret «AI_API_KEY» در Edge Function تنظیم می‌شود</Descriptions.Item>
-                <Descriptions.Item label="آدرس پایه">https://api.avalai.ir/v1</Descriptions.Item>
-                <Descriptions.Item label="آدرس Fallback">https://api.avalapis.ir/v1</Descriptions.Item>
-                <Descriptions.Item label="مدل مالی">
-                  محاسبه هزینه بر اساس usage از AvalAI + حاشیه سود — دفتر مصرف داخلی TazeSystem منبع حقیقت است
-                </Descriptions.Item>
-                <Descriptions.Item label="منبع حقیقت مالی">جدول org_ai_usage_ledger — AvalAI User API برای Reconciliation</Descriptions.Item>
-                <Descriptions.Item label="وضعیت اعتبار">
-                  {providerCredit?.available
-                    ? <Tag color="green">متصل — {formatIrt(providerBalance)}</Tag>
-                    : <Tag color="red">قابل دریافت نیست</Tag>}
-                </Descriptions.Item>
-              </Descriptions>
-            ),
-          },
           {
             key: 'models',
             label: (
@@ -399,16 +438,43 @@ const SaasAdminAiSettings: React.FC = () => {
             key: 'usage_orgs',
             label: 'خلاصه مصرف هر سازمان',
             children: (
-              <Table
-                rowKey="org_id"
-                size="small"
-                loading={loading}
-                dataSource={orgSummaries}
-                columns={orgColumns}
-                pagination={{ pageSize: 10 }}
-                locale={{ emptyText: <Empty description="مصرفی ثبت نشده است." /> }}
-                scroll={{ x: 700 }}
-              />
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Space wrap>
+                    <Button
+                      icon={<GiftOutlined />}
+                      type="primary"
+                      disabled={selectedOrgIds.length === 0}
+                      onClick={() => setGiftOpen(true)}
+                    >
+                      افزودن اعتبار هدیه
+                    </Button>
+                    <Button onClick={() => setSelectedOrgIds(orgSummaries.map((row) => row.org_id))}>
+                      انتخاب همه
+                    </Button>
+                    <Button onClick={() => setSelectedOrgIds([])}>
+                      لغو انتخاب
+                    </Button>
+                  </Space>
+                  <Text type="secondary" className="text-xs">
+                    {selectedOrgIds.length.toLocaleString('fa-IR')} سازمان انتخاب شده
+                  </Text>
+                </div>
+                <Table
+                  rowKey="org_id"
+                  size="small"
+                  loading={loading}
+                  dataSource={orgSummaries}
+                  columns={orgColumns}
+                  rowSelection={{
+                    selectedRowKeys: selectedOrgIds,
+                    onChange: setSelectedOrgIds,
+                  }}
+                  pagination={{ pageSize: 10 }}
+                  locale={{ emptyText: <Empty description="سازمانی پیدا نشد." /> }}
+                  scroll={{ x: 980 }}
+                />
+              </div>
             ),
           },
           {
@@ -429,6 +495,41 @@ const SaasAdminAiSettings: React.FC = () => {
           },
         ]}
       />
+
+      <Modal
+        open={giftOpen}
+        title="افزودن اعتبار هدیه"
+        onCancel={() => setGiftOpen(false)}
+        onOk={() => void grantGiftCredit()}
+        confirmLoading={giftSaving}
+        okText="ثبت اعتبار"
+        cancelText="انصراف"
+      >
+        <div className="space-y-3">
+          <Alert
+            type="info"
+            showIcon
+            message={`${selectedOrgIds.length.toLocaleString('fa-IR')} سازمان انتخاب شده است.`}
+            description="این اعتبار داخلی برای سازمان ثبت می‌شود و پرداخت واقعی از AvalAI انجام نمی‌دهد."
+          />
+          <div>
+            <div className="mb-1 text-xs text-gray-500">مبلغ هدیه برای هر سازمان (تومان)</div>
+            <InputNumber
+              min={1}
+              step={100000}
+              className="w-full"
+              value={giftAmount}
+              formatter={(value) => `${value || ''}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+              parser={(value) => Number(String(value || '').replace(/,/g, ''))}
+              onChange={(value) => setGiftAmount(Number(value || 0))}
+            />
+          </div>
+          <div>
+            <div className="mb-1 text-xs text-gray-500">توضیح</div>
+            <Input value={giftReason} onChange={(event) => setGiftReason(event.target.value)} />
+          </div>
+        </div>
+      </Modal>
 
       {/* Edit/Add model modal */}
       <Modal
