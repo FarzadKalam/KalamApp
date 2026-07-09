@@ -25,6 +25,7 @@ import { formatIranMobileForInput, normalizeIranMobile } from '../../utils/phone
 import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../../utils/sessionCache';
 import { clearReferenceDataCache } from '../../utils/referenceData';
 import { canManageSuperAdminByRoleContext, canManageUsersByRoleContext } from '../../utils/softwareRoles';
+import { invokeUserAdminFunction } from '../../utils/userAdminInvoke';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
@@ -453,16 +454,7 @@ const UsersTab: React.FC = () => {
   };
 
   const invokeUserAdmin = async (body: Record<string, any>) => {
-    const { data, error } = await supabase.functions.invoke('user-admin', {
-      body,
-    });
-    if (error) throw error;
-    if (data?.success === false) {
-      const nextError: any = new Error(String(data?.message || 'خطا در عملیات کاربر'));
-      if (data?.reason_code) nextError.code = String(data.reason_code);
-      throw nextError;
-    }
-    return data;
+    return invokeUserAdminFunction(body);
   };
 
   const buildVoipProfilePatch = (values: any) => ({
