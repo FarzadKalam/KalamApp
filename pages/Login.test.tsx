@@ -22,6 +22,7 @@ const {
     verifyOtp: vi.fn(),
     signInWithPassword: vi.fn(),
     signOut: vi.fn(),
+    getSession: vi.fn(),
     getUser: vi.fn(),
     onAuthStateChange: vi.fn(),
     resetPasswordForEmail: vi.fn(),
@@ -164,6 +165,7 @@ const {
       verifyOtp: (...args: any[]) => authState.verifyOtp(...args),
       signInWithPassword: (...args: any[]) => authState.signInWithPassword(...args),
       signOut: (...args: any[]) => authState.signOut(...args),
+      getSession: (...args: any[]) => authState.getSession(...args),
       getUser: (...args: any[]) => authState.getUser(...args),
       onAuthStateChange: (...args: any[]) => authState.onAuthStateChange(...args),
       resetPasswordForEmail: (...args: any[]) => authState.resetPasswordForEmail(...args),
@@ -220,6 +222,8 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('../supabaseClient', () => ({
   supabase: supabaseMock,
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_ANON_KEY: 'anon-key',
 }));
 
 const renderLogin = () =>
@@ -259,6 +263,7 @@ describe('Login OTP and password flows', () => {
     });
     authState.onAuthStateChange.mockReturnValue({ data: { subscription: { unsubscribe: vi.fn() } } });
     authState.signOut.mockResolvedValue({ error: null });
+    authState.getSession.mockResolvedValue({ data: { session: { access_token: 'session-token' } }, error: null });
     authState.resetPasswordForEmail.mockResolvedValue({ error: null });
     authState.updateUser.mockResolvedValue({ error: null });
     rpcState.mockResolvedValue({ data: null, error: null });
@@ -387,7 +392,7 @@ describe('Login OTP and password flows', () => {
     expect(document.body.textContent || '').toContain('ورود با موفقیت انجام شد');
   }, 15000);
 
-  it('repairs legacy phone conflict, signs out, and resends OTP', async () => {
+  it('repairs legacy phone conflict and continues login with the verified session', async () => {
     rpcState.mockImplementation(async (fn: string) => {
       if (fn === 'check_phone_login_candidate') {
         return {
@@ -442,14 +447,17 @@ describe('Login OTP and password flows', () => {
           action: 'repair_legacy_phone_login',
           phone: '+989125555555',
         },
+        headers: {
+          Authorization: 'Bearer session-token',
+        },
       });
     });
     await waitFor(() => {
-      expect(authState.signOut).toHaveBeenCalled();
-      expect(authState.signInWithOtp).toHaveBeenCalledTimes(2);
+      expect(mockTrackSuccessfulLogin).toHaveBeenCalledWith('otp');
+      expect(mockNavigate).toHaveBeenCalledWith('/', { replace: true });
     });
-    expect(document.body.textContent || '').toContain('تعارض قدیمی ورود پیامکی این شماره تعمیر شد');
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(authState.signOut).not.toHaveBeenCalled();
+    expect(authState.signInWithOtp).toHaveBeenCalledTimes(1);
   }, 15000);
 
   it('blocks invited otp login when invite conflicts with another org ownership', async () => {
@@ -547,7 +555,7 @@ describe('Login OTP and password flows', () => {
     await screen.findByText('ورود با کد یکبارمصرف');
 
     expect((screen.getByPlaceholderText('0912...') as HTMLInputElement).value).toBe('09127778888');
-    expect((screen.getByPlaceholderText('123456') as HTMLInputElement).value).toBe('4321');
+    expect((screen.getByPlaceholderText('123456') as HTMLInputElement).value).toBe('');
     expect(document.body.textContent || '').toContain('ارسال مجدد تا');
   });
 });

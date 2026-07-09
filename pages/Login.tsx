@@ -11,6 +11,7 @@ import { assertLoginOtpRequestAllowed, consumePhoneSignupInvite, lookupPhoneLogi
 import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 import { signOutLocalSession } from '../utils/authSession';
+import { invokeUserAdminFunction } from '../utils/userAdminInvoke';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
@@ -313,14 +314,11 @@ const Login = () => {
   };
 
   const repairLegacyPhoneLoginConflict = async (phoneNumber: string) => {
-    const { data, error } = await supabase.functions.invoke('user-admin', {
-      body: {
-        action: 'repair_legacy_phone_login',
-        phone: phoneNumber,
-      },
+    const data = await invokeUserAdminFunction({
+      action: 'repair_legacy_phone_login',
+      phone: phoneNumber,
     });
 
-    if (error) throw error;
     if (!data?.success) {
       throw new Error(String(data?.message || '__otp_phone_profile_conflict__'));
     }

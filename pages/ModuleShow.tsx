@@ -251,6 +251,50 @@ const buildAccountingEntryChoices = (entries: ResolvedJournalEntry[]): Accountin
   return Array.from(grouped.values());
 };
 
+const MODULE_SHOW_INLINE_DRAFT_PREFIX = 'kalamapp:module-show-inline-draft:v1';
+
+const readModuleShowInlineDraft = (key: string) => {
+  if (!key || typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      values: parsed.values && typeof parsed.values === 'object' ? parsed.values : {},
+      editingFields: parsed.editingFields && typeof parsed.editingFields === 'object' ? parsed.editingFields : {},
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeModuleShowInlineDraft = (
+  key: string,
+  values: Record<string, any>,
+  editingFields: Record<string, boolean>,
+) => {
+  if (!key || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(key, JSON.stringify({
+      values,
+      editingFields,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    // Draft persistence must not block editing if storage is unavailable.
+  }
+};
+
+const clearModuleShowInlineDraft = (key: string) => {
+  if (!key || typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+};
+
 const ModuleShowSkeleton: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f6f7fb] dark:bg-[#0f1115] px-4 py-5 md:px-6">
@@ -476,6 +520,10 @@ const ModuleShow: React.FC = () => {
   const displayData = useMemo(
     () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
     [data, moduleId]
+  );
+  const inlineDraftStorageKey = useMemo(
+    () => (moduleId && id ? `${MODULE_SHOW_INLINE_DRAFT_PREFIX}:${moduleId}:${id}` : ''),
+    [id, moduleId],
   );
   const recordLockState = useMemo(() => getRecordLockStateFromRecord(data), [data]);
   const isRecordLocked = recordLockState.isLocked;
@@ -802,8 +850,27 @@ const ModuleShow: React.FC = () => {
     setOptionsReady(!!cachedOptionSnapshot);
     setCurrentTags(hasFreshSnapshot ? cachedSnapshot?.tags ?? [] : []);
     setAccessDenied(false);
+    const inlineDraft = readModuleShowInlineDraft(inlineDraftStorageKey);
+    setEditingFields(inlineDraft?.editingFields || {});
+    setTempValues(inlineDraft?.values || {});
     hasRecordDataRef.current = hasFreshSnapshot;
-  }, [id, moduleId]);
+  }, [id, inlineDraftStorageKey, moduleId]);
+
+  useEffect(() => {
+    if (!inlineDraftStorageKey) return;
+    const activeKeys = Object.keys(editingFields || {}).filter((key) => editingFields[key]);
+    if (activeKeys.length === 0) {
+      clearModuleShowInlineDraft(inlineDraftStorageKey);
+      return;
+    }
+    const draftValues = activeKeys.reduce<Record<string, any>>((acc, key) => {
+      if (Object.prototype.hasOwnProperty.call(tempValues || {}, key)) {
+        acc[key] = tempValues[key];
+      }
+      return acc;
+    }, {});
+    writeModuleShowInlineDraft(inlineDraftStorageKey, draftValues, editingFields);
+  }, [editingFields, inlineDraftStorageKey, tempValues]);
 
   useEffect(() => {
     hasRecordDataRef.current = !!data;
@@ -4693,9 +4760,19 @@ const ModuleShow: React.FC = () => {
   const startEdit = (key: string, value: any) => {
     if (!canEditModule) return;
     setEditingFields(prev => ({ ...prev, [key]: true }));
-    setTempValues(prev => ({ ...prev, [key]: value }));
+    setTempValues(prev => ({
+      ...prev,
+      [key]: Object.prototype.hasOwnProperty.call(prev || {}, key) ? prev[key] : value,
+    }));
   };
-  const cancelEdit = (key: string) => { setEditingFields(prev => ({ ...prev, [key]: false })); };
+  const cancelEdit = (key: string) => {
+    setEditingFields(prev => ({ ...prev, [key]: false }));
+    setTempValues(prev => {
+      const next = { ...(prev || {}) };
+      delete next[key];
+      return next;
+    });
+  };
 
   const checkVisibility = useCallback((target: any) => {
     if (!target) return true;
@@ -5854,7 +5931,12 @@ const ModuleShow: React.FC = () => {
         ? `flex w-full min-w-0 flex-col gap-2 ${isSuperLongTextField ? 'items-stretch' : ''}`
         : `flex w-full min-w-[150px] gap-1 ${isSuperLongTextField ? 'items-start' : 'items-center'}`;
       return (
-        <div className={inlineEditorClassName}>
+        <div
+          className={inlineEditorClassName}
+          onClickCapture={(event) => event.stopPropagation()}
+          onMouseDownCapture={(event) => event.stopPropagation()}
+          onPointerDownCapture={(event) => event.stopPropagation()}
+        >
           <div className="min-w-0 flex-1">
             <SmartFieldRenderer
               field={field}
@@ -5943,7 +6025,13 @@ const ModuleShow: React.FC = () => {
 
     if (isHeader) {
       return (
-        <div className="group flex w-full min-w-0 items-start gap-2 cursor-pointer" onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}>
+        <div
+          className="group flex w-full min-w-0 items-start gap-2 cursor-pointer"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked) startEdit(field.key, value);
+          }}
+        >
           <div className="min-w-0 flex-1 overflow-hidden">
             {displayNode}
           </div>
@@ -5955,7 +6043,10 @@ const ModuleShow: React.FC = () => {
     return (
       <div
         className={`group flex justify-between min-h-[32px] hover:bg-gray-50 dark:hover:bg-white/5 px-3 rounded-lg -mx-3 transition-colors cursor-pointer border border-transparent hover:border-gray-100 dark:hover:border-gray-700 ${isSuperLongTextField ? 'items-start py-2' : 'items-center'}`}
-        onClick={() => !field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && startEdit(field.key, value)}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked) startEdit(field.key, value);
+        }}
       >
         <div className="text-gray-800 dark:text-gray-200 flex-1 min-w-0">{displayNode}</div>
         {!field.readonly && canInlineEdit && !isProcessTemplateFieldLocked && <EditOutlined className="text-leather-400 opacity-0 group-hover:opacity-100 transition-opacity" />}

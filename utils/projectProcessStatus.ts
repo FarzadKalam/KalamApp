@@ -121,18 +121,18 @@ export const deriveProjectStatusFromProcessState = (
 ): ProjectProcessStatus | null => {
   const normalizedDraftStages = parseDraftStages(draftStages)
     .filter((stage) => !!String(stage?.id || stage?.name || '').trim());
-  if (normalizedDraftStages.length > 0) return 'draft';
+  const hasDraftStages = normalizedDraftStages.length > 0;
 
   const normalizedTasks = (Array.isArray(tasks) ? tasks : [])
     .filter((task) => !!String(task?.id || task?.name || '').trim());
   const normalizedRunStages = (Array.isArray(runStages) ? runStages : [])
     .filter((stage) => !!String(stage?.id || stage?.stage_name || stage?.name || '').trim());
   const statusCarriers = [...normalizedTasks, ...normalizedRunStages];
-  if (statusCarriers.length === 0) return null;
+  if (statusCarriers.length === 0) return hasDraftStages ? 'draft' : null;
 
   const normalizedStatuses = statusCarriers.map((item) => normalizeTaskStatus(item?.status));
-  if (normalizedStatuses.every((status) => status === CANCELED_TASK_STATUS)) return 'on_hold';
-  if (statusCarriers.every((item) => isTaskDoneStatus(item?.status))) return 'completed';
+  if (!hasDraftStages && normalizedStatuses.every((status) => status === CANCELED_TASK_STATUS)) return 'on_hold';
+  if (!hasDraftStages && statusCarriers.every((item) => isTaskDoneStatus(item?.status))) return 'completed';
 
   const hasStartedTask = normalizedStatuses.some((status) =>
     !!status
@@ -178,19 +178,54 @@ export const fetchProjectProcessTasks = async (projectId: string) => {
 export const fetchProjectProcessRunIds = async (projectId: string) => {
   const normalizedProjectId = normalizeText(projectId);
   if (!normalizedProjectId) return [] as string[];
-  const { data, error } = await supabase
+
+  const runIds = new Set<string>();
+
+  const { data: linkRows, error: linkError } = await supabase
     .from('process_run_links')
     .select('process_run_id')
     .eq('module_id', PROJECTS_MODULE_ID)
     .eq('record_id', normalizedProjectId)
     .limit(1000);
-  if (error) {
-    if (isMissingColumnLikeError(error)) return [];
-    throw error;
+  if (linkError) {
+    if (!isMissingColumnLikeError(linkError)) throw linkError;
+  } else {
+    (Array.isArray(linkRows) ? linkRows : [])
+      .map((row: any) => normalizeText(row?.process_run_id))
+      .filter(Boolean)
+      .forEach((runId) => runIds.add(runId));
   }
-  return Array.from(new Set((Array.isArray(data) ? data : [])
-    .map((row: any) => normalizeText(row?.process_run_id))
-    .filter(Boolean)));
+
+  const { data: directRows, error: directError } = await supabase
+    .from('process_runs')
+    .select('id')
+    .eq('module_id', PROJECTS_MODULE_ID)
+    .eq('record_id', normalizedProjectId)
+    .limit(1000);
+  if (directError) {
+    if (!isMissingColumnLikeError(directError)) throw directError;
+  } else {
+    (Array.isArray(directRows) ? directRows : [])
+      .map((row: any) => normalizeText(row?.id))
+      .filter(Boolean)
+      .forEach((runId) => runIds.add(runId));
+  }
+
+  const { data: projectRows, error: projectError } = await supabase
+    .from('process_runs')
+    .select('id')
+    .eq('project_id', normalizedProjectId)
+    .limit(1000);
+  if (projectError) {
+    if (!isMissingColumnLikeError(projectError)) throw projectError;
+  } else {
+    (Array.isArray(projectRows) ? projectRows : [])
+      .map((row: any) => normalizeText(row?.id))
+      .filter(Boolean)
+      .forEach((runId) => runIds.add(runId));
+  }
+
+  return Array.from(runIds);
 };
 
 export const fetchProjectProcessRunStages = async (projectId: string) => {

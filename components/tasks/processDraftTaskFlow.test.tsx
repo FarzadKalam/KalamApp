@@ -62,7 +62,7 @@ const currentOrgAssignees = {
 
 const createRuntimeSupabase = () => {
   const rpc = vi.fn(async (functionName: string, args: any) => {
-    if (functionName === 'ensure_process_run_for_draft_group') {
+    if (functionName === 'ensure_process_run_for_draft_group_v2') {
       return {
         data: {
           process_run_id: '77777777-7777-4777-8777-777777777777',
@@ -356,7 +356,7 @@ describe('process draft task flow', () => {
 
     openTaskProcessModal({
       task: {
-        id: 'task-real-1',
+        id: '77777777-7777-4777-8777-777777777771',
         name: 'کنترل کیفیت',
         source_module_id: 'projects',
         source_record_id: PROJECT_ID,
@@ -366,7 +366,7 @@ describe('process draft task flow', () => {
     const modal = await screen.findByTestId('global-process-modal');
     expect(modal).toHaveAttribute('data-module-id', 'projects');
     expect(modal).toHaveAttribute('data-record-id', PROJECT_ID);
-    expect(modal).toHaveAttribute('data-task-id', 'task-real-1');
+    expect(modal).toHaveAttribute('data-task-id', '77777777-7777-4777-8777-777777777771');
 
     cleanup();
     render(

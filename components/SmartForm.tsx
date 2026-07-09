@@ -2879,6 +2879,9 @@ const SmartForm: React.FC<SmartFormProps> = ({
               ? 'flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar scrollbar-wide'
               : 'flex-1 p-4 md:p-6'
           }
+          onClickCapture={(event) => event.stopPropagation()}
+          onMouseDownCapture={(event) => event.stopPropagation()}
+          onPointerDownCapture={(event) => event.stopPropagation()}
           style={{ position: 'relative', zIndex: 0 }}
         >
           {loading && !isBulkEdit ? (

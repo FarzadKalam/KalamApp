@@ -551,6 +551,34 @@ const deleteProfile = async (
   }
 };
 
+const releaseOrphanProfilePhoneConflict = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  duplicateProfile: any,
+  phoneE164?: string | null,
+  options?: { targetOrgId?: string | null; canCrossOrg?: boolean },
+) => {
+  const duplicateProfileId = String(duplicateProfile?.id || '').trim();
+  const normalizedPhone = normalizeIranMobileE164(phoneE164);
+  if (!duplicateProfileId || !normalizedPhone) return false;
+  if (normalizeIranMobileE164(duplicateProfile?.mobile_1 || '') !== normalizedPhone) return false;
+
+  const duplicateOrgId = String(duplicateProfile?.org_id || '').trim();
+  const targetOrgId = String(options?.targetOrgId || '').trim();
+  if (!options?.canCrossOrg && duplicateOrgId && targetOrgId && duplicateOrgId !== targetOrgId) {
+    return false;
+  }
+
+  const duplicateAuthUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, duplicateProfileId).catch(() => null);
+  if (duplicateAuthUser?.id) return false;
+
+  await upsertProfile(supabaseUrl, serviceRoleKey, {
+    id: duplicateProfileId,
+    mobile_1: null,
+  });
+  return true;
+};
+
 const hasSaasAdminAccess = async (
   supabaseUrl: string,
   serviceRoleKey: string,
@@ -1138,7 +1166,7 @@ Deno.serve(async (request) => {
         }
         const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
         if (authUser?.id) await deleteAuthUser(supabaseUrl, serviceRoleKey, targetUserId);
-        else await deleteProfile(supabaseUrl, serviceRoleKey, targetUserId);
+        await deleteProfile(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
         return json(200, { success: true });
       }
 
@@ -1179,12 +1207,17 @@ Deno.serve(async (request) => {
         if (action === 'saas_send_phone_otp') {
           await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, { phone: toGoTruePhone(normalizedPhone), phone_confirm: false });
           await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
-          await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'phone_change');
-          return json(200, { success: true });
+          const otpResult = await sendSmsOtp(supabaseUrl, serviceRoleKey, normalizedPhone);
+          return json(200, { success: true, messageId: otpResult?.message_id || null, otpType: 'sms' });
         }
         const token = normalizeDigitsToEnglish(body?.token).replace(/\D+/g, '');
         if (!token) return json(400, { success: false, message: 'کد تایید الزامی است.' });
-        await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'phone_change');
+        await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'sms');
+        await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+          phone: toGoTruePhone(normalizedPhone),
+          phone_confirm: true,
+        });
+        await upsertProfile(supabaseUrl, serviceRoleKey, { id: targetUserId, mobile_1: toLocalIranMobile(normalizedPhone) });
         return json(200, { success: true });
       }
     }
@@ -1234,23 +1267,42 @@ Deno.serve(async (request) => {
         return json(400, { success: false, message: 'رمز عبور باید حداقل ۶ کاراکتر باشد.' });
       }
 
+      const resolvedRole = await resolveRoleForOrg(supabaseUrl, serviceRoleKey, roleId, body?.orgId || callerProfile.org_id);
+      const targetOrgId = resolvedRole.orgId || callerProfile.org_id || null;
+      assertOrgAccess(callerProfile, callerRole, targetOrgId, softwareRole);
+
       const duplicateProfile = await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
         phone: normalizedPhone,
         email,
       });
       if (duplicateProfile?.id) {
-        return json(409, {
-          success: false,
-          message:
-            normalizedPhone && toLocalIranMobile(normalizedPhone) === duplicateProfile.mobile_1
+        const duplicateIsPhoneMatch = normalizedPhone && toLocalIranMobile(normalizedPhone) === duplicateProfile.mobile_1;
+        const releasedOrphanPhone = duplicateIsPhoneMatch
+          ? await releaseOrphanProfilePhoneConflict(supabaseUrl, serviceRoleKey, duplicateProfile, normalizedPhone, {
+            targetOrgId,
+            canCrossOrg: callerRole === 'super_admin',
+          })
+          : false;
+        if (!releasedOrphanPhone) {
+          return json(409, {
+            success: false,
+            message: duplicateIsPhoneMatch
               ? 'برای این شماره موبایل قبلا کاربر ثبت شده است.'
               : 'برای این ایمیل قبلا کاربر ثبت شده است.',
+          });
+        }
+      }
+
+      const emailDuplicateProfile = email
+        ? await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, { email })
+        : null;
+      if (emailDuplicateProfile?.id) {
+        return json(409, {
+          success: false,
+          message: 'برای این ایمیل قبلا کاربر ثبت شده است.',
         });
       }
 
-      const resolvedRole = await resolveRoleForOrg(supabaseUrl, serviceRoleKey, roleId, body?.orgId || callerProfile.org_id);
-      const targetOrgId = resolvedRole.orgId || callerProfile.org_id || null;
-      assertOrgAccess(callerProfile, callerRole, targetOrgId, softwareRole);
       const pendingInviteConflict = await fetchPendingInviteConflictByPhone(
         supabaseUrl,
         serviceRoleKey,
@@ -1390,12 +1442,35 @@ Deno.serve(async (request) => {
         excludeUserId: targetUserId,
       });
       if (duplicateProfile?.id) {
-        return json(409, {
-          success: false,
-          message:
-            normalizedPhone && toLocalIranMobile(normalizedPhone) === duplicateProfile.mobile_1
+        const duplicateIsPhoneMatch = normalizedPhone && toLocalIranMobile(normalizedPhone) === duplicateProfile.mobile_1;
+        const releasedOrphanPhone = duplicateIsPhoneMatch
+          ? await releaseOrphanProfilePhoneConflict(supabaseUrl, serviceRoleKey, duplicateProfile, normalizedPhone, {
+            targetOrgId: body?.orgId || targetProfile.org_id || callerProfile.org_id,
+            canCrossOrg: callerRole === 'super_admin',
+          })
+          : false;
+        if (releasedOrphanPhone) {
+          // Continue with the normal update path after freeing an orphan profile phone.
+        } else {
+          return json(409, {
+            success: false,
+            message: duplicateIsPhoneMatch
               ? 'این شماره موبایل قبلا برای کاربر دیگری ثبت شده است.'
               : 'این ایمیل قبلا برای کاربر دیگری ثبت شده است.',
+          });
+        }
+      }
+
+      const emailDuplicateProfile = email
+        ? await fetchProfileByPhoneOrEmail(supabaseUrl, serviceRoleKey, {
+          email,
+          excludeUserId: targetUserId,
+        })
+        : null;
+      if (emailDuplicateProfile?.id) {
+        return json(409, {
+          success: false,
+          message: 'این ایمیل قبلا برای کاربر دیگری ثبت شده است.',
         });
       }
 
@@ -1480,6 +1555,7 @@ Deno.serve(async (request) => {
 
       assertOrgAccess(callerProfile, callerRole, targetProfile.org_id, targetProfile.role);
       await deleteAuthUser(supabaseUrl, serviceRoleKey, targetUserId);
+      await deleteProfile(supabaseUrl, serviceRoleKey, targetUserId).catch(() => null);
       return json(200, { success: true });
     }
 
@@ -1529,7 +1605,7 @@ Deno.serve(async (request) => {
       const authUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, targetUserId);
       const currentAuthPhone = normalizeIranMobileE164(authUser?.phone || '');
       if (currentAuthPhone === normalizedPhone && !authUser?.phone_confirmed_at) {
-        // Seed a real phone_change flow for admin-created/unconfirmed users.
+        // Reset stale unconfirmed state before requesting a fresh central SMS OTP.
         await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
           phone: null,
           phone_confirm: false,
@@ -1543,11 +1619,11 @@ Deno.serve(async (request) => {
         id: targetUserId,
         mobile_1: toLocalIranMobile(normalizedPhone),
       });
-      const otpResult = await resendOtp(supabaseUrl, serviceRoleKey, normalizedPhone, 'phone_change');
+      const otpResult = await sendSmsOtp(supabaseUrl, serviceRoleKey, normalizedPhone);
       return json(200, {
         success: true,
         messageId: otpResult?.message_id || null,
-        otpType: 'phone_change',
+        otpType: 'sms',
       });
     }
 
@@ -1602,7 +1678,15 @@ Deno.serve(async (request) => {
           phone: toGoTruePhone(normalizedPhone),
         });
       }
-      await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'phone_change');
+      await verifyPhoneOtp(supabaseUrl, serviceRoleKey, normalizedPhone, token, 'sms');
+      await updateAuthUser(supabaseUrl, serviceRoleKey, targetUserId, {
+        phone: toGoTruePhone(normalizedPhone),
+        phone_confirm: true,
+      });
+      await upsertProfile(supabaseUrl, serviceRoleKey, {
+        id: targetUserId,
+        mobile_1: toLocalIranMobile(normalizedPhone),
+      });
       return json(200, { success: true });
     }
 

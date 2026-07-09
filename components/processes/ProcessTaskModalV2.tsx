@@ -644,6 +644,7 @@ type InlineEditableFieldProps = {
   label: string;
   value: any;
   onSave: (value: any) => void;
+  onDraftChange?: (value: any) => void;
   field?: ModuleField;
   options?: Array<{ value: string; label: string; color?: string }>;
   fieldType?: MockCustomField['type'];
@@ -662,6 +663,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   label,
   value,
   onSave,
+  onDraftChange,
   field,
   options,
   fieldType = FieldType.TEXT,
@@ -747,8 +749,9 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   const handleChange = useCallback((nextValue: any) => {
     const serialized = serializeRendererValue(nextValue);
     setDraftValue(serialized);
+    onDraftChange?.(serialized);
     if (forceEditMode) onSave(serialized);
-  }, [forceEditMode, onSave, serializeRendererValue]);
+  }, [forceEditMode, onDraftChange, onSave, serializeRendererValue]);
 
   const commit = useCallback(() => {
     onSave(draftValue);
@@ -881,10 +884,14 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     <div
       role="button"
       tabIndex={0}
-      onClick={() => setEditing(true)}
+      onClick={(event) => {
+        event.stopPropagation();
+        setEditing(true);
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
+          event.stopPropagation();
           setEditing(true);
         }
       }}
@@ -1022,9 +1029,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     || ''
   );
   const isDraftActivityCreationMode = stage?.kind === 'draft' && !rawTaskRecordId;
-  const creationDraftStorageKey = useMemo(
-    () => (isDraftActivityCreationMode ? buildCreationDraftStorageKey(process, stage) : ''),
-    [isDraftActivityCreationMode, process, stage],
+  const fieldDraftStorageKey = useMemo(
+    () => buildCreationDraftStorageKey(process, stage),
+    [process, stage],
   );
   const rawSourceRecurrence = parseObject(rawSource?.recurrence_info);
   const localPatchRecurrence = parseObject(localTaskPatch?.recurrence_info);
@@ -1732,7 +1739,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           setQueuedUploadFiles([]);
         }
       }
-      clearCreationDraftSnapshot(creationDraftStorageKey);
+      clearCreationDraftSnapshot(fieldDraftStorageKey);
       onClose();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فعالیت ناموفق بود'));
@@ -1742,7 +1749,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   }, [
     buildDraftActivityOverrides,
     creatingDraftActivity,
-    creationDraftStorageKey,
+    fieldDraftStorageKey,
     message,
     onClose,
     onCreateDraftActivity,
@@ -2246,9 +2253,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setDraftCopyTemplateId(isTemplateBackedDraft ? (templateBackedTemplateId || undefined) : (runProcess?.templateId || undefined));
     setDraftCopyStageId(isTemplateBackedDraft ? (templateBackedStageId || stage?.id || undefined) : undefined);
     setTemplateCopyStages([]);
-    const storedCreationDraft = isDraftActivityCreationMode
-      ? readCreationDraftSnapshot(creationDraftStorageKey)
-      : null;
+    const storedCreationDraft = readCreationDraftSnapshot(fieldDraftStorageKey);
     applyStageSettingsToDraft(stage, storedCreationDraft);
     setIsLocked(false);
     setFilesExpanded(false);
@@ -2269,22 +2274,22 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     setTaskActionBusy(null);
     setSavingFieldKey(null);
     setLocalTaskPatch({});
-  }, [applyStageSettingsToDraft, creationDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, modalInitKey, open, runProcess?.templateId, stage, templateBackedStageId, templateBackedTemplateId]);
+  }, [applyStageSettingsToDraft, fieldDraftStorageKey, isDraftActivityCreationMode, isTemplateBackedDraft, modalInitKey, open, runProcess?.templateId, stage, templateBackedStageId, templateBackedTemplateId]);
 
   useLayoutEffect(() => {
     if (!open || !isDraftActivityCreationMode) return;
-    if (creationDraftStorageKey && readCreationDraftSnapshot(creationDraftStorageKey)) return;
+    if (fieldDraftStorageKey && readCreationDraftSnapshot(fieldDraftStorageKey)) return;
     setTaskNameValue(resolvedDraftTaskName || '');
     setActivityTypeValue(resolvedDraftActivityType || '');
-  }, [creationDraftStorageKey, isDraftActivityCreationMode, open, resolvedDraftActivityType, resolvedDraftTaskName]);
+  }, [fieldDraftStorageKey, isDraftActivityCreationMode, open, resolvedDraftActivityType, resolvedDraftTaskName]);
 
   useEffect(() => {
-    if (!open || !isDraftActivityCreationMode || !creationDraftStorageKey) return;
+    if (!open || !fieldDraftStorageKey) return;
     const customFieldValues = customFields.reduce<Record<string, any>>((acc, field) => {
       acc[field.key] = field.value;
       return acc;
     }, {});
-    writeCreationDraftSnapshot(creationDraftStorageKey, {
+    writeCreationDraftSnapshot(fieldDraftStorageKey, {
       taskNameValue: taskNameValue || resolvedDraftTaskName || '',
       activityTypeValue: activityTypeValue || resolvedDraftActivityType || '',
       assigneeValue,
@@ -2311,7 +2316,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     activityTags,
     activityTypeValue,
     assigneeValue,
-    creationDraftStorageKey,
+    fieldDraftStorageKey,
     customFields,
     descriptionDraft,
     dueAnchorStageValue,
@@ -2471,14 +2476,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     return ref || null;
   }, [process]);
   const renderRouteText = useCallback((to: string, className: string, children: React.ReactNode) => {
-    if (!isInsideRouter) {
-      return <span className={className}>{children}</span>;
-    }
-    return (
-      <Link to={to} className={className}>
-        {children}
-      </Link>
-    );
+    void to;
+    void isInsideRouter;
+    return <span className={className}>{children}</span>;
   }, [isInsideRouter]);
   const formattedStageDueLabel = useMemo(() => {
     const rawDue = String(source?.due_date || source?.planned_due_at || stage?.dueLabel || '').trim();
@@ -2578,6 +2578,14 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       // Error message is handled inside uploadFilesForTask.
     }
   }, [isDraftActivityCreationMode, message, taskRecordId, uploadFilesForTask]);
+  const writeModalFieldDraftPatch = useCallback((patch: Record<string, any>) => {
+    if (!open || !fieldDraftStorageKey) return;
+    const current = readCreationDraftSnapshot(fieldDraftStorageKey) || {};
+    writeCreationDraftSnapshot(fieldDraftStorageKey, {
+      ...current,
+      ...patch,
+    });
+  }, [fieldDraftStorageKey, open]);
   const shouldShowTimingStageAnchor = useCallback((anchorType: string) => (
     String(anchorType || '').trim().startsWith('specific_stage_')
   ), []);
@@ -2774,6 +2782,9 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         data-module-id={primaryProcessRecordLink?.moduleId || undefined}
         data-record-id={primaryProcessRecordLink?.recordId || undefined}
         data-task-id={taskRecordId || undefined}
+        onClickCapture={(event) => event.stopPropagation()}
+        onMouseDownCapture={(event) => event.stopPropagation()}
+        onPointerDownCapture={(event) => event.stopPropagation()}
         className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
         dir="rtl"
         style={{
@@ -3183,6 +3194,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                   label="مسئول"
                   value={assigneeValue}
                   onSave={isDraftActivityCreationMode ? setAssigneeValue : (value) => { void saveTaskAssignee(value); }}
+                  onDraftChange={(value) => writeModalFieldDraftPatch({ assigneeValue: value })}
                   options={assigneeOptions.length > 0 ? assigneeOptions : (assigneeValue ? [{ value: assigneeValue, label: assigneeValue }] : [])}
                   fieldType={FieldType.SELECT}
                   forceEditMode={isDraftActivityCreationMode}
@@ -3217,6 +3229,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 label="شرح فعالیت"
                 value={descriptionDraft}
                 onSave={isDraftActivityCreationMode ? setDescriptionDraft : (value) => { void saveTaskDescription(value); }}
+                onDraftChange={(value) => writeModalFieldDraftPatch({ descriptionDraft: value })}
                 fieldType={FieldType.LONG_TEXT}
                 forceEditMode={isDraftActivityCreationMode}
               />
@@ -3227,6 +3240,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                     label="دستمزد"
                     value={wageValue}
                     onSave={setWageValue}
+                    onDraftChange={(value) => writeModalFieldDraftPatch({ wageValue: value })}
                     fieldType={FieldType.NUMBER}
                     forceEditMode
                   />
@@ -3234,6 +3248,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                     label="وزن"
                     value={weightValue}
                     onSave={setWeightValue}
+                    onDraftChange={(value) => writeModalFieldDraftPatch({ weightValue: value })}
                     fieldType={FieldType.NUMBER}
                     forceEditMode
                   />
@@ -3288,6 +3303,18 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                           requiredForCompletion={field.requiredForCompletion}
                           requiredForCreation={field.requiredForCreation}
                           saving={savingFieldKey === field.key}
+                          onDraftChange={(nextValue) => {
+                            const current = readCreationDraftSnapshot(fieldDraftStorageKey) || {};
+                            const currentValues = current?.customFieldValues && typeof current.customFieldValues === 'object'
+                              ? current.customFieldValues
+                              : {};
+                            writeModalFieldDraftPatch({
+                              customFieldValues: {
+                                ...currentValues,
+                                [field.key]: nextValue,
+                              },
+                            });
+                          }}
                           onSave={(nextValue) => {
                             if (isDraftActivityCreationMode) {
                               setCustomFields((current) => current.map((item) => (
@@ -3356,6 +3383,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                 label="گزارش فعالیت"
                 value={reportDraft}
                   onSave={isDraftActivityCreationMode ? setReportDraft : (value) => { void saveTaskReport(value); }}
+                  onDraftChange={(value) => writeModalFieldDraftPatch({ reportDraft: value })}
                   fieldType={FieldType.LONG_TEXT}
                   forceEditMode={isDraftActivityCreationMode}
                 />
