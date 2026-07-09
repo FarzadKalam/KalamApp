@@ -21,7 +21,7 @@ const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
-  telegram: 'https://api.telegram.org',
+  telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
   bale: 'https://tapi.bale.ai',
   rubika: 'https://botapi.rubika.ir',
 };
@@ -78,7 +78,7 @@ const normalizeBaseUrl = (value: any) => {
 
 const normalizeBotSettings = (channel: BotChannel, settings: Record<string, any> | null | undefined) => ({
   ...(settings && typeof settings === 'object' ? settings : {}),
-  ...(channel === 'rubika' ? { api_base_url: RUBIKA_OFFICIAL_API_BASE_URL } : {}),
+  api_base_url: DEFAULT_API_BASE_URL[channel],
 });
 
 const buildSendMessageUrl = (baseUrl: string, token: string, pathTemplate: string) => {
@@ -1356,6 +1356,27 @@ const isRubikaHostedUrl = (value: string | null | undefined) => {
   }
 };
 
+const isProviderHostedTemporaryUrl = (channel: BotChannel, value: string | null | undefined) => {
+  const target = String(value || '').trim();
+  if (!target) return false;
+  if (channel === 'rubika') return isRubikaHostedUrl(target);
+  if (channel !== 'telegram' && channel !== 'bale') return false;
+  try {
+    const parsed = new URL(target);
+    const host = String(parsed.hostname || '').trim().toLowerCase();
+    const baseHost = (() => {
+      try {
+        return String(new URL(DEFAULT_API_BASE_URL[channel]).hostname || '').trim().toLowerCase();
+      } catch {
+        return '';
+      }
+    })();
+    return Boolean(baseHost && (host === baseHost || host.endsWith(`.${baseHost}`)));
+  } catch {
+    return false;
+  }
+};
+
 const uploadBinaryToStorage = async ({
   supabaseUrl,
   serviceRoleKey,
@@ -1554,7 +1575,7 @@ const tryTelegramLikeGetFile = async ({
 }) => {
   const token = String(settings?.bot_token || '').trim();
   if (!token || !fileId) return null;
-  const baseUrl = normalizeBaseUrl(String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim());
+  const baseUrl = normalizeBaseUrl(DEFAULT_API_BASE_URL[channel]);
   if (!baseUrl) return null;
   const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/getFile`;
   try {
@@ -1569,7 +1590,13 @@ const tryTelegramLikeGetFile = async ({
     const filePath = String(parsed?.result?.file_path || '').trim();
     if (!filePath) return null;
     const downloadUrl = `${baseUrl}/file/bot${encodeURIComponent(token)}/${filePath}`;
-    return { fileUrl: downloadUrl };
+    return {
+      fileUrl: downloadUrl,
+      fileUrls: [downloadUrl],
+      bytes: null as Uint8Array | null,
+      contentType: null as string | null,
+      providerResult: parsed,
+    };
   } catch {
     return null;
   }
@@ -1618,6 +1645,25 @@ const tryRubikaGetFile = async ({
     } catch {
       // continue fallback bodies
     }
+  }
+  return null;
+};
+
+const tryBotProviderGetFile = async ({
+  channel,
+  settings,
+  fileId,
+}: {
+  channel: BotChannel;
+  settings: IntegrationSettings;
+  fileId: string;
+}) => {
+  if (!fileId) return null;
+  if (channel === 'rubika') {
+    return await tryRubikaGetFile({ settings, fileId });
+  }
+  if (channel === 'telegram' || channel === 'bale') {
+    return await tryTelegramLikeGetFile({ channel, settings, fileId });
   }
   return null;
 };
@@ -1699,20 +1745,12 @@ const resolveAndStoreInboundMedia = async ({
   let bytes: Uint8Array | null = null;
 
   const normalizedFileId = String(mediaInfo.fileId || '').trim();
-  const shouldPreferRubikaFileApi = channel === 'rubika' && normalizedFileId.length > 0;
-  const shouldUseTelegramLikeFileApi = (channel === 'bale' || channel === 'telegram') && normalizedFileId.length > 0;
+  const shouldUseProviderFileApi = normalizedFileId.length > 0
+    && (channel === 'rubika' || channel === 'bale' || channel === 'telegram');
 
-  if (shouldUseTelegramLikeFileApi) {
-    const byFileId = await tryTelegramLikeGetFile({
-      channel: channel as 'bale' | 'telegram',
-      settings: integrationSettings,
-      fileId: normalizedFileId,
-    });
-    if (byFileId?.fileUrl) resolvedUrl = byFileId.fileUrl;
-  }
-
-  if (shouldPreferRubikaFileApi) {
-    const byFileId = await tryRubikaGetFile({
+  if (shouldUseProviderFileApi) {
+    const byFileId = await tryBotProviderGetFile({
+      channel,
       settings: integrationSettings,
       fileId: normalizedFileId,
     });
@@ -1728,15 +1766,16 @@ const resolveAndStoreInboundMedia = async ({
     }
   }
 
-  if (channel === 'rubika' && normalizedFileId && resolvedUrls.length === 0) {
+  if (shouldUseProviderFileApi && resolvedUrls.length === 0) {
     return buildMediaImportFailure({
       fileUrl: null,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime,
-      errorCode: 'rubika_file_resolve_failed',
-      message: 'Rubika getFile لینک دانلود برنگرداند.',
+      errorCode: `${channel}_file_resolve_failed`,
+      message: 'getFile لینک دانلود فایل را برنگرداند.',
       retryable: true,
       diagnostic: {
+        channel,
         file_id: normalizedFileId,
         provider_method: 'getFile',
       },
@@ -1759,10 +1798,11 @@ const resolveAndStoreInboundMedia = async ({
     }
   }
 
-  // Rubika links can be short-lived or region-sensitive. Retry with fresh getFile URLs.
-  if (!bytes && shouldPreferRubikaFileApi) {
+  // Provider links can be short-lived or region-sensitive. Retry with fresh getFile URLs.
+  if (!bytes && shouldUseProviderFileApi) {
     for (let retry = 0; retry < 2; retry += 1) {
-      const refreshed = await tryRubikaGetFile({
+      const refreshed = await tryBotProviderGetFile({
+        channel,
         settings: integrationSettings,
         fileId: normalizedFileId,
       });
@@ -1788,17 +1828,18 @@ const resolveAndStoreInboundMedia = async ({
   }
 
   if (!bytes || !bytes.length) {
-    const safeFallbackUrl = channel === 'rubika' && isRubikaHostedUrl(resolvedUrl)
+    const safeFallbackUrl = isProviderHostedTemporaryUrl(channel, resolvedUrl)
       ? null
       : (resolvedUrl || null);
     return buildMediaImportFailure({
       fileUrl: safeFallbackUrl,
       fileName: mediaInfo.fileName,
       mimeType: resolvedMime || mediaInfo.mimeType || null,
-      errorCode: channel === 'rubika' ? 'rubika_file_download_failed' : 'media_download_failed',
+      errorCode: shouldUseProviderFileApi ? `${channel}_file_download_failed` : 'media_download_failed',
       message: 'دانلود فایل ورودی ناموفق بود.',
       retryable: true,
       diagnostic: {
+        channel,
         file_id: normalizedFileId || null,
         candidate_count: resolvedUrls.length,
         has_fallback_url: Boolean(safeFallbackUrl),
@@ -3368,7 +3409,7 @@ Deno.serve(async (req) => {
         const fallbackSourceUrl = String(mediaInfo.fileUrl || '').trim();
         const finalMediaUrl = String(
           mediaStored?.fileUrl
-          || (channel === 'rubika' && isRubikaHostedUrl(fallbackSourceUrl) ? '' : fallbackSourceUrl)
+          || (isProviderHostedTemporaryUrl(channel, fallbackSourceUrl) ? '' : fallbackSourceUrl)
           || ''
         ).trim();
         resolvedMediaEntries.push({

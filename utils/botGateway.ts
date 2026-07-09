@@ -5,7 +5,7 @@ import { supabase } from '../supabaseClient';
 export type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 export const OFFICIAL_BOT_API_BASE_URL: Record<BotChannel, string> = {
-  telegram: 'https://api.telegram.org',
+  telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
   bale: 'https://tapi.bale.ai',
   rubika: 'https://botapi.rubika.ir',
 };
@@ -144,7 +144,7 @@ export const sendBotMessageViaGateway = async ({
   }
 
   const token = String(activeSettings.bot_token || '').trim();
-  const baseUrl = String(activeSettings.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const baseUrl = DEFAULT_API_BASE_URL[channel];
   const sendMessagePath = String(activeSettings.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
 
   if (!token) {

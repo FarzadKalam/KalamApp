@@ -3,7 +3,7 @@
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 type BotAdminBody = {
-  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_rubika_file' | 'import_bale_file' | 'edit_message' | 'delete_message' | 'diagnose_rubika_runtime';
+  action?: 'start_capture' | 'poll_updates' | 'send_test_message' | 'resolve_file' | 'import_bot_file' | 'import_rubika_file' | 'import_bale_file' | 'edit_message' | 'delete_message' | 'diagnose_rubika_runtime';
   channel?: BotChannel | string;
   connectionId?: string;
   cursor?: string | number | null;
@@ -51,7 +51,7 @@ const corsHeaders = {
 const BOT_ADMIN_BUILD = 'bot-admin-2026-06-22-02';
 
 const DEFAULT_API_BASE_URL: Record<BotChannel, string> = {
-  telegram: 'https://api.telegram.org',
+  telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
   bale: 'https://tapi.bale.ai',
   rubika: 'https://botapi.rubika.ir',
 };
@@ -83,8 +83,7 @@ const pick = (...values: any[]) => {
 };
 
 const normalizeBaseUrl = (value: string, channel: BotChannel) => {
-  if (channel === 'rubika') return RUBIKA_OFFICIAL_API_BASE_URL;
-  const raw = String(value || DEFAULT_API_BASE_URL[channel] || '').trim();
+  const raw = String(DEFAULT_API_BASE_URL[channel] || '').trim();
   if (!raw) return '';
   if (/^https?:\/\//i.test(raw)) return raw.replace(/\/+$/, '');
   return `https://${raw.replace(/\/+$/, '')}`;
@@ -1359,7 +1358,7 @@ const sendProviderMessage = async (
 ) => {
   const token = pick(settings?.bot_token);
   if (!token) throw new Error('توکن بات تنظیم نشده است.');
-  const baseUrl = String(settings?.api_base_url || DEFAULT_API_BASE_URL[channel]).trim();
+  const baseUrl = DEFAULT_API_BASE_URL[channel];
   const sendMessagePath = String(settings?.send_message_path || '').trim() || DEFAULT_SEND_PATH[channel];
 
   let lastError: any = null;
@@ -3234,6 +3233,171 @@ const importRubikaFileToStorage = async ({
   }
 };
 
+const importTelegramLikeFileToStorage = async ({
+  channel,
+  supabaseUrl,
+  serviceRoleKey,
+  requestUrl,
+  requestHeaders,
+  integration,
+  fileId,
+  fileName,
+  messageId,
+  messageTable = 'counterparty_bot_messages',
+}: {
+  channel: 'telegram' | 'bale';
+  supabaseUrl: string;
+  serviceRoleKey: string;
+  requestUrl: string;
+  requestHeaders: Headers;
+  integration: Record<string, any>;
+  fileId: string;
+  fileName?: string | null;
+  messageId?: string | null;
+  messageTable?: 'counterparty_bot_messages' | 'counterparty_bot_direct_messages';
+}) => {
+  let currentRow: Record<string, any> | null = null;
+  let resolved: any = null;
+  try {
+    currentRow = messageId ? await loadCounterpartyBotMessage(supabaseUrl, serviceRoleKey, messageId, messageTable) : null;
+    const currentPayload = currentRow?.payload && typeof currentRow.payload === 'object' ? currentRow.payload : {};
+    resolved = await resolveTelegramLikeFileUrl(channel, integration?.settings || {}, fileId);
+    const downloadUrl = String(resolved?.file_url || '').trim();
+    if (!downloadUrl) {
+      throw createBotAdminError('getFile لینک دانلود فایل را برنگرداند.', {
+        errorCode: `${channel}_file_resolve_failed`,
+        retryable: true,
+        details: { provider_result: resolved?.provider_result || null },
+      });
+    }
+
+    const downloaded = await downloadBinaryFromUrl(downloadUrl);
+    if (downloaded?.ok !== true || !downloaded?.bytes?.length) {
+      throw createBotAdminError('دانلود فایل از بات ناموفق بود.', {
+        errorCode: `${channel}_file_download_failed`,
+        retryable: true,
+        details: {
+          status: downloaded?.status ?? null,
+          content_type: downloaded?.contentType || null,
+          error_message: downloaded?.errorMessage || null,
+          final_url: downloaded?.finalUrl || downloadUrl,
+        },
+      });
+    }
+
+    const publicBaseUrl = pickPublicApiBaseUrl(requestUrl, requestHeaders, integration?.settings || {});
+    if (!publicBaseUrl) {
+      throw createBotAdminError('آدرس عمومی API برای ساخت لینک فایل در دسترس نیست.', {
+        errorCode: 'public_api_base_url_missing',
+        retryable: false,
+      });
+    }
+
+    const effectiveFileName = String(fileName || currentRow?.file_name || 'file').trim() || 'file';
+    const effectiveMimeType = String(
+      downloaded.contentType
+      || currentRow?.mime_type
+      || currentPayload?.mime_type
+      || inferMimeTypeFromFileName(effectiveFileName)
+      || ''
+    ).trim() || 'application/octet-stream';
+    const detectedKind = inferRubikaMediaKind({
+      fileName: effectiveFileName,
+      mimeType: effectiveMimeType,
+      messageType: String(currentPayload?.file_type || currentPayload?.message_type || currentRow?.message_type || '').trim() || null,
+    });
+
+    const objectPath = buildStorageObjectPath({
+      orgId: String(integration?.org_id || '').trim() || 'unknown_org',
+      channel,
+      fileName: effectiveFileName,
+      mimeType: effectiveMimeType,
+    });
+    const publicUrl = await uploadBinaryToStorage({
+      supabaseUrl,
+      serviceRoleKey,
+      publicBaseUrl,
+      bucket: DEFAULT_FILE_STORAGE_BUCKET,
+      objectPath,
+      bytes: downloaded.bytes,
+      contentType: effectiveMimeType,
+    });
+
+    if (messageId) {
+      await updateCounterpartyBotMessageImportState({
+        supabaseUrl,
+        serviceRoleKey,
+        messageId,
+        messageTable,
+        currentRow,
+        fileName: effectiveFileName,
+        mimeType: effectiveMimeType,
+        fileType: detectedKind,
+        fileUrl: publicUrl,
+        storagePath: objectPath,
+        fileId,
+        providerResult: resolved?.provider_result || null,
+        importStatus: 'succeeded',
+        importErrorCode: null,
+        importErrorMessage: null,
+        retryable: false,
+        downloadDiagnostic: {
+          final_url: downloaded.finalUrl || downloadUrl,
+          status: downloaded.status ?? null,
+          content_type: downloaded.contentType || null,
+        },
+      });
+    }
+
+    return {
+      file_url: publicUrl,
+      file_name: effectiveFileName,
+      storage_bucket: DEFAULT_FILE_STORAGE_BUCKET,
+      storage_path: objectPath,
+      mime_type: effectiveMimeType,
+      detected_kind: detectedKind,
+      provider_result: resolved?.provider_result || null,
+      download_diagnostic: {
+        final_url: downloaded.finalUrl || downloadUrl,
+        status: downloaded.status ?? null,
+        content_type: downloaded.contentType || null,
+      },
+    };
+  } catch (error: any) {
+    const fallbackFileName = String(fileName || currentRow?.file_name || 'file').trim() || 'file';
+    const currentPayload = currentRow?.payload && typeof currentRow.payload === 'object' ? currentRow.payload : {};
+    if (messageId) {
+      try {
+        await updateCounterpartyBotMessageImportState({
+          supabaseUrl,
+          serviceRoleKey,
+          messageId,
+          messageTable,
+          currentRow,
+          fileName: fallbackFileName,
+          mimeType: String(currentRow?.mime_type || currentPayload?.mime_type || inferMimeTypeFromFileName(fallbackFileName) || '').trim() || null,
+          fileType: String(currentPayload?.file_type || currentPayload?.message_type || currentRow?.message_type || 'file').trim() || 'file',
+          fileUrl: undefined,
+          fileId,
+          providerResult: resolved?.provider_result || error?.details?.provider_result || null,
+          importStatus: 'failed',
+          importErrorCode: String(error?.errorCode || `${channel}_file_import_failed`),
+          importErrorMessage: String(error?.message || 'بازیابی فایل بات ناموفق بود.'),
+          retryable: typeof error?.retryable === 'boolean' ? error.retryable : true,
+          downloadDiagnostic: error?.details || null,
+        });
+      } catch (patchError) {
+        console.error('[bot-admin] failed to persist bot import failure state', String((patchError as any)?.message || patchError));
+      }
+    }
+    throw createBotAdminError(String(error?.message || 'بازیابی فایل بات ناموفق بود.'), {
+      errorCode: String(error?.errorCode || `${channel}_file_import_failed`),
+      retryable: typeof error?.retryable === 'boolean' ? error.retryable : true,
+      details: error?.details || null,
+    });
+  }
+};
+
 const diagnoseRubikaRuntime = async ({
   supabaseUrl,
   serviceRoleKey,
@@ -3396,7 +3560,7 @@ Deno.serve(async (req) => {
     if (!connectionId) {
       return json(400, { success: false, message: 'connectionId الزامی است.' });
     }
-    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_rubika_file', 'import_bale_file', 'edit_message', 'delete_message', 'diagnose_rubika_runtime'].includes(action)) {
+    if (!['start_capture', 'poll_updates', 'send_test_message', 'resolve_file', 'import_bot_file', 'import_rubika_file', 'import_bale_file', 'edit_message', 'delete_message', 'diagnose_rubika_runtime'].includes(action)) {
       return json(400, { success: false, message: 'action معتبر نیست.' });
     }
 
@@ -3566,6 +3730,61 @@ Deno.serve(async (req) => {
         });
       }
       return json(400, { success: false, message: 'resolve_file برای این کانال پشتیبانی نمی‌شود.' });
+    }
+
+    if (action === 'import_bot_file') {
+      if (!fileId) {
+        return json(400, { success: false, message: 'fileId الزامی است.' });
+      }
+      try {
+        const imported = channel === 'rubika'
+          ? await importRubikaFileToStorage({
+              supabaseUrl,
+              serviceRoleKey,
+              requestUrl: req.url,
+              requestHeaders: req.headers,
+              integration,
+              fileId,
+              fileName: fileName || null,
+              messageId: messageId || null,
+              messageTable,
+            })
+          : (channel === 'telegram' || channel === 'bale')
+            ? await importTelegramLikeFileToStorage({
+                channel,
+                supabaseUrl,
+                serviceRoleKey,
+                requestUrl: req.url,
+                requestHeaders: req.headers,
+                integration,
+                fileId,
+                fileName: fileName || null,
+                messageId: messageId || null,
+                messageTable,
+              })
+            : null;
+        if (!imported) {
+          return json(400, { success: false, message: 'import_bot_file برای این کانال پشتیبانی نمی‌شود.' });
+        }
+        return json(200, {
+          success: true,
+          channel,
+          message_id: messageId || null,
+          file_id: fileId,
+          ...imported,
+        });
+      } catch (error: any) {
+        return json(200, {
+          success: false,
+          channel,
+          message_id: messageId || null,
+          file_id: fileId,
+          retryable: Boolean(error?.retryable),
+          error_code: String(error?.errorCode || `${channel}_file_import_failed`),
+          details: error?.details || null,
+          message: String(error?.message || 'بازیابی فایل بات ناموفق بود.'),
+        });
+      }
     }
 
     if (action === 'import_rubika_file') {

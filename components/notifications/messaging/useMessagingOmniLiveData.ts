@@ -550,10 +550,20 @@ const isBrokenRubikaStorageUrl = (url: string) =>
 const isRubikaTemporaryDownloadUrl = (url: string) =>
   /https?:\/\/messenger[^/]*\.rubika\.ir\/download\/?\?/i.test(String(url || '').trim());
 
+const isProviderTemporaryDownloadUrl = (channel: BotChannel, url: string) => {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl) return false;
+  if (channel === 'rubika') return isBrokenRubikaStorageUrl(normalizedUrl) || isRubikaTemporaryDownloadUrl(normalizedUrl);
+  if (channel === 'telegram' || channel === 'bale') {
+    return /\/file\/bot/i.test(normalizedUrl) || /api\.telegram\.org/i.test(normalizedUrl) || /tapi\.bale\.ai/i.test(normalizedUrl);
+  }
+  return false;
+};
+
 const isMissingOrBrokenBotMediaUrl = (channel: BotChannel, url: string | null | undefined) => {
   const normalizedUrl = String(url || '').trim();
   if (!normalizedUrl) return true;
-  return channel === 'rubika' && (isBrokenRubikaStorageUrl(normalizedUrl) || isRubikaTemporaryDownloadUrl(normalizedUrl));
+  return isProviderTemporaryDownloadUrl(channel, normalizedUrl);
 };
 
 const buildRenderableBotAttachments = (row: BotMessageRow, channel: BotChannel | null) =>
@@ -634,7 +644,7 @@ const shouldHydrateBotMessageMedia = (
   const groupId = String(row?.bot_group_id || '').trim();
   const group = groupById.get(groupId);
   const channel = String(group?.channel_type || '').trim();
-  if (channel !== 'rubika' && channel !== 'bale') return false;
+  if (!BOT_CHANNELS.includes(channel as BotChannel)) return false;
   const rowId = String(row?.id || '').trim();
   if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
   if (
@@ -656,7 +666,7 @@ const shouldHydrateBotDirectMessageMedia = (
   const threadId = String(row?.direct_thread_id || '').trim();
   const thread = threadById.get(threadId);
   const channel = String(thread?.channel_type || '').trim();
-  if (channel !== 'rubika' && channel !== 'bale') return false;
+  if (!BOT_CHANNELS.includes(channel as BotChannel)) return false;
   const rowId = String(row?.id || '').trim();
   if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
   if (
@@ -1013,7 +1023,7 @@ const buildBotGroupLiveModels = (
       && !isNotificationRead('bot_messages', 'counterparty_bot_message', String(row?.id || '').trim(), false)
     )).length;
     return {
-      key: `live:bot_group:${group.id}`,
+      key: `bot:${group.id}`,
       channel: 'bot_group',
       title: relatedTitle || group.group_title || 'گروه بات',
       subtitle: `${channelLabel} - ${group.group_title || 'گروه بات'}`,
@@ -1047,7 +1057,7 @@ const buildBotGroupLiveModels = (
     return {
       id: `live-bot-group-${String(row?.id || `${groupId}-${row?.created_at || Math.random()}`)}`,
       sourceRow: row,
-      conversationKey: `live:bot_group:${groupId}`,
+      conversationKey: `bot:${groupId}`,
       kind: 'message' as const,
       direction,
       author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
@@ -1291,24 +1301,25 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       const rowId = String(row?.id || '').trim();
       const group = groupById.get(String(row?.bot_group_id || '').trim());
       const channel = String(group?.channel_type || '').trim();
-      if (channel !== 'rubika' && channel !== 'bale') continue;
-      const mediaItems = collectBotMediaFileItems(row, channel);
+      if (!BOT_CHANNELS.includes(channel as BotChannel)) continue;
+      const botChannel = channel as BotChannel;
+      const mediaItems = collectBotMediaFileItems(row, botChannel);
       if (!rowId || mediaItems.length === 0) continue;
       hydratingRubikaMessageIdsRef.current.add(rowId);
       try {
-        let connectionId = connectionIdsByChannel.get(channel);
+        let connectionId = connectionIdsByChannel.get(botChannel);
         if (!connectionId) {
-          const activeConnection = await getActiveChannelSettings(channel);
+          const activeConnection = await getActiveChannelSettings(botChannel);
           connectionId = String(activeConnection?.id || '').trim();
-          if (connectionId) connectionIdsByChannel.set(channel, connectionId);
+          if (connectionId) connectionIdsByChannel.set(botChannel, connectionId);
         }
         if (!connectionId) continue;
         const importedAttachments: Array<Record<string, any>> = [];
         for (const mediaItem of mediaItems) {
           const { data, error } = await supabase.functions.invoke('bot-admin', {
             body: {
-              action: channel === 'rubika' ? 'import_rubika_file' : 'import_bale_file',
-              channel,
+              action: 'import_bot_file',
+              channel: botChannel,
               connectionId,
               messageId: rowId,
               messageTable: 'counterparty_bot_messages',
@@ -1403,24 +1414,25 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       const rowId = String(row?.id || '').trim();
       const thread = threadById.get(String(row?.direct_thread_id || '').trim());
       const channel = String(thread?.channel_type || '').trim();
-      if (channel !== 'rubika' && channel !== 'bale') continue;
-      const mediaItems = collectBotMediaFileItems(row, channel);
+      if (!BOT_CHANNELS.includes(channel as BotChannel)) continue;
+      const botChannel = channel as BotChannel;
+      const mediaItems = collectBotMediaFileItems(row, botChannel);
       if (!rowId || mediaItems.length === 0) continue;
       hydratingRubikaMessageIdsRef.current.add(rowId);
       try {
-        let connectionId = connectionIdsByChannel.get(channel);
+        let connectionId = connectionIdsByChannel.get(botChannel);
         if (!connectionId) {
-          const activeConnection = await getActiveChannelSettings(channel);
+          const activeConnection = await getActiveChannelSettings(botChannel);
           connectionId = String(activeConnection?.id || '').trim();
-          if (connectionId) connectionIdsByChannel.set(channel, connectionId);
+          if (connectionId) connectionIdsByChannel.set(botChannel, connectionId);
         }
         if (!connectionId) continue;
         const importedAttachments: Array<Record<string, any>> = [];
         for (const mediaItem of mediaItems) {
           const { data, error } = await supabase.functions.invoke('bot-admin', {
             body: {
-              action: channel === 'rubika' ? 'import_rubika_file' : 'import_bale_file',
-              channel,
+              action: 'import_bot_file',
+              channel: botChannel,
               connectionId,
               messageId: rowId,
               messageTable: 'counterparty_bot_direct_messages',

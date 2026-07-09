@@ -952,7 +952,7 @@ const ConnectionsTab: React.FC = () => {
           provider: normalizedTelegramValues?.provider || 'telegram_bot_api',
           settings: {
             bot_token: normalizedTelegramValues?.bot_token || '',
-            api_base_url: TELEGRAM_OFFICIAL_API_BASE_URL,
+            api_base_url: normalizedTelegramValues?.api_base_url || TELEGRAM_OFFICIAL_API_BASE_URL,
             webhook_secret: ensuredTelegramSecret,
             bot_username: normalizedTelegramValues?.bot_username || '',
           },
@@ -1311,16 +1311,11 @@ const ConnectionsTab: React.FC = () => {
     try {
       const botValues = form.getFieldValue(formKey) || {};
       const botToken = String(botValues?.bot_token || '').trim();
-      const apiBaseUrl = OFFICIAL_BOT_API_BASE_URL[channel];
       const chatId = String(botTestChatIds[channel] || '').trim();
       const text = String(botTestTexts[channel] || '').trim();
 
       if (!botToken) {
         message.error('توکن بات را وارد کنید.');
-        return;
-      }
-      if (!apiBaseUrl) {
-        message.error('API Base URL بات را وارد کنید.');
         return;
       }
       if (!chatId) {
@@ -2103,9 +2098,6 @@ const ConnectionsTab: React.FC = () => {
                       <Input />
                     </Form.Item>
 
-                    <Form.Item label="API Base URL" name={['telegram_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input readOnly disabled placeholder={TELEGRAM_OFFICIAL_API_BASE_URL} />
-                    </Form.Item>
                   </div>
                   <div className="text-xs text-gray-500">
                     برای به‌دست آوردن Chat ID، بعد از ذخیره تنظیمات یک پیام یا /start به بات بفرستید.
@@ -2165,9 +2157,6 @@ const ConnectionsTab: React.FC = () => {
                       <Input />
                     </Form.Item>
 
-                    <Form.Item label="API Base URL" name={['bale_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input readOnly disabled placeholder={BALE_OFFICIAL_API_BASE_URL} />
-                    </Form.Item>
                   </div>
                   <div className="text-xs text-gray-500">
                     تنظیمات این بخش per-org ذخیره می‌شود تا هر سازمان بات خودش را داشته باشد.
@@ -2227,9 +2216,6 @@ const ConnectionsTab: React.FC = () => {
                       <Input />
                     </Form.Item>
 
-                    <Form.Item label="API Base URL" name={['rubika_bot', 'api_base_url']} className="md:col-span-3">
-                      <Input readOnly disabled placeholder={RUBIKA_OFFICIAL_API_BASE_URL} />
-                    </Form.Item>
                   </div>
                   <div className="rounded-xl border border-dashed border-amber-300 dark:border-amber-700 p-3 bg-amber-50/30 dark:bg-white/5 mt-3">
                     <div className="font-semibold mb-2">ارسال تست بات روبیکا</div>

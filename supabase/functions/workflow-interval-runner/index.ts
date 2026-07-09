@@ -13,6 +13,16 @@ const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
+const DEFAULT_BOT_API_BASE_URL: Record<string, string> = {
+  telegram: 'https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c',
+  bale: 'https://tapi.bale.ai',
+  rubika: 'https://botapi.rubika.ir',
+};
+const DEFAULT_BOT_SEND_PATH: Record<string, string> = {
+  telegram: '/bot{token}/sendMessage',
+  bale: '/bot{token}/sendMessage',
+  rubika: '/v3/{token}/sendMessage',
+};
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CALENDAR_PUBLIC_BASE_URL = String(
   Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
@@ -1570,24 +1580,35 @@ async function sendSmsViaProvider(settings: any, to: string[], text: string, url
 // ── Bot sending ────────────────────────────────────────────────────────────────
 
 async function getOrgBotSettings(url: string, key: string, orgId: string, channel: string): Promise<any | null> {
+  const canonicalType = `${channel}_bot`;
+  const legacyType = channel;
   const rows = await dbGet(url, key,
-    `integration_settings?org_id=eq.${orgId}&connection_type=eq.${channel}&is_active=eq.true&limit=1`
+    `integration_settings?org_id=eq.${orgId}&connection_type=in.(${canonicalType},${legacyType})&is_active=eq.true&order=updated_at.desc&limit=1`
   ).catch(() => []);
   return rows.length > 0 ? rows[0]?.settings || null : null;
+}
+
+function normalizeBotApiBaseUrl(value: string, channel: string): string {
+  const raw = String(DEFAULT_BOT_API_BASE_URL[channel] || '').trim().replace(/\/+$/, '');
+  if (!raw) return DEFAULT_BOT_API_BASE_URL[channel] || '';
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+
+function buildBotSendMessageUrl(settings: any, token: string, channel: string): string {
+  const baseUrl = normalizeBotApiBaseUrl(String(settings?.api_base_url || ''), channel);
+  const pathTemplate = String(settings?.send_message_path || DEFAULT_BOT_SEND_PATH[channel] || '/bot{token}/sendMessage').trim();
+  const path = pathTemplate
+    .replace('{token}', encodeURIComponent(token))
+    .replace(/^\/*/, '/');
+  return `${baseUrl}${path}`;
 }
 
 async function sendBotMessage(chatId: string, text: string, settings: any, channel: string): Promise<void> {
   const token = String(settings.bot_token || settings.token || '').trim();
   if (!token || !chatId) return;
-  const isTelegram = channel === 'telegram';
   const isRubika = channel === 'rubika';
-  const baseUrl = isRubika
-    ? `https://rubika.ir/rubika/bots/${token}/sendMessage`
-    : isTelegram
-    ? `https://api.telegram.org/bot${token}/sendMessage`
-    : `https://tapi.bale.ai/bot${token}/sendMessage`;
-  const payload = { chat_id: chatId, text, parse_mode: 'HTML' };
-  await fetch(baseUrl, {
+  const payload = isRubika ? { chat_id: chatId, text } : { chat_id: chatId, text, parse_mode: 'HTML' };
+  await fetch(buildBotSendMessageUrl(settings, token, channel), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -2715,19 +2736,7 @@ async function executeAction(
     const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, 'rubika');
     if (chatIds.length === 0) return actionResult(action, 'skipped', 'گیرنده روبیکا پیدا نشد.', { recipient_count: 0 });
     for (const chatId of chatIds) {
-      const token = String(botSettings.bot_token || '').trim();
-      if (!token || !chatId) continue;
-      await fetch(`https://rubika.ir/rubika/bots/${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text }),
-        signal: AbortSignal.timeout(8000),
-      }).then(async (response) => {
-        if (!response.ok) {
-          const raw = await response.text().catch(() => String(response.status));
-          throw new Error(`ارسال پیام روبیکا ناموفق بود: ${raw || response.status}`);
-        }
-      });
+      await sendBotMessage(chatId, text, botSettings, 'rubika');
     }
     return actionResult(action, 'success', undefined, { recipient_count: chatIds.length });
   }

@@ -75,6 +75,7 @@ import { noteInsertBus } from '../../../utils/communicationRealtimeBus';
 import { useNotificationConversationList } from '../../../hooks/useNotificationConversationList';
 import { shouldSubmitComposerOnEnter } from '../../../utils/composeKeyboard';
 import { useInternalConversationTimeline } from '../../../hooks/useInternalConversationTimeline';
+import { useBotConversationTimeline } from '../../../hooks/useBotConversationTimeline';
 import {
   CHAT_GROUP_PREFIX,
   MY_NOTES_CONVERSATION_KEY,
@@ -319,6 +320,129 @@ const getLiveInternalConversationKey = (conversationKey: string) => `${LIVE_INTE
 const getInternalSourceConversationKey = (key?: string | null) => {
   const normalized = String(key || '').trim();
   return normalized.startsWith(LIVE_INTERNAL_PREFIX) ? normalized.slice(LIVE_INTERNAL_PREFIX.length) : null;
+};
+
+const getBotGroupIdFromConversationKey = (key?: string | null) => {
+  const normalized = String(key || '').trim();
+  if (normalized.startsWith('live:bot_group:')) return normalized.slice('live:bot_group:'.length).trim();
+  if (normalized.startsWith('bot:')) return normalized.slice('bot:'.length).trim();
+  return normalized;
+};
+
+const normalizeMessagingConversationKey = (key?: string | null) => {
+  const normalized = String(key || '').trim();
+  if (normalized.startsWith('live:bot_group:')) {
+    const groupId = normalized.slice('live:bot_group:'.length).trim();
+    return groupId ? `bot:${groupId}` : normalized;
+  }
+  return normalized;
+};
+
+const getBotDirectThreadIdFromConversationKey = (key?: string | null) => {
+  const normalized = String(key || '').trim();
+  if (normalized.startsWith('live:bot_direct:')) return normalized.slice('live:bot_direct:'.length).trim();
+  return normalized;
+};
+
+const isKnownBotChannel = (value: any): value is BotChannel =>
+  BOT_CHANNELS.includes(String(value || '').trim() as BotChannel);
+
+const resolveBotTimelineTarget = (row: any) => {
+  const targetType = String(row?.target_type || '').trim();
+  const targetRecordId = String(row?.target_record_id || '').trim();
+  if (isBotTargetModuleId(targetType) && targetRecordId) return { moduleId: targetType, recordId: targetRecordId };
+  const customerId = String(row?.customer_id || '').trim();
+  if (customerId) return { moduleId: 'customers', recordId: customerId };
+  const supplierId = String(row?.supplier_id || '').trim();
+  if (supplierId) return { moduleId: 'suppliers', recordId: supplierId };
+  const employeeId = String(row?.employee_id || '').trim();
+  if (employeeId) return { moduleId: 'employees', recordId: employeeId };
+  return { moduleId: '', recordId: '' };
+};
+
+const getTimelineRecordLabel = (
+  labels: Record<string, string>,
+  moduleId?: string | null,
+  recordId?: string | null,
+  fallback?: string | null,
+) => {
+  const key = buildRecordReferenceKey(String(moduleId || '').trim(), String(recordId || '').trim());
+  return String((key ? labels[key] : '') || fallback || '').trim();
+};
+
+const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const rawAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
+  const attachments = rawAttachments
+    .map((attachment: any) => {
+      const url = String(attachment?.url || attachment?.file_url || '').trim();
+      const name = String(attachment?.name || attachment?.file_name || row?.file_name || 'فایل').trim() || 'فایل';
+      const mimeType = String(attachment?.mime_type || attachment?.mimeType || row?.mime_type || '').trim() || null;
+      const fileType = String(attachment?.file_type || attachment?.fileType || row?.message_type || '').trim().toLowerCase();
+      const kind: AttachmentKind = fileType === 'image' || String(mimeType || '').startsWith('image/')
+        ? 'image'
+        : fileType === 'video' || String(mimeType || '').startsWith('video/')
+          ? 'video'
+          : fileType === 'audio' || fileType === 'voice' || String(mimeType || '').startsWith('audio/')
+            ? 'audio'
+            : 'file';
+      return { name, kind, url: url || null, mimeType };
+    })
+    .filter((attachment: any) => attachment.url || attachment.name);
+  const directUrl = String(row?.file_url || '').trim();
+  if (directUrl && !attachments.some((attachment: any) => String(attachment.url || '') === directUrl)) {
+    const mimeType = String(row?.mime_type || '').trim() || null;
+    attachments.unshift({
+      name: String(row?.file_name || 'فایل').trim() || 'فایل',
+      kind: String(mimeType || '').startsWith('image/') ? 'image' : String(mimeType || '').startsWith('video/') ? 'video' : String(mimeType || '').startsWith('audio/') ? 'audio' : 'file',
+      url: directUrl,
+      mimeType,
+    });
+  }
+  return attachments;
+};
+
+const buildBotGroupRpcTimelineEvents = (
+  rows: any[],
+  activeGroup: any | null,
+  recordTitleMap: Record<string, string>,
+): TimelineEvent[] => {
+  const target = resolveBotTimelineTarget(activeGroup || {});
+  const relatedTitle = getTimelineRecordLabel(recordTitleMap, target.moduleId, target.recordId, activeGroup?.group_title);
+  const channel: BotChannel | null = isKnownBotChannel(activeGroup?.channel_type) ? activeGroup.channel_type as BotChannel : null;
+  return (rows || []).map((row: any) => {
+    const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
+    const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const attachments = buildBotTimelineAttachments(row) || [];
+    const text = String(row?.content_text || payload?.text || payload?.caption || '').trim()
+      || (attachments.length ? '' : 'پیام بات');
+    const senderDisplayName = String(payload?.sender_display_name || payload?.sender_name || '').trim();
+    const senderUsername = String(payload?.username || '').trim();
+    const senderChatId = String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim();
+    return {
+      id: `rpc-bot-group-${String(row?.id || `${row?.bot_group_id || ''}-${row?.created_at || Math.random()}`)}`,
+      sourceRow: row,
+      conversationKey: `bot:${String(row?.bot_group_id || activeGroup?.id || '').trim()}`,
+      kind: 'message' as const,
+      direction,
+      author: direction === 'outbound' ? 'کاربر سازمان' : (senderDisplayName || senderUsername || relatedTitle || activeGroup?.group_title || 'عضو گروه بات'),
+      text,
+      time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
+      status: direction === 'outbound' ? 'ارسال شده' : undefined,
+      replyTo: String(payload?.reply_to_message_id || payload?.reply_to_id || '').trim() || null,
+      attachments: attachments.length ? attachments : undefined,
+      avatarUrl: null,
+      botSenderChannel: channel,
+      botSenderChatId: direction === 'inbound' ? senderChatId || null : null,
+      botSenderDisplayName: direction === 'inbound' ? senderDisplayName || null : null,
+      botSenderUsername: direction === 'inbound' ? senderUsername || null : null,
+      botSenderPhoneNumber: direction === 'inbound' ? String(payload?.phone_number || '').trim() || null : null,
+      botSenderBound: true,
+      relatedRecordLabel: relatedTitle || undefined,
+      relatedModuleId: target.moduleId || null,
+      relatedRecordId: target.recordId || null,
+    };
+  });
 };
 
 const getInternalConversationKind = (summary: NotificationConversationSummary): Conversation['internalKind'] => {
@@ -1168,12 +1292,26 @@ const isBrokenRubikaStorageUrl = (url: string) =>
 const isRubikaTemporaryDownloadUrl = (url: string) =>
   /https?:\/\/messenger[^/]*\.rubika\.ir\/download\/?\?/i.test(String(url || '').trim());
 
-const hasRetryableRubikaMedia = (item: TimelineEvent) => {
-  if (item.botSenderChannel !== 'rubika') return false;
+const isProviderTemporaryDownloadUrl = (channel: string | null | undefined, url: string) => {
+  const value = String(url || '').trim();
+  if (!value) return false;
+  const normalizedChannel = String(channel || '').trim();
+  if (normalizedChannel === 'rubika') return isRubikaTemporaryDownloadUrl(value) || isBrokenRubikaStorageUrl(value);
+  if (normalizedChannel === 'telegram' || normalizedChannel === 'bale') {
+    return /\/file\/bot/i.test(value) || /api\.telegram\.org/i.test(value) || /tapi\.bale\.ai/i.test(value);
+  }
+  return false;
+};
+
+const hasRetryableBotMedia = (item: TimelineEvent) => {
+  const channel = String(item.botSenderChannel || item.sourceRow?.channel_type || '').trim();
+  if (!BOT_CHANNELS.includes(channel as BotChannel)) return false;
   const refs = collectBotMessageMediaFileRefs(item.sourceRow);
+  const payload = item.sourceRow?.payload && typeof item.sourceRow.payload === 'object' ? item.sourceRow.payload : {};
+  const markedRetryable = payload?.media_import_status === 'failed' && payload?.media_import_retryable !== false;
   return refs.some((ref) => {
     const url = String(ref.url || '').trim();
-    return ref.fileId && (!url || isBrokenRubikaStorageUrl(url) || isRubikaTemporaryDownloadUrl(url));
+    return ref.fileId && (!url || markedRetryable || isProviderTemporaryDownloadUrl(channel, url));
   });
 };
 
@@ -1284,7 +1422,7 @@ const TimelineEventCard: React.FC<{
   const relatedRecordTextClassName = outgoing
     ? 'text-sky-50 underline decoration-sky-100/55 underline-offset-4 hover:text-white hover:decoration-white'
     : 'text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 hover:text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-300-rgb))] dark:hover:text-[rgb(var(--brand-200-rgb))]';
-  const canRetryRubikaMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableRubikaMedia(item);
+  const canRetryBotMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableBotMedia(item);
   const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
   const relatedRecordHref = showRelatedRecordLink
     ? buildRecordHref(
@@ -1425,7 +1563,7 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('reply') ? <TimelineIconButton title="پاسخ" icon={<RollbackOutlined />} inverse={outgoing} onClick={() => onReply?.(item)} /> : null}
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
-          {canRetryRubikaMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
+          {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
           {!outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && item.botSenderChatId && !item.botSenderBound ? (
             <TimelineIconButton title="اتصال فرستنده به مخاطب" icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
           ) : null}
@@ -1827,7 +1965,7 @@ type ChatGroupRow = {
 const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ initialFilter = 'internal', initialConversationKey = null }) => {
   const { message } = App.useApp();
   const notificationRuntime = useOptionalNotificationRuntime();
-  const [selectedKey, setSelectedKey] = useState(() => String(initialConversationKey || '').trim());
+  const [selectedKey, setSelectedKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
   const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all'>(initialFilter);
   const [conversationListOpen, setConversationListOpen] = useState(false);
   const [phoneBindOpen, setPhoneBindOpen] = useState(false);
@@ -1892,6 +2030,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const markReadDedupeRef = useRef('');
   const runtimeRevisionRef = useRef(notificationRuntime.revisions);
   const botStatusWatchTimerRef = useRef<number | null>(null);
+  const botTimelineRefreshRef = useRef<null | ((options?: { force?: boolean }) => Promise<any>)>(null);
   const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready });
   const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
   const loadInternalConversationFallback = useMemo(() => {
@@ -2110,10 +2249,19 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const refreshMessagingSurface = async () => {
     if (refreshingMessages) return;
     setRefreshingMessages(true);
+    const selectedBotGroupId = getBotGroupIdFromConversationKey(selectedKey);
+    const shouldRefreshBotTimeline = Boolean(
+      selectedBotGroupId
+      && (selectedKey.startsWith('bot:') || selectedKey.startsWith('live:bot_group:'))
+      && botTimelineRefreshRef.current,
+    );
     try {
       await Promise.all([
         liveData.refresh(),
         refreshInternalConversations({ force: true }),
+        shouldRefreshBotTimeline && botTimelineRefreshRef.current
+          ? botTimelineRefreshRef.current({ force: true })
+          : Promise.resolve(null),
         selectedInternalSourceKey
           ? refreshInternalTimeline({ force: true })
           : Promise.resolve(null),
@@ -2128,13 +2276,16 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
 
   const retryBotMessageMedia = async (item: TimelineEvent) => {
     const rowId = String(item?.sourceRow?.id || '').trim();
-    if (!rowId || item.botSenderChannel !== 'rubika') {
+    const channel = String(item.botSenderChannel || item.sourceRow?.channel_type || '').trim() as BotChannel;
+    if (!rowId || !BOT_CHANNELS.includes(channel)) {
       message.warning('برای این پیام فایل قابل بازیابی پیدا نشد.');
       return;
     }
+    const payload = item.sourceRow?.payload && typeof item.sourceRow.payload === 'object' ? item.sourceRow.payload : {};
+    const markedRetryable = payload?.media_import_status === 'failed' && payload?.media_import_retryable !== false;
     const mediaItems = collectBotMessageMediaFileRefs(item.sourceRow).filter((ref) => {
       const url = String(ref.url || '').trim();
-      return ref.fileId && (!url || isBrokenRubikaStorageUrl(url) || isRubikaTemporaryDownloadUrl(url));
+      return ref.fileId && (!url || markedRetryable || isProviderTemporaryDownloadUrl(channel, url));
     });
     if (mediaItems.length === 0) {
       message.info('این پیام پیوست قابل بازیابی ندارد.');
@@ -2145,14 +2296,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const messageTable = String(item?.conversationKey || '').startsWith('live:bot_direct:')
         ? 'counterparty_bot_direct_messages'
         : 'counterparty_bot_messages';
-      const activeConnection = await getActiveChannelSettings('rubika');
+      const activeConnection = await getActiveChannelSettings(channel);
       const connectionId = String(activeConnection?.id || '').trim();
-      if (!connectionId) throw new Error('اتصال فعال روبیکا پیدا نشد.');
+      if (!connectionId) throw new Error('اتصال فعال بات پیدا نشد.');
       for (const mediaItem of mediaItems) {
         const { data, error } = await supabase.functions.invoke('bot-admin', {
           body: {
-            action: 'import_rubika_file',
-            channel: 'rubika',
+            action: 'import_bot_file',
+            channel,
             connectionId,
             messageId: rowId,
             messageTable,
@@ -2162,21 +2313,25 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         });
         if (error) throw error;
         if (!data?.success || !String(data?.file_url || '').trim()) {
-          const nextError: any = new Error(String(data?.message || 'بازیابی فایل روبیکا ناموفق بود.'));
+          const nextError: any = new Error(String(data?.message || 'بازیابی فایل بات ناموفق بود.'));
           nextError.details = data?.details || null;
           throw nextError;
         }
       }
       await liveData.refresh();
-      message.success('پیوست روبیکا دوباره بازیابی شد.');
+      if (botTimelineRefreshRef.current) {
+        await botTimelineRefreshRef.current({ force: true });
+      }
+      message.success('پیوست بات دوباره بازیابی شد.');
     } catch (error: any) {
-      console.info('Messaging v2 manual Rubika media retry failed.', {
+      console.info('Messaging v2 manual bot media retry failed.', {
+        channel,
         messageId: rowId,
         fileIds: mediaItems.map((mediaItem) => mediaItem.fileId),
         error: String(error?.message || error || 'unknown_error'),
         details: error?.details || null,
       });
-      message.error(toFaErrorMessage(error, 'بازیابی دوباره فایل روبیکا ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'بازیابی دوباره فایل بات ناموفق بود.'));
     } finally {
       setRetryingBotMediaIds((prev) => {
         const next = new Set(prev);
@@ -2400,12 +2555,62 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     notificationRuntime.summary.sms_messages,
     notificationRuntime.summary.voip_calls,
   ]);
+  const activeConversation = displayConversations.find((conversation) => conversation.key === selectedKey) || displayConversations[0] || emptyConversation;
+  const activeBotGroupId = activeConversation.channel === 'bot_group'
+    ? getBotGroupIdFromConversationKey(activeConversation.key)
+    : '';
+  const activeBotGroupRow = activeBotGroupId
+    ? (liveData.botGroups || []).find((row: any) => String(row?.id || '').trim() === activeBotGroupId) || null
+    : null;
+  const liveBotGroupFallbackRows = useMemo(() => (
+    activeBotGroupId
+      ? liveData.events
+        .filter((item) => item.conversationKey === `bot:${activeBotGroupId}` || item.conversationKey === `live:bot_group:${activeBotGroupId}`)
+        .map((item) => item.sourceRow)
+        .filter(Boolean)
+      : []
+  ), [activeBotGroupId, liveData.events]);
+  const botTimeline = useBotConversationTimeline<any>({
+    supabase,
+    enabled: Boolean(liveData.profile.id && activeConversation.channel === 'bot_group' && activeBotGroupId),
+    botGroupId: activeBotGroupId || null,
+    pageSize: 40,
+    cacheScopeKey,
+    fallbackLoadInitial: liveBotGroupFallbackRows.length
+      ? async () => liveBotGroupFallbackRows
+      : undefined,
+  });
+  useEffect(() => {
+    botTimelineRefreshRef.current = botTimeline.refresh;
+    return () => {
+      if (botTimelineRefreshRef.current === botTimeline.refresh) {
+        botTimelineRefreshRef.current = null;
+      }
+    };
+  }, [botTimeline.refresh]);
+  useEffect(() => {
+    if (!liveData.profile.id || activeConversation.channel !== 'bot_group' || !activeBotGroupId) return;
+    void botTimeline.refresh({ force: true }).catch((error) => {
+      console.warn('Could not refresh active bot conversation timeline', error);
+    });
+  }, [
+    activeBotGroupId,
+    activeConversation.channel,
+    botTimeline.refresh,
+    liveData.profile.id,
+    notificationRuntime.revisions.bot_messages,
+  ]);
+  const botGroupRpcEvents = useMemo<TimelineEvent[]>(() => (
+    activeConversation.channel === 'bot_group'
+      ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap)
+      : []
+  ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap]);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
     const normalizedLiveEvents = liveData.events.map((item) => {
       if (item.direction !== 'outbound') return item;
-      const isBotEvent = String(item.conversationKey || '').startsWith('live:bot_group:')
+      const isBotEvent = String(item.conversationKey || '').startsWith('bot:')
         || String(item.conversationKey || '').startsWith('live:bot_direct:');
       const senderId = String((item as any)?.sourceRow?.created_by || '').trim();
       const senderUser = senderId ? directoryUserMap[senderId] : null;
@@ -2424,10 +2629,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     });
     return [
       ...liveInternalEvents,
-      ...normalizedLiveEvents,
+      ...normalizedLiveEvents.filter((item) => !(activeConversation.channel === 'bot_group' && item.conversationKey === activeConversation.key)),
+      ...botGroupRpcEvents,
     ] as TimelineEvent[];
-  }, [directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents]);
-  const activeConversation = displayConversations.find((conversation) => conversation.key === selectedKey) || displayConversations[0] || emptyConversation;
+  }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents]);
   const activeEventsRaw = useMemo(
     () => displayEvents.filter((item) => item.conversationKey === activeConversation.key),
     [activeConversation.key, displayEvents],
@@ -2493,7 +2698,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   }, [activeConversation?.key, activeEvents.length]);
 
   useEffect(() => {
-    const normalizedInitialKey = String(initialConversationKey || '').trim();
+    const normalizedInitialKey = normalizeMessagingConversationKey(initialConversationKey);
     if (!normalizedInitialKey) return;
     setSelectedKey(normalizedInitialKey);
   }, [initialConversationKey]);
@@ -2557,7 +2762,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           created_at: getEventActivityAt(item),
         })));
       } else if (activeConversation.channel === 'bot_group') {
-        const groupId = activeConversation.key.replace(/^live:bot_group:/, '');
+        const groupId = getBotGroupIdFromConversationKey(activeConversation.key);
         if (groupId) {
           await notificationRuntime.markCommunicationRead('bot', `bot:${groupId}`, readableEvents.map((item) => ({
             id: item.sourceRow?.id,
@@ -2565,7 +2770,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           })));
         }
       } else if (activeConversation.channel === 'bot_direct') {
-        const threadId = activeConversation.key.replace(/^live:bot_direct:/, '');
+        const threadId = getBotDirectThreadIdFromConversationKey(activeConversation.key);
         const thread = liveData.botDirectThreads.find((item: any) => String(item?.id || '').trim() === threadId);
         const channel = String(thread?.channel_type || '').trim();
         const chatId = String(thread?.chat_id || '').trim();
@@ -2597,7 +2802,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   ]);
 
   const selectConversation = (key: string) => {
-    setSelectedKey(key);
+    setSelectedKey(normalizeMessagingConversationKey(key));
     setReplyTarget(null);
     setConversationSearchOpen(false);
     setConversationSearchValue('');
@@ -2981,7 +3186,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   };
 
   const getBotGroupContextFromConversation = (conversation: Conversation): BotStatusModalContext | null => {
-    const groupId = String(conversation.key || '').replace(/^live:bot_group:/, '').trim();
+    const groupId = getBotGroupIdFromConversationKey(conversation.key);
     const groupRow = groupId
       ? (liveData.botGroups || []).find((row: any) => String(row?.id || '').trim() === groupId)
       : null;
@@ -3456,7 +3661,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
 
   const getBotConversationRow = (conversation: Conversation) => {
     if (conversation.channel === 'bot_group') {
-      const groupId = String(conversation.key || '').replace(/^live:bot_group:/, '');
+      const groupId = getBotGroupIdFromConversationKey(conversation.key);
       return {
         table: 'counterparty_bot_groups' as const,
         id: groupId,
@@ -3464,7 +3669,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       };
     }
     if (conversation.channel === 'bot_direct') {
-      const threadId = String(conversation.key || '').replace(/^live:bot_direct:/, '');
+      const threadId = getBotDirectThreadIdFromConversationKey(conversation.key);
       return {
         table: 'counterparty_bot_direct_threads' as const,
         id: threadId,
@@ -3986,7 +4191,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           return false;
         }
         if (conversation.channel === 'bot_group') {
-          const groupId = String(conversation.key).replace(/^live:bot_group:/, '');
+          const groupId = getBotGroupIdFromConversationKey(conversation.key);
           const group = (liveData.botGroups || []).find((row: any) => String(row?.id || '') === groupId);
           if (!group) throw new Error('گروه بات انتخاب‌شده پیدا نشد.');
           await sendTextToBotGroup(group, finalText, {
@@ -4000,7 +4205,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             },
           });
         } else {
-          const threadId = String(conversation.key).replace(/^live:bot_direct:/, '');
+          const threadId = getBotDirectThreadIdFromConversationKey(conversation.key);
           const thread = (liveData.botDirectThreads || []).find((row: any) => String(row?.id || '') === threadId);
           if (!thread) throw new Error('گفتگوی شخصی بات انتخاب‌شده پیدا نشد.');
           await sendTextToBotDirectThread(thread, finalText, {
