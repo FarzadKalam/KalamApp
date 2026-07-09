@@ -167,6 +167,33 @@ const extractAuthMessage = (parsed: any, fallback: string) =>
     fallback
   );
 
+const inferAuthReasonCode = (parsed: any, fallbackCode: string) => {
+  const raw = `${extractAuthMessage(parsed, '').toLowerCase()} ${String(parsed?.code || '').trim().toLowerCase()}`.trim();
+  if (raw.includes('users_phone_key') || (raw.includes('phone') && (raw.includes('already') || raw.includes('duplicate') || raw.includes('exists')))) {
+    return 'phone_conflict';
+  }
+  if (raw.includes('users_email_key') || (raw.includes('email') && (raw.includes('already') || raw.includes('duplicate') || raw.includes('exists')))) {
+    return 'email_conflict';
+  }
+  return fallbackCode;
+};
+
+const getAuthFailureStatus = (status: number, reasonCode?: string | null) => {
+  if (reasonCode === 'phone_conflict' || reasonCode === 'email_conflict') return 409;
+  if (status >= 400 && status < 500) return status;
+  return 500;
+};
+
+const getAuthFailureMessage = (reasonCode: string | null, fallback: string) => {
+  if (reasonCode === 'phone_conflict') {
+    return 'این شماره موبایل قبلا برای کاربر دیگری در احراز هویت ثبت شده است.';
+  }
+  if (reasonCode === 'email_conflict') {
+    return 'این ایمیل قبلا برای کاربر دیگری در احراز هویت ثبت شده است.';
+  }
+  return fallback;
+};
+
 const inferOtpReasonCode = (parsed: any, status: number, fallbackCode: string) => {
   const raw = `${extractAuthMessage(parsed, '').toLowerCase()} ${String(parsed?.code || '').trim().toLowerCase()}`.trim();
   if (raw.includes('otp_disabled')) return 'otp_disabled';
@@ -384,7 +411,12 @@ const createAuthUser = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'ایجاد کاربر ناموفق بود'));
+    const reasonCode = inferAuthReasonCode(parsed, 'auth_create_failed');
+    throw createReasonedError(
+      getAuthFailureMessage(reasonCode, extractAuthMessage(parsed, 'ایجاد کاربر ناموفق بود')),
+      reasonCode,
+      getAuthFailureStatus(response.status, reasonCode),
+    );
   }
   return unwrapAuthUserPayload(parsed);
 };
@@ -402,7 +434,12 @@ const updateAuthUser = async (
   });
   const parsed = await readJsonSafe(response);
   if (!response.ok) {
-    throw new Error(String(parsed?.msg || parsed?.message || parsed || 'بروزرسانی کاربر ناموفق بود'));
+    const reasonCode = inferAuthReasonCode(parsed, 'auth_update_failed');
+    throw createReasonedError(
+      getAuthFailureMessage(reasonCode, extractAuthMessage(parsed, 'بروزرسانی کاربر ناموفق بود')),
+      reasonCode,
+      getAuthFailureStatus(response.status, reasonCode),
+    );
   }
   return unwrapAuthUserPayload(parsed);
 };
@@ -1236,14 +1273,36 @@ Deno.serve(async (request) => {
         targetOrgId,
       );
 
-      const authUser = await createAuthUser(supabaseUrl, serviceRoleKey, {
+      const existingAuthUsers = await findAuthUsersByPhone(supabaseUrl, serviceRoleKey, normalizedPhone);
+      let orphanAuthUser: any = null;
+      for (const existingAuthUser of existingAuthUsers) {
+        const existingAuthUserId = String(existingAuthUser?.id || '').trim();
+        if (!existingAuthUserId) continue;
+        const existingAuthProfile = await fetchProfile(supabaseUrl, serviceRoleKey, existingAuthUserId);
+        if (existingAuthProfile?.id) {
+          return json(409, {
+            success: false,
+            message: 'برای این شماره موبایل قبلا کاربر ثبت شده است.',
+            reason_code: 'phone_conflict',
+          });
+        }
+        if (!orphanAuthUser) orphanAuthUser = existingAuthUser;
+      }
+
+      let createdNewAuthUser = false;
+      const authPayload = {
         email: email || undefined,
         phone: toGoTruePhone(normalizedPhone),
         password,
         user_metadata: { full_name: fullName },
         email_confirm: email ? true : undefined,
         phone_confirm: false,
-      });
+      };
+
+      const authUser = orphanAuthUser?.id
+        ? await updateAuthUser(supabaseUrl, serviceRoleKey, String(orphanAuthUser.id), authPayload)
+        : await createAuthUser(supabaseUrl, serviceRoleKey, authPayload);
+      createdNewAuthUser = !orphanAuthUser?.id;
       if (!authUser?.id) {
         throw new Error('ایجاد حساب احراز هویت ناموفق بود.');
       }
@@ -1267,13 +1326,17 @@ Deno.serve(async (request) => {
           is_active: isActive,
         });
       } catch (profileError) {
-        await deleteAuthUser(supabaseUrl, serviceRoleKey, createdAuthUserId).catch(() => null);
+        if (createdNewAuthUser) {
+          await deleteAuthUser(supabaseUrl, serviceRoleKey, createdAuthUserId).catch(() => null);
+        }
         throw profileError;
       }
 
       const persistedProfile = await fetchProfile(supabaseUrl, serviceRoleKey, createdAuthUserId);
       if (!persistedProfile?.id) {
-        await deleteAuthUser(supabaseUrl, serviceRoleKey, createdAuthUserId).catch(() => null);
+        if (createdNewAuthUser) {
+          await deleteAuthUser(supabaseUrl, serviceRoleKey, createdAuthUserId).catch(() => null);
+        }
         throw new Error('ایجاد پروفایل کاربر نهایی نشد.');
       }
 
