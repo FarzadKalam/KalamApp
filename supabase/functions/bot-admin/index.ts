@@ -920,6 +920,38 @@ function createBotAdminError(
   return error;
 }
 
+const fetchWithTimeout = async (
+  url: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number; errorCode?: string; channel?: string; action?: string } = {},
+) => {
+  const timeoutMs = Math.max(1000, Number(options.timeoutMs || 12000));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal || controller.signal,
+    });
+  } catch (error: any) {
+    if (String(error?.name || '').toLowerCase() === 'aborterror') {
+      throw createBotAdminError('The upstream server is timing out', {
+        errorCode: options.errorCode || 'bot_upstream_timeout',
+        retryable: true,
+        details: {
+          channel: options.channel || null,
+          action: options.action || null,
+          timeout_ms: timeoutMs,
+          upstream: describeExternalUrl(url),
+        },
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isTransientProviderStatus = (status: number | null | undefined) => {
@@ -988,10 +1020,15 @@ const disableTelegramLikeWebhook = async (
   const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
   const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/deleteWebhook`;
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ drop_pending_updates: false }),
+  }, {
+    timeoutMs: 10000,
+    errorCode: `${channel}_delete_webhook_timeout`,
+    channel,
+    action: 'deleteWebhook',
   });
   const payload = await parseResponse(response);
   if (!response.ok) {
@@ -1067,7 +1104,7 @@ const callTelegramLikeGetUpdates = async (
   const baseUrl = normalizeBaseUrl(settings?.api_base_url, channel);
   const endpoint = `${baseUrl}/bot${encodeURIComponent(token)}/getUpdates`;
   const body: Record<string, any> = {
-    limit: 10,
+    limit: 50,
     timeout: 0,
   };
   const offset = Number(cursor);
@@ -1075,10 +1112,15 @@ const callTelegramLikeGetUpdates = async (
     body.offset = offset;
   }
 
-  const response = await fetch(endpoint, {
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+  }, {
+    timeoutMs: 10000,
+    errorCode: `${channel}_get_updates_timeout`,
+    channel,
+    action: 'getUpdates',
   });
   const payload = await parseResponse(response);
   if (!response.ok) {
@@ -3870,6 +3912,9 @@ Deno.serve(async (req) => {
     console.error('[bot-admin] error', String(error?.message || error));
     return json(400, {
       success: false,
+      error_code: String(error?.errorCode || 'bot_admin_error'),
+      retryable: Boolean(error?.retryable),
+      details: error?.details || null,
       message: String(error?.message || 'خطا در عملیات بات'),
     });
   }

@@ -94,11 +94,13 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     canEdit: true,
     canDelete: true,
   });
+  const [loadedRecord, setLoadedRecord] = useState<Record<string, any> | null>(null);
 
   const [activeBotsLoading, setActiveBotsLoading] = useState(false);
   const [activeBots, setActiveBots] = useState<Array<{ channel: NotificationBotChannel; label: string }>>([]);
 
   const moduleConfig = moduleId ? MODULES[moduleId] : null;
+  const effectiveRecord = useMemo(() => loadedRecord || record || {}, [loadedRecord, record]);
   const scopedModuleId = getReadyTextScopeModuleId(moduleId, 'message');
   const globalScopedModuleId = getReadyTextScopeModuleId(null, 'message');
   const isTemplateMode = mode === 'template';
@@ -112,16 +114,16 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     () =>
       (isBulkSmsMode
         ? Array.from(new Set((smsRecipients || []).map((value) => String(value || '').trim()).filter(Boolean)))
-        : getRecordPhoneCandidates(moduleId, record, initialPhone)
+        : getRecordPhoneCandidates(moduleId, effectiveRecord, initialPhone)
       ).map((value) => ({
         label: <PhoneDisplay value={value} size="md" className="w-full" />,
         value,
         searchText: String(value || '').toLowerCase(),
       })),
-    [initialPhone, isBulkSmsMode, moduleId, record, smsRecipients]
+    [effectiveRecord, initialPhone, isBulkSmsMode, moduleId, smsRecipients]
   );
 
-  const botTargets = useMemo(() => getRecordBotTargets(record), [record]);
+  const botTargets = useMemo(() => getRecordBotTargets(effectiveRecord), [effectiveRecord]);
 
   const availableBotOptions = useMemo(() => {
     return activeBots
@@ -136,7 +138,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const variableOptions = useMemo(() => {
     const optionsByToken = new Map<string, { label: string; value: string; searchText: string }>();
     [
-      ...getMessageTemplateVariables(moduleId, record),
+      ...getMessageTemplateVariables(moduleId, effectiveRecord),
       ...(Array.isArray(templateVariableOptions) ? templateVariableOptions : []),
     ].forEach((item) => {
       const token = String(item?.token || '').trim();
@@ -150,7 +152,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       });
     });
     return Array.from(optionsByToken.values());
-  }, [moduleId, record, templateVariableOptions]);
+  }, [effectiveRecord, moduleId, templateVariableOptions]);
 
   const selectPopupContainer = (node?: HTMLElement | null) => resolveOverlayPopupContainer(node);
   const commonSelectFilter = (input: string, option?: { label?: unknown; searchText?: unknown }) =>
@@ -176,7 +178,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     }
 
     let cancelled = false;
-    resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, record || {})
+    resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, effectiveRecord)
       .then((maps) => {
         if (!cancelled) setTemplateOptionLabelMaps(maps);
       })
@@ -188,12 +190,50 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [open, messageText, moduleId, record]);
+  }, [effectiveRecord, open, messageText, moduleId]);
 
   const renderedPreview = useMemo(
-    () => renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
-    [messageText, record, moduleId, templateOptionLabelMaps]
+    () => renderRecordTemplate(messageText, effectiveRecord, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
+    [messageText, effectiveRecord, moduleId, templateOptionLabelMaps]
   );
+
+  useEffect(() => {
+    if (!open) {
+      setLoadedRecord(null);
+      return;
+    }
+    const tableName = String((moduleConfig as any)?.table || '').trim();
+    const recordId = String(record?.id || '').trim();
+    if (!tableName || !recordId) {
+      setLoadedRecord(null);
+      return;
+    }
+    const hasOnlyId = Object.keys(record || {}).filter((key) => key !== 'id').length === 0;
+    if (!hasOnlyId) {
+      setLoadedRecord(record || null);
+      return;
+    }
+
+    let cancelled = false;
+    supabase
+      .from(tableName)
+      .select('*')
+      .eq('id', recordId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.warn('Could not load message template record', error);
+          setLoadedRecord(record || null);
+          return;
+        }
+        setLoadedRecord(data || record || null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moduleConfig, open, record]);
 
   useEffect(() => {
     let cancelled = false;
@@ -453,15 +493,23 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     }
   };
 
+  const renderReadyTextForApply = async (content: string) => {
+    const source = String(content || '').trim();
+    if (!source) return '';
+    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, source, moduleId, effectiveRecord)
+      .catch(() => templateOptionLabelMaps);
+    return String(renderRecordTemplate(source, effectiveRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
+  };
+
   const handleSend = async () => {
     if (isTemplateMode) {
       onCancel();
       return;
     }
 
-    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, record || {})
+    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, effectiveRecord)
       .catch(() => templateOptionLabelMaps);
-    const finalText = String(renderRecordTemplate(messageText, record || {}, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
+    const finalText = String(renderRecordTemplate(messageText, effectiveRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
     if (!finalText) {
       msg.warning('متن پیام خالی است.');
       return;
@@ -758,9 +806,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                             <div className="flex items-center gap-1">
                               <Button
                                 size="small"
-                                onClick={() => {
+                                onClick={async () => {
                                   if (isTemplateMode) {
-                                    onApplyTemplate?.(item.content);
+                                    const rendered = await renderReadyTextForApply(item.content);
+                                    onApplyTemplate?.(rendered || item.content);
                                     onCancel();
                                     return;
                                   }

@@ -406,14 +406,77 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
   return attachments;
 };
 
+type BotIdentityBindingLike = {
+  channel_type?: string | null;
+  chat_id?: string | null;
+  target_module_id?: string | null;
+  target_record_id?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+  phone_number?: string | null;
+};
+
+const buildBotIdentityBindingKey = (channel?: string | null, chatId?: string | null) =>
+  `${String(channel || '').trim()}:${String(chatId || '').trim()}`;
+
+const buildBotIdentityBindingMap = (rows?: BotIdentityBindingLike[] | null) => {
+  const map = new Map<string, BotIdentityBindingLike>();
+  (rows || []).forEach((row) => {
+    const key = buildBotIdentityBindingKey(row?.channel_type, row?.chat_id);
+    if (key !== ':') map.set(key, row);
+  });
+  return map;
+};
+
+const resolveBotRpcSenderName = (
+  row: any,
+  binding: BotIdentityBindingLike | null,
+  recordTitleMap: Record<string, string>,
+  fallback: string,
+) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  if (binding?.target_module_id && binding?.target_record_id) {
+    const boundTitle = getTimelineRecordLabel(
+      recordTitleMap,
+      String(binding.target_module_id),
+      String(binding.target_record_id),
+      binding.display_name || fallback,
+    );
+    if (boundTitle) return boundTitle;
+  }
+  const senderTargetModuleId = String(payload?.sender_target_module_id || payload?.target_module_id || '').trim();
+  const senderTargetRecordId = String(payload?.sender_target_record_id || payload?.target_record_id || '').trim();
+  const senderTargetTitle = getTimelineRecordLabel(recordTitleMap, senderTargetModuleId, senderTargetRecordId);
+  if (senderTargetTitle) return senderTargetTitle;
+  const username = String(payload?.username || payload?.sender_username || binding?.username || '').trim().replace(/^@+/, '');
+  return String(payload?.sender_display_name || payload?.display_name || binding?.display_name || '').trim()
+    || (username ? `@${username}` : '')
+    || String(payload?.phone_number || payload?.sender_phone_number || binding?.phone_number || '').trim()
+    || String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim()
+    || fallback;
+};
+
+const resolveBotRpcSenderAvatarUrl = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  return String(
+    payload?.sender_avatar_url
+    || payload?.avatar_url
+    || payload?.profile_photo_url
+    || payload?.photo_url
+    || ''
+  ).trim() || null;
+};
+
 const buildBotGroupRpcTimelineEvents = (
   rows: any[],
   activeGroup: any | null,
   recordTitleMap: Record<string, string>,
+  botSenderBindings?: BotIdentityBindingLike[] | null,
 ): TimelineEvent[] => {
   const target = resolveBotTimelineTarget(activeGroup || {});
   const relatedTitle = getTimelineRecordLabel(recordTitleMap, target.moduleId, target.recordId, activeGroup?.group_title);
   const channel: BotChannel | null = isKnownBotChannel(activeGroup?.channel_type) ? activeGroup.channel_type as BotChannel : null;
+  const botSenderBindingMap = buildBotIdentityBindingMap(botSenderBindings);
   return (rows || []).map((row: any) => {
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
@@ -423,25 +486,29 @@ const buildBotGroupRpcTimelineEvents = (
     const senderDisplayName = String(payload?.sender_display_name || payload?.sender_name || '').trim();
     const senderUsername = String(payload?.username || '').trim();
     const senderChatId = String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim();
+    const senderBinding = direction === 'inbound' && channel && senderChatId
+      ? botSenderBindingMap.get(buildBotIdentityBindingKey(channel, senderChatId)) || null
+      : null;
+    const senderTitle = resolveBotRpcSenderName(row, senderBinding, recordTitleMap, relatedTitle || activeGroup?.group_title || 'عضو گروه بات');
     return {
       id: `rpc-bot-group-${String(row?.id || `${row?.bot_group_id || ''}-${row?.created_at || Math.random()}`)}`,
       sourceRow: row,
       conversationKey: `bot:${String(row?.bot_group_id || activeGroup?.id || '').trim()}`,
       kind: 'message' as const,
       direction,
-      author: direction === 'outbound' ? 'کاربر سازمان' : (senderDisplayName || senderUsername || relatedTitle || activeGroup?.group_title || 'عضو گروه بات'),
+      author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
       text,
       time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
       status: direction === 'outbound' ? 'ارسال شده' : undefined,
       replyTo: String(payload?.reply_to_message_id || payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
-      avatarUrl: null,
+      avatarUrl: resolveBotRpcSenderAvatarUrl(row),
       botSenderChannel: channel,
       botSenderChatId: direction === 'inbound' ? senderChatId || null : null,
       botSenderDisplayName: direction === 'inbound' ? senderDisplayName || null : null,
       botSenderUsername: direction === 'inbound' ? senderUsername || null : null,
       botSenderPhoneNumber: direction === 'inbound' ? String(payload?.phone_number || '').trim() || null : null,
-      botSenderBound: true,
+      botSenderBound: direction === 'inbound' ? Boolean(senderBinding?.target_module_id && senderBinding?.target_record_id) : true,
       relatedRecordLabel: relatedTitle || undefined,
       relatedModuleId: target.moduleId || null,
       relatedRecordId: target.recordId || null,
@@ -1484,6 +1551,10 @@ const TimelineEventCard: React.FC<{
     ? 'text-sky-50 underline decoration-sky-100/55 underline-offset-4 hover:text-white hover:decoration-white'
     : 'text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 hover:text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-300-rgb))] dark:hover:text-[rgb(var(--brand-200-rgb))]';
   const canRetryBotMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableBotMedia(item);
+  const canBindBotSender = !outgoing
+    && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
+    && Boolean(item.botSenderChatId)
+    && !item.botSenderBound;
   const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
   const relatedRecordHref = showRelatedRecordLink
     ? buildRecordHref(
@@ -1533,7 +1604,24 @@ const TimelineEventCard: React.FC<{
               />
             )}
             <div className="min-w-0">
-              <div className={authorTextClassName}>{item.author}</div>
+              <div className="flex min-w-0 items-center gap-1.5">
+                <div className={authorTextClassName}>{item.author}</div>
+                {canBindBotSender ? (
+                  <Tooltip title="اتصال فرستنده به مخاطب">
+                    <button
+                      type="button"
+                      className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition ${
+                        outgoing
+                          ? 'bg-white/14 text-white hover:bg-white/22'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700 dark:bg-white/[0.07] dark:text-slate-300 dark:hover:bg-white/[0.12]'
+                      }`}
+                      onClick={() => onBindBotSender?.(item)}
+                    >
+                      <UserAddOutlined className="text-[11px]" />
+                    </button>
+                  </Tooltip>
+                ) : null}
+              </div>
               <div className={timeTextClassName}>{item.time}</div>
             </div>
           </div>
@@ -1625,7 +1713,7 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
           {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
-          {!outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && item.botSenderChatId && !item.botSenderBound ? (
+          {canBindBotSender ? (
             <TimelineIconButton title="اتصال فرستنده به مخاطب" icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
           ) : null}
           <TimelineIconButton title="کپی متن" icon={<CopyOutlined />} inverse={outgoing} onClick={() => void copyMessageText()} />
@@ -1783,6 +1871,10 @@ const MessagingComposerDock: React.FC<{
   const [linkedAttachments, setLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [readyTextsOpen, setReadyTextsOpen] = useState(false);
   const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
+  const readyTextRecord = useMemo(
+    () => (conversation.relatedRecordId ? { id: conversation.relatedRecordId } : null),
+    [conversation.relatedRecordId],
+  );
   useEffect(() => {
     setDraft('');
     setRecording(false);
@@ -1809,7 +1901,7 @@ const MessagingComposerDock: React.FC<{
         open
         mode="template"
         moduleId={conversation.relatedModuleId || null}
-        record={conversation.relatedRecordId ? { id: conversation.relatedRecordId } : null}
+        record={readyTextRecord}
         templateOnlyTitle="پیام‌های آماده"
         onApplyTemplate={applyReadyText}
         onInsertVariable={(token) => applyReadyText(token)}
@@ -2697,9 +2789,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   ]);
   const botGroupRpcEvents = useMemo<TimelineEvent[]>(() => (
     activeConversation.channel === 'bot_group'
-      ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap)
+      ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap, liveData.botSenderBindings)
       : []
-  ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap]);
+  ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap, liveData.botSenderBindings]);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
@@ -2707,6 +2799,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       if (item.direction !== 'outbound') return item;
       const isBotEvent = String(item.conversationKey || '').startsWith('bot:')
         || String(item.conversationKey || '').startsWith('live:bot_direct:');
+      const isSmsEvent = item.kind === 'sms';
       const senderId = String((item as any)?.sourceRow?.created_by || '').trim();
       const senderUser = senderId ? directoryUserMap[senderId] : null;
       if (isBotEvent) {
@@ -2714,6 +2807,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           ...item,
           author: String(senderUser?.display_name || item.author || '').trim() || 'کاربر سازمان',
           avatarUrl: String((item as any).avatarUrl || senderUser?.avatar_url || '').trim() || null,
+        };
+      }
+      if (isSmsEvent) {
+        return {
+          ...item,
+          author: String(orgDisplayName || item.author || '').trim() || 'سازمان',
+          avatarUrl: String(orgLogoUrl || (item as any).avatarUrl || '').trim() || null,
         };
       }
       return {
@@ -2730,7 +2830,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveEventsForDisplay,
       ...botGroupRpcEvents,
     ] as TimelineEvent[];
-  }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents]);
+  }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents, orgDisplayName, orgLogoUrl]);
   const activeEventsRaw = useMemo(
     () => displayEvents.filter((item) => item.conversationKey === activeConversation.key),
     [activeConversation.key, displayEvents],
@@ -3400,7 +3500,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     setBotStatusPlatformData(platforms);
     setBotStatusDefaultChannel(defaultChannel);
     setBotStatusFallbackToActive(Boolean(prefResult.data?.fallback_to_active));
-    setBotStatusActiveTab(options?.activeTab || defaultChannel);
+    setBotStatusActiveTab((prev) => (
+      options?.activeTab && BOT_CHANNELS.includes(options.activeTab)
+        ? options.activeTab
+        : (BOT_CHANNELS.includes(prev) ? prev : defaultChannel)
+    ));
   };
 
   const saveBotStatusSettings = async (options?: { forceCapture?: boolean; captureChannel?: BotChannel; captureSeconds?: number }) => {

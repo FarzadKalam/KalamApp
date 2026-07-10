@@ -1675,6 +1675,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       events: [...botGroupModels.events, ...botDirectModels.events, ...smsModels.events, ...voipModels.events],
       botGroups,
       botDirectThreads,
+      botSenderBindings,
       refresh,
       profile,
       liveSummary: [

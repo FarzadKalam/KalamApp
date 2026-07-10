@@ -8,6 +8,7 @@ import {
   mergeClassNames,
   resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
+import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 
 export type BotChannel = 'rubika' | 'telegram' | 'bale';
 
@@ -57,6 +58,16 @@ const CHANNEL_LABEL_BY_VALUE: Record<BotChannel, string> = CHANNEL_OPTIONS.reduc
   acc[item.value] = item.label;
   return acc;
 }, {} as Record<BotChannel, string>);
+
+const renderChannelTabLabel = (channel: BotChannel, label: string) => {
+  const iconSrc = getBotPlatformAvatarSrc(channel);
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {iconSrc ? <img src={iconSrc} alt="" className="h-4 w-4 rounded-full" /> : null}
+      <span>{label}</span>
+    </span>
+  );
+};
 
 const STATUS_COLOR: Record<string, string> = {
   active: 'text-emerald-600 dark:text-emerald-400',
@@ -347,7 +358,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
 
   const tabItems = CHANNEL_OPTIONS.map(({ label, value: channel }) => ({
     key: channel,
-    label,
+    label: renderChannelTabLabel(channel, label),
     children: (
       <PlatformTabContent
         channel={channel}

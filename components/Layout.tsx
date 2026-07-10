@@ -78,6 +78,7 @@ import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from './announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from './announcements/UserAnnouncementsPopupHost';
 import AiAssistantLauncher from './communications/AiAssistantLauncher';
+import { toPersianNumber } from '../utils/persianNumberFormatter';
 import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 
@@ -1579,7 +1580,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
             <div className="mx-1 hidden h-6 w-[1px] bg-gray-300 dark:bg-gray-700 sm:block"></div>
             {communicationsAccess.canUseWorkspace ? (
               <Tooltip title="پیام‌رسانی" placement="bottom">
-                <Badge count={notificationRuntime.communicationUnread || 0} size="small" color="#c0392b">
+                <Badge
+                  count={notificationRuntime.communicationUnread > 0 ? toPersianNumber(String(notificationRuntime.communicationUnread)) : 0}
+                  size="small"
+                  color="#c0392b"
+                >
                   <Button
                     type="text"
                     size={isMobile ? 'small' : 'middle'}
@@ -1603,7 +1608,11 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
               />
             ) : null}
             <Tooltip title="اعلان‌ها" placement="bottom">
-              <Badge count={notificationRuntime.alertsUnread || 0} size="small" color="#c0392b">
+              <Badge
+                count={notificationRuntime.alertsUnread > 0 ? toPersianNumber(String(notificationRuntime.alertsUnread)) : 0}
+                size="small"
+                color="#c0392b"
+              >
                 <Button
                   type="text"
                   size={isMobile ? 'small' : 'middle'}
