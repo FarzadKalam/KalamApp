@@ -31,10 +31,15 @@ import {
   normalizeKnowledgeVisibilityIds,
 } from '../../utils/knowledgeVisibility';
 import {
+  AI_CUSTOMER_RESPONSE_GUIDE_DEFAULT_BODY,
+  AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE,
+  AI_CUSTOMER_RESPONSE_GUIDE_SYSTEM_KEY,
+  AI_CUSTOMER_RESPONSE_GUIDE_TITLE,
   AI_INSTRUCTIONS_DEFAULT_BODY,
   AI_INSTRUCTIONS_DOCUMENT_TYPE,
   AI_INSTRUCTIONS_SYSTEM_KEY,
   AI_INSTRUCTIONS_TITLE,
+  isAiCustomerResponseGuideConfigured,
   isAiInstructionsConfigured,
 } from '../../utils/aiKnowledge';
 import {
@@ -88,6 +93,7 @@ const DOCUMENT_SELECT_FIELDS = 'id, title, body, body_html, document_type, statu
 
 const BASE_DOCUMENT_TYPE_OPTIONS = [
   { label: 'دستورهای هوش مصنوعی', value: AI_INSTRUCTIONS_DOCUMENT_TYPE },
+  { label: AI_CUSTOMER_RESPONSE_GUIDE_TITLE, value: AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE },
   { label: BUSINESS_MODEL_CANVAS_TITLE, value: BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE },
   { label: 'بیزنس پلن', value: 'business_plan' },
   { label: 'توضیحات کسب و کار', value: 'business_overview' },
@@ -131,6 +137,7 @@ const AiKnowledgeTab: React.FC = () => {
       allTypeOptions.filter(
         (option) =>
           option.value !== AI_INSTRUCTIONS_DOCUMENT_TYPE
+          && option.value !== AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE
           && option.value !== BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE
       ),
     [allTypeOptions]
@@ -196,9 +203,15 @@ const AiKnowledgeTab: React.FC = () => {
   const sortedDocuments = useMemo(
     () =>
       [...documents].sort((a, b) => {
-        const aIsSystem = String(a.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
-        const bIsSystem = String(b.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+        const aType = String(a.document_type || '');
+        const bType = String(b.document_type || '');
+        const systemOrder = [AI_INSTRUCTIONS_DOCUMENT_TYPE, AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE, BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE];
+        const aSystemIndex = systemOrder.indexOf(aType);
+        const bSystemIndex = systemOrder.indexOf(bType);
+        const aIsSystem = aSystemIndex >= 0;
+        const bIsSystem = bSystemIndex >= 0;
         if (aIsSystem !== bIsSystem) return aIsSystem ? -1 : 1;
+        if (aIsSystem && bIsSystem && aSystemIndex !== bSystemIndex) return aSystemIndex - bSystemIndex;
         return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
       }),
     [documents]
@@ -285,10 +298,51 @@ const AiKnowledgeTab: React.FC = () => {
     return insertedDocument;
   };
 
+  const ensureCustomerResponseGuideDocument = async () => {
+    const { data, error } = await supabase
+      .from('org_documents')
+      .select(DOCUMENT_SELECT_FIELDS)
+      .eq('document_type', AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const existing = Array.isArray(data) ? (data[0] as OrgDocument | undefined) : undefined;
+    if (existing) return existing;
+
+    const { data: authData } = await supabase.auth.getUser();
+    const { data: inserted, error: insertError } = await supabase
+      .from('org_documents')
+      .insert([
+        {
+          title: AI_CUSTOMER_RESPONSE_GUIDE_TITLE,
+          body: AI_CUSTOMER_RESPONSE_GUIDE_DEFAULT_BODY,
+          document_type: AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE,
+          status: 'active',
+          use_for_ai: true,
+          metadata: {
+            system_key: AI_CUSTOMER_RESPONSE_GUIDE_SYSTEM_KEY,
+            is_system_default: true,
+            default_template: true,
+          },
+          created_by: authData?.user?.id || null,
+          updated_by: authData?.user?.id || null,
+          allowed_user_ids: [],
+          allowed_role_ids: [],
+        },
+      ])
+      .select(DOCUMENT_SELECT_FIELDS)
+      .maybeSingle();
+    if (insertError) throw insertError;
+    const insertedDocument = inserted as OrgDocument | null;
+    if (insertedDocument) await rebuildChunks(insertedDocument);
+    return insertedDocument;
+  };
+
   const fetchDocuments = async () => {
     setLoading(true);
     try {
       await ensureAiInstructionsDocument();
+      await ensureCustomerResponseGuideDocument();
       await ensureBusinessModelCanvasDocument();
       const { data, error } = await supabase
         .from('org_documents')
@@ -357,11 +411,25 @@ const AiKnowledgeTab: React.FC = () => {
 
   const openQuickEditModal = (doc: OrgDocument) => {
     const isSystemDocument = String(doc.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+    const isCustomerGuideDocument = String(doc.document_type || '') === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE;
+    const isCanvasDocument = String(doc.document_type || '') === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE;
     setEditingDocument(doc);
     form.setFieldsValue({
-      title: isSystemDocument ? AI_INSTRUCTIONS_TITLE : (doc.title || ''),
+      title: isSystemDocument
+        ? AI_INSTRUCTIONS_TITLE
+        : isCustomerGuideDocument
+        ? AI_CUSTOMER_RESPONSE_GUIDE_TITLE
+        : isCanvasDocument
+        ? BUSINESS_MODEL_CANVAS_TITLE
+        : (doc.title || ''),
       body: doc.body || '',
-      document_type: isSystemDocument ? AI_INSTRUCTIONS_DOCUMENT_TYPE : (doc.document_type || 'general'),
+      document_type: isSystemDocument
+        ? AI_INSTRUCTIONS_DOCUMENT_TYPE
+        : isCustomerGuideDocument
+        ? AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE
+        : isCanvasDocument
+        ? BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE
+        : (doc.document_type || 'general'),
       status: doc.status || 'active',
       allowed_user_ids: normalizeKnowledgeVisibilityIds(doc.allowed_user_ids),
       allowed_role_ids: normalizeKnowledgeVisibilityIds(doc.allowed_role_ids),
@@ -374,14 +442,17 @@ const AiKnowledgeTab: React.FC = () => {
       const values = await form.validateFields();
       setSaving(true);
       const { data: authData } = await supabase.auth.getUser();
-      if (!editingDocument?.id && [AI_INSTRUCTIONS_DOCUMENT_TYPE, BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE].includes(String(values.document_type || '').trim())) {
+      if (!editingDocument?.id && [AI_INSTRUCTIONS_DOCUMENT_TYPE, AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE, BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE].includes(String(values.document_type || '').trim())) {
         throw new Error('این نوع سند به‌صورت سیستمی مدیریت می‌شود و از این بخش قابل ایجاد نیست.');
       }
       const isSystemDocument = editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE;
+      const isCustomerGuideDocument = editingDocument?.document_type === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE;
       const isCanvasDocument = editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE;
       const payload = {
         title: isSystemDocument
           ? AI_INSTRUCTIONS_TITLE
+          : isCustomerGuideDocument
+          ? AI_CUSTOMER_RESPONSE_GUIDE_TITLE
           : isCanvasDocument
           ? BUSINESS_MODEL_CANVAS_TITLE
           : values.title.trim(),
@@ -389,6 +460,8 @@ const AiKnowledgeTab: React.FC = () => {
         body_html: null,
         document_type: isSystemDocument
           ? AI_INSTRUCTIONS_DOCUMENT_TYPE
+          : isCustomerGuideDocument
+          ? AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE
           : isCanvasDocument
           ? BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE
           : (values.document_type || 'general'),
@@ -402,6 +475,13 @@ const AiKnowledgeTab: React.FC = () => {
               system_key: AI_INSTRUCTIONS_SYSTEM_KEY,
               is_system_default: true,
               default_template: !isAiInstructionsConfigured(values.body),
+            }
+          : isCustomerGuideDocument
+          ? {
+              ...(editingDocument?.metadata || {}),
+              system_key: AI_CUSTOMER_RESPONSE_GUIDE_SYSTEM_KEY,
+              is_system_default: true,
+              default_template: !isAiCustomerResponseGuideConfigured(values.body),
             }
           : isCanvasDocument
           ? {
@@ -450,7 +530,11 @@ const AiKnowledgeTab: React.FC = () => {
 
   const handleDelete = async (documentId: string) => {
     const targetDocument = documents.find((item) => item.id === documentId);
-    if (targetDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || isBusinessModelCanvasDocument(targetDocument)) {
+    if (
+      targetDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE
+      || targetDocument?.document_type === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE
+      || isBusinessModelCanvasDocument(targetDocument)
+    ) {
       message.warning('رکوردهای سیستمی دانش سازمان قابل حذف نیستند.');
       return;
     }
@@ -562,6 +646,10 @@ const AiKnowledgeTab: React.FC = () => {
                     <Tag color={isAiInstructionsConfigured(row.body) ? 'magenta' : 'gold'} className="!m-0">
                       {isAiInstructionsConfigured(row.body) ? 'تنظیم‌شده' : 'نیازمند تنظیم'}
                     </Tag>
+                  ) : String(row.document_type || '') === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE ? (
+                    <Tag color={isAiCustomerResponseGuideConfigured(row.body) ? 'blue' : 'gold'} className="!m-0">
+                      {isAiCustomerResponseGuideConfigured(row.body) ? 'تنظیم‌شده' : 'پیش‌فرض'}
+                    </Tag>
                   ) : isBusinessModelCanvasDocument(row) ? (
                     <Tag color="cyan" className="!m-0">
                       صفحه اختصاصی
@@ -656,7 +744,9 @@ const AiKnowledgeTab: React.FC = () => {
                     بازسازی AI
                   </Button>
                 </Tooltip>
-                {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE || isBusinessModelCanvasDocument(row) ? null : (
+                {String(row.document_type || '') === AI_INSTRUCTIONS_DOCUMENT_TYPE
+                || String(row.document_type || '') === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE
+                || isBusinessModelCanvasDocument(row) ? null : (
                   <Popconfirm title="این سند حذف شود؟" onConfirm={() => handleDelete(row.id)}>
                     <Button size="small" danger icon={<DeleteOutlined />} />
                   </Popconfirm>
@@ -686,12 +776,12 @@ const AiKnowledgeTab: React.FC = () => {
               className="md:col-span-2"
               rules={[{ required: true, message: 'عنوان را وارد کنید.' }]}
             >
-              <Input disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE} />
+              <Input disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE} />
             </Form.Item>
             <Form.Item label="نوع سند" name="document_type">
               <Select
                 options={editingDocument ? allTypeOptions : creatableTypeOptions}
-                disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE}
+                disabled={editingDocument?.document_type === AI_INSTRUCTIONS_DOCUMENT_TYPE || editingDocument?.document_type === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE || editingDocument?.document_type === BUSINESS_MODEL_CANVAS_DOCUMENT_TYPE}
                 showSearch
                 filterOption={(input, opt) =>
                   String(opt?.label || '').toLowerCase().includes(input.toLowerCase())

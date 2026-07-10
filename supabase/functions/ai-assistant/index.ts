@@ -17,6 +17,7 @@ type AssistantAction =
   | 'propose_note'
   | 'confirm_action'
   | 'suggest_reply'
+  | 'bot_customer_agent_turn'
   | 'get_ai_settings'
   | 'save_ai_settings'
   | 'get_ai_overview'
@@ -2149,6 +2150,23 @@ const isSystemAiInstructionChunk = (row: any) =>
   String(row?.metadata?.system_key || '').trim() === 'ai_instructions'
   || String(row?.metadata?.document_type || '').trim() === 'ai_instructions';
 
+const AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE = 'ai_customer_response_guide';
+const AI_CUSTOMER_RESPONSE_GUIDE_SYSTEM_KEY = 'ai_customer_response_guide';
+
+const AUTO_REPLY_KNOWLEDGE_LIMITS = {
+  customerGuide: 2,
+  operationalInstructions: 3,
+  organizationKnowledge: 5,
+  systemInstructions: 2,
+} as const;
+
+const AUTO_REPLY_CHUNK_CONTENT_LIMIT = 950;
+const AUTO_REPLY_RETRIEVAL_QUERY_LIMIT = 2800;
+
+const isCustomerResponseGuideChunk = (row: any) =>
+  String(row?.metadata?.system_key || '').trim() === AI_CUSTOMER_RESPONSE_GUIDE_SYSTEM_KEY
+  || String(row?.metadata?.document_type || '').trim() === AI_CUSTOMER_RESPONSE_GUIDE_DOCUMENT_TYPE;
+
 const isOperationalInstructionChunk = (row: any) =>
   String(row?.source_kind || row?.metadata?.source_kind || '').trim() === 'instruction'
   || String(row?.metadata?.document_type || '').trim() === 'module_instruction';
@@ -2258,11 +2276,14 @@ const fetchKnowledgeChunks = async (
   serviceRoleKey: string,
   authContext: any,
   query: string,
-  options: { moduleId?: string | null } = {},
+  options: { moduleId?: string | null; matchCount?: number; systemInstructionLimit?: number; totalLimit?: number } = {},
 ) => {
   if (!authContext.orgId) return [];
   const instructionRowsFor = (rows: any[]) => rows.filter(isSystemAiInstructionChunk);
   const moduleId = String(options?.moduleId || '').trim();
+  const systemInstructionLimit = Math.max(0, Math.min(3, Number(options?.systemInstructionLimit ?? 2)));
+  const matchCount = Math.max(1, Math.min(12, Number(options?.matchCount || 6)));
+  const totalLimit = Math.max(systemInstructionLimit, Math.min(12, Number(options?.totalLimit || matchCount)));
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
     org_id: `eq.${authContext.orgId}`,
     status: 'eq.active',
@@ -2299,7 +2320,7 @@ const fetchKnowledgeChunks = async (
             p_role_id: authContext.roleId || null,
             p_query_text: queryText.slice(0, 2000),
             p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
-            p_match_count: 6,
+            p_match_count: matchCount,
             p_match_threshold: KNOWLEDGE_MATCH_THRESHOLD,
             p_full_text_weight: 1.15,
             p_semantic_weight: 1,
@@ -2311,7 +2332,7 @@ const fetchKnowledgeChunks = async (
             p_user_id: authContext.userId || null,
             p_role_id: authContext.roleId || null,
             p_query_embedding: `[${embeddingResult.embedding.join(',')}]`,
-            p_match_count: 6,
+            p_match_count: matchCount,
           });
         }
         const freshVectorRows = await filterFreshOperationalInstructionChunks(supabaseUrl, serviceRoleKey, authContext, vectorRows || [], moduleId);
@@ -2320,7 +2341,7 @@ const fetchKnowledgeChunks = async (
           .filter((row: any) => isChunkRelevantToModule(row, moduleId))
           .filter((row: any) => Number(row?.similarity || 0) >= (isOperationalInstructionChunk(row) ? INSTRUCTION_MATCH_THRESHOLD : KNOWLEDGE_MATCH_THRESHOLD))
           .filter((row: any) => !instructionRows.some((item: any) => String(item.id) === String(row.id)))
-          .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
+          .slice(0, Math.max(0, totalLimit - instructionRows.slice(0, systemInstructionLimit).length));
         if (filteredVectorRows.length > 0) {
           await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
             capability: 'embedding',
@@ -2331,7 +2352,7 @@ const fetchKnowledgeChunks = async (
             status: 'finalized',
             metadata: { source: 'knowledge_retrieval' },
           });
-          return [...instructionRows.slice(0, 2), ...filteredVectorRows];
+          return [...instructionRows.slice(0, systemInstructionLimit), ...filteredVectorRows].slice(0, totalLimit);
         }
       }
     } catch (error) {
@@ -2340,7 +2361,7 @@ const fetchKnowledgeChunks = async (
   }
   const otherRows = visibleRows.filter((row: any) => !instructionRows.includes(row));
   const tokens = tokenize(query);
-  if (!tokens.length) return [...instructionRows.slice(0, 2), ...otherRows.slice(0, Math.max(0, 4 - instructionRows.slice(0, 2).length))];
+  if (!tokens.length) return [...instructionRows.slice(0, systemInstructionLimit), ...otherRows.slice(0, Math.max(0, totalLimit - instructionRows.slice(0, systemInstructionLimit).length))].slice(0, totalLimit);
   const scoredRows = otherRows
     .map((row) => {
       const haystack = `${row?.content || ''} ${JSON.stringify(row?.metadata || {})}`.toLowerCase();
@@ -2349,8 +2370,143 @@ const fetchKnowledgeChunks = async (
     })
     .filter((row) => row.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(0, 6 - instructionRows.slice(0, 2).length));
-  return [...instructionRows.slice(0, 2), ...scoredRows];
+    .slice(0, Math.max(0, totalLimit - instructionRows.slice(0, systemInstructionLimit).length));
+  return [...instructionRows.slice(0, systemInstructionLimit), ...scoredRows].slice(0, totalLimit);
+};
+
+const dedupeKnowledgeChunks = (chunks: any[]) => {
+  const seen = new Set<string>();
+  return (chunks || []).filter((chunk: any) => {
+    const key = String(
+      chunk?.id
+      || `${chunk?.document_id || chunk?.metadata?.document_id || ''}:${chunk?.chunk_index ?? ''}`
+      || `${chunk?.metadata?.document_title || ''}:${String(chunk?.content || '').slice(0, 160)}`,
+    ).trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const mapKnowledgeChunkForPrompt = (chunk: any, index: number, maxLength = AUTO_REPLY_CHUNK_CONTENT_LIMIT) => ({
+  index: index + 1,
+  id: chunk?.id || null,
+  document_id: chunk?.document_id || chunk?.metadata?.document_id || null,
+  instruction_id: normalizeId(chunk?.source_record_id || chunk?.metadata?.source_record_id) || null,
+  title: chunk?.metadata?.document_title || chunk?.metadata?.source_title || null,
+  chunk_index: chunk?.chunk_index ?? null,
+  content: String(chunk?.content || '').trim().slice(0, maxLength),
+});
+
+const categorizeAutoReplyKnowledgeChunks = (chunks: any[]) => {
+  const deduped = dedupeKnowledgeChunks(chunks);
+  const customerGuide = deduped
+    .filter(isCustomerResponseGuideChunk)
+    .slice(0, AUTO_REPLY_KNOWLEDGE_LIMITS.customerGuide);
+  const systemInstructions = deduped
+    .filter((chunk: any) => isSystemAiInstructionChunk(chunk) && !isCustomerResponseGuideChunk(chunk))
+    .slice(0, AUTO_REPLY_KNOWLEDGE_LIMITS.systemInstructions);
+  const operationalInstructions = deduped
+    .filter((chunk: any) => isOperationalInstructionChunk(chunk) && !isCustomerResponseGuideChunk(chunk))
+    .slice(0, AUTO_REPLY_KNOWLEDGE_LIMITS.operationalInstructions);
+  const organizationKnowledge = deduped
+    .filter((chunk: any) =>
+      !isCustomerResponseGuideChunk(chunk)
+      && !isSystemAiInstructionChunk(chunk)
+      && !isOperationalInstructionChunk(chunk)
+    )
+    .slice(0, AUTO_REPLY_KNOWLEDGE_LIMITS.organizationKnowledge);
+  return {
+    customerGuide,
+    systemInstructions,
+    operationalInstructions,
+    organizationKnowledge,
+  };
+};
+
+const buildAutoReplyRetrievalQuery = (args: {
+  channel: string;
+  fallbackQuery: string;
+  instruction?: string | null;
+  recentMessages: any[];
+  businessContext: any;
+  counterparty: any;
+  contextForReply: any;
+}) => {
+  const conversationText = (args.recentMessages || [])
+    .slice(-10)
+    .map((item: any) => {
+      const role = String(item?.role || item?.direction || '').trim() || 'message';
+      const author = String(item?.author_name || '').trim();
+      const text = String(item?.text || '').trim();
+      return text ? `${role}${author ? ` ${author}` : ''}: ${text}` : '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 1200);
+  const invoices = (args.businessContext?.invoices || [])
+    .slice(0, 4)
+    .map((item: any) => [item?.system_code, item?.title, item?.status, item?.description, item?.notes].filter(Boolean).join(' '))
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 600);
+  const projects = (args.businessContext?.projects || [])
+    .slice(0, 5)
+    .map((item: any) => [item?.system_code, item?.title || item?.name, item?.status, item?.stage, item?.description].filter(Boolean).join(' '))
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 700);
+  const counterpartyProfile = args.businessContext?.counterparty
+    ? JSON.stringify({
+      module_id: args.counterparty?.moduleId || null,
+      status: args.businessContext?.counterparty?.status || null,
+      title: args.businessContext?.counterparty?.title || args.businessContext?.counterparty?.name || args.businessContext?.counterparty?.business_name || null,
+      level: args.businessContext?.counterparty?.level || args.businessContext?.counterparty?.customer_level || args.businessContext?.counterparty?.club_level || null,
+      financial_summary: args.businessContext?.financial_summary || null,
+    }).slice(0, 900)
+    : '';
+  return [
+    args.channel === 'sms' ? 'پاسخگویی پیامک مشتری' : 'پاسخگویی گفتگوی بات مشتری',
+    String(args.instruction || '').trim(),
+    String(args.fallbackQuery || '').trim(),
+    conversationText,
+    counterpartyProfile,
+    projects ? `پروژه‌ها و مراحل احتمالی:\n${projects}` : '',
+    invoices ? `فاکتورها و توضیحات احتمالی:\n${invoices}` : '',
+    args.contextForReply?.moduleId ? `module:${args.contextForReply.moduleId}` : '',
+    'قیمت فروش پیش فاکتور طراحی تحویل اجرا مالی باشگاه مشتریان سطح مشتری محصول پروژه دستورالعمل پاسخگویی',
+  ]
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, AUTO_REPLY_RETRIEVAL_QUERY_LIMIT);
+};
+
+const buildAutoReplyRetrievalMetadata = (categorized: ReturnType<typeof categorizeAutoReplyKnowledgeChunks>, retrievalQuery: string) => {
+  const allChunks = [
+    ...categorized.customerGuide,
+    ...categorized.systemInstructions,
+    ...categorized.operationalInstructions,
+    ...categorized.organizationKnowledge,
+  ];
+  const idsFor = (rows: any[]) => rows.map((chunk: any) => chunk?.id).filter(Boolean);
+  const documentIdsFor = (rows: any[]) => Array.from(new Set(rows.map((chunk: any) => chunk?.document_id || chunk?.metadata?.document_id).filter(Boolean)));
+  const instructionIds = Array.from(new Set(
+    categorized.operationalInstructions
+      .map((chunk: any) => normalizeId(chunk?.source_record_id || chunk?.metadata?.source_record_id))
+      .filter(isUuid)
+  ));
+  return {
+    retrieval_query: String(retrievalQuery || '').slice(0, AUTO_REPLY_RETRIEVAL_QUERY_LIMIT),
+    chunk_ids: idsFor(allChunks),
+    document_ids: documentIdsFor(allChunks),
+    customer_response_guide_chunk_ids: idsFor(categorized.customerGuide),
+    ai_instruction_chunk_ids: idsFor(categorized.systemInstructions),
+    operational_instruction_chunk_ids: idsFor(categorized.operationalInstructions),
+    organization_knowledge_chunk_ids: idsFor(categorized.organizationKnowledge),
+    instruction_ids: instructionIds,
+    instruction_applied: categorized.customerGuide.length > 0 || categorized.systemInstructions.length > 0 || categorized.operationalInstructions.length > 0,
+    limits: AUTO_REPLY_KNOWLEDGE_LIMITS,
+  };
 };
 
 const loadCompanyContext = async (supabaseUrl: string, serviceRoleKey: string, authContext: any) => {
@@ -9797,6 +9953,7 @@ const fetchReplyCrossModuleContext = async (
 };
 
 const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const actionKind = String(body?.action || '').trim() === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'suggest_reply';
   const channel = String(body?.channel || '').trim().toLowerCase();
   if (channel !== 'sms' && channel !== 'bot') {
     return json(400, { success: false, message: 'کانال پیشنهاد پاسخ معتبر نیست.' });
@@ -9913,17 +10070,26 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
   }
 
   const businessContext = await fetchCounterpartyBusinessContext(supabaseUrl, serviceRoleKey, authContext, counterparty);
-  const knowledgeQuery = [
+  const knowledgeQuery = buildAutoReplyRetrievalQuery({
+    channel,
     fallbackQuery,
-    String(body?.instruction || '').trim(),
-    channel === 'sms' ? 'پیشنهاد پاسخ پیامک مشتری' : 'پیشنهاد پاسخ گفتگوی بات مشتری',
-  ]
-    .filter(Boolean)
-    .join('\n');
+    instruction: String(body?.instruction || '').trim(),
+    recentMessages,
+    businessContext,
+    counterparty,
+    contextForReply,
+  });
   const [knowledgeChunks, crossModuleContext] = await Promise.all([
-    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, knowledgeQuery, { moduleId: counterparty?.moduleId || contextForReply.moduleId || null }),
+    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, knowledgeQuery, {
+      moduleId: counterparty?.moduleId || contextForReply.moduleId || null,
+      matchCount: 10,
+      totalLimit: 10,
+      systemInstructionLimit: AUTO_REPLY_KNOWLEDGE_LIMITS.systemInstructions,
+    }),
     fetchReplyCrossModuleContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
+  const categorizedKnowledge = categorizeAutoReplyKnowledgeChunks(knowledgeChunks);
+  const retrievalMetadata = buildAutoReplyRetrievalMetadata(categorizedKnowledge, knowledgeQuery);
   const retrievedContexts = await fetchRelevantModuleContexts(
     supabaseUrl,
     serviceRoleKey,
@@ -9958,42 +10124,24 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     cross_module_context: crossModuleContext,
     conversation: recentMessages.slice(-16),
     retrieved_contexts: retrievedContexts.slice(0, 4),
-    ai_instructions: knowledgeChunks
-      .filter(isSystemAiInstructionChunk)
-      .slice(0, 2)
-      .map((chunk, index) => ({
-        index: index + 1,
-        id: chunk.id,
-        title: chunk?.metadata?.document_title || null,
-        content: String(chunk?.content || '').slice(0, 1100),
-      })),
-    operational_instructions: knowledgeChunks
-      .filter(isOperationalInstructionChunk)
-      .slice(0, 2)
-      .map((chunk, index) => ({
-        index: index + 1,
-        id: chunk.id,
-        title: chunk?.metadata?.document_title || null,
-        content: String(chunk?.content || '').slice(0, 1100),
-      })),
-    organization_knowledge: knowledgeChunks
-      .filter((chunk: any) =>
-        !isSystemAiInstructionChunk(chunk)
-        && !isOperationalInstructionChunk(chunk)
-      )
-      .map((chunk, index) => ({
-        index: index + 1,
-        id: chunk.id,
-        title: chunk?.metadata?.document_title || null,
-        content: String(chunk?.content || '').slice(0, 1100),
-      })),
+    targeted_retrieval: {
+      query: retrievalMetadata.retrieval_query,
+      limits: retrievalMetadata.limits,
+      has_customer_response_guide: categorizedKnowledge.customerGuide.length > 0,
+      has_operational_instructions: categorizedKnowledge.operationalInstructions.length > 0,
+      has_organization_knowledge: categorizedKnowledge.organizationKnowledge.length > 0,
+    },
+    customer_response_guide: categorizedKnowledge.customerGuide.map((chunk, index) => mapKnowledgeChunkForPrompt(chunk, index)),
+    ai_instructions: categorizedKnowledge.systemInstructions.map((chunk, index) => mapKnowledgeChunkForPrompt(chunk, index)),
+    operational_instructions: categorizedKnowledge.operationalInstructions.map((chunk, index) => mapKnowledgeChunkForPrompt(chunk, index)),
+    organization_knowledge: categorizedKnowledge.organizationKnowledge.map((chunk, index) => mapKnowledgeChunkForPrompt(chunk, index)),
   };
 
   const aiResult = await callChatCompletions(providerConfig, [
     {
       role: 'system',
       content:
-        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز، operational_instructions به‌عنوان دستورالعمل‌های کاری مرتبط، و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
+        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. ابتدا customer_response_guide و ai_instructions را رعایت کنید، سپس operational_instructions مرتبط را بر دانش عمومی مدل مقدم بدانید، و بعد از organization_knowledge مرتبط استفاده کنید. اگر سند یا دستورالعمل مرتبط در payload نیست، وانمود نکنید که وجود دارد. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید یا یک سوال کوتاه بپرسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
     },
     {
       role: 'user',
@@ -10018,12 +10166,14 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     model: providerConfig.model,
     metadata: {
       context_key: `reply:${channel}:${contextKey}`,
-      source: 'notifications_chat_reply_suggest',
+      source: actionKind === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'notifications_chat_reply_suggest',
       channel,
       counterparty_module_id: counterparty?.moduleId || null,
       counterparty_record_id: counterparty?.recordId || null,
       conversation_size: recentMessages.length,
-      knowledge_chunk_ids: knowledgeChunks.map((chunk) => chunk.id),
+      knowledge_chunk_ids: retrievalMetadata.chunk_ids,
+      instruction_ids: retrievalMetadata.instruction_ids,
+      targeted_retrieval_query: retrievalMetadata.retrieval_query,
     },
   });
 
@@ -10034,7 +10184,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     provider: aiResult.provider,
     model: aiResult.model,
     metadata: {
-      source: 'reply_suggestion',
+      source: actionKind === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'reply_suggestion',
       channel,
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
@@ -10057,6 +10207,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
         users: crossModuleContext.users.length,
       },
       retrieved_context_modules: retrievedContexts.map((ctx: any) => ctx.moduleId),
+      targeted_retrieval: retrievalMetadata,
     },
   });
 
@@ -10080,6 +10231,10 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
       record_id: counterparty?.recordId || contextForReply.recordId || null,
       last_activity_kind: 'reply_suggestion',
       last_message_preview: suggestedReply.slice(0, 300),
+      targeted_retrieval: {
+        instruction_applied: retrievalMetadata.instruction_applied,
+        knowledge_chunk_count: retrievalMetadata.chunk_ids.length,
+      },
     },
   });
 
@@ -10091,7 +10246,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     provider: aiResult.provider,
     model: aiResult.model,
     usageMetadata: aiResult.usageMetadata,
-    metadata: { source: 'reply_suggestion', channel, context_key: `reply:${channel}:${contextKey}` },
+    metadata: { source: actionKind === 'bot_customer_agent_turn' ? 'bot_customer_agent_turn' : 'reply_suggestion', channel, context_key: `reply:${channel}:${contextKey}`, targeted_retrieval: retrievalMetadata },
   });
   await patchAiMessageCustomerBilling(supabaseUrl, serviceRoleKey, authContext, assistantMessage, aiResult.usageMetadata, ledger);
 
@@ -10111,7 +10266,13 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
       counterpartyRecordId: counterparty?.recordId || null,
       conversationMessages: recentMessages.length,
       retrievedContextModules: retrievedContexts.map((ctx: any) => ctx.moduleId),
-      knowledgeSources: knowledgeChunks.map((chunk) => ({
+      targetedRetrieval: retrievalMetadata,
+      knowledgeSources: [
+        ...categorizedKnowledge.customerGuide,
+        ...categorizedKnowledge.systemInstructions,
+        ...categorizedKnowledge.operationalInstructions,
+        ...categorizedKnowledge.organizationKnowledge,
+      ].map((chunk) => ({
         id: chunk.id,
         documentId: chunk.document_id,
         title: chunk?.metadata?.document_title || null,
@@ -11362,7 +11523,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'chat_with_file' || action === 'analyze_file' || action === 'upload_file' || action === 'send_file') {
       return await handleChatWithFile(supabaseUrl, serviceRoleKey, authContext, body);
     }
-    if (action === 'suggest_reply') return await handleSuggestReply(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'suggest_reply' || action === 'bot_customer_agent_turn') return await handleSuggestReply(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'propose_note') return await handleProposeNote(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'confirm_action') return await handleConfirmAction(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'saas_ai') return await handleSaasAi(supabaseUrl, serviceRoleKey, authContext, body);
