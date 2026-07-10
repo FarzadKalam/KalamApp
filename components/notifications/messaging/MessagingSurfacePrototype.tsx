@@ -469,31 +469,57 @@ const resolveBotRpcSenderAvatarUrl = (row: any) => {
 
 const resolveBotRpcSenderChatId = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
   const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
   const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
   const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
-  return String(
+  const hasGroupConversation = Boolean(String(row?.bot_group_id || '').trim());
+  const hasDirectConversation = Boolean(String(row?.direct_thread_id || '').trim());
+  const explicitSenderId = String(
     payload?.sender_id
     || payload?.sender_chat_id
+    || payload?.sender_object_guid
+    || payload?.sender_guid
     || payload?.user_id
-    || payload?.object_guid
+    || payload?.userId
     || payload?.from_id
     || payload?.author_id
+    || newMessage?.sender_id
+    || newMessage?.senderId
+    || newMessage?.sender_chat_id
+    || inlineMessage?.sender_id
+    || inlineMessage?.senderId
+    || inlineMessage?.sender_chat_id
     || sender?.id
     || sender?.chat_id
     || sender?.user_id
+    || sender?.object_guid
     || from?.id
     || from?.chat_id
     || from?.user_id
+    || from?.object_guid
     || user?.id
     || user?.chat_id
     || user?.user_id
     || ''
   ).trim();
+  if (explicitSenderId) return explicitSenderId;
+  if (hasGroupConversation) return '';
+  if (hasDirectConversation) {
+    return String(newMessage?.object_guid || inlineMessage?.chat_id || payload?.object_guid || row?.chat_id || '').trim();
+  }
+  return '';
 };
 
 const resolveBotRpcSenderDisplayName = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
   const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
   const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
   const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
@@ -507,18 +533,30 @@ const resolveBotRpcSenderDisplayName = (row: any) => {
     || from?.name
     || user?.display_name
     || user?.name
+    || newMessage?.sender_display_name
+    || newMessage?.sender_name
+    || inlineMessage?.sender_display_name
+    || inlineMessage?.sender_name
     || ''
   ).trim();
 };
 
 const resolveBotRpcSenderUsername = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
   const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
   const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
   const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
   return String(
     payload?.username
     || payload?.sender_username
+    || newMessage?.username
+    || newMessage?.sender_username
+    || inlineMessage?.username
+    || inlineMessage?.sender_username
     || sender?.username
     || from?.username
     || user?.username
@@ -1267,44 +1305,16 @@ const getPrimaryActions = (conversation: Conversation) => {
   return ['search', 'bind'].filter((action) => conversation.actions.includes(action as ConversationAction)) as ConversationAction[];
 };
 
-const MessagingConversationListSkeleton: React.FC<{ compact?: boolean }> = ({ compact = false }) => (
-  <div className={`h-full min-h-0 animate-pulse ${compact ? 'px-2 py-3' : 'px-3 py-4'}`}>
-    {!compact ? (
-      <div className="mb-4 space-y-3">
-        <div className="h-8 rounded-lg bg-slate-200/80 dark:bg-white/[0.08]" />
-        <div className="grid grid-cols-3 gap-2">
-          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
-          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
-          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
-        </div>
-      </div>
-    ) : null}
-    <div className="space-y-2">
-      {Array.from({ length: compact ? 7 : 9 }).map((_, index) => (
-        <div key={`conversation-skeleton-${index}`} className={`rounded-xl bg-white/70 shadow-sm dark:bg-white/[0.045] ${compact ? 'p-2' : 'p-3'}`}>
-          <div className="flex items-center gap-2">
-            <div className="h-9 w-9 shrink-0 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
-            {!compact ? (
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="h-3 w-2/3 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
-                <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
 const MessagingTimelineSkeleton: React.FC = () => (
   <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
     <div className="border-b border-slate-200/70 bg-white/88 px-4 py-3 dark:border-white/[0.07] dark:bg-[#17191c]">
-      <div className="flex animate-pulse items-center gap-3">
-        <div className="h-10 w-10 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="h-3.5 w-40 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
-          <div className="h-2.5 w-64 max-w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+      <div className="flex items-center gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[rgba(var(--brand-500-rgb),0.10)] text-[rgb(var(--brand-700-rgb))] dark:bg-[rgba(var(--brand-300-rgb),0.12)] dark:text-[rgb(var(--brand-200-rgb))]">
+          <MessageOutlined />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold text-slate-800 dark:text-slate-100">پیام‌رسانی</div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">در حال آماده‌سازی گفتگوها</div>
         </div>
       </div>
     </div>
@@ -1340,14 +1350,15 @@ const MessagingConversationList: React.FC<{
   selectedKey: string;
   onSelect: (key: string) => void;
   compact?: boolean;
+  loading?: boolean;
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
   unreadSummary?: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
-  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
+  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
 );
 
 const MessagingConversationListInner: React.FC<{
@@ -1355,13 +1366,14 @@ const MessagingConversationListInner: React.FC<{
   selectedKey: string;
   onSelect: (key: string) => void;
   compact?: boolean;
+  loading?: boolean;
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
   unreadSummary: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary }) => {
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const normalizedSearch = String(searchValue || '').trim().toLocaleLowerCase('fa');
@@ -1488,7 +1500,23 @@ const MessagingConversationListInner: React.FC<{
       </div>
       ) : null}
       <div className={compact ? 'space-y-1' : 'min-h-0 flex-1 overflow-y-auto p-1.5'}>
-      {filteredConversations.map((conversation) => {
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: compact ? 7 : 9 }).map((_, index) => (
+            <div key={`conversation-list-inline-skeleton-${index}`} className={`animate-pulse rounded-xl bg-white/70 shadow-sm dark:bg-white/[0.045] ${compact ? 'p-2' : 'p-3'}`}>
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 shrink-0 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+                {!compact ? (
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="h-3 w-2/3 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+                    <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : filteredConversations.map((conversation) => {
         const active = conversation.key === selectedKey;
         if (compact) {
           return (
@@ -1638,8 +1666,8 @@ const BOT_SENDER_AVATAR_TONES = [
   'bg-cyan-50 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-200',
 ];
 
-const getBotSenderAvatarTone = (chatId?: string | null) => {
-  const key = String(chatId || '').trim();
+const getBotSenderAvatarTone = (identityKey?: string | null) => {
+  const key = String(identityKey || '').trim();
   if (!key) return '';
   let hash = 0;
   for (let index = 0; index < key.length; index += 1) {
@@ -1667,8 +1695,9 @@ const TimelineEventCard: React.FC<{
   const isInternal = activeConversation.channel === 'internal';
   const showStatusBadge = Boolean(item.status && (isCall || (item.kind === 'sms' && outgoing)));
   const avatarFallback = String(item.author || activeConversation.avatarText || 'ک').trim().slice(0, 1) || 'ک';
+  const botAvatarIdentityKey = String(item.botSenderChatId || item.author || item.sourceRow?.id || '').trim();
   const avatarTone = !outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
-    ? getBotSenderAvatarTone(item.botSenderChatId) || activeConversation.tone
+    ? getBotSenderAvatarTone(botAvatarIdentityKey) || activeConversation.tone
     : activeConversation.tone;
   const authorTextClassName = outgoing
     ? 'truncate text-xs font-bold text-white'
@@ -1700,10 +1729,10 @@ const TimelineEventCard: React.FC<{
     ? 'text-sky-50 underline decoration-sky-100/55 underline-offset-4 hover:text-white hover:decoration-white'
     : 'text-[rgb(var(--brand-700-rgb))] underline decoration-dotted decoration-[rgba(var(--brand-500-rgb),0.55)] underline-offset-4 hover:text-[rgb(var(--brand-800-rgb))] dark:text-[rgb(var(--brand-300-rgb))] dark:hover:text-[rgb(var(--brand-200-rgb))]';
   const canRetryBotMedia = (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct') && hasRetryableBotMedia(item);
-  const canBindBotSender = !outgoing
+  const canOpenBotSenderBinding = !outgoing
     && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
-    && Boolean(item.botSenderChatId)
-    && !item.botSenderBound;
+    && Boolean(item.botSenderChatId);
+  const botSenderBindingTitle = item.botSenderBound ? 'ویرایش اتصال فرستنده' : 'اتصال فرستنده به مخاطب';
   const showRelatedRecordLink = Boolean(item.relatedRecordLabel && activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct');
   const relatedRecordHref = showRelatedRecordLink
     ? buildRecordHref(
@@ -1755,8 +1784,8 @@ const TimelineEventCard: React.FC<{
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-1.5">
                 <div className={authorTextClassName}>{item.author}</div>
-                {canBindBotSender ? (
-                  <Tooltip title="اتصال فرستنده به مخاطب">
+                {canOpenBotSenderBinding ? (
+                  <Tooltip title={botSenderBindingTitle}>
                     <button
                       type="button"
                       className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full transition ${
@@ -1862,8 +1891,8 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
           {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
-          {canBindBotSender ? (
-            <TimelineIconButton title="اتصال فرستنده به مخاطب" icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
+          {canOpenBotSenderBinding ? (
+            <TimelineIconButton title={botSenderBindingTitle} icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
           ) : null}
           <TimelineIconButton title="کپی متن" icon={<CopyOutlined />} inverse={outgoing} onClick={() => void copyMessageText()} />
           <TimelineIconButton title={item.liked ? 'پسندیده شده' : 'پسندیدن'} icon={<LikeOutlined />} active={Boolean(item.liked)} activeTone="like" inverse={outgoing} onClick={() => onToggleLike?.(item)} />
@@ -4669,40 +4698,34 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     <div dir="rtl" data-testid="messaging-v2-prototype" className="h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
       <div className="flex h-full min-h-0 overflow-hidden">
         <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#131518] md:block">
-          {initialMessagingLoading ? (
-            <MessagingConversationListSkeleton />
-          ) : (
-            <MessagingConversationList
-              conversations={displayConversations}
-              selectedKey={selectedKey}
-              onSelect={selectConversation}
-              onRefresh={() => void refreshMessagingSurface()}
-              refreshing={refreshingMessages}
-              onCreateInternalGroup={openCreateInternalGroupModal}
-              activeFilter={conversationFilter}
-              onChangeFilter={changeConversationFilter}
-              unreadSummary={messagingUnreadSummary}
-            />
-          )}
+          <MessagingConversationList
+            conversations={displayConversations}
+            selectedKey={selectedKey}
+            onSelect={selectConversation}
+            loading={initialMessagingLoading}
+            onRefresh={() => void refreshMessagingSurface()}
+            refreshing={refreshingMessages}
+            onCreateInternalGroup={openCreateInternalGroupModal}
+            activeFilter={conversationFilter}
+            onChangeFilter={changeConversationFilter}
+            unreadSummary={messagingUnreadSummary}
+          />
         </aside>
         <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] md:hidden">
           <div className="flex h-full min-h-0 flex-col">
             <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
               <Button block type="text" icon={<MenuOutlined />} onClick={() => setConversationListOpen(true)} aria-label="باز کردن فهرست گفتگوها" />
             </div>
-            {initialMessagingLoading ? (
-              <MessagingConversationListSkeleton compact />
-            ) : (
-              <MessagingConversationList
-                conversations={displayConversations}
-                selectedKey={selectedKey}
-                onSelect={selectConversation}
-                compact
-                activeFilter={conversationFilter}
-                onChangeFilter={changeConversationFilter}
-                unreadSummary={messagingUnreadSummary}
-              />
-            )}
+            <MessagingConversationList
+              conversations={displayConversations}
+              selectedKey={selectedKey}
+              onSelect={selectConversation}
+              compact
+              loading={initialMessagingLoading}
+              activeFilter={conversationFilter}
+              onChangeFilter={changeConversationFilter}
+              unreadSummary={messagingUnreadSummary}
+            />
           </div>
         </aside>
         {conversationListOpen ? (
@@ -4712,21 +4735,18 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 <div className="text-sm font-bold">گفتگوها</div>
                 <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={() => setConversationListOpen(false)} aria-label="بستن فهرست گفتگوها" />
               </div>
-              {initialMessagingLoading ? (
-                <MessagingConversationListSkeleton />
-              ) : (
-                <MessagingConversationList
-                  conversations={displayConversations}
-                  selectedKey={selectedKey}
-                  onSelect={selectConversation}
-                  onRefresh={() => void refreshMessagingSurface()}
-                  refreshing={refreshingMessages}
-                  onCreateInternalGroup={openCreateInternalGroupModal}
-                  activeFilter={conversationFilter}
-                  onChangeFilter={changeConversationFilter}
-                  unreadSummary={messagingUnreadSummary}
-                />
-              )}
+              <MessagingConversationList
+                conversations={displayConversations}
+                selectedKey={selectedKey}
+                onSelect={selectConversation}
+                loading={initialMessagingLoading}
+                onRefresh={() => void refreshMessagingSurface()}
+                refreshing={refreshingMessages}
+                onCreateInternalGroup={openCreateInternalGroupModal}
+                activeFilter={conversationFilter}
+                onChangeFilter={changeConversationFilter}
+                unreadSummary={messagingUnreadSummary}
+              />
             </div>
           </div>
         ) : null}

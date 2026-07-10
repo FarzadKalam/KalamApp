@@ -345,27 +345,49 @@ const resolveBotSenderTarget = (row: any) => {
 
 const resolveBotSenderChatId = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
   const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
   const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
   const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
-  return String(
+  const hasGroupConversation = Boolean(String(row?.bot_group_id || '').trim());
+  const hasDirectConversation = Boolean(String(row?.direct_thread_id || '').trim());
+  const explicitSenderId = String(
     payload?.sender_id
     || payload?.sender_chat_id
+    || payload?.sender_object_guid
+    || payload?.sender_guid
     || payload?.user_id
-    || payload?.object_guid
+    || payload?.userId
     || payload?.from_id
     || payload?.author_id
+    || newMessage?.sender_id
+    || newMessage?.senderId
+    || newMessage?.sender_chat_id
+    || inlineMessage?.sender_id
+    || inlineMessage?.senderId
+    || inlineMessage?.sender_chat_id
     || sender?.id
     || sender?.chat_id
     || sender?.user_id
+    || sender?.object_guid
     || from?.id
     || from?.chat_id
     || from?.user_id
+    || from?.object_guid
     || user?.id
     || user?.chat_id
     || user?.user_id
     || ''
   ).trim();
+  if (explicitSenderId) return explicitSenderId;
+  if (hasGroupConversation) return '';
+  if (hasDirectConversation) {
+    return String(newMessage?.object_guid || inlineMessage?.chat_id || payload?.object_guid || row?.chat_id || '').trim();
+  }
+  return '';
 };
 
 const collectBotSenderRecordReferences = (rows: any[]) =>
@@ -396,12 +418,36 @@ const resolveBotSenderLabel = (
 
 const resolveBotSenderUsername = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-  return String(payload?.username || payload?.sender_username || '').trim().replace(/^@+/, '') || null;
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
+  return String(
+    payload?.username
+    || payload?.sender_username
+    || newMessage?.username
+    || newMessage?.sender_username
+    || inlineMessage?.username
+    || inlineMessage?.sender_username
+    || ''
+  ).trim().replace(/^@+/, '') || null;
 };
 
 const resolveBotSenderDisplayName = (row: any) => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
-  return String(payload?.sender_display_name || payload?.display_name || '').trim() || null;
+  const update = payload?.update && typeof payload.update === 'object' ? payload.update : {};
+  const newMessage = (payload?.new_message && typeof payload.new_message === 'object' ? payload.new_message : null)
+    || (update?.new_message && typeof update.new_message === 'object' ? update.new_message : {});
+  const inlineMessage = payload?.inline_message && typeof payload.inline_message === 'object' ? payload.inline_message : {};
+  return String(
+    payload?.sender_display_name
+    || payload?.display_name
+    || newMessage?.sender_display_name
+    || newMessage?.sender_name
+    || inlineMessage?.sender_display_name
+    || inlineMessage?.sender_name
+    || ''
+  ).trim() || null;
 };
 
 const resolveBotSenderPhoneNumber = (row: any) => {

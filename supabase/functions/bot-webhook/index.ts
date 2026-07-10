@@ -315,9 +315,20 @@ const extractContact = (payload: Record<string, any>) => {
     payload?.phone
   );
 
-  const displayName = pick(
+  const personDisplayName = pick(
     getDisplayName(from),
     getDisplayName(contact),
+    message?.sender_display_name,
+    message?.sender_name,
+    rubikaNewMessage?.sender_display_name,
+    rubikaNewMessage?.sender_name,
+    rubikaRootMessage?.sender_display_name,
+    rubikaRootMessage?.sender_name,
+    rubikaInlineMessage?.sender_display_name,
+    rubikaInlineMessage?.sender_name
+  );
+  const fallbackDisplayName = pick(
+    personDisplayName,
     getDisplayName(message?.chat),
     getDisplayName(payload)
   );
@@ -365,6 +376,15 @@ const extractContact = (payload: Record<string, any>) => {
     from?.userId,
     from?.object_guid,
     from?.objectGuid,
+    message?.sender_id,
+    message?.senderId,
+    message?.sender_chat_id,
+    rubikaNewMessage?.sender_id,
+    rubikaNewMessage?.senderId,
+    rubikaRootMessage?.sender_id,
+    rubikaRootMessage?.senderId,
+    rubikaInlineMessage?.sender_id,
+    rubikaInlineMessage?.senderId,
     payload?.sender_id,
     payload?.user_id,
     payload?.userId
@@ -390,7 +410,7 @@ const extractContact = (payload: Record<string, any>) => {
     senderId,
     username,
     phoneNumber,
-    displayName,
+    displayName: isGroup ? personDisplayName : fallbackDisplayName,
     chatTitle,
     chatType: normalizedChatType || null,
     isGroup,
