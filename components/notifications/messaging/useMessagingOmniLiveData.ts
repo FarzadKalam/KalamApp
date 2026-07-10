@@ -165,6 +165,50 @@ type BotIdentityBindingRow = {
 const RUBIKA_MEDIA_AUTO_HYDRATION_BATCH_SIZE = 5;
 const RUBIKA_MEDIA_HYDRATION_BACKOFF_MS = 5 * 60 * 1000;
 const RUBIKA_MEDIA_HYDRATION_MAX_FAILURES = 2;
+const MESSAGING_OMNI_CACHE_TTL_MS = 3 * 60 * 1000;
+const MESSAGING_OMNI_CACHE_MAX_ENTRIES = 8;
+
+type MessagingOmniCacheSnapshot = {
+  fetchedAt: number;
+  profile: LiveProfile;
+  smsMessages: any[];
+  voipCalls: any[];
+  botGroups: BotGroupRow[];
+  botGroupMessages: BotMessageRow[];
+  botDirectThreads: BotDirectThreadRow[];
+  botDirectMessages: BotMessageRow[];
+  botSenderBindings: BotIdentityBindingRow[];
+  recordTitleMap: Record<string, string>;
+  readStateKeys: string[];
+};
+
+const messagingOmniCache = new Map<string, MessagingOmniCacheSnapshot>();
+
+const buildMessagingOmniCacheKey = (profile: LiveProfile) => [
+  String(profile.orgId || '').trim() || 'no-org',
+  String(profile.id || '').trim() || 'no-user',
+  String(profile.roleId || '').trim() || 'no-role',
+  profile.canViewAllCalls ? 'calls-all' : `calls-${String(profile.voipExtension || '').trim() || 'own'}`,
+  profile.canViewAllSms ? 'sms-all' : 'sms-own',
+].join(':');
+
+const readMessagingOmniCache = (key: string) => {
+  const snapshot = messagingOmniCache.get(key);
+  if (!snapshot) return null;
+  if (Date.now() - snapshot.fetchedAt > MESSAGING_OMNI_CACHE_TTL_MS) {
+    messagingOmniCache.delete(key);
+    return null;
+  }
+  return snapshot;
+};
+
+const writeMessagingOmniCache = (key: string, snapshot: MessagingOmniCacheSnapshot) => {
+  messagingOmniCache.set(key, snapshot);
+  if (messagingOmniCache.size <= MESSAGING_OMNI_CACHE_MAX_ENTRIES) return;
+  const oldest = Array.from(messagingOmniCache.entries())
+    .sort((left, right) => left[1].fetchedAt - right[1].fetchedAt)[0]?.[0];
+  if (oldest) messagingOmniCache.delete(oldest);
+};
 
 const buildReadStateKey = (section: string, sourceType: string, sourceId: string) =>
   `${String(section || '').trim()}:${String(sourceType || '').trim()}:${String(sourceId || '').trim()}`;
@@ -644,9 +688,9 @@ const shouldHydrateBotMessageMedia = (
   const groupId = String(row?.bot_group_id || '').trim();
   const group = groupById.get(groupId);
   const channel = String(group?.channel_type || '').trim();
-  if (!BOT_CHANNELS.includes(channel as BotChannel)) return false;
+  if (!isBotChannel(channel)) return false;
   const rowId = String(row?.id || '').trim();
-  if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
+  if (!rowId || collectBotMediaFileItems(row, channel as BotChannel).length === 0) return false;
   if (
     failureState
     && failureState.attempts >= RUBIKA_MEDIA_HYDRATION_MAX_FAILURES
@@ -666,9 +710,9 @@ const shouldHydrateBotDirectMessageMedia = (
   const threadId = String(row?.direct_thread_id || '').trim();
   const thread = threadById.get(threadId);
   const channel = String(thread?.channel_type || '').trim();
-  if (!BOT_CHANNELS.includes(channel as BotChannel)) return false;
+  if (!isBotChannel(channel)) return false;
   const rowId = String(row?.id || '').trim();
-  if (!rowId || collectBotMediaFileItems(row, channel).length === 0) return false;
+  if (!rowId || collectBotMediaFileItems(row, channel as BotChannel).length === 0) return false;
   if (
     failureState
     && failureState.attempts >= RUBIKA_MEDIA_HYDRATION_MAX_FAILURES
@@ -1188,9 +1232,15 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const [readStateKeys, setReadStateKeys] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const refreshInFlightRef = useRef(false);
+  const appliedCacheKeyRef = useRef('');
+  const recordTitleMapRef = useRef<Record<string, string>>({});
   const hydratingRubikaMessageIdsRef = useRef<Set<string>>(new Set());
   const rubikaHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedRubikaHydrationFailuresRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    recordTitleMapRef.current = recordTitleMap;
+  }, [recordTitleMap]);
 
   useEffect(() => {
     let disposed = false;
@@ -1214,10 +1264,24 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     };
   }, []);
 
-  const refresh = useCallback(async () => {
+  const applyCachedSnapshot = useCallback((snapshot: MessagingOmniCacheSnapshot) => {
+    setSmsMessages(snapshot.smsMessages || []);
+    setVoipCalls(snapshot.voipCalls || []);
+    setBotGroups(snapshot.botGroups || []);
+    setBotGroupMessages(snapshot.botGroupMessages || []);
+    setBotDirectThreads(snapshot.botDirectThreads || []);
+    setBotDirectMessages(snapshot.botDirectMessages || []);
+    setBotSenderBindings(snapshot.botSenderBindings || []);
+    setRecordTitleMap(snapshot.recordTitleMap || {});
+    recordTitleMapRef.current = snapshot.recordTitleMap || {};
+    setReadStateKeys(new Set(snapshot.readStateKeys || []));
+    setLoading(false);
+  }, []);
+
+  const refresh = useCallback(async (options?: { background?: boolean }) => {
     if (!profile.id || refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
-    setLoading(true);
+    if (!options?.background) setLoading(true);
     try {
       const readStatePromise = safeLiveFetch('read-states', () => fetchNotificationReadStateKeys(profile), new Set<string>())
         .then((nextReadStateKeys) => {
@@ -1272,7 +1336,23 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           ...collectBotSenderRecordReferences(botDirectMessageRows || []),
           ...collectBotBindingRecordReferences(bindingRows || []),
         ]), {} as Record<string, string>);
-      setRecordTitleMap((prev) => ({ ...prev, ...labels }));
+      const nextRecordTitleMap = { ...recordTitleMapRef.current, ...labels };
+      recordTitleMapRef.current = nextRecordTitleMap;
+      setRecordTitleMap(nextRecordTitleMap);
+      const cacheKey = buildMessagingOmniCacheKey(profile);
+      writeMessagingOmniCache(cacheKey, {
+        fetchedAt: Date.now(),
+        profile,
+        smsMessages: smsRows || [],
+        voipCalls: callRows || [],
+        botGroups: botGroupRows || [],
+        botGroupMessages: botMessageRows || [],
+        botDirectThreads: botDirectThreadRows || [],
+        botDirectMessages: botDirectMessageRows || [],
+        botSenderBindings: bindingRows || [],
+        recordTitleMap: nextRecordTitleMap,
+        readStateKeys: Array.from((await readStatePromise) || []),
+      });
     } finally {
       refreshInFlightRef.current = false;
       setLoading(false);
@@ -1281,8 +1361,14 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
 
   useEffect(() => {
     if (!profile.id) return;
-    void refresh();
-  }, [profile.id, refresh]);
+    const cacheKey = buildMessagingOmniCacheKey(profile);
+    const cached = readMessagingOmniCache(cacheKey);
+    if (cached && appliedCacheKeyRef.current !== cacheKey) {
+      appliedCacheKeyRef.current = cacheKey;
+      applyCachedSnapshot(cached);
+    }
+    void refresh({ background: Boolean(cached) });
+  }, [applyCachedSnapshot, profile, refresh]);
 
   const hydrateBotGroupMessageMedia = useCallback(async (rows: BotMessageRow[], groups: BotGroupRow[]) => {
     const groupById = new Map((groups || []).map((group) => [String(group?.id || '').trim(), group] as const));
@@ -1301,7 +1387,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       const rowId = String(row?.id || '').trim();
       const group = groupById.get(String(row?.bot_group_id || '').trim());
       const channel = String(group?.channel_type || '').trim();
-      if (!BOT_CHANNELS.includes(channel as BotChannel)) continue;
+      if (!isBotChannel(channel)) continue;
       const botChannel = channel as BotChannel;
       const mediaItems = collectBotMediaFileItems(row, botChannel);
       if (!rowId || mediaItems.length === 0) continue;
@@ -1414,7 +1500,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       const rowId = String(row?.id || '').trim();
       const thread = threadById.get(String(row?.direct_thread_id || '').trim());
       const channel = String(thread?.channel_type || '').trim();
-      if (!BOT_CHANNELS.includes(channel as BotChannel)) continue;
+      if (!isBotChannel(channel)) continue;
       const botChannel = channel as BotChannel;
       const mediaItems = collectBotMediaFileItems(row, botChannel);
       if (!rowId || mediaItems.length === 0) continue;

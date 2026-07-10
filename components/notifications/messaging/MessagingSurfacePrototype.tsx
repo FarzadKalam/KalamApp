@@ -2627,9 +2627,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         avatarUrl: String((item as any).avatarUrl || currentUser?.avatar_url || '').trim() || null,
       };
     });
+    const liveEventsForDisplay = botGroupRpcEvents.length > 0
+      ? normalizedLiveEvents.filter((item) => !(activeConversation.channel === 'bot_group' && item.conversationKey === activeConversation.key))
+      : normalizedLiveEvents;
     return [
       ...liveInternalEvents,
-      ...normalizedLiveEvents.filter((item) => !(activeConversation.channel === 'bot_group' && item.conversationKey === activeConversation.key)),
+      ...liveEventsForDisplay,
       ...botGroupRpcEvents,
     ] as TimelineEvent[];
   }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents]);
@@ -2711,7 +2714,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   }, [displayConversations, selectedKey]);
 
   useEffect(() => {
-    if (!activeConversation.key || !activeEvents.length || !activeConversation.unread) return;
+    if (!activeConversation.key || !activeEvents.length) return;
     const currentUserId = String(liveData.profile.id || '').trim();
     const readableEvents = activeEvents.filter((item) => {
       const id = String(item.sourceRow?.id || '').trim();
@@ -2734,7 +2737,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     if (!readableEvents.length) return;
     const latestAt = readableEvents.map(getEventActivityAt).filter(Boolean).sort().at(-1) || activeConversation.lastActivityAt || new Date().toISOString();
     const dedupeKey = `${activeConversation.key}:${latestAt}:${readableEvents.length}`;
-    if (markReadDedupeRef.current === dedupeKey) return;
+    if (markReadDedupeRef.current === dedupeKey && !activeConversation.unread) return;
     markReadDedupeRef.current = dedupeKey;
     setLocalReadThroughByConversation((prev) => ({ ...prev, [activeConversation.key]: latestAt }));
 
@@ -2787,7 +2790,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       } else {
         await liveData.refresh();
       }
-    })();
+    })().catch((error) => {
+      markReadDedupeRef.current = '';
+      console.warn('Messaging v2 mark read failed', error);
+    });
   }, [
     activeConversation.channel,
     activeConversation.key,
