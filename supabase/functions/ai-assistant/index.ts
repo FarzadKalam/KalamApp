@@ -3209,6 +3209,8 @@ const extractImagePayload = (raw: any): {
   push(raw?.output?.[0], 'output[0]');
   push(raw?.result, 'result');
   push(raw?.response?.data?.[0], 'response.data[0]');
+  push(raw?.choices?.[0]?.message?.images?.[0]?.image_url, 'choices[0].message.images[0].image_url');
+  push(raw?.choices?.[0]?.message?.images?.[0], 'choices[0].message.images[0]');
   push(raw?.candidates?.[0]?.content?.parts?.find((part: any) => part?.inline_data?.data || part?.inlineData?.data || part?.file_data?.file_uri || part?.fileData?.fileUri), 'gemini.part');
 
   for (const entry of candidates) {
@@ -3858,9 +3860,47 @@ const callWebSearch = async (
   }
 };
 
-// Route a model id to the correct AvalAI endpoint family. Mirrors
-// ai_model_catalog.metadata.api_route (see database_v1_phase260).
+const normalizeEndpointPath = (value: any) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return raw.startsWith('/') ? raw : `/${raw}`;
+};
+
+const getModelSupportedEndpoints = (providerConfig: any) => {
+  const metadata = providerConfig?.modelMetadata && typeof providerConfig.modelMetadata === 'object'
+    ? providerConfig.modelMetadata
+    : {};
+  const candidates = [
+    providerConfig?.supportedEndpoints,
+    metadata?.supported_endpoints,
+    metadata?.supportedEndpoints,
+    metadata?.endpoints,
+  ];
+  return new Set(
+    candidates
+      .flatMap((item: any) => Array.isArray(item) ? item : [])
+      .map(normalizeEndpointPath)
+      .filter(Boolean),
+  );
+};
+
+const supportsModelEndpoint = (providerConfig: any, endpoint: string) => {
+  const endpoints = getModelSupportedEndpoints(providerConfig);
+  return endpoints.size === 0 || endpoints.has(normalizeEndpointPath(endpoint));
+};
+
+// Route a model id to the correct AvalAI endpoint family. AvalAI documents
+// Nano Banana/Gemini image models on chat completions with image modalities,
+// while GPT Image/Qwen/Seedream edit-capable models use /v1/images/edits.
 const isGeminiImageModel = (model: string) => /^gemini[-.\d]*.*image/i.test(String(model || '').trim());
+const isKnownImageEditModel = (model: string) => {
+  const normalized = String(model || '').trim().toLowerCase();
+  return /^gpt-image/i.test(normalized)
+    || /^qwen-image/i.test(normalized)
+    || /^seedream/i.test(normalized)
+    || /^imagen-3\.0-generate-001$/i.test(normalized)
+    || /^flux\.1-kontext-pro$/i.test(normalized);
+};
 
 const buildImagePromptWithSettings = (prompt: string, settings: any = {}) => {
   const instructions: string[] = [];
@@ -3907,9 +3947,9 @@ const appendImageContextToPrompt = (prompt: string, args: { companyContext?: any
   return clampImagePrompt(`${prompt}\n\nزمینه مجاز سازمان برای استفاده در تصویر:\n${contextLines.join('\n')}`);
 };
 
-// Gemini image (Nano Banana) models are served via the native Gemini endpoint
-// (/v1beta/models/{id}:generateContent), NOT the OpenAI /v1/images/generations route.
-// Calling them on /images/generations hangs and returns a 504 gateway timeout.
+// Gemini image (Nano Banana) models are served by AvalAI via OpenAI-compatible
+// chat completions with modalities ["image", "text"], not /images/generations
+// or /images/edits. Sending them to Image API routes can hang until timeout.
 const callGeminiImageGenerate = async (
   providerConfig: any,
   prompt: string,
@@ -3918,29 +3958,32 @@ const callGeminiImageGenerate = async (
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای تولید تصویر، مدل فعال در تنظیمات سازمان پیدا نشد.');
-  const parts: any[] = [{ text: prompt }];
+  const content: any[] = [{ type: 'text', text: prompt }];
   for (const src of (options.sourceImages || [])) {
     const data = String(src?.data || '').replace(/^data:[^;]+;base64,/, '').trim();
-    if (data) parts.push({ inline_data: { mime_type: src?.mimeType || 'image/png', data } });
+    if (data) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${src?.mimeType || 'image/png'};base64,${data}` },
+      });
+    }
   }
   const body: Record<string, any> = {
-    contents: [{ parts }],
-    generationConfig: {
-      responseModalities: ['TEXT', 'IMAGE'],
-      ...(options.extraConfig && typeof options.extraConfig === 'object' ? options.extraConfig : {}),
-    },
+    model,
+    messages: [{ role: 'user', content: content.length === 1 ? prompt : content }],
+    modalities: ['image', 'text'],
+    ...(options.extraConfig && typeof options.extraConfig === 'object' ? { extra_body: options.extraConfig } : {}),
   };
-  // Gemini native endpoint lives at /v1beta (strip the /v1 suffix from the base url).
   const { response, baseUrl } = await requestAvalaiWithFallback(
     providerConfig,
-    `/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+    '/chat/completions',
     {
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(IMAGE_PROVIDER_TIMEOUT_MS),
     },
-    { stripVersionForPath: true, disableFallback: true },
+    { disableFallback: true },
   );
   const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
   const parsed = parseJsonSafe(await response.text());
@@ -4161,9 +4204,11 @@ const callImageGeneration = async (
     : 'png';
   const n = Math.min(4, Math.max(1, Number(options.n) || 1));
 
-  // Gemini Nano Banana models -> native /v1beta generateContent (handles both
-  // generation and editing-with-source-images via inline_data parts).
+  // Gemini Nano Banana models -> AvalAI chat completions with image modalities.
   if (isGeminiImageModel(model)) {
+    if (!supportsModelEndpoint(providerConfig, '/v1/chat/completions') && !supportsModelEndpoint(providerConfig, '/chat/completions')) {
+      throw new Error('مدل انتخاب‌شده برای ویرایش تصویر در AvalAI مسیر گفتگوی تصویری را پشتیبانی نمی‌کند.');
+    }
     const result = await callGeminiImageGenerate({ ...providerConfig, model }, prompt, {
       sourceImages,
       extraConfig: options.extraBody,
@@ -4173,6 +4218,9 @@ const callImageGeneration = async (
 
   // OpenAI-family image models with source image(s) -> /v1/images/edits (multipart).
   if (sourceImages.length > 0) {
+    if (!supportsModelEndpoint(providerConfig, '/v1/images/edits') && !supportsModelEndpoint(providerConfig, '/images/edits') && !isKnownImageEditModel(model)) {
+      throw new Error('مدل انتخاب‌شده برای ویرایش تصویر مناسب نیست. از تنظیمات AI یک مدل پشتیبانی‌کننده ویرایش تصویر مثل gpt-image-2، gpt-image-1، gpt-image-1-mini، qwen-image-edit یا مدل‌های Nano Banana را انتخاب کنید.');
+    }
     const formData = new FormData();
     formData.append('model', model);
     formData.append('prompt', prompt);
@@ -4241,6 +4289,9 @@ const callImageGeneration = async (
   }
 
   let lastFailure = '';
+  if (!supportsModelEndpoint(providerConfig, '/v1/images/generations') && !supportsModelEndpoint(providerConfig, '/images/generations')) {
+    throw new Error('مدل انتخاب‌شده برای ساخت تصویر، endpoint تولید تصویر AvalAI را پشتیبانی نمی‌کند. لطفاً در تنظیمات AI یک مدل تصویری فعال انتخاب کنید.');
+  }
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const { response, baseUrl } = await requestAvalaiWithFallback(providerConfig, '/images/generations', {
       method: 'POST',
@@ -4409,10 +4460,17 @@ const uploadGeneratedImage = async (
     if (requestedFormat === 'jpeg') contentType = 'image/jpeg';
     else if (requestedFormat === 'webp') contentType = 'image/webp';
   } else if (imageResult?.imageUrl) {
-    const imageResponse = await fetch(imageResult.imageUrl);
-    if (!imageResponse.ok) throw new Error('دریافت تصویر ساخته‌شده ناموفق بود.');
-    contentType = imageResponse.headers.get('content-type') || contentType;
-    bytes = new Uint8Array(await imageResponse.arrayBuffer());
+    const imageUrl = String(imageResult.imageUrl || '').trim();
+    const dataUrlMatch = imageUrl.match(/^data:([^;,]+);base64,(.+)$/i);
+    if (dataUrlMatch) {
+      contentType = dataUrlMatch[1] || contentType;
+      bytes = base64ToUint8Array(dataUrlMatch[2] || '');
+    } else {
+      const imageResponse = await fetch(imageUrl);
+      if (!imageResponse.ok) throw new Error('دریافت تصویر ساخته‌شده ناموفق بود.');
+      contentType = imageResponse.headers.get('content-type') || contentType;
+      bytes = new Uint8Array(await imageResponse.arrayBuffer());
+    }
   }
   if (!bytes?.length) throw new Error('خروجی تصویر معتبر نیست.');
   const ext = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : contentType.includes('webp') ? 'webp' : 'png';
@@ -8546,6 +8604,12 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   const contextKey = buildContextKey(rawContext);
   const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'image_generation', { modelOverride: body?.modelOverride });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
+  const modelCatalogRow = await loadModelPricing(supabaseUrl, serviceRoleKey, providerConfig.model);
+  const imageProviderConfig = {
+    ...providerConfig,
+    modelMetadata: modelCatalogRow?.metadata && typeof modelCatalogRow.metadata === 'object' ? modelCatalogRow.metadata : {},
+    supportedEndpoints: Array.isArray(modelCatalogRow?.metadata?.supported_endpoints) ? modelCatalogRow.metadata.supported_endpoints : undefined,
+  };
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
   const useOrganizationContext = imageSettings.useOrganizationContext === true;
@@ -8647,6 +8711,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
       queued_at: backgroundQueuedAt,
       provider: providerConfig.provider,
       model: providerConfig.model,
+      model_endpoints: Array.from(getModelSupportedEndpoints(imageProviderConfig)),
     },
     image_call_options: {
       size: imageCallOptions.size || null,
@@ -8704,7 +8769,7 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
           },
         },
       }).catch(() => []);
-      const imageResult = await callImageGeneration(providerConfig, providerPrompt, imageCallOptions);
+      const imageResult = await callImageGeneration(imageProviderConfig, providerPrompt, imageCallOptions);
       const storedImage = await uploadGeneratedImage(supabaseUrl, serviceRoleKey, authContext, imageResult);
       const fileManagerResult = await registerAiGeneratedFileInFileManager(supabaseUrl, serviceRoleKey, authContext, pageContext, storedImage, {
         displayName: `تصویر هوش مصنوعی ${new Date().toISOString().slice(0, 10)}.png`,
