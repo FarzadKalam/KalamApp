@@ -7,7 +7,7 @@ export const canQuickReplyNotification = ({
   category?: string | null;
   conversationKey?: string | null;
 }) => {
-  if (section === 'bot_messages') return true;
+  if (section === 'bot_messages' || section === 'bot_direct_messages') return true;
   if (section !== 'notes') return false;
 
   const normalizedCategory = String(category || '').trim().toLowerCase();

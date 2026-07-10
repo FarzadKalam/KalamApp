@@ -231,7 +231,7 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز</div>
+                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای ارسال پیام خصوصی</div>
                     <AdaptiveSelectField
                       mode="multiple"
                       allowClear
@@ -251,7 +251,7 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                     />
                   </div>
                   <div>
-                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز</div>
+                    <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز برای ارسال پیام خصوصی</div>
                     <AdaptiveSelectField
                       mode="multiple"
                       allowClear

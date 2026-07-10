@@ -1901,6 +1901,12 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
           previousChatId: draft.chatId,
         });
       }
+      const directThreadMetadata = {
+        allowed_user_ids: botIdentityAllowedUserIds,
+        allowed_role_ids: botIdentityAllowedRoleIds,
+        ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
+        ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
+      };
       await syncBotDirectChatIdForTarget({
         client: supabase,
         orgId,
@@ -1912,26 +1918,8 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
         username: draft.username || null,
         phoneNumber: draft.phoneNumber || null,
         displayName: draft.displayName || null,
+        threadMetadata: directThreadMetadata,
       });
-      const directThreadMetadata = {
-        allowed_user_ids: botIdentityAllowedUserIds,
-        allowed_role_ids: botIdentityAllowedRoleIds,
-        ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
-        ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
-      };
-      const { error: directThreadError } = await supabase
-        .from('counterparty_bot_direct_threads')
-        .update({
-          display_name: draft.displayName || null,
-          username: draft.username || null,
-          phone_number: draft.phoneNumber || null,
-          metadata: directThreadMetadata,
-          last_seen_at: new Date().toISOString(),
-        })
-        .eq('org_id', orgId)
-        .eq('channel_type', draft.channel)
-        .eq('chat_id', draft.chatId);
-      if (directThreadError) throw directThreadError;
       await Promise.all([
         fetchBotDirectThreads(),
         refreshSection('bot_messages', { force: true }),

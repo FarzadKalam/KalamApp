@@ -139,6 +139,10 @@ const toSummarySection = (section: RuntimeSection): NotificationUnreadSection | 
   return null;
 };
 
+const isBotOverlaySection = (section: RuntimeSection | string) => (
+  section === 'bot_messages' || section === 'bot_direct_messages'
+);
+
 const NotificationRuntimeContext = createContext<NotificationRuntimeValue | null>(null);
 const NOOP_NOTIFICATION_RUNTIME: NotificationRuntimeValue = {
   ready: false,
@@ -180,7 +184,7 @@ const getOverlayKind = (row: OverlayFeedRow) => {
     const category = String(row.payload?.category || '').trim();
     return category === 'assistant' ? 'assistant' : 'note';
   }
-  if (row.section === 'bot_messages') return 'bot';
+  if (isBotOverlaySection(row.section)) return 'bot';
   if (row.section === 'sms_messages') return 'sms';
   if (row.section === 'voip_calls') return 'voip_call';
   if (row.section === 'tasks') return 'task';
@@ -192,7 +196,7 @@ const getOverlayChannel = (row: OverlayFeedRow) => {
     const category = String(row.payload?.category || '').trim().toLowerCase();
     return category === 'system' || category === 'assistant' ? 'system' : 'internal';
   }
-  if (row.section === 'bot_messages') return 'bot';
+  if (isBotOverlaySection(row.section)) return 'bot';
   if (row.section === 'sms_messages') return 'sms';
   if (row.section === 'voip_calls') return 'voip';
   if (row.section === 'tasks' || row.section === 'responsibilities') return 'system';
@@ -225,7 +229,7 @@ const resolveOverlayAttachments = (row: OverlayFeedRow): NoteAttachment[] => {
     ? (payload as any).attachment_previews
     : [];
   const directItems = previewItems.map(normalizeOverlayAttachment);
-  if (row.section === 'bot_messages') {
+  if (isBotOverlaySection(row.section)) {
     const botItems = extractBotMessageAttachments({
       file_url: (payload as any).file_url || null,
       file_name: (payload as any).file_name || null,
@@ -277,7 +281,7 @@ const resolveInternalOverlayConversationTitle = (row: OverlayFeedRow) => {
 
 const resolveOverlayTitle = (row: OverlayFeedRow) => {
   if (row.section === 'notes') return resolveInternalOverlayConversationTitle(row);
-  if (row.section === 'bot_messages') {
+  if (isBotOverlaySection(row.section)) {
     return getPayloadText(row.payload, ['group_title', 'conversation_title'])
       || String(row.title || '').trim()
       || 'پیام جدید بات';
@@ -302,7 +306,7 @@ const resolveOverlayBody = (row: OverlayFeedRow) => {
 };
 
 const resolveOverlayAvatarUrl = (row: OverlayFeedRow) => {
-  if (row.section === 'bot_messages') {
+  if (isBotOverlaySection(row.section)) {
     return getPayloadText(row.payload, ['group_avatar_url', 'counterparty_image_url', 'avatar_url']) || null;
   }
   if (row.section === 'notes') {
@@ -312,7 +316,7 @@ const resolveOverlayAvatarUrl = (row: OverlayFeedRow) => {
 };
 
 const resolveOverlayAvatarName = (row: OverlayFeedRow) => {
-  if (row.section === 'bot_messages') {
+  if (isBotOverlaySection(row.section)) {
     return getPayloadText(row.payload, ['group_title', 'conversation_title'])
       || String(row.title || '').trim()
       || null;
@@ -674,7 +678,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       navigate(key ? `/messages?tab=notes&conversation=${encodeURIComponent(key)}` : '/messages?tab=notes');
       return;
     }
-    if (row.section === 'bot_messages') {
+    if (isBotOverlaySection(row.section)) {
       const directThreadId = String(row.payload?.direct_thread_id || '').trim();
       if (directThreadId) {
         navigate(`/messages?tab=bot_direct_messages&botDirectThread=${encodeURIComponent(directThreadId)}`);
@@ -800,7 +804,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       && conversationKey !== 'system'
     ) {
       await markOverlayCommunicationRead('internal', conversationKey, row);
-    } else if (row.section === 'bot_messages' && conversationKey) {
+    } else if (isBotOverlaySection(row.section) && conversationKey) {
       await markOverlayCommunicationRead('bot', conversationKey, row);
     }
     void refreshSummary();
@@ -865,7 +869,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       return;
     }
 
-    if (row.section === 'bot_messages') {
+    if (isBotOverlaySection(row.section)) {
       const directThreadId = String(row.payload?.direct_thread_id || '').trim();
       if (directThreadId) {
         const { data: thread, error: threadError } = await supabase
@@ -965,7 +969,7 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
         channel: getOverlayChannel(row),
         kindLabel: row.section === 'notes' ? resolveInternalOverlayKindLabel(row) : undefined,
         title: resolveOverlayTitle(row),
-        subtitle: row.section === 'bot_messages' ? resolveBotOverlaySenderName(row) : undefined,
+        subtitle: isBotOverlaySection(row.section) ? resolveBotOverlaySenderName(row) : undefined,
         body: resolveOverlayBody(row),
         attachments,
         hasAttachments: attachments.length > 0,

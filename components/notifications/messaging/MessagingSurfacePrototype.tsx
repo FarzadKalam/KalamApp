@@ -1896,9 +1896,6 @@ const TimelineEventCard: React.FC<{
           {activeConversation.actions.includes('forward') ? <TimelineIconButton title="هدایت" icon={<SendOutlined />} inverse={outgoing} onClick={() => onForward?.(item)} /> : null}
           {activeConversation.actions.includes('activity') ? <TimelineIconButton title="ایجاد فعالیت" icon={<FileAddOutlined />} inverse={outgoing} onClick={() => onCreateActivity?.(item)} /> : null}
           {canRetryBotMedia ? <TimelineIconButton title="تلاش دوباره برای دریافت پیوست" icon={<ReloadOutlined spin={retryingMedia} />} active={retryingMedia} inverse={outgoing} onClick={() => onRetryBotMedia?.(item)} /> : null}
-          {canOpenBotSenderBinding ? (
-            <TimelineIconButton title={botSenderBindingTitle} icon={<UserAddOutlined />} inverse={outgoing} onClick={() => onBindBotSender?.(item)} />
-          ) : null}
           <TimelineIconButton title="کپی متن" icon={<CopyOutlined />} inverse={outgoing} onClick={() => void copyMessageText()} />
           <TimelineIconButton title={item.liked ? 'پسندیده شده' : 'پسندیدن'} icon={<LikeOutlined />} active={Boolean(item.liked)} activeTone="like" inverse={outgoing} onClick={() => onToggleLike?.(item)} />
           {item.seenAt ? (
@@ -3486,6 +3483,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           previousChatId: draft.chatId,
         });
       }
+      const directThreadMetadata = {
+        allowed_user_ids: botIdentityAllowedUserIds,
+        allowed_role_ids: botIdentityAllowedRoleIds,
+        ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
+        ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
+      };
       await syncBotDirectChatIdForTarget({
         client: supabase,
         orgId,
@@ -3497,22 +3500,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         username: draft.username || null,
         phoneNumber: draft.phoneNumber || null,
         displayName: draft.displayName || null,
+        threadMetadata: directThreadMetadata,
       });
-      const { error: threadError } = await supabase
-        .from('counterparty_bot_direct_threads')
-        .update({
-          metadata: {
-            allowed_user_ids: botIdentityAllowedUserIds,
-            allowed_role_ids: botIdentityAllowedRoleIds,
-            ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
-            ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
-          },
-          last_seen_at: new Date().toISOString(),
-        })
-        .eq('org_id', orgId)
-        .eq('channel_type', draft.channel)
-        .eq('chat_id', draft.chatId);
-      if (threadError) throw threadError;
       await liveData.refresh();
       message.success('اتصال فرستنده بات ذخیره شد.');
       closeBotIdentityBindModal();
