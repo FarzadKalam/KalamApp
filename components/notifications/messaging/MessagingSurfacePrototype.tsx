@@ -508,6 +508,63 @@ const buildInternalLiveConversations = (summaries: NotificationConversationSumma
       };
     });
 
+const buildBotRpcConversations = (summaries: NotificationConversationSummary[] | null | undefined): Conversation[] =>
+  (summaries || [])
+    .filter((summary) => String(summary?.section || '').trim() === 'bot_messages')
+    .map((summary) => {
+      const key = normalizeMessagingConversationKey(summary?.conversation_key);
+      const platform = isKnownBotChannel(summary?.channel_type) ? summary.channel_type as BotChannel : undefined;
+      const channelLabel = platform ? BOT_CHANNEL_LABELS_FA[platform] : String(summary?.channel_type || 'بات').trim();
+      const title = String(summary?.title || summary?.counterparty_label || '').trim() || 'گروه بات';
+      const latestAt = String(summary?.latest_message_at || '').trim();
+      return {
+        key,
+        channel: 'bot_group' as const,
+        title,
+        subtitle: `${channelLabel} - ${String(summary?.subtitle || title).trim() || 'گروه بات'}`,
+        preview: String(summary?.last_message_preview || '').trim() || 'گفتگوی بات',
+        time: latestAt ? safeJalaliFormat(latestAt, 'MM/DD HH:mm') || '' : '',
+        lastActivityAt: latestAt || null,
+        unread: Math.max(0, Number(summary?.unread_count || 0)),
+        tone: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200',
+        avatarText: title.slice(0, 1) || 'ب',
+        status: 'بات فعال',
+        platform,
+        relatedRecordTitle: String(summary?.counterparty_label || '').trim() || undefined,
+        relatedScope: summary?.counterparty_label ? 'record' as const : undefined,
+        relatedLabelPrefix: summary?.counterparty_label ? 'مخاطب مرتبط' : undefined,
+        actions: ['search', 'attach', 'reply', 'forward', 'ready_text', 'activity', 'bind', 'record', 'receipt'] as ConversationAction[],
+      };
+    });
+
+const mergeBotRpcConversations = (liveConversations: Conversation[], rpcConversations: Conversation[]) => {
+  if (!rpcConversations.length) return liveConversations;
+  const merged = new Map<string, Conversation>();
+  liveConversations.forEach((conversation) => {
+    const key = normalizeMessagingConversationKey(conversation.key);
+    if (key) merged.set(key, { ...conversation, key });
+  });
+  rpcConversations.forEach((rpcConversation) => {
+    const key = normalizeMessagingConversationKey(rpcConversation.key);
+    if (!key) return;
+    const liveConversation = merged.get(key);
+    merged.set(key, liveConversation
+      ? {
+          ...liveConversation,
+          ...rpcConversation,
+          platform: liveConversation.platform || rpcConversation.platform,
+          relatedModuleId: liveConversation.relatedModuleId,
+          relatedRecordId: liveConversation.relatedRecordId,
+          relatedRecordTitle: liveConversation.relatedRecordTitle || rpcConversation.relatedRecordTitle,
+          relatedScope: liveConversation.relatedScope || rpcConversation.relatedScope,
+          relatedLabelPrefix: liveConversation.relatedLabelPrefix || rpcConversation.relatedLabelPrefix,
+          actions: liveConversation.actions?.length ? liveConversation.actions : rpcConversation.actions,
+        }
+      : rpcConversation);
+  });
+  return sortConversationsByActivity(Array.from(merged.values()));
+};
+
 const getInternalNotePreview = (row: any) => {
   const parsed = parseNoteContent(row?.content ?? row?.body ?? row?.message_text ?? '');
   const text = String(parsed.text || '').trim();
@@ -2073,6 +2130,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     fallbackLoadInitial: loadInternalConversationFallback,
     mergeFallbackInitial: true,
   });
+  const botConversations = useNotificationConversationList({
+    supabase,
+    section: 'bot_messages',
+    enabled: Boolean(liveData.profile.id),
+    cacheScopeKey,
+  });
   const selectedInternalSourceKey = getInternalSourceConversationKey(selectedKey);
   const loadInternalTimelineFallback = useMemo(() => {
     const conversationKey = String(selectedInternalSourceKey || '').trim();
@@ -2105,6 +2168,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     cacheScopeKey,
   });
   const refreshInternalConversations = internalConversations.refresh;
+  const refreshBotConversations = botConversations.refresh;
   const refreshInternalTimeline = internalTimeline.refresh;
   useEffect(() => {
     const previous = runtimeRevisionRef.current;
@@ -2121,12 +2185,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       || current.sms_messages !== previous.sms_messages
       || current.voip_calls !== previous.voip_calls
     ) {
+      void refreshBotConversations({ force: true });
       void liveData.refresh();
     }
   }, [
     liveData,
     notificationRuntime.revisions,
     refreshInternalConversations,
+    refreshBotConversations,
     refreshInternalTimeline,
   ]);
   const [assigneeDirectory, setAssigneeDirectory] = useState<AssigneeDirectory>({ users: [], roles: [] });
@@ -2263,6 +2329,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       await Promise.all([
         liveData.refresh(),
         refreshInternalConversations({ force: true }),
+        refreshBotConversations({ force: true }),
         shouldRefreshBotTimeline && botTimelineRefreshRef.current
           ? botTimelineRefreshRef.current({ force: true })
           : Promise.resolve(null),
@@ -2518,7 +2585,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const displayConversations = useMemo(() => {
     if (reelInitialLoading || liveData.loading) return [];
     const liveInternal = liveInternalConversations;
-    const liveBotGroups = liveData.conversations.filter((conversation) => conversation.channel === 'bot_group');
+    const liveBotGroups = mergeBotRpcConversations(
+      liveData.conversations.filter((conversation) => conversation.channel === 'bot_group'),
+      buildBotRpcConversations(botConversations.items),
+    );
     const liveBotDirect = liveData.conversations.filter((conversation) => conversation.channel === 'bot_direct');
     const liveSms = liveData.conversations.filter((conversation) => conversation.channel === 'sms');
     const liveCalls = liveData.conversations.filter((conversation) => conversation.channel === 'call');
@@ -2529,7 +2599,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveSms,
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
-  }, [liveData.conversations, liveData.loading, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  }, [botConversations.items, liveData.conversations, liveData.loading, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
   const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
     const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
     const savedConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'saved');
@@ -2762,7 +2832,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     if (!readableEvents.length) return;
     const latestAt = readableEvents.map(getEventActivityAt).filter(Boolean).sort().at(-1) || activeConversation.lastActivityAt || new Date().toISOString();
     const dedupeKey = `${activeConversation.key}:${latestAt}:${readableEvents.length}`;
-    if (markReadDedupeRef.current === dedupeKey && !activeConversation.unread) return;
+    if (markReadDedupeRef.current === dedupeKey) return;
     markReadDedupeRef.current = dedupeKey;
     setLocalReadThroughByConversation((prev) => ({ ...prev, [activeConversation.key]: latestAt }));
 
@@ -2815,6 +2885,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       if (activeConversation.channel === 'internal') {
         await refreshInternalConversations({ force: true });
       } else {
+        if (activeConversation.channel === 'bot_group') {
+          await refreshBotConversations({ force: true });
+        }
         await liveData.refresh();
       }
     })().catch((error) => {
@@ -2830,6 +2903,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     liveData,
     liveData.profile.id,
     notificationRuntime,
+    refreshBotConversations,
     refreshInternalConversations,
     selectedInternalSourceKey,
   ]);
@@ -4192,7 +4266,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         return false;
       }
     }
-    if ((conversation.channel === 'bot_group' || conversation.channel === 'bot_direct') && conversation.key.startsWith('live:')) {
+    if (conversation.channel === 'bot_group' || conversation.channel === 'bot_direct') {
       try {
         const botSmsNotification = payload.smsNotificationEnabled
           ? await prepareBotSmsNotification(conversation)
@@ -4252,7 +4326,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             },
           });
         }
-        await liveData.refresh();
+        await Promise.all([
+          liveData.refresh(),
+          conversation.channel === 'bot_group'
+            ? refreshBotConversations({ force: true })
+            : Promise.resolve(null),
+        ]);
         if (botSmsNotification) {
           try {
             await sendSmsViaGateway({

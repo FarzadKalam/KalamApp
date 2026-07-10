@@ -247,11 +247,16 @@ const DEFAULT_FILE_STORAGE_BUCKET = String(
 
 const safeFileName = (value: string, fallback = 'file') => {
   const raw = String(value || '').trim();
-  const normalized = raw
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return normalized || fallback;
+  const extension = raw.includes('.') ? String(raw.split('.').pop() || '').trim() : '';
+  const base = extension ? raw.slice(0, -1 * (extension.length + 1)) : raw;
+  const safeBase = (base || fallback)
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 100);
+  const safeExtension = extension.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
+  const normalized = safeBase || fallback;
+  return safeExtension ? `${normalized}.${safeExtension}` : normalized;
 };
 
 const extensionFromMime = (value: string) => {
