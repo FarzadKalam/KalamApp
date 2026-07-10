@@ -110,26 +110,54 @@ function New-SshSessionOptions {
   param(
     [string]$DeployPort,
     [string]$DeployHost,
-    [string]$RepoRoot
+    [string]$RepoRoot,
+    [string]$SshKeyPath = ''
   )
 
   $controlDir = Join-Path $RepoRoot '.ssh-control'
   New-Item -ItemType Directory -Path $controlDir -Force | Out-Null
   $controlPath = [System.IO.Path]::GetFullPath((Join-Path $controlDir ("kalamapp-ssh-{0}-{1}" -f $DeployHost, $DeployPort)))
+  $identityArgs = @()
+  if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) {
+    $identityArgs = @('-i', $SshKeyPath)
+  }
   return [pscustomobject]@{
     SshArgs = @(
       '-p', $DeployPort,
       '-o', 'ControlMaster=auto',
       '-o', 'ControlPersist=600',
       '-o', "ControlPath=$controlPath"
-    )
+    ) + $identityArgs
     ScpArgs = @(
       '-P', $DeployPort,
       '-o', 'ControlMaster=auto',
       '-o', 'ControlPersist=600',
       '-o', "ControlPath=$controlPath"
-    )
+    ) + $identityArgs
   }
+}
+
+function Resolve-SshKeyPath {
+  param(
+    [string]$ConfiguredPath,
+    [string]$RepoRoot
+  )
+
+  if ([string]::IsNullOrWhiteSpace($ConfiguredPath)) {
+    return ''
+  }
+
+  $candidate = $ConfiguredPath.Trim()
+  if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+    $candidate = Join-Path $RepoRoot $candidate
+  }
+
+  $resolved = [System.IO.Path]::GetFullPath($candidate)
+  if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
+    throw "DEPLOY_SSH_KEY_PATH was not found: $resolved"
+  }
+
+  return $resolved
 }
 
 function Get-LocalFunctionNames {
@@ -213,6 +241,7 @@ try {
   $deployHost = Get-RequiredEnv -Name 'DEPLOY_HOST'
   $deployPort = Get-OptionalEnv -Name 'DEPLOY_PORT' -DefaultValue '22'
   $deployUser = Get-RequiredEnv -Name 'DEPLOY_USER'
+  $sshKeyPath = Resolve-SshKeyPath -ConfiguredPath (Get-OptionalEnv -Name 'DEPLOY_SSH_KEY_PATH') -RepoRoot $repoRoot
   $functionsPath = Get-RequiredEnv -Name 'DEPLOY_FUNCTIONS_PATH'
   $composeDir = Get-OptionalEnv -Name 'DEPLOY_FUNCTIONS_COMPOSE_DIR'
   $composeFile = Get-OptionalEnv -Name 'DEPLOY_FUNCTIONS_COMPOSE_FILE' -DefaultValue 'docker-compose.yml'
@@ -238,10 +267,14 @@ try {
 
   $target = '{0}@{1}' -f $deployUser, $deployHost
   $remoteArchive = "/tmp/$archiveName"
-  $sshCommonArgs = @('-p', $deployPort)
-  $scpCommonArgs = @('-P', $deployPort)
+  $identityArgs = @()
+  if (-not [string]::IsNullOrWhiteSpace($sshKeyPath)) {
+    $identityArgs = @('-i', $sshKeyPath)
+  }
+  $sshCommonArgs = @('-p', $deployPort) + $identityArgs
+  $scpCommonArgs = @('-P', $deployPort) + $identityArgs
   if ($useSharedSsh) {
-    $sessionOptions = New-SshSessionOptions -DeployPort $deployPort -DeployHost $deployHost -RepoRoot $repoRoot
+    $sessionOptions = New-SshSessionOptions -DeployPort $deployPort -DeployHost $deployHost -RepoRoot $repoRoot -SshKeyPath $sshKeyPath
     $sshCommonArgs = $sessionOptions.SshArgs
     $scpCommonArgs = $sessionOptions.ScpArgs
   }
@@ -253,8 +286,8 @@ try {
       $sharedSessionOpened = $true
     } else {
       Write-Warning 'Shared SSH session is not available on this client. Falling back to direct ssh/scp calls.'
-      $sshCommonArgs = @('-p', $deployPort)
-      $scpCommonArgs = @('-P', $deployPort)
+      $sshCommonArgs = @('-p', $deployPort) + $identityArgs
+      $scpCommonArgs = @('-P', $deployPort) + $identityArgs
     }
   }
 

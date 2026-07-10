@@ -84,6 +84,7 @@ Required settings in `.env.deploy`:
 
 Optional settings:
 
+- `DEPLOY_SSH_KEY_PATH`
 - `DEPLOY_FUNCTIONS_COMPOSE_DIR`
 - `DEPLOY_FUNCTIONS_COMPOSE_FILE`
 - `DEPLOY_FUNCTIONS_SERVICE`
