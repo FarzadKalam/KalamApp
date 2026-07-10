@@ -1322,14 +1322,11 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[]),
         safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[]),
       ]);
-      setBotGroupMessages(botMessageRows || []);
-      setBotDirectMessages(botDirectMessageRows || []);
       const bindingRows = await safeLiveFetch(
         'bot-sender-bindings',
         () => fetchBotSenderBindings([...(botMessageRows || []), ...(botDirectMessageRows || [])], botGroupRows || [], botDirectThreadRows || []),
         [] as BotIdentityBindingRow[],
       );
-      setBotSenderBindings(bindingRows || []);
       const labels = await safeLiveFetch('record-labels', () => fetchRecordReferenceLabels(supabase, [
           ...collectRecordReferences(smsRows || []),
           ...collectRecordReferences(callRows || []),
@@ -1342,6 +1339,9 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       const nextRecordTitleMap = { ...recordTitleMapRef.current, ...labels };
       recordTitleMapRef.current = nextRecordTitleMap;
       setRecordTitleMap(nextRecordTitleMap);
+      setBotSenderBindings(bindingRows || []);
+      setBotGroupMessages(botMessageRows || []);
+      setBotDirectMessages(botDirectMessageRows || []);
       const cacheKey = buildMessagingOmniCacheKey(profile);
       writeMessagingOmniCache(cacheKey, {
         fetchedAt: Date.now(),

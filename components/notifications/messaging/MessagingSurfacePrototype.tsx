@@ -452,7 +452,7 @@ const resolveBotRpcSenderName = (
   return String(payload?.sender_display_name || payload?.display_name || binding?.display_name || '').trim()
     || (username ? `@${username}` : '')
     || String(payload?.phone_number || payload?.sender_phone_number || binding?.phone_number || '').trim()
-    || String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim()
+    || resolveBotRpcSenderChatId(row)
     || fallback;
 };
 
@@ -465,6 +465,65 @@ const resolveBotRpcSenderAvatarUrl = (row: any) => {
     || payload?.photo_url
     || ''
   ).trim() || null;
+};
+
+const resolveBotRpcSenderChatId = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
+  const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
+  const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
+  return String(
+    payload?.sender_id
+    || payload?.sender_chat_id
+    || payload?.user_id
+    || payload?.object_guid
+    || payload?.from_id
+    || payload?.author_id
+    || sender?.id
+    || sender?.chat_id
+    || sender?.user_id
+    || from?.id
+    || from?.chat_id
+    || from?.user_id
+    || user?.id
+    || user?.chat_id
+    || user?.user_id
+    || ''
+  ).trim();
+};
+
+const resolveBotRpcSenderDisplayName = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
+  const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
+  const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
+  return String(
+    payload?.sender_display_name
+    || payload?.sender_name
+    || payload?.display_name
+    || sender?.display_name
+    || sender?.name
+    || from?.display_name
+    || from?.name
+    || user?.display_name
+    || user?.name
+    || ''
+  ).trim();
+};
+
+const resolveBotRpcSenderUsername = (row: any) => {
+  const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+  const sender = payload?.sender && typeof payload.sender === 'object' ? payload.sender : {};
+  const from = payload?.from && typeof payload.from === 'object' ? payload.from : {};
+  const user = payload?.user && typeof payload.user === 'object' ? payload.user : {};
+  return String(
+    payload?.username
+    || payload?.sender_username
+    || sender?.username
+    || from?.username
+    || user?.username
+    || ''
+  ).trim().replace(/^@+/, '');
 };
 
 const buildBotGroupRpcTimelineEvents = (
@@ -483,9 +542,9 @@ const buildBotGroupRpcTimelineEvents = (
     const attachments = buildBotTimelineAttachments(row) || [];
     const text = String(row?.content_text || payload?.text || payload?.caption || '').trim()
       || (attachments.length ? '' : 'پیام بات');
-    const senderDisplayName = String(payload?.sender_display_name || payload?.sender_name || '').trim();
-    const senderUsername = String(payload?.username || '').trim();
-    const senderChatId = String(payload?.sender_id || payload?.sender_chat_id || row?.chat_id || '').trim();
+    const senderDisplayName = resolveBotRpcSenderDisplayName(row);
+    const senderUsername = resolveBotRpcSenderUsername(row);
+    const senderChatId = resolveBotRpcSenderChatId(row);
     const senderBinding = direction === 'inbound' && channel && senderChatId
       ? botSenderBindingMap.get(buildBotIdentityBindingKey(channel, senderChatId)) || null
       : null;
@@ -1208,6 +1267,74 @@ const getPrimaryActions = (conversation: Conversation) => {
   return ['search', 'bind'].filter((action) => conversation.actions.includes(action as ConversationAction)) as ConversationAction[];
 };
 
+const MessagingConversationListSkeleton: React.FC<{ compact?: boolean }> = ({ compact = false }) => (
+  <div className={`h-full min-h-0 animate-pulse ${compact ? 'px-2 py-3' : 'px-3 py-4'}`}>
+    {!compact ? (
+      <div className="mb-4 space-y-3">
+        <div className="h-8 rounded-lg bg-slate-200/80 dark:bg-white/[0.08]" />
+        <div className="grid grid-cols-3 gap-2">
+          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
+          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
+          <div className="h-7 rounded-full bg-slate-200/70 dark:bg-white/[0.07]" />
+        </div>
+      </div>
+    ) : null}
+    <div className="space-y-2">
+      {Array.from({ length: compact ? 7 : 9 }).map((_, index) => (
+        <div key={`conversation-skeleton-${index}`} className={`rounded-xl bg-white/70 shadow-sm dark:bg-white/[0.045] ${compact ? 'p-2' : 'p-3'}`}>
+          <div className="flex items-center gap-2">
+            <div className="h-9 w-9 shrink-0 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+            {!compact ? (
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="h-3 w-2/3 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+                <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const MessagingTimelineSkeleton: React.FC = () => (
+  <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="border-b border-slate-200/70 bg-white/88 px-4 py-3 dark:border-white/[0.07] dark:bg-[#17191c]">
+      <div className="flex animate-pulse items-center gap-3">
+        <div className="h-10 w-10 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="h-3.5 w-40 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+          <div className="h-2.5 w-64 max-w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+        </div>
+      </div>
+    </div>
+    <div className="min-h-0 flex-1 overflow-hidden bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] px-4 py-4 dark:bg-none dark:bg-[#101113]">
+      <div className="mx-auto flex max-w-5xl animate-pulse flex-col gap-4">
+        {Array.from({ length: 7 }).map((_, index) => {
+          const outgoing = index % 3 === 1;
+          return (
+            <div key={`timeline-skeleton-${index}`} className={`flex ${outgoing ? 'justify-start' : 'justify-end'}`}>
+              <div className={`w-[min(620px,82%)] rounded-2xl p-3 ${outgoing ? 'bg-slate-300/80 dark:bg-white/[0.10]' : 'bg-white/85 dark:bg-white/[0.055]'}`}>
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="h-7 w-7 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+                  <div className="space-y-1.5">
+                    <div className="h-2.5 w-24 rounded-full bg-slate-200 dark:bg-white/[0.08]" />
+                    <div className="h-2 w-16 rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+                  <div className="h-2.5 w-3/4 rounded-full bg-slate-100 dark:bg-white/[0.06]" />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  </div>
+);
+
 const MessagingConversationList: React.FC<{
   conversations: Conversation[];
   selectedKey: string;
@@ -1502,6 +1629,25 @@ const TimelineIconButton: React.FC<{
   </Tooltip>
 );
 
+const BOT_SENDER_AVATAR_TONES = [
+  'bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-200',
+  'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200',
+  'bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-200',
+  'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200',
+  'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-200',
+  'bg-cyan-50 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-200',
+];
+
+const getBotSenderAvatarTone = (chatId?: string | null) => {
+  const key = String(chatId || '').trim();
+  if (!key) return '';
+  let hash = 0;
+  for (let index = 0; index < key.length; index += 1) {
+    hash = ((hash << 5) - hash + key.charCodeAt(index)) | 0;
+  }
+  return BOT_SENDER_AVATAR_TONES[Math.abs(hash) % BOT_SENDER_AVATAR_TONES.length];
+};
+
 const TimelineEventCard: React.FC<{
   item: TimelineEvent;
   activeConversation: Conversation;
@@ -1521,6 +1667,9 @@ const TimelineEventCard: React.FC<{
   const isInternal = activeConversation.channel === 'internal';
   const showStatusBadge = Boolean(item.status && (isCall || (item.kind === 'sms' && outgoing)));
   const avatarFallback = String(item.author || activeConversation.avatarText || 'ک').trim().slice(0, 1) || 'ک';
+  const avatarTone = !outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
+    ? getBotSenderAvatarTone(item.botSenderChatId) || activeConversation.tone
+    : activeConversation.tone;
   const authorTextClassName = outgoing
     ? 'truncate text-xs font-bold text-white'
     : 'truncate text-xs font-bold text-slate-800 dark:text-slate-100';
@@ -1600,7 +1749,7 @@ const TimelineEventCard: React.FC<{
                 name={item.author}
                 fallback={avatarFallback}
                 preload
-                className={item.avatarUrl ? '!font-bold' : `${activeConversation.tone} !font-bold`}
+                className={item.avatarUrl ? '!font-bold' : `${avatarTone} !font-bold`}
               />
             )}
             <div className="min-w-0">
@@ -2119,6 +2268,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const { message } = App.useApp();
   const notificationRuntime = useOptionalNotificationRuntime();
   const [selectedKey, setSelectedKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
+  const [readEnabledConversationKey, setReadEnabledConversationKey] = useState(() => normalizeMessagingConversationKey(initialConversationKey));
   const [conversationFilter, setConversationFilter] = useState<ChannelKind | 'all'>(initialFilter);
   const [conversationListOpen, setConversationListOpen] = useState(false);
   const [phoneBindOpen, setPhoneBindOpen] = useState(false);
@@ -2692,6 +2842,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
   }, [botConversations.items, liveData.conversations, liveData.loading, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  const initialMessagingLoading = displayConversations.length === 0 && (reelInitialLoading || liveData.loading);
   const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
     const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
     const savedConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'saved');
@@ -2795,7 +2946,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
-    const normalizedLiveEvents = liveData.events.map((item) => {
+    const normalizeOutboundEvent = (item: any): TimelineEvent => {
       if (item.direction !== 'outbound') return item;
       const isBotEvent = String(item.conversationKey || '').startsWith('bot:')
         || String(item.conversationKey || '').startsWith('live:bot_direct:');
@@ -2821,14 +2972,16 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         author: String(currentUser?.display_name || item.author || '').trim() || 'من',
         avatarUrl: String((item as any).avatarUrl || currentUser?.avatar_url || '').trim() || null,
       };
-    });
-    const liveEventsForDisplay = botGroupRpcEvents.length > 0
+    };
+    const normalizedLiveEvents = liveData.events.map(normalizeOutboundEvent);
+    const normalizedBotGroupRpcEvents = botGroupRpcEvents.map(normalizeOutboundEvent);
+    const liveEventsForDisplay = normalizedBotGroupRpcEvents.length > 0
       ? normalizedLiveEvents.filter((item) => !(activeConversation.channel === 'bot_group' && item.conversationKey === activeConversation.key))
       : normalizedLiveEvents;
     return [
       ...liveInternalEvents,
       ...liveEventsForDisplay,
-      ...botGroupRpcEvents,
+      ...normalizedBotGroupRpcEvents,
     ] as TimelineEvent[];
   }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents, orgDisplayName, orgLogoUrl]);
   const activeEventsRaw = useMemo(
@@ -2899,6 +3052,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     const normalizedInitialKey = normalizeMessagingConversationKey(initialConversationKey);
     if (!normalizedInitialKey) return;
     setSelectedKey(normalizedInitialKey);
+    setReadEnabledConversationKey(normalizedInitialKey);
   }, [initialConversationKey]);
 
   useEffect(() => {
@@ -2910,6 +3064,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
 
   useEffect(() => {
     if (!activeConversation.key || !activeEvents.length) return;
+    if (readEnabledConversationKey !== activeConversation.key) return;
     const currentUserId = String(liveData.profile.id || '').trim();
     const readableEvents = activeEvents.filter((item) => {
       const id = String(item.sourceRow?.id || '').trim();
@@ -3005,11 +3160,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     notificationRuntime,
     refreshBotConversations,
     refreshInternalConversations,
+    readEnabledConversationKey,
     selectedInternalSourceKey,
   ]);
 
   const selectConversation = (key: string) => {
-    setSelectedKey(normalizeMessagingConversationKey(key));
+    const normalizedKey = normalizeMessagingConversationKey(key);
+    setSelectedKey(normalizedKey);
+    setReadEnabledConversationKey(normalizedKey);
     setReplyTarget(null);
     setConversationSearchOpen(false);
     setConversationSearchValue('');
@@ -3810,7 +3968,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         return [...prev.filter((item) => String(item.id || '').trim() !== existingId), row];
       });
       await refreshInternalConversations({ force: true });
-      setSelectedKey(getLiveInternalConversationKey(`${CHAT_GROUP_PREFIX}${row.id}`));
+      const nextConversationKey = getLiveInternalConversationKey(`${CHAT_GROUP_PREFIX}${row.id}`);
+      setSelectedKey(nextConversationKey);
+      setReadEnabledConversationKey(nextConversationKey);
       setInternalGroupModalOpen(false);
       setEditingInternalGroupId(null);
       message.success(editingGroupId ? 'گروه داخلی ویرایش شد.' : 'گروه داخلی ایجاد شد.');
@@ -4509,32 +4669,40 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     <div dir="rtl" data-testid="messaging-v2-prototype" className="h-full min-h-0 overflow-hidden bg-slate-100 text-slate-800 dark:bg-[#101113] dark:text-slate-100">
       <div className="flex h-full min-h-0 overflow-hidden">
         <aside className="order-last hidden h-full min-h-0 w-[292px] shrink-0 border-l border-slate-200/70 bg-slate-50/86 dark:border-white/[0.07] dark:bg-[#131518] md:block">
-          <MessagingConversationList
-            conversations={displayConversations}
-            selectedKey={selectedKey}
-            onSelect={selectConversation}
-            onRefresh={() => void refreshMessagingSurface()}
-            refreshing={refreshingMessages}
-            onCreateInternalGroup={openCreateInternalGroupModal}
-            activeFilter={conversationFilter}
-            onChangeFilter={changeConversationFilter}
-            unreadSummary={messagingUnreadSummary}
-          />
+          {initialMessagingLoading ? (
+            <MessagingConversationListSkeleton />
+          ) : (
+            <MessagingConversationList
+              conversations={displayConversations}
+              selectedKey={selectedKey}
+              onSelect={selectConversation}
+              onRefresh={() => void refreshMessagingSurface()}
+              refreshing={refreshingMessages}
+              onCreateInternalGroup={openCreateInternalGroupModal}
+              activeFilter={conversationFilter}
+              onChangeFilter={changeConversationFilter}
+              unreadSummary={messagingUnreadSummary}
+            />
+          )}
         </aside>
         <aside className="order-last h-full min-h-0 w-[76px] shrink-0 border-l border-slate-200/70 bg-slate-50/90 dark:border-white/[0.07] dark:bg-[#131518] md:hidden">
           <div className="flex h-full min-h-0 flex-col">
             <div className="border-b border-slate-200/70 px-2 py-2 dark:border-white/[0.07]">
               <Button block type="text" icon={<MenuOutlined />} onClick={() => setConversationListOpen(true)} aria-label="باز کردن فهرست گفتگوها" />
             </div>
-            <MessagingConversationList
-              conversations={displayConversations}
-              selectedKey={selectedKey}
-              onSelect={selectConversation}
-              compact
-              activeFilter={conversationFilter}
-              onChangeFilter={changeConversationFilter}
-              unreadSummary={messagingUnreadSummary}
-            />
+            {initialMessagingLoading ? (
+              <MessagingConversationListSkeleton compact />
+            ) : (
+              <MessagingConversationList
+                conversations={displayConversations}
+                selectedKey={selectedKey}
+                onSelect={selectConversation}
+                compact
+                activeFilter={conversationFilter}
+                onChangeFilter={changeConversationFilter}
+                unreadSummary={messagingUnreadSummary}
+              />
+            )}
           </div>
         </aside>
         {conversationListOpen ? (
@@ -4544,22 +4712,28 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 <div className="text-sm font-bold">گفتگوها</div>
                 <Button type="text" shape="circle" icon={<CloseOutlined />} onClick={() => setConversationListOpen(false)} aria-label="بستن فهرست گفتگوها" />
               </div>
-              <MessagingConversationList
-                conversations={displayConversations}
-                selectedKey={selectedKey}
-                onSelect={selectConversation}
-                onRefresh={() => void refreshMessagingSurface()}
-                refreshing={refreshingMessages}
-                onCreateInternalGroup={openCreateInternalGroupModal}
-                activeFilter={conversationFilter}
-                onChangeFilter={changeConversationFilter}
-                unreadSummary={messagingUnreadSummary}
-              />
+              {initialMessagingLoading ? (
+                <MessagingConversationListSkeleton />
+              ) : (
+                <MessagingConversationList
+                  conversations={displayConversations}
+                  selectedKey={selectedKey}
+                  onSelect={selectConversation}
+                  onRefresh={() => void refreshMessagingSurface()}
+                  refreshing={refreshingMessages}
+                  onCreateInternalGroup={openCreateInternalGroupModal}
+                  activeFilter={conversationFilter}
+                  onChangeFilter={changeConversationFilter}
+                  unreadSummary={messagingUnreadSummary}
+                />
+              )}
             </div>
           </div>
         ) : null}
         <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          {displayConversations.length === 0 ? (
+          {initialMessagingLoading ? (
+            <MessagingTimelineSkeleton />
+          ) : displayConversations.length === 0 ? (
             <div className="flex min-h-0 flex-1 items-center justify-center bg-[linear-gradient(180deg,rgba(248,250,252,0.94),rgba(241,245,249,0.82))] px-4 text-center dark:bg-none dark:bg-[#101113]">
               <div className="flex max-w-sm flex-col items-center gap-3 rounded-2xl border border-slate-200/70 bg-white/85 px-5 py-6 text-sm font-semibold text-slate-600 shadow-sm dark:border-white/[0.08] dark:bg-white/[0.045] dark:text-slate-200">
                 <Spin />

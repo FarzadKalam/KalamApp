@@ -733,6 +733,8 @@ const collectRawStageIdentityIds = (stage: any, index = 0) => {
   return [
     stage?.id,
     stage?.task_id,
+    stage?.draft_stage_id,
+    stage?.draft_stage_key,
     stage?.template_stage_id,
     stage?.process_run_stage_id,
     stage?.run_stage_id,
@@ -740,6 +742,8 @@ const collectRawStageIdentityIds = (stage: any, index = 0) => {
     stage?.[PROCESS_NODE_KEY],
     metadata?.id,
     metadata?.task_id,
+    metadata?.draft_stage_id,
+    metadata?.draft_stage_key,
     metadata?.template_stage_id,
     metadata?.process_run_stage_id,
     metadata?.run_stage_id,
@@ -747,6 +751,8 @@ const collectRawStageIdentityIds = (stage: any, index = 0) => {
     metadata?.[PROCESS_NODE_KEY],
     sourceStage?.id,
     sourceStage?.task_id,
+    sourceStage?.draft_stage_id,
+    sourceStage?.draft_stage_key,
     sourceStage?.template_stage_id,
     sourceStage?.process_run_stage_id,
     sourceStage?.run_stage_id,
@@ -2950,19 +2956,6 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
   }, [cardKey, message, persistCardStagePositions]);
 
-  const removeDraftStagesByPredicate = useCallback(async (
-    predicate: (stage: any, index: number) => boolean,
-  ) => {
-    const currentStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
-    const nextStages = currentStages.filter((stage, index) => !predicate(stage, index));
-    if (nextStages.length === currentStages.length) {
-      message.warning('مرحله پیش‌نویس متناظر برای حذف پیدا نشد.');
-      return false;
-    }
-    await persistDraftStageList(nextStages);
-    return true;
-  }, [message, persistDraftStageList]);
-
   const resolveRawDraftStagesForV2Stages = useCallback((
     stages: ProcessV2Stage[],
     targetGroupId?: string | null,
@@ -3106,6 +3099,51 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }
     return removedAny;
   }, [cacheKey, orgId, persistDraftStageList]);
+
+  const removeLocalDraftStageFromCard = useCallback((
+    stage: ProcessV2Stage,
+    process: ProcessV2CardData,
+  ) => {
+    const key = cardKey(process);
+    const matchIds = getProcessV2StageMatchIds(stage);
+    const directStageId = normalizeText(stage.id);
+    if (directStageId) matchIds.add(directStageId);
+    if (matchIds.size === 0) return false;
+
+    const removeFromCard = (card: ProcessV2CardData) => {
+      let removed = false;
+      const nextCard = {
+        ...card,
+        lanes: card.lanes.map((lane) => ({
+          ...lane,
+          stages: lane.stages.filter((candidate) => {
+            const matches = processV2StageMatches(candidate, matchIds)
+              || normalizeText(candidate.id) === directStageId;
+            if (matches) removed = true;
+            return !matches;
+          }),
+        })),
+      } as ProcessV2CardData;
+      return { nextCard, removed };
+    };
+
+    const preview = removeFromCard(process);
+    if (!preview.removed) return false;
+    setCardOverrides((current) => {
+      const result = removeFromCard(current[key] || process);
+      if (!result.removed) return current;
+      return {
+        ...current,
+        [key]: result.nextCard,
+      };
+    });
+    processRuntimeBlockCache.delete(cacheKey);
+    markRuntimeModuleListsChanged({
+      processRunId: process.mode === 'run' && !normalizeText(process.id).startsWith('draft:') ? process.id : undefined,
+      templateId: process.mode === 'run' ? process.templateId : undefined,
+    });
+    return true;
+  }, [cacheKey, cardKey, markRuntimeModuleListsChanged]);
 
   const deleteTemplateStages = useCallback(async (stageIds: string[]) => {
     const normalizedIds = Array.from(new Set(stageIds.map(normalizeDbUuid).filter(Boolean)));
@@ -3256,12 +3294,18 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       return false;
     }
 
-    if (await removeDraftStagesByPredicate((candidate, index) => rawStageMatchesV2Stage(candidate, stage, index))) {
+    if (await removeDraftSourceForV2Stages([stage])) {
       if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
       return true;
     }
+
+    if (removeLocalDraftStageFromCard(stage, process)) {
+      if (showMessage) message.success('مرحله پیش‌نویس حذف شد');
+      return true;
+    }
+    if (showMessage) message.warning('مرحله پیش‌نویس متناظر برای حذف پیدا نشد.');
     return false;
-  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftSourceForV2Stages, removeDraftStagesByPredicate]);
+  }, [deleteRunDraftStages, deleteTemplateStages, getRunStageIdForDraftStage, message, normalizedModuleId, removeDraftSourceForV2Stages, removeLocalDraftStageFromCard]);
 
   const deleteTaskAndDraftStageCompletely = useCallback(async (
     stage: ProcessV2Stage,
