@@ -17,7 +17,7 @@ export type ParsedNoteContent = {
 const isObject = (value: unknown): value is Record<string, any> =>
   Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif)$/i;
 const VIDEO_EXTENSIONS = /\.(mp4|mkv|mov|avi|webm|3gp|m4v)$/i;
 const AUDIO_EXTENSIONS = /\.(mp3|wav|ogg|oga|aac|m4a|flac|opus|weba|webm)$/i;
 

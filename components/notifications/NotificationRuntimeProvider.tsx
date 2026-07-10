@@ -104,6 +104,13 @@ const isOverlayFeedTimeoutError = (error: any) => {
 const wait = (delayMs: number) => new Promise<void>((resolve) => {
   window.setTimeout(resolve, delayMs);
 });
+const chunkArray = <T,>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+};
 const EMPTY_REVISIONS: RuntimeRevisions = {
   notes: 0,
   bot_messages: 0,
@@ -628,20 +635,26 @@ export const NotificationRuntimeProvider: React.FC<{ children: React.ReactNode }
       source_type: row.source_type,
       source_id: row.source_id,
     }));
-    const rpcResult = await supabase.rpc('mark_messaging_read_v2', {
-      p_channel: null,
-      p_conversation_key: null,
-      p_read_through_at: null,
-      p_read_through_id: null,
-      p_entries: rpcEntries,
-    });
-    if (!rpcResult.error) {
-      void refreshSummary();
-      return;
-    }
-    if (!isMissingRpcError(rpcResult.error)) {
+    let rpcMissing = false;
+    for (const chunk of chunkArray(rpcEntries, 40)) {
+      const rpcResult = await supabase.rpc('mark_messaging_read_v2', {
+        p_channel: null,
+        p_conversation_key: null,
+        p_read_through_at: null,
+        p_read_through_id: null,
+        p_entries: chunk,
+      });
+      if (!rpcResult.error) continue;
+      if (isMissingRpcError(rpcResult.error)) {
+        rpcMissing = true;
+        break;
+      }
       console.warn('Could not persist notification read states through central RPC', rpcResult.error);
       await refreshSummary();
+      return;
+    }
+    if (!rpcMissing) {
+      void refreshSummary();
       return;
     }
     const { error } = await supabase

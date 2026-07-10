@@ -16,8 +16,14 @@ export type BotMediaFileRef = {
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
+const normalizeRenderableUrl = (value: unknown) => {
+  const url = normalizeText(value);
+  if (!url) return '';
+  return url.replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/');
+};
+
 const normalizeAttachment = (value: any): NoteAttachment | null => {
-  const url = normalizeText(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url);
+  const url = normalizeRenderableUrl(value?.url || value?.file_url || value?.media_url || value?.download_url || value?.link_url);
   if (!url) return null;
   const fallbackName = normalizeText(url.split('?')[0].split('#')[0].split('/').pop()) || 'فایل';
   return {
@@ -49,7 +55,7 @@ const collectNestedAttachmentLikes = (root: unknown) => {
       continue;
     }
     const item = current as Record<string, any>;
-    const url = normalizeText(item.url || item.file_url || item.media_url || item.download_url || item.link_url);
+    const url = normalizeRenderableUrl(item.url || item.file_url || item.media_url || item.download_url || item.link_url);
     const hasFileMeta = Boolean(
       normalizeText(item.file_id || item.fileId)
       || normalizeText(item.mime_type || item.mimeType)

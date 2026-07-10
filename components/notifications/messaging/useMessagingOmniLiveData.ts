@@ -1234,6 +1234,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const refreshInFlightRef = useRef(false);
   const appliedCacheKeyRef = useRef('');
   const recordTitleMapRef = useRef<Record<string, string>>({});
+  const hasLoadedSnapshotRef = useRef(false);
   const hydratingRubikaMessageIdsRef = useRef<Set<string>>(new Set());
   const rubikaHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedRubikaHydrationFailuresRef = useRef<Set<string>>(new Set());
@@ -1275,13 +1276,15 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     setRecordTitleMap(snapshot.recordTitleMap || {});
     recordTitleMapRef.current = snapshot.recordTitleMap || {};
     setReadStateKeys(new Set(snapshot.readStateKeys || []));
+    hasLoadedSnapshotRef.current = true;
     setLoading(false);
   }, []);
 
   const refresh = useCallback(async (options?: { background?: boolean }) => {
     if (!profile.id || refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
-    if (!options?.background) setLoading(true);
+    const shouldShowInitialLoading = !options?.background && !hasLoadedSnapshotRef.current;
+    if (shouldShowInitialLoading) setLoading(true);
     try {
       const readStatePromise = safeLiveFetch('read-states', () => fetchNotificationReadStateKeys(profile), new Set<string>())
         .then((nextReadStateKeys) => {
@@ -1353,6 +1356,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         recordTitleMap: nextRecordTitleMap,
         readStateKeys: Array.from((await readStatePromise) || []),
       });
+      hasLoadedSnapshotRef.current = true;
     } finally {
       refreshInFlightRef.current = false;
       setLoading(false);

@@ -17,6 +17,7 @@ type UseBotConversationTimelineOptions<TItem> = {
   botGroupId: string | null;
   pageSize?: number;
   fallbackLoadInitial?: LegacyLoader<TItem>;
+  fallbackOnEmpty?: boolean;
   cacheScopeKey?: string | null;
 };
 
@@ -117,6 +118,7 @@ export const useBotConversationTimeline = <TItem,>({
   botGroupId,
   pageSize = 10,
   fallbackLoadInitial,
+  fallbackOnEmpty = false,
   cacheScopeKey,
 }: UseBotConversationTimelineOptions<TItem>) => {
   const [items, setItemsState] = useState<TItem[]>([]);
@@ -298,6 +300,13 @@ export const useBotConversationTimeline = <TItem,>({
       if (!payload) {
         return await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
       }
+      if ((payload.items || []).length === 0 && fallbackOnEmpty && fallbackLoadInitial) {
+        const fallbackPayload = await loadFallbackInitial({ preserveExistingItemsOnEmpty: true });
+        if ((fallbackPayload.items || []).length > 0) {
+          _botTimelineCache.set(timelineCacheKey, { payload: { ...fallbackPayload, items: itemsRef.current }, fetchedAt: Date.now() });
+          return fallbackPayload;
+        }
+      }
       // Always merge with existing items: a force refresh fires while the user is
       // reading (realtime updates), and replacing would trim loaded history back
       // to the latest page and break the scroll position. Duplicates resolve to
@@ -312,7 +321,7 @@ export const useBotConversationTimeline = <TItem,>({
       cacheAppliedRef.current = false;
       refreshInFlightKeysRef.current.delete(requestBotGroupId);
     }
-  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
+  }, [applyPayload, available, botGroupId, enabled, fallbackLoadInitial, fallbackOnEmpty, fetchTimelinePage, loadFallbackInitial, timelineCacheKey]);
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !botGroupId || !cursor || !available || loadingOlder) return;

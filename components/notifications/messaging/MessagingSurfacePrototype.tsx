@@ -370,12 +370,16 @@ const getTimelineRecordLabel = (
   return String((key ? labels[key] : '') || fallback || '').trim();
 };
 
+const normalizeRenderableAttachmentUrl = (value: any) => (
+  String(value || '').trim().replace(/^http:\/\/api\.tazesystem\.ir\//i, 'https://api.tazesystem.ir/')
+);
+
 const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => {
   const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
   const rawAttachments = Array.isArray(payload?.attachments) ? payload.attachments : [];
   const attachments = rawAttachments
     .map((attachment: any) => {
-      const url = String(attachment?.url || attachment?.file_url || '').trim();
+      const url = normalizeRenderableAttachmentUrl(attachment?.url || attachment?.file_url || '');
       const name = String(attachment?.name || attachment?.file_name || row?.file_name || 'فایل').trim() || 'فایل';
       const mimeType = String(attachment?.mime_type || attachment?.mimeType || row?.mime_type || '').trim() || null;
       const fileType = String(attachment?.file_type || attachment?.fileType || row?.message_type || '').trim().toLowerCase();
@@ -389,7 +393,7 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
       return { name, kind, url: url || null, mimeType };
     })
     .filter((attachment: any) => attachment.url || attachment.name);
-  const directUrl = String(row?.file_url || '').trim();
+  const directUrl = normalizeRenderableAttachmentUrl(row?.file_url || '');
   if (directUrl && !attachments.some((attachment: any) => String(attachment.url || '') === directUrl)) {
     const mimeType = String(row?.mime_type || '').trim() || null;
     attachments.unshift({
@@ -2570,15 +2574,36 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         .filter(Boolean)
       : []
   ), [activeBotGroupId, liveData.events]);
+  const loadActiveBotGroupFallbackRows = useMemo(() => {
+    const groupId = String(activeBotGroupId || '').trim();
+    if (!groupId) return undefined;
+    return async () => {
+      const { data, error } = await supabase
+        .from('counterparty_bot_messages')
+        .select('id,bot_group_id,direction,message_type,chat_id,provider_message_id,content_text,file_url,file_name,mime_type,payload,created_by,created_at')
+        .eq('bot_group_id', groupId)
+        .order('created_at', { ascending: false })
+        .limit(80);
+      if (error) throw error;
+      const directRows = ((data || []) as any[]).reverse();
+      const merged = new Map<string, any>();
+      [...liveBotGroupFallbackRows, ...directRows].forEach((row: any) => {
+        const key = String(row?.id || '').trim();
+        if (key) merged.set(key, row);
+      });
+      return Array.from(merged.values()).sort((left, right) => (
+        new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
+      ));
+    };
+  }, [activeBotGroupId, liveBotGroupFallbackRows]);
   const botTimeline = useBotConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && activeConversation.channel === 'bot_group' && activeBotGroupId),
     botGroupId: activeBotGroupId || null,
     pageSize: 40,
     cacheScopeKey,
-    fallbackLoadInitial: liveBotGroupFallbackRows.length
-      ? async () => liveBotGroupFallbackRows
-      : undefined,
+    fallbackLoadInitial: loadActiveBotGroupFallbackRows,
+    fallbackOnEmpty: true,
   });
   useEffect(() => {
     botTimelineRefreshRef.current = botTimeline.refresh;
@@ -2746,7 +2771,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const sourceId = String(item.sourceRow?.id || '').trim();
       if (!sourceId) return;
       if (activeConversation.channel === 'internal') {
-        entries.push({ section: 'notes', sourceType: 'note', sourceId });
+        if (!selectedInternalSourceKey || selectedInternalSourceKey === MY_NOTES_CONVERSATION_KEY) {
+          entries.push({ section: 'notes', sourceType: 'note', sourceId });
+        }
       } else if (activeConversation.channel === 'bot_group') {
         entries.push({ section: 'bot_messages', sourceType: 'counterparty_bot_message', sourceId });
       } else if (activeConversation.channel === 'bot_direct') {
