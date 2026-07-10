@@ -1498,7 +1498,8 @@ const normalizeAttachmentKind = (attachment: Record<string, any> | null | undefi
   ).trim().toLowerCase();
   const name = String(attachment?.name || '').trim().toLowerCase();
 
-  if (rawType === 'voice') return 'voice';
+  const normalizedRawType = rawType.replace(/[\s_-]+/g, '');
+  if (rawType === 'voice' || normalizedRawType === 'voicemessage' || normalizedRawType === 'recordaudio' || normalizedRawType === 'recordedaudio') return 'voice';
   if (rawType === 'audio') return 'audio';
   if (rawType === 'gif') return 'gif';
   if (rawType === 'image') return 'image';
@@ -1550,7 +1551,7 @@ const resolveRubikaUploadFileType = (attachment: Record<string, any> | null | un
   if (kind === 'gif') return mimeType === 'video/mp4' || /\.mp4$/i.test(name) ? 'Gif' : 'Image';
   if (kind === 'image') return 'Image';
   if (kind === 'video') return 'Video';
-  if (kind === 'voice') return mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name) ? 'Voice' : 'File';
+  if (kind === 'voice') return 'Voice';
   if (kind === 'audio') {
     if (mimeType === 'audio/mpeg' || mimeType === 'audio/mp3' || /\.mp3$/i.test(name)) return 'Music';
     return 'File';
@@ -2778,6 +2779,10 @@ const inferMimeTypeFromFileName = (fileName: string) => {
   if (lower.endsWith('.mp4')) return 'video/mp4';
   if (lower.endsWith('.mp3')) return 'audio/mpeg';
   if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.oga')) return 'audio/ogg';
+  if (lower.endsWith('.opus')) return 'audio/ogg';
+  if (lower.endsWith('.m4a')) return 'audio/mp4';
+  if (lower.endsWith('.weba')) return 'audio/webm';
   if (lower.endsWith('.wav')) return 'audio/wav';
   if (lower.endsWith('.pdf')) return 'application/pdf';
   if (lower.endsWith('.zip')) return 'application/zip';
@@ -2802,7 +2807,8 @@ const inferRubikaMediaKind = ({
   const normalizedType = String(messageType || '').trim().toLowerCase();
   if (normalizedMime.startsWith('image/') || normalizedType === 'image') return 'image';
   if (normalizedMime.startsWith('video/') || normalizedType === 'video') return 'video';
-  if (normalizedMime.startsWith('audio/') || normalizedType === 'audio' || normalizedType === 'voice') return 'audio';
+  if (normalizedType === 'voice' || normalizedType === 'recordaudio' || normalizedType === 'recorded_audio') return 'voice';
+  if (normalizedMime.startsWith('audio/') || normalizedType === 'audio') return 'audio';
   return 'file';
 };
 

@@ -22,6 +22,7 @@ import AiSparkleIcon from '../ai/AiSparkleIcon';
 import ProfileAvatar from '../common/ProfileAvatar';
 import ResilientImage from '../common/ResilientImage';
 import FileExtensionTile from '../files/FileExtensionTile';
+import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 
 interface SharedNoteCardProps {
   authorName: string;
@@ -161,6 +162,8 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
   const { token } = theme.useToken();
   const normalizedMentionUsers = normalizeMentionLabels(mentionUsers, 'user');
   const normalizedMentionRoles = normalizeMentionLabels(mentionRoles, 'role');
+  const renderableAttachments = attachments.filter((attachment) => String(attachment?.url || '').trim());
+  const pendingAttachments = attachments.filter((attachment) => !String(attachment?.url || '').trim());
 
   useEffect(() => {
     if (!animateOnMount) {
@@ -563,9 +566,14 @@ const SharedNoteCard: React.FC<SharedNoteCardProps> = ({
         )}
 
         {attachments.length > 0 ? (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {attachments.map(renderAttachment)}
-          </div>
+          <>
+            {renderableAttachments.length > 0 ? <MessageAttachmentGallery attachments={renderableAttachments} /> : null}
+            {pendingAttachments.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {pendingAttachments.map(renderAttachment)}
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         {(normalizedMentionUsers.length > 0 || normalizedMentionRoles.length > 0) ? (

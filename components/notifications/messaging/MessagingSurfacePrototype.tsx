@@ -52,7 +52,7 @@ import { sendSmsViaGateway } from '../../../utils/smsGateway';
 import SharedNoteComposer from '../../notes/SharedNoteComposer';
 import { fetchAssigneeDirectory, type AssigneeDirectory } from '../../../utils/referenceData';
 import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
-import { parseNoteContent, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
+import { parseNoteContent, resolveNoteAttachmentFileType, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../../utils/noteAttachments';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../../utils/noteDispatch';
 import { shortenAttachmentsForExternalShare } from '../../../utils/fileShortLinks';
@@ -97,7 +97,7 @@ const CounterpartyBotStatusModal = React.lazy(() => import('../../bot/Counterpar
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 type EventKind = 'message' | 'sms' | 'call';
-type AttachmentKind = 'image' | 'file' | 'video' | 'audio';
+type AttachmentKind = 'image' | 'file' | 'video' | 'audio' | 'voice';
 
 type ConversationAction =
   | 'search'
@@ -383,13 +383,12 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
       const name = String(attachment?.name || attachment?.file_name || row?.file_name || 'فایل').trim() || 'فایل';
       const mimeType = String(attachment?.mime_type || attachment?.mimeType || row?.mime_type || '').trim() || null;
       const fileType = String(attachment?.file_type || attachment?.fileType || row?.message_type || '').trim().toLowerCase();
-      const kind: AttachmentKind = fileType === 'image' || String(mimeType || '').startsWith('image/')
-        ? 'image'
-        : fileType === 'video' || String(mimeType || '').startsWith('video/')
-          ? 'video'
-          : fileType === 'audio' || fileType === 'voice' || String(mimeType || '').startsWith('audio/')
-            ? 'audio'
-            : 'file';
+      const kind = resolveNoteAttachmentFileType({
+        ...attachment,
+        fileType,
+        mimeType,
+        name,
+      }) as AttachmentKind;
       return { name, kind, url: url || null, mimeType };
     })
     .filter((attachment: any) => attachment.url || attachment.name);
@@ -398,7 +397,12 @@ const buildBotTimelineAttachments = (row: any): TimelineEvent['attachments'] => 
     const mimeType = String(row?.mime_type || '').trim() || null;
     attachments.unshift({
       name: String(row?.file_name || 'فایل').trim() || 'فایل',
-      kind: String(mimeType || '').startsWith('image/') ? 'image' : String(mimeType || '').startsWith('video/') ? 'video' : String(mimeType || '').startsWith('audio/') ? 'audio' : 'file',
+      kind: resolveNoteAttachmentFileType({
+        fileType: row?.message_type,
+        mimeType,
+        name: row?.file_name,
+        url: directUrl,
+      }) as AttachmentKind,
       url: directUrl,
       mimeType,
     });
@@ -1170,7 +1174,8 @@ const getNoteAttachmentKind = (attachment: NoteAttachment): AttachmentKind => {
   const mimeType = String(attachment?.mimeType || '').trim().toLowerCase();
   if (fileType === 'image' || mimeType.startsWith('image/')) return 'image';
   if (fileType === 'video' || mimeType.startsWith('video/')) return 'video';
-  if (fileType === 'audio' || fileType === 'voice' || mimeType.startsWith('audio/')) return 'audio';
+  if (fileType === 'voice') return 'voice';
+  if (fileType === 'audio' || mimeType.startsWith('audio/')) return 'audio';
   return 'file';
 };
 

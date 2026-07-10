@@ -41,9 +41,11 @@ export const uploadNoteAttachments = async (
     const fileUrl = String(data?.publicUrl || '').trim();
     if (!fileUrl) throw new Error('آدرس فایل بارگذاری‌شده دریافت نشد.');
 
+    const explicitFileType = String((file as any)?.fileType || (file as any)?.file_type || '').trim() || null;
     const fileType = resolveNoteAttachmentFileType({
       name: file.name,
       mimeType: file.type || null,
+      fileType: explicitFileType,
     }) || 'file';
     const fileName = String(file.name || storedName).trim() || storedName;
 

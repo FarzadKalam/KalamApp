@@ -660,6 +660,16 @@ const resolveCompositeMediaMessageType = (
   return fallbackMessageType === 'text' ? 'file' : fallbackMessageType;
 };
 
+const getInboundMediaPreviewLabel = (messageType?: string | null, fileName?: string | null) => {
+  const normalizedType = String(messageType || '').trim().toLowerCase();
+  if (normalizedType === 'voice') return 'پیام صوتی';
+  if (normalizedType === 'audio') return 'فایل صوتی';
+  if (normalizedType === 'image') return 'تصویر';
+  if (normalizedType === 'video') return 'ویدیو';
+  const normalizedName = String(fileName || '').trim();
+  return normalizedName || 'فایل';
+};
+
 const collectMediaCollectionCandidates = (payload: Record<string, any>) => {
   const {
     rubikaUpdate,
@@ -744,6 +754,8 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.video?.url,
     message?.audio?.url,
     message?.voice?.url,
+    message?.voice?.file_url,
+    message?.voice?.download_url,
     message?.image?.url,
     message?.file?.url,
     message?.media?.url,
@@ -757,19 +769,37 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaRootMessage?.media_url,
     rubikaUpdate?.new_message?.media?.url,
     rubikaUpdate?.new_message?.media_url,
+    rubikaUpdate?.new_message?.voice?.url,
+    rubikaUpdate?.new_message?.voice?.file_url,
+    rubikaUpdate?.new_message?.voice?.download_url,
     rubikaUpdate?.updated_message?.file?.url,
     rubikaUpdate?.updated_message?.media?.url,
     rubikaUpdate?.updated_message?.media_url,
+    rubikaUpdate?.updated_message?.voice?.url,
+    rubikaUpdate?.updated_message?.voice?.file_url,
+    rubikaUpdate?.updated_message?.voice?.download_url,
     rubikaNewMessage?.file?.url,
     rubikaNewMessage?.file_url,
     rubikaNewMessage?.media?.url,
     rubikaNewMessage?.media_url,
+    rubikaNewMessage?.voice?.url,
+    rubikaNewMessage?.voice?.file_url,
+    rubikaNewMessage?.voice?.download_url,
     rubikaUpdatedMessage?.file?.url,
     rubikaUpdatedMessage?.file_url,
     rubikaUpdatedMessage?.media?.url,
     rubikaUpdatedMessage?.media_url,
+    rubikaUpdatedMessage?.voice?.url,
+    rubikaUpdatedMessage?.voice?.file_url,
+    rubikaUpdatedMessage?.voice?.download_url,
+    rubikaRootMessage?.voice?.url,
+    rubikaRootMessage?.voice?.file_url,
+    rubikaRootMessage?.voice?.download_url,
     rubikaInlineMessage?.file?.url,
     rubikaInlineMessage?.media?.url,
+    rubikaInlineMessage?.voice?.url,
+    rubikaInlineMessage?.voice?.file_url,
+    rubikaInlineMessage?.voice?.download_url,
     payload?.file_url,
     payload?.fileUrl,
     payload?.media_url,
@@ -778,6 +808,9 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload?.video?.url,
     payload?.photo?.url,
     payload?.audio?.url,
+    payload?.voice?.url,
+    payload?.voice?.file_url,
+    payload?.voice?.download_url,
     message?.file?.download_url,
     message?.file?.downloadUrl,
     message?.media?.download_url,
@@ -830,15 +863,33 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.file_id,
     message?.video?.file_id,
     message?.audio?.file_id,
+    message?.voice?.file_id,
+    message?.voice?.fileId,
+    message?.voice?.id,
     rubikaNewMessage?.file_id,
     rubikaNewMessage?.file?.file_id,
     rubikaNewMessage?.file?.fileId,
+    rubikaNewMessage?.voice?.file_id,
+    rubikaNewMessage?.voice?.fileId,
+    rubikaNewMessage?.voice?.id,
     rubikaUpdatedMessage?.file_id,
     rubikaUpdatedMessage?.file?.file_id,
     rubikaUpdatedMessage?.file?.fileId,
+    rubikaUpdatedMessage?.voice?.file_id,
+    rubikaUpdatedMessage?.voice?.fileId,
+    rubikaUpdatedMessage?.voice?.id,
     rubikaRootMessage?.file_id,
     rubikaRootMessage?.file?.file_id,
     rubikaRootMessage?.file?.fileId,
+    rubikaRootMessage?.voice?.file_id,
+    rubikaRootMessage?.voice?.fileId,
+    rubikaRootMessage?.voice?.id,
+    rubikaInlineMessage?.voice?.file_id,
+    rubikaInlineMessage?.voice?.fileId,
+    rubikaInlineMessage?.voice?.id,
+    payload?.voice?.file_id,
+    payload?.voice?.fileId,
+    payload?.voice?.id,
     payload?.file_id,
     payload?.fileId
   );
@@ -874,19 +925,31 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.file_name,
     message?.document?.fileName,
     message?.video?.file_name,
+    message?.voice?.file_name,
+    message?.voice?.fileName,
+    message?.voice?.name,
     message?.aux_data?.file_name,
     message?.aux_data?.fileName,
     message?.aux_data?.name,
     rubikaNewMessage?.file?.file_name,
     rubikaNewMessage?.file_name,
+    rubikaNewMessage?.voice?.file_name,
+    rubikaNewMessage?.voice?.fileName,
+    rubikaNewMessage?.voice?.name,
     rubikaNewMessage?.aux_data?.file_name,
     rubikaNewMessage?.aux_data?.fileName,
     rubikaRootMessage?.file?.file_name,
     rubikaRootMessage?.file_name,
+    rubikaRootMessage?.voice?.file_name,
+    rubikaRootMessage?.voice?.fileName,
+    rubikaRootMessage?.voice?.name,
     rubikaRootMessage?.aux_data?.file_name,
     rubikaRootMessage?.aux_data?.fileName,
     payload?.document?.file_name,
     payload?.video?.file_name,
+    payload?.voice?.file_name,
+    payload?.voice?.fileName,
+    payload?.voice?.name,
     payload?.photo?.file_name,
     payload?.file_name,
     payload?.fileName,
@@ -926,6 +989,11 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.aux_data?.mime_type,
     rubikaNewMessage?.file_type,
     rubikaNewMessage?.file?.type,
+    rubikaNewMessage?.voice?.type,
+    rubikaNewMessage?.voice?.file_type,
+    rubikaNewMessage?.voice?.fileType,
+    rubikaNewMessage?.voice?.media_type,
+    rubikaNewMessage?.voice?.mediaType,
     rubikaNewMessage?.file?.file_type,
     rubikaNewMessage?.file?.fileType,
     rubikaNewMessage?.file?.media_type,
@@ -944,6 +1012,11 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaUpdatedMessage?.mediaType,
     rubikaUpdatedMessage?.file_type,
     rubikaUpdatedMessage?.file?.type,
+    rubikaUpdatedMessage?.voice?.type,
+    rubikaUpdatedMessage?.voice?.file_type,
+    rubikaUpdatedMessage?.voice?.fileType,
+    rubikaUpdatedMessage?.voice?.media_type,
+    rubikaUpdatedMessage?.voice?.mediaType,
     rubikaUpdatedMessage?.file?.file_type,
     rubikaUpdatedMessage?.file?.fileType,
     rubikaUpdatedMessage?.file?.media_type,
@@ -962,6 +1035,11 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaRootMessage?.mediaType,
     rubikaRootMessage?.file_type,
     rubikaRootMessage?.file?.type,
+    rubikaRootMessage?.voice?.type,
+    rubikaRootMessage?.voice?.file_type,
+    rubikaRootMessage?.voice?.fileType,
+    rubikaRootMessage?.voice?.media_type,
+    rubikaRootMessage?.voice?.mediaType,
     rubikaRootMessage?.file?.file_type,
     rubikaRootMessage?.file?.fileType,
     rubikaRootMessage?.file?.media_type,
@@ -980,6 +1058,11 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     rubikaInlineMessage?.mediaType,
     rubikaInlineMessage?.file_type,
     rubikaInlineMessage?.file?.type,
+    rubikaInlineMessage?.voice?.type,
+    rubikaInlineMessage?.voice?.file_type,
+    rubikaInlineMessage?.voice?.fileType,
+    rubikaInlineMessage?.voice?.media_type,
+    rubikaInlineMessage?.voice?.mediaType,
     rubikaInlineMessage?.file?.file_type,
     rubikaInlineMessage?.file?.fileType,
     rubikaInlineMessage?.file?.media_type,
@@ -998,6 +1081,11 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     payload?.mediaType,
     payload?.file_type,
     payload?.file?.type,
+    payload?.voice?.type,
+    payload?.voice?.file_type,
+    payload?.voice?.fileType,
+    payload?.voice?.media_type,
+    payload?.voice?.mediaType,
     payload?.file?.file_type,
     payload?.file?.fileType,
     payload?.file?.media_type,
@@ -1011,14 +1099,26 @@ const extractMediaInfo = (payload: Record<string, any>) => {
     message?.document?.mime_type,
     message?.document?.mimeType,
     message?.video?.mime_type,
+    message?.voice?.mime_type,
+    message?.voice?.mimeType,
     message?.file?.mime_type,
     message?.media?.mime_type,
     message?.aux_data?.mime_type,
     message?.aux_data?.mimeType,
     rubikaNewMessage?.file?.mime_type,
+    rubikaNewMessage?.voice?.mime_type,
+    rubikaNewMessage?.voice?.mimeType,
     rubikaNewMessage?.aux_data?.mime_type,
     rubikaRootMessage?.file?.mime_type,
+    rubikaRootMessage?.voice?.mime_type,
+    rubikaRootMessage?.voice?.mimeType,
     rubikaRootMessage?.aux_data?.mime_type,
+    rubikaUpdatedMessage?.voice?.mime_type,
+    rubikaUpdatedMessage?.voice?.mimeType,
+    rubikaInlineMessage?.voice?.mime_type,
+    rubikaInlineMessage?.voice?.mimeType,
+    payload?.voice?.mime_type,
+    payload?.voice?.mimeType,
     payload?.mime_type,
     payload?.mimeType
   );
@@ -1040,7 +1140,14 @@ const extractMediaInfo = (payload: Record<string, any>) => {
   );
   const hasVideo = Boolean(message?.video || payload?.video);
   const hasAudio = Boolean(message?.audio || payload?.audio);
-  const hasVoice = Boolean(message?.voice || payload?.voice);
+  const hasVoice = Boolean(
+    message?.voice
+    || payload?.voice
+    || rubikaRootMessage?.voice
+    || rubikaNewMessage?.voice
+    || rubikaUpdatedMessage?.voice
+    || rubikaInlineMessage?.voice
+  );
   const mimeLower = String(mimeType || '').toLowerCase();
   const nameLower = String(fileName || '').toLowerCase();
   const inferredMessageType = inferInboundMediaMessageType({
@@ -1504,7 +1611,7 @@ const shouldTreatAsBinaryFile = (fileName?: string | null, messageType?: string 
   return [
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
     'mp4', 'mkv', 'mov', 'avi', 'webm', '3gp',
-    'mp3', 'wav', 'ogg', 'aac', 'flac',
+    'mp3', 'wav', 'ogg', 'oga', 'opus', 'aac', 'm4a', 'flac', 'weba',
     'pdf', 'zip', 'rar', '7z', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   ].includes(ext);
 };
@@ -3474,6 +3581,14 @@ Deno.serve(async (req) => {
       const primaryFailedEntry = resolvedMediaEntries.find((entry) => entry?.mediaStored?.mediaImportStatus === 'failed') || null;
       const primaryMediaStateEntry = primaryStoredEntry || primaryFailedEntry || resolvedMediaEntries[0] || null;
       const primaryAttachment = attachmentEntries[0] || null;
+      const inboundMessageType = resolveCompositeMediaMessageType(attachmentEntries.map((item: any) => normalizeExtractedMedia({
+        messageType: String(item?.file_type || mediaEnvelope.messageType || 'text').trim() || 'text',
+        fileUrl: String(item?.url || '').trim() || null,
+        fileName: String(item?.name || '').trim() || null,
+        mimeType: String(item?.mime_type || '').trim() || null,
+        fileId: String(item?.media_file_id || '').trim() || null,
+      })), mediaEnvelope.messageType);
+      const mediaPreviewLabel = getInboundMediaPreviewLabel(inboundMessageType, primaryAttachment?.name || resolvedMediaEntries[0]?.mediaInfo?.fileName || null);
       const mergeTarget = mediaGroupTarget || existingMessage || null;
       const rawPayload = payload && typeof payload === 'object' ? payload : {};
       const baseContentText = String(contact.text || '').trim() || null;
@@ -3552,13 +3667,7 @@ Deno.serve(async (req) => {
           org_id: integration.org_id || null,
           channel_type: channel,
           direction: 'inbound',
-          message_type: resolveCompositeMediaMessageType(attachmentEntries.map((item: any) => normalizeExtractedMedia({
-            messageType: String(item?.file_type || mediaEnvelope.messageType || 'text').trim() || 'text',
-            fileUrl: String(item?.url || '').trim() || null,
-            fileName: String(item?.name || '').trim() || null,
-            mimeType: String(item?.mime_type || '').trim() || null,
-            fileId: String(item?.media_file_id || '').trim() || null,
-          })), mediaEnvelope.messageType),
+          message_type: inboundMessageType,
           chat_id: isDirectConversation ? senderChatId || null : String(contact.chatId || '').trim() || null,
           provider_message_id: messageIdentity.providerMessageId || null,
           content_text: baseContentText,
@@ -3623,7 +3732,7 @@ Deno.serve(async (req) => {
           last_seen_at: new Date().toISOString(),
           last_inbound_at: new Date().toISOString(),
           last_message_at: new Date().toISOString(),
-          last_message_preview: baseContentText || String(primaryAttachment?.name || '').trim() || null,
+          last_message_preview: baseContentText || mediaPreviewLabel || null,
         });
       }
       if (!isDirectConversation && matchedGroup?.id) {

@@ -407,7 +407,10 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
   const attachPendingVoiceClip = () => {
     if (!pendingVoiceClip) return;
-    onFilesSelected([pendingVoiceClip.file]);
+    const voiceFile = pendingVoiceClip.file as File & { fileType?: string; file_type?: string };
+    voiceFile.fileType = 'voice';
+    voiceFile.file_type = 'voice';
+    onFilesSelected([voiceFile]);
     clearPendingVoiceClip();
   };
 

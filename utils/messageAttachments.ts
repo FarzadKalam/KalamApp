@@ -44,14 +44,16 @@ const normalizeAttachment = (value: any): NoteAttachment | null => {
 const collectNestedAttachmentLikes = (root: unknown) => {
   const results: any[] = [];
   const seen = new Set<any>();
-  const stack = [root];
+  const stack: Array<{ node: unknown; hint?: string | null }> = [{ node: root, hint: null }];
 
   while (stack.length > 0) {
-    const current = stack.pop();
+    const currentEntry = stack.pop();
+    const current = currentEntry?.node;
+    const hint = currentEntry?.hint || null;
     if (!current || typeof current !== 'object' || seen.has(current)) continue;
     seen.add(current);
     if (Array.isArray(current)) {
-      current.forEach((item) => stack.push(item));
+      current.forEach((item) => stack.push({ node: item, hint }));
       continue;
     }
     const item = current as Record<string, any>;
@@ -66,15 +68,26 @@ const collectNestedAttachmentLikes = (root: unknown) => {
         url,
         name: item.name || item.file_name || item.fileName,
         mimeType: item.mimeType || item.mime_type,
-        fileType: item.fileType || item.file_type,
+        fileType: item.fileType || item.file_type || hint,
         assetId: item.assetId || item.asset_id,
         entryId: item.entryId || item.entry_id,
         moduleId: item.moduleId || item.module_id,
         recordId: item.recordId || item.record_id,
       });
     }
-    Object.values(item).forEach((value) => {
-      if (value && typeof value === 'object') stack.push(value);
+    Object.entries(item).forEach(([key, value]) => {
+      if (!value || typeof value !== 'object') return;
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      const nextHint = normalizedKey === 'voice' || normalizedKey === 'voices'
+        ? 'voice'
+        : normalizedKey === 'audio' || normalizedKey === 'audios'
+          ? 'audio'
+          : normalizedKey === 'photo' || normalizedKey === 'photos' || normalizedKey === 'image' || normalizedKey === 'images'
+            ? 'image'
+            : normalizedKey === 'video' || normalizedKey === 'videos'
+              ? 'video'
+              : hint;
+      stack.push({ node: value, hint: nextHint });
     });
   }
 
@@ -113,22 +126,35 @@ const normalizeBotMediaFileRef = (value: any, fallback?: Partial<BotMediaFileRef
 const collectNestedBotMediaFileRefs = (root: unknown, fallback?: Partial<BotMediaFileRef>) => {
   const results: BotMediaFileRef[] = [];
   const seen = new Set<any>();
-  const stack = [root];
+  const stack: Array<{ node: unknown; hint?: string | null }> = [{ node: root, hint: null }];
 
   while (stack.length > 0) {
-    const current = stack.pop();
+    const currentEntry = stack.pop();
+    const current = currentEntry?.node;
+    const hint = currentEntry?.hint || null;
     if (!current || typeof current !== 'object' || seen.has(current)) continue;
     seen.add(current);
     if (Array.isArray(current)) {
-      current.forEach((item) => stack.push(item));
+      current.forEach((item) => stack.push({ node: item, hint }));
       continue;
     }
 
     const item = current as Record<string, any>;
-    const ref = normalizeBotMediaFileRef(item, fallback);
+    const ref = normalizeBotMediaFileRef(item, hint ? { ...(fallback || {}), fileType: hint } : fallback);
     if (ref) results.push(ref);
-    Object.values(item).forEach((value) => {
-      if (value && typeof value === 'object') stack.push(value);
+    Object.entries(item).forEach(([key, value]) => {
+      if (!value || typeof value !== 'object') return;
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      const nextHint = normalizedKey === 'voice' || normalizedKey === 'voices'
+        ? 'voice'
+        : normalizedKey === 'audio' || normalizedKey === 'audios'
+          ? 'audio'
+          : normalizedKey === 'photo' || normalizedKey === 'photos' || normalizedKey === 'image' || normalizedKey === 'images'
+            ? 'image'
+            : normalizedKey === 'video' || normalizedKey === 'videos'
+              ? 'video'
+              : hint;
+      stack.push({ node: value, hint: nextHint });
     });
   }
 
