@@ -32,6 +32,16 @@ describe('AiMessageRenderer', () => {
     expect(onCopy).toHaveBeenCalledWith('متن آماده برای استفاده\nخط دوم', 'متن');
   });
 
+  it('renders markdown headings without treating code fences as headings', () => {
+    render(<AiMessageRenderer text={'## عنوان اصلی\nمتن معمولی\n\n### **زیرعنوان**\n\n#### C#\n\n```md\n## داخل کد\n```'} />);
+
+    expect(screen.getByRole('heading', { level: 2, name: 'عنوان اصلی' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'زیرعنوان' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 4, name: 'C#' })).toBeInTheDocument();
+    expect(screen.getByText('## داخل کد')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'داخل کد' })).toBeNull();
+  });
+
   it('shows streaming and retry controls', () => {
     const onStop = vi.fn();
     const onRetry = vi.fn();

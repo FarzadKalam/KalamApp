@@ -14,6 +14,7 @@ type AiMessageRendererProps = {
 
 type Block =
   | { type: 'paragraph'; text: string }
+  | { type: 'heading'; level: 1 | 2 | 3 | 4 | 5 | 6; text: string }
   | { type: 'quote'; text: string }
   | { type: 'ul'; items: string[] }
   | { type: 'ol'; items: string[] }
@@ -62,6 +63,25 @@ const renderInline = (text: string) => splitInline(text).map((part, index) => {
   if (part.type === 'link') return <a key={key} href={part.text} target="_blank" rel="noreferrer" className="break-all text-[rgb(var(--brand-700-rgb))] underline underline-offset-2">{part.text}</a>;
   return <React.Fragment key={key}>{part.text}</React.Fragment>;
 });
+
+const headingClassByLevel: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
+  1: 'text-[16px] font-extrabold leading-8 text-slate-950 dark:text-white',
+  2: 'text-[15px] font-extrabold leading-7 text-slate-950 dark:text-white',
+  3: 'text-[14px] font-bold leading-7 text-slate-900 dark:text-white',
+  4: 'text-[13px] font-bold leading-6 text-slate-900 dark:text-white',
+  5: 'text-[12px] font-bold leading-6 text-slate-800 dark:text-slate-100',
+  6: 'text-[12px] font-semibold leading-6 text-slate-700 dark:text-slate-200',
+};
+
+const renderHeading = (block: Extract<Block, { type: 'heading' }>, index: number) => {
+  const className = `m-0 min-w-0 break-words ${headingClassByLevel[block.level]}`;
+  if (block.level === 1) return <h1 key={`h-${index}`} className={className}>{renderInline(block.text)}</h1>;
+  if (block.level === 2) return <h2 key={`h-${index}`} className={className}>{renderInline(block.text)}</h2>;
+  if (block.level === 3) return <h3 key={`h-${index}`} className={className}>{renderInline(block.text)}</h3>;
+  if (block.level === 4) return <h4 key={`h-${index}`} className={className}>{renderInline(block.text)}</h4>;
+  if (block.level === 5) return <h5 key={`h-${index}`} className={className}>{renderInline(block.text)}</h5>;
+  return <h6 key={`h-${index}`} className={className}>{renderInline(block.text)}</h6>;
+};
 
 const parseBlocks = (text: string): Block[] => {
   const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
@@ -118,6 +138,18 @@ const parseBlocks = (text: string): Block[] => {
       flushQuote();
       flushList();
       blocks.push({ type: 'hr' });
+      return;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      flushParagraph();
+      flushQuote();
+      flushList();
+      blocks.push({
+        type: 'heading',
+        level: heading[1].length as 1 | 2 | 3 | 4 | 5 | 6,
+        text: heading[2].replace(/\s+#+\s*$/, '').trim(),
+      });
       return;
     }
     const quoted = line.match(/^\s*>\s?(.*)$/);
@@ -205,6 +237,7 @@ const AiMessageRenderer: React.FC<AiMessageRendererProps> = ({
         <div className="space-y-2">
           {blocks.map((block, index) => {
             if (block.type === 'hr') return <hr key={`hr-${index}`} className="border-slate-200 dark:border-white/10" />;
+            if (block.type === 'heading') return renderHeading(block, index);
             if (block.type === 'code') {
               return (
                 <div key={`code-${index}`} className="overflow-hidden rounded-lg border border-slate-200 bg-slate-950 text-slate-100 dark:border-white/10">
