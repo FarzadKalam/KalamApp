@@ -2575,7 +2575,19 @@ async function executeAction(
         continue;
       }
       if (channel === 'bot') {
-        await executeAction({ ...action, type: 'send_bot_message', config: { message: '{{ai_answer}}', ...(channelConfigs.bot || {}) } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await executeAction({
+          ...action,
+          type: 'send_bot_message',
+          config: {
+            ...(channelConfigs.bot || {}),
+            message: '{{ai_answer}}',
+            sender_kind: 'ai',
+            sender_type: 'ai',
+            sender_display_name: 'هوش مصنوعی',
+            message_source: 'ai',
+            ai_generated: true,
+          },
+        }, actionRecord, moduleId, orgId, url, key, actorUserId);
         continue;
       }
       if (channel === 'note') {

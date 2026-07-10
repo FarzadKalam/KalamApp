@@ -913,8 +913,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [botIdentityBindDraft, setBotIdentityBindDraft] = useState<BotChatIdentityBindDraft | null>(null);
   const [botIdentityBindTargetModuleId, setBotIdentityBindTargetModuleId] = useState<BotTargetModuleId>('customers');
   const [botIdentityBindTargetRecordId, setBotIdentityBindTargetRecordId] = useState<string | null>(null);
-  const [botIdentityBindSearch, setBotIdentityBindSearch] = useState('');
-  const [botIdentityBindOptions, setBotIdentityBindOptions] = useState<Array<{ value: string; label: string; meta?: string | null }>>([]);
   const [botIdentityAllowedUserIds, setBotIdentityAllowedUserIds] = useState<string[]>([]);
   const [botIdentityAllowedRoleIds, setBotIdentityAllowedRoleIds] = useState<string[]>([]);
   const [botIdentityAiAutoReplyEnabled, setBotIdentityAiAutoReplyEnabled] = useState(false);
@@ -1293,17 +1291,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     return null;
   }, []);
 
-  const formatBotTargetRecordLabel = useCallback((moduleId: BotTargetModuleId, row: Record<string, any> | null | undefined) => {
-    if (!row) return '';
-    if (moduleId === 'customers') {
-      return String(row.full_name || row.business_name || row.legal_name || row.system_code || '').trim();
-    }
-    if (moduleId === 'suppliers') {
-      return String(row.business_name || row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.system_code || '').trim();
-    }
-    return String(row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || row.system_code || row.legacy_system_code || '').trim();
-  }, []);
-
   const clearBotStatusWatchTimer = useCallback(() => {
     if (botStatusWatchTimerRef.current !== null && typeof window !== 'undefined') {
       window.clearInterval(botStatusWatchTimerRef.current);
@@ -1632,79 +1619,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     return normalized;
   }, []);
 
-  const loadBotIdentityBindTargetOptions = useCallback(async (
-    moduleId: BotTargetModuleId,
-    search: string,
-  ) => {
-    const normalizedSearch = String(search || '').trim();
-    let query: any;
-    if (moduleId === 'customers') {
-      query = supabase
-        .from('customers')
-        .select('id, full_name, business_name, legal_name, system_code')
-        .limit(30)
-        .order('updated_at', { ascending: false, nullsFirst: false });
-      if (normalizedSearch) {
-        query = query.or(`full_name.ilike.%${normalizedSearch}%,business_name.ilike.%${normalizedSearch}%,legal_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%`);
-      }
-    } else if (moduleId === 'suppliers') {
-      query = supabase
-        .from('suppliers')
-        .select('id, business_name, full_name, first_name, last_name, system_code')
-        .limit(30)
-        .order('updated_at', { ascending: false, nullsFirst: false });
-      if (normalizedSearch) {
-        query = query.or(`business_name.ilike.%${normalizedSearch}%,full_name.ilike.%${normalizedSearch}%,first_name.ilike.%${normalizedSearch}%,last_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%`);
-      }
-    } else {
-      query = supabase
-        .from('employees')
-        .select('id, full_name, first_name, last_name, system_code, legacy_system_code')
-        .limit(30)
-        .order('updated_at', { ascending: false, nullsFirst: false });
-      if (normalizedSearch) {
-        query = query.or(`full_name.ilike.%${normalizedSearch}%,first_name.ilike.%${normalizedSearch}%,last_name.ilike.%${normalizedSearch}%,system_code.ilike.%${normalizedSearch}%,legacy_system_code.ilike.%${normalizedSearch}%`);
-      }
-    }
-    const { data, error } = await query;
-    if (error) throw error;
-    return ((data || []) as Record<string, any>[])
-      .map((row) => {
-        const label = formatBotTargetRecordLabel(moduleId, row) || '[بدون عنوان]';
-        const meta = [String(row.system_code || '').trim(), String(row.legacy_system_code || '').trim()]
-          .filter(Boolean)
-          .join(' | ');
-        return {
-          value: String(row.id || '').trim(),
-          label,
-          meta: meta || null,
-        };
-      })
-      .filter((row) => row.value);
-  }, [formatBotTargetRecordLabel]);
-
-  useEffect(() => {
-    if (!botIdentityBindModalOpen) return;
-    let cancelled = false;
-    setBotIdentityBindModalLoading(true);
-    void loadBotIdentityBindTargetOptions(botIdentityBindTargetModuleId, botIdentityBindSearch)
-      .then((options) => {
-        if (!cancelled) setBotIdentityBindOptions(options);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.warn('Could not load bot identity bind targets', error);
-          setBotIdentityBindOptions([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setBotIdentityBindModalLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [botIdentityBindModalOpen, botIdentityBindSearch, botIdentityBindTargetModuleId, loadBotIdentityBindTargetOptions]);
-
   const closeBotIdentityBindModal = useCallback(() => {
     setBotIdentityBindModalOpen(false);
     setBotIdentityBindModalLoading(false);
@@ -1712,8 +1626,6 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     setBotIdentityBindDraft(null);
     setBotIdentityBindTargetModuleId('customers');
     setBotIdentityBindTargetRecordId(null);
-    setBotIdentityBindSearch('');
-    setBotIdentityBindOptions([]);
     setBotIdentityAllowedUserIds([]);
     setBotIdentityAllowedRoleIds([]);
     setBotIdentityAiAutoReplyEnabled(false);
@@ -1743,9 +1655,24 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
     }
     setBotIdentityBindModalOpen(true);
     setBotIdentityBindModalLoading(true);
+    setBotIdentityBindDraft({
+      channel,
+      chatId: normalizedChatId,
+      threadId: null,
+      displayName: String(displayName || '').trim(),
+      username: String(username || '').trim().replace(/^@+/, ''),
+      phoneNumber: String(phoneNumber || '').trim(),
+      existingBinding: null,
+    });
+    setBotIdentityBindTargetModuleId('customers');
+    setBotIdentityBindTargetRecordId(null);
+    setBotIdentityAllowedUserIds(String(profile.id || '').trim() ? [String(profile.id || '').trim()] : []);
+    setBotIdentityAllowedRoleIds([]);
+    setBotIdentityAiAutoReplyEnabled(false);
+    setBotIdentityAiCounterpartyGuide('');
     try {
       const normalizedOrgId = String(profile.org_id || '').trim();
-      const [bindingResult, threadResult, membershipResult] = await Promise.all([
+      const [bindingResult, threadResult, membershipResult, groupResult] = await Promise.all([
         supabase
           .from('bot_chat_identity_bindings')
           .select('id,target_module_id,target_record_id,display_name,username,phone_number,profile_id')
@@ -1767,12 +1694,22 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
           .or(`payload->>sender_id.eq.${normalizedChatId},payload->>user_id.eq.${normalizedChatId},payload->>object_guid.eq.${normalizedChatId}`)
           .order('created_at', { ascending: false })
           .limit(400),
+        String(sourceGroupId || '').trim()
+          ? supabase
+              .from('counterparty_bot_groups')
+              .select('metadata')
+              .eq('org_id', normalizedOrgId)
+              .eq('id', String(sourceGroupId || '').trim())
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null } as any),
       ]);
       if (bindingResult.error) throw bindingResult.error;
       if (threadResult.error) throw threadResult.error;
       if (membershipResult.error) throw membershipResult.error;
+      if (groupResult.error) throw groupResult.error;
       const threadRow = threadResult.data as Record<string, any> | null;
       const threadMetadata = threadRow?.metadata && typeof threadRow.metadata === 'object' ? threadRow.metadata : {};
+      const groupMetadata = groupResult.data?.metadata && typeof groupResult.data.metadata === 'object' ? groupResult.data.metadata : {};
       const existingBinding = (bindingResult.data || null) as BotIdentityBindingRow | null;
       const initialTargetModuleId = isBotTargetModuleId(String(existingBinding?.target_module_id || '').trim())
         ? String(existingBinding?.target_module_id || '').trim() as BotTargetModuleId
@@ -1790,21 +1727,27 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
       });
       setBotIdentityBindTargetModuleId(initialTargetModuleId);
       setBotIdentityBindTargetRecordId(String(existingBinding?.target_record_id || threadRow?.target_record_id || '').trim() || null);
+      const rawAllowedUserIds = Array.isArray((threadMetadata as any)?.allowed_user_ids)
+        ? (threadMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const groupAllowedUserIds = Array.isArray((groupMetadata as any)?.allowed_user_ids)
+        ? (groupMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const rawAllowedRoleIds = Array.isArray((threadMetadata as any)?.allowed_role_ids)
+        ? (threadMetadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const groupAllowedRoleIds = Array.isArray((groupMetadata as any)?.allowed_role_ids)
+        ? (groupMetadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const currentProfileId = String(profile.id || '').trim();
       setBotIdentityAllowedUserIds(
-        Array.isArray((threadMetadata as any)?.allowed_user_ids)
-          ? ((threadMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean).length > 0
-            ? (threadMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-            : (String(profile.id || '').trim() ? [String(profile.id || '').trim()] : []))
-          : (String(profile.id || '').trim() ? [String(profile.id || '').trim()] : []),
+        rawAllowedUserIds.length > 0
+          ? rawAllowedUserIds
+          : (groupAllowedUserIds.length > 0 ? groupAllowedUserIds : (currentProfileId ? [currentProfileId] : [])),
       );
-      setBotIdentityAllowedRoleIds(
-        Array.isArray((threadMetadata as any)?.allowed_role_ids)
-          ? (threadMetadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-          : [],
-      );
-      setBotIdentityAiAutoReplyEnabled(Boolean((threadMetadata as any)?.ai_auto_reply_enabled));
-      setBotIdentityAiCounterpartyGuide(String((threadMetadata as any)?.ai_counterparty_guide || '').trim());
-      setBotIdentityBindSearch('');
+      setBotIdentityAllowedRoleIds(rawAllowedRoleIds.length > 0 ? rawAllowedRoleIds : groupAllowedRoleIds);
+      setBotIdentityAiAutoReplyEnabled(Boolean((threadMetadata as any)?.ai_auto_reply_enabled ?? (groupMetadata as any)?.ai_auto_reply_enabled));
+      setBotIdentityAiCounterpartyGuide(String((threadMetadata as any)?.ai_counterparty_guide || (groupMetadata as any)?.ai_counterparty_guide || '').trim());
       const statusLabelMap: Record<string, string> = {
         active: 'فعال',
         pending_join: 'در انتظار اتصال',
@@ -1917,7 +1860,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
         previousChatId: draft.chatId,
         username: draft.username || null,
         phoneNumber: draft.phoneNumber || null,
-        displayName: draft.displayName || null,
+        displayName: null,
         threadMetadata: directThreadMetadata,
       });
       await Promise.all([
@@ -8834,9 +8777,6 @@ useEffect(() => {
             }}
             targetRecordId={botIdentityBindTargetRecordId}
             onChangeTargetRecordId={setBotIdentityBindTargetRecordId}
-            targetOptions={botIdentityBindOptions}
-            searchValue={botIdentityBindSearch}
-            onChangeSearchValue={setBotIdentityBindSearch}
             userOptions={directoryUsers.map((user: any) => ({
               label: String(user?.display_name || user?.id || '-').trim(),
               value: String(user?.id || '').trim(),

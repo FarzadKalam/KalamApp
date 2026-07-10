@@ -1,7 +1,9 @@
 import React from 'react';
 import { Alert, Checkbox, Empty, Input, Modal, Radio, Space, Tabs, Tag } from 'antd';
 import type { BotTargetModuleId } from '../../utils/botPlatform';
+import { FieldType } from '../../types';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import SmartFieldRenderer from '../SmartFieldRenderer';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 
 type TargetOption = {
@@ -32,9 +34,9 @@ type BotChatIdentityBindModalProps = {
   onChangeTargetModuleId: (value: BotTargetModuleId) => void;
   targetRecordId: string | null;
   onChangeTargetRecordId: (value: string | null) => void;
-  targetOptions: TargetOption[];
-  searchValue: string;
-  onChangeSearchValue: (value: string) => void;
+  targetOptions?: TargetOption[];
+  searchValue?: string;
+  onChangeSearchValue?: (value: string) => void;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
   allowedUserIds: string[];
@@ -94,9 +96,6 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
   onChangeTargetModuleId,
   targetRecordId,
   onChangeTargetRecordId,
-  targetOptions,
-  searchValue,
-  onChangeSearchValue,
   userOptions,
   roleOptions,
   allowedUserIds,
@@ -119,19 +118,19 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
     () => ensureSelectedOptions(roleOptions, allowedRoleIds, 'نقش'),
     [allowedRoleIds, roleOptions],
   );
-  const targetRecordOptions = React.useMemo(
-    () => targetOptions.map((option) => ({
-      value: option.value,
-      label: option.label,
-      meta: option.meta || '',
-      searchText: `${option.label} ${option.meta || ''}`.toLowerCase(),
-    })),
-    [targetOptions],
-  );
   const resolveModalPopupContainer = React.useCallback((trigger?: HTMLElement | null) => {
     const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
     return modalBodyHost || resolveOverlayPopupContainer(trigger);
   }, []);
+  const targetRelationField = React.useMemo(() => ({
+    key: 'bot_identity_target_record_id',
+    type: FieldType.RELATION,
+    labels: { fa: 'رکورد مقصد' },
+    label: 'رکورد مقصد',
+    relationConfig: {
+      targetModule: targetModuleId,
+    },
+  } as any), [targetModuleId]);
 
   return (
     <Modal
@@ -145,6 +144,7 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
       destroyOnHidden
       width={680}
       zIndex={BOT_IDENTITY_MODAL_Z_INDEX}
+      okButtonProps={{ disabled: loading }}
     >
       <Tabs
         items={[
@@ -175,7 +175,13 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                   <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">نوع رکورد</div>
                   <Radio.Group
                     value={targetModuleId}
-                    onChange={(event) => onChangeTargetModuleId(event.target.value)}
+                    onChange={(event) => {
+                      const nextModuleId = event.target.value as BotTargetModuleId;
+                      if (nextModuleId !== targetModuleId) {
+                        onChangeTargetRecordId(null);
+                      }
+                      onChangeTargetModuleId(nextModuleId);
+                    }}
                     optionType="button"
                     buttonStyle="solid"
                     options={MODULE_OPTIONS}
@@ -183,49 +189,16 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                 </div>
 
                 <div>
-                  <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">جستجو</div>
-                  <Input
-                    value={searchValue}
-                    onChange={(event) => onChangeSearchValue(event.target.value)}
-                    placeholder="نام، کد یا شناسه را جستجو کنید"
-                    allowClear
-                  />
-                </div>
-
-                <div>
                   <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">رکورد مقصد</div>
-                  <AdaptiveSelectField
-                    showSearch
+                  <SmartFieldRenderer
+                    field={targetRelationField}
                     value={targetRecordId || undefined}
                     onChange={(value: any) => onChangeTargetRecordId(String(value || '').trim() || null)}
-                    placeholder="یک رکورد موجود را انتخاب کنید"
-                    loading={loading}
-                    filterOption={false}
-                    allowClear
-                    options={targetRecordOptions}
-                    optionFilterProp="searchText"
-                    optionDisplayFallback={(option: any) => String(option?.label || option?.value || '').trim()}
-                    renderMobileOption={(option: any) => (
-                      <div className="min-w-0">
-                        <div className="truncate">{option?.label}</div>
-                        {option?.meta ? <div className="truncate text-[11px] text-gray-400">{option.meta}</div> : null}
-                      </div>
-                    )}
-                    optionRender={(option: any) => {
-                      const data = option?.data || option;
-                      return (
-                        <div className="min-w-0">
-                          <div className="truncate">{data?.label}</div>
-                          {data?.meta ? <div className="truncate text-[11px] text-gray-400">{data.meta}</div> : null}
-                        </div>
-                      );
-                    }}
-                    getPopupContainer={(trigger: HTMLElement) => resolveModalPopupContainer(trigger)}
-                    modalContainer={resolveModalPopupContainer}
-                    preferLocalPopupContainer
+                    forceEditMode
+                    compactMode
                     overlayZIndexBase={BOT_IDENTITY_SELECT_Z_INDEX}
-                    styles={{ popup: { root: { zIndex: 19000 } } }}
-                    className="w-full"
+                    popupContainer={resolveModalPopupContainer}
+                    preferLocalPopupContainer
                   />
                 </div>
 

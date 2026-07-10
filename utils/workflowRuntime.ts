@@ -2409,7 +2409,15 @@ export const executeWorkflowAction = async (
         await executeWorkflowAction({
           ...action,
           type: 'send_bot_message',
-          config: { message: '{{ai_answer}}', ...(channelConfigs.bot || {}) },
+          config: {
+            ...(channelConfigs.bot || {}),
+            message: '{{ai_answer}}',
+            sender_kind: 'ai',
+            sender_type: 'ai',
+            sender_display_name: 'هوش مصنوعی',
+            message_source: 'ai',
+            ai_generated: true,
+          },
         }, moduleId, actionRecord);
         continue;
       }
@@ -2643,6 +2651,16 @@ export const executeWorkflowAction = async (
         })
       : [];
     const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
+    const botSenderPayload = {
+      attachments,
+      workflow_action_type: 'send_bot_message',
+      workflow_action_id: (action as any)?.id || null,
+      sender_kind: String(config.sender_kind || '').trim() || null,
+      sender_type: String(config.sender_type || '').trim() || null,
+      sender_display_name: String(config.sender_display_name || '').trim() || null,
+      message_source: String(config.message_source || '').trim() || null,
+      ai_generated: config.ai_generated === true || String(config.sender_kind || '').trim().toLowerCase() === 'ai',
+    };
     const configuredRecipientFields = asArray(config.recipient_fields).map((item) => String(item || '').trim()).filter(Boolean);
     const configuredRecipientAssignees = asArray(config.recipient_assignees).map((item) => String(item || '').trim()).filter(Boolean);
 
@@ -2701,11 +2719,11 @@ export const executeWorkflowAction = async (
             const groupChatId = String(group?.bot_chat_id || '').trim();
             if (!groupChatId || handledChatIds.has(groupChatId)) continue;
             handledChatIds.add(groupChatId);
-            await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: { attachments, workflow_action_type: 'send_bot_message', workflow_action_id: (action as any)?.id || null }, messageType: attachments.length > 0 ? 'file' : 'text' });
+            await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: botSenderPayload, extraPayload: botSenderPayload, messageType: attachments.length > 0 ? 'file' : 'text' });
           }
         }
         for (const chatId of recipients.filter((r) => !handledChatIds.has(String(r || '').trim()))) {
-          await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments: channel === 'rubika' ? attachments : undefined, fallbackText: channel === 'rubika' ? fallbackText : undefined, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
+          await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments: channel === 'rubika' ? attachments : undefined, fallbackText: channel === 'rubika' ? fallbackText : undefined, extraPayload: botSenderPayload, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
         }
       }
     }

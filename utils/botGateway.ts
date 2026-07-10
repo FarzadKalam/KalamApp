@@ -101,6 +101,18 @@ const parseResponse = async (response: Response) => {
   }
 };
 
+const isAiSenderPayload = (payload?: Record<string, any> | null) => {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  return [
+    source.sender_kind,
+    source.sender_type,
+    source.source_type,
+    source.message_source,
+    source.author_type,
+  ].some((value) => String(value || '').trim().toLowerCase() === 'ai')
+    || Boolean(source.ai_generated || source.ai_answer || source.workflow_ai_prompt);
+};
+
 export const sendBotMessageViaGateway = async ({
   channel,
   chatId,
@@ -349,12 +361,24 @@ export const sendCounterpartyBotGroupMessage = async ({
       .eq('id', currentUserId)
       .maybeSingle()).data
     : null;
-  const senderPayload = {
-    sender_user_id: currentUserId,
-    sender_profile_id: currentUserId,
-    sender_display_name: String((currentUserProfile as any)?.full_name || '').trim() || null,
-    sender_avatar_url: String((currentUserProfile as any)?.avatar_url || '').trim() || null,
-  };
+  const combinedSenderSource = { ...(payload || {}), ...(extraPayload || {}) };
+  const isAiSender = isAiSenderPayload(combinedSenderSource);
+  const senderPayload = isAiSender
+    ? {
+        sender_user_id: currentUserId,
+        sender_profile_id: currentUserId,
+        sender_display_name: 'هوش مصنوعی',
+        sender_avatar_url: null,
+        sender_kind: 'ai',
+        sender_type: 'ai',
+        message_source: 'ai',
+      }
+    : {
+        sender_user_id: currentUserId,
+        sender_profile_id: currentUserId,
+        sender_display_name: String((currentUserProfile as any)?.full_name || '').trim() || null,
+        sender_avatar_url: String((currentUserProfile as any)?.avatar_url || '').trim() || null,
+      };
 
   const rowsToInsert = providerMessages.map((providerItem: any) => {
     const itemProviderResult = providerItem?.provider_result || {};
@@ -386,6 +410,7 @@ export const sendCounterpartyBotGroupMessage = async ({
       created_by: currentUserId,
       payload: {
         ...(payload || {}),
+        ...(extraPayload || {}),
         attachments: attachment ? [attachment] : ((payload as any)?.attachments || []),
         provider_file_id: String(providerItem?.provider_file_id || '').trim() || null,
         provider_upload: providerItem?.provider_upload || null,

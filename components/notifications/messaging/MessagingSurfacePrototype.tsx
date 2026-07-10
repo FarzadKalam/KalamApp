@@ -71,7 +71,7 @@ import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '..
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage, type BotChannel } from '../../../utils/botGateway';
 import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { useOptionalNotificationRuntime } from '../NotificationRuntimeProvider';
-import { noteInsertBus } from '../../../utils/communicationRealtimeBus';
+import { botMessageInsertBus, noteInsertBus } from '../../../utils/communicationRealtimeBus';
 import { useNotificationConversationList } from '../../../hooks/useNotificationConversationList';
 import { shouldSubmitComposerOnEnter } from '../../../utils/composeKeyboard';
 import { useInternalConversationTimeline } from '../../../hooks/useInternalConversationTimeline';
@@ -84,9 +84,10 @@ import {
   getChatGroupSelectionId,
   resolveConversationSelection,
 } from '../../../utils/notificationConversationKeys';
-import type { NotificationConversationSummary } from '../../../utils/notificationConversationRpc';
+import { compareIsoAsc, type NotificationConversationSummary } from '../../../utils/notificationConversationRpc';
 import ProfileAvatar from '../../common/ProfileAvatar';
 import MessageAttachmentGallery from '../../messaging/MessageAttachmentGallery';
+import AiSparkleIcon from '../../ai/AiSparkleIcon';
 import type { BotPlatformState } from '../../bot/CounterpartyBotStatusModal';
 
 const ForwardMessageModalRuntime = React.lazy(() => import('../ForwardMessageModalRuntime'));
@@ -156,6 +157,9 @@ type TimelineEvent = {
   mentionUsers?: string[];
   mentionRoles?: string[];
   avatarUrl?: string | null;
+  avatarFallback?: React.ReactNode;
+  avatarTone?: string | null;
+  isAiAuthor?: boolean;
   botSenderChannel?: BotChannel | null;
   botSenderChatId?: string | null;
   botSenderDisplayName?: string | null;
@@ -568,6 +572,25 @@ const resolveBotRpcSenderUsername = (row: any) => {
   ).trim().replace(/^@+/, '');
 };
 
+const isAiBotSenderPayload = (payload: any, row?: any) => {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  return [
+    source.sender_kind,
+    source.sender_type,
+    source.source_type,
+    source.message_source,
+    source.author_type,
+    row?.sender_kind,
+    row?.sender_type,
+  ].some((value) => String(value || '').trim().toLowerCase() === 'ai')
+    || Boolean(source.ai_generated || source.ai_answer || source.workflow_ai_prompt);
+};
+
+const isAiTimelineEvent = (item: any) => {
+  const payload = item?.sourceRow?.payload && typeof item.sourceRow.payload === 'object' ? item.sourceRow.payload : {};
+  return Boolean(item?.isAiAuthor) || isAiBotSenderPayload(payload, item?.sourceRow);
+};
+
 const buildBotGroupRpcTimelineEvents = (
   rows: any[],
   activeGroup: any | null,
@@ -581,6 +604,7 @@ const buildBotGroupRpcTimelineEvents = (
   return (rows || []).map((row: any) => {
     const direction = String(row?.direction || '').trim() === 'outbound' ? 'outbound' : 'inbound';
     const payload = row?.payload && typeof row.payload === 'object' ? row.payload : {};
+    const isAiSender = direction === 'outbound' && isAiBotSenderPayload(payload, row);
     const attachments = buildBotTimelineAttachments(row) || [];
     const text = String(row?.content_text || payload?.text || payload?.caption || '').trim()
       || (attachments.length ? '' : 'پیام بات');
@@ -597,13 +621,16 @@ const buildBotGroupRpcTimelineEvents = (
       conversationKey: `bot:${String(row?.bot_group_id || activeGroup?.id || '').trim()}`,
       kind: 'message' as const,
       direction,
-      author: direction === 'outbound' ? 'کاربر سازمان' : senderTitle,
+      author: direction === 'outbound' ? (isAiSender ? 'هوش مصنوعی' : 'کاربر سازمان') : senderTitle,
       text,
       time: safeJalaliFormat(row?.created_at, 'YYYY/MM/DD HH:mm') || '',
       status: direction === 'outbound' ? 'ارسال شده' : undefined,
       replyTo: String(payload?.reply_to_message_id || payload?.reply_to_id || '').trim() || null,
       attachments: attachments.length ? attachments : undefined,
-      avatarUrl: resolveBotRpcSenderAvatarUrl(row),
+      avatarUrl: isAiSender ? null : resolveBotRpcSenderAvatarUrl(row),
+      avatarFallback: isAiSender ? <AiSparkleIcon className="h-3.5 w-3.5" /> : undefined,
+      avatarTone: isAiSender ? 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-500/15 dark:text-fuchsia-200' : null,
+      isAiAuthor: isAiSender,
       botSenderChannel: channel,
       botSenderChatId: direction === 'inbound' ? senderChatId || null : null,
       botSenderDisplayName: direction === 'inbound' ? senderDisplayName || null : null,
@@ -1699,11 +1726,12 @@ const TimelineEventCard: React.FC<{
   const isCall = item.kind === 'call';
   const isInternal = activeConversation.channel === 'internal';
   const showStatusBadge = Boolean(item.status && (isCall || (item.kind === 'sms' && outgoing)));
-  const avatarFallback = String(item.author || activeConversation.avatarText || 'ک').trim().slice(0, 1) || 'ک';
+  const avatarFallback = item.avatarFallback ?? (String(item.author || activeConversation.avatarText || 'ک').trim().slice(0, 1) || 'ک');
   const botAvatarIdentityKey = String(item.botSenderChatId || item.author || item.sourceRow?.id || '').trim();
-  const avatarTone = !outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
-    ? getBotSenderAvatarTone(botAvatarIdentityKey) || activeConversation.tone
-    : activeConversation.tone;
+  const avatarTone = item.avatarTone
+    || (!outgoing && (activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct')
+      ? getBotSenderAvatarTone(botAvatarIdentityKey) || activeConversation.tone
+      : activeConversation.tone);
   const authorTextClassName = outgoing
     ? 'truncate text-xs font-bold text-white'
     : 'truncate text-xs font-bold text-slate-800 dark:text-slate-100';
@@ -2322,6 +2350,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [botIdentityAllowedRoleIds, setBotIdentityAllowedRoleIds] = useState<string[]>([]);
   const [botIdentityAiAutoReplyEnabled, setBotIdentityAiAutoReplyEnabled] = useState(false);
   const [botIdentityAiCounterpartyGuide, setBotIdentityAiCounterpartyGuide] = useState('');
+  const [optimisticBotSenderBindings, setOptimisticBotSenderBindings] = useState<BotIdentityBindingLike[]>([]);
   const [replyTarget, setReplyTarget] = useState<TimelineEvent | null>(null);
   const [conversationSearchOpen, setConversationSearchOpen] = useState(false);
   const [conversationSearchValue, setConversationSearchValue] = useState('');
@@ -2969,14 +2998,61 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     liveData.profile.id,
     notificationRuntime.revisions.bot_messages,
   ]);
+  useEffect(() => {
+    const orgId = String(liveData.profile.orgId || '').trim();
+    if (!orgId) return undefined;
+    const unsubscribeBot = botMessageInsertBus.subscribe((row) => {
+      const rowOrgId = String(row?.org_id || '').trim();
+      if (rowOrgId && rowOrgId !== orgId) return;
+      const rowGroupId = String(row?.bot_group_id || '').trim();
+      const rowDirectThreadId = String(row?.direct_thread_id || '').trim();
+      if (activeConversation.channel === 'bot_group' && activeBotGroupId && rowGroupId === activeBotGroupId) {
+        botTimeline.setItems((prev: any[]) => {
+          const id = String(row?.id || '').trim();
+          if (!id || prev.some((item: any) => String(item?.id || '').trim() === id)) return prev;
+          return [...prev, row].sort((left: any, right: any) => compareIsoAsc(left?.created_at, right?.created_at));
+        });
+      }
+      if (
+        rowGroupId
+        || (activeConversation.channel === 'bot_direct' && rowDirectThreadId && activeConversation.key === `live:bot_direct:${rowDirectThreadId}`)
+      ) {
+        void liveData.refresh();
+        void refreshBotConversations({ force: true });
+      }
+    });
+    return () => {
+      unsubscribeBot();
+    };
+  }, [activeBotGroupId, activeConversation.channel, activeConversation.key, botTimeline.setItems, liveData, refreshBotConversations]);
   const botGroupRpcEvents = useMemo<TimelineEvent[]>(() => (
     activeConversation.channel === 'bot_group'
-      ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap, liveData.botSenderBindings)
+      ? buildBotGroupRpcTimelineEvents(botTimeline.items || [], activeBotGroupRow, internalRecordTitleMap, [
+          ...(liveData.botSenderBindings || []),
+          ...optimisticBotSenderBindings,
+        ])
       : []
-  ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap, liveData.botSenderBindings]);
+  ), [activeBotGroupRow, activeConversation.channel, botTimeline.items, internalRecordTitleMap, liveData.botSenderBindings, optimisticBotSenderBindings]);
   const displayEvents = useMemo<TimelineEvent[]>(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentUser = currentUserId ? directoryUserMap[currentUserId] : null;
+    const optimisticBindingMap = buildBotIdentityBindingMap(optimisticBotSenderBindings);
+    const normalizeInboundBotIdentity = (item: TimelineEvent): TimelineEvent => {
+      if (item.direction !== 'inbound') return item;
+      const isBotEvent = String(item.conversationKey || '').startsWith('bot:')
+        || String(item.conversationKey || '').startsWith('live:bot_direct:');
+      if (!isBotEvent) return item;
+      const bindingKey = buildBotIdentityBindingKey(item.botSenderChannel, item.botSenderChatId);
+      const binding = optimisticBindingMap.get(bindingKey) || null;
+      if (!binding?.target_module_id || !binding?.target_record_id) return item;
+      const title = getTimelineRecordLabel(
+        internalRecordTitleMap,
+        String(binding.target_module_id),
+        String(binding.target_record_id),
+        binding.display_name || item.author,
+      );
+      return title ? { ...item, author: title, botSenderBound: true } : item;
+    };
     const normalizeOutboundEvent = (item: any): TimelineEvent => {
       if (item.direction !== 'outbound') return item;
       const isBotEvent = String(item.conversationKey || '').startsWith('bot:')
@@ -2985,10 +3061,14 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const senderId = String((item as any)?.sourceRow?.created_by || '').trim();
       const senderUser = senderId ? directoryUserMap[senderId] : null;
       if (isBotEvent) {
+        const isAiSender = isAiTimelineEvent(item);
         return {
           ...item,
-          author: String(senderUser?.display_name || item.author || '').trim() || 'کاربر سازمان',
-          avatarUrl: String((item as any).avatarUrl || senderUser?.avatar_url || '').trim() || null,
+          author: isAiSender ? 'هوش مصنوعی' : (String(senderUser?.display_name || item.author || '').trim() || 'کاربر سازمان'),
+          avatarUrl: isAiSender ? null : (String((item as any).avatarUrl || senderUser?.avatar_url || '').trim() || null),
+          avatarFallback: isAiSender ? <AiSparkleIcon className="h-3.5 w-3.5" /> : item.avatarFallback,
+          avatarTone: isAiSender ? 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-500/15 dark:text-fuchsia-200' : item.avatarTone,
+          isAiAuthor: isAiSender,
         };
       }
       if (isSmsEvent) {
@@ -3004,8 +3084,8 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         avatarUrl: String((item as any).avatarUrl || currentUser?.avatar_url || '').trim() || null,
       };
     };
-    const normalizedLiveEvents = liveData.events.map(normalizeOutboundEvent);
-    const normalizedBotGroupRpcEvents = botGroupRpcEvents.map(normalizeOutboundEvent);
+    const normalizedLiveEvents = liveData.events.map((item) => normalizeInboundBotIdentity(normalizeOutboundEvent(item)));
+    const normalizedBotGroupRpcEvents = botGroupRpcEvents.map((item) => normalizeInboundBotIdentity(normalizeOutboundEvent(item)));
     const liveEventsForDisplay = normalizedBotGroupRpcEvents.length > 0
       ? normalizedLiveEvents.filter((item) => !(activeConversation.channel === 'bot_group' && item.conversationKey === activeConversation.key))
       : normalizedLiveEvents;
@@ -3014,7 +3094,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveEventsForDisplay,
       ...normalizedBotGroupRpcEvents,
     ] as TimelineEvent[];
-  }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, liveData.events, liveData.profile.id, liveInternalEvents, orgDisplayName, orgLogoUrl]);
+  }, [activeConversation.channel, activeConversation.key, botGroupRpcEvents, directoryUserMap, internalRecordTitleMap, liveData.events, liveData.profile.id, liveInternalEvents, optimisticBotSenderBindings, orgDisplayName, orgLogoUrl]);
   const activeEventsRaw = useMemo(
     () => displayEvents.filter((item) => item.conversationKey === activeConversation.key),
     [activeConversation.key, displayEvents],
@@ -3360,11 +3440,27 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       message.warning('برای این پیام chat id یکتای فرستنده پیدا نشد.');
       return;
     }
+    const optimisticDisplayName = String(item.botSenderDisplayName || item.author || '').trim();
     setBotIdentityBindOpen(true);
     setBotIdentityBindLoading(true);
+    setBotIdentityBindDraft({
+      channel,
+      chatId,
+      displayName: optimisticDisplayName,
+      username: String(item.botSenderUsername || '').trim().replace(/^@+/, ''),
+      phoneNumber: String(item.botSenderPhoneNumber || '').trim(),
+      existingBinding: null,
+    });
+    setBotIdentityBindTargetModuleId('customers');
+    setBotIdentityBindTargetRecordId(null);
+    setBotIdentityAllowedUserIds(String(liveData.profile.id || '').trim() ? [String(liveData.profile.id || '').trim()] : []);
+    setBotIdentityAllowedRoleIds([]);
+    setBotIdentityAiAutoReplyEnabled(false);
+    setBotIdentityAiCounterpartyGuide('');
     try {
       const orgId = String(liveData.profile.orgId || '').trim();
-      const [bindingResult, threadResult] = await Promise.all([
+      const sourceGroupId = String(item.sourceRow?.bot_group_id || '').trim();
+      const [bindingResult, threadResult, groupResult] = await Promise.all([
         supabase
           .from('bot_chat_identity_bindings')
           .select('target_module_id,target_record_id,display_name,username,phone_number')
@@ -3379,12 +3475,22 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           .eq('channel_type', channel)
           .eq('chat_id', chatId)
           .maybeSingle(),
+        sourceGroupId
+          ? supabase
+              .from('counterparty_bot_groups')
+              .select('metadata')
+              .eq('org_id', orgId)
+              .eq('id', sourceGroupId)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null } as any),
       ]);
       if (bindingResult.error) throw bindingResult.error;
       if (threadResult.error) throw threadResult.error;
+      if (groupResult.error) throw groupResult.error;
       const existingBinding = (bindingResult.data || null) as BotIdentityBindingRow | null;
       const threadRow = (threadResult.data || null) as Record<string, any> | null;
       const metadata = threadRow?.metadata && typeof threadRow.metadata === 'object' ? threadRow.metadata : {};
+      const groupMetadata = groupResult.data?.metadata && typeof groupResult.data.metadata === 'object' ? groupResult.data.metadata : {};
       const initialTargetModuleId = isBotTargetModuleId(String(existingBinding?.target_module_id || '').trim())
         ? String(existingBinding?.target_module_id || '').trim() as BotTargetModuleId
         : isBotTargetModuleId(String(threadRow?.target_module_id || '').trim())
@@ -3410,11 +3516,16 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const rawAllowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
         ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
         : [];
+      const groupAllowedUserIds = Array.isArray((groupMetadata as any)?.allowed_user_ids)
+        ? (groupMetadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
+        : [];
       const currentProfileId = String(liveData.profile.id || '').trim();
-      setBotIdentityAllowedUserIds(rawAllowedUserIds.length > 0 ? rawAllowedUserIds : (currentProfileId ? [currentProfileId] : []));
-      setBotIdentityAllowedRoleIds(Array.isArray((metadata as any)?.allowed_role_ids) ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : []);
-      setBotIdentityAiAutoReplyEnabled(Boolean((metadata as any)?.ai_auto_reply_enabled));
-      setBotIdentityAiCounterpartyGuide(String((metadata as any)?.ai_counterparty_guide || '').trim());
+      setBotIdentityAllowedUserIds(rawAllowedUserIds.length > 0 ? rawAllowedUserIds : (groupAllowedUserIds.length > 0 ? groupAllowedUserIds : (currentProfileId ? [currentProfileId] : [])));
+      const rawAllowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids) ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [];
+      const groupAllowedRoleIds = Array.isArray((groupMetadata as any)?.allowed_role_ids) ? (groupMetadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean) : [];
+      setBotIdentityAllowedRoleIds(rawAllowedRoleIds.length > 0 ? rawAllowedRoleIds : groupAllowedRoleIds);
+      setBotIdentityAiAutoReplyEnabled(Boolean((metadata as any)?.ai_auto_reply_enabled ?? (groupMetadata as any)?.ai_auto_reply_enabled));
+      setBotIdentityAiCounterpartyGuide(String((metadata as any)?.ai_counterparty_guide || (groupMetadata as any)?.ai_counterparty_guide || '').trim());
     } catch (error: any) {
       setBotIdentityBindOpen(false);
       message.error(toFaErrorMessage(error, 'خواندن اتصال فرستنده بات ناموفق بود.'));
@@ -3422,35 +3533,6 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       setBotIdentityBindLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!botIdentityBindOpen) return;
-    let disposed = false;
-    setBotIdentityBindLoading(true);
-    void searchPhoneBindingTargets({
-      client: supabase,
-      moduleId: botIdentityBindTargetModuleId,
-      search: botIdentityBindSearch,
-      limit: 20,
-    }).then((options) => {
-      if (disposed) return;
-      setBotIdentityBindOptions((prev) => {
-        const map = new Map<string, { value: string; label: string; meta?: string | null }>();
-        prev.forEach((item) => {
-          if (item.value === botIdentityBindTargetRecordId) map.set(item.value, item);
-        });
-        options.forEach((item) => map.set(item.value, item));
-        return Array.from(map.values());
-      });
-    }).catch((error: any) => {
-      if (!disposed) message.error(toFaErrorMessage(error, 'جستجوی مخاطب بات ناموفق بود.'));
-    }).finally(() => {
-      if (!disposed) setBotIdentityBindLoading(false);
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [botIdentityBindOpen, botIdentityBindSearch, botIdentityBindTargetModuleId, botIdentityBindTargetRecordId, message]);
 
   const saveBotIdentityBind = async () => {
     const draft = botIdentityBindDraft;
@@ -3489,7 +3571,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         ai_auto_reply_enabled: botIdentityAiAutoReplyEnabled,
         ai_counterparty_guide: String(botIdentityAiCounterpartyGuide || '').trim() || null,
       };
-      await syncBotDirectChatIdForTarget({
+      const syncResult = await syncBotDirectChatIdForTarget({
         client: supabase,
         orgId,
         moduleId: botIdentityBindTargetModuleId,
@@ -3499,10 +3581,35 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         previousChatId: draft.chatId,
         username: draft.username || null,
         phoneNumber: draft.phoneNumber || null,
-        displayName: draft.displayName || null,
+        displayName: null,
         threadMetadata: directThreadMetadata,
       });
-      await liveData.refresh();
+      const boundDisplayName = String(syncResult?.displayName || '').trim();
+      setOptimisticBotSenderBindings((prev) => {
+        const key = `${draft.channel}:${draft.chatId}`;
+        const next = prev.filter((item) => `${String(item.channel_type || '').trim()}:${String(item.chat_id || '').trim()}` !== key);
+        next.push({
+          channel_type: draft.channel,
+          chat_id: draft.chatId,
+          target_module_id: botIdentityBindTargetModuleId,
+          target_record_id: targetRecordId,
+          display_name: boundDisplayName || null,
+          username: draft.username || null,
+          phone_number: draft.phoneNumber || null,
+        });
+        return next;
+      });
+      if (boundDisplayName) {
+        setInternalRecordTitleMap((prev) => ({
+          ...prev,
+          [`${botIdentityBindTargetModuleId}:${targetRecordId}`]: boundDisplayName,
+        }));
+      }
+      await Promise.all([
+        liveData.refresh(),
+        refreshBotConversations({ force: true }),
+        botTimelineRefreshRef.current ? botTimelineRefreshRef.current({ force: true }) : Promise.resolve(null),
+      ]);
       message.success('اتصال فرستنده بات ذخیره شد.');
       closeBotIdentityBindModal();
     } catch (error: any) {
@@ -4167,6 +4274,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       text: String(text || '').trim(),
       attachments: attachments.length ? attachments : undefined,
       fallbackText: options?.fallbackText,
+      extraPayload: options?.extraPayload,
       moduleId: String(thread?.target_module_id || '').trim() || undefined,
       recordId: String(thread?.target_record_id || '').trim() || undefined,
     });
@@ -4193,6 +4301,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         created_by: String(liveData.profile.id || '').trim() || null,
         payload: {
           ...(options?.payload || {}),
+          ...(options?.extraPayload || {}),
           attachments,
         },
       }]);
