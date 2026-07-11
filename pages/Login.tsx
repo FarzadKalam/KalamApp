@@ -12,6 +12,7 @@ import { normalizeIranMobile } from '../utils/phoneNumber';
 import { trackSuccessfulLogin } from '../utils/userLoginTracking';
 import { signOutLocalSession } from '../utils/authSession';
 import { invokeUserAdminFunction } from '../utils/userAdminInvoke';
+import { clearSessionBootstrapCache, fetchSessionBootstrap } from '../utils/sessionCache';
 import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
@@ -349,6 +350,11 @@ const Login = () => {
     }
   };
 
+  const refreshAuthenticatedSessionBootstrap = async () => {
+    clearSessionBootstrapCache();
+    await fetchSessionBootstrap(supabase, { force: true });
+  };
+
   // اگر روی app.tazesystem.ir هستیم و tenant resolved_host داره، به subdomain خودش ریدایرکت می‌کنیم
   const resolveTenantRedirect = async (): Promise<string | null> => {
     if (!isSaasAppHost()) return null;
@@ -464,6 +470,7 @@ const Login = () => {
       });
       if (error) throw error;
       await ensureActiveSessionUser();
+      await refreshAuthenticatedSessionBootstrap();
       await trackSuccessfulLogin('password');
 
       message.success('خوش آمدید! در حال ورود...');
@@ -527,6 +534,7 @@ const Login = () => {
       otpVerified = true;
       await ensureInvitedOrExistingProfile(otpRequestedFor);
       await ensureActiveSessionUser();
+      await refreshAuthenticatedSessionBootstrap();
       await trackSuccessfulLogin('otp');
       clearOtpSessionState();
       setOtpRequestedFor(null);

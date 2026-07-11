@@ -39,6 +39,7 @@ const OtpCodeInput = ({ value = '', onChange, length = 6, disabled, autoFocus }:
           autoFocus={autoFocus && index === 0}
           inputMode="numeric"
           autoComplete={index === 0 ? 'one-time-code' : 'off'}
+          aria-label={`رقم ${index + 1} کد تایید`}
           maxLength={length}
           className="!h-12 !w-11 text-center text-xl font-bold"
           onChange={(event) => updateAt(index, event.target.value)}

@@ -299,7 +299,10 @@ describe('Login OTP and password flows', () => {
     clickRequestOtp();
 
     await waitFor(() => {
-      expect(authState.signInWithOtp).toHaveBeenCalledWith({ phone: '+989121234567' });
+      expect(authState.signInWithOtp).toHaveBeenCalledWith({
+        phone: '+989121234567',
+        options: { shouldCreateUser: false },
+      });
     });
     expect(screen.getByText('ورود با کد')).toBeInTheDocument();
     expect(document.body.textContent || '').toContain('ارسال مجدد تا 90 ثانیه دیگر');
@@ -375,7 +378,7 @@ describe('Login OTP and password flows', () => {
     clickRequestOtp();
     await screen.findByText('ورود با کد');
 
-    fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '۱۲۳۴۵۶' } });
+    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '۱۲۳۴۵۶' } });
     fireEvent.click(screen.getByText('ورود با کد'));
 
     await waitFor(() => {
@@ -438,7 +441,7 @@ describe('Login OTP and password flows', () => {
     clickRequestOtp();
     await screen.findByText('ورود با کد');
 
-    fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '1111' } });
+    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '1111' } });
     fireEvent.click(screen.getByText('ورود با کد'));
 
     await waitFor(() => {
@@ -505,7 +508,7 @@ describe('Login OTP and password flows', () => {
     clickRequestOtp();
     await screen.findByText('ورود با کد');
 
-    fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '123456' } });
+    fireEvent.change(screen.getByLabelText('رقم 1 کد تایید'), { target: { value: '123456' } });
     fireEvent.click(screen.getByText('ورود با کد'));
 
     await waitFor(() => {
@@ -555,7 +558,7 @@ describe('Login OTP and password flows', () => {
     await screen.findByText('ورود با کد یکبارمصرف');
 
     expect((screen.getByPlaceholderText('0912...') as HTMLInputElement).value).toBe('09127778888');
-    expect((screen.getByPlaceholderText('123456') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('رقم 1 کد تایید') as HTMLInputElement).value).toBe('');
     expect(document.body.textContent || '').toContain('ارسال مجدد تا');
   });
 });
