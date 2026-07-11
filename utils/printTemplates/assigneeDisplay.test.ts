@@ -12,14 +12,21 @@ describe('print assignee display', () => {
     ).toBe('تیم فروش');
   });
 
-  it('does not fall back to raw UUID when no readable assignee label exists', () => {
+  it('uses a deleted user label for typed assignee values without a readable option', () => {
     const userId = '11111111-1111-1111-1111-111111111111';
 
+    expect(resolvePrintAssigneeComboLabel(`user_${userId}`, {})).toBe('کاربر حذف شده');
     expect(
       resolvePrintAssigneeLabel({
         assignee_id: userId,
         assignee_type: 'user',
       }, {}),
-    ).toBe('');
+    ).toBe('کاربر حذف شده');
+  });
+
+  it('does not fall back to raw UUID when no assignee type is available', () => {
+    const userId = '11111111-1111-1111-1111-111111111111';
+
+    expect(resolvePrintAssigneeComboLabel(userId, {})).toBe('');
   });
 });

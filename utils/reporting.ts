@@ -114,9 +114,6 @@ export const REPORT_BASE_SELECT_COLUMNS = [
   'assignee_role_id',
   'assignee_type',
   'is_deleted',
-  'deleted',
-  '_deleted',
-  'deleted_at',
 ] as const;
 
 const REPORT_UNSUPPORTED_FIELD_TYPES = new Set<FieldType>([

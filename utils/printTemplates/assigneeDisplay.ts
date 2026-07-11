@@ -2,6 +2,16 @@ import { buildResolvedAssigneeCombo, getResolvedAssigneeId, normalizeAssigneeTyp
 
 type RelationOptions = Record<string, any[]>;
 
+const ASSIGNEE_PREFIX_REGEX = /^(user|role)[:_]/i;
+const DELETED_USER_LABEL_FA = 'کاربر حذف شده';
+const DELETED_ROLE_LABEL_FA = 'نقش حذف شده';
+
+const hasExplicitAssigneePrefix = (value: unknown): boolean =>
+  ASSIGNEE_PREFIX_REGEX.test(String(value || '').trim());
+
+const getDeletedAssigneeLabel = (assigneeType: 'user' | 'role' | null | undefined): string =>
+  assigneeType === 'role' ? DELETED_ROLE_LABEL_FA : DELETED_USER_LABEL_FA;
+
 const getOptionLabel = (option: any): string =>
   String(
     option?.label ||
@@ -38,6 +48,7 @@ export const resolvePrintAssigneeComboLabel = (
   rawValue: unknown,
   relationOptions: RelationOptions = {},
 ): string => {
+  const hasTypedValue = hasExplicitAssigneePrefix(rawValue);
   const parsed = parseAssigneeValue(rawValue);
   if (!parsed.assigneeType || !parsed.assigneeId) return '';
 
@@ -56,9 +67,12 @@ export const resolvePrintAssigneeComboLabel = (
   const directComboLabel = resolvePrintOptionLabel(mergedOptions, comboValue);
   if (directComboLabel) return directComboLabel;
 
-  return parsed.assigneeType === 'role'
-    ? (resolvePrintOptionLabel(roleOptions, parsed.assigneeId) || resolvePrintOptionLabel(mergedOptions, parsed.assigneeId))
-    : (resolvePrintOptionLabel(userOptions, parsed.assigneeId) || resolvePrintOptionLabel(mergedOptions, parsed.assigneeId));
+  const scopedOptions = parsed.assigneeType === 'role' ? roleOptions : userOptions;
+  return (
+    resolvePrintOptionLabel(scopedOptions, parsed.assigneeId) ||
+    resolvePrintOptionLabel(mergedOptions, parsed.assigneeId) ||
+    (hasTypedValue ? getDeletedAssigneeLabel(parsed.assigneeType) : '')
+  );
 };
 
 export const resolvePrintAssigneeLabel = (

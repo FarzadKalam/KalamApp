@@ -2782,6 +2782,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
         data-module-id={primaryProcessRecordLink?.moduleId || undefined}
         data-record-id={primaryProcessRecordLink?.recordId || undefined}
         data-task-id={taskRecordId || undefined}
+        onClick={(event) => event.stopPropagation()}
         className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
         dir="rtl"
         style={{

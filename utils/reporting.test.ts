@@ -36,11 +36,13 @@ describe('buildReportBaseSelectColumns', () => {
       'id',
       'org_id',
       'assignee_id',
+      'is_deleted',
       'name',
       'total_invoice_amount',
       'customer_id',
       'payments',
       'invoiceItems',
     ]));
+    expect(columns).not.toEqual(expect.arrayContaining(['deleted', '_deleted', 'deleted_at']));
   });
 });

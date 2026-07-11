@@ -38,6 +38,35 @@ const isMissingBatchRpc = (error: any) => {
     || message.includes('could not find the function');
 };
 
+const isStatementTimeout = (error: any) => {
+  const code = normalizeText(error?.code).toUpperCase();
+  const message = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+  return code === '57014' || message.includes('statement timeout');
+};
+
+const readBatchRows = async (
+  supabaseClient: any,
+  moduleId: string,
+  recordIds: string[],
+): Promise<any[]> => {
+  const { data, error } = await supabaseClient.rpc('get_process_runtime_tasks_batch_for_records', {
+    p_module_id: moduleId,
+    p_record_ids: recordIds,
+  });
+  if (!error) {
+    return Array.isArray(data)
+      ? data
+      : data && typeof data === 'object' && Array.isArray(data.records) ? data.records : [];
+  }
+  if (isStatementTimeout(error) && recordIds.length > 1) {
+    const middle = Math.ceil(recordIds.length / 2);
+    const left = await readBatchRows(supabaseClient, moduleId, recordIds.slice(0, middle));
+    const right = await readBatchRows(supabaseClient, moduleId, recordIds.slice(middle));
+    return [...left, ...right];
+  }
+  throw error;
+};
+
 const collectContextIds = (context: ProcessRuntimeTaskContext) => ({
   taskIds: Array.from(new Set((context.stages || []).map((stage) => normalizeUuid(stage?.task_id)).filter(Boolean))),
   runIds: Array.from(new Set((context.runs || []).map((run) => normalizeUuid(run?.id)).filter(Boolean))),
@@ -74,20 +103,13 @@ const flush = async (supabaseClient: any, moduleId: string) => {
   const uniqueRecordIds = Array.from(new Set(queue.map((item) => item.recordId)));
   const tasksByRecord = new Map<string, any[]>();
   try {
-    const { data, error } = await supabaseClient.rpc('get_process_runtime_tasks_batch_for_records', {
-      p_module_id: moduleId,
-      p_record_ids: uniqueRecordIds,
-    });
-    if (error) throw error;
-    const rows = Array.isArray(data)
-      ? data
-      : data && typeof data === 'object' && Array.isArray(data.records) ? data.records : [];
+    const rows = await readBatchRows(supabaseClient, moduleId, uniqueRecordIds);
     rows.forEach((row: any) => {
       const recordId = normalizeText(row?.record_id);
       if (recordId) tasksByRecord.set(recordId, Array.isArray(row?.tasks) ? row.tasks : []);
     });
   } catch (error) {
-    if (!isMissingBatchRpc(error)) {
+    if (!isMissingBatchRpc(error) && !isStatementTimeout(error)) {
       queue.forEach((item) => item.reject(error));
       return;
     }
