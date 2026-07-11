@@ -104,16 +104,7 @@ const PRIMARY_MODEL_CAPABILITIES = new Set([
   'web_search',
 ]);
 
-const PRIMARY_MODEL_PREFERRED_IDS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.5-flash',
-  'gpt-5.4-mini',
-  'grok-4.3',
-  'gpt-5.5',
-  'qwen3.7-max',
-  'kimi-k2.6',
-];
-const PRIMARY_MODEL_ALLOWED_IDS = new Set(PRIMARY_MODEL_PREFERRED_IDS);
+const PRIMARY_MODEL_DEFAULT_KEY = '__primary_model';
 
 const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   dashboard_chat: 'ai_chat',
@@ -1084,18 +1075,19 @@ const filterSelectableAiModels = (models: any[], capability: string) =>
       && tags.some((tag: string) => acceptedTags.includes(String(tag || '').trim()));
   });
 
+const isCatalogDefaultFor = (model: any, capability: string) =>
+  Array.isArray(model?.metadata?.default_capability_tags)
+  && model.metadata.default_capability_tags.includes(capability);
+
 const pickPreferredPrimaryAiModel = (models: any[]) => {
   const candidates = (models || []).filter((model: any) => {
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
-      && PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim())
       && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
   });
-  const byId = new Map(candidates.map((model: any) => [String(model?.id || '').trim(), model]).filter(([id]) => id));
-  for (const preferredId of PRIMARY_MODEL_PREFERRED_IDS) {
-    if (byId.has(preferredId)) return preferredId;
-  }
+  const configuredDefault = candidates.find((model: any) => isCatalogDefaultFor(model, PRIMARY_MODEL_DEFAULT_KEY));
+  if (configuredDefault) return String(configuredDefault.id || '').trim();
   const scored = candidates
     .map((model: any) => {
       const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
@@ -1118,7 +1110,6 @@ const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<stri
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
-      && PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim())
       && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
   });
   const requestedPrimary = String(selectedModels?.[PRIMARY_AI_MODEL_KEY] || '').trim();
@@ -1132,9 +1123,12 @@ const sanitizeTenantSelectedModels = (models: any[], selectedModels: Record<stri
     const requested = String(selectedModels?.[capability] || '').trim();
     const allowed = filterSelectableAiModels(models, capability);
     const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
-    const resolved = PRIMARY_MODEL_CAPABILITIES.has(capability) && primaryModel && allowedIds.has(primaryModel)
-      ? primaryModel
-      : allowedIds.has(requested) ? requested : String(allowed[0]?.id || requested || '').trim();
+    const configuredDefault = allowed.find((model: any) => isCatalogDefaultFor(model, capability));
+    const resolved = allowedIds.has(requested)
+      ? requested
+      : PRIMARY_MODEL_CAPABILITIES.has(capability) && primaryModel && allowedIds.has(primaryModel)
+        ? primaryModel
+        : String(configuredDefault?.id || allowed[0]?.id || requested || '').trim();
     if (resolved) next[capability] = resolved;
   });
   return next;
@@ -1167,7 +1161,7 @@ const loadOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, au
 const listActiveAiModels = async (supabaseUrl: string, serviceRoleKey: string) =>
   safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
     is_active: 'eq.true',
-    select: 'id,capability_tags,is_coming_soon',
+    select: 'id,capability_tags,is_coming_soon,metadata',
     order: 'id.asc',
     limit: 500,
   }).catch(() => []);
@@ -1187,7 +1181,10 @@ const pickCapabilityModelFromCatalog = (
   const selectedAlias = (CAPABILITY_SELECTION_ALIASES[capability] || [])
     .map((alias) => selected?.[alias])
     .find((modelId) => String(modelId || '').trim());
-  const requested = String(requestedOverride || (PRIMARY_MODEL_CAPABILITIES.has(capability) && allowedIds.has(primaryModel) ? primaryModel : selected?.[capability] || selectedAlias) || '').trim();
+  const configuredDefault = allowed.find((model: any) => isCatalogDefaultFor(model, capability));
+  // The organization primary model serves every operation explicitly tagged for it.
+  // A per-message override still wins; specialized models remain the fallback.
+  const requested = String(requestedOverride || (allowedIds.has(primaryModel) ? primaryModel : selected?.[capability] || selectedAlias || configuredDefault?.id) || '').trim();
   if (requested && allowedIds.has(requested)) return requested;
   return String(allowed[0]?.id || '').trim();
 };
@@ -10326,7 +10323,7 @@ const inferProviderModelCapabilities = (modelId: string, raw: any) => {
   } else if (/(embed)/.test(id)) {
     tags.add('embedding');
   } else {
-    ['dashboard_chat', 'record_chat', 'customer_reply_suggestion', 'document_analysis', 'workflow_ai_prompt'].forEach((tag) => tags.add(tag));
+    ['dashboard_chat', 'record_chat', 'customer_reply_suggestion', 'document_analysis', 'document_generation', 'workflow_ai_prompt'].forEach((tag) => tags.add(tag));
     if (/(reason|o1|o3|r1|thinking)/.test(id)) {
       tags.add('deep_reasoning');
       tags.add('auto_decision');
@@ -11267,11 +11264,47 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
     const row = body?.model || {};
     const modelId = String(row?.id || '').trim();
     if (!modelId) return json(400, { success: false, message: 'شناسه مدل الزامی است.' });
+    const allCatalogRows = await safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
+      select: 'id,capability_tags,metadata',
+      limit: 1000,
+    });
+    const existingModel = allCatalogRows.find((item: any) => String(item?.id || '') === modelId);
+    const capabilityTags = Array.isArray(row.capability_tags) ? row.capability_tags.map((tag: any) => String(tag || '').trim()).filter(Boolean) : [];
+    const requestedDefaults = Array.isArray(row?.metadata?.default_capability_tags)
+      ? Array.from(new Set(row.metadata.default_capability_tags.map((tag: any) => String(tag || '').trim()).filter(Boolean)))
+      : [];
+    const validDefaultCapabilities = new Set([PRIMARY_MODEL_DEFAULT_KEY, ...Object.keys(AI_CAPABILITY_FEATURE_KEYS)]);
+    const invalidDefault = requestedDefaults.find((capability) => !validDefaultCapabilities.has(capability));
+    if (invalidDefault) return json(400, { success: false, message: `عملگر پیش‌فرض «${invalidDefault}» معتبر نیست.` });
+    const supportsDefault = (capability: string) => capability === PRIMARY_MODEL_DEFAULT_KEY
+      ? capabilityTags.some((tag) => PRIMARY_MODEL_CAPABILITIES.has(tag))
+      : capabilityTags.includes(capability) || (CAPABILITY_SELECTION_ALIASES[capability] || []).some((alias) => capabilityTags.includes(alias));
+    const unsupportedDefault = requestedDefaults.find((capability) => !supportsDefault(capability));
+    if (unsupportedDefault) return json(400, { success: false, message: 'مدل فقط برای عملگرهایی می‌تواند پیش‌فرض شود که در ویژگی‌های آن انتخاب شده‌اند.' });
+    const nextMetadata = {
+      ...(existingModel?.metadata && typeof existingModel.metadata === 'object' ? existingModel.metadata : {}),
+      ...(row.metadata && typeof row.metadata === 'object' ? row.metadata : {}),
+      default_capability_tags: requestedDefaults,
+    };
+    const replacedDefaults: Array<{ capability: string; modelId: string }> = [];
+    for (const catalogModel of allCatalogRows) {
+      if (String(catalogModel?.id || '') === modelId) continue;
+      const oldDefaults = Array.isArray(catalogModel?.metadata?.default_capability_tags)
+        ? catalogModel.metadata.default_capability_tags.map((tag: any) => String(tag || '').trim()).filter(Boolean)
+        : [];
+      const removedDefaults = oldDefaults.filter((capability: string) => requestedDefaults.includes(capability));
+      if (removedDefaults.length === 0) continue;
+      await restPatch(supabaseUrl, serviceRoleKey, 'ai_model_catalog', { id: `eq.${catalogModel.id}` }, {
+        metadata: { ...(catalogModel.metadata || {}), default_capability_tags: oldDefaults.filter((capability: string) => !requestedDefaults.includes(capability)) },
+        updated_at: new Date().toISOString(),
+      });
+      removedDefaults.forEach((capability: string) => replacedDefaults.push({ capability, modelId: String(catalogModel.id) }));
+    }
     const rows = await restUpsert(supabaseUrl, serviceRoleKey, 'ai_model_catalog', [{
       id: modelId,
       provider: String(row.provider || 'avalai').trim(),
       display_name_fa: String(row.display_name_fa || modelId).trim(),
-      capability_tags: Array.isArray(row.capability_tags) ? row.capability_tags : [],
+      capability_tags: capabilityTags,
       input_usd_per_1m: numberFrom(row.input_usd_per_1m, 0),
       cached_input_usd_per_1m: row.cached_input_usd_per_1m !== undefined ? numberFrom(row.cached_input_usd_per_1m, 0) : null,
       output_usd_per_1m: numberFrom(row.output_usd_per_1m, 0),
@@ -11282,10 +11315,10 @@ const handleSaasAi = async (supabaseUrl: string, serviceRoleKey: string, authCon
       is_active: row.is_active !== false,
       is_coming_soon: row.is_coming_soon === true,
       pricing_source: String(row.pricing_source || 'manual').trim(),
-      metadata: row.metadata && typeof row.metadata === 'object' ? row.metadata : {},
+      metadata: nextMetadata,
       updated_at: new Date().toISOString(),
     }], 'id');
-    return json(200, { success: true, model: rows[0] || null });
+    return json(200, { success: true, model: rows[0] || null, replacedDefaults });
   }
 
   if (subAction === 'toggle_model') {

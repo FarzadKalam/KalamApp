@@ -17,7 +17,7 @@ import {
 import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadButton';
 const MessageComposerModal = lazy(() => import('../MessageComposerModal'));
 import AiVoiceRecorder, { type RecordedVoice } from './AiVoiceRecorder';
-import AiMediaSettingsPopover, { type AiMediaSettings, type AiMediaSourceImage } from './AiMediaSettingsPopover';
+import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsPopover';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiComposerCapability =
@@ -57,8 +57,6 @@ type AiCapabilityComposerActionsProps = {
   onRecordCreationTargetModuleChange?: (moduleId: string | null) => void;
   mediaSettings?: AiMediaSettings;
   onMediaSettingsChange?: (next: AiMediaSettings) => void;
-  mediaSourceImages?: AiMediaSourceImage[];
-  onMediaSourceImagesChange?: (next: AiMediaSourceImage[]) => void;
   onApplyPrompt?: (text: string) => void;
   promptRecord?: Record<string, any> | null;
 };
@@ -116,8 +114,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   onRecordCreationTargetModuleChange,
   mediaSettings = {},
   onMediaSettingsChange,
-  mediaSourceImages = [],
-  onMediaSourceImagesChange,
   onApplyPrompt,
   promptRecord = null,
 }) => {
@@ -140,7 +136,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         : selectedSet.has('voice_output')
           ? 'voice_output' as const
           : null;
-  const mediaSupportsSources = activeMediaCapability === 'image_generation' || activeMediaCapability === 'video_generation';
 
   useEffect(() => {
     if (disabled || loading) setOpen(false);
@@ -277,9 +272,6 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           capability={activeMediaCapability}
           settings={mediaSettings}
           onSettingsChange={onMediaSettingsChange}
-          sourceImages={mediaSupportsSources ? mediaSourceImages : undefined}
-          onSourceImagesChange={mediaSupportsSources ? onMediaSourceImagesChange : undefined}
-          maxSourceImages={activeMediaCapability === 'video_generation' ? 1 : 4}
           disabled={disabled || loading}
           size={size}
         />

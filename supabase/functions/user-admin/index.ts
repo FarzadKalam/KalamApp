@@ -80,7 +80,7 @@ const toLocalIranMobile = (value?: string | null) => {
 
 const toGoTruePhone = (value?: string | null) => {
   const normalized = normalizeIranMobileE164(value);
-  return normalized || null;
+  return normalized ? normalized.replace(/^\+/, '') : null;
 };
 
 const normalizeEmail = (value?: string | null) =>

@@ -35,6 +35,7 @@ type AiCapabilityKey =
   | 'voice_output'
   | 'image_generation'
   | 'video_generation'
+  | 'document_generation'
   | 'voip_auto_reply'
   | 'auto_decision'
   | 'customer_auto_reply';
@@ -58,6 +59,7 @@ const CAPABILITIES: Array<{
   { key: 'voice_output', label: 'تولید صدا', description: 'پاسخگویی با ویس', phase: 'active' },
   { key: 'image_generation', label: 'تولید تصویر', description: 'ساخت تصویر با پرامپت', phase: 'active' },
   { key: 'video_generation', label: 'تولید ویدیو', description: 'ساخت ویدیو با پرامپت', phase: 'next' },
+  { key: 'document_generation', label: 'ساخت فایل', description: 'تولید فایل Word، Excel، PDF یا CSV', phase: 'active' },
   { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
   { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان', description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },
 ];
@@ -73,17 +75,6 @@ const PRIMARY_MODEL_CAPABILITIES = new Set([
   'legal_assistant',
   'web_search',
 ]);
-
-const PRIMARY_MODEL_PREFERRED_IDS = [
-  'gemini-3.1-flash-lite',
-  'gemini-3.5-flash',
-  'gpt-5.4-mini',
-  'grok-4.3',
-  'gpt-5.5',
-  'qwen3.7-max',
-  'kimi-k2.6',
-];
-const PRIMARY_MODEL_ALLOWED_IDS = new Set(PRIMARY_MODEL_PREFERRED_IDS);
 
 const formatUnit = (value: unknown) =>
   Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 8 });
@@ -176,11 +167,7 @@ const AiSettingsTab: React.FC = () => {
       const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
       return model?.is_coming_soon !== true && tags.some((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim()));
     })
-    .filter((model) => PRIMARY_MODEL_ALLOWED_IDS.has(String(model?.id || '').trim()))
     .sort((a, b) => {
-      const aIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(a?.id || ''));
-      const bIndex = PRIMARY_MODEL_PREFERRED_IDS.indexOf(String(b?.id || ''));
-      if (aIndex !== -1 || bIndex !== -1) return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
       const aTags = Array.isArray(a?.capability_tags) ? a.capability_tags : [];
       const bTags = Array.isArray(b?.capability_tags) ? b.capability_tags : [];
       const aCoverage = aTags.filter((tag: string) => PRIMARY_MODEL_CAPABILITIES.has(String(tag || '').trim())).length;

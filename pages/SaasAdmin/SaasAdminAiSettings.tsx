@@ -63,6 +63,12 @@ const MODEL_TABS = [
   { key: 'embedding', label: 'بردارساز' },
 ];
 
+const PRIMARY_MODEL_DEFAULT_KEY = '__primary_model';
+const DEFAULT_CAPABILITY_OPTIONS = [
+  { key: PRIMARY_MODEL_DEFAULT_KEY, label: 'مدل اصلی سازمان' },
+  ...ALL_CAPABILITIES,
+];
+
 const formatIrt = (value: unknown) =>
   `${Number(value || 0).toLocaleString('fa-IR')} تومان`;
 
@@ -135,6 +141,8 @@ const SaasAdminAiSettings: React.FC = () => {
   const [giftReason, setGiftReason] = useState('اعتبار هدیه هوش مصنوعی');
   const [giftSaving, setGiftSaving] = useState(false);
   const [form] = Form.useForm<ModelFormValues>();
+  const defaultCapabilityTags = Form.useWatch(['metadata', 'default_capability_tags'], form) || [];
+  const isDefaultModel = Form.useWatch(['metadata', 'is_default_model'], form) === true;
 
   const loadOverview = useCallback(async () => {
     setLoading(true);
@@ -163,6 +171,12 @@ const SaasAdminAiSettings: React.FC = () => {
     !catalogCapabilityFilter || (model.capability_tags || []).includes(catalogCapabilityFilter)
   ), [catalogCapabilityFilter, models]);
   const catalogModelIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
+  const defaultReplacementPreview = useMemo(() => (Array.isArray(defaultCapabilityTags) ? defaultCapabilityTags : [])
+    .map((capability) => ({
+      capability,
+      label: DEFAULT_CAPABILITY_OPTIONS.find((option) => option.key === capability)?.label || capability,
+      current: models.filter((model) => Array.isArray(model.metadata?.default_capability_tags) && model.metadata.default_capability_tags.includes(capability)),
+    })), [defaultCapabilityTags, models]);
   const orgSummaries = useMemo(() => (overview?.orgSummaries || []) as any[], [overview]);
   const allUsage = useMemo(() => (overview?.allUsage || []) as any[], [overview]);
   const totals = overview?.totals || {};
@@ -231,6 +245,10 @@ const SaasAdminAiSettings: React.FC = () => {
       form.setFieldsValue({
         ...model,
         capability_tags: model.capability_tags || [],
+        metadata: {
+          ...(model.metadata || {}),
+          is_default_model: Array.isArray(model.metadata?.default_capability_tags) && model.metadata.default_capability_tags.length > 0,
+        },
       });
     } else {
       form.resetFields();
@@ -240,6 +258,7 @@ const SaasAdminAiSettings: React.FC = () => {
         is_active: true,
         is_coming_soon: false,
         capability_tags: [],
+        metadata: { default_capability_tags: [] },
       });
     }
     setEditOpen(true);
@@ -740,6 +759,60 @@ const SaasAdminAiSettings: React.FC = () => {
             <Form.Item name="is_coming_soon" label="فاز بعد" valuePropName="checked">
               <Switch />
             </Form.Item>
+            <Form.Item
+              name={['metadata', 'is_default_model']}
+              label="مدل پیش‌فرض"
+              valuePropName="checked"
+              className="col-span-2"
+            >
+              <Switch
+                checkedChildren="پیش‌فرض"
+                unCheckedChildren="عادی"
+                onChange={(checked) => {
+                  const metadata = form.getFieldValue('metadata') || {};
+                  form.setFieldValue('metadata', {
+                    ...metadata,
+                    is_default_model: checked,
+                    default_capability_tags: checked ? (metadata.default_capability_tags || []) : [],
+                  });
+                }}
+              />
+            </Form.Item>
+            <Form.Item
+              name={['metadata', 'default_capability_tags']}
+              label="پیش‌فرض برای عملگرها"
+              className="col-span-2"
+              dependencies={[['metadata', 'is_default_model']]}
+            >
+              <Select
+                mode="multiple"
+                disabled={!isDefaultModel}
+                options={DEFAULT_CAPABILITY_OPTIONS.map((capability) => ({ value: capability.key, label: capability.label }))}
+                placeholder="عملگرهایی که این مدل باید پیش‌فرض آن‌ها باشد"
+              />
+            </Form.Item>
+            {defaultReplacementPreview.length > 0 ? (
+              <div className="col-span-2">
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="تغییر پیش‌فرض‌های مرکزی"
+                  description={(
+                    <div className="space-y-1 text-xs">
+                      {defaultReplacementPreview.map((item) => (
+                        <div key={item.capability}>
+                          <b>{item.label}:</b>{' '}
+                          {item.current.length > 0
+                            ? `${item.current.map((model) => model.display_name_fa || model.id).join('، ')} از پیش‌فرض خارج می‌شود.`
+                            : 'اکنون مدل پیش‌فرضی ندارد.'}
+                        </div>
+                      ))}
+                      <div>پس از ذخیره، این مدل پیش‌فرض مرکزی این عملگرها می‌شود؛ انتخاب ذخیره‌شده هر سازمان تغییر نمی‌کند.</div>
+                    </div>
+                  )}
+                />
+              </div>
+            ) : null}
           </div>
         </Form>
       </Modal>

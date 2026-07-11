@@ -1,15 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Checkbox, Drawer, Grid, Input, InputNumber, Popover, Select, Slider, Space, Tooltip } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Button, Checkbox, Drawer, Grid, Input, InputNumber, Popover, Select, Slider, Tooltip } from 'antd';
 import type { ButtonProps } from 'antd';
-import { AudioOutlined, CloseCircleFilled, PictureOutlined, SettingOutlined } from '@ant-design/icons';
+import { SettingOutlined } from '@ant-design/icons';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
-
-export type AiMediaSourceImage = {
-  data: string;       // base64 (no data: prefix)
-  mimeType: string;
-  filename?: string;
-  previewUrl: string; // data URL for thumbnail
-};
 
 export type AiMediaSettings = {
   // image
@@ -46,11 +39,8 @@ type AiMediaSettingsPopoverProps = {
   capability: 'image_generation' | 'voice_output' | 'video_generation' | 'document_generation';
   settings: AiMediaSettings;
   onSettingsChange: (next: AiMediaSettings) => void;
-  sourceImages?: AiMediaSourceImage[];
-  onSourceImagesChange?: (next: AiMediaSourceImage[]) => void;
   disabled?: boolean;
   size?: ButtonProps['size'];
-  maxSourceImages?: number;
 };
 
 // Voices valid on AvalAI /v1/audio/speech (OpenAI + ElevenLabs compatible set).
@@ -117,32 +107,16 @@ const MUSIC_MODE_OPTIONS = [
   { value: 'song', label: 'موسیقی با ترانه' },
 ];
 
-const blobToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
-  const reader = new FileReader();
-  reader.onload = () => resolve(String(reader.result || ''));
-  reader.onerror = () => reject(reader.error || new Error('خواندن فایل ناموفق بود.'));
-  reader.readAsDataURL(file);
-});
-
 const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   capability,
   settings,
   onSettingsChange,
-  sourceImages = [],
-  onSourceImagesChange,
   disabled = false,
   size,
-  maxSourceImages = 4,
 }) => {
-  const { message } = App.useApp();
   const screens = Grid.useBreakpoint();
   const [open, setOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const voiceReferenceInputRef = useRef<HTMLInputElement | null>(null);
   const isMobile = !screens.md;
-
-  const supportsSourceImages = (capability === 'image_generation' || capability === 'video_generation')
-    && typeof onSourceImagesChange === 'function';
 
   useEffect(() => () => {
     scheduleOverlayLockRelease(0);
@@ -164,67 +138,6 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
       orientationHorizontal: checked ? false : settings.orientationHorizontal,
       size: checked ? '1024x1536' : settings.orientationHorizontal ? '1536x1024' : settings.size,
     });
-  };
-
-  const handlePickFiles = async (files: FileList | null) => {
-    if (!files || !onSourceImagesChange) return;
-    const room = Math.max(0, maxSourceImages - sourceImages.length);
-    if (room <= 0) {
-      message.warning(`حداکثر ${maxSourceImages.toLocaleString('fa-IR')} تصویر منبع مجاز است.`);
-      return;
-    }
-    const picked = Array.from(files).filter((file) => file.type.startsWith('image/')).slice(0, room);
-    const next: AiMediaSourceImage[] = [];
-    for (const file of picked) {
-      if (file.size > 8 * 1024 * 1024) {
-        message.warning(`«${file.name}» بزرگ‌تر از ۸ مگابایت است و رد شد.`);
-        continue;
-      }
-      try {
-        const dataUrl = await blobToDataUrl(file);
-        next.push({
-          data: dataUrl.replace(/^data:[^;]+;base64,/, ''),
-          mimeType: file.type || 'image/png',
-          filename: file.name,
-          previewUrl: dataUrl,
-        });
-      } catch {
-        message.error(`خواندن «${file.name}» ناموفق بود.`);
-      }
-    }
-    if (next.length) onSourceImagesChange([...sourceImages, ...next]);
-  };
-
-  const handlePickReferenceVoice = async (files: FileList | null) => {
-    const file = Array.from(files || []).find((item) => item.type.startsWith('audio/'));
-    if (!file) return;
-    if (file.size > 8 * 1024 * 1024) {
-      message.warning('فایل صدای مرجع بزرگ‌تر از ۸ مگابایت است.');
-      return;
-    }
-    try {
-      const dataUrl = await blobToDataUrl(file);
-      update({
-        referenceVoiceData: dataUrl.replace(/^data:[^;]+;base64,/, ''),
-        referenceVoiceMimeType: file.type || 'audio/mpeg',
-        referenceVoiceFilename: file.name,
-        referenceVoicePreviewUrl: dataUrl,
-      });
-    } catch {
-      message.error('خواندن صدای مرجع ناموفق بود.');
-    }
-  };
-
-  const removeReferenceVoice = () => update({
-    referenceVoiceData: undefined,
-    referenceVoiceMimeType: undefined,
-    referenceVoiceFilename: undefined,
-    referenceVoicePreviewUrl: undefined,
-  });
-
-  const removeSource = (index: number) => {
-    if (!onSourceImagesChange) return;
-    onSourceImagesChange(sourceImages.filter((_, idx) => idx !== index));
   };
 
   const content = useMemo(() => (
@@ -391,35 +304,6 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
               />
             </div>
           ) : null}
-          <div>
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">صدای مرجع</span>
-              {settings.referenceVoiceFilename ? (
-                <button type="button" className="text-[10px] text-red-500" onClick={removeReferenceVoice}>حذف</button>
-              ) : null}
-            </div>
-            <button
-              type="button"
-              onClick={() => voiceReferenceInputRef.current?.click()}
-              className="flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs text-gray-500 hover:border-leather-400 hover:text-leather-600 dark:border-white/15 dark:text-gray-300"
-            >
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <AudioOutlined />
-                <span className="truncate">{settings.referenceVoiceFilename || 'افزودن فایل صوتی مرجع'}</span>
-              </span>
-              <span className="shrink-0 text-[10px] text-gray-400">اختیاری</span>
-            </button>
-            <input
-              ref={voiceReferenceInputRef}
-              type="file"
-              accept="audio/*"
-              className="hidden"
-              onChange={(event) => {
-                void handlePickReferenceVoice(event.target.files);
-                event.target.value = '';
-              }}
-            />
-          </div>
         </>
       ) : null}
 
@@ -474,63 +358,9 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
         </>
       ) : null}
 
-      {supportsSourceImages ? (
-        <div>
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">
-              {capability === 'video_generation' ? 'تصویر مرجع' : 'تصاویر منبع'}
-            </span>
-            <span className="text-[10px] text-gray-400">
-              {sourceImages.length.toLocaleString('fa-IR')}/{maxSourceImages.toLocaleString('fa-IR')}
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {sourceImages.map((src, index) => (
-              <div key={`${src.filename}-${index}`} className="relative">
-                <img src={src.previewUrl} alt={src.filename || 'منبع'} className="h-14 w-14 rounded-lg object-cover" />
-                <button
-                  type="button"
-                  onClick={() => removeSource(index)}
-                  className="absolute -right-1.5 -top-1.5 text-red-500"
-                  aria-label="حذف تصویر"
-                >
-                  <CloseCircleFilled />
-                </button>
-              </div>
-            ))}
-            {sourceImages.length < maxSourceImages ? (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex h-14 w-14 items-center justify-center rounded-lg border border-dashed border-gray-300 text-gray-400 hover:border-leather-400 hover:text-leather-500 dark:border-white/15"
-                aria-label="افزودن تصویر منبع"
-              >
-                <PictureOutlined />
-              </button>
-            ) : null}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple={capability !== 'video_generation'}
-            className="hidden"
-            onChange={(event) => {
-              void handlePickFiles(event.target.files);
-              event.target.value = '';
-            }}
-          />
-          <div className="mt-1 text-[10px] leading-4 text-gray-400">
-            {capability === 'video_generation'
-              ? 'یک تصویر برای ساخت ویدیو از روی عکس.'
-              : 'با افزودن تصویر، هوش مصنوعی به‌جای ساخت از صفر، تصویر شما را ویرایش/ترکیب می‌کند.'}
-          </div>
-        </div>
-      ) : null}
     </div>
-  ), [capability, settings, sourceImages, maxSourceImages, supportsSourceImages]);
+  ), [capability, settings]);
 
-  const badge = sourceImages.length > 0 ? sourceImages.length.toLocaleString('fa-IR') : null;
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (!nextOpen) scheduleOverlayLockRelease();
@@ -539,7 +369,7 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   const renderTriggerButton = (onClick?: () => void) => (
     <Tooltip title="تنظیمات تولید رسانه">
       <Button size={size} disabled={disabled} icon={<SettingOutlined />} onClick={onClick}>
-        {badge ? <Space size={2}>{badge}</Space> : null}
+        تنظیمات
       </Button>
     </Tooltip>
   );

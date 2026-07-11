@@ -53,6 +53,31 @@ const revokeBundleInputPreviewUrls = (items: AiBundleInput[]) => {
   });
 };
 
+const buildBundleMessageAttachments = (items: AiBundleInput[]) => items.map((item) => {
+  if (item.type === 'voice') {
+    return {
+      name: item.voice.filename || 'پیام صوتی',
+      url: item.voice.previewUrl || '',
+      mimeType: item.voice.mimeType,
+      fileType: 'audio',
+    };
+  }
+  const rawData = String(item.file.data || '').trim();
+  const mimeType = String(item.file.mimeType || 'application/octet-stream');
+  const url = String(item.file.url || '').trim()
+    || (rawData ? (rawData.startsWith('data:') ? rawData : `data:${mimeType};base64,${rawData}`) : '');
+  return {
+    name: item.file.fileName || item.label || 'فایل پیوست',
+    url,
+    mimeType,
+    fileType: item.type === 'image' ? 'image' : 'file',
+    assetId: item.file.assetId || null,
+    entryId: item.file.entryId || null,
+    moduleId: item.file.moduleId || null,
+    recordId: item.file.recordId || null,
+  };
+}).filter((attachment) => Boolean(attachment.url));
+
 const DEFAULT_COMPOSER_CAPABILITIES: AiComposerCapability[] = [];
 const NON_STREAM_CHAT_CAPABILITIES = new Set([
   'document_analysis',
@@ -403,6 +428,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
+  const composerImageSources = useMemo(() => bundleInputs
+    .filter((item) => item.type === 'image' && String(item.file?.data || '').trim())
+    .map((item) => ({
+      data: String(item.file.data || ''),
+      mimeType: String(item.file.mimeType || 'image/png'),
+      filename: String(item.file.fileName || 'image.png'),
+    })), [bundleInputs]);
   const bundleInputsRef = useRef<AiBundleInput[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
@@ -942,7 +974,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
     if (capabilitySet.has('image_generation')) {
       const autoSourceImages = [
-        ...mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
         ...bundlePayload
           .filter((item) => String(item?.type || '') === 'image' && String(item?.file?.data || '').trim())
           .map((item) => ({
@@ -1002,7 +1033,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
     if (capabilitySet.has('video_generation')) {
       const prompt = params.messageText || 'با توجه به درخواست کاربر ویدیو بساز.';
-      const autoSourceImages = mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+      const autoSourceImages = composerImageSources;
       const confirmBody = {
         action: 'generate_video',
         prompt,
@@ -1781,7 +1812,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
-        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        sourceImages: composerImageSources,
         sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
       });
       if (data.threadId) setThreadId(String(data.threadId));
@@ -1906,7 +1937,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
-        sourceImages: mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename })),
+        sourceImages: composerImageSources,
       });
       if (data.threadId) setThreadId(String(data.threadId));
       const videoId = String(data?.videoId || '').trim();
@@ -2044,6 +2075,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       created_at: new Date().toISOString(),
       metadata: {
         input_kind: 'task_bundle',
+        attachments: buildBundleMessageAttachments(bundleInputs),
         bundle_inputs: bundleInputs.map((item) => item.type === 'voice'
           ? { type: item.type, label: item.label, durationMs: item.voice.durationMs, mimeType: item.voice.mimeType }
           : {
@@ -2238,7 +2270,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           finalConfirmBody.settings = mediaSettings;
           finalConfirmBody.sourceImages = Array.isArray(confirmBody.sourceImages) && confirmBody.sourceImages.length
             ? confirmBody.sourceImages
-            : mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+            : composerImageSources;
           finalConfirmBody.sourceImageUrls = Array.isArray(confirmBody.sourceImageUrls) && confirmBody.sourceImageUrls.length
             ? confirmBody.sourceImageUrls
             : imageEditSourceUrl ? [imageEditSourceUrl] : [];
@@ -2246,7 +2278,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           finalConfirmBody.settings = mediaSettings;
           finalConfirmBody.sourceImages = Array.isArray(confirmBody.sourceImages) && confirmBody.sourceImages.length
             ? confirmBody.sourceImages
-            : mediaSourceImages.map((src) => ({ data: src.data, mimeType: src.mimeType, filename: src.filename }));
+            : composerImageSources;
         } else if (generationKind === 'voice_output') {
           finalConfirmBody.settings = mediaSettings;
         } else if (generationKind === 'document_generation') {
@@ -2429,7 +2461,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} />
-            {!pendingKind && providerRawText ? (
+            {!pendingKind && providerRawText && attachments.length === 0 ? (
               <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
                 <summary className="cursor-pointer text-right font-semibold" dir="rtl">
                   پاسخ خام سرویس‌دهنده
@@ -2777,9 +2809,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                       capability={pendingGenerationKind as 'image_generation' | 'voice_output' | 'video_generation' | 'document_generation'}
                       settings={mediaSettings}
                       onSettingsChange={setMediaSettings}
-                      sourceImages={pendingGenerationKind === 'image_generation' || pendingGenerationKind === 'video_generation' ? mediaSourceImages : undefined}
-                      onSourceImagesChange={pendingGenerationKind === 'image_generation' || pendingGenerationKind === 'video_generation' ? setMediaSourceImages : undefined}
-                      maxSourceImages={pendingGenerationKind === 'video_generation' ? 1 : 4}
                       size="small"
                     />
                   </div>
@@ -2914,8 +2943,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
             mediaSettings={mediaSettings}
             onMediaSettingsChange={setMediaSettings}
-            mediaSourceImages={mediaSourceImages}
-            onMediaSourceImagesChange={setMediaSourceImages}
             onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
           />
           <Button
