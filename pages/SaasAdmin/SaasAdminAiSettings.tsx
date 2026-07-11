@@ -15,6 +15,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tabs,
   Tooltip,
   Typography,
 } from 'antd';
@@ -38,14 +39,28 @@ const ALL_CAPABILITIES = [
   { key: 'document_analysis', label: 'تحلیل اسناد' },
   { key: 'workflow_ai_prompt', label: 'پرامپت گردش کار' },
   { key: 'deep_reasoning', label: 'تفکر عمیق' },
+  { key: 'auto_decision', label: 'تصمیم‌گیری خودکار' },
   { key: 'legal_assistant', label: 'دستیار حقوقی' },
   { key: 'voip_auto_reply', label: 'VOIP خودکار' },
   { key: 'web_search', label: 'جستجوی وب' },
   { key: 'voice_input', label: 'ورودی صوتی (STT)' },
   { key: 'voice_output', label: 'خروجی صوتی (TTS)' },
   { key: 'image_generation', label: 'تولید تصویر' },
+  { key: 'image_edit', label: 'ویرایش تصویر' },
   { key: 'video_generation', label: 'تولید ویدیو' },
   { key: 'embedding', label: 'Embedding اسناد' },
+  { key: 'document_generation', label: 'تولید سند' },
+  { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان' },
+];
+
+const MODEL_TABS = [
+  { key: 'all', label: 'همه مدل‌ها' },
+  { key: 'text', label: 'مدل‌های متنی' },
+  { key: 'reasoning', label: 'مدل‌های استدلالی' },
+  { key: 'image', label: 'تصویرساز' },
+  { key: 'audio', label: 'تولید و دریافت صدا' },
+  { key: 'video', label: 'ویدیوساز' },
+  { key: 'embedding', label: 'بردارساز' },
 ];
 
 const formatIrt = (value: unknown) =>
@@ -79,11 +94,38 @@ type AiModel = {
 
 type ModelFormValues = Omit<AiModel, 'metadata'>;
 
+type ProviderModel = {
+  id: string;
+  label: string;
+  suggested_capability_tags?: string[];
+  context_window?: number | null;
+  input_usd_per_1m?: number | null;
+  output_usd_per_1m?: number | null;
+  raw?: Record<string, any>;
+};
+
+const modelTabKey = (model: Pick<ProviderModel, 'id' | 'suggested_capability_tags'>) => {
+  const id = String(model.id || '').toLowerCase();
+  const tags = model.suggested_capability_tags || [];
+  if (tags.includes('image_generation') || /(image|imagen|flux|banana)/.test(id)) return 'image';
+  if (tags.includes('video_generation') || /(video|sora|veo|kling|runway)/.test(id)) return 'video';
+  if (tags.includes('voice_input') || tags.includes('voice_output') || /(tts|speech|eleven|transcrib|whisper)/.test(id)) return 'audio';
+  if (tags.includes('embedding') || /embed/.test(id)) return 'embedding';
+  if (tags.includes('deep_reasoning') || tags.includes('auto_decision') || /(reason|o1|o3|r1|thinking)/.test(id)) return 'reasoning';
+  return 'text';
+};
+
 const SaasAdminAiSettings: React.FC = () => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState<Record<string, any> | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [providerModelsOpen, setProviderModelsOpen] = useState(false);
+  const [providerModels, setProviderModels] = useState<ProviderModel[]>([]);
+  const [providerModelsWarning, setProviderModelsWarning] = useState('');
+  const [providerModelTab, setProviderModelTab] = useState('all');
+  const [providerModelSearch, setProviderModelSearch] = useState('');
+  const [catalogCapabilityFilter, setCatalogCapabilityFilter] = useState<string | undefined>();
   const [editModel, setEditModel] = useState<AiModel | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
@@ -109,6 +151,18 @@ const SaasAdminAiSettings: React.FC = () => {
   useEffect(() => { void loadOverview(); }, [loadOverview]);
 
   const models = useMemo<AiModel[]>(() => (overview?.models || []) as AiModel[], [overview]);
+  const providerModelRows = useMemo(() => {
+    const term = providerModelSearch.trim().toLowerCase();
+    return providerModels.filter((model) => {
+      const matchesTab = providerModelTab === 'all' || modelTabKey(model) === providerModelTab;
+      const searchable = `${model.id} ${model.label} ${(model.suggested_capability_tags || []).join(' ')}`.toLowerCase();
+      return matchesTab && (!term || searchable.includes(term));
+    });
+  }, [providerModels, providerModelSearch, providerModelTab]);
+  const filteredCatalogModels = useMemo(() => models.filter((model) =>
+    !catalogCapabilityFilter || (model.capability_tags || []).includes(catalogCapabilityFilter)
+  ), [catalogCapabilityFilter, models]);
+  const catalogModelIds = useMemo(() => new Set(models.map((model) => model.id)), [models]);
   const orgSummaries = useMemo(() => (overview?.orgSummaries || []) as any[], [overview]);
   const allUsage = useMemo(() => (overview?.allUsage || []) as any[], [overview]);
   const totals = overview?.totals || {};
@@ -131,24 +185,44 @@ const SaasAdminAiSettings: React.FC = () => {
       const data = await callAi({ action: 'saas_ai', sub: 'sync_models' });
       const list: any[] = data?.models || [];
       message.success(`${list.length} مدل از AvalAI دریافت شد.`);
-      // Show list for review (not auto-save)
-      Modal.info({
-        title: 'مدل‌های AvalAI',
-        width: 700,
-        content: (
-          <div className="max-h-80 overflow-auto text-xs">
-            {list.slice(0, 60).map((item) => (
-              <div key={item.id} className="py-0.5">{item.id} — {item.label}</div>
-            ))}
-            {list.length > 60 ? <div>…و {list.length - 60} مدل دیگر</div> : null}
-          </div>
-        ),
-      });
+      setProviderModels(list as ProviderModel[]);
+      setProviderModelsWarning(String(data?.warning || ''));
+      setProviderModelTab('all');
+      setProviderModelSearch('');
+      setProviderModelsOpen(true);
     } catch (err: any) {
       message.error(toFaErrorMessage(err, 'همگام‌سازی مدل‌ها ناموفق بود.'));
     } finally {
       setSyncing(false);
     }
+  };
+
+  const openAddProviderModel = (model: ProviderModel) => {
+    const existingModel = models.find((catalogModel) => catalogModel.id === model.id);
+    if (existingModel) {
+      openEdit(existingModel);
+      setProviderModelsOpen(false);
+      return;
+    }
+    setEditModel(null);
+    form.resetFields();
+    form.setFieldsValue({
+      id: model.id,
+      provider: 'avalai',
+      display_name_fa: model.label || model.id,
+      capability_tags: model.suggested_capability_tags || [],
+      input_usd_per_1m: model.input_usd_per_1m ?? 0,
+      output_usd_per_1m: model.output_usd_per_1m ?? 0,
+      margin_percent: 30,
+      is_active: true,
+      is_coming_soon: false,
+      metadata: {
+        context_window: model.context_window ?? null,
+        provider_catalog_id: model.id,
+      },
+    });
+    setProviderModelsOpen(false);
+    setEditOpen(true);
   };
 
   const openEdit = (model: AiModel | null) => {
@@ -174,11 +248,12 @@ const SaasAdminAiSettings: React.FC = () => {
   const saveModel = async () => {
     try {
       const values = await form.validateFields();
+      const allValues = form.getFieldsValue(true);
       setEditSaving(true);
       await callAi({
         action: 'saas_ai',
         sub: 'upsert_model',
-        model: { ...(editModel || {}), ...values },
+        model: { ...(editModel || {}), ...allValues, ...values },
       });
       message.success(editModel ? 'مدل ویرایش شد.' : 'مدل جدید اضافه شد.');
       setEditOpen(false);
@@ -421,11 +496,22 @@ const SaasAdminAiSettings: React.FC = () => {
                   className="text-xs"
                   message="برای هر ویژگی (capability)، فقط مدل‌هایی که capability_tags آن‌ها شامل آن ویژگی باشد در انتخاب سازمان‌ها نشان داده می‌شود."
                 />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Text type="secondary" className="text-xs">فیلتر بر اساس عملگر:</Text>
+                  <Select
+                    allowClear
+                    className="min-w-56"
+                    value={catalogCapabilityFilter}
+                    onChange={setCatalogCapabilityFilter}
+                    placeholder="همه عملگرها"
+                    options={ALL_CAPABILITIES.map((capability) => ({ value: capability.key, label: capability.label }))}
+                  />
+                </div>
                 <Table
                   rowKey="id"
                   size="small"
                   loading={loading}
-                  dataSource={models}
+                  dataSource={filteredCatalogModels}
                   columns={modelColumns}
                   pagination={{ pageSize: 15, showSizeChanger: false }}
                   locale={{ emptyText: <Empty description="مدلی در کاتالوگ وجود ندارد." /> }}
@@ -495,6 +581,75 @@ const SaasAdminAiSettings: React.FC = () => {
           },
         ]}
       />
+
+      <Modal
+        open={providerModelsOpen}
+        title="مدل‌های AvalAI"
+        onCancel={() => setProviderModelsOpen(false)}
+        footer={<Button onClick={() => setProviderModelsOpen(false)}>بستن</Button>}
+        width={1100}
+        destroyOnHidden
+      >
+        <div className="space-y-3" dir="rtl">
+          <Alert
+            type="info"
+            showIcon
+            message={`${providerModels.length.toLocaleString('fa-IR')} مدل از AvalAI دریافت شد؛ برای سرعت، هر بار فقط یک صفحه نمایش داده می‌شود.`}
+            description="برچسب‌ها از اطلاعات مدل و نام آن پیشنهاد می‌شوند. پیش از ذخیره می‌توانید آن‌ها و قیمت را در فرم افزودن مدل اصلاح کنید."
+          />
+          {providerModelsWarning ? <Alert type="warning" showIcon message={providerModelsWarning} /> : null}
+          <Tabs
+            activeKey={providerModelTab}
+            onChange={setProviderModelTab}
+            items={MODEL_TABS.map((tab) => ({
+              key: tab.key,
+              label: `${tab.label} (${(tab.key === 'all' ? providerModels : providerModels.filter((model) => modelTabKey(model) === tab.key)).length.toLocaleString('fa-IR')})`,
+            }))}
+          />
+          <Input.Search
+            allowClear
+            value={providerModelSearch}
+            onChange={(event) => setProviderModelSearch(event.target.value)}
+            placeholder="جستجو در نام یا شناسه مدل"
+          />
+          <Table
+            rowKey="id"
+            size="small"
+            dataSource={providerModelRows}
+            pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `${total.toLocaleString('fa-IR')} مدل` }}
+            scroll={{ x: 980, y: 460 }}
+            locale={{ emptyText: <Empty description="مدلی در این دسته پیدا نشد." /> }}
+            columns={[
+              {
+                title: 'مدل', width: 250,
+                render: (_: unknown, row: ProviderModel) => <div><div className="font-semibold text-xs">{row.label || row.id}</div><div className="font-mono text-[10px] text-gray-400">{row.id}</div></div>,
+              },
+              {
+                title: 'دسته و ویژگی‌ها', width: 260,
+                render: (_: unknown, row: ProviderModel) => <Space size={[2, 2]} wrap><Tag color="blue" className="m-0 text-[10px]">{MODEL_TABS.find((tab) => tab.key === modelTabKey(row))?.label || 'متنی'}</Tag>{(row.suggested_capability_tags || []).map((tag) => <Tag key={tag} className="m-0 text-[10px]">{ALL_CAPABILITIES.find((item) => item.key === tag)?.label || tag}</Tag>)}</Space>,
+              },
+              {
+                title: 'ورودی / خروجی', width: 150,
+                render: (_: unknown, row: ProviderModel) => row.input_usd_per_1m !== null && row.input_usd_per_1m !== undefined || row.output_usd_per_1m !== null && row.output_usd_per_1m !== undefined
+                  ? <span className="text-xs">{formatUsd(row.input_usd_per_1m || 0)} / {formatUsd(row.output_usd_per_1m || 0)} <span className="text-gray-400">برای ۱M</span></span>
+                  : <span className="text-xs text-gray-400">اعلام نشده</span>,
+              },
+              {
+                title: 'پنجره توکن', width: 120,
+                render: (_: unknown, row: ProviderModel) => row.context_window ? <span className="text-xs">{Number(row.context_window).toLocaleString('fa-IR')}</span> : <span className="text-xs text-gray-400">اعلام نشده</span>,
+              },
+              {
+                title: 'وضعیت', width: 110,
+                render: (_: unknown, row: ProviderModel) => catalogModelIds.has(row.id) ? <Tag color="green">انتخاب‌شده در پروژه</Tag> : <Tag>جدید</Tag>,
+              },
+              {
+                title: '', width: 110,
+                render: (_: unknown, row: ProviderModel) => <Button size="small" type={catalogModelIds.has(row.id) ? 'default' : 'primary'} icon={<PlusOutlined />} onClick={() => openAddProviderModel(row)}>{catalogModelIds.has(row.id) ? 'ویرایش مدل' : 'افزودن مدل'}</Button>,
+              },
+            ]}
+          />
+        </div>
+      </Modal>
 
       <Modal
         open={giftOpen}

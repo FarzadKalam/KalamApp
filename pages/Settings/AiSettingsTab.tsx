@@ -35,7 +35,9 @@ type AiCapabilityKey =
   | 'voice_output'
   | 'image_generation'
   | 'video_generation'
-  | 'voip_auto_reply';
+  | 'voip_auto_reply'
+  | 'auto_decision'
+  | 'customer_auto_reply';
 
 const CAPABILITIES: Array<{
   key: AiCapabilityKey;
@@ -49,6 +51,7 @@ const CAPABILITIES: Array<{
   { key: 'document_analysis', label: 'تحلیل اسناد', description: 'پرسش و پاسخ روی دانش و اسناد سازمان', phase: 'active' },
   { key: 'workflow_ai_prompt', label: 'پرامپت در گردش کار', description: 'اجرای پرامپت در گردش کارهای معمولی و زمان‌بندی‌شده', phase: 'active' },
   { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل‌های reasoning برای سوالات پیچیده', phase: 'active' },
+  { key: 'auto_decision', label: 'تصمیم‌گیری خودکار', description: 'انتخاب و ارزیابی هوشمند گزینه‌ها در عملگرهای خودکار', phase: 'active' },
   { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد سازمان و جستجوی وب', phase: 'active' },
   { key: 'web_search', label: 'جستجوی وب', description: 'جستجوی اینترنتی برای سوالات نیازمند اطلاعات جاری', phase: 'active' },
   { key: 'voice_input', label: 'دریافت و تحلیل صدا', description: 'تبدیل ویس به متن و تحلیل آن', phase: 'active' },
@@ -56,6 +59,7 @@ const CAPABILITIES: Array<{
   { key: 'image_generation', label: 'تولید تصویر', description: 'ساخت تصویر با پرامپت', phase: 'active' },
   { key: 'video_generation', label: 'تولید ویدیو', description: 'ساخت ویدیو با پرامپت', phase: 'next' },
   { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
+  { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان', description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },
 ];
 
 const PRIMARY_MODEL_KEY = '__primary_model';

@@ -16,6 +16,8 @@ import useUserAnnouncements from '../hooks/useUserAnnouncements';
 import UserAnnouncementsBanner from '../components/announcements/UserAnnouncementsBanner';
 import UserAnnouncementsPopupHost from '../components/announcements/UserAnnouncementsPopupHost';
 import ResilientImage from '../components/common/ResilientImage';
+import OtpCodeInput from '../components/common/OtpCodeInput';
+import { formatIranMobileForInput } from '../utils/phoneNumber';
 
 const LOGIN_MODE_STORAGE_KEY = 'kalam_login_mode';
 const OTP_PHONE_STORAGE_KEY = 'kalam_login_otp_phone';
@@ -495,7 +497,7 @@ const Login = () => {
       const invite = await lookupPhoneSignupInvite(normalizedPhone);
       assertLoginOtpRequestAllowed(candidate, invite);
 
-      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone);
+      const requestedPhone = await requestSmsOtp(supabase.auth, normalizedPhone, { shouldCreateUser: false });
       setOtpRequestedFor(requestedPhone);
       setOtpCode('');
       setOtpCooldown(OTP_RESEND_SECONDS);
@@ -746,7 +748,7 @@ const Login = () => {
                         <Input
                           dir="ltr"
                           value={phone}
-                          onChange={(e) => setPhone(e.target.value)}
+                          onChange={(e) => setPhone(formatIranMobileForInput(e.target.value))}
                           placeholder="0912..."
                         />
                         {normalizedPhone ? (
@@ -769,12 +771,7 @@ const Login = () => {
                         <>
                           <div>
                             <label className="block text-sm font-medium mb-1">کد تایید</label>
-                            <Input
-                              dir="ltr"
-                              value={otpCode}
-                              onChange={(e) => setOtpCode(e.target.value)}
-                              placeholder="123456"
-                            />
+                            <OtpCodeInput value={otpCode} onChange={setOtpCode} autoFocus />
                           </div>
                           <Button
                             type="primary"

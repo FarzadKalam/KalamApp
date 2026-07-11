@@ -131,6 +131,8 @@ const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   video_generation: 'ai_video_generation',
   document_generation: 'ai_document_analysis',
   voip_auto_reply: 'ai_voip_auto_reply',
+  auto_decision: 'ai_deep_reasoning',
+  customer_auto_reply: 'ai_chat',
 };
 
 const TENANT_READY_AI_CAPABILITIES = new Set([
@@ -148,7 +150,18 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'image_generation',
   'video_generation',
   'document_generation',
+  'auto_decision',
+  'customer_auto_reply',
 ]);
+
+// These are dedicated admin-facing operators. Runtime requests still use the
+// established capability names, so keep their model selections interoperable.
+const CAPABILITY_SELECTION_ALIASES: Record<string, string[]> = {
+  deep_reasoning: ['auto_decision'],
+  auto_decision: ['deep_reasoning'],
+  customer_reply_suggestion: ['customer_auto_reply'],
+  customer_auto_reply: ['customer_reply_suggestion'],
+};
 
 const AUTO_ROUTER_CAPABILITIES = [
   'document_analysis',
@@ -1065,9 +1078,10 @@ const assertAiCapabilityEnabled = async (
 const filterSelectableAiModels = (models: any[], capability: string) =>
   (models || []).filter((model: any) => {
     const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    const acceptedTags = [capability, ...(CAPABILITY_SELECTION_ALIASES[capability] || [])];
     return model?.is_active !== false
       && model?.is_coming_soon !== true
-      && tags.includes(capability);
+      && tags.some((tag: string) => acceptedTags.includes(String(tag || '').trim()));
   });
 
 const pickPreferredPrimaryAiModel = (models: any[]) => {
@@ -1170,7 +1184,10 @@ const pickCapabilityModelFromCatalog = (
   const allowed = filterSelectableAiModels(catalogRows, capability);
   const allowedIds = new Set(allowed.map((model: any) => String(model?.id || '').trim()).filter(Boolean));
   const primaryModel = String(selected?.[PRIMARY_AI_MODEL_KEY] || '').trim();
-  const requested = String(requestedOverride || (PRIMARY_MODEL_CAPABILITIES.has(capability) && allowedIds.has(primaryModel) ? primaryModel : selected?.[capability]) || '').trim();
+  const selectedAlias = (CAPABILITY_SELECTION_ALIASES[capability] || [])
+    .map((alias) => selected?.[alias])
+    .find((modelId) => String(modelId || '').trim());
+  const requested = String(requestedOverride || (PRIMARY_MODEL_CAPABILITIES.has(capability) && allowedIds.has(primaryModel) ? primaryModel : selected?.[capability] || selectedAlias) || '').trim();
   if (requested && allowedIds.has(requested)) return requested;
   return String(allowed[0]?.id || '').trim();
 };
@@ -10282,6 +10299,43 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
   });
 };
 
+const providerNumber = (...values: any[]) => {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return null;
+};
+
+const inferProviderModelCapabilities = (modelId: string, raw: any) => {
+  const id = modelId.toLowerCase();
+  const sourceTags = [raw?.capabilities, raw?.capability_tags, raw?.tags, raw?.modalities]
+    .flatMap((value: any) => Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [])
+    .map((value: any) => String(value || '').trim())
+    .filter(Boolean);
+  const tags = new Set(sourceTags);
+  if (/(image|imagen|flux|banana)/.test(id)) {
+    tags.add('image_generation');
+    if (/(edit|image-1|banana)/.test(id)) tags.add('image_edit');
+  } else if (/(video|sora|veo|kling|runway)/.test(id)) {
+    tags.add('video_generation');
+  } else if (/(tts|speech|eleven)/.test(id)) {
+    tags.add('voice_output');
+  } else if (/(transcrib|whisper|stt)/.test(id)) {
+    tags.add('voice_input');
+  } else if (/(embed)/.test(id)) {
+    tags.add('embedding');
+  } else {
+    ['dashboard_chat', 'record_chat', 'customer_reply_suggestion', 'document_analysis', 'workflow_ai_prompt'].forEach((tag) => tags.add(tag));
+    if (/(reason|o1|o3|r1|thinking)/.test(id)) {
+      tags.add('deep_reasoning');
+      tags.add('auto_decision');
+    }
+    tags.add('customer_auto_reply');
+  }
+  return Array.from(tags);
+};
+
 const parseModelsResponse = (parsed: any) => {
   const list = Array.isArray(parsed?.data)
     ? parsed.data
@@ -10292,12 +10346,33 @@ const parseModelsResponse = (parsed: any) => {
     : [];
   return list
     .map((item: any) => {
-      if (typeof item === 'string') return { id: item, label: item };
+      if (typeof item === 'string') return {
+        id: item,
+        label: item,
+        suggested_capability_tags: inferProviderModelCapabilities(item, {}),
+        context_window: null,
+        input_usd_per_1m: null,
+        output_usd_per_1m: null,
+      };
       const id = String(item?.id || item?.name || item?.model || '').trim();
       if (!id) return null;
+      const pricing = item?.pricing || item?.price || item?.cost || {};
+      const contextWindow = providerNumber(item?.context_window, item?.contextWindow, item?.max_context_tokens, item?.max_tokens, item?.limits?.context_window);
+      const inputUsdPer1m = providerNumber(
+        item?.input_usd_per_1m, item?.input_price_per_million, pricing?.input_usd_per_1m,
+        pricing?.input, pricing?.prompt, pricing?.input?.per_1m,
+      );
+      const outputUsdPer1m = providerNumber(
+        item?.output_usd_per_1m, item?.output_price_per_million, pricing?.output_usd_per_1m,
+        pricing?.output, pricing?.completion, pricing?.output?.per_1m,
+      );
       return {
         id,
         label: String(item?.display_name || item?.label || item?.name || id).trim(),
+        suggested_capability_tags: inferProviderModelCapabilities(id, item),
+        context_window: contextWindow,
+        input_usd_per_1m: inputUsdPer1m,
+        output_usd_per_1m: outputUsdPer1m,
         raw: item,
       };
     })

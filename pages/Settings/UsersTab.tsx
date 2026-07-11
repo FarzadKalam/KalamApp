@@ -31,6 +31,8 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClien
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import ProfileAvatar from '../../components/common/ProfileAvatar';
 import { emitProfileAvatarUpdated } from '../../utils/profileAvatarEvents';
+import OtpCodeInput from '../../components/common/OtpCodeInput';
+import { normalizeDigitsToEnglish } from '../../utils/persianNumericInput';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -820,7 +822,7 @@ const UsersTab: React.FC = () => {
           <Form.Item label="ایمیل" name="email" rules={[{ type: 'email', message: 'ایمیل معتبر نیست' }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="شماره موبایل" name="mobile" rules={[{ required: true, message: 'شماره موبایل الزامی است' }]}>
+          <Form.Item label="شماره موبایل" name="mobile" normalize={formatIranMobileForInput} rules={[{ required: true, message: 'شماره موبایل الزامی است' }]}>
             <Input dir="ltr" placeholder="0912..." />
           </Form.Item>
           <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true, message: 'جایگاه سازمانی الزامی است' }]}>
@@ -871,10 +873,10 @@ const UsersTab: React.FC = () => {
               <Form.Item label="حالت شماره‌گیری" name="voip_dial_mode" className="mb-0">
                 <Select options={VOIP_DIAL_MODE_OPTIONS} getPopupContainer={resolveOverlayPopupContainer} />
               </Form.Item>
-              <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" className="mb-0">
+              <Form.Item label="کد اپراتور تلفنچی" name="voip_operator_code" normalize={normalizeDigitsToEnglish} className="mb-0">
                 <Input placeholder="کد اپراتور" />
               </Form.Item>
-              <Form.Item label="داخلی VoIP" name="voip_extension" className="mb-0">
+              <Form.Item label="داخلی VoIP" name="voip_extension" normalize={normalizeDigitsToEnglish} className="mb-0">
                 <Input placeholder="مثال: 101" />
               </Form.Item>
               <Form.Item label="شناسه سرویس VoIP" name="voip_service_id" className="mb-0 md:col-span-2">
@@ -916,12 +918,7 @@ const UsersTab: React.FC = () => {
                   </Button>
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <Input
-                    dir="ltr"
-                    placeholder="کد تایید"
-                    value={phoneOtpCode}
-                    onChange={(e) => setPhoneOtpCode(e.target.value)}
-                  />
+                  <OtpCodeInput value={phoneOtpCode} onChange={setPhoneOtpCode} />
                   <Button type="primary" loading={phoneOtpLoading && phoneOtpRequested} onClick={handleVerifyPhoneOtp}>
                     تایید شماره
                   </Button>

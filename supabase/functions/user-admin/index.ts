@@ -80,7 +80,7 @@ const toLocalIranMobile = (value?: string | null) => {
 
 const toGoTruePhone = (value?: string | null) => {
   const normalized = normalizeIranMobileE164(value);
-  return normalized ? normalized.replace(/^\+/, '') : null;
+  return normalized || null;
 };
 
 const normalizeEmail = (value?: string | null) =>
@@ -576,6 +576,28 @@ const releaseOrphanProfilePhoneConflict = async (
     id: duplicateProfileId,
     mobile_1: null,
   });
+  return true;
+};
+
+const releaseInactiveDuplicateProfileEmailConflict = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  duplicateProfile: any,
+  email: string | null,
+  options?: { targetOrgId?: string | null; canCrossOrg?: boolean },
+) => {
+  const duplicateProfileId = String(duplicateProfile?.id || '').trim();
+  const normalizedEmail = normalizeEmail(email);
+  if (!duplicateProfileId || !normalizedEmail || duplicateProfile?.is_active !== false) return false;
+
+  const duplicateOrgId = String(duplicateProfile?.org_id || '').trim();
+  const targetOrgId = String(options?.targetOrgId || '').trim();
+  if (!options?.canCrossOrg && duplicateOrgId && targetOrgId && duplicateOrgId !== targetOrgId) return false;
+
+  const duplicateAuthUser = await fetchAuthUserById(supabaseUrl, serviceRoleKey, duplicateProfileId).catch(() => null);
+  if (normalizeEmail(duplicateAuthUser?.email) === normalizedEmail) return false;
+
+  await upsertProfile(supabaseUrl, serviceRoleKey, { id: duplicateProfileId, email: null });
   return true;
 };
 
@@ -1449,7 +1471,13 @@ Deno.serve(async (request) => {
             canCrossOrg: callerRole === 'super_admin',
           })
           : false;
-        if (releasedOrphanPhone) {
+        const releasedInactiveEmail = !duplicateIsPhoneMatch
+          ? await releaseInactiveDuplicateProfileEmailConflict(supabaseUrl, serviceRoleKey, duplicateProfile, email, {
+            targetOrgId: body?.orgId || targetProfile.org_id || callerProfile.org_id,
+            canCrossOrg: callerRole === 'super_admin',
+          })
+          : false;
+        if (releasedOrphanPhone || releasedInactiveEmail) {
           // Continue with the normal update path after freeing an orphan profile phone.
         } else {
           return json(409, {
