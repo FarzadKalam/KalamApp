@@ -35,6 +35,7 @@ import { fetchRelationOptionsForField } from '../../utils/relationOptions';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
+import { TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
@@ -69,6 +70,7 @@ import {
 } from '../../utils/processV2AutoAssign';
 import {
   formatProcessStageDueLabel,
+  formatProcessStageScheduleRule,
   resolveProcessStageDueValue,
 } from '../../utils/processStageCardLabels';
 import {
@@ -559,6 +561,7 @@ const mapRawStageToV2 = (
     graph,
     processStartedAt: stage?.process_started_at || stage?.started_at || stage?.created_at || null,
   });
+  const scheduleRuleLabel = formatProcessStageScheduleRule({ stage, stages: allStages, graph });
   const automationActionCount = getAutomationActionCount(stage);
   const fallbackActionCount = Number(stage?.action_count ?? metadata?.action_count ?? metadata?.actions_count ?? 0);
   const actionCount = automationActionCount > 0 ? automationActionCount : fallbackActionCount;
@@ -575,7 +578,9 @@ const mapRawStageToV2 = (
     assigneeLabel: assignee.label,
     assigneeAvatarUrl: assignee.avatarUrl,
     activityTypeLabel: activityType,
-    dueLabel: formatDueLabel(rawDue),
+    dueLabel: effectiveKind === 'draft'
+      ? scheduleRuleLabel
+      : (formatDueLabel(rawDue) || scheduleRuleLabel),
     actionCount: Number.isFinite(actionCount) ? Math.max(0, actionCount) : 0,
     metaLabel: statusLabel,
     source: {
@@ -710,7 +715,16 @@ const buildRunCard = (
     relatedRecordLabel: fallbackRecordLabel,
     statusLabel: normalizeText(run?.status) || 'active',
     realtimeLabel: 'زنده',
-    lanes: buildLanesFromStages(stages, 'activity', directory, templateContext, run?.module_id),
+    lanes: buildLanesFromStages(
+      stages.map((stage) => ({
+        ...stage,
+        process_started_at: stage?.process_started_at || run?.started_at || run?.created_at || null,
+      })),
+      'activity',
+      directory,
+      templateContext,
+      run?.module_id,
+    ),
   };
 };
 
@@ -2000,10 +2014,32 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           const belongsToCurrentRuntime = (runtimeRef.current.tasks || []).some((task: any) => normalizeDbUuid(task?.id) === taskId);
           if (!belongsToCurrentRuntime) return;
         }
+        const taskPatch = payload?.record_patch && typeof payload.record_patch === 'object'
+          ? { ...payload.record_patch, id: taskId || payload.record_patch.id }
+          : null;
+        if (taskId && taskPatch) {
+          applyTaskRealtimePayload({ eventType: 'UPDATE', new: taskPatch });
+          return;
+        }
         scheduleRefresh();
       },
     });
-  }, [enabled, orgId, recordData?.org_id, scheduleRefresh]);
+  }, [applyTaskRealtimePayload, enabled, orgId, recordData?.org_id, scheduleRefresh]);
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined') return undefined;
+    const handleRuntimePatch = (event: Event) => {
+      const detail = (event as CustomEvent<TaskRuntimeUpdatedPayload>)?.detail;
+      const task = detail?.task;
+      const taskId = normalizeDbUuid(task?.id);
+      if (!taskId) return;
+      const belongsToCurrentRuntime = (runtimeRef.current.tasks || []).some((item: any) => normalizeDbUuid(item?.id) === taskId);
+      if (!belongsToCurrentRuntime) return;
+      applyTaskRealtimePayload({ eventType: 'UPDATE', new: task });
+    };
+    window.addEventListener(TASK_RUNTIME_UPDATED_EVENT, handleRuntimePatch as EventListener);
+    return () => window.removeEventListener(TASK_RUNTIME_UPDATED_EVENT, handleRuntimePatch as EventListener);
+  }, [applyTaskRealtimePayload, enabled]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -2410,9 +2446,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     taskId?: string | null;
     processRunId?: string | null;
     templateId?: string | null;
+    taskPatch?: Record<string, any> | null;
+    skipParent?: boolean;
   }) => {
     const updatedAt = new Date().toISOString();
-    if (normalizedModuleId && normalizedRecordId) {
+    if (!options?.skipParent && normalizedModuleId && normalizedRecordId) {
       markModuleListChanged({
         org_id: orgId || recordData?.org_id || null,
         module_id: normalizedModuleId,
@@ -2429,6 +2467,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         record_id: taskId,
         action: 'update',
         updated_at: updatedAt,
+        record_patch: options?.taskPatch || null,
       });
     }
     const processRunId = normalizeText(options?.processRunId);
@@ -2504,6 +2543,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       taskId: sourcePatch?.task_id || sourcePatch?.process_task_id || sourcePatch?.id,
       processRunId: sourcePatch?.process_run_id,
       templateId: sourcePatch?.source_template_id,
+      taskPatch: {
+        ...(sourcePatch || {}),
+        status,
+      },
+      skipParent: true,
     });
     void syncProjectStatusForRuntime(runtimeRef.current).catch((error) => {
       console.warn('Could not sync project status after process v2 stage status change', error);

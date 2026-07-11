@@ -1,5 +1,9 @@
 import type { ProcessGraphDefinition } from './processGraph';
-import { computeProcessStageDueDate } from './processSchedule';
+import {
+  computeProcessStageDueDate,
+  normalizeProcessDueAnchor,
+  resolveProcessDueAnchorStage,
+} from './processSchedule';
 import { safeJalaliFormat, toPersianNumber } from './persianNumberFormatter';
 import { getFieldLabelFa } from './fieldLabel';
 
@@ -139,6 +143,50 @@ export const formatProcessStageDueLabel = (value: unknown, now: Date = new Date(
 
   const format = hasExplicitTime ? 'YYYY/MM/DD HH:mm' : 'YYYY/MM/DD';
   return toPersianNumber(safeJalaliFormat(parsed.toISOString(), format) || raw);
+};
+
+export const formatProcessStageScheduleRule = ({
+  stage,
+  stages = [],
+  graph,
+}: {
+  stage: Record<string, any> | null | undefined;
+  stages?: Record<string, any>[];
+  graph?: ProcessGraphDefinition | null;
+}) => {
+  if (!stage) return undefined;
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
+  if (!hasDueScheduleSignal(stage, metadata, recurrence)) return undefined;
+
+  const enriched = {
+    ...stage,
+    due_anchor_type: pickFirstText(stage?.due_anchor_type, recurrence?.due_anchor_type, metadata?.due_anchor_type, stage?.duration_from, recurrence?.duration_from, metadata?.duration_from),
+    due_anchor_stage_node_key: pickFirstText(stage?.due_anchor_stage_node_key, recurrence?.due_anchor_stage_node_key, metadata?.due_anchor_stage_node_key),
+  };
+  const anchor = normalizeProcessDueAnchor(enriched);
+  const value = Math.max(0, Number(stage?.duration_value ?? recurrence?.duration_value ?? metadata?.duration_value ?? 0) || 0);
+  const unit = pickFirstText(stage?.duration_unit, recurrence?.duration_unit, metadata?.duration_unit) === 'hour' ? 'ساعت' : 'روز';
+  const offset = value > 0 ? `${toPersianNumber(value)} ${unit} بعد از ` : 'هم‌زمان با ';
+  const anchorStage = resolveProcessDueAnchorStage({ stage: enriched, stages, graph });
+  const anchorStageName = pickFirstText(anchorStage?.stage_name, anchorStage?.name, anchorStage?.title) || 'مرحله انتخاب‌شده';
+  const labels: Record<string, string> = {
+    process_start: 'شروع فرآیند',
+    current_stage_created: 'ایجاد فعالیت',
+    previous_stage_created: 'ایجاد مرحله قبلی',
+    previous_stage_start: 'شروع واقعی مرحله قبلی',
+    previous_stage_due: 'موعد مرحله قبلی',
+    previous_stage_completed: 'تکمیل واقعی مرحله قبلی',
+    next_stage_created: 'ایجاد مرحله بعدی',
+    next_stage_start: 'شروع واقعی مرحله بعدی',
+    next_stage_due: 'موعد مرحله بعدی',
+    next_stage_completed: 'تکمیل واقعی مرحله بعدی',
+    specific_stage_created: `ایجاد مرحله «${anchorStageName}»`,
+    specific_stage_start: `شروع واقعی مرحله «${anchorStageName}»`,
+    specific_stage_due: `موعد مرحله «${anchorStageName}»`,
+    specific_stage_completed: `تکمیل واقعی مرحله «${anchorStageName}»`,
+  };
+  return `${offset}${labels[anchor.type] || 'شروع فرآیند'}`;
 };
 
 export const getProcessTaskCustomFieldLabelFa = (field: any, index: number, moduleId = 'tasks') => {

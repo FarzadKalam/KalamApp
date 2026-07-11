@@ -30,6 +30,7 @@ export type ModuleListLiveInvalidationPayload = {
     assignee_user_id?: string | null;
     assignee_role_id?: string | null;
   } | null;
+  record_patch?: Record<string, any> | null;
 };
 
 export type ModuleListLocalInvalidationMarker = ModuleListLiveInvalidationPayload & {

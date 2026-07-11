@@ -137,6 +137,24 @@ const assertTaskIsNotLocked = async (taskId: string, task?: Record<string, any> 
   }
 };
 
+const dispatchProcessSiblingScheduleUpdates = async (task: Record<string, any>) => {
+  const processRunId = String(task?.process_run_id || '').trim();
+  if (!processRunId) return;
+  const { data, error } = await supabase
+    .from('tasks')
+    .select(TASK_AUTOMATION_SELECT)
+    .eq('process_run_id', processRunId)
+    .limit(500);
+  if (error || !Array.isArray(data)) return;
+  data.forEach((sibling) => {
+    dispatchTaskRuntimeUpdated({
+      task: sibling,
+      previousTask: null,
+      reason: 'patch',
+    });
+  });
+};
+
 export const updateTaskStatusWithAutomation = async ({
   taskId,
   nextStatus,
@@ -200,6 +218,7 @@ export const updateTaskStatusWithAutomation = async ({
     supabaseClient: supabase,
     task: updatedTask,
   });
+  await dispatchProcessSiblingScheduleUpdates(updatedTask);
 
   await runProcessAutomationsForTaskEvent({
     task: updatedTask,

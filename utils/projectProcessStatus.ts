@@ -211,20 +211,6 @@ export const fetchProjectProcessRunIds = async (projectId: string) => {
       .forEach((runId) => runIds.add(runId));
   }
 
-  const { data: projectRows, error: projectError } = await supabase
-    .from('process_runs')
-    .select('id')
-    .eq('project_id', normalizedProjectId)
-    .limit(1000);
-  if (projectError) {
-    if (!isMissingColumnLikeError(projectError)) throw projectError;
-  } else {
-    (Array.isArray(projectRows) ? projectRows : [])
-      .map((row: any) => normalizeText(row?.id))
-      .filter(Boolean)
-      .forEach((runId) => runIds.add(runId));
-  }
-
   return Array.from(runIds);
 };
 
