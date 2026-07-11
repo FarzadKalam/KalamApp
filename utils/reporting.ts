@@ -105,6 +105,20 @@ export const parseReportTableRelationFieldKey = (value?: string | null) => {
 
 export const isReportTableRelationFieldKey = (value?: string | null) => !!parseReportTableRelationFieldKey(value);
 
+export const REPORT_BASE_SELECT_COLUMNS = [
+  'id',
+  'org_id',
+  'created_at',
+  'updated_at',
+  'assignee_id',
+  'assignee_role_id',
+  'assignee_type',
+  'is_deleted',
+  'deleted',
+  '_deleted',
+  'deleted_at',
+] as const;
+
 const REPORT_UNSUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.IMAGE,
   FieldType.JSON,
@@ -168,6 +182,55 @@ export const getReportTableBlock = (moduleId?: string | null, tableSourceId?: st
   const meta = parseReportTableSourceId(tableSourceId);
   if (!meta) return null;
   return getReportTableBlocks(moduleId).find((block) => String(block.id || '') === meta.blockId) || null;
+};
+
+export const buildReportBaseSelectColumns = (
+  moduleConfig: { fields?: ModuleField[] | null } | null | undefined,
+  keys: readonly string[],
+  selectedTableBlocks: readonly Pick<BlockDefinition, 'id'>[],
+) => {
+  const moduleFieldKeys = new Set(
+    (moduleConfig?.fields || [])
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean)
+  );
+  const selectedTableBlockIds = new Set(
+    (selectedTableBlocks || [])
+      .map((block) => String(block?.id || '').trim())
+      .filter(Boolean)
+  );
+  const requiredColumns = new Set<string>(REPORT_BASE_SELECT_COLUMNS);
+
+  selectedTableBlockIds.forEach((blockId) => requiredColumns.add(blockId));
+
+  (keys || []).forEach((rawKey) => {
+    const key = String(rawKey || '').trim();
+    if (!key) return;
+
+    const tableFieldMeta = parseReportTableFieldKey(key);
+    if (tableFieldMeta?.blockId) {
+      requiredColumns.add(tableFieldMeta.blockId);
+      return;
+    }
+
+    const tableRelationMeta = parseReportTableRelationFieldKey(key);
+    if (tableRelationMeta?.blockId) {
+      requiredColumns.add(tableRelationMeta.blockId);
+      return;
+    }
+
+    const relatedMeta = parseWorkflowRelatedFieldKey(key);
+    if (relatedMeta?.relationFieldKey && moduleFieldKeys.has(relatedMeta.relationFieldKey)) {
+      requiredColumns.add(relatedMeta.relationFieldKey);
+      return;
+    }
+
+    if (moduleFieldKeys.has(key)) {
+      requiredColumns.add(key);
+    }
+  });
+
+  return Array.from(requiredColumns);
 };
 
 export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({

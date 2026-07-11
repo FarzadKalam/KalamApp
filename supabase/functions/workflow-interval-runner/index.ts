@@ -5,6 +5,7 @@
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-06-27-event-payments';
 const MAX_WORKFLOWS = 30;
+const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
 const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
@@ -116,6 +117,21 @@ type WorkflowRow = {
   server_queued_at: string | null;
   execution_mode: string | null;
   batch_size: number | null;
+};
+
+type ReportDefinitionRow = {
+  id: string;
+  org_id: string;
+  name: string;
+  description?: string | null;
+  module_id: string;
+  config: Record<string, any> | null;
+  is_active: boolean;
+  last_run_at: string | null;
+  server_queued_at: string | null;
+  updated_at?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
 };
 
 function resolveWorkflowActorId(workflow: Partial<WorkflowRow> | null | undefined): string | null {
@@ -1003,6 +1019,46 @@ async function claimWorkflow(
 
 async function clearServerQueued(url: string, key: string, workflowId: string): Promise<void> {
   await dbPatch(url, key, 'workflows', `id=eq.${workflowId}`, { server_queued_at: null }).catch(() => {});
+}
+
+async function fetchQueuedReports(url: string, key: string): Promise<ReportDefinitionRow[]> {
+  const rows = await dbGet(url, key,
+    `report_definitions?is_active=eq.true&server_queued_at=not.is.null&select=id,org_id,name,description,module_id,config,is_active,last_run_at,server_queued_at,updated_at,created_by,updated_by&order=updated_at.asc&limit=${MAX_REPORTS}`
+  );
+  return rows as ReportDefinitionRow[];
+}
+
+async function claimReportScheduleRun(
+  url: string,
+  key: string,
+  reportId: string,
+  expectedLastRunAt: string | null,
+  scheduledDueAt: Date,
+): Promise<boolean> {
+  const claimedAt = scheduledDueAt.toISOString();
+  try {
+    const result = await callRpc(url, key, 'claim_report_schedule_run', {
+      p_report_id: reportId,
+      p_expected_last_run_at: expectedLastRunAt,
+      p_claimed_at: claimedAt,
+    });
+    return result === true;
+  } catch {
+    const filter = expectedLastRunAt
+      ? `id=eq.${reportId}&is_active=eq.true&last_run_at=eq.${expectedLastRunAt}`
+      : `id=eq.${reportId}&is_active=eq.true&last_run_at=is.null`;
+    try {
+      await dbPatch(url, key, 'report_definitions', filter, { last_run_at: claimedAt, server_queued_at: null, schedule_error: null });
+      return true;
+    } catch { return false; }
+  }
+}
+
+async function clearReportServerQueued(url: string, key: string, reportId: string, scheduleError?: string): Promise<void> {
+  await dbPatch(url, key, 'report_definitions', `id=eq.${reportId}`, {
+    server_queued_at: null,
+    ...(scheduleError ? { schedule_error: scheduleError } : {}),
+  }).catch(() => {});
 }
 
 async function fetchModuleRecordsPage(
@@ -3133,7 +3189,144 @@ async function executeActionWithRetry(
   throw lastError;
 }
 
-// ── Main execution loop ─────────────────────────────────────���──────────────────
+// ── Scheduled reports ─────────────────────────────────────────────────────────
+
+function getReportScheduleConfig(report: ReportDefinitionRow): Record<string, any> {
+  const config = report?.config && typeof report.config === 'object' ? report.config : {};
+  const schedule = config.schedule && typeof config.schedule === 'object' ? config.schedule : {};
+  return schedule as Record<string, any>;
+}
+
+function getReportScheduledDueAt(report: ReportDefinitionRow, now: Date): Date | null {
+  const schedule = getReportScheduleConfig(report);
+  if (schedule.enabled !== true) return null;
+  return getWorkflowScheduledDueAt({
+    last_run_at: report.last_run_at || null,
+    interval_value: Math.max(1, parseInt(String(schedule.interval_value || 1), 10) || 1),
+    interval_unit: ['hour', 'day', 'week', 'month'].includes(String(schedule.interval_unit || '').toLowerCase())
+      ? String(schedule.interval_unit || '').toLowerCase()
+      : 'day',
+    interval_at: null,
+    interval_first_run_at: null,
+    interval_minute: null,
+    interval_allowed_from_hour: null,
+    interval_allowed_to_hour: null,
+    interval_day_of_month: null,
+    interval_day_condition: null,
+    interval_days_after_holiday: null,
+  } as WorkflowRow, now);
+}
+
+function buildReportUrl(reportId: string): string {
+  const path = `/reports/${reportId}`;
+  return CALENDAR_PUBLIC_BASE_URL ? `${CALENDAR_PUBLIC_BASE_URL}${path}` : path;
+}
+
+function buildScheduledReportNote(report: ReportDefinitionRow, scheduledDueAt: Date): string {
+  const reportUrl = buildReportUrl(report.id);
+  const moduleLabel = String(report.module_id || '').trim() || 'نامشخص';
+  return [
+    `گزارش دوره‌ای «${String(report.name || 'گزارش').trim()}» آماده مشاهده است.`,
+    `ماژول: ${moduleLabel}`,
+    `زمان اجرا: ${formatJalaliDateTime(scheduledDueAt.toISOString())}`,
+    `لینک گزارش: ${reportUrl}`,
+  ].join('\n');
+}
+
+async function deliverScheduledReport(
+  url: string,
+  key: string,
+  report: ReportDefinitionRow,
+  scheduledDueAt: Date,
+): Promise<{ status: 'success' | 'skipped'; recipientCount: number; message?: string }> {
+  const schedule = getReportScheduleConfig(report);
+  const recipientUserIds = Array.from(new Set(
+    (Array.isArray(schedule.recipient_user_ids) ? schedule.recipient_user_ids : [])
+      .map((item: any) => String(item || '').trim())
+      .filter(Boolean)
+  ));
+  if (recipientUserIds.length === 0) {
+    return { status: 'skipped', recipientCount: 0, message: 'گیرنده‌ای برای ارسال دوره‌ای گزارش انتخاب نشده است.' };
+  }
+
+  const deliveryChannels = Array.from(new Set(
+    (Array.isArray(schedule.delivery_channels) ? schedule.delivery_channels : ['note'])
+      .map((item: any) => String(item || '').trim().toLowerCase())
+      .filter(Boolean)
+  ));
+  if (!deliveryChannels.includes('note')) {
+    return { status: 'skipped', recipientCount: 0, message: 'در حال حاضر ارسال دوره‌ای گزارش فقط از مسیر یادداشت داخلی پشتیبانی می‌شود.' };
+  }
+
+  await insertNote(url, key, {
+    org_id: report.org_id,
+    module_id: 'reports',
+    record_id: report.id,
+    content: buildScheduledReportNote(report, scheduledDueAt),
+    mention_user_ids: recipientUserIds,
+    mention_role_ids: [],
+    source_type: 'system',
+    metadata: {
+      source_type: 'system',
+      notification_surface: 'system_feed',
+      requires_action: false,
+      scheduled_report_id: report.id,
+      report_module_id: report.module_id,
+      scheduled_due_at: scheduledDueAt.toISOString(),
+      runner_build: FUNCTION_BUILD,
+    },
+  });
+
+  return { status: 'success', recipientCount: recipientUserIds.length };
+}
+
+async function runScheduledReportsTick(url: string, key: string, now: Date): Promise<Record<string, number>> {
+  const stats = { checkedReports: 0, claimedReports: 0, sentReports: 0, skippedReports: 0, failedReports: 0 };
+  const reports = await fetchQueuedReports(url, key).catch((error) => {
+    console.warn('[workflow-runner] Scheduled report fetch failed:', error?.message || error);
+    return [] as ReportDefinitionRow[];
+  });
+  stats.checkedReports = reports.length;
+
+  for (const report of reports) {
+    const scheduledDueAt = getReportScheduledDueAt(report, now);
+    if (!scheduledDueAt) {
+      await clearReportServerQueued(url, key, report.id);
+      continue;
+    }
+
+    const claimed = await claimReportScheduleRun(url, key, report.id, report.last_run_at, scheduledDueAt);
+    if (!claimed) continue;
+    stats.claimedReports++;
+
+    try {
+      const result = await deliverScheduledReport(url, key, report, scheduledDueAt);
+      if (result.status === 'success') {
+        stats.sentReports++;
+        await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}`, {
+          schedule_last_sent_at: new Date().toISOString(),
+          schedule_error: null,
+        }).catch(() => {});
+      } else {
+        stats.skippedReports++;
+        await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}`, {
+          schedule_error: result.message || 'ارسال دوره‌ای گزارش انجام نشد.',
+        }).catch(() => {});
+      }
+    } catch (error: any) {
+      stats.failedReports++;
+      const errorMessage = String(error?.message || 'scheduled report delivery failed');
+      console.error(`[workflow-runner] Scheduled report failed (${report.name || report.id}):`, errorMessage);
+      await dbPatch(url, key, 'report_definitions', `id=eq.${report.id}`, {
+        schedule_error: errorMessage,
+      }).catch(() => {});
+    }
+  }
+
+  return stats;
+}
+
+// ── Main execution loop ───────────────────────────────────────────────────────
 
 async function runIntervalTick(url: string, key: string): Promise<Record<string, any>> {
   const now = new Date();
@@ -3291,7 +3484,8 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
     }
   }
 
-  return stats;
+  const reportStats = await runScheduledReportsTick(url, key, now);
+  return { ...stats, ...reportStats };
 }
 
 function workflowTargetsModule(workflow: WorkflowRow, moduleId: string): boolean {

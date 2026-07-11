@@ -189,6 +189,70 @@ describe('process run draft helpers', () => {
     expect(result.processRunStageId).toBe('22222222-2222-4222-8222-222222222222');
   });
 
+  it('uses an existing process run group when converting draft stages from a run card', async () => {
+    const existingRunId = '11111111-1111-4111-8111-111111111111';
+    const rpc = vi.fn().mockResolvedValue({
+      data: {
+        process_run_id: existingRunId,
+        stages: [{
+          id: '22222222-2222-4222-8222-222222222222',
+          draft_stage_id: 'draft-stage-1',
+          template_stage_id: null,
+          stage_name: 'طراحی',
+          sort_order: 10,
+        }],
+      },
+      error: null,
+    });
+    const from = vi.fn((table: string) => {
+      const builder: any = {
+        select: () => builder,
+        eq: () => builder,
+        maybeSingle: async () => ({
+          data: table === 'process_runs'
+            ? { id: existingRunId, process_group_id: 'actual-run-group' }
+            : { org_id: '33333333-3333-4333-8333-333333333333' },
+        }),
+      };
+      return builder;
+    });
+
+    await ensureProcessRunForDraftStageGroup({
+      supabaseClient: { from, rpc },
+      moduleId: 'projects',
+      recordId: '44444444-4444-4444-8444-444444444444',
+      stages: [
+        {
+          id: 'draft-stage-1',
+          name: 'طراحی',
+          sort_order: 10,
+          process_group_id: 'stale-draft-group',
+          process_run_id: existingRunId,
+        },
+        {
+          id: 'draft-stage-2',
+          name: 'چاپ',
+          sort_order: 20,
+          process_group_id: 'stale-draft-group',
+          process_run_id: existingRunId,
+        },
+      ],
+      targetStage: {
+        id: 'draft-stage-1',
+        name: 'طراحی',
+        sort_order: 10,
+        process_group_id: 'stale-draft-group',
+        process_run_id: existingRunId,
+      },
+    });
+
+    expect(from).toHaveBeenCalledWith('process_runs');
+    expect(rpc).toHaveBeenCalledWith('ensure_process_run_for_draft_group_v2', expect.objectContaining({
+      p_process_group_id: 'actual-run-group',
+    }));
+    expect(rpc.mock.calls[0][1].p_stages).toHaveLength(2);
+  });
+
   it('uses the selected target assignee for the stage being converted', async () => {
     const selectedUserId = '66666666-6666-4666-8666-666666666666';
     const staleRoleId = '77777777-7777-4777-8777-777777777777';

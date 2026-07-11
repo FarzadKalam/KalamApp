@@ -13,6 +13,7 @@ import {
   resolveWorkflowFieldValue,
 } from '../../utils/workflowRuntime';
 import {
+  buildReportBaseSelectColumns,
   buildReportTableFieldKey,
   getReportConditionFields,
   getReportTableBlock,
@@ -137,29 +138,6 @@ const isGroupingFieldAvailableForRow = (fieldKey: string, row: Record<string, an
   return !!row?.__report_table_rows?.[blockId];
 };
 
-const buildCompactReportBaseColumns = (
-  moduleConfig: any,
-  keys: string[],
-  selectedTableBlocks: any[],
-) => {
-  const moduleFieldKeys = new Set(
-    (moduleConfig?.fields || [])
-      .map((field: any) => String(field?.key || '').trim())
-      .filter(Boolean)
-  );
-  const tableBlockIds = new Set((selectedTableBlocks || []).map((block: any) => String(block?.id || '').trim()).filter(Boolean));
-  return Array.from(new Set([
-    'id',
-    'org_id',
-    'created_at',
-    'updated_at',
-    'assignee_id',
-    'assignee_role_id',
-    'assignee_type',
-    ...keys.filter((key) => moduleFieldKeys.has(String(key || '').trim()) || tableBlockIds.has(String(key || '').trim())),
-  ]));
-};
-
 const buildFlatGroupedRows = (
   sourceRows: ReportRow[],
   groupBys: Array<{ field: string; direction: 'asc' | 'desc' }>,
@@ -263,7 +241,9 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
   const moduleConfig = MODULES[moduleId];
   const currencyLabel = readCurrencyConfig().label || '';
   const selectedTableBlocks = useMemo(
-    () => config.secondary_module_ids.map((sourceId) => getReportTableBlock(moduleId, sourceId)).filter(Boolean),
+    () => config.secondary_module_ids
+      .map((sourceId) => getReportTableBlock(moduleId, sourceId))
+      .filter((block): block is NonNullable<typeof block> => !!block),
     [config.secondary_module_ids, moduleId]
   );
   const reportableFields = useMemo(
@@ -347,7 +327,7 @@ const ReportCompactRenderer: React.FC<ReportCompactRendererProps> = ({
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
-      const baseColumns = buildCompactReportBaseColumns(
+      const baseColumns = buildReportBaseSelectColumns(
         moduleConfig,
         [...neededKeys, ...conditionFieldKeys],
         selectedTableBlocks,

@@ -5,6 +5,8 @@ import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
 import { fetchProcessRuntimeBatchForRecord } from '../../utils/processRuntimeBatch';
+import { fetchProcessRuntimeTasksForRecord } from '../../utils/processRuntimeTasks';
+import { clearAppRuntimeCache } from '../../utils/appRuntimeCache';
 import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
 import { isProcessExecutionStarted, type ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import {
@@ -30,10 +32,9 @@ import {
 import { fetchLinkedProcessDraftStagesForRecord } from '../../utils/processLinkedDraftLookup';
 import { fetchRecordReferenceLabels, buildRecordReferenceKey } from '../../utils/recordReference';
 import { fetchRelationOptionsForField } from '../../utils/relationOptions';
-import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { parseAssigneeValue } from '../../utils/assigneeValue';
-import { applyTaskSourceRecordFilter, resolveTaskSourceLink } from '../../utils/taskMeta';
+import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
@@ -1206,238 +1207,6 @@ const buildDraftProcessCards = (
     }));
 };
 
-const TASK_RUNTIME_COLUMNS = [
-  'id',
-  'name',
-  'status',
-  'task_type',
-  'assignee_id',
-  'assignee_role_id',
-  'assignee_type',
-  'sort_order',
-  'process_group_id',
-  'process_run_id',
-  'process_run_stage_id',
-  'recurrence_info',
-  'source_module_id',
-  'source_record_id',
-  'source_template_id',
-  'source_stage_sort_order',
-  'process_node_key',
-  'process_lane_key',
-  'due_date',
-  'created_at',
-  'updated_at',
-] as const;
-
-type RuntimeTaskBatchRequest = {
-  key: string;
-  moduleId: string;
-  recordId: string;
-  taskIds: Set<string>;
-  runIds: Set<string>;
-  stageIds: Set<string>;
-  resolve: (tasks: any[]) => void;
-  reject: (error: unknown) => void;
-  force?: boolean;
-};
-
-const PROCESS_RUNTIME_TASK_CACHE_TTL_MS = 30_000;
-const processRuntimeTaskCache = new Map<string, { tasks: any[]; savedAt: number }>();
-const processRuntimeTaskQueue: RuntimeTaskBatchRequest[] = [];
-let processRuntimeTaskFlushTimer: ReturnType<typeof setTimeout> | null = null;
-
-const clearProcessRuntimeTaskCache = () => {
-  processRuntimeTaskCache.clear();
-};
-
-const buildRuntimeTaskRequestKey = (moduleId: string, recordId: string, taskIds: string[], runIds: string[], stageIds: string[]) => JSON.stringify({
-  moduleId,
-  recordId,
-  taskIds: [...taskIds].sort(),
-  runIds: [...runIds].sort(),
-  stageIds: [...stageIds].sort(),
-});
-
-const fetchRuntimeTasksByColumn = async (
-  cacheKey: string,
-  column: 'id' | 'process_run_id' | 'process_run_stage_id',
-  ids: string[],
-) => {
-  if (ids.length === 0) return { data: [], error: null };
-  return runSelectWithCompatibleColumns<any[]>({
-    cacheKey,
-    columns: TASK_RUNTIME_COLUMNS,
-    execute: (selectExpr) => supabase
-      .from('tasks')
-      .select(selectExpr)
-      .in(column, ids),
-  });
-};
-
-const isMissingRuntimeTasksRpcError = (error: any) => {
-  const code = normalizeText(error?.code).toUpperCase();
-  const message = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
-  return (
-    code === '42883'
-    || code === 'PGRST202'
-    || code === 'PGRST204'
-    || message.includes('get_process_runtime_tasks_for_record')
-    || message.includes('get_process_runtime_tasks_for_context')
-    || message.includes('could not find the function')
-  );
-};
-
-const fetchRuntimeTasksWithRpc = async (
-  moduleId: string,
-  recordId: string,
-  taskIds: string[],
-  runIds: string[],
-  stageIds: string[],
-) => {
-  const { data, error } = await supabase.rpc('get_process_runtime_tasks_for_record', {
-    p_module_id: moduleId,
-    p_record_id: recordId,
-    p_task_ids: taskIds,
-    p_process_run_ids: runIds,
-    p_process_run_stage_ids: stageIds,
-  });
-  if (error) throw error;
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object' && Array.isArray((data as any).tasks)) return (data as any).tasks;
-  return [];
-};
-
-const fetchRuntimeTasksForRecordFallback = async (
-  moduleId: string,
-  recordId: string,
-) => {
-  if (!moduleId || !recordId) return [];
-  const sourceResult = await runSelectWithCompatibleColumns<any[]>({
-    cacheKey: `process-v2-runtime:tasks:record:${moduleId}:${recordId}`,
-    columns: TASK_RUNTIME_COLUMNS,
-    execute: (selectExpr) => applyTaskSourceRecordFilter(
-      supabase.from('tasks').select(selectExpr),
-      moduleId,
-      recordId,
-    ).order('sort_order', { ascending: true }),
-  });
-  if (sourceResult.error) throw sourceResult.error;
-  return Array.isArray(sourceResult.data) ? sourceResult.data : [];
-};
-
-const taskMatchesRuntimeRequest = (task: any, request: RuntimeTaskBatchRequest) => (
-  request.taskIds.has(normalizeDbUuid(task?.id))
-  || request.runIds.has(normalizeDbUuid(task?.process_run_id))
-  || request.stageIds.has(normalizeDbUuid(task?.process_run_stage_id))
-  || (
-    normalizeText(resolveTaskSourceLink(task).moduleId) === request.moduleId
-    && normalizeText(resolveTaskSourceLink(task).recordId) === request.recordId
-  )
-  || normalizeText(parseObject(task?.recurrence_info)?.process_links?.[request.moduleId]) === request.recordId
-);
-
-const flushRuntimeTaskQueue = async () => {
-  const queue = processRuntimeTaskQueue.splice(0, processRuntimeTaskQueue.length);
-  processRuntimeTaskFlushTimer = null;
-  if (queue.length === 0) return;
-
-  try {
-    await Promise.all(queue.map(async (request) => {
-      try {
-        const tasks = await fetchRuntimeTasksWithRpc(
-          request.moduleId,
-          request.recordId,
-          Array.from(request.taskIds),
-          Array.from(request.runIds),
-          Array.from(request.stageIds),
-        );
-        if (!request.force) {
-          processRuntimeTaskCache.set(request.key, { tasks, savedAt: Date.now() });
-        }
-        request.resolve(tasks);
-      } catch (rpcError) {
-        if (!isMissingRuntimeTasksRpcError(rpcError)) throw rpcError;
-        const taskIds = Array.from(request.taskIds);
-        const runIds = Array.from(request.runIds);
-        const stageIds = Array.from(request.stageIds);
-        const results = await Promise.allSettled([
-          taskIds.length
-            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:id:${request.key}`, 'id', taskIds)
-            : Promise.resolve({ data: [], error: null }),
-          runIds.length
-            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:process-run:${request.key}`, 'process_run_id', runIds)
-            : Promise.resolve({ data: [], error: null }),
-          stageIds.length
-            ? fetchRuntimeTasksByColumn(`process-v2-runtime:tasks:run-stage:${request.key}`, 'process_run_stage_id', stageIds)
-            : Promise.resolve({ data: [], error: null }),
-          fetchRuntimeTasksForRecordFallback(request.moduleId, request.recordId).then((data) => ({ data, error: null })),
-        ]);
-        const byId = new Map<string, any>();
-        results.forEach((result) => {
-          if (result.status !== 'fulfilled') return;
-          const value = result.value as { data?: any[]; error?: any };
-          if (value.error || !Array.isArray(value.data)) return;
-          value.data.forEach((task: any) => {
-            if (!taskMatchesRuntimeRequest(task, request)) return;
-            const id = normalizeDbUuid(task?.id) || normalizeText(task?.id);
-            if (id) byId.set(id, task);
-          });
-        });
-        const tasks = Array.from(byId.values());
-        if (!request.force) {
-          processRuntimeTaskCache.set(request.key, { tasks, savedAt: Date.now() });
-        }
-        request.resolve(tasks);
-      }
-    }));
-  } catch (error) {
-    queue.forEach((request) => request.reject(error));
-  }
-};
-
-const fetchRuntimeTasks = async (
-  moduleId: string,
-  recordId: string,
-  runs: any[],
-  stages: any[],
-  options?: { force?: boolean },
-) => {
-  const normalizedModuleId = normalizeText(moduleId);
-  const normalizedRecordId = normalizeText(recordId);
-  const taskIds = Array.from(new Set((stages || []).map((stage: any) => normalizeDbUuid(stage?.task_id)).filter(Boolean)));
-  const runIds = Array.from(new Set((runs || []).map((run: any) => normalizeDbUuid(run?.id)).filter(Boolean)));
-  const stageIds = Array.from(new Set((stages || []).flatMap((stage: any) => [
-    normalizeDbUuid(stage?.id),
-    normalizeDbUuid(stage?.process_run_stage_id),
-  ]).filter(Boolean)));
-  if (!normalizedModuleId || !normalizedRecordId) return [];
-  const key = buildRuntimeTaskRequestKey(normalizedModuleId, normalizedRecordId, taskIds, runIds, stageIds);
-  const cached = processRuntimeTaskCache.get(key);
-  if (!options?.force && cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_TASK_CACHE_TTL_MS) {
-    return cached.tasks;
-  }
-
-  return new Promise<any[]>((resolve, reject) => {
-    processRuntimeTaskQueue.push({
-      key,
-      moduleId: normalizedModuleId,
-      recordId: normalizedRecordId,
-      taskIds: new Set(taskIds),
-      runIds: new Set(runIds),
-      stageIds: new Set(stageIds),
-      resolve,
-      reject,
-      force: options?.force,
-    });
-    if (!processRuntimeTaskFlushTimer) {
-      processRuntimeTaskFlushTimer = setTimeout(() => {
-        void flushRuntimeTaskQueue();
-      }, 0);
-    }
-  });
-};
-
 const fetchRunStages = async (runId: string, options?: { force?: boolean }) => {
   if (!runId) return [];
   const extended = await supabase
@@ -1939,7 +1708,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const refresh = useCallback(async (force = false) => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
-    if (force) clearProcessRuntimeTaskCache();
+    if (force) clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     if (readOnlyVariant && !force) {
       const cached = processRuntimeBlockCache.get(cacheKey);
       if (cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS) {
@@ -1971,7 +1740,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (isProcessRunModule(normalizedModuleId)) {
         const stages = await fetchRunStages(normalizedRecordId, force ? { force: true } : undefined);
         const runs = [recordDataRef.current].filter(Boolean);
-        const tasks = await fetchRuntimeTasks(normalizedModuleId, normalizedRecordId, runs, stages, { force });
+        const tasks = await fetchProcessRuntimeTasksForRecord(
+          supabase,
+          normalizedModuleId,
+          normalizedRecordId,
+          { runs, stages },
+          { force },
+        );
         const nextRuntime = {
           runs,
           stages,
@@ -2002,7 +1777,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         snapshot.stages || [],
         force ? { force: true } : undefined,
       );
-      const tasks = await fetchRuntimeTasks(normalizedModuleId, normalizedRecordId, snapshot.runs || [], snapshotStages, { force });
+      const tasks = await fetchProcessRuntimeTasksForRecord(
+        supabase,
+        normalizedModuleId,
+        normalizedRecordId,
+        { runs: snapshot.runs || [], stages: snapshotStages },
+        { force },
+      );
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
         loadLegacyLinkedDrafts
@@ -2045,7 +1826,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [refresh]);
 
   const scheduleRefresh = useCallback(() => {
-    clearProcessRuntimeTaskCache();
+    clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
@@ -2054,7 +1835,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [cacheKey]);
 
   const commitRuntimeRealtimePatch = useCallback((updater: (current: RuntimeState) => RuntimeState) => {
-    clearProcessRuntimeTaskCache();
+    clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
     setRuntime((current) => {
       const next = updater(current);
@@ -2673,7 +2454,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [normalizedModuleId, normalizedRecordId, orgId, recordData?.org_id]);
 
   const handleStageStatusChange = useCallback((process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => {
-    clearProcessRuntimeTaskCache();
+    clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
     const key = cardKey(process);
     const stageStatus = mapTaskStatusToStageStatus(status);
@@ -2763,7 +2544,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     ));
     if (changedEntries.length === 0) return;
 
-    clearProcessRuntimeTaskCache();
+    clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
 
     const draftPositions = changedEntries

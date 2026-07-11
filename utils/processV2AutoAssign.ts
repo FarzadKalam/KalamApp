@@ -1,4 +1,5 @@
 import { MODULES } from '../moduleRegistry';
+import { getAppRuntimeCached } from './appRuntimeCache';
 import { FieldType, ModuleField } from '../types';
 import { buildResolvedAssigneeCombo, normalizeTaskAssigneeRowsForDirectory, parseAssigneeValue } from './assigneeValue';
 import {
@@ -219,13 +220,19 @@ const hasUsableTemplateRecordData = (provided?: Record<string, any> | null) => {
 
 const loadRecord = async (supabaseClient: any, moduleId: string, recordId: string, provided?: Record<string, any> | null) => {
   if (hasUsableTemplateRecordData(provided)) return provided;
-  const { data, error } = await supabaseClient
-    .from(getModuleTable(moduleId))
-    .select('*')
-    .eq('id', recordId)
-    .maybeSingle();
-  if (error) throw error;
-  return data || {};
+  return getAppRuntimeCached({
+    key: `process-template-record:${moduleId}:${recordId}`,
+    ttlMs: 60_000,
+    loader: async () => {
+      const { data, error } = await supabaseClient
+        .from(getModuleTable(moduleId))
+        .select('*')
+        .eq('id', recordId)
+        .maybeSingle();
+      if (error) throw error;
+      return data || {};
+    },
+  });
 };
 
 export const buildProcessV2TemplateContext = async ({
@@ -272,13 +279,8 @@ export const buildProcessV2TemplateContext = async ({
     const cacheKey = `${normalizedModuleId}:${normalizedRecordId}`;
     let linkedRecord = cache.get(cacheKey);
     if (!linkedRecord) {
-      const { data, error } = await supabaseClient
-        .from(getModuleTable(normalizedModuleId))
-        .select('*')
-        .eq('id', normalizedRecordId)
-        .maybeSingle();
-      if (error || !data) return;
-      linkedRecord = data as Record<string, any>;
+      linkedRecord = await loadRecord(supabaseClient, normalizedModuleId, normalizedRecordId).catch(() => null);
+      if (!linkedRecord) return;
       cache.set(cacheKey, linkedRecord);
     }
     assignProcessLinkedRecordFields(record, normalizedModuleId, linkedRecord);

@@ -35,6 +35,7 @@ type EnsureProcessRunArgs = {
   targetStage?: Record<string, any> | null;
   currentUserId?: string | null;
   stageScope?: 'group' | 'target';
+  existingProcessRunId?: string | null;
 };
 
 export type EnsuredProcessRunContext = {
@@ -283,6 +284,45 @@ const resolveOrgId = async (
   }
 };
 
+const getStageProcessRunId = (stage: Record<string, any> | null | undefined) => {
+  const metadata = parseObject(stage?.metadata);
+  const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
+  const sourceStage = stage?.source_stage && typeof stage.source_stage === 'object' ? stage.source_stage : {};
+  const sourceMetadata = parseObject(sourceStage?.metadata);
+  return normalizeDbUuid(
+    stage?.process_run_id
+    || metadata?.process_run_id
+    || recurrence?.process_run_id
+    || sourceStage?.process_run_id
+    || sourceMetadata?.process_run_id,
+  );
+};
+
+const resolveExistingRunGroupId = async (
+  supabaseClient: any,
+  orgId: string,
+  moduleId: string,
+  recordId: string,
+  processRunId: string,
+) => {
+  const normalizedRunId = normalizeDbUuid(processRunId);
+  if (!normalizedRunId) return '';
+  try {
+    const { data, error } = await supabaseClient
+      .from('process_runs')
+      .select('id, process_group_id')
+      .eq('id', normalizedRunId)
+      .eq('org_id', orgId)
+      .eq('module_id', moduleId)
+      .eq('record_id', recordId)
+      .maybeSingle();
+    if (error) throw error;
+    return normalizeText(data?.process_group_id);
+  } catch {
+    return '';
+  }
+};
+
 const normalizeStageStatusForRun = (status: unknown) => {
   const normalized = normalizeText(status).toLowerCase();
   if (['in_progress', 'done', 'blocked', 'canceled'].includes(normalized)) return normalized;
@@ -359,16 +399,43 @@ export const ensureProcessRunForDraftStageGroup = async ({
   stages,
   targetStage = null,
   stageScope = 'group',
+  existingProcessRunId = null,
 }: EnsureProcessRunArgs): Promise<EnsuredProcessRunContext> => {
   const targetMeta = getDraftStageProcessGroupMeta(targetStage || stages[0]);
-  const groupId = normalizeText(targetMeta.groupId);
+  const sourceGroupId = normalizeText(targetMeta.groupId);
+  let groupId = sourceGroupId;
   const normalizedRecordId = normalizeDbUuid(recordId);
-  if (!supabaseClient || !moduleId || !normalizedRecordId || !groupId || groupId === 'default_process_group') {
+  const processRunIdHint = normalizeDbUuid(
+    existingProcessRunId
+    || getStageProcessRunId(targetStage)
+    || (Array.isArray(stages) ? stages.map(getStageProcessRunId).find(Boolean) : ''),
+  );
+  if (!supabaseClient || !moduleId || !normalizedRecordId || ((!groupId || groupId === 'default_process_group') && !processRunIdHint)) {
     return { processRunId: null, processRunStageId: null, stageMap: new Map() };
   }
 
+  const orgId = normalizeDbUuid(await resolveOrgId(supabaseClient, moduleId, normalizedRecordId));
+  if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+
+  if (processRunIdHint) {
+    const existingRunGroupId = await resolveExistingRunGroupId(
+      supabaseClient,
+      orgId,
+      moduleId,
+      normalizedRecordId,
+      processRunIdHint,
+    );
+    if (existingRunGroupId) {
+      groupId = existingRunGroupId;
+    }
+  }
+  if (!groupId || groupId === 'default_process_group') {
+    return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+  }
+
+  const stageSourceGroupId = sourceGroupId && sourceGroupId !== 'default_process_group' ? sourceGroupId : groupId;
   const groupStages = (Array.isArray(stages) ? stages : [])
-    .filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === groupId)
+    .filter((stage) => getDraftStageProcessGroupMeta(stage).groupId === stageSourceGroupId)
     .sort((a, b) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0));
   if (groupStages.length === 0 && !targetStage) {
     return { processRunId: null, processRunStageId: null, stageMap: new Map() };
@@ -378,10 +445,7 @@ export const ensureProcessRunForDraftStageGroup = async ({
     : groupStages;
   const stagesForRuntime = stageScope === 'target' && targetStage
     ? (scopedStages.length > 0 ? scopedStages : [targetStage])
-    : groupStages;
-
-  const orgId = normalizeDbUuid(await resolveOrgId(supabaseClient, moduleId, normalizedRecordId));
-  if (!orgId) return { processRunId: null, processRunStageId: null, stageMap: new Map() };
+    : (groupStages.length > 0 ? groupStages : [targetStage].filter(Boolean) as Record<string, any>[]);
 
   try {
     const rpcStages = stagesForRuntime.map((stage) => {

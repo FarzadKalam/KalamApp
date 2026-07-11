@@ -78,6 +78,7 @@ import {
   buildModuleListSearchFilter,
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
+import { buildJsonArrayViewCrudFilters, isJsonArrayViewFilterField } from "../utils/viewCrudFilters";
 import { getBaseModuleFieldDefinition } from "../utils/moduleSettingsRuntime";
 import {
   buildSurveyRuntimeModule,
@@ -3436,6 +3437,14 @@ export const ModuleListRefine: React.FC<{
           _isTagViewFilter: true,
         } as any);
         continue;
+      }
+
+      if (isJsonArrayViewFilterField(field)) {
+        const arrayFilters = buildJsonArrayViewCrudFilters(fieldKey, operator, value);
+        if (arrayFilters.length > 0) {
+          filters.push(...arrayFilters);
+          continue;
+        }
       }
 
       switch (operator) {

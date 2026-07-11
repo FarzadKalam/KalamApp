@@ -345,7 +345,7 @@ const ReportBuilderPage: React.FC = () => {
           interval_value: Math.max(1, Number(scheduleIntervalValue || 1)),
           interval_unit: scheduleIntervalUnit,
           recipient_user_ids: scheduleRecipientIds,
-          delivery_channels: scheduleChannels,
+          delivery_channels: scheduleEnabled ? ['note'] : scheduleChannels,
         },
       };
 
@@ -483,7 +483,7 @@ const ReportBuilderPage: React.FC = () => {
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <div className="font-black text-gray-800 dark:text-gray-100">ارسال دوره‌ای</div>
-                  <div className="text-sm text-gray-500">ارسال به چند کاربر به‌صورت یادداشت یا ایمیل همراه با لینک گزارش</div>
+                  <div className="text-sm text-gray-500">ارسال به چند کاربر به‌صورت یادداشت داخلی همراه با لینک گزارش</div>
                 </div>
                 <Switch checked={scheduleEnabled} onChange={setScheduleEnabled} checkedChildren="فعال" unCheckedChildren="غیرفعال" />
               </div>
@@ -493,7 +493,7 @@ const ReportBuilderPage: React.FC = () => {
                     <InputNumber min={1} className="w-full persian-number" value={scheduleIntervalValue} onChange={(value) => setScheduleIntervalValue(Math.max(1, Number(value || 1)))} />
                     <Select className="w-full" value={scheduleIntervalUnit} onChange={(value) => setScheduleIntervalUnit(value as ReportScheduleUnit)} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} />
                   </div>
-                  <Checkbox.Group value={scheduleChannels} onChange={(value) => setScheduleChannels(value as ReportScheduleChannel[])} options={[{ label: 'یادداشت داخلی', value: 'note' }, { label: 'ایمیل', value: 'email' }]} />
+                  <Checkbox.Group value={scheduleChannels} onChange={(value) => setScheduleChannels(value as ReportScheduleChannel[])} options={[{ label: 'یادداشت داخلی', value: 'note' }]} />
                   <div className="md:col-span-2">
                     <Select
                       className="w-full"

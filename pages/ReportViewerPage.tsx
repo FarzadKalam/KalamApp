@@ -20,6 +20,7 @@ import {
   resolveWorkflowFieldValue,
 } from '../utils/workflowRuntime';
 import {
+  buildReportBaseSelectColumns,
   getReportConditionFields,
   getReportTableBlock,
   getReportableFieldMap,
@@ -30,6 +31,7 @@ import {
   normalizeReportConfig,
   type ReportDefinitionRecord,
 } from '../utils/reporting';
+import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import { getSurveyTemplateScopedIdFromConditions, loadSurveyTemplateDefinition, normalizeSurveyTemplateSnapshot } from '../utils/surveyTemplates';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { escapeCsvCell, formatListCellValue } from '../utils/listPrintExport';
@@ -272,6 +274,36 @@ const buildReportResultCacheKey = (report: ReportDefinitionRecord, normalizedCon
     config: normalizedConfig,
   })}`;
 
+const readCachedReportResult = (cacheKey: string) => {
+  try {
+    const cached = sessionStorage.getItem(cacheKey);
+    return cached ? JSON.parse(cached) : null;
+  } catch {
+    try {
+      sessionStorage.removeItem(cacheKey);
+    } catch {
+      // ignore cache cleanup failures
+    }
+    return null;
+  }
+};
+
+const removeCachedReportResult = (cacheKey: string) => {
+  try {
+    sessionStorage.removeItem(cacheKey);
+  } catch {
+    // ignore cache cleanup failures
+  }
+};
+
+const writeCachedReportResult = (cacheKey: string, value: unknown) => {
+  try {
+    sessionStorage.setItem(cacheKey, JSON.stringify(value));
+  } catch (error) {
+    console.warn('Could not cache report result', error);
+  }
+};
+
 const formatLastUpdatedAt = (value?: string | null) =>
   value ? new Date(value).toLocaleString('fa-IR') : '-';
 
@@ -334,7 +366,9 @@ const ReportViewerPage: React.FC = () => {
   const moduleConfig = MODULES[moduleId];
   const currencyLabel = readCurrencyConfig().label || '';
   const selectedTableBlocks = useMemo(
-    () => secondaryModuleIds.map((sourceId) => getReportTableBlock(moduleId, sourceId)).filter(Boolean),
+    () => secondaryModuleIds
+      .map((sourceId) => getReportTableBlock(moduleId, sourceId))
+      .filter((block): block is NonNullable<typeof block> => !!block),
     [moduleId, secondaryModuleIds]
   );
   const reportableFields = useMemo(
@@ -481,22 +515,17 @@ const ReportViewerPage: React.FC = () => {
     if (!report || !moduleConfig) return;
     const cacheKey = buildReportResultCacheKey(report, config);
     if (!forceRefresh) {
-      try {
-        const cached = sessionStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          setRows(Array.isArray(parsed.rows) ? parsed.rows : []);
-          setGroupedRows(Array.isArray(parsed.groupedRows) ? parsed.groupedRows : []);
-          setGroupedTreeRows(Array.isArray(parsed.groupedTreeRows) ? parsed.groupedTreeRows : []);
-          setChartRows(Array.isArray(parsed.chartRows) ? parsed.chartRows : []);
-          setLastUpdatedAt(String(parsed.lastUpdatedAt || ''));
-          return;
-        }
-      } catch {
-        sessionStorage.removeItem(cacheKey);
+      const parsed = readCachedReportResult(cacheKey);
+      if (parsed) {
+        setRows(Array.isArray(parsed.rows) ? parsed.rows : []);
+        setGroupedRows(Array.isArray(parsed.groupedRows) ? parsed.groupedRows : []);
+        setGroupedTreeRows(Array.isArray(parsed.groupedTreeRows) ? parsed.groupedTreeRows : []);
+        setChartRows(Array.isArray(parsed.chartRows) ? parsed.chartRows : []);
+        setLastUpdatedAt(String(parsed.lastUpdatedAt || ''));
+        return;
       }
     } else {
-      sessionStorage.removeItem(cacheKey);
+      removeCachedReportResult(cacheKey);
     }
     setExecuting(true);
     try {
@@ -509,20 +538,6 @@ const ReportViewerPage: React.FC = () => {
         return;
       }
 
-      const { data, error } = await supabase
-        .from(moduleConfig.table || moduleId)
-        .select('*')
-        .limit(config.row_limit);
-      if (error) throw error;
-
-      const scopedRows = (data || []).filter((row: any) =>
-        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
-          currentOrgId: roleContext.orgId,
-          allowedRoleIds: roleContext.allowedRoleIds,
-          allowedUserIds: roleContext.allowedUserIds,
-        })
-      );
-
       const neededKeys = Array.from(new Set([
         ...config.columns,
         ...config.group_bys.map((item) => item.field),
@@ -533,6 +548,30 @@ const ReportViewerPage: React.FC = () => {
         ...config.conditions_all,
         ...config.conditions_any,
       ].map((condition: any) => String(condition?.field || '').trim()).filter(Boolean);
+      const baseColumns = buildReportBaseSelectColumns(
+        moduleConfig,
+        [...neededKeys, ...conditionFieldKeys],
+        selectedTableBlocks,
+      );
+
+      const baseResult = await runSelectWithCompatibleColumns<any[]>({
+        cacheKey: `report-viewer:${moduleId}`,
+        columns: baseColumns,
+        execute: (selectExpr) =>
+          supabase
+            .from(moduleConfig.table || moduleId)
+            .select(selectExpr)
+            .limit(config.row_limit),
+      });
+      if (baseResult.error) throw baseResult.error;
+
+      const scopedRows = (baseResult.data || []).filter((row: any) =>
+        !isDeletedReportRecord(row) && canAccessAssignedRecord(row, roleContext.userId, roleContext.roleId, modulePerm.record_scope || 'all', {
+          currentOrgId: roleContext.orgId,
+          allowedRoleIds: roleContext.allowedRoleIds,
+          allowedUserIds: roleContext.allowedUserIds,
+        })
+      );
       const tableRelationFieldKeys = Array.from(new Set([
         ...neededKeys,
         ...conditionFieldKeys,
@@ -702,13 +741,13 @@ const ReportViewerPage: React.FC = () => {
         setGroupedTreeRows([]);
         const now = new Date().toISOString();
         setLastUpdatedAt(now);
-        sessionStorage.setItem(cacheKey, JSON.stringify({
+        writeCachedReportResult(cacheKey, {
           rows: nextRows,
           groupedRows: [],
           groupedTreeRows: [],
           chartRows: nextChartRows,
           lastUpdatedAt: now,
-        }));
+        });
         return;
       }
 
@@ -812,13 +851,13 @@ const ReportViewerPage: React.FC = () => {
       setGroupedTreeRows(finalGroupedTreeRows);
       const now = new Date().toISOString();
       setLastUpdatedAt(now);
-      sessionStorage.setItem(cacheKey, JSON.stringify({
+      writeCachedReportResult(cacheKey, {
         rows: nextRows,
         groupedRows: finalGroupedRows,
         groupedTreeRows: finalGroupedTreeRows,
         chartRows: nextChartRows,
         lastUpdatedAt: now,
-      }));
+      });
     } catch {
       message.error('اجرای گزارش ناموفق بود.');
       setRows([]);

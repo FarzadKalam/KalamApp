@@ -401,6 +401,26 @@ export const employeesModule: ModuleDefinition = {
     { key: 'notes', labels: { fa: 'توضیحات', en: 'Notes' }, type: FieldType.LONG_TEXT, blockId: 'notes_info', order: 12 },
     { key: 'template_field_values', labels: { fa: 'داده‌های قالب', en: 'Template Values' }, type: FieldType.JSON, blockId: 'notes_info', order: 90, readonly: true, hideInCreateForm: true, nature: FieldNature.SYSTEM },
     { key: 'template_schema_snapshot', labels: { fa: 'اسنپ‌شات قالب', en: 'Template Snapshot' }, type: FieldType.JSON, blockId: 'notes_info', order: 91, readonly: true, hideInCreateForm: true, nature: FieldNature.SYSTEM },
+
+    {
+      key: 'process_template_id',
+      labels: { fa: 'الگوی فرآیند اجرا', en: 'Execution Template' },
+      type: FieldType.RELATION,
+      location: FieldLocation.BLOCK,
+      blockId: 'process',
+      order: 1,
+      relationConfig: { targetModule: 'process_templates', targetField: 'name' },
+      nature: FieldNature.STANDARD,
+    },
+    {
+      key: 'execution_process_draft',
+      labels: { fa: 'فرآیند اجرا', en: 'Execution Process' },
+      type: FieldType.JSON,
+      location: FieldLocation.BLOCK,
+      blockId: 'process',
+      order: 2,
+      nature: FieldNature.STANDARD,
+    },
   
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 1.75, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 1.8, nature: FieldNature.STANDARD, isTableColumn: true },
@@ -415,6 +435,7 @@ export const employeesModule: ModuleDefinition = {
     { id: 'insurance_info', titles: { fa: 'بیمه' }, type: BlockType.FIELD_GROUP, order: 6 },
     { id: 'banking_info', titles: { fa: 'اطلاعات بانکی' }, type: BlockType.FIELD_GROUP, order: 7 },
     { id: 'job_description_info', titles: { fa: 'شرح شغل' }, type: BlockType.FIELD_GROUP, order: 8 },
+    { id: 'process', titles: { fa: 'فرآیند جذب و همکاری' }, type: BlockType.FIELD_GROUP, order: 8.5 },
     { id: 'notes_info', titles: { fa: 'یادداشت' }, type: BlockType.FIELD_GROUP, order: 9 },
   ],
   relatedTabs: [
