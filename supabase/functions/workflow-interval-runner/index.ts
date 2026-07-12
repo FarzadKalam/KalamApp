@@ -16,8 +16,9 @@ import {
   type ProcessAutomationEvent,
 } from '../_shared/process-automation-core.ts';
 import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
+import { buildProcessActivatorRecordContext } from '../_shared/process-activator-context.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-12-persian-formatters';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-scalable-interval-queue';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -1093,6 +1094,15 @@ async function dbInsert(supabaseUrl: string, key: string, table: string, body: a
   const url = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/${table}`;
   const r = await fetch(url, { method: 'POST', headers: dbHeaders(key), body: JSON.stringify(body) });
   if (!r.ok) { const t = await r.text(); throw new Error(`INSERT ${table} failed: ${t}`); }
+  try { const d = await r.json(); return Array.isArray(d) ? d[0] : d; } catch { return null; }
+}
+
+async function dbUpsert(supabaseUrl: string, key: string, table: string, body: any, onConflict: string): Promise<any> {
+  const url = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`;
+  // صف append-only است؛ اجرای تکراری enqueue نباید job نهایی‌شده را دوباره pending کند.
+  const headers = dbHeaders(key, { 'Prefer': 'resolution=ignore-duplicates,return=representation' });
+  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!r.ok) { const t = await r.text(); throw new Error(`UPSERT ${table} failed: ${t}`); }
   try { const d = await r.json(); return Array.isArray(d) ? d[0] : d; } catch { return null; }
 }
 
@@ -2574,6 +2584,95 @@ async function activateInitialProcessRunNodes(
   return { ...(result || {}), process_node_keys: nodeKeys };
 }
 
+function parseProcessAssigneeToken(value: any): { userId: string | null; roleId: string | null } {
+  const raw = String(value || '').trim();
+  if (!raw) return { userId: null, roleId: null };
+  const prefixed = raw.match(/^(user|role)[:_](.+)$/i);
+  if (prefixed) {
+    const id = String(prefixed[2] || '').trim() || null;
+    return String(prefixed[1]).toLowerCase() === 'role'
+      ? { userId: null, roleId: id }
+      : { userId: id, roleId: null };
+  }
+  return { userId: raw, roleId: null };
+}
+
+async function prepareProcessRunForAutomaticExecution(
+  url: string,
+  key: string,
+  orgId: string,
+  processRunId: string,
+  record: Record<string, any>,
+) {
+  const processLinks = parseObjectValue(record?.process_links);
+  const targetModuleIds = Array.from(new Set([
+    ...(Array.isArray(record?.process_target_module_ids) ? record.process_target_module_ids : []),
+    ...Object.keys(processLinks),
+  ].map((value) => String(value || '').trim()).filter(Boolean)));
+
+  const existingLinks = await dbGet(url, key,
+    `process_run_links?org_id=eq.${encodeURIComponent(orgId)}&process_run_id=eq.${encodeURIComponent(processRunId)}&select=module_id,record_id`
+  ).catch(() => []);
+  const existingLinkKeys = new Set(existingLinks.map((link: any) => `${link.module_id}:${link.record_id}`));
+  for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
+    const linkedRecordId = String(linkedRecordIdRaw || '').trim();
+    const linkKey = `${linkedModuleId}:${linkedRecordId}`;
+    if (!linkedModuleId || !linkedRecordId || existingLinkKeys.has(linkKey)) continue;
+    await dbInsert(url, key, 'process_run_links', {
+      org_id: orgId,
+      process_run_id: processRunId,
+      module_id: linkedModuleId,
+      record_id: linkedRecordId,
+      is_primary: false,
+    });
+    existingLinkKeys.add(linkKey);
+  }
+
+  const runStages = await dbGet(url, key,
+    `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=*&order=sort_order.asc&limit=500`
+  ).catch(() => []);
+  for (const stage of runStages) {
+    const metadata = parseObjectValue(stage?.metadata);
+    const assigneeReference = String(metadata?.default_assignee_field || '').trim().replace(/^field:/i, '');
+    const resolvedAssignee = assigneeReference
+      ? parseProcessAssigneeToken(getFieldValueForCondition(record, assigneeReference))
+      : { userId: null, roleId: null };
+    await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(String(stage.id))}`, {
+      assignee_user_id: stage?.assignee_user_id || resolvedAssignee.userId,
+      assignee_role_id: stage?.assignee_role_id || resolvedAssignee.roleId,
+      metadata: {
+        ...metadata,
+        process_link_map: processLinks,
+        process_target_module_ids: targetModuleIds,
+      },
+    });
+  }
+  return runStages;
+}
+
+async function activateAllProcessRunNodes(
+  url: string,
+  key: string,
+  orgId: string,
+  processRunId: string,
+  actorUserId: string | null,
+) {
+  const stages = await dbGet(url, key,
+    `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=id,process_node_key,metadata&order=sort_order.asc&limit=500`
+  ).catch(() => []);
+  const nodeKeys = stages
+    .map((stage: any) => String(stage?.process_node_key || stage?.metadata?.process_node_key || '').trim())
+    .filter(Boolean);
+  if (nodeKeys.length === 0) return { process_node_keys: [], created_task_ids: [], existing_task_ids: [] };
+  const result = await callRpc(url, key, 'activate_process_run_nodes', {
+    p_org_id: orgId,
+    p_process_run_id: processRunId,
+    p_node_keys: Array.from(new Set(nodeKeys)),
+    p_actor_user_id: actorUserId || null,
+  });
+  return { ...result, process_node_keys: nodeKeys };
+}
+
 // ── Action execution ───────────────────────────────────────────────────────────
 
 function actionResult(
@@ -3148,8 +3247,11 @@ async function executeAction(
       await dbPatch(url, key, 'process_runs', `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
       await dbPatch(url, key, 'process_run_stages', `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: new Date().toISOString() }).catch(() => {});
     }
+    if (processRunId) {
+      await prepareProcessRunForAutomaticExecution(url, key, orgId, processRunId, record);
+    }
     const activation = processRunId
-      ? await activateInitialProcessRunNodes(url, key, orgId, processRunId, actorUserId)
+      ? await activateAllProcessRunNodes(url, key, orgId, processRunId, actorUserId)
       : null;
     return actionResult(action, 'success', undefined, {
       affected_count: Math.max(1, Array.isArray(activation?.created_task_ids) ? activation.created_task_ids.length : 0),
@@ -3489,6 +3591,328 @@ async function runScheduledReportsTick(url: string, key: string, now: Date): Pro
 
 // ── Main execution loop ───────────────────────────────────────────────────────
 
+type WorkflowIntervalJob = {
+  id: string;
+  org_id: string;
+  job_kind: 'workflow_scan' | 'workflow_action';
+  workflow_id: string | null;
+  module_id: string | null;
+  record_id: string | null;
+  scheduled_due_at: string;
+  page_offset: number;
+  action_index: number | null;
+  payload: Record<string, any>;
+  attempts: number;
+  max_attempts: number;
+};
+
+const intervalJobDedupeKey = (...parts: any[]) => parts.map((part) => String(part ?? '').trim()).join('|');
+
+async function enqueueIntervalJob(url: string, key: string, input: Record<string, any>) {
+  return dbUpsert(url, key, 'workflow_interval_jobs', {
+    ...input,
+    status: 'pending',
+    available_at: input.available_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }, 'dedupe_key');
+}
+
+async function completeIntervalJob(
+  url: string,
+  key: string,
+  job: WorkflowIntervalJob,
+  status: 'succeeded' | 'failed' | 'skipped',
+  result: Record<string, any> | null,
+  errorMessage: string | null = null,
+) {
+  await dbPatch(url, key, 'workflow_interval_jobs', `id=eq.${encodeURIComponent(job.id)}`, {
+    status,
+    result,
+    last_error: errorMessage,
+    completed_at: new Date().toISOString(),
+    locked_at: null,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+async function retryOrFailIntervalJob(url: string, key: string, job: WorkflowIntervalJob, error: any) {
+  const errorMessage = String(error?.message || error || 'اجرای job ناموفق بود.');
+  if (Number(job.attempts || 0) < Number(job.max_attempts || 3)) {
+    const delaySeconds = Math.min(300, Math.max(5, 5 * (2 ** Math.max(0, Number(job.attempts || 1) - 1))));
+    await dbPatch(url, key, 'workflow_interval_jobs', `id=eq.${encodeURIComponent(job.id)}`, {
+      status: 'pending',
+      available_at: new Date(Date.now() + delaySeconds * 1000).toISOString(),
+      locked_at: null,
+      last_error: errorMessage,
+      updated_at: new Date().toISOString(),
+    });
+    return 'retried';
+  }
+  await completeIntervalJob(url, key, job, 'failed', null, errorMessage);
+  return 'failed';
+}
+
+async function enqueueWorkflowScanJobs(
+  url: string,
+  key: string,
+  workflow: WorkflowRow,
+  scheduledDueAt: Date,
+) {
+  const targetModuleIds = Array.from(new Set(
+    workflow.scope_type === 'process_activator'
+      && !String(workflow.process_source_node_key || '').trim()
+      && Array.isArray(workflow.module_ids)
+      ? workflow.module_ids
+      : [workflow.module_id],
+  )).map((value) => String(value || '').trim()).filter(Boolean);
+  for (const targetModuleId of targetModuleIds) {
+    await enqueueIntervalJob(url, key, {
+      org_id: workflow.org_id,
+      job_kind: 'workflow_scan',
+      dedupe_key: intervalJobDedupeKey('scan', workflow.id, scheduledDueAt.toISOString(), targetModuleId, 0),
+      workflow_id: workflow.id,
+      module_id: targetModuleId,
+      record_id: null,
+      scheduled_due_at: scheduledDueAt.toISOString(),
+      page_offset: 0,
+      action_index: null,
+      max_attempts: 3,
+      payload: { workflow, target_module_id: targetModuleId },
+    });
+  }
+}
+
+async function runIntervalEnqueueTick(url: string, key: string): Promise<Record<string, any>> {
+  const now = new Date();
+  const stats = { checkedWorkflows: 0, queuedWorkflows: 0, queuedScans: 0 };
+  const workflows = await fetchQueuedWorkflows(url, key);
+  stats.checkedWorkflows = workflows.length;
+  for (const workflow of workflows) {
+    const scheduledDueAt = getWorkflowScheduledDueAt(workflow, now);
+    if (!scheduledDueAt || !await checkIntervalDayCondition(workflow.interval_day_condition, scheduledDueAt, workflow.interval_days_after_holiday)) {
+      await clearServerQueued(url, key, workflow.id);
+      continue;
+    }
+    const claimed = await claimWorkflow(url, key, workflow.id, workflow.last_run_at, scheduledDueAt);
+    if (!claimed) continue;
+    await enqueueWorkflowScanJobs(url, key, workflow, scheduledDueAt);
+    stats.queuedWorkflows += 1;
+    stats.queuedScans += workflow.scope_type === 'process_activator' && Array.isArray(workflow.module_ids)
+      ? workflow.module_ids.length
+      : 1;
+  }
+  const [reportStats, processAutomationStats] = await Promise.all([
+    runScheduledReportsTick(url, key, now),
+    runServerProcessAutomationIntervalTick(url, key, now),
+  ]);
+  return { ...stats, ...reportStats, processAutomation: processAutomationStats };
+}
+
+async function processWorkflowScanJob(url: string, key: string, job: WorkflowIntervalJob) {
+  const workflow = job.payload?.workflow as WorkflowRow;
+  const moduleId = String(job.module_id || job.payload?.target_module_id || '').trim();
+  if (!workflow?.id || !moduleId) throw new Error('اطلاعات اسکن گردش‌کار ناقص است.');
+  const configuredRecordLimit = Number(workflow.batch_size) > 0
+    ? Math.max(1, Math.min(50000, Number(workflow.batch_size)))
+    : 50000;
+  const offset = Math.max(0, Number(job.page_offset || 0));
+  const pageSize = Math.max(1, Math.min(DEFAULT_BATCH_SIZE, configuredRecordLimit - offset));
+  if (pageSize <= 0) return { scanned: 0, matched: 0, queuedActions: 0, complete: true };
+  const table = getModuleTable(moduleId);
+  const records = await fetchModuleRecordsPage(url, key, table, workflow.org_id, pageSize, offset);
+  const conditionsAll = (Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [])
+    .filter((condition) => !['changed', 'changed_from', 'changed_to'].includes(String(condition?.operator || '')));
+  const conditionsAny = (Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [])
+    .filter((condition) => !['changed', 'changed_from', 'changed_to'].includes(String(condition?.operator || '')));
+  const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+  const executionMode = String(workflow.execution_mode || 'first_match');
+  const actorUserId = resolveWorkflowActorId(workflow);
+  let matched = 0;
+  let queuedActions = 0;
+  for (const sourceRecord of records) {
+    if (await shouldSkipWorkflowIntervalRecord(url, key, workflow.org_id, table, sourceRecord)) continue;
+    const recordId = String(sourceRecord?.id || '').trim();
+    if (!recordId) continue;
+    const record = workflow.scope_type === 'process_activator'
+      ? buildProcessActivatorRecordContext(moduleId, sourceRecord)
+      : sourceRecord;
+    if (!await evaluateConditions(conditionsAll, conditionsAny, record)) continue;
+    if (executionMode === 'first_match') {
+      const existing = await dbGet(url, key,
+        `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${moduleId}&status=eq.success&record_id=eq.${recordId}&select=id&limit=1`
+      ).catch(() => []);
+      if (existing.length > 0) continue;
+    }
+    matched += 1;
+    if (actions.length === 0) {
+      await insertWorkflowLog(url, key, {
+        workflow_id: workflow.id,
+        org_id: workflow.org_id,
+        module_id: moduleId,
+        record_id: recordId,
+        run_type: 'scheduled',
+        status: 'skipped',
+        message: 'اقدامی برای اجرا تعریف نشده است.',
+        details: { workflow_name: workflow.name, scheduled_due_at: job.scheduled_due_at, execution_queue: 'v2' },
+      });
+      continue;
+    }
+    for (const [actionIndex, action] of actions.entries()) {
+      await enqueueIntervalJob(url, key, {
+        org_id: workflow.org_id,
+        job_kind: 'workflow_action',
+        dedupe_key: intervalJobDedupeKey('action', workflow.id, job.scheduled_due_at, moduleId, recordId, actionIndex),
+        workflow_id: workflow.id,
+        module_id: moduleId,
+        record_id: recordId,
+        scheduled_due_at: job.scheduled_due_at,
+        page_offset: 0,
+        action_index: actionIndex,
+        is_terminal_action: actionIndex === actions.length - 1,
+        // اقدام‌های دارای اثر بیرونی (مانند پیامک) نباید در سطح job تکرار شوند.
+        // retry امن و idempotent داخل executeActionWithRetry مدیریت می‌شود.
+        max_attempts: 1,
+        payload: { workflow, record, action, action_count: actions.length, actor_user_id: actorUserId },
+      });
+      queuedActions += 1;
+    }
+  }
+  const nextOffset = offset + records.length;
+  if (records.length === pageSize && nextOffset < configuredRecordLimit) {
+    await enqueueIntervalJob(url, key, {
+      org_id: workflow.org_id,
+      job_kind: 'workflow_scan',
+      dedupe_key: intervalJobDedupeKey('scan', workflow.id, job.scheduled_due_at, moduleId, nextOffset),
+      workflow_id: workflow.id,
+      module_id: moduleId,
+      record_id: null,
+      scheduled_due_at: job.scheduled_due_at,
+      page_offset: nextOffset,
+      action_index: null,
+      max_attempts: 3,
+      payload: job.payload,
+    });
+  }
+  return { scanned: records.length, matched, queuedActions, next_offset: nextOffset };
+}
+
+async function finalizeWorkflowActionReport(url: string, key: string, job: WorkflowIntervalJob) {
+  const workflowId = String(job.workflow_id || '').trim();
+  const moduleId = String(job.module_id || '').trim();
+  const recordId = String(job.record_id || '').trim();
+  if (!workflowId || !moduleId || !recordId) return;
+  const jobs = await dbGet(url, key,
+    `workflow_interval_jobs?job_kind=eq.workflow_action&workflow_id=eq.${encodeURIComponent(workflowId)}&scheduled_due_at=eq.${encodeURIComponent(job.scheduled_due_at)}&module_id=eq.${encodeURIComponent(moduleId)}&record_id=eq.${encodeURIComponent(recordId)}&select=id,status,attempts,action_index,result,last_error,payload&order=action_index.asc`
+  ) as Array<Record<string, any>>;
+  if (jobs.length === 0 || jobs.some((item) => ['pending', 'running'].includes(String(item.status)))) return;
+
+  const executionRunKey = intervalJobDedupeKey('report', workflowId, job.scheduled_due_at, moduleId, recordId);
+  const reportJobFilter = `job_kind=eq.workflow_action&workflow_id=eq.${encodeURIComponent(workflowId)}&scheduled_due_at=eq.${encodeURIComponent(job.scheduled_due_at)}&module_id=eq.${encodeURIComponent(moduleId)}&record_id=eq.${encodeURIComponent(recordId)}`;
+  const existing = await dbGet(url, key,
+    `workflow_logs?execution_run_key=eq.${encodeURIComponent(executionRunKey)}&select=id&limit=1`
+  ).catch(() => []);
+  if (existing.length > 0) {
+    await dbPatch(url, key, 'workflow_interval_jobs', reportJobFilter, { report_logged_at: new Date().toISOString() });
+    return;
+  }
+
+  const actionResults = jobs.map((item) => item.result?.action_result || {
+    type: String(item.payload?.action?.type || ''),
+    status: item.status === 'failed' ? 'failed' : item.status,
+    message: item.last_error || undefined,
+  });
+  const failed = actionResults.filter((item: any) => item?.status === 'failed');
+  const succeeded = actionResults.filter((item: any) => item?.status === 'success');
+  const workflow = jobs[0]?.payload?.workflow || job.payload?.workflow || {};
+  await dbUpsert(url, key, 'workflow_logs', {
+    workflow_id: workflowId,
+    execution_run_key: executionRunKey,
+    org_id: job.org_id,
+    module_id: moduleId,
+    record_id: recordId,
+    run_type: 'scheduled',
+    status: failed.length > 0 ? 'failed' : succeeded.length > 0 ? 'success' : 'skipped',
+    message: failed.map((item: any) => String(item?.message || '')).filter(Boolean).join(' | ') || null,
+    details: {
+      workflow_name: String(workflow?.name || '').trim() || null,
+      record_title: getServerRecordTitle(job.payload?.record || {}),
+      execution_mode: String(workflow?.execution_mode || 'first_match'),
+      scheduled_due_at: job.scheduled_due_at,
+      action_count: jobs.length,
+      action_results: actionResults,
+      execution_run_key: executionRunKey,
+      execution_queue: 'v2',
+      queue_job_ids: jobs.map((item) => item.id),
+      queue_attempts: jobs.reduce((sum, item) => sum + Number(item.attempts || 0), 0),
+      actor_id: job.payload?.actor_user_id || null,
+      runner_build: FUNCTION_BUILD,
+    },
+  }, 'execution_run_key');
+  await dbPatch(url, key, 'workflow_interval_jobs', reportJobFilter, { report_logged_at: new Date().toISOString() });
+}
+
+async function processWorkflowActionJob(url: string, key: string, job: WorkflowIntervalJob) {
+  const workflow = job.payload?.workflow as WorkflowRow;
+  const action = job.payload?.action as WorkflowAction;
+  const record = job.payload?.record as Record<string, any>;
+  const moduleId = String(job.module_id || '').trim();
+  if (!workflow?.id || !action || !record || !moduleId) throw new Error('اطلاعات اقدام گردش‌کار ناقص است.');
+  const actionResultValue = await executeActionWithRetry(
+    action, record, moduleId, job.org_id, url, key, job.payload?.actor_user_id || null,
+  );
+  await completeIntervalJob(url, key, job, 'succeeded', { action_result: actionResultValue });
+  await finalizeWorkflowActionReport(url, key, job).catch((error) => {
+    console.warn('[workflow-runner] Queue report will be reconciled:', error?.message || error);
+  });
+  return actionResultValue;
+}
+
+async function processIntervalJob(url: string, key: string, job: WorkflowIntervalJob) {
+  try {
+    if (job.job_kind === 'workflow_scan') {
+      const result = await processWorkflowScanJob(url, key, job);
+      await completeIntervalJob(url, key, job, 'succeeded', result);
+      return 'succeeded';
+    }
+    await processWorkflowActionJob(url, key, job);
+    return 'succeeded';
+  } catch (error: any) {
+    const status = await retryOrFailIntervalJob(url, key, job, error);
+    if (job.job_kind === 'workflow_action' && status === 'failed') {
+      await finalizeWorkflowActionReport(url, key, job).catch(() => {});
+    }
+    console.error(`[workflow-runner] Interval job failed (${job.id}):`, error?.message || error);
+    return status;
+  }
+}
+
+async function drainIntervalJobs(url: string, key: string): Promise<Record<string, number>> {
+  const stats = { claimed: 0, succeeded: 0, retried: 0, failed: 0, reconciledReports: 0 };
+  await callRpc(url, key, 'requeue_stale_workflow_interval_jobs', {}).catch(() => 0);
+  const reportCandidates = await dbGet(url, key,
+    'workflow_interval_jobs?job_kind=eq.workflow_action&is_terminal_action=eq.true&report_logged_at=is.null&status=in.(succeeded,failed,skipped)&select=*&order=completed_at.asc&limit=100'
+  ).catch(() => []) as WorkflowIntervalJob[];
+  for (const candidate of reportCandidates) {
+    try {
+      await finalizeWorkflowActionReport(url, key, candidate);
+      stats.reconciledReports += 1;
+    } catch (error: any) {
+      console.warn('[workflow-runner] Queue report reconciliation failed:', candidate.id, error?.message || error);
+    }
+  }
+  for (let wave = 0; wave < 10; wave += 1) {
+    const claimed = await callRpc(url, key, 'claim_workflow_interval_jobs', { p_limit: 20 })
+      .catch(() => []) as WorkflowIntervalJob[];
+    if (!Array.isArray(claimed) || claimed.length === 0) break;
+    stats.claimed += claimed.length;
+    for (let offset = 0; offset < claimed.length; offset += 5) {
+      const results = await Promise.all(claimed.slice(offset, offset + 5).map((job) => processIntervalJob(url, key, job)));
+      for (const result of results) stats[result as 'succeeded' | 'retried' | 'failed'] += 1;
+    }
+  }
+  return stats;
+}
+
 async function runIntervalTick(url: string, key: string): Promise<Record<string, any>> {
   const now = new Date();
   const stats = { checkedWorkflows: 0, claimedWorkflows: 0, processedRecords: 0, executedActions: 0, failedRuns: 0 };
@@ -3573,7 +3997,10 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
           if (await shouldSkipWorkflowIntervalRecord(url, key, workflow.org_id, targetTable, record)) continue;
 
           stats.processedRecords++;
-          const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
+          const actionRecord = workflow.scope_type === 'process_activator'
+            ? buildProcessActivatorRecordContext(targetModuleId, record)
+            : record;
+          const matched = await evaluateConditions(conditionsAll, conditionsAny, actionRecord);
           if (!matched) continue;
 
           const recordId = String(record?.id || '').trim();
@@ -3587,7 +4014,7 @@ async function runIntervalTick(url: string, key: string): Promise<Record<string,
             try {
               const result = await executeActionWithRetry(
                 action as WorkflowAction,
-                record,
+                actionRecord,
                 targetModuleId,
                 workflow.org_id,
                 url,
@@ -4359,6 +4786,11 @@ Deno.serve(async (req) => {
       const stats = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey);
       return json(200, { ok: true, mode: 'event_queue', stats });
     }
+    if (action === 'drain_interval_jobs') {
+      if (!isServiceRole) return json(401, { ok: false, error: 'Unauthorized interval queue runner' });
+      const stats = await drainIntervalJobs(supabaseUrl, serviceRoleKey);
+      return json(200, { ok: true, mode: 'interval_queue', stats });
+    }
     if (action === 'run_event') {
       if (!isServiceRole) return json(401, { ok: false, error: 'Unauthorized event runner' });
       const stats = await runEventTick(supabaseUrl, serviceRoleKey, body);
@@ -4366,12 +4798,13 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, mode: 'event', stats });
     }
 
-    const [stats, eventQueueStats] = await Promise.all([
-      runIntervalTick(supabaseUrl, serviceRoleKey),
+    const [enqueueStats, eventQueueStats] = await Promise.all([
+      runIntervalEnqueueTick(supabaseUrl, serviceRoleKey),
       runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey),
     ]);
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} stats=${JSON.stringify(stats)} eventQueueStats=${JSON.stringify(eventQueueStats)}`);
-    return json(200, { ok: true, stats, eventQueueStats });
+    const intervalQueueStats = await drainIntervalJobs(supabaseUrl, serviceRoleKey);
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} enqueueStats=${JSON.stringify(enqueueStats)} intervalQueueStats=${JSON.stringify(intervalQueueStats)} eventQueueStats=${JSON.stringify(eventQueueStats)}`);
+    return json(200, { ok: true, stats: enqueueStats, intervalQueueStats, eventQueueStats });
   } catch (e: any) {
     console.error('[workflow-runner] Fatal error:', e.message);
     return json(500, { ok: false, error: String(e?.message || 'internal error') });
