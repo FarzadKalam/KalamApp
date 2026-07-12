@@ -16,6 +16,7 @@ export interface ListFieldDefinition {
   options?: any[];
   group?: string;
   defaultSelected?: boolean;
+  printSection?: 'table' | 'context';
 }
 
 export interface ListPrintSummaryDefinition {

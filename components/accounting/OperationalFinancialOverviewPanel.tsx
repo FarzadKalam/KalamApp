@@ -10,6 +10,8 @@ import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { supabase } from '../../supabaseClient';
 import {
   computeOperationalFinancialTotals,
+  buildOperationalFinancialEntityPrintFields,
+  buildOperationalFinancialEntityPrintValues,
   fetchOperationalFinancialOverview,
   OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL,
   OPERATIONAL_FINANCIAL_PRINT_FIELDS,
@@ -17,6 +19,7 @@ import {
   OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL,
   OPERATIONAL_FINANCIAL_STATUS_LABEL,
   type OperationalFinancialEntityType,
+  type OperationalFinancialEntityPrintField,
   type OperationalFinancialRow,
 } from '../../utils/operationalFinancialOverview';
 import { createChoiceFilter, createDateRangeFilter, createNumberRangeFilter, createTextFilter } from './tableColumnFilters';
@@ -25,7 +28,7 @@ import { useListPrintManager } from '../../utils/printTemplates/useListPrintMana
 type OperationalFinancialOverviewPanelProps = {
   entityType: OperationalFinancialEntityType;
   entityId: string;
-  entityData?: Record<string, any> | null;
+  entityPrintFields?: OperationalFinancialEntityPrintField[];
 };
 
 const ENTITY_LABELS: Record<OperationalFinancialEntityType, { title: string; denied: string; empty: string; share: string }> = {
@@ -49,6 +52,12 @@ const ENTITY_LABELS: Record<OperationalFinancialEntityType, { title: string; den
   },
 };
 
+const ENTITY_PRINT_CONTEXT_TITLES: Record<OperationalFinancialEntityType, string> = {
+  customer: 'اطلاعات مشتری',
+  supplier: 'اطلاعات تامین‌کننده',
+  employee: 'اطلاعات کارمند',
+};
+
 const statusColor = (status?: string) =>
   ['received', 'cleared', 'final', 'paid', 'closed', 'approved', 'posted', 'settled', 'completed'].includes(String(status))
     ? 'success'
@@ -56,10 +65,10 @@ const statusColor = (status?: string) =>
       ? 'error'
       : 'processing';
 
-const createVirtualModuleConfig = (entityType: OperationalFinancialEntityType) => ({
+const createVirtualModuleConfig = (entityType: OperationalFinancialEntityType, printFields: any[]) => ({
   id: `operational_financial_overview_${entityType}`,
   titles: { fa: ENTITY_LABELS[entityType].title, en: 'Operational Financial Overview' },
-  fields: OPERATIONAL_FINANCIAL_PRINT_FIELDS.map((field) => ({
+  fields: printFields.map((field) => ({
     key: field.key,
     labels: { fa: field.label, en: field.label },
     type: field.type,
@@ -73,6 +82,7 @@ const createVirtualModuleConfig = (entityType: OperationalFinancialEntityType) =
 const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPanelProps> = ({
   entityType,
   entityId,
+  entityPrintFields = [],
 }) => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
@@ -146,16 +156,31 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
 
   const visibleTotals = useMemo(() => computeOperationalFinancialTotals(filteredRows), [filteredRows]);
 
+  const completePrintFields = useMemo(
+    () => [
+      ...OPERATIONAL_FINANCIAL_PRINT_FIELDS,
+      ...buildOperationalFinancialEntityPrintFields(entityPrintFields),
+    ],
+    [entityPrintFields],
+  );
+
   const listPrintRows = useMemo(
     () => filteredRows.map((row) => row.printableFields || {}),
     [filteredRows],
   );
 
+  const printContextValues = useMemo(
+    () => buildOperationalFinancialEntityPrintValues(entityPrintFields),
+    [entityPrintFields],
+  );
+
   const listPrintManager = useListPrintManager({
     moduleId: `operational_financial_overview_${entityType}`,
-    moduleConfig: createVirtualModuleConfig(entityType),
+    moduleConfig: createVirtualModuleConfig(entityType, completePrintFields),
     rows: listPrintRows,
-    printableFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS as any,
+    printableFields: completePrintFields as any,
+    contextTitle: ENTITY_PRINT_CONTEXT_TITLES[entityType],
+    contextValues: printContextValues,
     summary: {
       title: 'جمع فیلتر جاری',
       fields: [...OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS] as any,

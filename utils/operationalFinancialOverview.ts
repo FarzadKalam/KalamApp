@@ -60,6 +60,39 @@ export type OperationalFinancialOverviewResult = {
   printFields: Array<{ key: string; label: string; type?: string; options?: Array<{ label: string; value: string }> }>;
 };
 
+export type OperationalFinancialEntityPrintField = {
+  key: string;
+  label: string;
+  group?: string;
+  printValue: any;
+};
+
+export const OPERATIONAL_FINANCIAL_ENTITY_PRINT_FIELD_PREFIX = 'entity__';
+
+export const buildOperationalFinancialEntityPrintFields = (
+  fields: OperationalFinancialEntityPrintField[] = [],
+) => fields
+  .filter((field) => String(field?.key || '').trim())
+  .map((field) => ({
+    key: `${OPERATIONAL_FINANCIAL_ENTITY_PRINT_FIELD_PREFIX}${String(field.key).trim()}`,
+    label: String(field.label || field.key),
+    type: 'text',
+    group: field.group || 'اطلاعات رکورد',
+    defaultSelected: false,
+    printSection: 'context' as const,
+  }));
+
+export const buildOperationalFinancialEntityPrintValues = (
+  fields: OperationalFinancialEntityPrintField[] = [],
+) => Object.fromEntries(
+    fields
+      .filter((field) => String(field?.key || '').trim())
+      .map((field) => [
+        `${OPERATIONAL_FINANCIAL_ENTITY_PRINT_FIELD_PREFIX}${String(field.key).trim()}`,
+        field.printValue,
+      ])
+  );
+
 type OverviewArgs = {
   entityType: OperationalFinancialEntityType;
   entityId: string;
