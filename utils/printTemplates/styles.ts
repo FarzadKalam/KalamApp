@@ -173,6 +173,16 @@ export const printStyles = `
     }
     .invoice-custom-print-shell .print-template-page-counter { color: #334155 !important; }
     .invoice-custom-print-shell .print-template-body-measure { display: none !important; }
+    /* System invoice rows may have different font metrics. Keep each row whole
+       when a long items table flows onto the next printed page. */
+    .invoice-print-card {
+      break-inside: auto !important;
+      page-break-inside: auto !important;
+    }
+    .invoice-print-card tr {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
     .print-card { border: none; box-shadow: none; border-radius: 0; }
   }
 `;

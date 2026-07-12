@@ -128,7 +128,10 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
       className="print-card invoice-print-card" 
       style={{ 
         width: '148mm', 
-        height: '210mm', 
+        // Item rows may become taller after their actual font loads. Let the
+        // card grow instead of hiding the final row beneath a fixed page area.
+        minHeight: '210mm',
+        height: 'auto',
         padding: isMobilePrint ? '8px' : '12px',
         display: 'flex',
         flexDirection: 'column',
@@ -338,9 +341,9 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
       {/* جدول اقلام */}
       <div style={{ 
         margin: isMobilePrint ? '6px 0' : '10px 0', 
-        flex: 1,
+        flex: '0 0 auto',
         minHeight: 0,
-        overflow: 'hidden'
+        overflow: 'visible'
       }}>
         <table style={{ 
           width: '100%', 
@@ -385,7 +388,7 @@ export const InvoiceCard: React.FC<InvoiceCardProps> = ({
           </thead>
           <tbody>
             {data.invoiceItems && Array.isArray(data.invoiceItems) && data.invoiceItems.length > 0 ? (
-              data.invoiceItems.slice(0, isMobilePrint ? 4 : 6).map((item: any, idx: number) => {
+              data.invoiceItems.map((item: any, idx: number) => {
                 const productLabel = getInvoiceItemProductLabel(item);
                 const deliveryTime = String(item?.delivery_time || '').trim();
                 const discountDisplay = buildInvoiceAdjustmentDisplay({

@@ -32,7 +32,7 @@ import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type P
 import {
   buildPrintLetterheadOverlayHtml,
   buildPrintLetterheadPageCounterHtml,
-  getPrintLetterheadBodyItem,
+  getPrintLetterheadEffectiveBodyItem,
   getPrintLetterheadSignaturesItem,
 } from './letterheadRender';
 import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
@@ -891,7 +891,7 @@ export const useListPrintManager = ({
       selectedStoredTemplate.renderMode === 'org_letterhead' && Boolean(selectedOrgLetterhead?.imageUrl);
 
     if (isOrgLetterheadTemplate && selectedOrgLetterhead) {
-      const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+      const bodyItem = getPrintLetterheadEffectiveBodyItem(selectedOrgLetterhead, Boolean(printSignatureBandHtml));
       const signaturesItem = getPrintLetterheadSignaturesItem(selectedOrgLetterhead);
       if (!bodyItem) return null;
       const overlayHtml = buildPrintLetterheadOverlayHtml(selectedOrgLetterhead, {

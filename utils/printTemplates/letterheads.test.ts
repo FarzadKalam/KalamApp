@@ -4,6 +4,7 @@ import {
   normalizePrintLetterheads,
   type PrintLetterheadConfig,
 } from './letterheads';
+import { getPrintLetterheadEffectiveBodyItem } from './letterheadRender';
 import type { StoredPrintTemplate } from './store';
 
 describe('print letterheads', () => {
@@ -94,5 +95,28 @@ describe('print letterheads', () => {
     expect(portraitVariant?.sourceTemplateId).toBe('default_invoices_a4_portrait');
     expect(next.some((item) => item.id.includes('catalog_fullpage'))).toBe(true);
     expect(next.filter((item) => item.renderMode === 'org_letterhead')).toHaveLength(1);
+  });
+
+  it('returns the unused signature slot to the body', () => {
+    const letterhead: PrintLetterheadConfig = {
+      id: 'portrait_1',
+      slotId: 'portrait_1',
+      orientation: 'portrait',
+      title: 'سربرگ آزمایشی',
+      imageUrl: 'https://example.com/p1.png',
+      isActive: true,
+      sortOrder: 1,
+      layout: {
+        orientation: 'portrait',
+        version: 1,
+        items: [
+          { id: 'body', type: 'body', x: 7, y: 30, width: 86, height: 50, visible: true, zIndex: 3 },
+          { id: 'signatures', type: 'signatures', x: 7, y: 82, width: 86, height: 12, visible: true, zIndex: 2 },
+        ],
+      },
+    };
+
+    expect(getPrintLetterheadEffectiveBodyItem(letterhead, false)?.height).toBe(64);
+    expect(getPrintLetterheadEffectiveBodyItem(letterhead, true)?.height).toBe(50);
   });
 });

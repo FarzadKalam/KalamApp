@@ -6,6 +6,7 @@ import {
   getPrintLetterheadLayoutItem,
   toPercentStyle,
   type PrintLetterheadConfig,
+  type PrintLetterheadLayoutItem,
 } from './letterheads';
 import { toPersianNumber } from '../persianNumberFormatter';
 
@@ -92,6 +93,23 @@ export const getPrintLetterheadBodyItem = (letterhead: PrintLetterheadConfig | n
 
 export const getPrintLetterheadSignaturesItem = (letterhead: PrintLetterheadConfig | null | undefined) =>
   letterhead ? getPrintLetterheadLayoutItem(letterhead.layout, 'signatures') : null;
+
+export const getPrintLetterheadEffectiveBodyItem = (
+  letterhead: PrintLetterheadConfig | null | undefined,
+  hasSignatureBand: boolean,
+): PrintLetterheadLayoutItem | null => {
+  const bodyItem = getPrintLetterheadBodyItem(letterhead);
+  const signaturesItem = getPrintLetterheadSignaturesItem(letterhead);
+  if (!bodyItem || hasSignatureBand || !signaturesItem) return bodyItem;
+
+  const signatureBottom = Math.min(100, signaturesItem.y + signaturesItem.height);
+  if (signatureBottom <= bodyItem.y) return bodyItem;
+
+  return {
+    ...bodyItem,
+    height: Math.max(bodyItem.height, signatureBottom - bodyItem.y),
+  };
+};
 
 export const buildPrintLetterheadOverlayHtml = (
   letterhead: PrintLetterheadConfig | null | undefined,

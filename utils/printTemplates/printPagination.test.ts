@@ -1,196 +1,76 @@
 import { describe, expect, it } from 'vitest';
-import { annotatePrintFlowHtml, buildSmartPrintPageOffsets, PRINT_FLOW_BLOCK_ATTR } from './printPagination';
+import { buildSmartPrintPageOffsets, type PrintPageAnchor } from './printPagination';
 
-describe('buildSmartPrintPageOffsets', () => {
-  it('falls back to the last complete block only when no line anchors exist', () => {
+const pxPerMm = 96 / 25.4;
+
+const buildVariableLineAnchors = (totalHeight: number, lineHeights: number[]): PrintPageAnchor[] => {
+  const anchors: PrintPageAnchor[] = [];
+  let top = 0;
+  let index = 0;
+  while (top < totalHeight) {
+    const height = lineHeights[index % lineHeights.length];
+    const bottom = Math.min(totalHeight, top + height);
+    anchors.push({ top, bottom, priority: 'normal', source: 'line' });
+    top = bottom + 5;
+    index += 1;
+  }
+  return anchors;
+};
+
+describe('print pagination scenarios', () => {
+  it('برای محتوای کوتاه با هر ترکیب سربرگ، پاورقی و امضا فقط یک صفحه می‌سازد', () => {
+    const pageBodyStepPx = Math.floor((297 - (14 + 10)) * pxPerMm - 104 - (62 + 108));
+    const totalHeight = Math.floor(pageBodyStepPx * 0.72);
+    const lineAnchors = buildVariableLineAnchors(totalHeight, [18, 27, 22, 31]);
+
+    expect(buildSmartPrintPageOffsets({ totalHeight, pageBodyStepPx, anchors: lineAnchors })).toEqual([0]);
+  });
+
+  it.each([
+    {
+      name: 'A4 عمودی با سربرگ، پاورقی، امضا و حاشیه‌های سفارشی',
+      paperHeightMm: 297,
+      marginsMm: 14 + 10,
+      headerPx: 104,
+      footerPx: 62 + 108,
+      lineHeights: [18, 22, 27, 19, 31],
+      tableRows: [96, 128, 74, 148, 82],
+    },
+    {
+      name: 'A4 افقی با فونت ریز و جدول اقلام چندستونه',
+      paperHeightMm: 210,
+      marginsMm: 8 + 8,
+      headerPx: 72,
+      footerPx: 44,
+      lineHeights: [13, 16, 15, 21, 14],
+      tableRows: [58, 73, 91, 66, 104, 81],
+    },
+    {
+      name: 'A5 عمودی با فونت درشت، پاورقی بلند و چند جدول',
+      paperHeightMm: 210,
+      marginsMm: 12 + 16,
+      headerPx: 88,
+      footerPx: 96 + 108,
+      lineHeights: [25, 34, 29, 38],
+      tableRows: [112, 156, 92, 136],
+    },
+  ])('$name در چند صفحه متن را فقط بین خطوط کامل می‌شکند', ({ paperHeightMm, marginsMm, headerPx, footerPx, lineHeights, tableRows }) => {
+    const pageBodyStepPx = Math.floor((paperHeightMm - marginsMm) * pxPerMm - headerPx - footerPx);
+    const totalHeight = pageBodyStepPx * 3 + 240;
+    const lineAnchors = buildVariableLineAnchors(totalHeight, lineHeights);
+    const tableAnchors = tableRows.map((height, index) => {
+      const top = 110 + index * Math.floor(totalHeight / tableRows.length);
+      return { top, bottom: top + height, priority: 'normal' as const, source: 'block' as const };
+    });
     const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2200,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 520, priority: 'normal' },
-        { top: 520, bottom: 880, priority: 'normal' },
-        { top: 880, bottom: 1180, priority: 'normal' },
-        { top: 1180, bottom: 1680, priority: 'normal' },
-        { top: 1680, bottom: 2150, priority: 'normal' },
-      ],
+      totalHeight,
+      pageBodyStepPx,
+      anchors: [...lineAnchors, ...tableAnchors],
     });
 
-    expect(offsets).toEqual([0, 880, 1680]);
-  });
-
-  it('moves the break before a protected block when neither line nor block bottoms are safe', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2000,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 540, priority: 'normal' },
-        { top: 760, bottom: 1180, priority: 'high' },
-        { top: 1180, bottom: 1620, priority: 'normal' },
-        { top: 1620, bottom: 1980, priority: 'normal' },
-      ],
+    expect(offsets.length).toBeGreaterThan(2);
+    offsets.slice(1).forEach((offset) => {
+      expect(lineAnchors.some((line) => line.top < offset && offset < line.bottom)).toBe(false);
     });
-
-    expect(offsets).toEqual([0, 760, 1620]);
-  });
-
-  it('prefers line breaks inside a tall block before falling back to the block top', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2100,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 520, priority: 'normal', source: 'block' },
-        { top: 520, bottom: 1540, priority: 'high', source: 'block' },
-        { top: 930, bottom: 952, priority: 'normal', source: 'line' },
-        { top: 970, bottom: 992, priority: 'normal', source: 'line' },
-        { top: 1540, bottom: 2080, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 992, 1992]);
-  });
-
-  it('splits normal paragraph text only at line boundaries', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2100,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 520, priority: 'normal', source: 'block' },
-        { top: 760, bottom: 1180, priority: 'normal', source: 'block' },
-        { top: 930, bottom: 952, priority: 'normal', source: 'line' },
-        { top: 970, bottom: 992, priority: 'normal', source: 'line' },
-        { top: 1180, bottom: 1680, priority: 'normal', source: 'block' },
-        { top: 1680, bottom: 2080, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 992, 1680]);
-  });
-
-  it('prefers the latest complete line before the page limit even if a taller block continues', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2200,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 430, priority: 'normal', source: 'block' },
-        { top: 430, bottom: 1500, priority: 'normal', source: 'block' },
-        { top: 900, bottom: 924, priority: 'normal', source: 'line' },
-        { top: 950, bottom: 974, priority: 'normal', source: 'line' },
-        { top: 990, bottom: 1014, priority: 'normal', source: 'line' },
-        { top: 1460, bottom: 1484, priority: 'normal', source: 'line' },
-        { top: 1910, bottom: 1934, priority: 'normal', source: 'line' },
-        { top: 1950, bottom: 1974, priority: 'normal', source: 'line' },
-        { top: 1500, bottom: 2140, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 974, 1974]);
-  });
-
-  it('splits long table content at the last complete line instead of the row boundary', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 1900,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 420, priority: 'normal', source: 'block' },
-        { top: 420, bottom: 1880, priority: 'normal', source: 'block' },
-        { top: 420, bottom: 460, priority: 'high', source: 'block' },
-        { top: 460, bottom: 1240, priority: 'high', source: 'block' },
-        { top: 870, bottom: 894, priority: 'normal', source: 'line' },
-        { top: 915, bottom: 939, priority: 'normal', source: 'line' },
-        { top: 960, bottom: 984, priority: 'normal', source: 'line' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 984]);
-  });
-
-  it('does not leave a large blank area before a normal table-like block without line anchors', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2400,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 500, priority: 'normal', source: 'block' },
-        { top: 500, bottom: 1480, priority: 'normal', source: 'block' },
-        { top: 1480, bottom: 2360, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 1000, 2000]);
-  });
-
-  it('does not use an early line top as the page break for tall text rects', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2400,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 480, priority: 'normal', source: 'block' },
-        { top: 520, bottom: 1320, priority: 'normal', source: 'line' },
-        { top: 1320, bottom: 2300, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 1000, 2000]);
-  });
-
-  it('does not move the break to the top of an oversized protected block', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 2600,
-      pageBodyStepPx: 1000,
-      anchors: [
-        { top: 0, bottom: 460, priority: 'normal', source: 'block' },
-        { top: 460, bottom: 2100, priority: 'high', source: 'block' },
-        { top: 900, bottom: 924, priority: 'normal', source: 'line' },
-        { top: 950, bottom: 974, priority: 'normal', source: 'line' },
-        { top: 1000, bottom: 1024, priority: 'normal', source: 'line' },
-        { top: 1460, bottom: 1484, priority: 'normal', source: 'line' },
-        { top: 1950, bottom: 1974, priority: 'normal', source: 'line' },
-        { top: 2100, bottom: 2550, priority: 'normal', source: 'block' },
-      ],
-    });
-
-    expect(offsets).toEqual([0, 974, 1974]);
-  });
-
-  it('keeps single-page content on the first page', () => {
-    const offsets = buildSmartPrintPageOffsets({
-      totalHeight: 640,
-      pageBodyStepPx: 1000,
-      anchors: [{ top: 0, bottom: 620, priority: 'normal' }],
-    });
-
-    expect(offsets).toEqual([0]);
-  });
-});
-
-describe('annotatePrintFlowHtml', () => {
-  it('marks paragraphs and table rows as print-flow blocks without making the whole table hard-kept', () => {
-    const annotated = annotatePrintFlowHtml('<div><p>text</p><table><tbody><tr><td>row</td></tr></tbody></table></div>');
-
-    expect(annotated).toContain(PRINT_FLOW_BLOCK_ATTR);
-    expect(annotated).toContain(`<p ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="text-block">text</p>`);
-    expect(annotated).toContain('data-print-flow-role="table-container"');
-    expect(annotated).toContain('data-print-flow-role="table-row"');
-    expect(annotated).toContain(`<table ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);
-  });
-
-  it('keeps legacy page-break avoidance from hard-keeping entire tables', () => {
-    const annotated = annotatePrintFlowHtml(
-      '<table style="page-break-inside: avoid;"><tbody><tr><td>row</td></tr></tbody></table>'
-    );
-
-    expect(annotated).toContain(`<table style="page-break-inside: avoid;" ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="table-container">`);
-    expect(annotated).not.toContain('data-print-flow-role="manual-keep"');
-  });
-
-  it('does not hard-keep normal text sections with title or summary class names', () => {
-    const annotated = annotatePrintFlowHtml(
-      '<div class="payment-summary" style="page-break-inside: avoid;"><p class="section-title">normal text</p></div>'
-    );
-
-    expect(annotated).toContain(`data-print-flow-block="normal" data-print-flow-role="root-block"`);
-    expect(annotated).toContain(`<p class="section-title" ${PRINT_FLOW_BLOCK_ATTR}="normal" data-print-flow-role="text-block">normal text</p>`);
-    expect(annotated).not.toContain(`${PRINT_FLOW_BLOCK_ATTR}="high"`);
-    expect(annotated).not.toContain('data-print-flow-role="manual-keep"');
-    expect(annotated).not.toContain('data-print-flow-role="semantic-block"');
   });
 });

@@ -80,7 +80,7 @@ import {
 import {
   buildPrintLetterheadOverlayHtml,
   buildPrintLetterheadPageCounterHtml,
-  getPrintLetterheadBodyItem,
+  getPrintLetterheadEffectiveBodyItem,
   getPrintLetterheadSignaturesItem,
 } from './letterheadRender';
 
@@ -103,6 +103,10 @@ const MIN_PRINT_BODY_HEIGHT_PX = 80;
 const PRINT_SECTION_CONTENT_PADDING = '0 10px';
 const PRINT_PAGE_COUNTER_HEIGHT_PX = 18;
 const PRINT_BODY_LINE_GUARD_PX = 28;
+// The measured line boxes can be fractionally smaller than their final painted
+// size after a webfont settles. Keep a tiny overlap between adjacent body
+// viewports so a line can never be cut at a page boundary.
+const PRINT_BODY_VIEWPORT_OVERSCAN_PX = 2;
 const isLongTextType = (value: unknown) => LONG_TEXT_FIELD_TYPES.has(String(value || '').trim().toLowerCase());
 
 const getReducedPrintFontSize = (baseSize: number) => {
@@ -181,7 +185,10 @@ const normalizePrintBodyHeightPx = (value: number) =>
 const getTemplatePageBodyStepPx = (pageBodyHeightPx: number) =>
   normalizePrintBodyHeightPx(pageBodyHeightPx);
 const getPrintBodyViewportHeightPx = (pageBodyHeightPx: number, effectiveBodyStepPx: number) =>
-  Math.min(normalizePrintBodyHeightPx(pageBodyHeightPx), Math.max(1, Math.ceil(effectiveBodyStepPx)));
+  Math.min(
+    normalizePrintBodyHeightPx(pageBodyHeightPx),
+    Math.max(1, Math.ceil(effectiveBodyStepPx + PRINT_BODY_VIEWPORT_OVERSCAN_PX))
+  );
 
 const getMeasuredPrintBlockHeight = (measureNode: HTMLElement) => {
   const rootRect = measureNode.getBoundingClientRect();
@@ -976,7 +983,10 @@ export const usePrintManager = ({
       Boolean(selectedOrgLetterhead?.imageUrl);
     const pageBodyHeightPx = isOrgLetterhead
       ? (() => {
-          const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+          const bodyItem = getPrintLetterheadEffectiveBodyItem(
+            selectedOrgLetterhead,
+            printSignatureSectionHeightPxRef.current > 0
+          );
           return bodyItem ? mmToPx(metrics.heightMm * (bodyItem.height / 100)) : mmToPx(metrics.heightMm);
         })()
       : (() => {
@@ -2841,7 +2851,7 @@ export const usePrintManager = ({
         Boolean(selectedOrgLetterhead?.imageUrl);
       const pageBodyHeightPx = isOrgLetterheadTemplate
         ? (() => {
-            const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+            const bodyItem = getPrintLetterheadEffectiveBodyItem(selectedOrgLetterhead, Boolean(printSignatureBandHtml));
             return bodyItem ? mmToPx(metrics.heightMm * (bodyItem.height / 100)) : mmToPx(metrics.heightMm);
           })()
         : (() => {
@@ -2912,6 +2922,15 @@ export const usePrintManager = ({
     const t1 = window.setTimeout(scheduleMeasure, 160);
     const t2 = window.setTimeout(scheduleMeasure, 480);
     const t3 = window.setTimeout(scheduleMeasure, 960);
+    let fontMeasurementCancelled = false;
+    // System tables can use a font different from the surrounding template.
+    // Re-measure after every currently pending font has settled, rather than
+    // relying only on timing guesses that can leave the final line clipped.
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      void document.fonts.ready.then(() => {
+        if (!fontMeasurementCancelled) scheduleMeasure();
+      });
+    }
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined' && bodyMeasureRef.current) {
@@ -2949,6 +2968,7 @@ export const usePrintManager = ({
       window.clearTimeout(t1);
       window.clearTimeout(t2);
       window.clearTimeout(t3);
+      fontMeasurementCancelled = true;
       window.removeEventListener('resize', scheduleMeasure);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
@@ -2965,6 +2985,7 @@ export const usePrintManager = ({
     renderedCustomTemplate?.footerHtml,
     renderedCustomTemplate?.headerHtml,
     printSignatureSectionHeightPx,
+    printSignatureBandHtml,
     selectedOrgLetterhead?.imageUrl,
   ]);
 
@@ -2987,7 +3008,7 @@ export const usePrintManager = ({
       const isOrgLetterheadTemplate =
         selectedStoredTemplate?.renderMode === 'org_letterhead' && Boolean(selectedOrgLetterhead?.imageUrl);
       if (isOrgLetterheadTemplate && selectedOrgLetterhead) {
-        const bodyItem = getPrintLetterheadBodyItem(selectedOrgLetterhead);
+        const bodyItem = getPrintLetterheadEffectiveBodyItem(selectedOrgLetterhead, Boolean(printSignatureBandHtml));
         const signaturesItem = getPrintLetterheadSignaturesItem(selectedOrgLetterhead);
         if (!bodyItem) return null;
         const bodyWidthMm = metrics.widthMm * (bodyItem.width / 100);
