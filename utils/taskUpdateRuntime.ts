@@ -1,5 +1,4 @@
 import { supabase } from '../supabaseClient';
-import { runProcessAutomationsForTaskEvent } from './processAutomationRuntime';
 import { attachTaskCompletionIfNeeded, buildTaskStatusUpdatePayload, isTaskDoneStatus } from './taskCompletion';
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { dispatchTaskRuntimeUpdated } from './taskRuntimeEvents';
@@ -220,12 +219,6 @@ export const updateTaskStatusWithAutomation = async ({
   });
   await dispatchProcessSiblingScheduleUpdates(updatedTask);
 
-  await runProcessAutomationsForTaskEvent({
-    task: updatedTask,
-    event: 'update',
-    previousTask: currentTask,
-    currentUser,
-  });
   await runWorkflowsForEvent({
     moduleId: 'tasks',
     event: 'upsert',
@@ -293,12 +286,6 @@ export const updateTaskDueDateWithAutomation = async ({
     task: updatedTask,
   });
 
-  await runProcessAutomationsForTaskEvent({
-    task: updatedTask,
-    event: 'update',
-    previousTask: currentTask,
-    currentUser,
-  });
   await runWorkflowsForEvent({
     moduleId: 'tasks',
     event: 'upsert',

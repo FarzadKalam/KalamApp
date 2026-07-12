@@ -3355,64 +3355,11 @@ export const runWorkflowsForEvent = async ({
   currentRecord,
   previousRecord = null,
 }: RunWorkflowArgs) => {
-  if (!moduleId || !currentRecord) return;
-  const hydratedCurrentRecord = await hydrateWorkflowCurrentRecord(moduleId, currentRecord);
-  if (await shouldSkipRecordForAutomation({ moduleId, record: hydratedCurrentRecord })) return;
-
-  const triggerTypes = event === 'create' ? ['on_create', 'on_upsert'] : ['on_upsert'];
-
-  let workflowQuery = supabase
-    .from('workflows')
-    .select('*');
-  workflowQuery = typeof workflowQuery.or === 'function'
-    ? workflowQuery.or(`module_id.eq.${moduleId},module_ids.cs.{${moduleId}}`)
-    : workflowQuery.eq('module_id', moduleId);
-  const { data, error } = await workflowQuery
-    .eq('is_active', true)
-    .in('trigger_type', triggerTypes);
-
-  if (error) {
-    console.error('Workflow fetch failed:', error);
-    return;
-  }
-
-  const workflows = ((data || []) as WorkflowRecord[]).filter((workflow) => {
-    if (workflow?.scope_type !== 'process_activator') return true;
-    const sourceNodeKey = String(workflow?.process_source_node_key || '').trim();
-    if (sourceNodeKey) return moduleId === 'tasks';
-    return (Array.isArray(workflow?.module_ids) ? workflow.module_ids : []).includes(moduleId);
-  });
-  for (const workflow of workflows) {
-    try {
-      const result = await executeWorkflowForRecord({
-        workflow,
-        moduleId,
-        currentRecord: hydratedCurrentRecord,
-        previousRecord,
-        event,
-        runType: 'event',
-      });
-      if (result.success) {
-        await supabase
-          .from('workflows')
-          .update({ last_run_at: new Date().toISOString() })
-          .eq('id', workflow.id);
-      }
-    } catch (err: any) {
-      console.error(`Workflow execution failed (${workflow?.name || workflow?.id}):`, err);
-      try {
-        await logWorkflowRun({
-          workflow,
-          moduleId,
-          currentRecord: hydratedCurrentRecord,
-          event,
-          runType: 'event',
-          status: 'failed',
-          errorMessage: String(err?.message || err || 'workflow execution failed'),
-        });
-      } catch (logErr) {
-        console.error('Workflow log insert failed:', logErr);
-      }
-    }
-  }
+  // Workflow execution is intentionally server-side. The database trigger
+  // records the persisted mutation in workflow_event_queue; this compatibility
+  // entry point remains async so existing save paths never block the UI.
+  void moduleId;
+  void event;
+  void currentRecord;
+  void previousRecord;
 };

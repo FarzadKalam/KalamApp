@@ -1,6 +1,18 @@
 // supabase/functions/workflow-interval-runner/index.ts
-var FUNCTION_BUILD = "workflow-interval-runner-2026-06-18-process-workflow-hardening";
+import {
+  evaluateProcessAutomationConditions as evaluateProcessAutomationConditionsCore,
+  getAdjacentProcessTasks as getAdjacentProcessTasksCore,
+  getTaskProcessAutomationRules as getTaskProcessAutomationRulesCore,
+  getTaskProcessLaneKey as getTaskProcessLaneKeyCore,
+  getTaskProcessNodeKey as getTaskProcessNodeKeyCore,
+  getTaskSourceLink as getTaskSourceLinkCore,
+  resolveProcessAutomationTargetTokens as resolveProcessAutomationTargetTokensCore,
+  runnableProcessConditions as runnableProcessConditionsCore,
+  taskRecipientToken as taskRecipientTokenCore
+} from "../_shared/process-automation-core.ts";
+var FUNCTION_BUILD = "workflow-interval-runner-2026-07-12-server-event-queue";
 var MAX_WORKFLOWS = 30;
+var MAX_REPORTS = 20;
 var DEFAULT_BATCH_SIZE = 300;
 var TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1e3;
 var WORKFLOW_ASSIGNEE_FIELD_KEY = "__workflow_assignee";
@@ -9,6 +21,16 @@ var WORKFLOW_MULTI_RELATION_PREFIX = "__workflow_multi_relation__";
 var PROCESS_NEXT_STAGE_FIELD_PREFIX = "__process_next_stage__";
 var DEFAULT_AI_BASE_URL = "https://api.avalai.ir/v1";
 var DEFAULT_AI_FALLBACK_BASE_URL = "https://api.avalapis.ir/v1";
+var DEFAULT_BOT_API_BASE_URL = {
+  telegram: "https://botapi.kalamnews.site/83cdbfe5940e24aaf81689a85390df5c",
+  bale: "https://tapi.bale.ai",
+  rubika: "https://botapi.rubika.ir"
+};
+var DEFAULT_BOT_SEND_PATH = {
+  telegram: "/bot{token}/sendMessage",
+  bale: "/bot{token}/sendMessage",
+  rubika: "/v3/{token}/sendMessage"
+};
 var UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 var CALENDAR_PUBLIC_BASE_URL = String(
   Deno.env.get("KALAMAPP_PUBLIC_BASE_URL") || Deno.env.get("PUBLIC_APP_URL") || Deno.env.get("PUBLIC_SITE_URL") || Deno.env.get("SITE_URL") || ""
@@ -168,6 +190,11 @@ function getFieldValue(record, fieldKey) {
   }
   return cur;
 }
+function getServerRecordTitle(record) {
+  return String(
+    record?.system_code || record?.name || record?.title || record?.full_name || record?.business_name || record?.task_name || "[\u0628\u062F\u0648\u0646 \u0639\u0646\u0648\u0627\u0646]"
+  ).trim() || "[\u0628\u062F\u0648\u0646 \u0639\u0646\u0648\u0627\u0646]";
+}
 function buildResolvedAssigneeCombo(record) {
   const assigneeType = String(record?.assignee_type || "").trim().toLowerCase();
   const roleId = String(record?.assignee_role_id || "").trim();
@@ -289,7 +316,23 @@ async function formatFieldValue(value, fieldKey, url, key, orgId) {
   if (typeof value === "number") {
     return value.toLocaleString("fa-IR");
   }
-  if (Array.isArray(value)) return value.join("\u060C ");
+  if (Array.isArray(value)) {
+    const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId)));
+    return rendered.filter(Boolean).join("\u060C ");
+  }
+  if (UUID_LIKE_REGEX.test(str)) {
+    const normalizedField = String(fieldKey || "").toLowerCase();
+    const candidates = normalizedField.includes("role") ? ["org_roles"] : normalizedField.includes("profile") || normalizedField.includes("user") || normalizedField.includes("assignee") ? ["profiles"] : normalizedField.includes("customer") ? ["customers"] : normalizedField.includes("supplier") ? ["suppliers"] : normalizedField.includes("purchase_invoice") ? ["purchase_invoices"] : normalizedField.includes("invoice") ? ["invoices"] : normalizedField.includes("product") ? ["products"] : normalizedField.includes("project") ? ["projects"] : normalizedField.includes("employee") ? ["employees"] : [];
+    for (const table of candidates) {
+      const rows = await dbGet(
+        url,
+        key,
+        `${table}?id=eq.${encodeURIComponent(str)}&select=*&limit=1`
+      ).catch(() => []);
+      if (rows[0]) return getServerRecordTitle(rows[0]);
+    }
+    return "[\u0631\u06A9\u0648\u0631\u062F \u0645\u0631\u062A\u0628\u0637]";
+  }
   return str;
 }
 async function renderTemplateAsync(template, record, url, key, bold = false, orgId = "") {
@@ -340,12 +383,30 @@ function normalizeConditionValue(value) {
   const ARABIC = "\u0660\u0661\u0662\u0663\u0664\u0665\u0666\u0667\u0668\u0669";
   return String(value ?? "").replace(/[۰-۹]/g, (d) => String(PERSIAN.indexOf(d))).replace(/[٠-٩]/g, (d) => String(ARABIC.indexOf(d)));
 }
-async function evaluateCondition(condition, record) {
+function comparableConditionValue(value) {
+  if (value === null || value === void 0) return value;
+  if (Array.isArray(value)) return value.map((item) => comparableConditionValue(item));
+  if (typeof value === "object") {
+    const preferred = value?.id ?? value?.value ?? value?.label ?? value?.name ?? value?.title ?? value?.full_name ?? value?.display;
+    if (preferred !== void 0 && preferred !== null) return comparableConditionValue(preferred);
+    return JSON.stringify(value);
+  }
+  if (typeof value === "boolean") return value;
+  const text = normalizeConditionValue(String(value).replace(/,/g, "").trim());
+  const num = Number(text);
+  if (!Number.isNaN(num) && text !== "") return num;
+  return text;
+}
+function comparableConditionJson(value) {
+  return JSON.stringify(comparableConditionValue(value) ?? null);
+}
+async function evaluateConditionWithPrevious(condition, record, previousRecord) {
   const field = String(condition?.field || "").trim();
   if (!field) return true;
   const operator = String(condition?.operator || "eq").trim();
   const expected = condition?.value;
   const currentRaw = getFieldValueForCondition(record, field);
+  const previousRaw = previousRecord ? getFieldValueForCondition(previousRecord, field) : void 0;
   const current = currentRaw;
   const currentStr = normalizeConditionValue(currentRaw);
   switch (operator) {
@@ -379,6 +440,12 @@ async function evaluateCondition(condition, record) {
       return current === true || current === "true" || current === 1;
     case "is_false":
       return current === false || current === "false" || current === 0;
+    case "changed":
+      return comparableConditionJson(current) !== comparableConditionJson(previousRaw);
+    case "changed_from":
+      return comparableConditionJson(previousRaw) === comparableConditionJson(expected) && comparableConditionJson(current) !== comparableConditionJson(previousRaw);
+    case "changed_to":
+      return comparableConditionJson(current) === comparableConditionJson(expected) && comparableConditionJson(current) !== comparableConditionJson(previousRaw);
     case "contains":
       return String(current ?? "").includes(String(expected ?? ""));
     case "not_contains":
@@ -521,18 +588,18 @@ async function evaluateCondition(condition, record) {
       return true;
   }
 }
-async function evaluateConditions(conditionsAll, conditionsAny, record) {
+async function evaluateConditions(conditionsAll, conditionsAny, record, previousRecord = null) {
   const allConditions = Array.isArray(conditionsAll) ? conditionsAll : [];
   const anyConditions = Array.isArray(conditionsAny) ? conditionsAny : [];
   if (allConditions.length > 0) {
     for (const c of allConditions) {
-      if (!await evaluateCondition(c, record)) return false;
+      if (!await evaluateConditionWithPrevious(c, record, previousRecord)) return false;
     }
   }
   if (anyConditions.length > 0) {
     let anyPassed = false;
     for (const c of anyConditions) {
-      if (await evaluateCondition(c, record)) {
+      if (await evaluateConditionWithPrevious(c, record, previousRecord)) {
         anyPassed = true;
         break;
       }
@@ -786,12 +853,86 @@ async function clearServerQueued(url, key, workflowId) {
   await dbPatch(url, key, "workflows", `id=eq.${workflowId}`, { server_queued_at: null }).catch(() => {
   });
 }
+async function fetchQueuedReports(url, key) {
+  const rows = await dbGet(
+    url,
+    key,
+    `report_definitions?is_active=eq.true&server_queued_at=not.is.null&select=id,org_id,name,description,module_id,config,is_active,last_run_at,server_queued_at,updated_at,created_by,updated_by&order=updated_at.asc&limit=${MAX_REPORTS}`
+  );
+  return rows;
+}
+async function claimReportScheduleRun(url, key, reportId, expectedLastRunAt, scheduledDueAt) {
+  const claimedAt = scheduledDueAt.toISOString();
+  try {
+    const result = await callRpc(url, key, "claim_report_schedule_run", {
+      p_report_id: reportId,
+      p_expected_last_run_at: expectedLastRunAt,
+      p_claimed_at: claimedAt
+    });
+    return result === true;
+  } catch {
+    const filter = expectedLastRunAt ? `id=eq.${reportId}&is_active=eq.true&last_run_at=eq.${expectedLastRunAt}` : `id=eq.${reportId}&is_active=eq.true&last_run_at=is.null`;
+    try {
+      await dbPatch(url, key, "report_definitions", filter, { last_run_at: claimedAt, server_queued_at: null, schedule_error: null });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+async function clearReportServerQueued(url, key, reportId, scheduleError) {
+  await dbPatch(url, key, "report_definitions", `id=eq.${reportId}`, {
+    server_queued_at: null,
+    ...scheduleError ? { schedule_error: scheduleError } : {}
+  }).catch(() => {
+  });
+}
 async function fetchModuleRecordsPage(url, key, table, orgId, pageSize, offset) {
   return await dbGet(
     url,
     key,
     `${table}?org_id=eq.${orgId}&select=*&order=id.asc&limit=${pageSize}&offset=${offset}`
   );
+}
+function parseObjectValue(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function isDeletedLikeWorkflowRecord(record) {
+  if (!record || typeof record !== "object") return true;
+  return Boolean(
+    record.deleted_at || record.deletedAt || record.removed_at || record.archived_at || record.is_deleted === true || record.deleted === true || record._deleted === true
+  );
+}
+async function isWorkflowRecordInRecycleBin(url, key, orgId, sourceTable, recordId) {
+  const normalizedRecordId = String(recordId || "").trim();
+  const normalizedSourceTable = String(sourceTable || "").trim();
+  if (!normalizedSourceTable || !UUID_LIKE_REGEX.test(normalizedRecordId)) return false;
+  const rows = await dbGet(
+    url,
+    key,
+    `recycle_bin_records?org_id=eq.${encodeURIComponent(orgId)}&source_table=eq.${encodeURIComponent(normalizedSourceTable)}&source_record_id=eq.${encodeURIComponent(normalizedRecordId)}&select=id&limit=1`
+  ).catch(() => []);
+  return rows.length > 0;
+}
+async function shouldSkipWorkflowIntervalRecord(url, key, orgId, sourceTable, record) {
+  if (isDeletedLikeWorkflowRecord(record)) return true;
+  const recordId = String(record?.id || "").trim();
+  if (await isWorkflowRecordInRecycleBin(url, key, orgId, sourceTable, recordId)) return true;
+  if (sourceTable === "tasks") {
+    const recurrence = parseObjectValue(record?.recurrence_info);
+    const processRunId = String(record?.process_run_id || recurrence?.process_run_id || "").trim();
+    const processRunStageId = String(record?.process_run_stage_id || recurrence?.process_run_stage_id || "").trim();
+    if (processRunId && await isWorkflowRecordInRecycleBin(url, key, orgId, "process_runs", processRunId)) return true;
+    if (processRunStageId && await isWorkflowRecordInRecycleBin(url, key, orgId, "process_run_stages", processRunStageId)) return true;
+  }
+  return false;
 }
 async function insertWorkflowLog(url, key, log) {
   await dbInsert(url, key, "workflow_logs", {
@@ -854,6 +995,45 @@ async function expandChatGroupsIntoSets(url, key, groupIds, userIds, roleIds) {
     return { groupId, userIds: groupUserIds, roleIds: groupRoleIds };
   }).filter((group) => Boolean(group.groupId));
 }
+function isActiveProfileRow(row) {
+  return row?.is_active !== false;
+}
+async function filterActiveMentionTargets(url, key, orgId, userIds, roleIds) {
+  const requestedUserIds = Array.from(new Set((userIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  const requestedRoleIds = Array.from(new Set((roleIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  const activeUserIds = /* @__PURE__ */ new Set();
+  if (requestedUserIds.length > 0) {
+    const rows = await dbGet(url, key, `profiles?id=in.(${requestedUserIds.join(",")})&select=id,is_active`).catch(() => []);
+    const knownIds = new Set(rows.map((row) => String(row?.id || "").trim()).filter(Boolean));
+    rows.filter(isActiveProfileRow).forEach((row) => {
+      const id = String(row?.id || "").trim();
+      if (id) activeUserIds.add(id);
+    });
+    requestedUserIds.filter((id) => !knownIds.has(id)).forEach((id) => activeUserIds.add(id));
+  }
+  const rolesWithProfiles = /* @__PURE__ */ new Set();
+  if (requestedRoleIds.length > 0) {
+    const rows = await dbGet(url, key, `profiles?role_id=in.(${requestedRoleIds.join(",")})&org_id=eq.${orgId}&select=id,role_id,is_active`).catch(() => []);
+    rows.forEach((row) => {
+      const roleId = String(row?.role_id || "").trim();
+      if (roleId) rolesWithProfiles.add(roleId);
+      if (!isActiveProfileRow(row)) return;
+      const id = String(row?.id || "").trim();
+      if (id) activeUserIds.add(id);
+    });
+  }
+  return {
+    userIds: Array.from(activeUserIds),
+    roleIds: requestedRoleIds.filter((roleId) => !rolesWithProfiles.has(roleId))
+  };
+}
+async function filterActiveGroupMentionTargets(url, key, orgId, groups) {
+  const filtered = await Promise.all((groups || []).map(async (group) => {
+    const target = await filterActiveMentionTargets(url, key, orgId, group.userIds || [], group.roleIds || []);
+    return { ...group, userIds: target.userIds, roleIds: target.roleIds };
+  }));
+  return filtered.filter((group) => group.userIds.length > 0 || group.roleIds.length > 0);
+}
 async function resolveAssigneesToSmsRecipients(url, key, orgId, recipientAssignees, recipientFields, record) {
   const userIds = /* @__PURE__ */ new Set();
   const roleIds = /* @__PURE__ */ new Set();
@@ -886,15 +1066,17 @@ async function resolveAssigneesToSmsRecipients(url, key, orgId, recipientAssigne
   const phones = [...directPhones];
   if (userIds.size > 0) {
     const ids = Array.from(userIds).join(",");
-    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=mobile_1,mobile_2,mobile`).catch(() => []);
+    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=mobile_1,mobile_2,mobile,is_active`).catch(() => []);
     profiles.forEach((p) => {
+      if (!isActiveProfileRow(p)) return;
       [p.mobile_1, p.mobile_2, p.mobile].map(normalizePhone).filter(isValidIranMobile).forEach((ph) => phones.push(ph));
     });
   }
   if (roleIds.size > 0) {
     const ids = Array.from(roleIds).join(",");
-    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=mobile_1,mobile_2,mobile`).catch(() => []);
+    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=mobile_1,mobile_2,mobile,is_active`).catch(() => []);
     profiles.forEach((p) => {
+      if (!isActiveProfileRow(p)) return;
       [p.mobile_1, p.mobile_2, p.mobile].map(normalizePhone).filter(isValidIranMobile).forEach((ph) => phones.push(ph));
     });
   }
@@ -926,7 +1108,7 @@ async function resolveAssigneesToMentionTargets(url, key, orgId, recipientAssign
     else processEntry(val);
   }
   const groupRows = await loadChatGroups(url, key, Array.from(groupIds));
-  const groupTargets = groupRows.map((group) => {
+  const groupTargetsRaw = groupRows.map((group) => {
     const groupId = String(group?.id || "").trim();
     if (!groupId) return null;
     return {
@@ -935,11 +1117,43 @@ async function resolveAssigneesToMentionTargets(url, key, orgId, recipientAssign
       roleIds: asArray(group?.role_ids).map((id) => String(id || "").trim()).filter(Boolean)
     };
   }).filter(Boolean);
+  const activeDirectTargets = await filterActiveMentionTargets(url, key, orgId, Array.from(userIds), Array.from(roleIds));
+  const groupTargets = await filterActiveGroupMentionTargets(url, key, orgId, groupTargetsRaw);
   return {
-    mentionUserIds: Array.from(userIds),
-    mentionRoleIds: Array.from(roleIds),
+    mentionUserIds: activeDirectTargets.userIds,
+    mentionRoleIds: activeDirectTargets.roleIds,
     groupTargets
   };
+}
+function normalizeWorkflowAttachmentValues(value, fallbackName) {
+  const values = Array.isArray(value) ? value : value === null || value === void 0 || value === "" ? [] : [value];
+  return values.flatMap((item, index) => {
+    if (typeof item === "string") {
+      const url2 = item.trim();
+      if (!url2) return [];
+      return [{ name: String(url2.split("?")[0].split("/").pop() || `${fallbackName}_${index + 1}`), url: url2, mimeType: null }];
+    }
+    if (!item || typeof item !== "object") return [];
+    const url = String(item?.url || item?.file_url || item?.value || "").trim();
+    if (!url) return [];
+    return [{
+      name: String(item?.name || item?.file_name || url.split("?")[0].split("/").pop() || `${fallbackName}_${index + 1}`).trim(),
+      url,
+      mimeType: String(item?.mimeType || item?.mime_type || "").trim() || null
+    }];
+  });
+}
+async function resolveServerNoteAttachments(url, key, fields, record) {
+  const attachments = [];
+  for (const field of Array.isArray(fields) ? fields : []) {
+    const fieldKey = String(field || "").trim();
+    if (!fieldKey) continue;
+    attachments.push(...normalizeWorkflowAttachmentValues(
+      await resolveWorkflowFieldValue(url, key, fieldKey, record),
+      fieldKey
+    ));
+  }
+  return Array.from(new Map(attachments.map((item) => [item.url, item])).values());
 }
 async function resolveAssigneesToBotChatIds(url, key, orgId, recipientAssignees, recipientFields, record, channel) {
   const userIds = /* @__PURE__ */ new Set();
@@ -975,15 +1189,15 @@ async function resolveAssigneesToBotChatIds(url, key, orgId, recipientAssignees,
   const allUserIds = new Set(userIds);
   if (roleIds.size > 0) {
     const ids = Array.from(roleIds).join(",");
-    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=id`).catch(() => []);
-    profiles.forEach((p) => {
+    const profiles = await dbGet(url, key, `profiles?role_id=in.(${ids})&org_id=eq.${orgId}&select=id,is_active`).catch(() => []);
+    profiles.filter(isActiveProfileRow).forEach((p) => {
       if (p.id) allUserIds.add(String(p.id));
     });
   }
   if (allUserIds.size > 0) {
     const ids = Array.from(allUserIds).join(",");
-    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=${chatIdField}`).catch(() => []);
-    profiles.forEach((p) => {
+    const profiles = await dbGet(url, key, `profiles?id=in.(${ids})&select=${chatIdField},is_active`).catch(() => []);
+    profiles.filter(isActiveProfileRow).forEach((p) => {
       const v = String(p?.[chatIdField] || "").trim();
       if (v) chatIds.push(v);
     });
@@ -1082,20 +1296,61 @@ async function auditSmsBatch(url, key, payload) {
     });
   }
 }
-async function sendSmsViaProvider(settings, to, text) {
+async function sendSmsViaGatewayFunction(url, key, settings, recipients, text) {
+  const functionUrl = `${url.replace(/\/+$/, "")}/functions/v1/send-sms`;
+  const response = await fetch(functionUrl, {
+    method: "POST",
+    headers: {
+      ...dbHeaders(key),
+      "x-kalam-internal": "workflow-interval-runner"
+    },
+    body: JSON.stringify({
+      action: "send",
+      to: recipients,
+      text,
+      overrideSettings: settings
+    }),
+    signal: AbortSignal.timeout(2e4)
+  });
+  const raw = await response.text();
+  let parsed = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!response.ok || parsed?.success === false) {
+    throw new Error(String(parsed?.message || raw || `\u067E\u0627\u0633\u062E \u067E\u06CC\u0627\u0645\u06A9 \u062E\u0637\u0627: ${response.status}`));
+  }
+  const accepted = new Set(
+    (Array.isArray(parsed?.provider_results) ? parsed.provider_results : []).map((item) => normalizePhone(String(item?.recipient || ""))).filter(isValidIranMobile)
+  );
+  return accepted.size > 0 ? recipients.filter((recipient) => accepted.has(recipient)) : recipients;
+}
+async function sendSmsViaProvider(settings, to, text, url, key) {
   const username = String(settings.username || "").trim();
   const password = String(settings.password || settings.api_key || "").trim();
   const apiKey = String(settings.api_key || "").trim();
   const senderNumber = String(settings.sender_number || "").trim();
   if (!senderNumber || !username && !apiKey) throw new Error("\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u067E\u06CC\u0627\u0645\u06A9 \u0646\u0627\u0642\u0635 \u0627\u0633\u062A");
   if (!text.trim()) throw new Error("\u0645\u062A\u0646 \u067E\u06CC\u0627\u0645\u06A9 \u062E\u0627\u0644\u06CC \u0627\u0633\u062A");
-  const sentRecipients = [];
-  for (const recipient of to) {
-    const phone = normalizePhone(recipient);
-    if (!isValidIranMobile(phone)) {
-      console.warn("[workflow-runner] Invalid phone:", phone);
-      continue;
+  const recipients = Array.from(new Set(
+    (to || []).map((recipient) => normalizePhone(recipient)).filter((phone) => {
+      if (isValidIranMobile(phone)) return true;
+      if (phone) console.warn("[workflow-runner] Invalid phone:", phone);
+      return false;
+    })
+  ));
+  if (recipients.length === 0) return [];
+  if (url && key) {
+    try {
+      return await sendSmsViaGatewayFunction(url, key, settings, recipients, text);
+    } catch (gatewayError) {
+      console.warn("[workflow-runner] send-sms gateway failed, falling back to direct SOAP:", String(gatewayError?.message || gatewayError));
     }
+  }
+  const sentRecipients = [];
+  for (const phone of recipients) {
     const form = new URLSearchParams({
       UserName: username,
       PassWord: password || apiKey,
@@ -1116,21 +1371,32 @@ async function sendSmsViaProvider(settings, to, text) {
   return sentRecipients;
 }
 async function getOrgBotSettings(url, key, orgId, channel) {
+  const canonicalType = `${channel}_bot`;
+  const legacyType = channel;
   const rows = await dbGet(
     url,
     key,
-    `integration_settings?org_id=eq.${orgId}&connection_type=eq.${channel}&is_active=eq.true&limit=1`
+    `integration_settings?org_id=eq.${orgId}&connection_type=in.(${canonicalType},${legacyType})&is_active=eq.true&order=updated_at.desc&limit=1`
   ).catch(() => []);
   return rows.length > 0 ? rows[0]?.settings || null : null;
+}
+function normalizeBotApiBaseUrl(value, channel) {
+  const raw = String(DEFAULT_BOT_API_BASE_URL[channel] || "").trim().replace(/\/+$/, "");
+  if (!raw) return DEFAULT_BOT_API_BASE_URL[channel] || "";
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+}
+function buildBotSendMessageUrl(settings, token, channel) {
+  const baseUrl = normalizeBotApiBaseUrl(String(settings?.api_base_url || ""), channel);
+  const pathTemplate = String(settings?.send_message_path || DEFAULT_BOT_SEND_PATH[channel] || "/bot{token}/sendMessage").trim();
+  const path = pathTemplate.replace("{token}", encodeURIComponent(token)).replace(/^\/*/, "/");
+  return `${baseUrl}${path}`;
 }
 async function sendBotMessage(chatId, text, settings, channel) {
   const token = String(settings.bot_token || settings.token || "").trim();
   if (!token || !chatId) return;
-  const isTelegram = channel === "telegram";
   const isRubika = channel === "rubika";
-  const baseUrl = isRubika ? `https://rubika.ir/rubika/bots/${token}/sendMessage` : isTelegram ? `https://api.telegram.org/bot${token}/sendMessage` : `https://tapi.bale.ai/bot${token}/sendMessage`;
-  const payload = { chat_id: chatId, text, parse_mode: "HTML" };
-  await fetch(baseUrl, {
+  const payload = isRubika ? { chat_id: chatId, text } : { chat_id: chatId, text, parse_mode: "HTML" };
+  await fetch(buildBotSendMessageUrl(settings, token, channel), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1176,6 +1442,8 @@ function getModuleTable(moduleId) {
     employeeBonusRequests: "employee_bonus_requests",
     employeePenaltyRequests: "employee_penalty_requests",
     employeeContracts: "employee_contracts",
+    jobDescriptions: "job_descriptions",
+    jobDescription: "job_descriptions",
     payrollSlips: "payroll_slips",
     recruitmentApplicants: "recruitment_applicants",
     processTemplates: "process_templates",
@@ -1945,7 +2213,19 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
         continue;
       }
       if (channel === "bot") {
-        await executeAction({ ...action, type: "send_bot_message", config: { message: "{{ai_answer}}", ...channelConfigs.bot || {} } }, actionRecord, moduleId, orgId, url, key, actorUserId);
+        await executeAction({
+          ...action,
+          type: "send_bot_message",
+          config: {
+            ...channelConfigs.bot || {},
+            message: "{{ai_answer}}",
+            sender_kind: "ai",
+            sender_type: "ai",
+            sender_display_name: "\u0647\u0648\u0634 \u0645\u0635\u0646\u0648\u0639\u06CC",
+            message_source: "ai",
+            ai_generated: true
+          }
+        }, actionRecord, moduleId, orgId, url, key, actorUserId);
         continue;
       }
       if (channel === "note") {
@@ -1983,7 +2263,7 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
       return actionResult(action, "skipped", "\u062A\u0646\u0638\u06CC\u0645\u0627\u062A \u067E\u06CC\u0627\u0645\u06A9 \u0641\u0639\u0627\u0644 \u0646\u06CC\u0633\u062A.", { recipient_count: allRecipients.length });
     }
     try {
-      const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text);
+      const sentRecipients = await sendSmsViaProvider(smsSettings, allRecipients, text, url, key);
       await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text, status: "provider_accepted", metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
       return actionResult(action, sentRecipients.length > 0 ? "success" : "skipped", sentRecipients.length > 0 ? void 0 : "\u0647\u06CC\u0686 \u0634\u0645\u0627\u0631\u0647 \u0645\u0639\u062A\u0628\u0631\u06CC \u0627\u0631\u0633\u0627\u0644 \u0646\u0634\u062F.", { recipient_count: sentRecipients.length });
     } catch (e) {
@@ -1993,7 +2273,8 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
   }
   if (action.type === "send_note" || action.type === "send_note_sms") {
     const noteText = (await renderTemplateAsync(String(config.note_text || ""), record, url, key, true, orgId)).trim();
-    if (!noteText) return actionResult(action, "skipped", "\u0645\u062A\u0646 \u06CC\u0627\u062F\u062F\u0627\u0634\u062A \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
+    const attachments = await resolveServerNoteAttachments(url, key, config.attachment_fields || [], record);
+    if (!noteText && attachments.length === 0) return actionResult(action, "skipped", "\u0645\u062A\u0646 \u0648 \u067E\u06CC\u0648\u0633\u062A \u06CC\u0627\u062F\u062F\u0627\u0634\u062A \u062E\u0627\u0644\u06CC \u0627\u0633\u062A.");
     if (!moduleId || !recordId) return actionResult(action, "skipped", "\u0631\u06A9\u0648\u0631\u062F \u0645\u0642\u0635\u062F \u0628\u0631\u0627\u06CC \u06CC\u0627\u062F\u062F\u0627\u0634\u062A \u0645\u0634\u062E\u0635 \u0646\u06CC\u0633\u062A.");
     const mentionTargets = await resolveAssigneesToMentionTargets(
       url,
@@ -2011,11 +2292,12 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
         org_id: orgId,
         module_id: moduleId,
         record_id: recordId,
-        content: noteText,
+        content: attachments.length > 0 ? JSON.stringify({ text: noteText, attachments }) : noteText,
         mention_user_ids: mentionTargets.mentionUserIds,
         mention_role_ids: mentionTargets.mentionRoleIds,
         source_type: "system",
-        metadata: baseMetadata
+        metadata: baseMetadata,
+        author_id: actorUserId || null
       });
     }
     mentionTargets.groupTargets.forEach((group) => {
@@ -2023,11 +2305,12 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
         org_id: orgId,
         module_id: moduleId,
         record_id: recordId,
-        content: noteText,
+        content: attachments.length > 0 ? JSON.stringify({ text: noteText, attachments }) : noteText,
         mention_user_ids: group.userIds,
         mention_role_ids: group.roleIds,
         source_type: "system",
-        metadata: { ...baseMetadata, chat_group_id: group.groupId }
+        metadata: { ...baseMetadata, chat_group_id: group.groupId },
+        author_id: actorUserId || null
       });
     });
     if (noteRows.length === 0 || !hasDirectMentions && mentionTargets.groupTargets.length === 0) {
@@ -2044,7 +2327,7 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
         const smsSettings = await getOrgSmsSettings(url, key, orgId);
         if (smsSettings) {
           try {
-            const sentRecipients = await sendSmsViaProvider(smsSettings, recipients, smsText);
+            const sentRecipients = await sendSmsViaProvider(smsSettings, recipients, smsText, url, key);
             smsRecipientCount = sentRecipients.length;
             await auditSmsBatch(url, key, { orgId, moduleId, recordId, recipients: sentRecipients, text: smsText, status: "provider_accepted", metadata: { workflow_action_type: action.type, workflow_action_id: action.id || null } });
           } catch (e) {
@@ -2113,19 +2396,7 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
     const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, "rubika");
     if (chatIds.length === 0) return actionResult(action, "skipped", "\u06AF\u06CC\u0631\u0646\u062F\u0647 \u0631\u0648\u0628\u06CC\u06A9\u0627 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.", { recipient_count: 0 });
     for (const chatId of chatIds) {
-      const token = String(botSettings.bot_token || "").trim();
-      if (!token || !chatId) continue;
-      await fetch(`https://rubika.ir/rubika/bots/${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text }),
-        signal: AbortSignal.timeout(8e3)
-      }).then(async (response) => {
-        if (!response.ok) {
-          const raw = await response.text().catch(() => String(response.status));
-          throw new Error(`\u0627\u0631\u0633\u0627\u0644 \u067E\u06CC\u0627\u0645 \u0631\u0648\u0628\u06CC\u06A9\u0627 \u0646\u0627\u0645\u0648\u0641\u0642 \u0628\u0648\u062F: ${raw || response.status}`);
-        }
-      });
+      await sendBotMessage(chatId, text, botSettings, "rubika");
     }
     return actionResult(action, "success", void 0, { recipient_count: chatIds.length });
   }
@@ -2280,21 +2551,25 @@ async function executeAction(action, record, moduleId, orgId, url, key, actorUse
   if (action.type === "copy_process_template") {
     const templateId = String(config.template_id || "").trim();
     if (!templateId || !record?.id) return actionResult(action, "skipped", "\u0642\u0627\u0644\u0628 \u0641\u0631\u0622\u06CC\u0646\u062F \u06CC\u0627 \u0631\u06A9\u0648\u0631\u062F \u0645\u0642\u0635\u062F \u0645\u0634\u062E\u0635 \u0646\u06CC\u0633\u062A.");
-    const stages = await dbGet(url, key, `process_template_stages?template_id=eq.${templateId}&order=sort_order.asc`).catch(() => []);
-    const templateRows = await dbGet(url, key, `process_templates?id=eq.${templateId}&select=name&limit=1`).catch(() => []);
-    const templateName = String(templateRows[0]?.name || "").trim();
-    const DRAFT_FIELD_MAP = {
-      invoices: "process_draft",
-      purchaseInvoices: "process_draft",
-      tasks: "sub_process_draft"
-    };
-    const draftFieldKey = DRAFT_FIELD_MAP[moduleId] || "process_draft";
-    const draft = { template_id: templateId, template_name: templateName, stages };
-    await updateRecord(url, key, moduleId, String(record.id), {
-      process_template_id: templateId,
-      [draftFieldKey]: JSON.stringify(draft)
-    }, actorUserId);
-    return actionResult(action, "success", void 0, { affected_count: 1, details: { template_id: templateId } });
+    const runIdResult = await callRpc(url, key, "create_process_run_from_template", {
+      p_org_id: orgId,
+      p_template_id: templateId,
+      p_module_id: moduleId,
+      p_record_id: String(record.id),
+      p_process_name: null,
+      p_copied_mode: "auto"
+    });
+    const processRunId = Array.isArray(runIdResult) ? String(runIdResult[0] || "").trim() : String(runIdResult || "").trim();
+    if (actorUserId && processRunId) {
+      await dbPatch(url, key, "process_runs", `id=eq.${processRunId}&org_id=eq.${orgId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).catch(() => {
+      });
+      await dbPatch(url, key, "process_run_stages", `process_run_id=eq.${processRunId}`, { created_by: actorUserId, updated_by: actorUserId, updated_at: (/* @__PURE__ */ new Date()).toISOString() }).catch(() => {
+      });
+    }
+    return actionResult(action, "success", void 0, {
+      affected_count: processRunId ? 1 : 0,
+      details: { template_id: templateId, process_run_id: processRunId }
+    });
   }
   if (action.type === "publish_story") {
     const content = (await renderTemplateAsync(String(config.content || config.text_template || ""), record, url, key, false, orgId)).trim();
@@ -2440,6 +2715,120 @@ async function executeActionWithRetry(action, record, moduleId, orgId, url, key,
   }
   throw lastError;
 }
+function getReportScheduleConfig(report) {
+  const config = report?.config && typeof report.config === "object" ? report.config : {};
+  const schedule = config.schedule && typeof config.schedule === "object" ? config.schedule : {};
+  return schedule;
+}
+function getReportScheduledDueAt(report, now) {
+  const schedule = getReportScheduleConfig(report);
+  if (schedule.enabled !== true) return null;
+  return getWorkflowScheduledDueAt({
+    last_run_at: report.last_run_at || null,
+    interval_value: Math.max(1, parseInt(String(schedule.interval_value || 1), 10) || 1),
+    interval_unit: ["hour", "day", "week", "month"].includes(String(schedule.interval_unit || "").toLowerCase()) ? String(schedule.interval_unit || "").toLowerCase() : "day",
+    interval_at: null,
+    interval_first_run_at: null,
+    interval_minute: null,
+    interval_allowed_from_hour: null,
+    interval_allowed_to_hour: null,
+    interval_day_of_month: null,
+    interval_day_condition: null,
+    interval_days_after_holiday: null
+  }, now);
+}
+function buildReportUrl(reportId) {
+  const path = `/reports/${reportId}`;
+  return CALENDAR_PUBLIC_BASE_URL ? `${CALENDAR_PUBLIC_BASE_URL}${path}` : path;
+}
+function buildScheduledReportNote(report, scheduledDueAt) {
+  const reportUrl = buildReportUrl(report.id);
+  const moduleLabel = String(report.module_id || "").trim() || "\u0646\u0627\u0645\u0634\u062E\u0635";
+  return [
+    `\u06AF\u0632\u0627\u0631\u0634 \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \xAB${String(report.name || "\u06AF\u0632\u0627\u0631\u0634").trim()}\xBB \u0622\u0645\u0627\u062F\u0647 \u0645\u0634\u0627\u0647\u062F\u0647 \u0627\u0633\u062A.`,
+    `\u0645\u0627\u0698\u0648\u0644: ${moduleLabel}`,
+    `\u0632\u0645\u0627\u0646 \u0627\u062C\u0631\u0627: ${formatJalaliDateTime(scheduledDueAt.toISOString())}`,
+    `\u0644\u06CC\u0646\u06A9 \u06AF\u0632\u0627\u0631\u0634: ${reportUrl}`
+  ].join("\n");
+}
+async function deliverScheduledReport(url, key, report, scheduledDueAt) {
+  const schedule = getReportScheduleConfig(report);
+  const recipientUserIds = Array.from(new Set(
+    (Array.isArray(schedule.recipient_user_ids) ? schedule.recipient_user_ids : []).map((item) => String(item || "").trim()).filter(Boolean)
+  ));
+  if (recipientUserIds.length === 0) {
+    return { status: "skipped", recipientCount: 0, message: "\u06AF\u06CC\u0631\u0646\u062F\u0647\u200C\u0627\u06CC \u0628\u0631\u0627\u06CC \u0627\u0631\u0633\u0627\u0644 \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u06AF\u0632\u0627\u0631\u0634 \u0627\u0646\u062A\u062E\u0627\u0628 \u0646\u0634\u062F\u0647 \u0627\u0633\u062A." };
+  }
+  const deliveryChannels = Array.from(new Set(
+    (Array.isArray(schedule.delivery_channels) ? schedule.delivery_channels : ["note"]).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+  ));
+  if (!deliveryChannels.includes("note")) {
+    return { status: "skipped", recipientCount: 0, message: "\u062F\u0631 \u062D\u0627\u0644 \u062D\u0627\u0636\u0631 \u0627\u0631\u0633\u0627\u0644 \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u06AF\u0632\u0627\u0631\u0634 \u0641\u0642\u0637 \u0627\u0632 \u0645\u0633\u06CC\u0631 \u06CC\u0627\u062F\u062F\u0627\u0634\u062A \u062F\u0627\u062E\u0644\u06CC \u067E\u0634\u062A\u06CC\u0628\u0627\u0646\u06CC \u0645\u06CC\u200C\u0634\u0648\u062F." };
+  }
+  await insertNote(url, key, {
+    org_id: report.org_id,
+    module_id: "reports",
+    record_id: report.id,
+    content: buildScheduledReportNote(report, scheduledDueAt),
+    mention_user_ids: recipientUserIds,
+    mention_role_ids: [],
+    source_type: "system",
+    metadata: {
+      source_type: "system",
+      notification_surface: "system_feed",
+      requires_action: false,
+      scheduled_report_id: report.id,
+      report_module_id: report.module_id,
+      scheduled_due_at: scheduledDueAt.toISOString(),
+      runner_build: FUNCTION_BUILD
+    }
+  });
+  return { status: "success", recipientCount: recipientUserIds.length };
+}
+async function runScheduledReportsTick(url, key, now) {
+  const stats = { checkedReports: 0, claimedReports: 0, sentReports: 0, skippedReports: 0, failedReports: 0 };
+  const reports = await fetchQueuedReports(url, key).catch((error) => {
+    console.warn("[workflow-runner] Scheduled report fetch failed:", error?.message || error);
+    return [];
+  });
+  stats.checkedReports = reports.length;
+  for (const report of reports) {
+    const scheduledDueAt = getReportScheduledDueAt(report, now);
+    if (!scheduledDueAt) {
+      await clearReportServerQueued(url, key, report.id);
+      continue;
+    }
+    const claimed = await claimReportScheduleRun(url, key, report.id, report.last_run_at, scheduledDueAt);
+    if (!claimed) continue;
+    stats.claimedReports++;
+    try {
+      const result = await deliverScheduledReport(url, key, report, scheduledDueAt);
+      if (result.status === "success") {
+        stats.sentReports++;
+        await dbPatch(url, key, "report_definitions", `id=eq.${report.id}`, {
+          schedule_last_sent_at: (/* @__PURE__ */ new Date()).toISOString(),
+          schedule_error: null
+        }).catch(() => {
+        });
+      } else {
+        stats.skippedReports++;
+        await dbPatch(url, key, "report_definitions", `id=eq.${report.id}`, {
+          schedule_error: result.message || "\u0627\u0631\u0633\u0627\u0644 \u062F\u0648\u0631\u0647\u200C\u0627\u06CC \u06AF\u0632\u0627\u0631\u0634 \u0627\u0646\u062C\u0627\u0645 \u0646\u0634\u062F."
+        }).catch(() => {
+        });
+      }
+    } catch (error) {
+      stats.failedReports++;
+      const errorMessage = String(error?.message || "scheduled report delivery failed");
+      console.error(`[workflow-runner] Scheduled report failed (${report.name || report.id}):`, errorMessage);
+      await dbPatch(url, key, "report_definitions", `id=eq.${report.id}`, {
+        schedule_error: errorMessage
+      }).catch(() => {
+      });
+    }
+  }
+  return stats;
+}
 async function runIntervalTick(url, key) {
   const now = /* @__PURE__ */ new Date();
   const stats = { checkedWorkflows: 0, claimedWorkflows: 0, processedRecords: 0, executedActions: 0, failedRuns: 0 };
@@ -2504,6 +2893,7 @@ async function runIntervalTick(url, key) {
           }
         }
         for (const record of records) {
+          if (await shouldSkipWorkflowIntervalRecord(url, key, workflow.org_id, targetTable, record)) continue;
           stats.processedRecords++;
           const matched = await evaluateConditions(conditionsAll, conditionsAny, record);
           if (!matched) continue;
@@ -2572,6 +2962,558 @@ async function runIntervalTick(url, key) {
       }
     }
   }
+  const reportStats = await runScheduledReportsTick(url, key, now);
+  const processAutomationStats = await runServerProcessAutomationIntervalTick(url, key, now);
+  return { ...stats, ...reportStats, processAutomationStats };
+}
+function workflowTargetsSourceTable(workflow, sourceTable) {
+  const normalizedSourceTable = String(sourceTable || "").trim();
+  if (!normalizedSourceTable) return false;
+  const moduleIds = [workflow?.module_id, ...Array.isArray(workflow?.module_ids) ? workflow.module_ids : []].map((value) => String(value || "").trim()).filter(Boolean);
+  return moduleIds.some((moduleId) => getModuleTable(moduleId) === normalizedSourceTable);
+}
+function resolveWorkflowModuleIdForSourceTable(workflow, sourceTable) {
+  const normalizedSourceTable = String(sourceTable || "").trim();
+  const moduleIds = [workflow?.module_id, ...Array.isArray(workflow?.module_ids) ? workflow.module_ids : []].map((value) => String(value || "").trim()).filter(Boolean);
+  return moduleIds.find((moduleId) => getModuleTable(moduleId) === normalizedSourceTable) || String(workflow?.module_id || sourceTable).trim() || normalizedSourceTable;
+}
+function shouldRunWorkflowForEventSourceTable(workflow, sourceTable) {
+  if (!workflowTargetsSourceTable(workflow, sourceTable)) return false;
+  if (workflow?.scope_type !== "process_activator") return true;
+  const sourceNodeKey = String(workflow?.process_source_node_key || "").trim();
+  if (sourceNodeKey) return sourceTable === "tasks";
+  return workflowTargetsSourceTable(workflow, sourceTable);
+}
+async function fetchWorkflowEventRecord(url, key, moduleId, recordId, fallbackRecord) {
+  const table = getModuleTable(moduleId);
+  const normalizedRecordId = String(recordId || fallbackRecord?.id || "").trim();
+  if (fallbackRecord && typeof fallbackRecord === "object" && String(fallbackRecord?.id || "").trim() === normalizedRecordId) {
+    return { table, record: fallbackRecord };
+  }
+  if (normalizedRecordId) {
+    const rows = await dbGet(
+      url,
+      key,
+      `${table}?id=eq.${encodeURIComponent(normalizedRecordId)}&select=*&limit=1`
+    ).catch((error) => {
+      console.warn("[workflow-runner] Event record fetch failed:", error?.message || error);
+      return [];
+    });
+    if (rows[0]) return { table, record: rows[0] };
+  }
+  return {
+    table,
+    record: fallbackRecord && typeof fallbackRecord === "object" ? fallbackRecord : null
+  };
+}
+async function fetchEventWorkflows(url, key, orgId, moduleId, event) {
+  const triggerTypes = event === "create" ? "on_create,on_upsert" : "on_upsert";
+  const rows = await dbGet(
+    url,
+    key,
+    `workflows?org_id=eq.${encodeURIComponent(orgId)}&is_active=eq.true&trigger_type=in.(${triggerTypes})&select=*&limit=500`
+  ).catch((error) => {
+    console.warn("[workflow-runner] Event workflow fetch failed:", error?.message || error);
+    return [];
+  });
+  return rows.filter((workflow) => shouldRunWorkflowForEventSourceTable(workflow, moduleId));
+}
+async function hasSuccessfulEventWorkflowLog(url, key, workflowId, moduleId, recordId) {
+  const rows = await dbGet(
+    url,
+    key,
+    `workflow_logs?workflow_id=eq.${encodeURIComponent(workflowId)}&run_type=eq.event&module_id=eq.${encodeURIComponent(moduleId)}&record_id=eq.${encodeURIComponent(recordId)}&status=eq.success&select=id&limit=1`
+  ).catch(() => []);
+  return rows.length > 0;
+}
+async function runEventTick(url, key, body) {
+  const moduleId = String(body?.module_id || body?.moduleId || "").trim();
+  const recordId = String(body?.record_id || body?.recordId || body?.record?.id || "").trim();
+  const event = String(body?.event || "upsert").trim() === "create" ? "create" : "upsert";
+  const providedRecord = body?.record && typeof body.record === "object" ? body.record : null;
+  const previousRecord = body?.previous_record && typeof body.previous_record === "object" ? body.previous_record : body?.previousRecord && typeof body.previousRecord === "object" ? body.previousRecord : null;
+  const source = String(body?.source || "workflow_event_runner").trim() || "workflow_event_runner";
+  const eventActorUserId = String(body?.actor_user_id || body?.actorUserId || "").trim() || null;
+  if (!moduleId || !recordId) {
+    throw new Error("module_id \u0648 record_id \u0628\u0631\u0627\u06CC \u0627\u062C\u0631\u0627\u06CC event \u0644\u0627\u0632\u0645 \u0627\u0633\u062A.");
+  }
+  const { table, record } = await fetchWorkflowEventRecord(url, key, moduleId, recordId, providedRecord);
+  if (!record?.id) {
+    throw new Error("\u0631\u06A9\u0648\u0631\u062F \u0645\u0642\u0635\u062F \u06AF\u0631\u062F\u0634 \u06A9\u0627\u0631 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.");
+  }
+  const orgId = String(record?.org_id || providedRecord?.org_id || previousRecord?.org_id || "").trim();
+  if (!orgId) {
+    throw new Error("\u0634\u0646\u0627\u0633\u0647 \u0633\u0627\u0632\u0645\u0627\u0646 \u0631\u06A9\u0648\u0631\u062F \u0645\u0642\u0635\u062F \u06AF\u0631\u062F\u0634 \u06A9\u0627\u0631 \u0645\u0634\u062E\u0635 \u0646\u06CC\u0633\u062A.");
+  }
+  const stats = {
+    event,
+    moduleId,
+    recordId: String(record.id),
+    checkedWorkflows: 0,
+    matchedWorkflows: 0,
+    executedActions: 0,
+    failedRuns: 0,
+    skippedRuns: 0
+  };
+  if (await shouldSkipWorkflowIntervalRecord(url, key, orgId, table, record)) {
+    stats.skippedRuns += 1;
+    return stats;
+  }
+  const workflows = await fetchEventWorkflows(url, key, orgId, moduleId, event);
+  stats.checkedWorkflows = workflows.length;
+  for (const workflow of workflows) {
+    const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
+    const recordIdForLog = String(record?.id || "").trim();
+    const workflowModuleId = resolveWorkflowModuleIdForSourceTable(workflow, moduleId);
+    try {
+      const matched = await evaluateConditions(
+        Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [],
+        Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [],
+        record,
+        previousRecord
+      );
+      if (!matched) continue;
+      stats.matchedWorkflows += 1;
+      const executionMode = String(workflow.execution_mode || "first_match");
+      if (executionMode === "first_match" && recordIdForLog && await hasSuccessfulEventWorkflowLog(url, key, workflow.id, workflowModuleId, recordIdForLog)) {
+        stats.skippedRuns += 1;
+        await insertWorkflowLog(url, key, {
+          workflow_id: workflow.id,
+          org_id: workflow.org_id,
+          module_id: workflowModuleId,
+          record_id: recordIdForLog,
+          run_type: "event",
+          status: "skipped",
+          message: "\u0627\u06CC\u0646 \u06AF\u0631\u062F\u0634 \u06A9\u0627\u0631 \u0642\u0628\u0644\u0627\u064B \u0628\u0631\u0627\u06CC \u0627\u06CC\u0646 \u0631\u06A9\u0648\u0631\u062F \u0627\u062C\u0631\u0627 \u0634\u062F\u0647 \u0627\u0633\u062A.",
+          details: { source, event, runner_build: FUNCTION_BUILD }
+        });
+        continue;
+      }
+      const actorUserId = resolveWorkflowActorId(workflow);
+      const errors = [];
+      const actionResults = [];
+      for (const action of actions) {
+        try {
+          const result = await executeActionWithRetry(
+            action,
+            record,
+            workflowModuleId,
+            workflow.org_id,
+            url,
+            key,
+            actorUserId
+          );
+          actionResults.push(result);
+          if (result.status === "success") stats.executedActions += 1;
+          if (result.status === "failed") {
+            errors.push(result.message || String(action?.type || "action failed"));
+            stats.failedRuns += 1;
+          }
+        } catch (error) {
+          const errorMessage = String(error?.message || action?.type || "action failed");
+          errors.push(errorMessage);
+          actionResults.push({
+            action_type: String(action?.type || ""),
+            action_id: action?.id || null,
+            status: "failed",
+            message: errorMessage
+          });
+          stats.failedRuns += 1;
+          console.error(`[workflow-runner] Event action failed (${workflow.name}/${action?.type}):`, error?.message || error);
+        }
+      }
+      const hasFailedAction = actionResults.some((result) => result.status === "failed");
+      const hasSuccessfulAction = actionResults.some((result) => result.status === "success");
+      const runStatus = hasFailedAction ? "failed" : hasSuccessfulAction ? "success" : "skipped";
+      if (runStatus === "skipped") stats.skippedRuns += 1;
+      await insertWorkflowLog(url, key, {
+        workflow_id: workflow.id,
+        org_id: workflow.org_id,
+        module_id: workflowModuleId,
+        record_id: recordIdForLog,
+        run_type: "event",
+        status: runStatus,
+        message: errors.length > 0 ? errors.join(" | ") : !hasSuccessfulAction ? "\u0647\u06CC\u0686 \u0627\u0642\u062F\u0627\u0645\u06CC \u0627\u062C\u0631\u0627 \u0646\u0634\u062F \u06CC\u0627 \u06AF\u06CC\u0631\u0646\u062F\u0647 \u0645\u0639\u062A\u0628\u0631 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F." : void 0,
+        details: {
+          source,
+          event,
+          workflow_name: workflow.name,
+          action_count: actions.length,
+          action_results: actionResults,
+          record_title: getServerRecordTitle(record),
+          runner_build: FUNCTION_BUILD,
+          has_previous_record: previousRecord !== null
+        }
+      });
+      if (runStatus === "success") {
+        await dbPatch(url, key, "workflows", `id=eq.${workflow.id}`, { last_run_at: (/* @__PURE__ */ new Date()).toISOString() }).catch(() => {
+        });
+      }
+    } catch (error) {
+      stats.failedRuns += 1;
+      const errorMessage = String(error?.message || "workflow event failed");
+      console.error(`[workflow-runner] Event workflow failed (${workflow?.name || workflow?.id}):`, errorMessage);
+      if (recordIdForLog) {
+        await insertWorkflowLog(url, key, {
+          workflow_id: workflow.id,
+          org_id: workflow.org_id,
+          module_id: workflowModuleId,
+          record_id: recordIdForLog,
+          run_type: "event",
+          status: "failed",
+          message: errorMessage,
+          details: { source, event, runner_build: FUNCTION_BUILD }
+        });
+      }
+    }
+  }
+  if (table === "tasks") {
+    const processAutomationStats = await runServerProcessAutomationsForTaskEvent(
+      url,
+      key,
+      record,
+      previousRecord,
+      event === "create" ? "create" : "update",
+      eventActorUserId
+    );
+    Object.assign(stats, { processAutomations: processAutomationStats });
+  }
+  return stats;
+}
+async function loadTaskSourceRecord(url, key, task) {
+  const link = getTaskSourceLinkCore(task);
+  if (!link.moduleId || !link.recordId) return { ...link, record: null };
+  const rows = await dbGet(
+    url,
+    key,
+    `${getModuleTable(link.moduleId)}?id=eq.${encodeURIComponent(link.recordId)}&select=*&limit=1`
+  ).catch(() => []);
+  return { ...link, record: rows[0] || null };
+}
+async function loadSiblingProcessTasks(url, key, task) {
+  const recurrence = parseObjectValue(task?.recurrence_info);
+  const processRunId = String(task?.process_run_id || recurrence?.process_run_id || "").trim();
+  const processGroupId = String(task?.process_group_id || recurrence?.process_group?.id || "").trim();
+  let path = "";
+  if (processRunId) path = `tasks?process_run_id=eq.${encodeURIComponent(processRunId)}`;
+  else if (processGroupId) path = `tasks?process_group_id=eq.${encodeURIComponent(processGroupId)}`;
+  else {
+    const source = getTaskSourceLinkCore(task);
+    if (source.moduleId && source.recordId) {
+      path = `tasks?source_module_id=eq.${encodeURIComponent(source.moduleId)}&source_record_id=eq.${encodeURIComponent(source.recordId)}`;
+    }
+  }
+  if (!path) return [task];
+  const rows = await dbGet(url, key, `${path}&select=*&order=sort_order.asc&limit=500`).catch(() => []);
+  return rows.some((row) => String(row?.id || "") === String(task?.id || "")) ? rows : [...rows, task];
+}
+function buildProcessAutomationTaskRecord(task, sourceRecord, sourceModuleId, siblings = []) {
+  const recurrence = parseObjectValue(task?.recurrence_info);
+  const customValues = parseObjectValue(recurrence?.process_task_custom_field_values);
+  const record = {
+    ...sourceRecord || {},
+    ...customValues,
+    id: sourceRecord?.id || task?.id,
+    org_id: task?.org_id || sourceRecord?.org_id,
+    task_id: task?.id,
+    task_name: task?.name,
+    task_type: task?.task_type || recurrence?.task_type,
+    task_status: task?.status,
+    task_status_label: task?.status_label || task?.status,
+    status_label: task?.status_label || task?.status,
+    task_priority: task?.priority,
+    task_due_date: task?.due_date,
+    task_image_url: task?.image_url,
+    source_module_id: sourceModuleId,
+    source_record_id: sourceRecord?.id || task?.source_record_id,
+    process_group_id: task?.process_group_id || recurrence?.process_group?.id,
+    process_run_id: task?.process_run_id || recurrence?.process_run_id,
+    process_run_stage_id: task?.process_run_stage_id || recurrence?.process_run_stage_id,
+    process_node_key: getTaskProcessNodeKeyCore(task),
+    process_lane_key: getTaskProcessLaneKeyCore(task),
+    recurrence_info: recurrence
+  };
+  Object.entries(task || {}).forEach(([field, value]) => {
+    record[`__task__${field}`] = value;
+  });
+  Object.entries(customValues).forEach(([field, value]) => {
+    record[field] = value;
+    record[`__task__${field}`] = value;
+  });
+  const previousTasks = getAdjacentProcessTasksCore(task, siblings, "previous");
+  const nextTasks = getAdjacentProcessTasksCore(task, siblings, "next");
+  const previousTask = previousTasks[0] || null;
+  const previousRecurrence = parseObjectValue(previousTask?.recurrence_info);
+  const previousCustomValues = parseObjectValue(previousRecurrence?.process_task_custom_field_values);
+  Object.entries(previousCustomValues).forEach(([field, value]) => {
+    record[`previous_stage__${field}`] = value;
+  });
+  record.previous_stage__image_url = previousTask?.image_url || null;
+  record.__comm_recipient__current_task_assignee = taskRecipientTokenCore(task);
+  record.__comm_recipient__previous_stage_assignee = taskRecipientTokenCore(previousTask);
+  record.__comm_recipient__previous_stage_assignees = previousTasks.map(taskRecipientTokenCore).filter(Boolean);
+  record.__comm_recipient__next_stage_assignee = taskRecipientTokenCore(nextTasks[0]);
+  siblings.forEach((stage) => {
+    const nodeKey = getTaskProcessNodeKeyCore(stage);
+    if (nodeKey) record[`__comm_recipient__specific_process_stage__${nodeKey}`] = taskRecipientTokenCore(stage);
+  });
+  const processLinks = parseObjectValue(recurrence?.process_links);
+  record.process_links = processLinks;
+  if (sourceModuleId && sourceRecord) {
+    Object.entries(sourceRecord).forEach(([field, value]) => {
+      record[`__linked__${sourceModuleId}__${field}`] = value;
+    });
+    record[`__linked__${sourceModuleId}____workflow_assignee`] = sourceRecord?.assignee_role_id ? `role_${sourceRecord.assignee_role_id}` : sourceRecord?.assignee_id ? `user_${sourceRecord.assignee_id}` : null;
+  }
+  return record;
+}
+async function hydrateProcessLinkedFields(url, key, record) {
+  const links = parseObjectValue(record?.process_links);
+  for (const [moduleIdRaw, recordIdRaw] of Object.entries(links)) {
+    const moduleId = String(moduleIdRaw || "").trim();
+    const recordId = String(recordIdRaw || "").trim();
+    if (!moduleId || !recordId) continue;
+    const rows = await dbGet(
+      url,
+      key,
+      `${getModuleTable(moduleId)}?id=eq.${encodeURIComponent(recordId)}&select=*&limit=1`
+    ).catch(() => []);
+    const linked = rows[0];
+    if (!linked) continue;
+    Object.entries(linked).forEach(([field, value]) => {
+      record[`__linked__${moduleId}__${field}`] = value;
+    });
+    record[`__linked__${moduleId}____workflow_assignee`] = linked?.assignee_role_id ? `role_${linked.assignee_role_id}` : linked?.assignee_id ? `user_${linked.assignee_id}` : null;
+  }
+}
+async function hasSuccessfulProcessAutomationLog(url, key, ruleId, taskId) {
+  const details = encodeURIComponent(JSON.stringify({ process_automation_rule_id: ruleId }));
+  const rows = await dbGet(
+    url,
+    key,
+    `workflow_logs?run_type=eq.process_automation&status=eq.success&module_id=eq.tasks&record_id=eq.${encodeURIComponent(taskId)}&details=cs.${details}&select=id&limit=1`
+  ).catch(() => []);
+  return rows.length > 0;
+}
+async function runServerProcessAutomationRules(url, key, task, previousTask, event, candidateRules, actorUserId = null) {
+  const taskId = String(task?.id || "").trim();
+  const orgId = String(task?.org_id || "").trim();
+  const stats = { checked: 0, matched: 0, succeeded: 0, failed: 0, skipped: 0 };
+  if (!taskId || !orgId) return stats;
+  const recurrence = parseObjectValue(task?.recurrence_info);
+  const rules = candidateRules || getTaskProcessAutomationRulesCore(task);
+  if (rules.length === 0) return stats;
+  const [source, siblings] = await Promise.all([
+    loadTaskSourceRecord(url, key, task),
+    loadSiblingProcessTasks(url, key, task)
+  ]);
+  const actionRecord = buildProcessAutomationTaskRecord(task, source.record, source.moduleId, siblings);
+  const previousActionRecord = previousTask ? buildProcessAutomationTaskRecord(previousTask, source.record, source.moduleId, siblings) : null;
+  await hydrateProcessLinkedFields(url, key, actionRecord);
+  if (previousActionRecord) await hydrateProcessLinkedFields(url, key, previousActionRecord);
+  for (const rule of rules) {
+    stats.checked += 1;
+    const trigger = String(rule?.trigger_type || "").trim();
+    if (event === "interval" ? trigger !== "interval" : event === "previous_stage_completed" ? trigger !== "previous_stage_completed" : trigger === "interval" || trigger === "previous_stage_completed") continue;
+    if (trigger === "on_create" && event !== "create") continue;
+    if (trigger === "on_upsert" && !["create", "update"].includes(event)) continue;
+    const ruleId = String(rule?.id || "").trim();
+    if (String(rule?.execution_mode || "every_match") === "first_match" && ruleId && await hasSuccessfulProcessAutomationLog(url, key, ruleId, taskId)) {
+      stats.skipped += 1;
+      continue;
+    }
+    const conditionsAll = runnableProcessConditionsCore(rule?.conditions_all).map((condition) => ({
+      ...condition,
+      field: String(condition?.field || "").startsWith("__task__") ? String(condition.field) : String(condition.field)
+    }));
+    const conditionsAny = runnableProcessConditionsCore(rule?.conditions_any);
+    if (!await evaluateProcessAutomationConditionsCore(
+      conditionsAll,
+      conditionsAny,
+      actionRecord,
+      previousActionRecord,
+      evaluateConditionWithPrevious
+    )) continue;
+    stats.matched += 1;
+    const targetTokens = resolveProcessAutomationTargetTokensCore(rule, task, siblings);
+    const actions = Array.isArray(rule?.actions) ? rule.actions : [];
+    const errors = [];
+    const results = [];
+    const targetModuleId = source.moduleId || "tasks";
+    for (const action of actions) {
+      const actionConfig = action?.config && typeof action.config === "object" ? action.config : {};
+      const hasExplicitRecipient = Array.isArray(actionConfig.recipient_assignees) && actionConfig.recipient_assignees.length > 0 || Array.isArray(actionConfig.recipient_fields) && actionConfig.recipient_fields.length > 0;
+      let shouldUseTargetFallback = !hasExplicitRecipient;
+      if ((String(action?.type || "") === "send_note" || String(action?.type || "") === "send_note_sms") && Array.isArray(actionConfig.recipient_fields) && actionConfig.recipient_fields.length > 0) {
+        const resolved = await resolveAssigneesToMentionTargets(url, key, orgId, [], actionConfig.recipient_fields, actionRecord);
+        shouldUseTargetFallback = resolved.mentionUserIds.length === 0 && resolved.mentionRoleIds.length === 0 && resolved.groupTargets.length === 0;
+      }
+      const serverAction = {
+        ...action,
+        config: {
+          ...actionConfig,
+          recipient_assignees: shouldUseTargetFallback ? targetTokens : actionConfig.recipient_assignees || [],
+          source_type: "process_automation"
+        }
+      };
+      try {
+        const result = await executeActionWithRetry(serverAction, actionRecord, targetModuleId, orgId, url, key, actorUserId);
+        results.push(result);
+        if (result.status === "failed") errors.push(result.message || String(action?.type || "automation action failed"));
+      } catch (error) {
+        errors.push(String(error?.message || error || "automation action failed"));
+      }
+    }
+    const status = errors.length > 0 ? "failed" : "success";
+    await insertWorkflowLog(url, key, {
+      workflow_id: null,
+      org_id: orgId,
+      module_id: "tasks",
+      record_id: taskId,
+      run_type: "process_automation",
+      status,
+      message: errors.length > 0 ? errors.join(" | ") : void 0,
+      details: {
+        process_automation_rule_id: ruleId || null,
+        process_automation_rule_name: String(rule?.name || "").trim() || null,
+        process_automation_trigger_type: trigger || null,
+        process_automation_event: event,
+        execution_mode: String(rule?.execution_mode || "every_match"),
+        record_title: getServerRecordTitle(task),
+        process_run_id: String(task?.process_run_id || recurrence?.process_run_id || "").trim() || null,
+        process_group_id: String(task?.process_group_id || recurrence?.process_group?.id || "").trim() || null,
+        process_run_stage_id: String(task?.process_run_stage_id || recurrence?.process_run_stage_id || "").trim() || null,
+        action_count: actions.length,
+        action_results: results,
+        actor_id: actorUserId,
+        runner_build: FUNCTION_BUILD
+      }
+    });
+    if (status === "success") stats.succeeded += 1;
+    else stats.failed += 1;
+  }
+  return stats;
+}
+async function runServerProcessAutomationsForTaskEvent(url, key, task, previousTask, event, actorUserId) {
+  const stats = await runServerProcessAutomationRules(url, key, task, previousTask, event, void 0, actorUserId);
+  const becameCompleted = ["done", "completed"].includes(String(task?.status || "").trim().toLowerCase()) && !["done", "completed"].includes(String(previousTask?.status || "").trim().toLowerCase());
+  if (becameCompleted) {
+    const siblings = await loadSiblingProcessTasks(url, key, task);
+    const nextTasks = getAdjacentProcessTasksCore(task, siblings, "next");
+    for (const nextTask of nextTasks) {
+      const nextRules = getTaskProcessAutomationRulesCore(nextTask).filter((rule) => String(rule?.trigger_type || "") === "previous_stage_completed");
+      if (nextRules.length > 0) {
+        await runServerProcessAutomationRules(url, key, nextTask, null, "previous_stage_completed", nextRules, actorUserId);
+      }
+    }
+  }
+  return stats;
+}
+async function getLastProcessAutomationSuccessAt(url, key, ruleId, taskId) {
+  const details = encodeURIComponent(JSON.stringify({ process_automation_rule_id: ruleId }));
+  const rows = await dbGet(
+    url,
+    key,
+    `workflow_logs?run_type=eq.process_automation&status=eq.success&module_id=eq.tasks&record_id=eq.${encodeURIComponent(taskId)}&details=cs.${details}&select=created_at&order=created_at.desc&limit=1`
+  ).catch(() => []);
+  return String(rows[0]?.created_at || "").trim() || null;
+}
+async function runServerProcessAutomationIntervalTick(url, key, now) {
+  const stats = { scannedTasks: 0, intervalCandidateTasks: 0, triggeredTasks: 0, failedTasks: 0 };
+  const pageSize = 100;
+  const maxTasks = 3e3;
+  for (let offset = 0; offset < maxTasks; offset += pageSize) {
+    const rows = await dbGet(
+      url,
+      key,
+      `tasks?recurrence_info=not.is.null&status=not.in.(done,completed)&select=*&order=updated_at.desc&limit=${pageSize}&offset=${offset}`
+    ).catch((error) => {
+      console.warn("[workflow-runner] Process automation interval task fetch failed:", error?.message || error);
+      return [];
+    });
+    if (rows.length === 0) break;
+    for (const task of rows) {
+      stats.scannedTasks += 1;
+      const taskId = String(task?.id || "").trim();
+      const rules = getTaskProcessAutomationRulesCore(task).filter((rule) => String(rule?.trigger_type || "").trim() === "interval");
+      if (rules.length === 0 || !taskId) continue;
+      const dueRules = [];
+      for (const rule of rules) {
+        const ruleId = String(rule?.id || "").trim();
+        const lastRunAt = ruleId ? await getLastProcessAutomationSuccessAt(url, key, ruleId, taskId) : null;
+        if (String(rule?.execution_mode || "every_match") === "first_match" && lastRunAt) continue;
+        const scheduledDueAt = getWorkflowScheduledDueAt({
+          last_run_at: lastRunAt,
+          interval_value: Math.max(1, Number(rule?.interval_value || 1)),
+          interval_unit: String(rule?.interval_unit || "day"),
+          interval_at: String(rule?.interval_at || "").trim() || null,
+          interval_first_run_at: null,
+          interval_minute: null,
+          interval_allowed_from_hour: null,
+          interval_allowed_to_hour: null,
+          interval_day_of_month: null,
+          interval_day_condition: null,
+          interval_days_after_holiday: null
+        }, now);
+        if (scheduledDueAt) dueRules.push(rule);
+      }
+      if (dueRules.length === 0) continue;
+      stats.intervalCandidateTasks += 1;
+      try {
+        await runServerProcessAutomationRules(url, key, task, null, "interval", dueRules);
+        stats.triggeredTasks += 1;
+      } catch (error) {
+        stats.failedTasks += 1;
+        console.warn("[workflow-runner] Process automation interval task failed:", taskId, error?.message || error);
+      }
+    }
+    if (rows.length < pageSize) break;
+  }
+  return stats;
+}
+async function completeWorkflowEvent(url, key, eventId, status, errorMessage = null) {
+  await dbPatch(url, key, "workflow_event_queue", `id=eq.${encodeURIComponent(eventId)}`, {
+    status,
+    completed_at: (/* @__PURE__ */ new Date()).toISOString(),
+    last_error: errorMessage
+  });
+}
+async function runQueuedWorkflowEvents(url, key) {
+  const stats = { scanned: 0, claimed: 0, succeeded: 0, failed: 0 };
+  await callRpc(url, key, "requeue_stale_workflow_events", {}).catch(() => 0);
+  const rows = await dbGet(
+    url,
+    key,
+    "workflow_event_queue?status=eq.pending&available_at=lte.now()&order=created_at.asc&limit=100"
+  ).catch((error) => {
+    console.warn("[workflow-runner] Event queue fetch failed:", error?.message || error);
+    return [];
+  });
+  for (const queuedEvent of rows) {
+    stats.scanned += 1;
+    const claimed = await callRpc(url, key, "claim_workflow_event", { p_event_id: queuedEvent.id }).catch(() => false);
+    if (claimed !== true) continue;
+    stats.claimed += 1;
+    try {
+      await runEventTick(url, key, {
+        module_id: queuedEvent.source_table,
+        record_id: queuedEvent.record_id,
+        event: queuedEvent.event_type,
+        record: queuedEvent.record_snapshot || { id: queuedEvent.record_id, org_id: queuedEvent.org_id },
+        previous_record: queuedEvent.previous_snapshot || null,
+        actor_user_id: queuedEvent.actor_user_id || null,
+        source: "server_event_queue"
+      });
+      await completeWorkflowEvent(url, key, queuedEvent.id, "succeeded");
+      stats.succeeded += 1;
+    } catch (error) {
+      const message = String(error?.message || error || "server workflow event failed");
+      await completeWorkflowEvent(url, key, queuedEvent.id, "failed", message).catch(() => {
+      });
+      stats.failed += 1;
+      console.error("[workflow-runner] Event queue item failed:", queuedEvent.id, message);
+    }
+  }
   return stats;
 }
 var corsHeaders = {
@@ -2597,9 +3539,28 @@ Deno.serve(async (req) => {
     return json(401, { ok: false, error: "Unauthorized" });
   }
   try {
-    const stats = await runIntervalTick(supabaseUrl, serviceRoleKey);
-    console.log(`[workflow-runner] build=${FUNCTION_BUILD} stats=${JSON.stringify(stats)}`);
-    return json(200, { ok: true, stats });
+    let body = {};
+    if (req.method === "POST") {
+      body = await req.json().catch(() => ({}));
+    }
+    const action = String(body?.action || "").trim();
+    if (action === "drain_events") {
+      if (!isServiceRole) return json(401, { ok: false, error: "Unauthorized event queue runner" });
+      const stats2 = await runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey);
+      return json(200, { ok: true, mode: "event_queue", stats: stats2 });
+    }
+    if (action === "run_event") {
+      if (!isServiceRole) return json(401, { ok: false, error: "Unauthorized event runner" });
+      const stats2 = await runEventTick(supabaseUrl, serviceRoleKey, body);
+      console.log(`[workflow-runner] build=${FUNCTION_BUILD} eventStats=${JSON.stringify(stats2)}`);
+      return json(200, { ok: true, mode: "event", stats: stats2 });
+    }
+    const [stats, eventQueueStats] = await Promise.all([
+      runIntervalTick(supabaseUrl, serviceRoleKey),
+      runQueuedWorkflowEvents(supabaseUrl, serviceRoleKey)
+    ]);
+    console.log(`[workflow-runner] build=${FUNCTION_BUILD} stats=${JSON.stringify(stats)} eventQueueStats=${JSON.stringify(eventQueueStats)}`);
+    return json(200, { ok: true, stats, eventQueueStats });
   } catch (e) {
     console.error("[workflow-runner] Fatal error:", e.message);
     return json(500, { ok: false, error: String(e?.message || "internal error") });

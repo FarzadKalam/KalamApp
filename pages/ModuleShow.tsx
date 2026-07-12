@@ -4277,10 +4277,18 @@ const ModuleShow: React.FC = () => {
 
   const saveEdit = async (key: string) => {
     if (!canEditModule) return;
+    // A field save can dispatch asynchronous automation. Guard the entry point so
+    // repeated taps on the confirmation icon never submit the same edit twice.
+    if (savingField === key) return;
     if (moduleId === 'production_orders' && key === 'status') {
-      const newStatus = tempValues[key];
-      await handleProductionStatusChange(String(newStatus));
-      setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
+      setSavingField(key);
+      try {
+        const newStatus = tempValues[key];
+        await handleProductionStatusChange(String(newStatus));
+        setTimeout(() => setEditingFields(prev => ({ ...prev, [key]: false })), 100);
+      } finally {
+        setSavingField(null);
+      }
       return;
     }
     setSavingField(key);
@@ -5969,7 +5977,8 @@ const ModuleShow: React.FC = () => {
               type="text"
               icon={<CheckOutlined />}
               onClick={() => saveEdit(field.key)}
-              disabled={isProcessTemplateFieldLocked}
+              disabled={isProcessTemplateFieldLocked || savingField === field.key}
+              loading={savingField === field.key}
               className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-emerald-200 hover:!text-emerald-600"
             />
             <Button
@@ -5977,6 +5986,7 @@ const ModuleShow: React.FC = () => {
               type="text"
               icon={<CloseOutlined />}
               onClick={() => cancelEdit(field.key)}
+              disabled={savingField === field.key}
               className="!h-8 !w-8 !min-w-8 rounded-full border border-gray-200 text-gray-500 hover:!border-rose-200 hover:!text-rose-600"
             />
           </div>

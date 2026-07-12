@@ -83,7 +83,6 @@ import AiSparkleIcon from './ai/AiSparkleIcon';
 import { useNotificationRuntime } from './notifications/NotificationRuntimeProvider';
 
 const { Header, Sider, Content } = AntLayout;
-const INTERVAL_RUNNER_LOCK_KEY = 'kalam_interval_runner_lock_v1';
 const NotificationsPopover = React.lazy(() => import('./NotificationsPopover'));
 const GlobalTaskProcessModalHost = React.lazy(() => import('./tasks/GlobalTaskProcessModalHost'));
 const GoalProgressSlider = React.lazy(() => import('./goals/GoalProgressSlider'));
@@ -132,8 +131,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
   const searchBoxRef = useRef<HTMLDivElement>(null);
   const searchRequestRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
-  const intervalRunnerBusyRef = useRef(false);
-  const intervalRunnerOwnerRef = useRef(`runner_${Math.random().toString(36).slice(2, 10)}`);
   const wasMobileViewportRef = useRef(initialIsMobile);
   const previousPathnameRef = useRef(location.pathname);
   const sidebarNavigationRef = useRef('');
@@ -534,13 +531,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     rolePermissions?.[CUSTOMER_CLUB_PERMISSION_KEY]?.view !== false;
   const filesAccess = resolveFilesAccessPermissions(rolePermissions);
   const communicationsAccess = resolveCommunicationsPermissions(rolePermissions);
-  const canRunIntervalAutomation = Boolean(rolePermissionsReady
-    && currentUser?.id
-    && (
-      canViewModule('tasks')
-      || canViewModule('workflows')
-      || canViewModule('automation_execution_reports')
-    ));
   const {
     headerAnnouncements: userHeaderAnnouncements,
     popupAnnouncements: userPopupAnnouncements,
@@ -549,28 +539,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     surface: 'user_panel',
     path: `${location.pathname}${location.search || ''}`,
   });
-
-  const acquireIntervalRunnerLock = useCallback((ttlMs = 140000) => {
-    try {
-      const now = Date.now();
-      const owner = intervalRunnerOwnerRef.current;
-      const raw = localStorage.getItem(INTERVAL_RUNNER_LOCK_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      const lockedAt = Number(parsed?.lockedAt || 0);
-      const lockOwner = String(parsed?.owner || '').trim();
-      const lockExpired = !lockedAt || (now - lockedAt) > ttlMs;
-      if (!lockExpired && lockOwner && lockOwner !== owner) {
-        return false;
-      }
-      localStorage.setItem(
-        INTERVAL_RUNNER_LOCK_KEY,
-        JSON.stringify({ owner, lockedAt: now })
-      );
-      return true;
-    } catch {
-      return true;
-    }
-  }, []);
 
   useEffect(() => {
     const handleAvatarUpdated = (event: Event) => {
@@ -620,19 +588,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       void channel.unsubscribe();
     };
   }, [currentUser?.id, currentUserProfile?.id]);
-
-  const releaseIntervalRunnerLock = useCallback(() => {
-    try {
-      const owner = intervalRunnerOwnerRef.current;
-      const raw = localStorage.getItem(INTERVAL_RUNNER_LOCK_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      if (String(parsed?.owner || '').trim() === owner) {
-        localStorage.removeItem(INTERVAL_RUNNER_LOCK_KEY);
-      }
-    } catch {
-      // ignore localStorage errors
-    }
-  }, []);
 
   // Keep the sidebar open by default only on the dashboard. Avoid toggling it
   // between non-dashboard pages, which creates a distracting open/close flash.
@@ -917,53 +872,6 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     communicationsAccess.canUseWorkspace,
     rolePermissions,
   ]);
-
-  useEffect(() => {
-    if (!canRunIntervalAutomation) return;
-
-    let disposed = false;
-    const tick = async () => {
-      if (disposed) return;
-      if (document.visibilityState !== 'visible') return;
-      if (intervalRunnerBusyRef.current) return;
-      if (!acquireIntervalRunnerLock()) return;
-
-      intervalRunnerBusyRef.current = true;
-      try {
-        // Interval workflows run server-side via workflow-interval-runner Edge Function.
-        // Only process automations still run client-side here.
-        const { runProcessAutomationsIntervalTick } = await import('../utils/processAutomationRuntime');
-        await runProcessAutomationsIntervalTick();
-      } catch (error) {
-        console.warn('Interval automation tick failed', error);
-      } finally {
-        intervalRunnerBusyRef.current = false;
-        releaseIntervalRunnerLock();
-      }
-    };
-
-    const initialTimer = window.setTimeout(() => {
-      void tick();
-    }, 15000);
-    const timer = window.setInterval(() => {
-      void tick();
-    }, 600000); // fallback: server-side pg_cron handles primary triggering
-
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void tick();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      disposed = true;
-      window.clearTimeout(initialTimer);
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      releaseIntervalRunnerLock();
-    };
-  }, [acquireIntervalRunnerLock, canRunIntervalAutomation, releaseIntervalRunnerLock]);
 
   const menuItems = useMemo<MenuProps['items']>(() => {
     return mapSidebarMenuItems(visibleRawMenuItems);

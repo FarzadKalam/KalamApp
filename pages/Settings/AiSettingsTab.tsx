@@ -112,14 +112,14 @@ const AiSettingsTab: React.FC = () => {
       setOverview(data);
       setUsagePolicyDraft({
         default: normalizePolicyDraft(data?.usagePolicies?.default),
-        users: Object.fromEntries((data?.usagePolicies?.users || []).map((user: any) => [
-          String(user?.id || ''),
-          normalizePolicyDraft(user?.policy || data?.usagePolicies?.default),
-        ]).filter(([id]: [string]) => id)),
-        roles: Object.fromEntries((data?.usagePolicies?.roles || []).map((role: any) => [
-          String(role?.id || ''),
-          normalizePolicyDraft(role?.policy || data?.usagePolicies?.default),
-        ]).filter(([id]: [string]) => id)),
+        users: Object.fromEntries((data?.usagePolicies?.users || []).flatMap((user: any) => {
+          const id = String(user?.id || '');
+          return id && user?.policy ? [[id, normalizePolicyDraft(user.policy)]] : [];
+        })),
+        roles: Object.fromEntries((data?.usagePolicies?.roles || []).flatMap((role: any) => {
+          const id = String(role?.id || '');
+          return id && role?.policy ? [[id, normalizePolicyDraft(role.policy)]] : [];
+        })),
       });
       const selectedModels = data?.settings?.selected_models || {};
       form.setFieldsValue({

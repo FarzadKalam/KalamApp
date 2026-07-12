@@ -72,7 +72,6 @@ import {
   readStoredWorkflowViewMode,
   type WorkflowEditorViewMode,
 } from './workflows/flow/viewModePreference';
-import { runProcessAutomationsForTaskEvent } from '../utils/processAutomationRuntime';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
@@ -2555,14 +2554,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             task: insertedTask,
           });
         }
-        for (const insertedTask of insertedRows) {
-          await runProcessAutomationsForTaskEvent({
-            task: insertedTask,
-            event: 'create',
-            previousTask: null,
-            currentUser: null,
-          });
-        }
         const linkedProjectIds = Array.from(new Set(
           insertedRows
             .map((task: any) => String(task?.project_id || '').trim())
@@ -2673,12 +2664,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           await syncProcessRunStageFromTask({
             supabaseClient: supabase,
             task: data,
-          });
-          await runProcessAutomationsForTaskEvent({
-            task: data,
-            event: 'update',
-            previousTask,
-            currentUser: null,
           });
         }
         return data || null;

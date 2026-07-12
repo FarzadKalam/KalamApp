@@ -5144,7 +5144,7 @@ const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string,
     created_by: existing?.created_by || authContext.userId,
     updated_by: authContext.userId,
   }], 'org_id');
-  const incomingPolicies = incoming.usage_policies || incoming.usagePolicies || {};
+  const incomingPolicies = body?.usage_policies || body?.usagePolicies || incoming.usage_policies || incoming.usagePolicies || {};
   const policyRows: Record<string, any>[] = [];
   const pushPolicy = (subjectType: string, subjectId: any, policy: any) => {
     if (!policy || typeof policy !== 'object') return;
@@ -5177,9 +5177,7 @@ const handleSaveAiSettings = async (supabaseUrl: string, serviceRoleKey: string,
     pushPolicy('role', item?.subject_id || item?.subjectId || item?.role_id || item?.roleId, item);
   });
   if (policyRows.length > 0) {
-    await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_policies', policyRows, 'org_id,subject_type,subject_id').catch((error: any) => {
-      console.warn('AI usage policy save skipped', error);
-    });
+    await restUpsert(supabaseUrl, serviceRoleKey, 'org_ai_usage_policies', policyRows, 'org_id,subject_type,subject_id');
   }
   return json(200, { success: true, settings: rows[0] || existing });
 };

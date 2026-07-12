@@ -989,7 +989,7 @@ describe('runWorkflowsForEvent', () => {
     vi.clearAllMocks();
   });
 
-  it('hydrates the latest record snapshot before evaluating conditions', async () => {
+  it('does not execute workflow actions in the browser', async () => {
     const recordId = '88888888-8888-4888-8888-888888888888';
     const workflowLogs: any[] = [];
     const workflowRows = [
@@ -1056,14 +1056,7 @@ describe('runWorkflowsForEvent', () => {
       currentRecord: { id: recordId },
     });
 
-    expect(mocks.sendSmsViaGateway).toHaveBeenCalledTimes(1);
-    expect(workflowLogs).toEqual([
-      expect.objectContaining({
-        workflow_id: 'wf-1',
-        module_id: 'attendance_logs',
-        record_id: recordId,
-        status: 'success',
-      }),
-    ]);
+    expect(mocks.sendSmsViaGateway).not.toHaveBeenCalled();
+    expect(workflowLogs).toEqual([]);
   });
 });
