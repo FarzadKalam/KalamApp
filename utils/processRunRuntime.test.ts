@@ -61,6 +61,21 @@ describe('process run draft helpers', () => {
     expect(draft[1].default_assignee_role_id).toBeNull();
   });
 
+  it('scopes graph node and lane keys for every applied process group', () => {
+    const sourceStages = [
+      { id: 'stage-1', stage_name: 'بررسی', sort_order: 10, process_node_key: 'node_1', process_lane_key: 'lane_1' },
+      { id: 'stage-2', stage_name: 'تایید', sort_order: 20, process_node_key: 'node_2', process_lane_key: 'lane_1' },
+    ];
+    const first = mapProcessTemplateStagesToDraft('template-1', sourceStages, { groupId: 'group-a' });
+    const second = mapProcessTemplateStagesToDraft('template-1', sourceStages, { groupId: 'group-b' });
+
+    expect(first.map((stage) => stage.process_node_key)).toEqual(['group-a__node_1', 'group-a__node_2']);
+    expect(second.map((stage) => stage.process_node_key)).toEqual(['group-b__node_1', 'group-b__node_2']);
+    expect(first[0].process_lane_key).toBe('group-a__lane_1');
+    expect(second[0].process_lane_key).toBe('group-b__lane_1');
+    expect(new Set([...first, ...second].map((stage) => stage.process_node_key)).size).toBe(4);
+  });
+
   it('keeps field-based assignee references when applying template stages to a draft', () => {
     const draft = mapProcessTemplateStagesToDraft('template-1', [
       {

@@ -159,7 +159,55 @@ export const mapProcessTemplateStagesToDraft = (
     templateName: options.templateName,
   });
   const materialized = materializeLegacyProcessGraph(Array.isArray(stages) ? stages : []);
-  const sourceStages = attachProcessGraphToStages(materialized.stages, materialized.graph);
+  const scopeKey = groupId.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const laneKeyMap = new Map(
+    materialized.graph.lanes.map((lane) => [lane.key, `${scopeKey}__${lane.key}`] as const)
+  );
+  const triggerKeyMap = new Map(
+    materialized.graph.triggers.map((trigger) => [trigger.key, `${scopeKey}__${trigger.key}`] as const)
+  );
+  const nodeKeyMap = new Map(
+    materialized.stages.map((stage, index) => {
+      const sourceNodeKey = getProcessStageNodeKey(stage, index);
+      return [sourceNodeKey, `${scopeKey}__${sourceNodeKey}`] as const;
+    })
+  );
+  const scopedGraph = {
+    ...materialized.graph,
+    lanes: materialized.graph.lanes.map((lane) => ({
+      ...lane,
+      key: laneKeyMap.get(lane.key) || `${scopeKey}__${lane.key}`,
+      parentTriggerKey: lane.parentTriggerKey
+        ? (triggerKeyMap.get(lane.parentTriggerKey) || null)
+        : null,
+    })),
+    triggers: materialized.graph.triggers.map((trigger) => ({
+      ...trigger,
+      key: triggerKeyMap.get(trigger.key) || `${scopeKey}__${trigger.key}`,
+      sourceNodeKey: trigger.sourceNodeKey
+        ? (nodeKeyMap.get(trigger.sourceNodeKey) || null)
+        : null,
+      targetLaneKeys: trigger.targetLaneKeys.map((laneKey) => laneKeyMap.get(laneKey) || `${scopeKey}__${laneKey}`),
+    })),
+  };
+  const scopedStages = materialized.stages.map((stage, index) => {
+    const metadata = stage?.metadata && typeof stage.metadata === 'object' ? stage.metadata : {};
+    const sourceNodeKey = getProcessStageNodeKey(stage, index);
+    const sourceLaneKey = getProcessStageLaneKey(stage);
+    const processNodeKey = nodeKeyMap.get(sourceNodeKey) || `${scopeKey}__${sourceNodeKey}`;
+    const processLaneKey = laneKeyMap.get(sourceLaneKey) || `${scopeKey}__${sourceLaneKey}`;
+    return {
+      ...stage,
+      [PROCESS_NODE_KEY]: processNodeKey,
+      [PROCESS_LANE_KEY]: processLaneKey,
+      metadata: {
+        ...metadata,
+        [PROCESS_NODE_KEY]: processNodeKey,
+        [PROCESS_LANE_KEY]: processLaneKey,
+      },
+    };
+  });
+  const sourceStages = attachProcessGraphToStages(scopedStages, scopedGraph);
   let cursor = Number(options.startSortOrder || 0);
   const sortStep = Math.max(1, Number(options.sortStep || 10));
 
@@ -203,7 +251,7 @@ export const mapProcessTemplateStagesToDraft = (
         : {},
       [PROCESS_NODE_KEY]: processNodeKey,
       [PROCESS_LANE_KEY]: processLaneKey,
-      [PROCESS_GRAPH_METADATA_KEY]: materialized.graph,
+      [PROCESS_GRAPH_METADATA_KEY]: scopedGraph,
       metadata: {
         ...metadata,
         start_duration_value: Number(stage?.start_duration_value ?? metadata?.start_duration_value ?? metadata?.duration_start_value ?? 0),
@@ -213,7 +261,7 @@ export const mapProcessTemplateStagesToDraft = (
         default_assignee_field: assignee.defaultAssigneeField,
         [PROCESS_NODE_KEY]: processNodeKey,
         [PROCESS_LANE_KEY]: processLaneKey,
-        [PROCESS_GRAPH_METADATA_KEY]: materialized.graph,
+        [PROCESS_GRAPH_METADATA_KEY]: scopedGraph,
       },
     };
     cursor += sortStep;

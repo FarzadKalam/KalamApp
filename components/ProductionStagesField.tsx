@@ -158,6 +158,7 @@ import { canUseRecordLockPermission, fetchCurrentUserRoleContext, resolveFilesAc
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
 import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
 import { assignProcessTemplateModuleAliases, resolveProcessTemplateTokenValue } from '../utils/processTemplateContext';
+import { resolveProcessAssigneeReference } from '../utils/processAssigneeReference';
 import {
   createProcessGroupId,
   ensureProcessRunForDraftStageGroup,
@@ -6305,11 +6306,21 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           })();
         }
       } catch (error: any) {
+        draftLocalRef.current = previousStages;
+        setDraftLocal(previousStages);
         message.error(toFaErrorMessage(error, 'ذخیره مرحله‌های فرآیند ناموفق بود.'));
         throw error;
       }
     }
-    if (onDraftStagesChange) await onDraftStagesChange(persistedStages);
+    if (onDraftStagesChange) {
+      try {
+        await onDraftStagesChange(persistedStages);
+      } catch (error) {
+        draftLocalRef.current = previousStages;
+        setDraftLocal(previousStages);
+        throw error;
+      }
+    }
     if (moduleId === 'production_boms' && recordId) {
       await supabase.from('production_boms').update({ production_stages_draft: persistedStages }).eq('id', recordId);
     }
@@ -6683,30 +6694,44 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       )}`;
       const nextGroupName = String(selectedTemplate?.label || fallbackGroupName).trim() || fallbackGroupName;
       const currentLinkedRecords = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
+      const maxExistingSortOrder = [...existing, ...(Array.isArray(tasks) ? tasks : [])]
+        .reduce((maxValue: number, stage: any) => {
+          const sortOrder = Number(stage?.sort_order || 0);
+          return Number.isFinite(sortOrder) && sortOrder > maxValue ? sortOrder : maxValue;
+        }, 0);
 
+      const assigneeContext = await buildTaskTemplateContextRecord({
+        processLinkMap: currentLinkedRecords,
+      }).catch(() => ({}));
       const appendedStages = mapProcessTemplateStagesToDraft(appendProcessTemplateId, incomingStages, {
         groupId: nextGroupId,
         groupName: nextGroupName,
         templateName: selectedTemplate?.label || null,
         targetModuleIds: appendProcessTargetModuleIds,
         processLinkMap: currentLinkedRecords,
-        startSortOrder: 10,
-      }).map((stage: any) => ({
-        ...stage,
-        automation_rules: normalizeProcessAutomationRules(stage?.automation_rules),
-        process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
-        process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
-        duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
-        duration_from: String(stage?.duration_from || 'project_start'),
-      }));
+        startSortOrder: maxExistingSortOrder > 0 ? maxExistingSortOrder + 10 : 10,
+      }).map((stage: any) => {
+        const assigneeReference = stage?.default_assignee_field || stage?.metadata?.default_assignee_field;
+        const resolvedAssignee = assigneeReference
+          ? parseAssigneeValue(resolveProcessAssigneeReference(assigneeReference, assigneeContext), null)
+          : { assigneeType: null, assigneeId: null };
+        return {
+          ...stage,
+          default_assignee_id: resolvedAssignee.assigneeType === 'user'
+            ? resolvedAssignee.assigneeId
+            : stage?.default_assignee_id,
+          default_assignee_role_id: resolvedAssignee.assigneeType === 'role'
+            ? resolvedAssignee.assigneeId
+            : stage?.default_assignee_role_id,
+          automation_rules: normalizeProcessAutomationRules(stage?.automation_rules),
+          process_task_custom_fields: normalizeProcessTaskCustomFields(stage?.[PROCESS_TASK_CUSTOM_FIELDS_KEY]),
+          process_task_status_options: normalizeProcessTaskStatusOptions(stage?.[PROCESS_TASK_STATUS_OPTIONS_KEY]),
+          duration_unit: String(stage?.duration_unit || 'day') === 'hour' ? 'hour' : 'day',
+          duration_from: String(stage?.duration_from || 'project_start'),
+        };
+      });
 
-      const existingSortShift = Math.max(20, (appendedStages.length + 1) * 10);
-      const shiftedExisting = existing.map((stage: any, index: number) => ({
-        ...stage,
-        sort_order: Number(stage?.sort_order || ((index + 1) * 10)) + existingSortShift,
-      }));
-
-      const nextStages = [...appendedStages, ...shiftedExisting].sort(
+      const nextStages = [...existing, ...appendedStages].sort(
         (a: any, b: any) => Number(a?.sort_order || 0) - Number(b?.sort_order || 0)
       );
       await saveDraftStages(nextStages);
@@ -6723,10 +6748,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     appendProcessLinkedRecords,
     appendProcessTargetModuleIds,
     appendProcessTemplateId,
+    buildTaskTemplateContextRecord,
     buildProcessGroupId,
     draftLocal,
     processTemplateOptions,
     saveDraftStages,
+    tasks,
   ]);
 
   const handleSaveProcessLinksToGroup = useCallback(async () => {
@@ -7076,7 +7103,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const stageName = String(stage?.name || stage?.title || `مرحله ${index + 1}`).trim();
         const normalized = normalizeStageName(stageName);
         const stageMeta = getStageProcessGroupMeta(stage);
-        const assignee = parseStageAssignee(stage);
+        const configuredAssignee = parseStageAssignee(stage);
         const recurrenceBase = stage?.recurrence_info && typeof stage.recurrence_info === 'object'
           ? stage.recurrence_info
           : {};
@@ -7112,6 +7139,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           previousTask: previousResolvedTask,
           relatedRecordCache: templateRecordCache,
         });
+        const assigneeReference = stage?.default_assignee_field || stage?.metadata?.default_assignee_field;
+        const referencedAssignee = assigneeReference
+          ? parseAssigneeValue(resolveProcessAssigneeReference(assigneeReference, templateContext), null)
+          : { assigneeType: null, assigneeId: null };
+        const assignee = configuredAssignee.assigneeId ? configuredAssignee : referencedAssignee;
         const resolvedStageName = String(
           renderTemplateValueFromRecord(stageName, templateContext, FieldType.TEXT) ?? stageName
         ).trim() || stageName;
