@@ -25,12 +25,15 @@ export const formatPersianPrice = (num: any, withComma = true): string => {
     input
       .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
       .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
-  const normalized = toEnglishDigits(String(num)).replace(/,/g, '').trim();
+  const normalized = toEnglishDigits(String(num))
+    .replace(/[٬,]/g, '')
+    .replace(/٫/g, '.')
+    .trim();
   const number = Number(normalized);
   if (!Number.isFinite(number)) return toPersianNumber(String(num));
   const rounded = Math.round(number);
   const str = withComma ? rounded.toLocaleString('en-US', { maximumFractionDigits: 0 }) : String(rounded);
-  return toPersianNumber(str);
+  return toPersianNumber(str).replace(/,/g, '٬');
 };
 
 // --- توابع تاریخ و زمان ---

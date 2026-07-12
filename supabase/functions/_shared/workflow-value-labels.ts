@@ -32,9 +32,11 @@ export const parseWorkflowIdentityReference = (
   };
 };
 
-export const formatWorkflowNumericValue = (fieldKey: unknown, value: unknown): string | null => {
+export const formatWorkflowNumericValue = (fieldKey: unknown, value: unknown, forcePrice = false): string | null => {
   const normalizedFieldKey = normalizeText(fieldKey).toLowerCase();
-  if (!/(^|_)(price|amount|cost|total|balance|wage|salary|fee|credit|debit|payment)(_|$)/.test(normalizedFieldKey)) {
+  const monetaryTokens = new Set(['price', 'amount', 'cost', 'total', 'balance', 'wage', 'salary', 'fee', 'credit', 'debit', 'payment']);
+  const fieldTokens = normalizedFieldKey.split(/[^a-z0-9]+/).filter(Boolean);
+  if (!forcePrice && !fieldTokens.some((token) => monetaryTokens.has(token))) {
     return null;
   }
   const normalizedValue = normalizeText(value)
@@ -44,6 +46,16 @@ export const formatWorkflowNumericValue = (fieldKey: unknown, value: unknown): s
   if (!/^-?\d+(?:\.\d+)?$/.test(normalizedValue)) return null;
   const numericValue = Number(normalizedValue);
   return Number.isFinite(numericValue)
-    ? numericValue.toLocaleString('fa-IR', { maximumFractionDigits: 6 })
+    ? Math.round(numericValue).toLocaleString('fa-IR', { maximumFractionDigits: 0 })
     : null;
+};
+
+export const resolveWorkflowCurrencyLabel = (code: unknown, label: unknown): string => {
+  const explicitLabel = normalizeText(label);
+  if (explicitLabel) return explicitLabel;
+  const normalizedCode = normalizeText(code).toUpperCase();
+  if (normalizedCode === 'IRR') return 'ریال';
+  if (normalizedCode === 'USD') return 'دلار';
+  if (normalizedCode === 'EUR') return 'یورو';
+  return 'تومان';
 };

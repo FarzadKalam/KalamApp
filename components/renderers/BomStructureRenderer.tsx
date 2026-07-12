@@ -86,7 +86,7 @@ const BomStructureRenderer: React.FC<BomStructureRendererProps> = ({
             </div>
             <div className="flex flex-col items-end">
                 <div className="text-3xl font-black font-mono tracking-tight text-white drop-shadow-md">
-                    {calculateGrandTotal().toLocaleString()} <span className="text-sm font-sans font-normal opacity-70">{currencyLabel}</span>
+                    {Math.round(calculateGrandTotal()).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} <span className="text-sm font-sans font-normal opacity-70">{currencyLabel}</span>
                 </div>
             </div>
         </div>

@@ -103,7 +103,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
   const issueDateWords = jalaliDateToPersianWords(issueDateRaw);
 
   const amount = normalizeAmount(source.amount);
-  const amountNumeric = amount === null ? '-' : toPersianNumber(amount.toLocaleString('en-US'));
+  const amountNumeric = amount === null ? '-' : toPersianNumber(Math.round(amount).toLocaleString('en-US', { maximumFractionDigits: 0 }));
   const amountInWords = amount === null ? '-' : amountToPersianRialWords(amount);
 
   const serialNoRaw = getRawText(source.serial_no);

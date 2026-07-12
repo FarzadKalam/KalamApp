@@ -70,7 +70,7 @@ const DEFAULT_CAPABILITY_OPTIONS = [
 ];
 
 const formatIrt = (value: unknown) =>
-  `${Number(value || 0).toLocaleString('fa-IR')} تومان`;
+  `${Math.round(Number(value || 0)).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} تومان`;
 
 const formatUsd = (value: unknown) =>
   `$${Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 6 })}`;
@@ -411,16 +411,16 @@ const SaasAdminAiSettings: React.FC = () => {
     { title: 'قابلیت', dataIndex: 'capability' },
     { title: 'مدل', dataIndex: 'model', render: (v: string) => <Text className="font-mono text-xs">{v}</Text> },
     { title: 'وضعیت', dataIndex: 'status', render: (v: string) => <Tag>{v}</Tag> },
-    { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_amount_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
-    { title: 'هزینه خام (تومان)', dataIndex: 'raw_cost_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
+    { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_amount_irt', render: (v: number) => formatIrt(v) },
+    { title: 'هزینه خام (تومان)', dataIndex: 'raw_cost_irt', render: (v: number) => formatIrt(v) },
   ];
 
   const orgColumns = [
     { title: 'سازمان', dataIndex: 'org_name', render: (v: string) => <span className="text-xs font-semibold">{v || 'سازمان بدون نام'}</span> },
     { title: 'اعتبار باقی‌مانده', dataIndex: 'wallet_remaining_irt', render: (v: number) => formatIrt(v) },
     { title: 'تعداد درخواست', dataIndex: 'requests' },
-    { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
-    { title: 'هزینه خام (تومان)', dataIndex: 'raw_irt', render: (v: number) => Number(v || 0).toLocaleString('fa-IR') },
+    { title: 'هزینه مشتری (تومان)', dataIndex: 'billed_irt', render: (v: number) => formatIrt(v) },
+    { title: 'هزینه خام (تومان)', dataIndex: 'raw_irt', render: (v: number) => formatIrt(v) },
     { title: 'آخرین هدیه', dataIndex: 'last_gift_irt', render: (v: number) => v ? formatIrt(v) : '-' },
     { title: 'مدل‌های استفاده‌شده', dataIndex: 'models', render: (v: string[]) => <Space wrap size={2}>{(v || []).slice(0, 4).map((m) => <Tag key={m} className="text-[10px] m-0">{m}</Tag>)}</Space> },
     {

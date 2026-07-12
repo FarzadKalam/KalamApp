@@ -83,7 +83,7 @@ const toJalaliDateTime = (value: string | null | undefined): string => {
 
 const formatPrice = (value: number | null | undefined, currencyLabel = 'ریال') => {
   if (value == null || isNaN(Number(value))) return '—';
-  return `${Number(value).toLocaleString('fa-IR')} ${currencyLabel}`;
+  return `${Math.round(Number(value)).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} ${currencyLabel}`;
 };
 
 const formatNumber = (value: number | null | undefined) => {

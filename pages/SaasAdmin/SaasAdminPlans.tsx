@@ -200,7 +200,7 @@ const arrayToFeatures = (ids: string[]): Record<string, any> =>
   Object.fromEntries(ids.map((id) => [id, true]));
 
 const formatPrice = (n: number) =>
-  n ? n.toLocaleString('fa-IR') : '—';
+  n ? Math.round(n).toLocaleString('fa-IR', { maximumFractionDigits: 0 }) : '—';
 
 const SaasAdminPlans: React.FC = () => {
   const { message: messageApi, modal } = App.useApp();

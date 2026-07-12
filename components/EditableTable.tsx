@@ -5080,8 +5080,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
       ), 0);
       return (
         <div className="mt-4 rounded-xl border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-700 dark:text-gray-100 bg-gray-50 dark:bg-[#171717] flex flex-wrap gap-4">
-          <span>جمع مبلغ: <span className="persian-number font-semibold">{toPersianNumber(totalAmount.toLocaleString('en-US'))}</span></span>
-          <span>جمع نهایی وضعیت انجام‌شده: <span className="persian-number font-semibold">{toPersianNumber(totalReceived.toLocaleString('en-US'))}</span></span>
+          <span>جمع مبلغ: <span className="persian-number font-semibold">{formatPersianPrice(totalAmount)}</span></span>
+          <span>جمع نهایی وضعیت انجام‌شده: <span className="persian-number font-semibold">{formatPersianPrice(totalReceived)}</span></span>
         </div>
       );
     }
@@ -5383,7 +5383,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
                 cells.push(
                   <Table.Summary.Cell index={cellIndex} key={`total_${index}`}>
                     <Text className="persian-number !text-[rgb(var(--brand-600-rgb))] dark:!text-leather-300">
-                      {toPersianNumber(total.toLocaleString('en-US'))}
+                      {formatPersianPrice(total)}
                       {isPriceTotal ? <span className="ms-1 text-[10px] opacity-80">{currencyLabel}</span> : null}
                     </Text>
                   </Table.Summary.Cell>
@@ -5435,12 +5435,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
                           <span className="persian-number text-gray-700 dark:text-gray-200">
                             {currentInvoiceGlobalDiscountType === 'percent'
                               ? `${toPersianNumber(currentInvoiceGlobalDiscountValue)}٪`
-                              : `${toPersianNumber(currentInvoiceGlobalDiscountValue.toLocaleString('en-US'))} ${currencyLabel}`
+                              : `${formatPersianPrice(currentInvoiceGlobalDiscountValue)} ${currencyLabel}`
                             }
                           </span>
                         )}
                         <span className="persian-number text-red-600 dark:text-red-300 text-xs md:text-sm">
-                          ({toPersianNumber(pageGlobalDiscountAmount.toLocaleString('en-US'))} {currencyLabel} -)
+                          ({formatPersianPrice(pageGlobalDiscountAmount)} {currencyLabel} -)
                         </span>
                       </div>
                     </Table.Summary.Cell>

@@ -15,7 +15,7 @@ import {
   taskRecipientToken as taskRecipientTokenCore,
   type ProcessAutomationEvent,
 } from '../_shared/process-automation-core.ts';
-import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference } from '../_shared/workflow-value-labels.ts';
+import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-12-persian-formatters';
 const MAX_WORKFLOWS = 30;
@@ -452,6 +452,52 @@ async function resolveWorkflowFieldValue(
 }
 
 const orgPublicBaseUrlCache = new Map<string, Promise<string>>();
+const orgCurrencyLabelCache = new Map<string, Promise<string>>();
+const orgModulePriceFieldCache = new Map<string, Promise<Set<string>>>();
+
+function getOrgCurrencyLabel(url: string, key: string, orgId: string): Promise<string> {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return Promise.resolve(resolveWorkflowCurrencyLabel('', ''));
+  if (!orgCurrencyLabelCache.has(normalizedOrgId)) {
+    orgCurrencyLabelCache.set(normalizedOrgId, (async () => {
+      const rows = await dbGet(url, key,
+        `company_settings?org_id=eq.${encodeURIComponent(normalizedOrgId)}&select=currency_code,currency_label&limit=1`
+      ).catch(() => []);
+      return resolveWorkflowCurrencyLabel(rows?.[0]?.currency_code, rows?.[0]?.currency_label);
+    })());
+  }
+  return orgCurrencyLabelCache.get(normalizedOrgId)!;
+}
+
+function getOrgModulePriceFields(url: string, key: string, orgId: string, moduleId: string): Promise<Set<string>> {
+  const normalizedOrgId = String(orgId || '').trim();
+  const normalizedModuleId = String(moduleId || '').trim();
+  const cacheKey = `${normalizedOrgId}:${normalizedModuleId}`;
+  if (!normalizedOrgId || !normalizedModuleId) return Promise.resolve(new Set());
+  if (!orgModulePriceFieldCache.has(cacheKey)) {
+    orgModulePriceFieldCache.set(cacheKey, (async () => {
+      const rows = await dbGet(url, key,
+        `integration_settings?org_id=eq.${encodeURIComponent(normalizedOrgId)}&connection_type=eq.module_settings&is_active=eq.true&select=settings&order=updated_at.desc&limit=1`
+      ).catch(() => []);
+      const fields = rows?.[0]?.settings?.modules?.[normalizedModuleId]?.schema?.fields;
+      return new Set(
+        (Array.isArray(fields) ? fields : [])
+          .filter((field: any) => String(field?.type || '').trim().toLowerCase() === 'price')
+          .map((field: any) => String(field?.key || '').trim())
+          .filter(Boolean)
+      );
+    })());
+  }
+  return orgModulePriceFieldCache.get(cacheKey)!;
+}
+
+function resolveTemplateFieldModule(moduleId: string, fieldKey: string): { moduleId: string; fieldKey: string } {
+  const related = parseWorkflowRelatedFieldKey(fieldKey);
+  if (related) return { moduleId: related.targetModuleId, fieldKey: related.targetFieldKey };
+  const multiRelated = parseWorkflowMultiRelationFieldKey(fieldKey);
+  if (multiRelated) return { moduleId: multiRelated.targetModuleId, fieldKey: multiRelated.targetFieldKey };
+  return { moduleId, fieldKey };
+}
 
 // Resolves the tenant's public base URL (e.g. https://kalam.tazesystem.ir) from saas_org_settings
 // so relative links like /i/{code} or /d/{code} can be expanded to absolute URLs in templates.
@@ -468,7 +514,7 @@ function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<s
   return orgPublicBaseUrlCache.get(normalizedOrgId)!;
 }
 
-async function formatFieldValue(value: any, fieldKey: string, url: string, key: string, orgId: string): Promise<string> {
+async function formatFieldValue(value: any, fieldKey: string, url: string, key: string, orgId: string, moduleId = ''): Promise<string> {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
   const str = String(value);
@@ -493,17 +539,26 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
   if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(str.trim())) {
     return toPersianDigits(str.trim());
   }
+  const fieldContext = resolveTemplateFieldModule(moduleId, fieldKey);
+  const configuredPriceFields = await getOrgModulePriceFields(url, key, orgId, fieldContext.moduleId);
+  const formattedNumericValue = formatWorkflowNumericValue(
+    fieldContext.fieldKey,
+    value,
+    configuredPriceFields.has(fieldContext.fieldKey),
+  );
+  if (formattedNumericValue) {
+    const currencyLabel = await getOrgCurrencyLabel(url, key, orgId);
+    return `${formattedNumericValue} ${currencyLabel}`;
+  }
   if (typeof value === 'number') {
     return value.toLocaleString('fa-IR', { maximumFractionDigits: 6 });
   }
   if (Array.isArray(value)) {
-    const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId)));
+    const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId, moduleId)));
     return rendered.filter(Boolean).join('، ');
   }
   const staticLabel = getWorkflowStaticValueLabel(fieldKey, value);
   if (staticLabel) return staticLabel;
-  const formattedNumericValue = formatWorkflowNumericValue(fieldKey, value);
-  if (formattedNumericValue) return formattedNumericValue;
   if (UUID_LIKE_REGEX.test(str)) {
     const normalizedField = String(fieldKey || '').toLowerCase();
     const candidates = normalizedField.includes('role')
@@ -536,6 +591,7 @@ async function renderTemplateAsync(
   key: string,
   bold = false,
   orgId = '',
+  moduleId = '',
 ): Promise<string> {
   const raw = String(template || '');
   const matches = Array.from(raw.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
@@ -547,7 +603,7 @@ async function renderTemplateAsync(
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) continue;
     const value = await resolveWorkflowFieldValue(url, key, fieldKey, record);
-    const text = await formatFieldValue(value, fieldKey, url, key, orgId);
+    const text = await formatFieldValue(value, fieldKey, url, key, orgId, moduleId);
     rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
   }
   return rendered;
@@ -2558,7 +2614,7 @@ async function executeAction(
 
   // ── run_ai_prompt ─────────────────────────────────────────────────────
   if (action.type === 'run_ai_prompt') {
-    const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key, false, orgId)).trim();
+    const prompt = (await renderTemplateAsync(String(config.prompt_template || config.prompt || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!prompt) return actionResult(action, 'skipped', 'پرامپت هوش مصنوعی خالی است.');
     if (!recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای پیشنهاد AI مشخص نیست.');
     const outputMode = String(config.output_mode || 'text').trim();
@@ -2768,7 +2824,7 @@ async function executeAction(
 
   // ── send_sms ──────────────────────────────────────────────────────────
   if (action.type === 'send_sms') {
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیامک خالی است.');
     const recipients = await resolveAssigneesToSmsRecipients(
       url, key, orgId,
@@ -2794,7 +2850,7 @@ async function executeAction(
 
   // ── send_note / send_note_sms ─────────────────────────────────────────
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
-    const noteText = (await renderTemplateAsync(String(config.note_text || ''), record, url, key, true, orgId)).trim();
+    const noteText = (await renderTemplateAsync(String(config.note_text || ''), record, url, key, true, orgId, moduleId)).trim();
     const attachments = await resolveServerNoteAttachments(url, key, config.attachment_fields || [], record);
     if (!noteText && attachments.length === 0) return actionResult(action, 'skipped', 'متن و پیوست یادداشت خالی است.');
     if (!moduleId || !recordId) return actionResult(action, 'skipped', 'رکورد مقصد برای یادداشت مشخص نیست.');
@@ -2857,7 +2913,7 @@ async function executeAction(
         ? configuredChannel
         : '';
     const directChannel = (explicitChannel || 'bale') as 'bale' | 'telegram' | 'rubika';
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیام بات خالی است.');
     const [directChatIds, counterpartyTargets] = await Promise.all([
       resolveAssigneesToBotChatIds(
@@ -2902,7 +2958,7 @@ async function executeAction(
 
   // ── send_rubika_bot ───────────────────────────────────────────────────
   if (action.type === 'send_rubika_bot') {
-    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId)).trim();
+    const text = (await renderTemplateAsync(String(config.message || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!text) return actionResult(action, 'skipped', 'متن پیام روبیکا خالی است.');
     const botSettings = await getOrgBotSettings(url, key, orgId, 'rubika');
     if (!botSettings) return actionResult(action, 'skipped', 'تنظیمات روبیکا فعال نیست.');
@@ -3132,7 +3188,7 @@ async function executeAction(
 
   // ── publish_story ─────────────────────────────────────────────────────
   if (action.type === 'publish_story') {
-    const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key, false, orgId)).trim();
+    const content = (await renderTemplateAsync(String(config.content || config.text_template || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!content) return actionResult(action, 'skipped', 'متن استوری خالی است.');
     const publisher = await resolveStoryPublisher(
       url,
@@ -3219,8 +3275,8 @@ async function executeAction(
 
   // ── send_email ────────────────────────────────────────────────────────
   if (action.type === 'send_email') {
-    const subject = (await renderTemplateAsync(String(config.subject || ''), record, url, key, false, orgId)).trim();
-    const body = (await renderTemplateAsync(String(config.body || ''), record, url, key, false, orgId)).trim();
+    const subject = (await renderTemplateAsync(String(config.subject || ''), record, url, key, false, orgId, moduleId)).trim();
+    const body = (await renderTemplateAsync(String(config.body || ''), record, url, key, false, orgId, moduleId)).trim();
     if (!subject && !body) return actionResult(action, 'skipped', 'موضوع و متن ایمیل خالی است.');
     const manuals: string[] = (Array.isArray(config.manual_emails) ? config.manual_emails : [])
       .map((v: any) => String(v || '').trim()).filter(Boolean);

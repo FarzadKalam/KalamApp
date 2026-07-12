@@ -3999,7 +3999,7 @@ const HRPage: React.FC = () => {
         line_type: 'earning' as const,
         title: payrollWizardBaseCompensation.displayTitle,
         amount: effectiveBaseSalary,
-        description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت`,
+        description: `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت`,
       }] : []),
       ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{
         line_type: 'earning' as const,
@@ -5721,7 +5721,7 @@ const HRPage: React.FC = () => {
         ? 0
         : (totalEarnings * toNumber(row.profile?.employer_insurance_rate)) / 100;
       const previewLines = [
-        ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${payrollWizardHourlyRate.toLocaleString()} ${currencyLabel}/ساعت` }] : []),
+        ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت` }] : []),
         ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
         ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'حقوق عملکردی فعالیت‌ها', amount: row.taskWageTotal, description: `${row.payrollDetailRows.length} فعالیت` }] : []),
         ...ledgerLines,

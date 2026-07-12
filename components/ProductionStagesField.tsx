@@ -15,7 +15,7 @@ import {
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { supabase } from '../supabaseClient';
-import { safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
+import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
 import AdaptiveSelectField from './AdaptiveSelectField';
 import DynamicSelectField from './DynamicSelectField';
@@ -6112,7 +6112,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             {hasWage && (
               <div className="flex items-center gap-2">
                 <span className="text-[rgba(var(--brand-700-rgb),1)]">💰</span>
-                <span>دستمزد: {toPersianNumber(Number(task.wage || 0).toLocaleString('en-US'))} تومان</span>
+                <span>دستمزد: {formatPersianPrice(task.wage || 0)} تومان</span>
               </div>
             )}
             {hasWeight && (
@@ -9714,7 +9714,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                     <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
                       <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{stage.label}</div>
                       <div>ترتیب: {toPersianNumber(stage.sort_order || '-')}</div>
-                      <div>دستمزد: {toPersianNumber(Number(stage.wage || 0).toLocaleString('en-US'))} تومان</div>
+                      <div>دستمزد: {formatPersianPrice(stage.wage || 0)} تومان</div>
                       <div>وزن: {toPersianNumber(stage.weight || 0)}</div>
                       <div>مسئول: {getDraftAssigneeLabel(stage)}</div>
                       {String(stage?.task_type || '').trim() && <div>نوع فعالیت: {stage.task_type}</div>}
@@ -9972,7 +9972,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 <div className="max-w-[min(92vw,22rem)] space-y-2 break-words p-1 text-xs">
                   <div className="font-bold text-[rgba(var(--brand-800-rgb),1)] dark:text-gray-100">{segment.label}</div>
                   <div>ترتیب: {toPersianNumber(segment.sort_order || '-')}</div>
-                  <div>دستمزد: {toPersianNumber(Number(segment.wage || 0).toLocaleString('en-US'))} تومان</div>
+                  <div>دستمزد: {formatPersianPrice(segment.wage || 0)} تومان</div>
                   <div>وزن: {toPersianNumber(segment.weight || 0)}</div>
                   <div>مسئول: {getDraftAssigneeLabel(segment)}</div>
                   {String(segment?.task_type || '').trim() && <div>نوع فعالیت: {segment.task_type}</div>}
@@ -10590,7 +10590,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             {showWageSummary && (
               <div className="text-xs text-gray-500">
-                دستمزد این خط: {toPersianNumber(((lineTasks.reduce((acc, t) => acc + (parseFloat(t.wage) || 0), 0)) * (parseFloat(line.quantity) || 0)).toLocaleString('en-US'))} تومان
+                دستمزد این خط: {formatPersianPrice((lineTasks.reduce((acc, t) => acc + (parseFloat(t.wage) || 0), 0)) * (parseFloat(line.quantity) || 0))} تومان
               </div>
             )}
           </div>
@@ -10621,7 +10621,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
       {showWageSummary && (
         <div className="text-sm font-bold text-gray-700">
-          جمع دستمزد تولید: {toPersianNumber(totalWage.toLocaleString('en-US'))} تومان
+          جمع دستمزد تولید: {formatPersianPrice(totalWage)} تومان
         </div>
       )}
 

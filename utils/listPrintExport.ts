@@ -56,7 +56,7 @@ const formatEnglishPrice = (value: any): string => {
   const normalized = toEnglishDigits(value).replace(/,/g, '').trim();
   const number = Number(normalized);
   if (!Number.isFinite(number)) return toEnglishDigits(String(value ?? ''));
-  return number.toLocaleString('en-US');
+  return Math.round(number).toLocaleString('en-US', { maximumFractionDigits: 0 });
 };
 
 const parseArrayLikeValue = (value: any): any[] | null => {

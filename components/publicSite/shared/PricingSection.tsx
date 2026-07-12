@@ -52,7 +52,7 @@ const usePricingPlans = () => {
   return { plans, loaded };
 };
 
-const formatPriceFA = (n: number) => n.toLocaleString('fa-IR');
+const formatPriceFA = (n: number) => Math.round(n).toLocaleString('fa-IR', { maximumFractionDigits: 0 });
 
 export const PricingSection: React.FC<{
   detailed?: boolean;

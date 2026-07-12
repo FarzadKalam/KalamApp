@@ -215,7 +215,7 @@ const AiSettingsTab: React.FC = () => {
   const currencyLabel = String(overview?.company?.currency_label || 'تومان');
   const currencyMultiplier = currencyCode === 'IRR' ? 10 : 1;
   const formatCurrency = (value: unknown) =>
-    `${(Number(value || 0) * currencyMultiplier).toLocaleString('fa-IR')} ${currencyLabel}`;
+    `${Math.round(Number(value || 0) * currencyMultiplier).toLocaleString('fa-IR', { maximumFractionDigits: 0 })} ${currencyLabel}`;
 
   const updateDefaultPolicy = (patch: Record<string, any>) => {
     setUsagePolicyDraft((current) => ({
