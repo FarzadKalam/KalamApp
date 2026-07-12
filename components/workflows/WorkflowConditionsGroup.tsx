@@ -18,6 +18,7 @@ import {
   workflowOperatorNeedsValue,
 } from '../../utils/filterUtils';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition, createWorkflowId } from '../../utils/workflowTypes';
+import { getFieldLabelFa } from '../../utils/fieldLabel';
 
 interface WorkflowConditionsGroupProps {
   value: WorkflowCondition[];
@@ -140,7 +141,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       fields
         .filter((f) => !!f?.key)
         .map((field) => ({
-          label: field?.labels?.fa || field.key,
+          label: getFieldLabelFa(field),
           value: field.key,
         })),
     [fields]
@@ -324,7 +325,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           protectedValues={dynamicFieldProps[field.dynamicOptionsCategory]?.protectedValues}
           overlayZIndexBase={overlayZIndexBase}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabelFa(field)}
         />
       );
     }
@@ -417,7 +418,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           overlayZIndexBase={overlayZIndexBase}
           modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabelFa(field)}
         />
       );
     }
@@ -433,7 +434,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           overlayZIndexBase={overlayZIndexBase}
           modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabelFa(field)}
         />
       );
     }
@@ -449,7 +450,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
           overlayZIndexBase={overlayZIndexBase}
           modalContainer={resolvedPopupContainer}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabelFa(field)}
         />
       );
     }

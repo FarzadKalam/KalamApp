@@ -148,18 +148,6 @@ export const tasksModule: ModuleDefinition = {
       isTableColumn: true,
     },
 
-    {
-      key: '__task_source_record_legacy_hidden__',
-      labels: { fa: 'رکورد مرتبط', en: 'Related Record' },
-      type: FieldType.RELATION,
-      location: FieldLocation.BLOCK,
-      blockId: 'general',
-      order: 1.9,
-      relationConfig: { targetModule: '', dependsOn: 'related_to_module' },
-      nature: FieldNature.SYSTEM,
-      hideInCreateForm: true,
-    },
-
     { key: 'related_product', labels: { fa: 'محصول مرتبط', en: 'Related Product' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 2, relationConfig: { targetModule: 'products', targetField: 'name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'products' } } },
     { key: 'related_customer', labels: { fa: 'مشتری مرتبط', en: 'Related Customer' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 3, relationConfig: { targetModule: 'customers', targetField: 'full_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'customers' } } },
     { key: 'related_supplier', labels: { fa: 'تامین‌کننده مرتبط', en: 'Related Supplier' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'general', order: 4, relationConfig: { targetModule: 'suppliers', targetField: 'business_name' }, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'related_to_module', operator: LogicOperator.EQUALS, value: 'suppliers' } } },

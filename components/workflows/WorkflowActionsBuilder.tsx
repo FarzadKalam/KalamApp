@@ -35,6 +35,7 @@ import { supabase } from '../../supabaseClient';
 import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { buildAiRecordCreationSchema } from '../../utils/aiRecordCreation';
+import { getFieldLabelFa } from '../../utils/fieldLabel';
 import {
   getCreateRelatedRecordRelationFieldOptions,
   getCreateRelatedRecordTargetModuleOptions,
@@ -259,10 +260,7 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
 
 const getFieldLabel = (field?: ModuleField | null) => {
   if (!field?.key) return '';
-  const fa = String(field?.labels?.fa || '').trim();
-  if (!fa) return field.key;
-  if (fa === field.key) return field.key;
-  return `${fa} (${field.key})`;
+  return getFieldLabelFa(field);
 };
 
 const getRelationTargetModuleId = (field?: ModuleField | null) =>
@@ -315,7 +313,7 @@ const normalizeBasicOption = (item: any): BasicSelectOption | null => {
   const value = String(item?.value ?? '').trim();
   if (!value) return null;
   return {
-    label: String(item?.label ?? item?.value ?? '').trim() || value,
+    label: String(item?.label ?? '').trim() || 'گزینه بدون عنوان',
     value,
   };
 };
@@ -531,7 +529,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         return targetFields
           .filter((targetField) => !!String(targetField?.key || '').trim() && matcher(targetField, targetModuleId))
           .map((targetField) => ({
-            label: `${getFieldLabel(field)} (${String(targetField?.labels?.fa || fallbackLabel || targetField.key).trim() || fallbackLabel})`,
+            label: `${getFieldLabel(field)} (${getFieldLabelFa(targetField, { fallback: fallbackLabel })})`,
             value: createWorkflowMultiRelationFieldKey(
               field.key,
               targetModuleId,
@@ -771,7 +769,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           const key = String(field?.key || '').trim();
           return {
             key,
-            label: String(field?.labels?.fa || field?.key || '').trim() || key,
+            label: getFieldLabel(field),
             token: `{{${key}}}`,
           };
         });
@@ -837,7 +835,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       (targetModule.fields || [])
         .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
         .forEach((field) => {
-          const fieldLabel = String(field?.labels?.fa || field?.key || '').trim() || String(field.key);
+          const fieldLabel = getFieldLabel(field);
           addOption(
             createWorkflowRelatedFieldKey(relationFieldKey, targetModuleId, String(field.key)),
             `${fieldLabel} (${targetTitle})`
@@ -859,7 +857,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       (targetModule.fields || [])
         .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
         .forEach((field) => {
-          const fieldLabel = String(field?.labels?.fa || field?.key || '').trim() || String(field.key);
+          const fieldLabel = getFieldLabel(field);
           addOption(
             createProcessLinkedFieldKey(linkedModuleId, String(field.key)),
             `${fieldLabel} (${targetTitle})`
@@ -1082,7 +1080,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           getPopupContainer={popupContainer as any}
           overlayZIndexBase={overlayZIndexBase}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabel(field)}
         />
       );
     }
@@ -1117,7 +1115,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           onChange={(nextVal) => onValueChange(normalizeWorkflowValueByFieldType(field, nextVal))}
           className="w-full"
           placeholder="مقدار"
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabel(field)}
         />
       );
     }
@@ -1150,7 +1148,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           modalContainer={popupContainer}
           overlayZIndexBase={overlayZIndexBase}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabel(field)}
         />
       );
     }
@@ -1166,7 +1164,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           modalContainer={popupContainer}
           overlayZIndexBase={overlayZIndexBase}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabel(field)}
         />
       );
     }
@@ -1182,7 +1180,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           modalContainer={popupContainer}
           overlayZIndexBase={overlayZIndexBase}
           adaptiveMode={adaptiveMode}
-          pickerTitle={field?.labels?.fa || field.key}
+          pickerTitle={getFieldLabel(field)}
         />
       );
     }

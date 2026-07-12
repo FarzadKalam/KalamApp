@@ -137,4 +137,33 @@ describe('WorkflowConditionsGroup', () => {
     expect(screen.queryByRole('button', { name: 'تایید' })).not.toBeInTheDocument();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth });
   }, 10000);
+
+  it('shows the Persian field title without exposing its technical key', () => {
+    render(
+      <ConfigProvider direction="rtl">
+        <App>
+          <WorkflowConditionsGroup
+            value={[{
+              id: 'condition-persian-label',
+              field: '8d86cc2f-70d2-4bc5-8984-942ce4ed61e2',
+              operator: 'eq',
+              value: 'نمونه',
+            } as any]}
+            onChange={vi.fn()}
+            fields={[{
+              key: '8d86cc2f-70d2-4bc5-8984-942ce4ed61e2',
+              type: FieldType.TEXT,
+              labels: { fa: 'عنوان شغلی', en: 'Job title' },
+            } as any]}
+            dynamicOptions={{}}
+            relationOptions={{}}
+          />
+        </App>
+      </ConfigProvider>
+    );
+
+    expect(screen.getByText('عنوان شغلی')).toBeInTheDocument();
+    expect(screen.queryByText('8d86cc2f-70d2-4bc5-8984-942ce4ed61e2')).not.toBeInTheDocument();
+    expect(screen.queryByText('Job title')).not.toBeInTheDocument();
+  });
 });

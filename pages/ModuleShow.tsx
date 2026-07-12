@@ -631,7 +631,7 @@ const ModuleShow: React.FC = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [editingFields, setEditingFields] = useState<Record<string, boolean>>({});
   const [tempValues, setTempValues] = useState<Record<string, any>>({});
-  const [, setSavingField] = useState<string | null>(null);
+  const [savingField, setSavingField] = useState<string | null>(null);
   const [, setUploadingImage] = useState(false);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});

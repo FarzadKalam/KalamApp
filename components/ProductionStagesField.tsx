@@ -153,6 +153,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
 import { getRecordTitle } from '../utils/recordTitle';
+import { getFieldLabelFa } from '../utils/fieldLabel';
 import { canUseRecordLockPermission, fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
 import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
@@ -1242,12 +1243,12 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     () => ([
       ...assignees.users.map((user) => ({
         value: `user:${user.id}`,
-        label: user.display_name || user.full_name || user.email || user.mobile_1 || `کاربر ${user.id}`,
+        label: user.display_name || user.full_name || user.email || user.mobile_1 || 'کاربر بدون نام',
         searchText: [user.display_name, user.full_name, user.email, user.mobile_1, 'کاربر'].filter(Boolean).join(' '),
       })),
       ...assignees.roles.map((role) => ({
         value: `role:${role.id}`,
-        label: role.title || `تیم ${role.id}`,
+        label: role.title || 'تیم بدون نام',
         searchText: [role.title, 'تیم'].filter(Boolean).join(' '),
       })),
     ]),
@@ -1347,7 +1348,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       .filter((field: any) => String(field?.key || '').includes(WORKFLOW_ASSIGNEE_FIELD_KEY))
       .map((field: any) => ({
         value: `field:${String(field.key || '').trim()}`,
-        label: String(field?.labels?.fa || field?.key || '').trim(),
+        label: getFieldLabelFa(field),
         searchText: [field?.labels?.fa, field?.key, 'مسئول', 'فیلد'].filter(Boolean).join(' '),
       }))
       .filter((option) => option.value && option.label);
@@ -1682,7 +1683,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         key: createProcessNextStageFieldKey(offset, String(field.key)),
         labels: {
           ...field.labels,
-          fa: `${field.labels?.fa || field.key} (${stageLabel})`,
+          fa: `${getFieldLabelFa(field)} (${stageLabel})`,
         },
         ...( { workflowOptionScopeModuleId: 'tasks' } as any ),
       }));
@@ -1869,11 +1870,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         const directory = await fetchAssigneeDirectory(supabase);
         nextRelationOptions[field.key] = [
           ...directory.users.map((user) => ({
-            label: String(user.display_name || user.full_name || user.id).trim(),
+            label: String(user.display_name || user.full_name || 'کاربر بدون نام').trim(),
             value: `user_${String(user.id)}`,
           })),
           ...directory.roles.map((role) => ({
-            label: String(role.title || role.id).trim(),
+            label: String(role.title || 'نقش بدون نام').trim(),
             value: `role_${String(role.id)}`,
           })),
         ];
@@ -1886,7 +1887,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .select('id, title')
           .order('title', { ascending: true });
         nextRelationOptions[field.key] = (data || []).map((row: any) => ({
-          label: String(row?.title || row?.id || '').trim(),
+          label: String(row?.title || 'برچسب بدون عنوان').trim(),
           value: String(row?.id || '').trim(),
         })).filter((item) => item.value);
         return;
@@ -1899,7 +1900,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .order('full_name', { ascending: true })
           .limit(300);
         nextRelationOptions[field.key] = (data || []).map((row: any) => ({
-          label: String(row?.full_name || row?.id || '').trim(),
+          label: String(row?.full_name || 'کاربر بدون نام').trim(),
           value: String(row?.id || '').trim(),
         })).filter((item) => item.value);
         return;
@@ -2236,7 +2237,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         if (field.type === FieldType.USER) {
           const directory = await fetchAssigneeDirectory(supabase);
           nextRelationOptions[field.key] = directory.users.map((user) => ({
-            label: String(user.display_name || user.full_name || user.id).trim(),
+            label: String(user.display_name || user.full_name || 'کاربر بدون نام').trim(),
             value: String(user.id),
           }));
           return;
@@ -6063,7 +6064,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                 {customFields.map((field) => (
                   <div key={`${task.id}-${field.key}`} className="space-y-1">
                     <div className="flex flex-wrap items-center gap-1 text-[11px] text-gray-500">
-                      <span>{field.labels?.fa || field.key}</span>
+                      <span>{getFieldLabelFa(field)}</span>
                       {field.validation?.required ? <Tag color="error" className="!m-0">الزامی</Tag> : null}
                     </div>
                     {renderTaskCustomFieldInline(task, field, currentCustomFieldValues[String(field.key)])}
@@ -11075,7 +11076,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                       }
                     >
                       <div className="mb-1 flex flex-wrap items-center gap-1 text-xs text-gray-500">
-                        <span>{field.labels?.fa || field.key}</span>
+                        <span>{getFieldLabelFa(field)}</span>
                         {field.validation?.required ? <Tag color="error" className="!m-0">الزامی</Tag> : null}
                       </div>
                       {renderTaskCustomFieldInput(
@@ -11637,7 +11638,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                                   <div className="space-y-2">
                                     <div className="flex flex-wrap items-center gap-2">
                                       <div className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                                        {field.labels?.fa || field.key}
+                                        {getFieldLabelFa(field)}
                                       </div>
                                       <Tag color="default">{processTaskCustomFieldTypeLabels[field.type] || field.type}</Tag>
                                       {field.validation?.required ? <Tag color="error">اجباری در تکمیل</Tag> : null}
@@ -12389,7 +12390,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                   allowClear
                   options={(MODULES[String(draftCustomFieldRelationTargetModule || '')]?.fields || []).map((field) => ({
                     value: field.key,
-                    label: field.labels?.fa || field.key,
+                    label: getFieldLabelFa(field),
                   }))}
                 />
               </Form.Item>
