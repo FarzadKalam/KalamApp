@@ -15,6 +15,7 @@ import {
   taskRecipientToken as taskRecipientTokenCore,
   type ProcessAutomationEvent,
 } from '../_shared/process-automation-core.ts';
+import { getWorkflowStaticValueLabel, parseWorkflowIdentityReference } from '../_shared/workflow-value-labels.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-12-server-event-queue';
 const MAX_WORKFLOWS = 30;
@@ -467,6 +468,16 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
   const str = String(value);
+  const identityReference = parseWorkflowIdentityReference(str);
+  if (identityReference) {
+    const table = identityReference.type === 'role' ? 'org_roles' : 'profiles';
+    const rows = await dbGet(url, key,
+      `${table}?id=eq.${encodeURIComponent(identityReference.id)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
+    ).catch(() => []);
+    return rows[0]
+      ? getServerRecordTitle(rows[0])
+      : (identityReference.type === 'role' ? 'نقش سازمانی' : 'کاربر');
+  }
   if (typeof value === 'string' && (str.startsWith('/i/') || str.startsWith('/d/'))) {
     const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
     return baseUrl ? `${baseUrl}${str}` : str;
@@ -482,6 +493,8 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
     const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId)));
     return rendered.filter(Boolean).join('، ');
   }
+  const staticLabel = getWorkflowStaticValueLabel(fieldKey, value);
+  if (staticLabel) return staticLabel;
   if (UUID_LIKE_REGEX.test(str)) {
     const normalizedField = String(fieldKey || '').toLowerCase();
     const candidates = normalizedField.includes('role')
@@ -498,7 +511,7 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
         : [];
     for (const table of candidates) {
       const rows = await dbGet(url, key,
-        `${table}?id=eq.${encodeURIComponent(str)}&select=*&limit=1`
+        `${table}?id=eq.${encodeURIComponent(str)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
       ).catch(() => []);
       if (rows[0]) return getServerRecordTitle(rows[0]);
     }
