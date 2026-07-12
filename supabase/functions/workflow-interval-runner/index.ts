@@ -15,9 +15,9 @@ import {
   taskRecipientToken as taskRecipientTokenCore,
   type ProcessAutomationEvent,
 } from '../_shared/process-automation-core.ts';
-import { getWorkflowStaticValueLabel, parseWorkflowIdentityReference } from '../_shared/workflow-value-labels.ts';
+import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference } from '../_shared/workflow-value-labels.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-12-server-event-queue';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-12-persian-formatters';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -173,11 +173,15 @@ function gregorianToJalali(gy: number, gm: number, gd: number): [number, number,
   return [jy, jm + 1, j_d_no + 1];
 }
 
+function toPersianDigits(value: unknown): string {
+  return String(value ?? '').replace(/\d/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
+}
+
 function formatJalaliDate(isoDate: string): string {
   const d = new Date(isoDate);
   if (isNaN(d.getTime())) return isoDate;
   const [jy, jm, jd] = gregorianToJalali(d.getFullYear(), d.getMonth() + 1, d.getDate());
-  return `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`;
+  return toPersianDigits(`${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')}`);
 }
 
 function toEnglishDigits(value: string): string {
@@ -300,7 +304,7 @@ function formatJalaliDateTime(isoDate: string): string {
   const [jy, jm, jd] = gregorianToJalali(local.getUTCFullYear(), local.getUTCMonth() + 1, local.getUTCDate());
   const h = String(local.getUTCHours()).padStart(2, '0');
   const min = String(local.getUTCMinutes()).padStart(2, '0');
-  return `${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')} ${h}:${min}`;
+  return toPersianDigits(`${jy}/${String(jm).padStart(2, '0')}/${String(jd).padStart(2, '0')} ${h}:${min}`);
 }
 
 // ── Template rendering ─────────────────────────────────────────────────────────
@@ -486,8 +490,11 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
     if (str.length > 10) return formatJalaliDateTime(str);
     return formatJalaliDate(str);
   }
+  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(str.trim())) {
+    return toPersianDigits(str.trim());
+  }
   if (typeof value === 'number') {
-    return value.toLocaleString('fa-IR');
+    return value.toLocaleString('fa-IR', { maximumFractionDigits: 6 });
   }
   if (Array.isArray(value)) {
     const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId)));
@@ -495,6 +502,8 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
   }
   const staticLabel = getWorkflowStaticValueLabel(fieldKey, value);
   if (staticLabel) return staticLabel;
+  const formattedNumericValue = formatWorkflowNumericValue(fieldKey, value);
+  if (formattedNumericValue) return formattedNumericValue;
   if (UUID_LIKE_REGEX.test(str)) {
     const normalizedField = String(fieldKey || '').toLowerCase();
     const candidates = normalizedField.includes('role')

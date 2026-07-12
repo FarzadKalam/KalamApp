@@ -31,3 +31,19 @@ export const parseWorkflowIdentityReference = (
     id: match[2],
   };
 };
+
+export const formatWorkflowNumericValue = (fieldKey: unknown, value: unknown): string | null => {
+  const normalizedFieldKey = normalizeText(fieldKey).toLowerCase();
+  if (!/(^|_)(price|amount|cost|total|balance|wage|salary|fee|credit|debit|payment)(_|$)/.test(normalizedFieldKey)) {
+    return null;
+  }
+  const normalizedValue = normalizeText(value)
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[٬,]/g, '');
+  if (!/^-?\d+(?:\.\d+)?$/.test(normalizedValue)) return null;
+  const numericValue = Number(normalizedValue);
+  return Number.isFinite(numericValue)
+    ? numericValue.toLocaleString('fa-IR', { maximumFractionDigits: 6 })
+    : null;
+};

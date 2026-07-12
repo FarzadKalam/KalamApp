@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatWorkflowNumericValue,
   getWorkflowStaticValueLabel,
   parseWorkflowIdentityReference,
 } from '../supabase/functions/_shared/workflow-value-labels';
@@ -17,5 +18,11 @@ describe('server workflow value labels', () => {
     expect(parseWorkflowIdentityReference(`user_${userId}`)).toEqual({ type: 'user', id: userId });
     expect(parseWorkflowIdentityReference(`role:${roleId}`)).toEqual({ type: 'role', id: roleId });
     expect(parseWorkflowIdentityReference('check_out')).toBeNull();
+  });
+
+  it('formats monetary strings with Persian digits, grouping and decimals', () => {
+    expect(formatWorkflowNumericValue('total_amount', '1234567.5')).toBe('۱٬۲۳۴٬۵۶۷٫۵');
+    expect(formatWorkflowNumericValue('invoice_price', '۱۲۳۴۵۶۷')).toBe('۱٬۲۳۴٬۵۶۷');
+    expect(formatWorkflowNumericValue('description', '1234567')).toBeNull();
   });
 });

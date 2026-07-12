@@ -1,6 +1,8 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-06-14-02';
+import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
+
+const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-07-12-tehran-time';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -398,8 +400,8 @@ Deno.serve(async (req) => {
       extension: extension || null,
       operator_code: firstValue(providerPayload.operator_code, providerPayload.operatorCode) || null,
       trunk: firstValue(providerPayload.trunk) || null,
-      started_at: toIsoOrNull(firstValue(providerPayload.started_at, providerPayload.start_at, providerPayload.start_time, providerPayload.created_at)),
-      ended_at: toIsoOrNull(firstValue(providerPayload.ended_at, providerPayload.end_at, providerPayload.end_time, providerPayload.updated_at)),
+      started_at: parseTehranProviderDateTimeToUtcIso(firstValue(providerPayload.started_at, providerPayload.start_at, providerPayload.start_time, providerPayload.created_at)),
+      ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(providerPayload.ended_at, providerPayload.end_at, providerPayload.end_time, providerPayload.updated_at)),
       wait_seconds: toIntegerOrNull(firstValue(providerPayload.time_wait, providerPayload.wait_seconds)),
       talk_seconds: talkSeconds,
       file_id: firstValue(providerPayload.file_id, providerPayload.fileId, providerPayload.record_id) || null,

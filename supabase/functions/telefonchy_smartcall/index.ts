@@ -1,6 +1,8 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'telefonchy-smartcall-2026-06-14-02';
+import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
+
+const FUNCTION_BUILD = 'telefonchy-smartcall-2026-07-12-tehran-time';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -399,8 +401,8 @@ const normalizeProviderCallRow = (
     extension: firstValue(item.extension, item.operator_extension, exten.number, exten.caller_id) || null,
     operator_code: firstValue(item.operator_code, item.operatorCode) || null,
     trunk: firstValue(item.trunk, item.trunk_number) || null,
-    started_at: toIsoOrNull(firstValue(item.started_at, item.start_at, item.start_time, item.created_at)),
-    ended_at: toIsoOrNull(firstValue(item.ended_at, item.end_at, item.end_time, item.updated_at)),
+    started_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.started_at, item.start_at, item.start_time, item.created_at)),
+    ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.ended_at, item.end_at, item.end_time, item.updated_at)),
     wait_seconds: toIntegerOrNull(firstValue(item.time_wait, item.wait_seconds)),
     talk_seconds: talkSeconds,
     file_id: firstValue(item.file_id, item.fileId, item.record_id) || null,
