@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildOperationAmountPair,
+  buildOperationalFinancialEntityPrintFields,
+  buildOperationalFinancialEntityPrintValues,
   isEmployeeFinancialOverviewOperation,
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
   computeOperationalFinancialTotals,
@@ -66,5 +68,22 @@ describe('operationalFinancialOverview', () => {
     expect(html).toContain('ماهیت مانده');
     expect(html).toContain('۴۰۰');
     expect(html).toContain('بستانکار');
+  });
+
+  it('adds the main record fields to financial printing without selecting them by default', () => {
+    const entityFields = [
+      { key: 'business_name', label: 'نام تجاری', group: 'بخش: اطلاعات پایه', printValue: 'درمانگاه عطار' },
+      { key: 'mobile_1', label: 'موبایل', group: 'بخش: اطلاعات تماس', printValue: '۰۹۱۲۱۲۳۴۵۶۷' },
+    ];
+
+    expect(buildOperationalFinancialEntityPrintFields(entityFields)).toEqual([
+      expect.objectContaining({ key: 'entity__business_name', label: 'نام تجاری', group: 'بخش: اطلاعات پایه', defaultSelected: false, printSection: 'context' }),
+      expect.objectContaining({ key: 'entity__mobile_1', label: 'موبایل', group: 'بخش: اطلاعات تماس', defaultSelected: false, printSection: 'context' }),
+    ]);
+
+    expect(buildOperationalFinancialEntityPrintValues(entityFields)).toEqual({
+      entity__business_name: 'درمانگاه عطار',
+      entity__mobile_1: '۰۹۱۲۱۲۳۴۵۶۷',
+    });
   });
 });

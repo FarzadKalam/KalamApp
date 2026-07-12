@@ -82,6 +82,8 @@ interface UseListPrintManagerProps {
   summary?: ListPrintSummaryDefinition | null;
   relationOptions?: Record<string, any[]>;
   extraSystemValues?: Record<string, any>;
+  contextTitle?: string;
+  contextValues?: Record<string, any>;
 }
 
 export const useListPrintManager = ({
@@ -92,6 +94,8 @@ export const useListPrintManager = ({
   summary = null,
   relationOptions = {},
   extraSystemValues = {},
+  contextTitle = '',
+  contextValues = {},
 }: UseListPrintManagerProps) => {
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
@@ -556,7 +560,7 @@ export const useListPrintManager = ({
     updatePrintSignatureConfig(rowId, (row) => ({ ...row, signerId }));
   }, [updatePrintSignatureConfig]);
 
-  const selectedColumns = useMemo(() => {
+  const selectedFields = useMemo(() => {
     const selected = selectedPrintFields[selectedTemplateId] || [];
     if (selected.length === 0) return printableFieldsForTemplate;
     const fieldMap = new Map(
@@ -566,12 +570,22 @@ export const useListPrintManager = ({
       .map((key) => fieldMap.get(String(key || '').trim()))
       .filter(Boolean) as ListFieldDefinition[];
     const resolved = filtered.length > 0 ? filtered : printableFieldsForTemplate;
+    return resolved;
+  }, [printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
+
+  const selectedContextFields = useMemo(
+    () => selectedFields.filter((field) => field.printSection === 'context'),
+    [selectedFields],
+  );
+
+  const selectedColumns = useMemo(() => {
+    const resolved = selectedFields.filter((field) => field.printSection !== 'context');
     if (!isCatalogTemplate) return resolved;
 
     const imageFields = resolved.filter((field) => String(field?.type || '').toLowerCase() === 'image').slice(0, 1);
     const contentFields = resolved.filter((field) => String(field?.type || '').toLowerCase() !== 'image').slice(0, 5);
     return [...imageFields, ...contentFields];
-  }, [isCatalogTemplate, printableFieldsForTemplate, selectedPrintFields, selectedTemplateId]);
+  }, [isCatalogTemplate, selectedFields]);
 
   const rowsPerPage = useMemo(() => {
     if (String(selectedStoredTemplate?.id || '').includes('_catalog_a4_portrait')) {
@@ -599,6 +613,18 @@ export const useListPrintManager = ({
     [currencyLabel, imageDisplayMode, relationOptions, summary]
   );
 
+  const renderedContextTable = useMemo(
+    () => buildListSummaryTableHtml(
+      selectedContextFields.length > 0
+        ? { title: contextTitle, fields: selectedContextFields, values: contextValues }
+        : null,
+      relationOptions,
+      currencyLabel,
+      imageDisplayMode,
+    ),
+    [contextTitle, contextValues, currencyLabel, imageDisplayMode, relationOptions, selectedContextFields],
+  );
+
   const resolveValue = useCallback((path: string, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
     if (path === 'system.list_title') return moduleConfig?.titles?.fa || moduleId;
     if (path === 'system.selected_count') return toPersianNumber(rows.length);
@@ -620,6 +646,9 @@ export const useListPrintManager = ({
     }
     if (path === 'system.list_summary_table') {
       return renderedSummaryTable;
+    }
+    if (path === 'system.list_context_table') {
+      return renderedContextTable;
     }
     if (path.startsWith('system.summary.')) {
       const summaryKey = path.replace(/^system\.summary\./, '');
@@ -644,17 +673,24 @@ export const useListPrintManager = ({
       return String(companyInfo?.[key] || '');
     }
     return '';
-  }, [companyInfo, currencyLabel, extraSystemValues, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
+  }, [companyInfo, currencyLabel, extraSystemValues, imageDisplayMode, moduleConfig?.titles?.fa, moduleId, relationOptions, renderedContextTable, renderedSummaryTable, rows.length, selectedColumns, summary?.values]);
 
   const renderTemplateSection = useCallback((html: string | undefined, pageIndex: number, pageCount: number, pageRows: any[], rowOffset: number) => {
-    const filled = stripLegacyPrintSignatureTokens(String(html || '')).replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
+    const rawHtml = stripLegacyPrintSignatureTokens(String(html || ''));
+    const htmlWithContext = renderedContextTable && !rawHtml.includes('system.list_context_table')
+      ? rawHtml.replace(
+          /({{\s*system\.list_(?:table|catalog_a4|catalog_fullpage)\s*}})/,
+          '{{system.list_context_table}}$1',
+        )
+      : rawHtml;
+    const filled = htmlWithContext.replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (_match, key: string) => {
       return resolveValue(key, pageIndex, pageCount, pageRows, rowOffset);
     });
     return normalizeRenderedImages(DOMPurify.sanitize(filled, {
       ADD_TAGS: ['colgroup', 'col'],
       ADD_ATTR: ['style', 'width', 'height', 'colspan', 'rowspan', 'src', 'alt'],
     }));
-  }, [resolveValue]);
+  }, [renderedContextTable, resolveValue]);
 
   const handleTogglePrintField = useCallback((templateId: string, fieldName: string) => {
     setSelectedPrintFields((prev) => {

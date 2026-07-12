@@ -5048,12 +5048,13 @@ const ModuleShow: React.FC = () => {
         return {
           ...field,
           value,
+          printValue: formatPrintValue(field, value),
           hasValue: hasValue(value),
           group: isBlockField ? `بخش: ${blockTitle}` : 'فیلدهای عمومی',
           scope: isBlockField ? 'module' : 'general',
         };
       });
-  }, [canViewField, conditionalFieldRuntime, data, displayData, moduleConfig]);
+  }, [canViewField, conditionalFieldRuntime, currencyLabel, data, displayData, dynamicOptions, moduleConfig, relationOptions]);
 
   // ✅ استفاده از custom hook برای مدیریت print
   const printManager = usePrintManager({
@@ -5769,21 +5770,36 @@ const ModuleShow: React.FC = () => {
     if (moduleId === 'customers' && id) {
       content.financial_stats = (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
-          <OperationalFinancialOverviewPanel entityType="customer" entityId={id} entityData={data} />
+          <OperationalFinancialOverviewPanel entityType="customer" entityId={id} entityPrintFields={printableFields.map((field: any) => ({
+            key: field.key,
+            label: field?.labels?.fa || field.key,
+            group: field.group,
+            printValue: field.printValue,
+          }))} />
         </React.Suspense>
       );
     }
     if (moduleId === 'suppliers' && id) {
       content.financial_info = (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
-          <OperationalFinancialOverviewPanel entityType="supplier" entityId={id} entityData={data} />
+          <OperationalFinancialOverviewPanel entityType="supplier" entityId={id} entityPrintFields={printableFields.map((field: any) => ({
+            key: field.key,
+            label: field?.labels?.fa || field.key,
+            group: field.group,
+            printValue: field.printValue,
+          }))} />
         </React.Suspense>
       );
     }
     if (moduleId === 'employees' && id) {
       content.payroll_info = (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
-          <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityData={data} />
+          <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityPrintFields={printableFields.map((field: any) => ({
+            key: field.key,
+            label: field?.labels?.fa || field.key,
+            group: field.group,
+            printValue: field.printValue,
+          }))} />
         </React.Suspense>
       );
     }
@@ -5836,7 +5852,7 @@ const ModuleShow: React.FC = () => {
       );
     }
     return content;
-  }, [baseCanEditModule, canEditModule, data, id, moduleId, projectProcessLinkedFields, relationOptions]);
+  }, [baseCanEditModule, canEditModule, data, id, moduleId, printableFields, projectProcessLinkedFields, relationOptions]);
 
   if (accessDenied) {
     return (
