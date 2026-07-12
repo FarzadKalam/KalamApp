@@ -51,6 +51,7 @@ const SAFE_FALLBACK_TITLE_COLUMNS = [
 const RECORD_TITLE_COLUMN_OVERRIDES: Record<string, string[]> = {
   customers: ['id', 'full_name', 'business_name', 'system_code', 'auto_name_enabled'],
   purchase_invoices: ['id', 'system_code'],
+  reports: ['id', 'name'],
 };
 
 const CACHE_KEY_COLUMN_EXCLUSIONS: Array<{ pattern: RegExp; columns: string[] }> = [

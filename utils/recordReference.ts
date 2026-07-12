@@ -13,6 +13,12 @@ const normalizeText = (value: unknown): string => String(value || '').trim();
 const RECORD_REFERENCE_LABEL_TTL_MS = 5 * 60_000;
 const recordReferenceLabelCache = new Map<string, { label: string; expiresAt: number }>();
 
+// Some application routes are record-reference module ids but do not have a
+// table with the same name. Keep their title lookups on the actual tenant table.
+const RECORD_REFERENCE_TABLE_OVERRIDES: Record<string, string> = {
+  reports: 'report_definitions',
+};
+
 export const buildRecordReferenceKey = (moduleId?: string | null, recordId?: string | null) => {
   const normalizedModuleId = normalizeText(moduleId);
   const normalizedRecordId = normalizeText(recordId);
@@ -48,7 +54,7 @@ export const fetchRecordReferenceLabels = async (
       if (!ids.length) return;
 
       const moduleConfig = MODULES[moduleId];
-      const table = moduleConfig?.table || moduleId;
+      const table = RECORD_REFERENCE_TABLE_OVERRIDES[moduleId] || moduleConfig?.table || moduleId;
       if (!table) return;
 
       const batchSize = table === 'customers' || table === 'suppliers' ? 25 : 80;
