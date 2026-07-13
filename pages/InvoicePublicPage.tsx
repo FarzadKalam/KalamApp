@@ -3,6 +3,7 @@ import {
   Alert,
   App,
   Avatar,
+  Badge,
   Button,
   ConfigProvider,
   Divider,
@@ -303,6 +304,8 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const [paymentState, setPaymentState] = useState<PublicInvoicePaymentState | null>(null);
   const [paymentStarting, setPaymentStarting] = useState(false);
+  const [paymentChoiceOpen, setPaymentChoiceOpen] = useState(false);
+  const [selectedPendingPaymentKey, setSelectedPendingPaymentKey] = useState<string | null>(null);
 
   // ── load invoice ──────────────────────────────────────────────────────────
 
@@ -879,7 +882,23 @@ ${invoice.description ? `
   const payableAmount = Math.max(0, Number(paymentState?.amount ?? invoice.remaining_balance ?? 0) || 0);
   const onlinePaymentAvailable = isSales && paymentState?.available === true && payableAmount > 0;
 
-  const handleStartOnlinePayment = async () => {
+  const pendingPaymentOptions = useMemo(
+    () => payments
+      .map((payment) => ({ payment }))
+      .filter(({ payment }) => String(payment?.status || '').trim().toLowerCase() === 'pending' && Number(payment?.amount || 0) > 0)
+      .map(({ payment }) => ({
+        key: String(payment?.row_key || payment?.payment_id || payment?.id || '').trim(),
+        title: String(payment?.description || payment?.payment_type_label || PAYMENT_TYPE_LABELS[String(payment?.payment_type || '').trim()] || 'دریافت در انتظار').trim(),
+        amount: Math.min(payableAmount, Math.max(0, Number(payment?.amount || 0))),
+      }))
+      .filter((item) => item.key && item.amount > 0),
+    [payableAmount, payments]
+  );
+  const selectedPendingPayment = pendingPaymentOptions.find((item) => item.key === selectedPendingPaymentKey) || null;
+  const selectedPaymentAmount = selectedPendingPayment?.amount || payableAmount;
+  const remainingAfterSelectedPayment = Math.max(0, payableAmount - selectedPaymentAmount);
+
+  const handleStartOnlinePayment = async (pendingPaymentRowKey: string | null = null) => {
     if (!code || !onlinePaymentAvailable) return;
     setPaymentStarting(true);
     try {
@@ -889,6 +908,7 @@ ${invoice.description ? `
           system_code: code,
           module: moduleId,
           return_origin: window.location.origin,
+          pending_payment_row_key: pendingPaymentRowKey || undefined,
         },
       });
       if (paymentError || paymentResult?.success === false) {
@@ -1897,19 +1917,50 @@ ${invoice.description ? `
                 {formatPrice(payableAmount, currencyLabel)}
               </div>
             </div>
-            <Button
-              type="primary"
-              size="large"
-              icon={<CreditCardOutlined />}
-              loading={paymentStarting}
-              onClick={handleStartOnlinePayment}
-              style={{ minWidth: 180, fontWeight: 800, background: primaryColor }}
-            >
-              پرداخت سریع
-            </Button>
+            <Badge count={pendingPaymentOptions.length > 0 ? 'امکان پیش‌پرداخت وجود دارد' : 0} color={primaryColor} offset={[-4, 2]}>
+              <Button
+                type="primary"
+                size="large"
+                icon={<CreditCardOutlined />}
+                loading={paymentStarting}
+                onClick={() => pendingPaymentOptions.length > 0 ? setPaymentChoiceOpen(true) : void handleStartOnlinePayment()}
+                style={{ minWidth: 180, fontWeight: 800, background: primaryColor }}
+              >
+                پرداخت سریع
+              </Button>
+            </Badge>
           </div>
         </div>
       ) : null}
+      <Modal
+        open={paymentChoiceOpen}
+        onCancel={() => setPaymentChoiceOpen(false)}
+        footer={null}
+        title="انتخاب مبلغ پرداخت آنلاین"
+      >
+        <div className="space-y-3">
+          <Alert type="info" showIcon message="می‌توانید یک دریافت در انتظار را به‌عنوان پیش‌پرداخت پرداخت کنید یا کل مانده فاکتور را تسویه کنید." />
+          {pendingPaymentOptions.map((option) => {
+            const selected = selectedPendingPaymentKey === option.key;
+            return (
+              <button key={option.key} type="button" onClick={() => setSelectedPendingPaymentKey(option.key)} className={`w-full rounded-xl border p-3 text-right transition-colors ${selected ? 'border-leather-500 bg-leather-50 dark:bg-leather-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
+                <div className="flex items-center justify-between gap-3"><span className="font-bold">{option.title}</span><span className="font-black">{formatPrice(option.amount, currencyLabel)}</span></div>
+                <div className="mt-1 text-xs text-gray-500">پرداخت این ردیف به‌عنوان پیش‌پرداخت ثبت می‌شود.</div>
+              </button>
+            );
+          })}
+          <Button block size="large" type={selectedPendingPaymentKey === null ? 'primary' : 'default'} onClick={() => setSelectedPendingPaymentKey(null)} style={selectedPendingPaymentKey === null ? { background: primaryColor, fontWeight: 900 } : { fontWeight: 800 }}>
+            تسویه کامل فاکتور — {formatPrice(payableAmount, currencyLabel)}
+          </Button>
+          <div className="rounded-xl bg-gray-50 p-3 text-sm dark:bg-white/5">
+            <div className="flex justify-between"><span>مبلغ نهایی قابل پرداخت</span><strong>{formatPrice(selectedPaymentAmount, currencyLabel)}</strong></div>
+            <div className="mt-2 flex justify-between text-gray-500"><span>مانده فاکتور پس از این پرداخت</span><span>{formatPrice(remainingAfterSelectedPayment, currencyLabel)}</span></div>
+          </div>
+          <Button block type="primary" size="large" icon={<CreditCardOutlined />} loading={paymentStarting} onClick={() => void handleStartOnlinePayment(selectedPendingPaymentKey)} style={{ background: primaryColor, fontWeight: 900 }}>
+            اتصال به درگاه پرداخت
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 };

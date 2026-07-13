@@ -22,7 +22,6 @@ export const deliveryFormsConfig: ModuleDefinition = {
     searchFields: ['name', 'system_code', 'location_text'],
   },
   fields: [
-    { key: 'image_url', labels: { fa: 'تصویر / فایل اصلی', en: 'Main Image / File' }, type: FieldType.IMAGE, location: FieldLocation.HEADER, order: 0, nature: FieldNature.PREDEFINED, isTableColumn: true },
     { key: 'name', labels: { fa: 'عنوان فرم', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, validation: { required: true }, nature: FieldNature.PREDEFINED, isKey: true, isTableColumn: true },
     { key: 'system_code', labels: { fa: 'شماره فرم', en: 'Form No.' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 2, readonly: true, nature: FieldNature.SYSTEM, isTableColumn: true },
     { key: 'public_link', labels: { fa: 'لینک تحویل آنلاین', en: 'Online Delivery Link' }, type: FieldType.LINK, location: FieldLocation.BLOCK, blockId: 'onlineDelivery', order: 1, readonly: true, nature: FieldNature.STANDARD, hideInCreateForm: true },

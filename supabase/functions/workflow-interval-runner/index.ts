@@ -510,7 +510,6 @@ const SHARED_APP_HOSTNAMES = new Set([
   'app.tazesystem.ir',
   'kalamapp.ir',
   'www.kalamapp.ir',
-  'kalam.tazesystem.ir',
 ]);
 
 function normalizeTenantBaseUrl(value: string): string {

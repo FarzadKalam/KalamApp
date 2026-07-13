@@ -67,7 +67,7 @@ const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string
   const candidate = /^https?:\/\//i.test(host) ? host : `https://${host}`;
   try {
     const parsed = new URL(candidate);
-    if (['tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir', 'kalamapp.ir', 'www.kalamapp.ir', 'kalam.tazesystem.ir'].includes(parsed.hostname.toLowerCase())) return '';
+    if (['tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir', 'kalamapp.ir', 'www.kalamapp.ir'].includes(parsed.hostname.toLowerCase())) return '';
     return parsed.origin;
   } catch {
     return '';
@@ -121,7 +121,7 @@ const rpc = async (urlBase: string, key: string, name: string, body: Record<stri
 };
 
 const getInvoiceByPublicCode = async (urlBase: string, key: string, code: string) => {
-  const select = 'id,org_id,system_code,public_slug,public_token,public_link,name,remaining_balance,total_invoice_amount';
+  const select = 'id,org_id,system_code,public_slug,public_token,public_link,name,remaining_balance,total_invoice_amount,payments';
   const filter = `select=${select}&or=(public_slug.eq.${enc(code)},public_token.eq.${enc(code)})&limit=1`;
   return first(await rest(urlBase, key, `invoices?${filter}`));
 };
@@ -368,8 +368,7 @@ const createAiCreditTopup = async (req: Request, urlBase: string, key: string, c
   const paymentDomain = trimSlashEnd(String(Deno.env.get('PAYMENT_PUBLIC_URL') || Deno.env.get('PUBLIC_FUNCTIONS_URL') || '').trim());
   const callbackPath = normalizeCallbackPath(Deno.env.get('PAYMENT_CALLBACK_PATH') || '/payment/callback');
   if (!paymentDomain) return json(500, { success: false, message: 'دامنه callback درگاه مرکزی تنظیم نشده است.' });
-  // مبدأ برگشت پرداخت باید tenant مالک فاکتور باشد، نه هاست درخواست‌کننده یا سایت عمومی.
-  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(invoice.org_id || ''))
+  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(profile.org_id || ''))
     || normalizeSafeReturnOrigin(body?.return_origin);
   const [tx] = await rest(urlBase, key, 'payment_transactions', {
     method: 'POST',
@@ -459,7 +458,20 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
     });
   }
 
-  const amount = Math.max(0, Number(paymentState.amount || invoice.remaining_balance || 0));
+  const remainingAmount = Math.max(0, Number(paymentState.amount || invoice.remaining_balance || 0));
+  const pendingPaymentRowKey = String(body?.pending_payment_row_key || '').trim();
+  const selectedPendingPayment = pendingPaymentRowKey
+    ? (Array.isArray(invoice?.payments) ? invoice.payments : []).find((row: any) => {
+        const rowKey = String(row?.row_key || row?.payment_id || row?.id || '').trim();
+        return rowKey === pendingPaymentRowKey && String(row?.status || '').trim().toLowerCase() === 'pending';
+      })
+    : null;
+  if (pendingPaymentRowKey && !selectedPendingPayment) {
+    return json(400, { success: false, message: 'ردیف دریافت در انتظار برای این فاکتور معتبر نیست.' });
+  }
+  const amount = selectedPendingPayment
+    ? Math.min(remainingAmount, Math.max(0, Number(selectedPendingPayment?.amount || 0)))
+    : remainingAmount;
   if (!Number.isFinite(amount) || amount <= 0) return json(400, { success: false, message: 'مبلغ قابل پرداخت معتبر نیست.' });
 
   const mode = String(settings.mode || 'production') === 'sandbox' ? 'sandbox' : 'production';
@@ -469,7 +481,11 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
   const description = String(settings.default_description || '').trim()
     || `پرداخت فاکتور ${invoice.system_code || invoice.name || ''}`.trim()
     || 'پرداخت آنلاین فاکتور';
-  const returnOrigin = normalizeSafeReturnOrigin(body?.return_origin);
+  // منبع بازگشت باید از تنظیمات سازمان مالک فاکتور تعیین شود، نه دامنه عمومی یا ورودی کاربر.
+  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(invoice.org_id || ''));
+  if (!returnOrigin) {
+    return json(503, { success: false, message: 'دامنه اختصاصی این سازمان برای پرداخت آنلاین تنظیم نشده است.' });
+  }
 
   if (!paymentDomain) return json(400, { success: false, message: 'دامنه پرداخت تنظیم نشده است.' });
 
@@ -492,6 +508,7 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
         public_link: invoice.public_link || `/i/${code}`,
         public_origin: returnOrigin,
         invoice_system_code: invoice.system_code || null,
+        pending_payment_row_key: pendingPaymentRowKey || null,
         mode,
       },
     }]),
@@ -603,7 +620,7 @@ const handleCallback = async (urlBase: string, key: string, merchantId: string, 
       await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
     } else {
       const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
-      const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+      const appendResult = await rpc(urlBase, key, 'apply_online_invoice_payment_transaction', {
         p_transaction_id: tx.id,
       });
       await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);
