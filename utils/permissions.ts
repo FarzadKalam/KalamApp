@@ -149,6 +149,7 @@ export const ACCOUNTING_PERMISSION_FIELDS = [
 export const REPORTS_PERMISSION_FIELDS = [
   { key: 'hub_page', label: 'صفحه گزارشات' },
   { key: 'builder_page', label: 'گزارش ساز' },
+  { key: 'all_reports', label: 'دسترسی به همه گزارش‌ها' },
 ];
 
 export const VOIP_PERMISSION_FIELDS = [
@@ -810,6 +811,7 @@ export const resolveReportsAccessPermissions = (permissions: PermissionMap | nul
     canViewHub,
     canUseBuilder,
     canDeleteReports: canViewHub && canDeleteRoot,
+    canViewAllReports: canViewHub && fields.all_reports !== false,
   };
 };
 

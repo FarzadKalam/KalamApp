@@ -3532,13 +3532,14 @@ function getReportScheduledDueAt(report: ReportDefinitionRow, now: Date): Date |
   } as WorkflowRow, now);
 }
 
-function buildReportUrl(reportId: string): string {
+async function buildReportUrl(url: string, key: string, orgId: string, reportId: string): Promise<string> {
   const path = `/reports/${reportId}`;
-  return CALENDAR_PUBLIC_BASE_URL ? `${CALENDAR_PUBLIC_BASE_URL}${path}` : path;
+  const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
+  return baseUrl ? `${baseUrl}${path}` : path;
 }
 
-function buildScheduledReportNote(report: ReportDefinitionRow, scheduledDueAt: Date): string {
-  const reportUrl = buildReportUrl(report.id);
+async function buildScheduledReportMessage(url: string, key: string, report: ReportDefinitionRow, scheduledDueAt: Date): Promise<string> {
+  const reportUrl = await buildReportUrl(url, key, report.org_id, report.id);
   const moduleLabel = String(report.module_id || '').trim() || 'نامشخص';
   return [
     `گزارش دوره‌ای «${String(report.name || 'گزارش').trim()}» آماده مشاهده است.`,
@@ -3546,6 +3547,29 @@ function buildScheduledReportNote(report: ReportDefinitionRow, scheduledDueAt: D
     `زمان اجرا: ${formatJalaliDateTime(scheduledDueAt.toISOString())}`,
     `لینک گزارش: ${reportUrl}`,
   ].join('\n');
+}
+
+async function getScheduledReportRecipients(url: string, key: string, orgId: string, userIds: string[]) {
+  if (userIds.length === 0) return [] as any[];
+  return await dbGet(url, key, `profiles?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${userIds.map(encodeURIComponent).join(',')})&select=id,email,mobile,mobile_1,mobile_2,is_active`).catch(() => []);
+}
+
+async function sendScheduledReportToBotGroups(url: string, key: string, orgId: string, groupIds: string[], text: string): Promise<number> {
+  if (groupIds.length === 0) return 0;
+  const rows = await dbGet(url, key, `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${groupIds.map(encodeURIComponent).join(',')})&status=eq.active&select=bot_chat_id,channel_type`).catch(() => []);
+  const settingsByChannel = new Map<string, any>();
+  let sentCount = 0;
+  for (const row of rows) {
+    const channel = String(row?.channel_type || '').trim().toLowerCase();
+    const chatId = String(row?.bot_chat_id || '').trim();
+    if (!chatId || !['bale', 'telegram', 'rubika'].includes(channel)) continue;
+    if (!settingsByChannel.has(channel)) settingsByChannel.set(channel, await getOrgBotSettings(url, key, orgId, channel));
+    const settings = settingsByChannel.get(channel);
+    if (!settings) continue;
+    await sendBotMessage(chatId, text, settings, channel);
+    sentCount += 1;
+  }
+  return sentCount;
 }
 
 async function deliverScheduledReport(
@@ -3560,7 +3584,12 @@ async function deliverScheduledReport(
       .map((item: any) => String(item || '').trim())
       .filter(Boolean)
   ));
-  if (recipientUserIds.length === 0) {
+  const botGroupIds = Array.from(new Set(
+    (Array.isArray(schedule.bot_group_ids) ? schedule.bot_group_ids : [])
+      .map((item: any) => String(item || '').trim())
+      .filter(Boolean)
+  ));
+  if (recipientUserIds.length === 0 && botGroupIds.length === 0) {
     return { status: 'skipped', recipientCount: 0, message: 'گیرنده‌ای برای ارسال دوره‌ای گزارش انتخاب نشده است.' };
   }
 
@@ -3569,30 +3598,38 @@ async function deliverScheduledReport(
       .map((item: any) => String(item || '').trim().toLowerCase())
       .filter(Boolean)
   ));
-  if (!deliveryChannels.includes('note')) {
-    return { status: 'skipped', recipientCount: 0, message: 'در حال حاضر ارسال دوره‌ای گزارش فقط از مسیر یادداشت داخلی پشتیبانی می‌شود.' };
+  const message = await buildScheduledReportMessage(url, key, report, scheduledDueAt);
+  const recipients = await getScheduledReportRecipients(url, key, report.org_id, recipientUserIds);
+  let deliveredCount = 0;
+  const deliveryErrors: string[] = [];
+
+  if (deliveryChannels.includes('note')) {
+    await insertNote(url, key, {
+      org_id: report.org_id, module_id: 'reports', record_id: report.id, content: message,
+      mention_user_ids: recipientUserIds, mention_role_ids: [], source_type: 'system',
+      metadata: { source_type: 'system', notification_surface: 'system_feed', requires_action: false, scheduled_report_id: report.id, report_module_id: report.module_id, scheduled_due_at: scheduledDueAt.toISOString(), runner_build: FUNCTION_BUILD },
+    });
+    deliveredCount += recipientUserIds.length;
   }
-
-  await insertNote(url, key, {
-    org_id: report.org_id,
-    module_id: 'reports',
-    record_id: report.id,
-    content: buildScheduledReportNote(report, scheduledDueAt),
-    mention_user_ids: recipientUserIds,
-    mention_role_ids: [],
-    source_type: 'system',
-    metadata: {
-      source_type: 'system',
-      notification_surface: 'system_feed',
-      requires_action: false,
-      scheduled_report_id: report.id,
-      report_module_id: report.module_id,
-      scheduled_due_at: scheduledDueAt.toISOString(),
-      runner_build: FUNCTION_BUILD,
-    },
-  });
-
-  return { status: 'success', recipientCount: recipientUserIds.length };
+  if (deliveryChannels.includes('email')) {
+    const emails = Array.from(new Set(recipients.filter(isActiveProfileRow).map((item: any) => String(item?.email || '').trim()).filter((item: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(item))));
+    if (emails.length > 0) {
+      const response = await fetch(`${url.replace(/\/$/, '')}/functions/v1/send-email`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }, body: JSON.stringify({ to: emails, subject: `گزارش دوره‌ای: ${String(report.name || 'گزارش').trim()}`, body: message, org_id: report.org_id }), signal: AbortSignal.timeout(30000) });
+      if (!response.ok) deliveryErrors.push(`ایمیل: ${await response.text().catch(() => String(response.status))}`);
+      else deliveredCount += emails.length;
+    }
+  }
+  if (deliveryChannels.includes('sms')) {
+    const phones = Array.from(new Set(recipients.filter(isActiveProfileRow).flatMap((item: any) => [item.mobile_1, item.mobile_2, item.mobile]).map(normalizePhone).filter(isValidIranMobile)));
+    const smsSettings = await getOrgSmsSettings(url, key, report.org_id);
+    if (phones.length > 0 && smsSettings) deliveredCount += (await sendSmsViaProvider(smsSettings, phones, message, url, key)).length;
+  }
+  if (deliveryChannels.includes('bot_group')) {
+    deliveredCount += await sendScheduledReportToBotGroups(url, key, report.org_id, botGroupIds, message);
+  }
+  return deliveredCount > 0
+    ? { status: 'success', recipientCount: deliveredCount }
+    : { status: 'skipped', recipientCount: 0, message: deliveryErrors[0] || 'هیچ ارسال معتبری برای روش‌های انتخاب‌شده انجام نشد.' };
 }
 
 async function runScheduledReportsTick(url: string, key: string, now: Date): Promise<Record<string, number>> {

@@ -86,11 +86,13 @@ const ReportBuilderPage: React.FC = () => {
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<ReportScheduleUnit>('day');
   const [scheduleRecipientIds, setScheduleRecipientIds] = useState<string[]>([]);
   const [scheduleChannels, setScheduleChannels] = useState<ReportScheduleChannel[]>(['note']);
+  const [scheduleBotGroupIds, setScheduleBotGroupIds] = useState<string[]>([]);
   const [surveyTemplateSnapshot, setSurveyTemplateSnapshot] = useState(() => normalizeSurveyTemplateSnapshot({}));
 
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [botGroupOptions, setBotGroupOptions] = useState<UserOption[]>([]);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleOptions = useMemo(() => getReportModuleOptions(permissions), [permissions]);
@@ -169,7 +171,10 @@ const ReportBuilderPage: React.FC = () => {
     let cancelled = false;
     const run = async () => {
       try {
-        const directory = await fetchAssigneeDirectory(supabase);
+        const [directory, botGroupsResult] = await Promise.all([
+          fetchAssigneeDirectory(supabase),
+          supabase.from('counterparty_bot_groups').select('id, group_title, channel_type, status').eq('status', 'active').order('group_title'),
+        ]);
         if (cancelled) return;
         setUserOptions(
           (directory.users || []).map((user) => ({
@@ -177,8 +182,17 @@ const ReportBuilderPage: React.FC = () => {
             value: String(user?.id || '').trim(),
           })).filter((item) => item.value)
         );
+        setBotGroupOptions(
+          (botGroupsResult.data || []).map((group: any) => ({
+            label: `${String(group?.group_title || 'گروه بات').trim()} (${String(group?.channel_type || '').trim() || 'بات'})`,
+            value: String(group?.id || '').trim(),
+          })).filter((item) => item.value)
+        );
       } catch {
-        if (!cancelled) setUserOptions([]);
+        if (!cancelled) {
+          setUserOptions([]);
+          setBotGroupOptions([]);
+        }
       }
     };
     void run();
@@ -263,6 +277,7 @@ const ReportBuilderPage: React.FC = () => {
       setScheduleIntervalUnit(config.schedule.interval_unit);
       setScheduleRecipientIds(config.schedule.recipient_user_ids);
       setScheduleChannels(config.schedule.delivery_channels);
+      setScheduleBotGroupIds(config.schedule.bot_group_ids);
       setSetupMissing(false);
     } catch (error) {
       if (isMissingReportsTableError(error)) {
@@ -291,7 +306,7 @@ const ReportBuilderPage: React.FC = () => {
           return false;
         }
         if (scheduleEnabled) {
-          if (scheduleRecipientIds.length === 0) {
+          if (scheduleRecipientIds.length === 0 && scheduleBotGroupIds.length === 0) {
             message.error('حداقل یک دریافت‌کننده برای ارسال دوره‌ای انتخاب کنید.');
             return false;
           }
@@ -317,7 +332,7 @@ const ReportBuilderPage: React.FC = () => {
       }
       return true;
     },
-    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleChannels.length, scheduleEnabled, scheduleRecipientIds.length]
+    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleRecipientIds.length]
   );
 
   const handleSave = async () => {
@@ -345,7 +360,8 @@ const ReportBuilderPage: React.FC = () => {
           interval_value: Math.max(1, Number(scheduleIntervalValue || 1)),
           interval_unit: scheduleIntervalUnit,
           recipient_user_ids: scheduleRecipientIds,
-          delivery_channels: scheduleEnabled ? ['note'] : scheduleChannels,
+          bot_group_ids: scheduleBotGroupIds,
+          delivery_channels: scheduleChannels,
         },
       };
 
@@ -483,7 +499,7 @@ const ReportBuilderPage: React.FC = () => {
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
                   <div className="font-black text-gray-800 dark:text-gray-100">ارسال دوره‌ای</div>
-                  <div className="text-sm text-gray-500">ارسال به چند کاربر به‌صورت یادداشت داخلی همراه با لینک گزارش</div>
+                  <div className="text-sm text-gray-500">ارسال خودکار لینک داخلی گزارش به کاربران و گروه‌های انتخاب‌شده</div>
                 </div>
                 <Switch checked={scheduleEnabled} onChange={setScheduleEnabled} checkedChildren="فعال" unCheckedChildren="غیرفعال" />
               </div>
@@ -493,7 +509,19 @@ const ReportBuilderPage: React.FC = () => {
                     <InputNumber min={1} className="w-full persian-number" value={scheduleIntervalValue} onChange={(value) => setScheduleIntervalValue(Math.max(1, Number(value || 1)))} />
                     <Select className="w-full" value={scheduleIntervalUnit} onChange={(value) => setScheduleIntervalUnit(value as ReportScheduleUnit)} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} />
                   </div>
-                  <Checkbox.Group value={scheduleChannels} onChange={(value) => setScheduleChannels(value as ReportScheduleChannel[])} options={[{ label: 'یادداشت داخلی', value: 'note' }]} />
+                  <div>
+                    <div className="mb-2 font-bold">روش‌های ارسال دوره‌ای گزارش</div>
+                    <Checkbox.Group
+                      value={scheduleChannels}
+                      onChange={(value) => setScheduleChannels(value as ReportScheduleChannel[])}
+                      options={[
+                        { label: 'ایمیل', value: 'email' },
+                        { label: 'یادداشت داخلی', value: 'note' },
+                        { label: 'پیامک', value: 'sms' },
+                        { label: 'گروه بات', value: 'bot_group' },
+                      ]}
+                    />
+                  </div>
                   <div className="md:col-span-2">
                     <Select
                       className="w-full"
@@ -506,6 +534,20 @@ const ReportBuilderPage: React.FC = () => {
                       onChange={(value) => setScheduleRecipientIds((value || []).map((item) => String(item)))}
                     />
                   </div>
+                  {scheduleChannels.includes('bot_group') && (
+                    <div className="md:col-span-2">
+                      <Select
+                        className="w-full"
+                        mode="multiple"
+                        showSearch
+                        optionFilterProp="label"
+                        value={scheduleBotGroupIds}
+                        options={botGroupOptions}
+                        placeholder="یک یا چند گروه بات را انتخاب کنید"
+                        onChange={(value) => setScheduleBotGroupIds((value || []).map((item) => String(item)))}
+                      />
+                    </div>
+                  )}
                   <div className="md:col-span-2">
                     <Alert type="info" showIcon message="تنظیمات زمان‌بندی در گزارش ذخیره می‌شود. اجرای واقعی ارسال دوره‌ای به runner زمان‌بندی‌شده پروژه متصل خواهد شد." />
                   </div>

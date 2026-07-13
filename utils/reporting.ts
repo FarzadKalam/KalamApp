@@ -9,7 +9,7 @@ export type ReportMetricType = 'count' | 'sum' | 'avg';
 export type ReportDefaultView = 'table' | 'table_and_chart';
 export type ReportGroupDirection = 'asc' | 'desc';
 export type ReportScheduleUnit = 'hour' | 'day';
-export type ReportScheduleChannel = 'note' | 'email';
+export type ReportScheduleChannel = 'note' | 'email' | 'sms' | 'bot_group';
 
 export interface ReportGroupingDefinition {
   field: string;
@@ -21,6 +21,7 @@ export interface ReportScheduleConfig {
   interval_value: number;
   interval_unit: ReportScheduleUnit;
   recipient_user_ids: string[];
+  bot_group_ids: string[];
   delivery_channels: ReportScheduleChannel[];
 }
 
@@ -235,6 +236,7 @@ export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
   interval_value: 1,
   interval_unit: 'day',
   recipient_user_ids: [],
+  bot_group_ids: [],
   delivery_channels: ['note'],
 });
 
@@ -283,7 +285,7 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
   const channels = Array.isArray(raw.delivery_channels)
     ? raw.delivery_channels
         .map((item) => String(item || '').trim().toLowerCase())
-        .filter((item): item is ReportScheduleChannel => item === 'note' || item === 'email')
+        .filter((item): item is ReportScheduleChannel => item === 'note' || item === 'email' || item === 'sms' || item === 'bot_group')
     : defaults.delivery_channels;
 
   return {
@@ -293,6 +295,9 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
     recipient_user_ids: Array.isArray(raw.recipient_user_ids)
       ? raw.recipient_user_ids.map((item) => String(item || '').trim()).filter(Boolean)
       : defaults.recipient_user_ids,
+    bot_group_ids: Array.isArray(raw.bot_group_ids)
+      ? raw.bot_group_ids.map((item) => String(item || '').trim()).filter(Boolean)
+      : defaults.bot_group_ids,
     delivery_channels: channels.length > 0 ? channels : defaults.delivery_channels,
   };
 };

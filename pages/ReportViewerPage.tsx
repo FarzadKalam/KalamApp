@@ -455,12 +455,6 @@ const ReportViewerPage: React.FC = () => {
       const roleContext = await fetchCurrentUserRecordAccessContext(supabase);
       const access = resolveReportsAccessPermissions(roleContext.permissions);
       setCanEditReport(access.canUseBuilder);
-      if (!access.canViewHub) {
-        setCanViewPage(false);
-        setLoading(false);
-        return;
-      }
-
       const { data, error } = await supabase
         .from('report_definitions')
         .select('id, name, description, module_id, config, is_active, updated_at')
