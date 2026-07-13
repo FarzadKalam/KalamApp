@@ -1,6 +1,11 @@
 import { getActiveChannelSettings } from './channelSettings';
 import { createOutboundMessageLog, updateOutboundMessageStatus } from './outboundMessages';
 import { supabase } from '../supabaseClient';
+import {
+  buildAutomatedBotSenderPayload,
+  isAiBotMessagePayload,
+  isSystemBotMessagePayload,
+} from '../supabase/functions/_shared/bot-system-message';
 
 export type BotChannel = 'telegram' | 'bale' | 'rubika';
 
@@ -40,6 +45,7 @@ type SendBotMessageArgs = {
 
 type CounterpartyBotGroupTarget = {
   id?: string | null;
+  org_id?: string | null;
   customer_id?: string | null;
   supplier_id?: string | null;
   channel_type?: BotChannel | string | null;
@@ -99,18 +105,6 @@ const parseResponse = async (response: Response) => {
   } catch {
     return raw;
   }
-};
-
-const isAiSenderPayload = (payload?: Record<string, any> | null) => {
-  const source = payload && typeof payload === 'object' ? payload : {};
-  return [
-    source.sender_kind,
-    source.sender_type,
-    source.source_type,
-    source.message_source,
-    source.author_type,
-  ].some((value) => String(value || '').trim().toLowerCase() === 'ai')
-    || Boolean(source.ai_generated || source.ai_answer || source.workflow_ai_prompt);
 };
 
 export const sendBotMessageViaGateway = async ({
@@ -352,27 +346,29 @@ export const sendCounterpartyBotGroupMessage = async ({
       content_text: messageText,
       provider_result: providerResponse,
     }];
-  const { data: authData } = await supabase.auth.getUser();
+  const combinedSenderSource = { ...(payload || {}), ...(extraPayload || {}) };
+  const isAiSender = isAiBotMessagePayload(combinedSenderSource);
+  const isSystemSender = !isAiSender && isSystemBotMessagePayload(combinedSenderSource);
+  const isAutomatedSender = isAiSender || isSystemSender;
+  const { data: authData } = isAutomatedSender ? { data: { user: null } } : await supabase.auth.getUser();
   const currentUserId = String(authData?.user?.id || '').trim() || null;
   const currentUserProfile = currentUserId
     ? (await supabase
       .from('profiles')
-      .select('id, full_name, avatar_url')
+      .select('id, full_name, avatar_url, org_id')
       .eq('id', currentUserId)
       .maybeSingle()).data
     : null;
-  const combinedSenderSource = { ...(payload || {}), ...(extraPayload || {}) };
-  const isAiSender = isAiSenderPayload(combinedSenderSource);
-  const senderPayload = isAiSender
-    ? {
-        sender_user_id: currentUserId,
-        sender_profile_id: currentUserId,
-        sender_display_name: 'هوش مصنوعی',
-        sender_avatar_url: null,
-        sender_kind: 'ai',
-        sender_type: 'ai',
-        message_source: 'ai',
-      }
+  const senderOrgId = String(group?.org_id || (currentUserProfile as any)?.org_id || '').trim();
+  const systemAvatarUrl = isSystemSender && senderOrgId
+    ? String((await supabase
+      .from('company_settings')
+      .select('logo_url')
+      .eq('org_id', senderOrgId)
+      .maybeSingle()).data?.logo_url || '').trim() || null
+    : null;
+  const senderPayload = isAutomatedSender
+    ? buildAutomatedBotSenderPayload({ payload: combinedSenderSource, systemAvatarUrl })
     : {
         sender_user_id: currentUserId,
         sender_profile_id: currentUserId,
@@ -407,7 +403,8 @@ export const sendCounterpartyBotGroupMessage = async ({
       file_url: String(providerItem?.file_url || attachment?.url || '').trim() || null,
       file_name: String(providerItem?.file_name || attachment?.name || '').trim() || null,
       mime_type: String(providerItem?.mime_type || attachment?.mime_type || attachment?.mimeType || '').trim() || null,
-      created_by: currentUserId,
+      org_id: senderOrgId || undefined,
+      created_by: isAutomatedSender ? null : currentUserId,
       payload: {
         ...(payload || {}),
         ...(extraPayload || {}),
