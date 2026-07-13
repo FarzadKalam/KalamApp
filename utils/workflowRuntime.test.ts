@@ -848,6 +848,27 @@ describe('evaluateWorkflowConditions', () => {
     })).resolves.toBe(true);
   });
 
+  it('matches due-date workflows when the propagated due date becomes non-empty or changes', async () => {
+    const currentRecord = { id: 'task-2', due_date: '2026-07-22T08:00:00.000Z' };
+    const previousRecord = { id: 'task-2', due_date: null };
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [{ id: 'due-not-null', field: 'due_date', operator: 'not_null' } as any],
+      conditionsAny: [],
+      currentRecord,
+      previousRecord,
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+
+    await expect(evaluateWorkflowConditions({
+      conditionsAll: [{ id: 'due-changed', field: 'due_date', operator: 'changed' } as any],
+      conditionsAny: [],
+      currentRecord,
+      previousRecord,
+      moduleId: 'tasks',
+    })).resolves.toBe(true);
+  });
+
   it('matches date fields against calendar occasions', async () => {
     mockHolidayCalendarFetch();
 

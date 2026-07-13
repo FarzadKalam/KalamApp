@@ -17,6 +17,7 @@ import {
 } from '../_shared/process-automation-core.ts';
 import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
 import { buildProcessActivatorRecordContext } from '../_shared/process-activator-context.ts';
+import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-scalable-interval-queue';
 const MAX_WORKFLOWS = 30;
@@ -2604,7 +2605,17 @@ async function prepareProcessRunForAutomaticExecution(
   processRunId: string,
   record: Record<string, any>,
 ) {
-  const processLinks = parseObjectValue(record?.process_links);
+  const recurrence = parseObjectValue(record?.recurrence_info);
+  const runRows = await dbGet(url, key,
+    `process_runs?id=eq.${encodeURIComponent(processRunId)}&org_id=eq.${encodeURIComponent(orgId)}&select=module_id,record_id&limit=1`
+  ).catch(() => []);
+  const runModuleId = String(runRows[0]?.module_id || '').trim();
+  const runRecordId = String(runRows[0]?.record_id || '').trim();
+  const processLinks = {
+    ...parseObjectValue(recurrence?.process_links),
+    ...parseObjectValue(record?.process_links),
+    ...(runModuleId && runRecordId ? { [runModuleId]: runRecordId } : {}),
+  };
   const targetModuleIds = Array.from(new Set([
     ...(Array.isArray(record?.process_target_module_ids) ? record.process_target_module_ids : []),
     ...Object.keys(processLinks),
@@ -2613,6 +2624,13 @@ async function prepareProcessRunForAutomaticExecution(
   const existingLinks = await dbGet(url, key,
     `process_run_links?org_id=eq.${encodeURIComponent(orgId)}&process_run_id=eq.${encodeURIComponent(processRunId)}&select=module_id,record_id`
   ).catch(() => []);
+  for (const existingLink of existingLinks) {
+    const linkedModuleId = String(existingLink?.module_id || '').trim();
+    const linkedRecordId = String(existingLink?.record_id || '').trim();
+    if (linkedModuleId && linkedRecordId && !processLinks[linkedModuleId]) {
+      processLinks[linkedModuleId] = linkedRecordId;
+    }
+  }
   const existingLinkKeys = new Set(existingLinks.map((link: any) => `${link.module_id}:${link.record_id}`));
   for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
     const linkedRecordId = String(linkedRecordIdRaw || '').trim();
@@ -2631,17 +2649,49 @@ async function prepareProcessRunForAutomaticExecution(
   const runStages = await dbGet(url, key,
     `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=*&order=sort_order.asc&limit=500`
   ).catch(() => []);
+  const templateRecord: Record<string, any> = { ...record };
+  for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
+    const linkedRecordId = String(linkedRecordIdRaw || '').trim();
+    if (!linkedModuleId || !linkedRecordId) continue;
+    const linkedRows = await dbGet(url, key,
+      `${getModuleTable(linkedModuleId)}?id=eq.${encodeURIComponent(linkedRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
+    ).catch(() => []);
+    const linkedRecord = linkedRows[0];
+    if (!linkedRecord) continue;
+    Object.entries(linkedRecord).forEach(([field, value]) => {
+      templateRecord[`__linked__${linkedModuleId}__${field}`] = value;
+    });
+    if (String(record?.id || '').trim() === linkedRecordId) Object.assign(templateRecord, linkedRecord);
+  }
   for (const stage of runStages) {
     const metadata = parseObjectValue(stage?.metadata);
+    templateRecord.task_name = String(stage?.stage_name || '').trim();
+    templateRecord.task_status = 'todo';
+    templateRecord.status_label = 'در انتظار انجام';
+    templateRecord.task_status_label = 'در انتظار انجام';
     const assigneeReference = String(metadata?.default_assignee_field || '').trim().replace(/^field:/i, '');
     const resolvedAssignee = assigneeReference
-      ? parseProcessAssigneeToken(getFieldValueForCondition(record, assigneeReference))
+      ? parseProcessAssigneeToken(getFieldValueForCondition(templateRecord, assigneeReference))
       : { userId: null, roleId: null };
+    const firstRenderedStage = await renderProcessStageForTaskCreation(
+      { stageName: String(stage?.stage_name || ''), metadata },
+      (template) => renderTemplateAsync(template, templateRecord, url, key, false, orgId, runModuleId),
+      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord),
+    );
+    // توضیح و مقادیر اختصاصی می‌توانند به {{task_name}} وابسته باشند؛
+    // پاس دوم آن‌ها را با عنوان نهایی فعالیت حل می‌کند.
+    templateRecord.task_name = firstRenderedStage.stageName;
+    const renderedStage = await renderProcessStageForTaskCreation(
+      firstRenderedStage,
+      (template) => renderTemplateAsync(template, templateRecord, url, key, false, orgId, runModuleId),
+      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord),
+    );
     await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(String(stage.id))}`, {
+      stage_name: renderedStage.stageName,
       assignee_user_id: stage?.assignee_user_id || resolvedAssignee.userId,
       assignee_role_id: stage?.assignee_role_id || resolvedAssignee.roleId,
       metadata: {
-        ...metadata,
+        ...renderedStage.metadata,
         process_link_map: processLinks,
         process_target_module_ids: targetModuleIds,
       },
@@ -3218,6 +3268,7 @@ async function executeAction(
     }
 
     if (nodeKeys.length === 0) return actionResult(action, 'skipped', 'مرحله مقصد برای فعال‌سازی پیدا نشد.');
+    await prepareProcessRunForAutomaticExecution(url, key, orgId, processRunId, record);
     const result = await callRpc(url, key, 'activate_process_run_nodes', {
       p_org_id: orgId,
       p_process_run_id: processRunId,

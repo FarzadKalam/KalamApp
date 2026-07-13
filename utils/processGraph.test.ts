@@ -209,4 +209,45 @@ describe('processSchedule', () => {
       processStartedAt: '2026-06-01T08:00:00.000Z',
     })?.toISOString()).toBe('2026-06-13T08:00:00.000Z');
   });
+
+  it('recalculates a specific-stage due anchor from the current referenced due date', () => {
+    const stages = [
+      { process_node_key: 'review', process_lane_key: 'lane_1', sort_order: 10, due_date: '2026-07-20T09:30:00.000Z' },
+      {
+        process_node_key: 'notify',
+        process_lane_key: 'lane_2',
+        sort_order: 10,
+        due_anchor_type: 'specific_stage_due',
+        due_anchor_stage_node_key: 'review',
+        duration_value: 2,
+        duration_unit: 'hour',
+      },
+    ];
+
+    expect(computeProcessStageDueDate({
+      stage: stages[1],
+      stages,
+      processStartedAt: null,
+    })?.toISOString()).toBe('2026-07-20T11:30:00.000Z');
+  });
+
+  it('supports start and next-stage completion anchors without falling back to process start', () => {
+    const stages = [
+      {
+        process_node_key: 'a', process_lane_key: 'lane_1', sort_order: 10,
+        due_anchor_type: 'next_stage_completed', duration_value: 1, duration_unit: 'day',
+      },
+      { process_node_key: 'b', process_lane_key: 'lane_1', sort_order: 20, actual_end_at: '2026-07-21T08:00:00.000Z' },
+      {
+        process_node_key: 'c', process_lane_key: 'lane_1', sort_order: 30,
+        due_anchor_type: 'previous_stage_start', duration_value: 30, duration_unit: 'hour',
+      },
+    ];
+
+    expect(computeProcessStageDueDate({ stage: stages[0], stages, processStartedAt: null })?.toISOString())
+      .toBe('2026-07-22T08:00:00.000Z');
+    stages[1].actual_start_at = '2026-07-19T06:00:00.000Z';
+    expect(computeProcessStageDueDate({ stage: stages[2], stages, processStartedAt: null })?.toISOString())
+      .toBe('2026-07-20T12:00:00.000Z');
+  });
 });
