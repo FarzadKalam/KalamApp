@@ -11,6 +11,7 @@ import {
   LinkOutlined,
   EditOutlined,
   PushpinOutlined,
+  PushpinFilled,
   SaveOutlined,
   TeamOutlined,
   UserOutlined,
@@ -378,6 +379,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
   const [editingReadyTextContent, setEditingReadyTextContent] = useState('');
   const [updatingReadyText, setUpdatingReadyText] = useState(false);
   const [deletingReadyTextId, setDeletingReadyTextId] = useState<string | null>(null);
+  const [pinningReadyTextId, setPinningReadyTextId] = useState<string | null>(null);
   const [relationLiveOptions, setRelationLiveOptions] = useState<any[]>([]);
   const [relationExactOption, setRelationExactOption] = useState<any | null>(null);
   const [relationLoading, setRelationLoading] = useState(false);
@@ -392,24 +394,6 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     canEdit: true,
     canDelete: true,
   });
-  const readyTextPinStorageKey = useMemo(
-    () => `kalamapp.ready_text_pins.${moduleId || 'global'}.${field.key || 'field'}`,
-    [field.key, moduleId]
-  );
-  const readPinnedReadyTextIds = () => {
-    if (typeof window === 'undefined') return new Set<string>();
-    try {
-      const raw = window.localStorage.getItem(readyTextPinStorageKey);
-      const parsed = raw ? JSON.parse(raw) : [];
-      return new Set(
-        Array.isArray(parsed)
-          ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
-          : []
-      );
-    } catch {
-      return new Set<string>();
-    }
-  };
   const sortReadyTexts = (items: ReadyTextItem[]) =>
     [...items].sort((left, right) => {
       const pinnedDelta = Number(Boolean(right?.pinned)) - Number(Boolean(left?.pinned));
@@ -1355,21 +1339,21 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
     try {
       let query = supabase
         .from('ready_texts')
-        .select('id, title, content, module_id')
+        .select('id, title, content, module_id, is_pinned')
+        .order('is_pinned', { ascending: false })
         .order('created_at', { ascending: false })
         .limit(200);
-      if (moduleId) {
-        query = query.or(`module_id.is.null,module_id.eq.${moduleId}`);
-      }
+      query = moduleId
+        ? query.eq('module_id', moduleId)
+        : query.is('module_id', null);
       const { data, error } = await query;
       if (error) throw error;
-      const pinnedIds = readPinnedReadyTextIds();
       const rows = (data || [])
         .map((row: any) => ({
           id: String(row?.id || ''),
           title: String(row?.title || '').trim(),
           content: String(row?.content || ''),
-          pinned: pinnedIds.has(String(row?.id || '')),
+          pinned: row?.is_pinned === true,
         }))
         .filter((row) => row.id && row.content.trim().length > 0);
       setReadyTexts(sortReadyTexts(rows));
@@ -1460,13 +1444,17 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
     setUpdatingReadyText(true);
     try {
-      const { error } = await supabase
+      let query = supabase
         .from('ready_texts')
         .update({
           title: title || content.slice(0, 40),
           content,
         })
         .eq('id', editingReadyTextId);
+      query = moduleId
+        ? query.eq('module_id', moduleId)
+        : query.is('module_id', null);
+      const { error } = await query;
       if (error) throw error;
       await loadReadyTexts();
       cancelEditReadyText();
@@ -1487,7 +1475,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
 
     setDeletingReadyTextId(id);
     try {
-      const { error } = await supabase.from('ready_texts').delete().eq('id', id);
+      let query = supabase.from('ready_texts').delete().eq('id', id);
+      query = moduleId
+        ? query.eq('module_id', moduleId)
+        : query.is('module_id', null);
+      const { error } = await query;
       if (error) throw error;
       setReadyTexts((prev) => prev.filter((item) => item.id !== id));
       if (editingReadyTextId === id) {
@@ -1501,25 +1493,42 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
       setDeletingReadyTextId(null);
     }
   };
-  const toggleReadyTextPin = (id: string) => {
-    const normalizedId = String(id || '').trim();
-    if (!normalizedId) return;
-    const nextPinnedIds = readPinnedReadyTextIds();
-    if (nextPinnedIds.has(normalizedId)) {
-      nextPinnedIds.delete(normalizedId);
-    } else {
-      nextPinnedIds.add(normalizedId);
+  const toggleReadyTextPin = async (item: ReadyTextItem) => {
+    const normalizedId = String(item?.id || '').trim();
+    if (!normalizedId || pinningReadyTextId) return;
+    if (!readyTextPermissions.canEdit) {
+      msg.warning('دسترسی تغییر سنجاق متن‌های آماده برای این ماژول فعال نیست.');
+      return;
     }
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(readyTextPinStorageKey, JSON.stringify(Array.from(nextPinnedIds)));
-    }
+
+    const nextPinned = !item.pinned;
+    setPinningReadyTextId(normalizedId);
     setReadyTexts((prev) => sortReadyTexts(
-      prev.map((item) => (
-        item.id === normalizedId
-          ? { ...item, pinned: nextPinnedIds.has(normalizedId) }
-          : item
+      prev.map((currentItem) => (
+        currentItem.id === normalizedId
+          ? { ...currentItem, pinned: nextPinned }
+          : currentItem
       ))
     ));
+
+    try {
+      let query = supabase
+        .from('ready_texts')
+        .update({ is_pinned: nextPinned })
+        .eq('id', normalizedId);
+      query = moduleId
+        ? query.eq('module_id', moduleId)
+        : query.is('module_id', null);
+      const { error } = await query;
+      if (error) throw error;
+      msg.success(nextPinned ? 'متن برای همه اعضای سازمان سنجاق شد.' : 'سنجاق متن برای سازمان برداشته شد.');
+    } catch (error) {
+      console.warn('Could not update ready text pin', error);
+      await loadReadyTexts();
+      msg.error('تغییر سنجاق متن آماده ناموفق بود.');
+    } finally {
+      setPinningReadyTextId(null);
+    }
   };
 
   const copyReadyText = async (content: string) => {
@@ -2973,7 +2982,7 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     ) : (
                       <>
                         <div className="text-xs font-semibold text-gray-700 dark:text-gray-200 truncate flex items-center gap-1">
-                          {item.pinned ? <PushpinOutlined className="text-amber-500" /> : null}
+                          {item.pinned ? <PushpinFilled className="text-amber-500" /> : null}
                           <span>{item.title || 'متن بدون عنوان'}</span>
                         </div>
                         <div className="mt-1 text-xs whitespace-pre-wrap break-words text-gray-600 dark:text-gray-300">
@@ -2986,8 +2995,11 @@ const SmartFieldRenderer: React.FC<SmartFieldRendererProps> = ({
                     <Button
                       size="small"
                       type={item.pinned ? 'primary' : 'default'}
-                      icon={<PushpinOutlined />}
-                      onClick={() => toggleReadyTextPin(item.id)}
+                      icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />}
+                      title={item.pinned ? 'برداشتن سنجاق سازمانی' : 'سنجاق برای همه اعضای سازمان'}
+                      loading={pinningReadyTextId === item.id}
+                      disabled={Boolean(pinningReadyTextId && pinningReadyTextId !== item.id)}
+                      onClick={() => void toggleReadyTextPin(item)}
                     />
                     <Button
                       size="small"

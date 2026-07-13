@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  assignProcessAutomationIdentityContext,
   evaluateProcessAutomationConditions,
   getAdjacentProcessTasks,
   getTaskProcessAutomationRules,
+  getTaskProcessIdentity,
   resolveProcessAutomationTargetTokens,
 } from './process-automation-core';
 
@@ -76,5 +78,24 @@ describe('server process automation core', () => {
 
     expect(result).toBe(false);
     expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves process and lane names from the existing process snapshot', () => {
+    const task = {
+      process_lane_key: 'lane-sales',
+      recurrence_info: {
+        process_group: { name: 'فروش سازمانی' },
+        process_graph: { lanes: [{ key: 'lane-sales', name: 'پیگیری فروش' }] },
+      },
+    };
+    const identity = getTaskProcessIdentity(task);
+    const context = assignProcessAutomationIdentityContext({}, identity.processName, identity.laneName);
+
+    expect(context).toMatchObject({
+      process_name: 'فروش سازمانی',
+      process_lane_name: 'پیگیری فروش',
+      'نام فرآیند': 'فروش سازمانی',
+      'نام ردیف': 'پیگیری فروش',
+    });
   });
 });

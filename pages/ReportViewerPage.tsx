@@ -25,6 +25,7 @@ import {
   getReportTableBlock,
   getReportableFieldMap,
   getReportableFields,
+  isDeletedReportRecord,
   buildReportTableFieldKey,
   parseReportTableFieldKey,
   parseReportTableRelationFieldKey,
@@ -155,9 +156,6 @@ const getMetricSourceKey = (fieldKey: string, row: Record<string, any>) => {
 
   return `record:${String(row?.id || row?.__report_parent_row?.id || row.__report_row_key || '')}`;
 };
-
-const isDeletedReportRecord = (row: Record<string, any> | null | undefined) =>
-  !!row && (row.is_deleted === true || row.deleted === true || row._deleted === true || !!row.deleted_at);
 
 const isDeletedReportTableRow = (row: Record<string, any> | null | undefined) =>
   isDeletedReportRecord(row) || row?.__deleted === true || row?._destroy === true;

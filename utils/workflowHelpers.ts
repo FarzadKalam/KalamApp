@@ -13,6 +13,10 @@ import {
   createWorkflowRelatedFieldKey,
 } from './workflowTypes';
 import { PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS } from './processModuleSupport';
+import {
+  PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY,
+  PROCESS_NAME_TEMPLATE_FIELD_KEY,
+} from './processTemplateContext';
 
 const HIDDEN_WORKFLOW_FIELD_KEYS = new Set([
   'execution_process_draft',
@@ -183,6 +187,23 @@ export const getProcessAutomationTaskFields = () => {
 
   return result;
 };
+
+export const getProcessTemplateIdentityFields = (): ModuleField[] => ([
+  {
+    key: PROCESS_NAME_TEMPLATE_FIELD_KEY,
+    labels: { fa: 'نام فرآیند', en: 'Process Name' },
+    type: FieldType.TEXT,
+    nature: 'system' as any,
+    readonly: true,
+  },
+  {
+    key: PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY,
+    labels: { fa: 'نام ردیف', en: 'Process Lane Name' },
+    type: FieldType.TEXT,
+    nature: 'system' as any,
+    readonly: true,
+  },
+]);
 
 export const getProcessAutomationConditionFields = (moduleId?: string | null): ModuleField[] => {
   const taskFields = getProcessAutomationTaskFields();

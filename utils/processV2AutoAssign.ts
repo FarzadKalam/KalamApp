@@ -36,8 +36,10 @@ import {
   syncProcessRunStageFromTask,
 } from './processRunRuntime';
 import {
+  assignProcessTemplateIdentityAliases,
   assignProcessTemplateModuleAliases,
   resolveProcessTemplateTokenValue,
+  resolveProcessTemplateLaneName,
 } from './processTemplateContext';
 import {
   createProcessLinkedFieldKey,
@@ -648,6 +650,10 @@ export const autoAssignProcessV2DraftStages = async ({
       taskType: stageTaskType,
       dueDate,
       previousTask: previousResolvedTask,
+    });
+    assignProcessTemplateIdentityAliases(templateContext, {
+      processName: stageMeta.groupLabel || stageMeta.templateName,
+      laneName: resolveProcessTemplateLaneName(stage),
     });
     const resolvedStageName = normalizeText(renderProcessV2TemplateValueFromRecord(rawStageName, templateContext, FieldType.TEXT) ?? rawStageName) || rawStageName;
     const resolvedDescription = normalizeText(renderProcessV2TemplateValueFromRecord(stageDescription, {

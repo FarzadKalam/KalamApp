@@ -457,6 +457,14 @@ const ModuleShow: React.FC = () => {
     () => String((location.state as any)?.focusRowKey || '').trim() || null,
     [location.state]
   );
+  const openProcessLinksRequest = useMemo(() => {
+    const request = (location.state as any)?.openProcessLinks;
+    if (!request || typeof request !== 'object') return null;
+    return {
+      groupId: String(request?.groupId || '').trim() || null,
+      templateId: String(request?.templateId || '').trim() || null,
+    };
+  }, [location.state]);
   const supportsAssignee = supportsModuleAssignee(baseModuleConfig);
   const supportsRoleAssignee = supportsModuleRoleAssignee(baseModuleConfig);
 
@@ -653,6 +661,7 @@ const ModuleShow: React.FC = () => {
   const [processRuntimeSnapshot, setProcessRuntimeSnapshot] = useState<ProcessRuntimeSnapshot | null>(null);
   const bomCopyPromptRef = useRef<string | null>(null);
   const processTemplatePromptRef = useRef<string | null>(null);
+  const handledProcessLinksRequestRef = useRef('');
   const processDraftFieldKey = useMemo(() => {
     if (!moduleConfig?.fields?.length) return null;
     const hasProcessTemplateField = moduleConfig.fields.some((f: any) => String(f?.key || '') === 'process_template_id');
@@ -660,6 +669,29 @@ const ModuleShow: React.FC = () => {
     const knownDraftKeys = ['execution_process_draft', 'marketing_process_draft', 'production_stages_draft'];
     return knownDraftKeys.find((key) => moduleConfig.fields.some((f: any) => String(f?.key || '') === key)) || null;
   }, [moduleConfig?.fields]);
+  useEffect(() => {
+    if (!openProcessLinksRequest || loading || !data?.id || !processDraftFieldKey || typeof window === 'undefined') return;
+    const requestKey = `${moduleId}:${id}:${openProcessLinksRequest.groupId || ''}:${openProcessLinksRequest.templateId || ''}`;
+    if (handledProcessLinksRequestRef.current === requestKey) return;
+    const timeoutId = window.setTimeout(() => {
+      handledProcessLinksRequestRef.current = requestKey;
+      document.getElementById(`process-section-${String(moduleId)}-${String(id || '')}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      window.dispatchEvent(new CustomEvent('kalamapp:open-process-append', {
+        detail: {
+          moduleId: String(moduleId),
+          recordId: String(id || ''),
+          mode: 'links',
+          group: {
+            id: openProcessLinksRequest.groupId,
+            templateId: openProcessLinksRequest.templateId,
+            stages: [],
+          },
+        },
+      }));
+    }, 180);
+    return () => window.clearTimeout(timeoutId);
+  }, [data?.id, id, loading, moduleId, openProcessLinksRequest, processDraftFieldKey]);
   const [productionModal, setProductionModal] = useState<'start' | 'stop' | 'complete' | null>(null);
   const [productionShelfOptions, setProductionShelfOptions] = useState<{ label: string; value: string }[]>([]);
   const [sourceShelfOptionsByProduct, setSourceShelfOptionsByProduct] = useState<Record<string, { label: string; value: string; stock?: number }[]>>({});

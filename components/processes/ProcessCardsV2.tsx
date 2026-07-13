@@ -16,6 +16,7 @@ import {
   CopyOutlined,
   DeleteOutlined,
   HolderOutlined,
+  HistoryOutlined,
   InfoCircleOutlined,
   DownOutlined,
   LeftOutlined,
@@ -70,6 +71,7 @@ export type ProcessV2TemplateCard = {
   activatorLabel: string;
   realtimeLabel?: string;
   lanes: ProcessV2Lane[];
+  auditSource?: any;
 };
 
 export type ProcessV2RunCard = {
@@ -82,6 +84,7 @@ export type ProcessV2RunCard = {
   statusLabel: string;
   realtimeLabel?: string;
   lanes: ProcessV2Lane[];
+  auditSource?: any;
 };
 
 export type ProcessV2CardData = ProcessV2TemplateCard | ProcessV2RunCard;
@@ -99,6 +102,7 @@ type ProcessCardsV2Props = {
   onOpenStageDetails?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData) => boolean | void;
   onStageStatusChange?: (process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
   onShowInfo?: (item: ProcessV2CardData) => void;
+  onShowHistory?: (item: ProcessV2CardData) => void;
   onShowRecords?: (item: ProcessV2CardData) => void;
   onTemplateChange?: (item: ProcessV2RunCard, templateId: string, intent: 'replace' | 'add') => void | Promise<void>;
   onAutoAssignProcess?: (item: ProcessV2CardData) => void;
@@ -646,6 +650,28 @@ const confirmProcessV2Delete = (title: string, onConfirm: () => void | Promise<v
     zIndex: 32000,
     onOk: onConfirm,
   });
+};
+
+const copyProcessTemplateToken = async (token: string) => {
+  const text = String(token || '').trim();
+  if (!text) return;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // fallback below
+  }
+  if (typeof document === 'undefined') return;
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
 };
 
 const IconButton = ({
@@ -1496,6 +1522,7 @@ const ProcessLaneRow = memo(({
   onToggleCollapse,
   onDelete,
   onCopy,
+  onCopyVariable,
   onInsertStageBefore,
   onInsertStageAfter,
   onInsertStageAtSlot,
@@ -1532,6 +1559,7 @@ const ProcessLaneRow = memo(({
   onToggleCollapse: () => void;
   onDelete: () => void;
   onCopy?: () => void;
+  onCopyVariable?: () => void;
   onInsertStageBefore: (stageId: string) => void;
   onInsertStageAfter: (stageId: string | null) => void;
   onInsertStageAtSlot: (slot: number) => void;
@@ -1668,6 +1696,9 @@ const ProcessLaneRow = memo(({
           <span className="min-w-0 flex-1">
             <InlineTitle value={lane.title} onSave={onUpdateTitle} className="max-w-[260px] text-[12px]" />
           </span>
+          {cardMode === 'template' && onCopyVariable ? (
+            <IconButton title="کپی متغیر نام ردیف" icon={<CopyOutlined />} onClick={onCopyVariable} />
+          ) : null}
           <Tag className={`!m-0 !rounded-full !border !px-2 !py-0 !text-[10px] !font-black ${laneStatusView.className}`}>
             {laneStatusView.label}
           </Tag>
@@ -1973,6 +2004,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   onOpenStageDetails,
   onStageStatusChange,
   onShowInfo,
+  onShowHistory,
   onShowRecords,
   onTemplateChange,
   onAutoAssignProcess,
@@ -2707,6 +2739,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               <IconButton title="حذف فرآیند" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف فرآیند', () => onDelete?.(item.id))} />
               <IconButton title="کپی فرآیند" icon={<CopyOutlined />} onClick={() => onCopy?.(item.id)} />
               <IconButton title="اطلاعات اجرای فرآیند" icon={<InfoCircleOutlined />} onClick={() => onShowInfo?.(item)} />
+              <IconButton title="تاریخچه تغییرات فرآیند" icon={<HistoryOutlined />} onClick={() => onShowHistory?.(item)} />
               <IconButton title={processCollapsed ? 'باز کردن فرآیند' : 'جمع کردن فرآیند'} icon={processCollapsed ? <LeftOutlined /> : <DownOutlined />} onClick={toggleAllLanesCollapsed} />
               <IconButton title={stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل'} icon={<CompressOutlined />} onClick={toggleStageSizeMode} />
             </div>
@@ -2732,12 +2765,19 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               className="min-w-0 text-[14px]"
             />
           </span>
+          <IconButton
+            title="کپی متغیر نام فرآیند"
+            icon={<CopyOutlined />}
+            onClick={() => { void copyProcessTemplateToken('{{نام فرآیند}}'); }}
+          />
           <Tag className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${computedStatusView.className}`}>
             {computedStatusView.label}
           </Tag>
           <div className="flex max-w-full flex-nowrap items-center gap-1 overflow-x-auto" style={{ marginInlineStart: 'auto' }} onClick={(event) => event.stopPropagation()}>
             {editorTools}
             <IconButton title="حذف الگو" icon={<DeleteOutlined />} danger onClick={() => confirmProcessV2Delete('حذف الگو', () => onDelete?.(item.id))} />
+            <IconButton title="اطلاعات الگوی فرآیند" icon={<InfoCircleOutlined />} onClick={() => onShowInfo?.(item)} />
+            <IconButton title="تاریخچه تغییرات الگوی فرآیند" icon={<HistoryOutlined />} onClick={() => onShowHistory?.(item)} />
             <IconButton title={processCollapsed ? 'باز کردن الگو' : 'جمع کردن الگو'} icon={processCollapsed ? <LeftOutlined /> : <DownOutlined />} onClick={toggleAllLanesCollapsed} />
             <IconButton title={stageSizeMode === 'fit' ? 'نمای بزرگ مراحل' : 'فیت کردن مراحل'} icon={<CompressOutlined />} onClick={toggleStageSizeMode} />
           </div>
@@ -2805,6 +2845,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                   onToggleCollapse={() => updateLane(lane.id, (currentLane) => ({ ...currentLane, collapsed: !currentLane.collapsed }))}
                   onDelete={() => deleteLane(lane)}
                   onCopy={item.mode === 'run' ? () => updateItem((current) => ({ ...current, lanes: [...current.lanes, cloneLane(lane)] } as ProcessV2CardData)) : undefined}
+                  onCopyVariable={item.mode === 'template' ? () => { void copyProcessTemplateToken('{{نام ردیف}}'); } : undefined}
                   onInsertStageBefore={(stageId) => insertStageBefore(lane.id, stageId)}
                   onInsertStageAfter={(stageId) => insertStageAfter(lane.id, stageId)}
                   onInsertStageAtSlot={(slot) => insertStageAtSlot(lane.id, slot)}

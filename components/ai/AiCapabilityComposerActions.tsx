@@ -294,6 +294,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
                 mode="template"
                 moduleId={moduleId}
                 record={promptRecord}
+                readyTextScope="ai"
                 templateOnlyTitle="پرامپت‌های آماده هوش مصنوعی"
                 onApplyTemplate={(content) => {
                   const text = String(content || '').trim();

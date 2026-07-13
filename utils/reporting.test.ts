@@ -5,11 +5,14 @@ import {
   buildReportTableFieldKey,
   buildReportTableRelationFieldKey,
   getMainReportableFields,
+  isDeletedReportRecord,
 } from './reporting';
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
 
 describe('buildReportBaseSelectColumns', () => {
   const moduleConfig = {
+    id: 'invoices',
+    table: 'invoices',
     fields: [
       { key: 'name', type: FieldType.TEXT, labels: { fa: 'نام' } },
       { key: 'customer_id', type: FieldType.RELATION, labels: { fa: 'مشتری' } },
@@ -37,14 +40,59 @@ describe('buildReportBaseSelectColumns', () => {
       'id',
       'org_id',
       'assignee_id',
-      'is_deleted',
       'name',
       'total_invoice_amount',
       'customer_id',
       'payments',
       'invoiceItems',
     ]));
-    expect(columns).not.toEqual(expect.arrayContaining(['deleted', '_deleted', 'deleted_at']));
+    expect(columns).not.toEqual(expect.arrayContaining(['is_deleted', 'deleted', '_deleted', 'deleted_at']));
+  });
+
+  it('does not request unsupported assignee or soft-delete columns', () => {
+    const columns = buildReportBaseSelectColumns(
+      {
+        id: 'reports',
+        table: 'reports',
+        fields: [{ key: 'name', type: FieldType.TEXT, labels: { fa: 'نام' } }],
+      },
+      ['name'],
+      [],
+    );
+
+    expect(columns).toEqual(['id', 'org_id', 'created_at', 'updated_at', 'name']);
+  });
+
+  it('always selects a declared soft-delete marker so deleted rows can be excluded', () => {
+    const columns = buildReportBaseSelectColumns(
+      {
+        id: 'custom_soft_delete_module',
+        table: 'custom_soft_delete_records',
+        fields: [
+          { key: 'name', type: FieldType.TEXT, labels: { fa: 'نام' } },
+          { key: 'is_deleted', type: FieldType.CHECKBOX, labels: { fa: 'حذف شده' } },
+        ],
+      },
+      ['name'],
+      [],
+    );
+
+    expect(columns).toEqual(expect.arrayContaining(['name', 'is_deleted']));
+  });
+});
+
+describe('isDeletedReportRecord', () => {
+  it.each([
+    { is_deleted: true },
+    { deleted: true },
+    { _deleted: true },
+    { deleted_at: '2026-07-14T00:00:00Z' },
+  ])('excludes deleted report records for every supported marker', (row) => {
+    expect(isDeletedReportRecord(row)).toBe(true);
+  });
+
+  it('keeps active records in report calculations', () => {
+    expect(isDeletedReportRecord({ is_deleted: false, deleted_at: null })).toBe(false);
   });
 });
 

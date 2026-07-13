@@ -2,10 +2,14 @@ import { MODULES } from '../moduleRegistry';
 import { renderTemplateText, type TemplateOptionLabelMaps } from './messageTemplateRenderer';
 import { normalizePhoneForStorage } from './phoneNumber';
 
-export type MessageReadyTextKind = 'field' | 'message';
+export type MessageReadyTextKind = 'field' | 'message' | 'ai' | 'workflow_automation';
+export type MessageReadyTextScope = 'module' | 'ai' | 'workflow_automation';
 
 export const GLOBAL_MESSAGE_READY_TEXT_SCOPE = '__message__';
 export const MESSAGE_READY_TEXT_SCOPE_PREFIX = '__message__:';
+export const AI_READY_TEXT_SCOPE = GLOBAL_MESSAGE_READY_TEXT_SCOPE;
+export const GENERAL_MESSAGE_READY_TEXT_SCOPE = `${MESSAGE_READY_TEXT_SCOPE_PREFIX}general`;
+export const WORKFLOW_AUTOMATION_READY_TEXT_SCOPE = '__workflow_automation__';
 
 const DEFAULT_PHONE_KEYS = ['mobile_1', 'mobile_2', 'phone'];
 
@@ -15,10 +19,20 @@ export const getReadyTextScopeModuleId = (
 ) => {
   const normalizedModuleId = String(moduleId || '').trim();
   if (kind === 'field') return normalizedModuleId || null;
+  if (kind === 'ai') return AI_READY_TEXT_SCOPE;
+  if (kind === 'workflow_automation') return WORKFLOW_AUTOMATION_READY_TEXT_SCOPE;
   return normalizedModuleId
     ? `${MESSAGE_READY_TEXT_SCOPE_PREFIX}${normalizedModuleId}`
-    : GLOBAL_MESSAGE_READY_TEXT_SCOPE;
+    : GENERAL_MESSAGE_READY_TEXT_SCOPE;
 };
+
+export const getMessageReadyTextScopeModuleId = (
+  moduleId?: string | null,
+  scope: MessageReadyTextScope = 'module'
+) => getReadyTextScopeModuleId(
+  moduleId,
+  scope === 'module' ? 'message' : scope
+);
 
 export const renderRecordTemplate = (
   template: string,

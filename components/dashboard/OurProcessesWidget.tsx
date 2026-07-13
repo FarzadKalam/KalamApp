@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { App, Button, Card, Empty, Spin, Tag } from 'antd';
-import { NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
+import { App, Button, Card, Empty, Spin, Tag, Tooltip } from 'antd';
+import { LinkOutlined, NodeIndexOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
@@ -557,14 +557,34 @@ const OurProcessesWidget: React.FC = () => {
                 className="rounded-2xl border border-gray-200/80 bg-white/85 p-2 shadow-sm transition-shadow hover:shadow-md dark:border-gray-700 dark:bg-[#111827]/80"
               >
                 <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    className="min-w-0 truncate text-right text-xs font-semibold text-gray-700 hover:text-[rgba(var(--brand-600-rgb),1)] dark:text-gray-200"
-                    onClick={() => navigate(`/${item.moduleId}/${item.recordId}`)}
-                    title={item.templateName ? `${getModuleTitle(item.moduleId)} - ${item.templateName}` : getModuleTitle(item.moduleId)}
-                  >
-                    {getModuleTitle(item.moduleId)}
-                  </button>
+                  <div className="flex min-w-0 items-center gap-1">
+                    <button
+                      type="button"
+                      className="min-w-0 truncate text-right text-xs font-semibold text-gray-700 hover:text-[rgba(var(--brand-600-rgb),1)] dark:text-gray-200"
+                      onClick={() => navigate(`/${item.moduleId}/${item.recordId}`)}
+                      title={item.templateName ? `${getModuleTitle(item.moduleId)} - ${item.templateName}` : getModuleTitle(item.moduleId)}
+                    >
+                      {getModuleTitle(item.moduleId)}
+                    </button>
+                    <Tooltip title="رکوردهای مرتبط با این فرآیند">
+                      <Button
+                        type="text"
+                        size="small"
+                        shape="circle"
+                        aria-label="رکوردهای مرتبط با این فرآیند"
+                        icon={<LinkOutlined />}
+                        className="!h-6 !w-6 !min-w-6 !text-gray-500 hover:!text-[rgba(var(--brand-600-rgb),1)]"
+                        onClick={() => navigate(`/${item.moduleId}/${item.recordId}`, {
+                          state: {
+                            openProcessLinks: {
+                              groupId: item.groupId,
+                              templateId: item.templateId,
+                            },
+                          },
+                        })}
+                      />
+                    </Tooltip>
+                  </div>
                   {item.templateName ? (
                     <Tag className="m-0 max-w-[58%] truncate rounded-full text-[10px]" color="blue">
                       {toPersianNumber(item.templateName)}

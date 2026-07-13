@@ -1,6 +1,7 @@
 import { MODULES } from '../moduleRegistry';
 import { BlockType, FieldType, type BlockDefinition, type ModuleField } from '../types';
 import { isSaasAdminModuleId } from './permissions';
+import { supportsModuleAssignee } from './assigneeSupport';
 import { buildSurveyReportFieldsFromSnapshot } from './surveyTemplates';
 import { getSyntheticWorkflowAssigneeField, getWorkflowConditionFields } from './workflowHelpers';
 import { parseWorkflowRelatedFieldKey, WORKFLOW_ASSIGNEE_FIELD_KEY, type WorkflowCondition } from './workflowTypes';
@@ -112,11 +113,28 @@ export const REPORT_BASE_SELECT_COLUMNS = [
   'org_id',
   'created_at',
   'updated_at',
+] as const;
+
+export const REPORT_ASSIGNEE_SELECT_COLUMNS = [
   'assignee_id',
   'assignee_role_id',
   'assignee_type',
-  'is_deleted',
 ] as const;
+
+export const REPORT_SOFT_DELETE_SELECT_COLUMNS = [
+  'is_deleted',
+  'deleted',
+  '_deleted',
+  'deleted_at',
+] as const;
+
+export const isDeletedReportRecord = (row: Record<string, any> | null | undefined) =>
+  !!row && (
+    row.is_deleted === true
+    || row.deleted === true
+    || row._deleted === true
+    || !!row.deleted_at
+  );
 
 const REPORT_UNSUPPORTED_FIELD_TYPES = new Set<FieldType>([
   FieldType.IMAGE,
@@ -184,7 +202,11 @@ export const getReportTableBlock = (moduleId?: string | null, tableSourceId?: st
 };
 
 export const buildReportBaseSelectColumns = (
-  moduleConfig: { fields?: ModuleField[] | null } | null | undefined,
+  moduleConfig: {
+    id?: string;
+    table?: string;
+    fields?: ModuleField[] | null;
+  } | null | undefined,
   keys: readonly string[],
   selectedTableBlocks: readonly Pick<BlockDefinition, 'id'>[],
 ) => {
@@ -199,6 +221,12 @@ export const buildReportBaseSelectColumns = (
       .filter(Boolean)
   );
   const requiredColumns = new Set<string>(REPORT_BASE_SELECT_COLUMNS);
+  if (supportsModuleAssignee(moduleConfig)) {
+    REPORT_ASSIGNEE_SELECT_COLUMNS.forEach((column) => requiredColumns.add(column));
+  }
+  REPORT_SOFT_DELETE_SELECT_COLUMNS.forEach((column) => {
+    if (moduleFieldKeys.has(column)) requiredColumns.add(column);
+  });
 
   selectedTableBlockIds.forEach((blockId) => requiredColumns.add(blockId));
 

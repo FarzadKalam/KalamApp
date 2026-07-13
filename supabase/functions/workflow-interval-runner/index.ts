@@ -4,10 +4,12 @@
 // Tenant isolation: every DB operation is filtered by org_id.
 
 import {
+  assignProcessAutomationIdentityContext,
   evaluateProcessAutomationConditions as evaluateProcessAutomationConditionsCore,
   getAdjacentProcessTasks as getAdjacentProcessTasksCore,
   getTaskProcessAutomationRules as getTaskProcessAutomationRulesCore,
   getTaskProcessLaneKey as getTaskProcessLaneKeyCore,
+  getTaskProcessIdentity,
   getTaskProcessNodeKey as getTaskProcessNodeKeyCore,
   getTaskSourceLink as getTaskSourceLinkCore,
   resolveProcessAutomationTargetTokens as resolveProcessAutomationTargetTokensCore,
@@ -20,7 +22,7 @@ import { buildProcessActivatorRecordContext } from '../_shared/process-activator
 import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-scalable-interval-queue';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-process-template-identities';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -2728,7 +2730,7 @@ async function prepareProcessRunForAutomaticExecution(
 ) {
   const recurrence = parseObjectValue(record?.recurrence_info);
   const runRows = await dbGet(url, key,
-    `process_runs?id=eq.${encodeURIComponent(processRunId)}&org_id=eq.${encodeURIComponent(orgId)}&select=module_id,record_id&limit=1`
+    `process_runs?id=eq.${encodeURIComponent(processRunId)}&org_id=eq.${encodeURIComponent(orgId)}&select=module_id,record_id,process_name&limit=1`
   ).catch(() => []);
   const runModuleId = String(runRows[0]?.module_id || '').trim();
   const runRecordId = String(runRows[0]?.record_id || '').trim();
@@ -2771,6 +2773,7 @@ async function prepareProcessRunForAutomaticExecution(
     `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=*&order=sort_order.asc&limit=500`
   ).catch(() => []);
   const templateRecord: Record<string, any> = { ...record };
+  assignProcessAutomationIdentityContext(templateRecord, runRows[0]?.process_name, null);
   for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
     const linkedRecordId = String(linkedRecordIdRaw || '').trim();
     if (!linkedModuleId || !linkedRecordId) continue;
@@ -2786,6 +2789,16 @@ async function prepareProcessRunForAutomaticExecution(
   }
   for (const stage of runStages) {
     const metadata = parseObjectValue(stage?.metadata);
+    const graph = parseObjectValue(metadata?.process_graph);
+    const laneKey = String(stage?.process_lane_key || metadata?.process_lane_key || 'lane_1').trim() || 'lane_1';
+    const lane = (Array.isArray(graph?.lanes) ? graph.lanes : []).find((item: any) => (
+      String(item?.key || item?.id || '').trim() === laneKey
+    ));
+    assignProcessAutomationIdentityContext(
+      templateRecord,
+      runRows[0]?.process_name,
+      lane?.name || lane?.title || metadata?.process_lane_name || 'ردیف اصلی',
+    );
     templateRecord.task_name = String(stage?.stage_name || '').trim();
     templateRecord.task_status = 'todo';
     templateRecord.status_label = 'در انتظار انجام';
@@ -4667,6 +4680,8 @@ function buildProcessAutomationTaskRecord(
     process_lane_key: getTaskProcessLaneKeyCore(task),
     recurrence_info: recurrence,
   };
+  const processIdentity = getTaskProcessIdentity(task);
+  assignProcessAutomationIdentityContext(record, processIdentity.processName, processIdentity.laneName);
   Object.entries(task || {}).forEach(([field, value]) => { record[`__task__${field}`] = value; });
   Object.entries(customValues).forEach(([field, value]) => { record[field] = value; record[`__task__${field}`] = value; });
   const previousTasks = getAdjacentProcessTasksCore(task, siblings, 'previous');

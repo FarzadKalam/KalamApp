@@ -3333,6 +3333,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           open
           mode="template"
           moduleId={currentModuleId || null}
+          readyTextScope="workflow_automation"
           templateOnlyTitle={templateModalTarget.title}
           templateVariableOptions={templateVariableOptions}
           zIndex={templateModalZIndex}

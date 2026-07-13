@@ -16,11 +16,11 @@ import { listActiveNotificationBots, type NotificationBotChannel } from '../util
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
 import {
   getMessageTemplateVariables,
-  getReadyTextScopeModuleId,
+  getMessageReadyTextScopeModuleId,
   getRecordBotTargets,
   getRecordPhoneCandidates,
   renderRecordTemplate,
-  GLOBAL_MESSAGE_READY_TEXT_SCOPE,
+  type MessageReadyTextScope,
 } from '../utils/recordMessaging';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { sendBotMessageViaGateway } from '../utils/botGateway';
@@ -51,6 +51,7 @@ type MessageComposerModalProps = {
   onApplyTemplate?: (value: string) => void;
   onInsertVariable?: (token: string) => void;
   templateVariableOptions?: Array<{ key: string; label: string; token: string }>;
+  readyTextScope?: MessageReadyTextScope;
   zIndex?: number;
 };
 
@@ -66,6 +67,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   onApplyTemplate,
   onInsertVariable,
   templateVariableOptions,
+  readyTextScope = 'module',
   zIndex,
 }) => {
   const { message: msg } = App.useApp();
@@ -101,8 +103,19 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
 
   const moduleConfig = moduleId ? MODULES[moduleId] : null;
   const effectiveRecord = useMemo(() => loadedRecord || record || {}, [loadedRecord, record]);
-  const scopedModuleId = getReadyTextScopeModuleId(moduleId, 'message');
-  const globalScopedModuleId = getReadyTextScopeModuleId(null, 'message');
+  const scopedModuleId = getMessageReadyTextScopeModuleId(moduleId, readyTextScope);
+  const readyTextCategoryLabel = readyTextScope === 'ai'
+    ? 'هوش مصنوعی'
+    : readyTextScope === 'workflow_automation'
+      ? 'گردش‌کار و اتوماسیون'
+      : (moduleConfig?.titles?.fa || 'پیام‌های عمومی');
+  const readyTextCategoryDescription = readyTextScope === 'ai'
+    ? 'این پرامپت‌ها فقط در بخش‌های هوش مصنوعی نمایش داده می‌شوند.'
+    : readyTextScope === 'workflow_automation'
+      ? 'این پیام‌ها بین همه اکشن‌های گردش‌کارها و اتوماسیون‌ها مشترک هستند.'
+      : moduleConfig?.titles?.fa
+        ? `این پیام‌ها فقط برای ماژول «${moduleConfig.titles.fa}» نمایش داده می‌شوند.`
+        : 'این پیام‌ها فقط در بخش‌های عمومیِ بدون ماژول نمایش داده می‌شوند.';
   const isTemplateMode = mode === 'template';
   const isBulkSmsMode = mode === 'sms' && Array.isArray(smsRecipients) && smsRecipients.length > 0;
   const modalZIndex = Math.max(
@@ -293,11 +306,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
         .order('created_at', { ascending: false })
         .limit(200);
 
-      if (scopedModuleId && scopedModuleId !== GLOBAL_MESSAGE_READY_TEXT_SCOPE) {
-        query = query.in('module_id', [scopedModuleId, globalScopedModuleId]);
-      } else {
-        query = query.eq('module_id', globalScopedModuleId);
-      }
+      query = query.eq('module_id', scopedModuleId);
 
       const { data, error } = await query;
       if (error) throw error;
@@ -449,7 +458,8 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
           title: title || content.slice(0, 40),
           content,
         })
-        .eq('id', editingReadyTextId);
+        .eq('id', editingReadyTextId)
+        .eq('module_id', scopedModuleId);
 
       if (error) throw error;
       await loadReadyTexts();
@@ -471,7 +481,11 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
 
     setDeletingReadyTextId(id);
     try {
-      const { error } = await supabase.from('ready_texts').delete().eq('id', id);
+      const { error } = await supabase
+        .from('ready_texts')
+        .delete()
+        .eq('id', id)
+        .eq('module_id', scopedModuleId);
       if (error) throw error;
       setReadyTexts((prev) => prev.filter((item) => item.id !== id));
       if (editingReadyTextId === id) cancelEditReadyText();
@@ -729,7 +743,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
           <div className="rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-[#171717]">
             <div className="mb-2 text-sm font-semibold text-gray-800 dark:text-gray-100">الگوهای پیام</div>
             <div className="mb-3 text-xs text-gray-500">
-              این بخش از متن‌های آماده‌ی فرم جداست و فقط برای پیامک و بات استفاده می‌شود.
+              {readyTextCategoryDescription}
             </div>
             {readyTextPermissions.canAdd && (
               <div className="space-y-2">
@@ -766,10 +780,8 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               </div>
             ) : (
               <div className="space-y-2">
-                {readyTexts.map((item) => {
-                  const isGlobal = item.moduleId === globalScopedModuleId;
-                  return (
-                    <div key={item.id} className="rounded-xl border border-gray-100 p-2 dark:border-gray-800">
+                {readyTexts.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-gray-100 p-2 dark:border-gray-800">
                       {editingReadyTextId === item.id ? (
                         <div className="space-y-2">
                           <Input
@@ -800,7 +812,9 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                                 {item.title || 'بدون عنوان'}
                               </div>
                               <div className="mt-1 flex flex-wrap gap-1">
-                                {isGlobal ? <Tag color="default">عمومی</Tag> : moduleConfig?.titles?.fa ? <Tag color="blue">{moduleConfig.titles.fa}</Tag> : null}
+                                <Tag color={readyTextScope === 'module' && moduleConfig?.titles?.fa ? 'blue' : 'default'}>
+                                  {readyTextCategoryLabel}
+                                </Tag>
                               </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -849,9 +863,8 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                           </div>
                         </>
                       )}
-                    </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             )}
           </div>

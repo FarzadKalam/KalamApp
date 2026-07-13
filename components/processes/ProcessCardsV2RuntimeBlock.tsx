@@ -3,7 +3,8 @@ import { Alert, App, Button, Modal, Skeleton } from 'antd';
 import { FieldType, type ModuleField } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
-import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
+import { fetchProcessAudit } from '../../utils/processAudit';
 import { fetchProcessRuntimeBatchForRecord } from '../../utils/processRuntimeBatch';
 import { fetchProcessRuntimeTasksForRecord } from '../../utils/processRuntimeTasks';
 import { clearAppRuntimeCache } from '../../utils/appRuntimeCache';
@@ -21,8 +22,10 @@ import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
 import {
+  assignProcessTemplateIdentityAliases,
   assignProcessTemplateModuleAliases,
   resolveProcessTemplateTokenValue,
+  resolveProcessTemplateLaneName,
 } from '../../utils/processTemplateContext';
 import {
   buildProcessLinkMapFromRecord,
@@ -554,7 +557,17 @@ const mapRawStageToV2 = (
   const effectiveKind = hasRealTask
     ? 'activity'
     : (explicitDraft || (kind === 'activity' && shouldForceActivityStageToDraft(stage, hasRealTask)) ? 'draft' : kind);
-  const assignee = resolveAssignee(stage, directory, fallbackModuleId, templateContext);
+  const stageTemplateContext = assignProcessTemplateIdentityAliases(
+    { ...templateContext },
+    {
+      processName: stage?.process_name
+        || stage?.process_group_name
+        || metadata?.process_group_name
+        || metadata?.source_template_name,
+      laneName: resolveProcessTemplateLaneName(stage),
+    },
+  );
+  const assignee = resolveAssignee(stage, directory, fallbackModuleId, stageTemplateContext);
   const rawDue = resolveProcessStageDueValue({
     stage,
     stages: allStages,
@@ -568,7 +581,7 @@ const mapRawStageToV2 = (
   const statusLabel = effectiveKind === 'draft' ? 'پیش نویس' : getTaskStatusLabel(status || 'todo', stage);
   const activityType = resolveStageActivityType(stage);
   const rawTitle = normalizeText(stage?.stage_name || stage?.name || stage?.title || stage?.label) || `مرحله ${toPersianNumber(index + 1)}`;
-  const title = renderTemplateVariables ? (renderTemplateText(rawTitle, templateContext) || rawTitle) : rawTitle;
+  const title = renderTemplateVariables ? (renderTemplateText(rawTitle, stageTemplateContext) || rawTitle) : rawTitle;
   return {
     id: normalizeText(stage?.id || stage?.template_stage_id || stage?.process_run_stage_id || stage?.[PROCESS_NODE_KEY]) || `stage_${index + 1}`,
     title,
@@ -585,7 +598,7 @@ const mapRawStageToV2 = (
     metaLabel: statusLabel,
     source: {
       ...stage,
-      __process_v2_template_context: templateContext,
+      __process_v2_template_context: stageTemplateContext,
       __process_v2_fallback_module_id: fallbackModuleId || null,
     },
   };
@@ -629,6 +642,14 @@ const buildLanesFromStages = (
 
 const getModuleLabel = (moduleId?: string | null) => {
   const normalized = normalizeText(moduleId);
+  const processModuleLabels: Record<string, string> = {
+    process_templates: 'الگوی فرآیند',
+    process_template_stages: 'مرحله الگوی فرآیند',
+    process_runs: 'اجرای فرآیند',
+    process_run_stages: 'مرحله اجرای فرآیند',
+    tasks: 'فعالیت',
+  };
+  if (processModuleLabels[normalized]) return processModuleLabels[normalized];
   return MODULES[normalized]?.titles?.fa || MODULES[normalized]?.titles?.faSingular || normalized || 'رکورد';
 };
 
@@ -681,6 +702,7 @@ const buildTemplateCard = (
     moduleLabel: getModuleLabel(recordData?.module_id || (Array.isArray(recordData?.module_ids) ? recordData.module_ids[0] : '')),
     activatorLabel: 'فعال کننده',
     realtimeLabel: 'زنده',
+    auditSource: recordData,
     lanes: buildLanesFromStages(
       templateStages,
       'draft',
@@ -706,6 +728,10 @@ const buildRunCard = (
   const templateTitle = normalizeText(run?.template_name || run?.metadata?.source_template_name)
     || (templateId ? templateNameById?.get(templateId) : '')
     || 'الگوی فرآیند';
+  const runTemplateContext = assignProcessTemplateIdentityAliases(
+    { ...templateContext },
+    { processName: normalizeText(run?.process_name) || templateTitle },
+  );
   return {
     mode: 'run',
     id,
@@ -715,6 +741,7 @@ const buildRunCard = (
     relatedRecordLabel: fallbackRecordLabel,
     statusLabel: normalizeText(run?.status) || 'active',
     realtimeLabel: 'زنده',
+    auditSource: run,
     lanes: buildLanesFromStages(
       stages.map((stage) => ({
         ...stage,
@@ -722,7 +749,7 @@ const buildRunCard = (
       })),
       'activity',
       directory,
-      templateContext,
+      runTemplateContext,
       run?.module_id,
     ),
   };
@@ -1217,7 +1244,14 @@ const buildDraftProcessCards = (
       templateTitle: group.templateId ? (templateNameById.get(group.templateId) || group.templateName) : group.templateName,
       relatedRecordLabel: '',
       statusLabel: 'draft',
-      lanes: buildLanesFromStages(group.stages, 'draft', directory, templateContext, fallbackModuleId),
+      auditSource: group.stages[0] || null,
+      lanes: buildLanesFromStages(
+        group.stages,
+        'draft',
+        directory,
+        assignProcessTemplateIdentityAliases({ ...templateContext }, { processName: group.label || group.templateName }),
+        fallbackModuleId,
+      ),
     }));
 };
 
@@ -3483,8 +3517,78 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     message.success('کپی فرآیند در نمای جدید ساخته شد.');
   }, [cardKey, displayCards, message]);
 
-  const handleShowInfo = useCallback((item: ProcessV2CardData) => {
+  const formatAuditDate = (value: unknown) => {
+    const raw = normalizeText(value);
+    return raw ? toPersianNumber(safeJalaliFormat(raw, 'YYYY/MM/DD HH:mm') || raw) : 'ثبت نشده';
+  };
+
+  const processAuditFieldLabels: Record<string, string> = {
+    process_name: 'نام فرآیند',
+    stage_name: 'نام مرحله',
+    status: 'وضعیت',
+    sort_order: 'ترتیب مرحله',
+    process_lane_key: 'ردیف فرآیند',
+    assignee_user_id: 'مسئول',
+    assignee_role_id: 'نقش مسئول',
+    task_id: 'فعالیت مرتبط',
+    planned_start_at: 'زمان شروع برنامه‌ریزی‌شده',
+    planned_due_at: 'موعد برنامه‌ریزی‌شده',
+    started_at: 'زمان شروع',
+    completed_at: 'زمان تکمیل',
+    name: 'نام فعالیت',
+    description: 'شرح فعالیت',
+    due_date: 'موعد فعالیت',
+  };
+
+  const getProcessAuditSummary = (row: any) => {
+    const metadata = parseObject(row?.metadata);
+    const explicit = normalizeText(metadata?.summary);
+    if (explicit && explicit !== 'یکی از فیلدهای رکورد تغییر کرد') return explicit;
+    const action = normalizeText(row?.action);
+    if (action === 'create') return `${getModuleLabel(row?.module_id)} ایجاد شد`;
+    if (action === 'delete') return `${getModuleLabel(row?.module_id)} حذف شد`;
+    const field = normalizeText(row?.field_name);
+    return field ? `${processAuditFieldLabels[field] || 'اطلاعات فرآیند'} تغییر کرد` : 'فرآیند تغییر کرد';
+  };
+
+  const getProcessAuditValue = (value: unknown) => {
+    if (value === null || value === undefined || value === '') return 'خالی';
+    const text = normalizeText(value);
+    if (!text) return 'خالی';
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
+      return 'رکورد مرتبط';
+    }
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+      return 'اطلاعات چندبخشی';
+    }
+    const statusLabels: Record<string, string> = {
+      todo: 'در انتظار انجام',
+      in_progress: 'در حال انجام',
+      done: 'انجام شده',
+      completed: 'تکمیل شده',
+      active: 'فعال',
+      paused: 'متوقف شده',
+      cancelled: 'لغو شده',
+      draft: 'پیش نویس',
+    };
+    const displayText = statusLabels[text] || text;
+    return toPersianNumber(displayText.length > 90 ? `${displayText.slice(0, 90)}…` : displayText);
+  };
+
+  const handleShowInfo = useCallback(async (item: ProcessV2CardData) => {
     const stageCount = item.lanes.reduce((sum, lane) => sum + lane.stages.length, 0);
+    const closeLoading = message.loading('در حال خواندن اطلاعات فرآیند...', 0);
+    let audit: Awaited<ReturnType<typeof fetchProcessAudit>> | null = null;
+    try {
+      audit = await fetchProcessAudit(supabase, item, {
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+      });
+    } catch (error) {
+      console.warn('Could not load process audit info', error);
+    } finally {
+      closeLoading();
+    }
     Modal.info({
       title: 'اطلاعات فرآیند',
       content: (
@@ -3496,13 +3600,63 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           ) : null}
           <div><span className="text-gray-500">تعداد ردیف:</span> {toPersianNumber(item.lanes.length)}</div>
           <div><span className="text-gray-500">تعداد مرحله:</span> {toPersianNumber(stageCount)}</div>
+          <div><span className="text-gray-500">ایجادکننده:</span> {audit?.createdBy || 'ثبت نشده'}</div>
+          <div><span className="text-gray-500">زمان ایجاد:</span> {formatAuditDate(audit?.createdAt)}</div>
+          <div><span className="text-gray-500">آخرین ویرایش‌کننده:</span> {audit?.updatedBy || 'ثبت نشده'}</div>
+          <div><span className="text-gray-500">زمان آخرین ویرایش:</span> {formatAuditDate(audit?.updatedAt)}</div>
         </div>
       ),
       okText: 'بستن',
       centered: true,
       direction: 'rtl',
     });
-  }, []);
+  }, [message, normalizedModuleId, normalizedRecordId]);
+
+  const handleShowHistory = useCallback(async (item: ProcessV2CardData) => {
+    const closeLoading = message.loading('در حال خواندن تاریخچه فرآیند...', 0);
+    try {
+      const audit = await fetchProcessAudit(supabase, item, {
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+      });
+      Modal.info({
+        title: 'تاریخچه تغییرات فرآیند',
+        content: (
+          <div className="max-h-[62vh] space-y-2 overflow-y-auto pl-1 text-sm" dir="rtl">
+            {audit.rows.length > 0 ? audit.rows.map((row: any) => (
+              <div key={row.id} className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+                <div className="font-bold text-gray-800 dark:text-gray-100">{getProcessAuditSummary(row)}</div>
+                {normalizeText(row.action) === 'update' && (row.old_value !== null || row.new_value !== null) ? (
+                  <div className="mt-1 text-xs leading-6 text-gray-600 dark:text-gray-300">
+                    از «{getProcessAuditValue(row.old_value)}» به «{getProcessAuditValue(row.new_value)}»
+                  </div>
+                ) : null}
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                  <span>{getModuleLabel(row.module_id)}</span>
+                  <span>•</span>
+                  <span>{formatAuditDate(row.created_at)}</span>
+                  {row.user_id ? <><span>•</span><span>{audit.authorNameMap[normalizeText(row.user_id)] || 'کاربر سیستم'}</span></> : null}
+                </div>
+              </div>
+            )) : (
+              <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-gray-500 dark:border-white/10">
+                هنوز تغییری برای این فرآیند ثبت نشده است.
+              </div>
+            )}
+          </div>
+        ),
+        width: 680,
+        okText: 'بستن',
+        centered: true,
+        direction: 'rtl',
+      });
+    } catch (error) {
+      console.warn('Could not load process changelog', error);
+      message.error('خواندن تاریخچه فرآیند ناموفق بود.');
+    } finally {
+      closeLoading();
+    }
+  }, [message, normalizedModuleId, normalizedRecordId]);
 
   const handleShowRecords = useCallback(async (item: ProcessV2CardData) => {
     const relatedRecords = collectProcessRelatedRecords(item);
@@ -4274,6 +4428,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
                   onCopy={handleCopyCard}
                   onAddRun={handleAddRun}
                   onShowInfo={handleShowInfo}
+                  onShowHistory={handleShowHistory}
                   onShowRecords={handleShowRecords}
                   onTemplateChange={handleTemplateChange}
                   onAutoAssignProcess={isProcessTemplateModule(normalizedModuleId) ? undefined : handleAutoAssignProcess}

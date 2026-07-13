@@ -77,7 +77,7 @@ import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { fetchProcessRuntimeBatchForRecord } from '../utils/processRuntimeBatch';
-import { getProcessAutomationConditionFieldsForModules, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
+import { getProcessAutomationConditionFieldsForModules, getProcessTemplateIdentityFields, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
   createWorkflowId,
@@ -1314,6 +1314,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   );
   const automationConditionFields = useMemo(
     () => [
+      ...(isProcessTemplateModule ? getProcessTemplateIdentityFields() : []),
       ...getProcessAutomationConditionFieldsForModules(stageAutomationScopeModuleIds).map((field) => (
         String(field?.key || '').trim() === '__task__status'
           ? { ...field, options: getTaskStatusOptions({ recurrence_info: { [PROCESS_TASK_STATUS_OPTIONS_KEY]: draftStageStatusOptions } }, field.options || []) }
@@ -1321,7 +1322,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       )),
       ...draftCustomAutomationFields,
     ],
-    [draftCustomAutomationFields, draftStageStatusOptions, stageAutomationScopeModuleIds]
+    [draftCustomAutomationFields, draftStageStatusOptions, isProcessTemplateModule, stageAutomationScopeModuleIds]
   );
   const automationConditionFieldsWithoutTaskType = useMemo(
     () => automationConditionFields.filter((field) => String(field?.key || '').trim() !== '__task__task_type'),
@@ -1720,6 +1721,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     () => Array.from(
       new Map(
         [
+          ...(isProcessTemplateModule ? getProcessTemplateIdentityFields() : []),
           ...createProcessAutomationTaskVariableFields(),
           ...previousStageVariableFields,
           ...automationActionModuleFields,
@@ -1728,7 +1730,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           .map((field) => [String(field.key), field] as const)
       ).values()
     ),
-    [automationActionModuleFields, previousStageVariableFields]
+    [automationActionModuleFields, isProcessTemplateModule, previousStageVariableFields]
   );
   const stageTemplateVariableOptions = useMemo(
     () => automationActionVariableFields.map((field) => {

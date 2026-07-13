@@ -29,6 +29,52 @@ export const getTaskProcessLaneKey = (task: Record<string, any>): string => {
 export const getTaskProcessGraph = (task: Record<string, any>): Record<string, any> =>
   parseAutomationObject(parseAutomationObject(task?.recurrence_info)?.process_graph);
 
+export const assignProcessAutomationIdentityContext = (
+  target: Record<string, any>,
+  processNameValue: unknown,
+  laneNameValue: unknown,
+) => {
+  const processName = String(processNameValue || '').trim();
+  const laneName = String(laneNameValue || '').trim();
+  if (processName) {
+    target.process_name = processName;
+    target['نام فرآیند'] = processName;
+    target['نام فرایند'] = processName;
+  }
+  if (laneName) {
+    target.process_lane_name = laneName;
+    target.lane_name = laneName;
+    target['نام ردیف'] = laneName;
+  }
+  return target;
+};
+
+export const getTaskProcessIdentity = (task: Record<string, any>) => {
+  const recurrence = parseAutomationObject(task?.recurrence_info);
+  const processGroup = parseAutomationObject(recurrence?.process_group);
+  const graph = getTaskProcessGraph(task);
+  const laneKey = getTaskProcessLaneKey(task);
+  const lane = (Array.isArray(graph?.lanes) ? graph.lanes : []).find((item: any) => (
+    String(item?.key || item?.id || '').trim() === laneKey
+  ));
+  return {
+    processName: String(
+      task?.process_name
+      || task?.process_group_name
+      || processGroup?.name
+      || processGroup?.template_name
+      || '',
+    ).trim(),
+    laneName: String(
+      task?.process_lane_name
+      || recurrence?.process_lane_name
+      || lane?.name
+      || lane?.title
+      || 'ردیف اصلی',
+    ).trim() || 'ردیف اصلی',
+  };
+};
+
 export const getTaskSourceLink = (task: Record<string, any>): { moduleId: string; recordId: string } => {
   const recurrence = parseAutomationObject(task?.recurrence_info);
   const moduleId = String(task?.source_module_id || task?.related_to_module || '').trim();

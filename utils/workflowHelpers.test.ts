@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getProcessAutomationConditionFieldsForModules,
+  getProcessTemplateIdentityFields,
   getWorkflowConditionFields,
 } from './workflowHelpers';
 
@@ -35,5 +36,12 @@ describe('workflowHelpers', () => {
     );
 
     expect(fullNameField?.labels?.fa).toBe('بازاریاب: نام و نام خانوادگی');
+  });
+
+  it('exposes stable process and lane identity variables for process templates', () => {
+    expect(getProcessTemplateIdentityFields()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'process_name', labels: expect.objectContaining({ fa: 'نام فرآیند' }) }),
+      expect.objectContaining({ key: 'process_lane_name', labels: expect.objectContaining({ fa: 'نام ردیف' }) }),
+    ]));
   });
 });

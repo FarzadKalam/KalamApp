@@ -2,6 +2,66 @@ import { MODULES } from '../moduleRegistry';
 import { getFieldLabelFa } from './fieldLabel';
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+const parseContextObject = (value: unknown): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+export const PROCESS_NAME_TEMPLATE_FIELD_KEY = 'process_name';
+export const PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY = 'process_lane_name';
+
+export const assignProcessTemplateIdentityAliases = (
+  target: Record<string, any>,
+  values: { processName?: unknown; laneName?: unknown },
+) => {
+  const processName = normalizeText(values.processName);
+  const laneName = normalizeText(values.laneName);
+  if (processName) {
+    target[PROCESS_NAME_TEMPLATE_FIELD_KEY] = processName;
+    target['نام فرآیند'] = processName;
+    target['نام فرایند'] = processName;
+  }
+  if (laneName) {
+    target[PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY] = laneName;
+    target.lane_name = laneName;
+    target['نام ردیف'] = laneName;
+  }
+  return target;
+};
+
+export const resolveProcessTemplateLaneName = (
+  stage: Record<string, any> | null | undefined,
+  fallback = 'ردیف اصلی',
+) => {
+  const metadata = parseContextObject(stage?.metadata);
+  const recurrence = parseContextObject(stage?.recurrence_info);
+  const graph = parseContextObject(stage?.process_graph
+    || metadata?.process_graph
+    || recurrence?.process_graph
+    || {});
+  const laneKey = normalizeText(
+    stage?.process_lane_key
+    || metadata?.process_lane_key
+    || recurrence?.process_lane_key
+    || 'lane_1',
+  ) || 'lane_1';
+  const lane = (Array.isArray(graph?.lanes) ? graph.lanes : []).find((item: any) => (
+    normalizeText(item?.key || item?.id) === laneKey
+  ));
+  return normalizeText(
+    lane?.name
+    || lane?.title
+    || stage?.process_lane_name
+    || metadata?.process_lane_name
+    || recurrence?.process_lane_name,
+  ) || fallback;
+};
 
 const getValueByPath = (record: Record<string, any> | null | undefined, path: string) => {
   const normalizedPath = normalizeText(path);
