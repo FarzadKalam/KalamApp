@@ -538,8 +538,9 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
     if (str.length > 10) return formatJalaliDateTime(str);
     return formatJalaliDate(str);
   }
-  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(str.trim())) {
-    return toPersianDigits(str.trim());
+  if (/^\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(str.trim())) {
+    const [hours, minutes] = str.trim().split(':');
+    return toPersianDigits(`${hours}:${minutes}`);
   }
   const fieldContext = resolveTemplateFieldModule(moduleId, fieldKey);
   const configuredPriceFields = await getOrgModulePriceFields(url, key, orgId, fieldContext.moduleId);
