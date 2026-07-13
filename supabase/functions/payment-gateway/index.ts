@@ -56,6 +56,24 @@ const normalizeSafeReturnOrigin = (value: any) => {
   return '';
 };
 
+const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string) => {
+  const row = first(await rest(
+    urlBase,
+    key,
+    `saas_org_settings?select=resolved_host&org_id=eq.${enc(orgId)}&limit=1`
+  ).catch(() => []));
+  const host = String(row?.resolved_host || '').trim().replace(/\/+$/, '');
+  if (!host) return '';
+  const candidate = /^https?:\/\//i.test(host) ? host : `https://${host}`;
+  try {
+    const parsed = new URL(candidate);
+    if (['tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir', 'kalamapp.ir', 'www.kalamapp.ir', 'kalam.tazesystem.ir'].includes(parsed.hostname.toLowerCase())) return '';
+    return parsed.origin;
+  } catch {
+    return '';
+  }
+};
+
 const rest = async (urlBase: string, key: string, path: string, init: RequestInit = {}) => {
   const res = await fetch(`${trimSlashEnd(urlBase)}/rest/v1/${path}`, {
     ...init,
@@ -350,7 +368,9 @@ const createAiCreditTopup = async (req: Request, urlBase: string, key: string, c
   const paymentDomain = trimSlashEnd(String(Deno.env.get('PAYMENT_PUBLIC_URL') || Deno.env.get('PUBLIC_FUNCTIONS_URL') || '').trim());
   const callbackPath = normalizeCallbackPath(Deno.env.get('PAYMENT_CALLBACK_PATH') || '/payment/callback');
   if (!paymentDomain) return json(500, { success: false, message: 'دامنه callback درگاه مرکزی تنظیم نشده است.' });
-  const returnOrigin = normalizeSafeReturnOrigin(body?.return_origin);
+  // مبدأ برگشت پرداخت باید tenant مالک فاکتور باشد، نه هاست درخواست‌کننده یا سایت عمومی.
+  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(invoice.org_id || ''))
+    || normalizeSafeReturnOrigin(body?.return_origin);
   const [tx] = await rest(urlBase, key, 'payment_transactions', {
     method: 'POST',
     body: JSON.stringify([{

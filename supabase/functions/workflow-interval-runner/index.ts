@@ -18,6 +18,7 @@ import {
 import { formatWorkflowNumericValue, getWorkflowStaticValueLabel, parseWorkflowIdentityReference, resolveWorkflowCurrencyLabel } from '../_shared/workflow-value-labels.ts';
 import { buildProcessActivatorRecordContext } from '../_shared/process-activator-context.ts';
 import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
+import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-scalable-interval-queue';
 const MAX_WORKFLOWS = 30;
@@ -501,6 +502,26 @@ function resolveTemplateFieldModule(moduleId: string, fieldKey: string): { modul
   return { moduleId, fieldKey };
 }
 
+const SHARED_APP_HOSTNAMES = new Set([
+  'tazesystem.ir',
+  'www.tazesystem.ir',
+  'app.tazesystem.ir',
+  'kalamapp.ir',
+  'www.kalamapp.ir',
+  'kalam.tazesystem.ir',
+]);
+
+function normalizeTenantBaseUrl(value: string): string {
+  const candidate = String(value || '').trim().replace(/\/+$/, '');
+  if (!candidate) return '';
+  const baseUrl = /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+  try {
+    return SHARED_APP_HOSTNAMES.has(new URL(baseUrl).hostname.trim().toLowerCase()) ? '' : baseUrl;
+  } catch {
+    return '';
+  }
+}
+
 // Resolves the tenant's public base URL (e.g. https://kalam.tazesystem.ir) from saas_org_settings
 // so relative links like /i/{code} or /d/{code} can be expanded to absolute URLs in templates.
 function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<string> {
@@ -508,12 +529,17 @@ function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<s
   if (!normalizedOrgId) return Promise.resolve('');
   if (!orgPublicBaseUrlCache.has(normalizedOrgId)) {
     orgPublicBaseUrlCache.set(normalizedOrgId, (async () => {
-      const rows = await dbGet(url, key, `saas_org_settings?org_id=eq.${normalizedOrgId}&select=resolved_host&limit=1`).catch(() => []);
-      const host = String(rows?.[0]?.resolved_host || '').trim().replace(/\/+$/, '');
-      return host ? `https://${host}` : (CALENDAR_PUBLIC_BASE_URL || '');
+      const rows = await dbGet(url, key, `saas_org_settings?org_id=eq.${encodeURIComponent(normalizedOrgId)}&select=resolved_host&limit=1`).catch(() => []);
+      const configuredHost = String(rows?.[0]?.resolved_host || '').trim().replace(/\/+$/, '');
+      // لینک‌های tenant-owned هرگز نباید با دامنه عمومی به‌عنوان fallback ساخته شوند.
+      return normalizeTenantBaseUrl(configuredHost);
     })());
   }
   return orgPublicBaseUrlCache.get(normalizedOrgId)!;
+}
+
+async function getOrgTenantBaseUrl(url: string, key: string, orgId: string): Promise<string> {
+  return getOrgPublicBaseUrl(url, key, orgId);
 }
 
 async function formatFieldValue(value: any, fieldKey: string, url: string, key: string, orgId: string, moduleId = ''): Promise<string> {
@@ -1596,7 +1622,7 @@ async function resolveCounterpartyBotTargets(
   record: Record<string, any>,
   recipientFields: any[],
   explicitChannel?: string | null,
-): Promise<Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string }>> {
+): Promise<Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string; group: ServerBotGroupTarget }>> {
   const customerIds = new Set<string>();
   const supplierIds = new Set<string>();
   const addUuid = (target: Set<string>, value: any) => {
@@ -1617,7 +1643,7 @@ async function resolveCounterpartyBotTargets(
     values.forEach((item) => addUuid(targetSet, item));
   }
 
-  const select = 'customer_id,supplier_id,bot_chat_id,channel_type,status';
+  const select = 'id,org_id,customer_id,supplier_id,employee_id,bot_chat_id,channel_type,status';
   const [customerRows, supplierRows] = await Promise.all([
     customerIds.size > 0
       ? dbGet(
@@ -1641,9 +1667,9 @@ async function resolveCounterpartyBotTargets(
       const chatId = String(row?.bot_chat_id || '').trim();
       if (!chatId || !['bale', 'telegram', 'rubika'].includes(channel)) return null;
       if (normalizedExplicitChannel && channel !== normalizedExplicitChannel) return null;
-      return { channel: channel as 'bale' | 'telegram' | 'rubika', chatId };
+      return { channel: channel as 'bale' | 'telegram' | 'rubika', chatId, group: row as ServerBotGroupTarget };
     })
-    .filter(Boolean) as Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string }>;
+    .filter(Boolean) as Array<{ channel: 'bale' | 'telegram' | 'rubika'; chatId: string; group: ServerBotGroupTarget }>;
 }
 
 // ── SMS sending ────────────────────────────────────────────────────────────────
@@ -1831,22 +1857,116 @@ function buildBotSendMessageUrl(settings: any, token: string, channel: string): 
   return `${baseUrl}${path}`;
 }
 
-async function sendBotMessage(chatId: string, text: string, settings: any, channel: string): Promise<void> {
+async function sendBotMessage(chatId: string, text: string, settings: any, channel: string): Promise<any> {
   const token = String(settings.bot_token || settings.token || '').trim();
   if (!token || !chatId) return;
   const isRubika = channel === 'rubika';
   const payload = isRubika ? { chat_id: chatId, text } : { chat_id: chatId, text, parse_mode: 'HTML' };
-  await fetch(buildBotSendMessageUrl(settings, token, channel), {
+  return await fetch(buildBotSendMessageUrl(settings, token, channel), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(8000),
   }).then(async (response) => {
+    const raw = await response.text().catch(() => '');
     if (!response.ok) {
-      const raw = await response.text().catch(() => String(response.status));
       throw new Error(`ارسال پیام ${channel} ناموفق بود: ${raw || response.status}`);
     }
+    try { return raw ? JSON.parse(raw) : null; } catch { return raw || null; }
   });
+}
+
+type ServerBotGroupTarget = {
+  id: string;
+  org_id?: string | null;
+  customer_id?: string | null;
+  supplier_id?: string | null;
+  employee_id?: string | null;
+  channel_type: string;
+  bot_chat_id: string;
+};
+
+const orgBotSystemIdentityCache = new Map<string, Promise<{ avatarUrl: string | null }>>();
+
+async function getOrgBotSystemIdentity(url: string, key: string, orgId: string) {
+  if (!orgBotSystemIdentityCache.has(orgId)) {
+    orgBotSystemIdentityCache.set(orgId, (async () => {
+      const rows = await dbGet(url, key,
+        `company_settings?org_id=eq.${encodeURIComponent(orgId)}&select=logo_url&limit=1`
+      ).catch(() => []);
+      return { avatarUrl: String(rows[0]?.logo_url || '').trim() || null };
+    })());
+  }
+  return orgBotSystemIdentityCache.get(orgId)!;
+}
+
+async function findServerBotGroup(
+  url: string,
+  key: string,
+  orgId: string,
+  channel: string,
+  chatId: string,
+): Promise<ServerBotGroupTarget | null> {
+  const rows = await dbGet(url, key,
+    `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&channel_type=eq.${encodeURIComponent(channel)}&bot_chat_id=eq.${encodeURIComponent(chatId)}&status=eq.active&select=id,org_id,customer_id,supplier_id,employee_id,channel_type,bot_chat_id&limit=2`
+  ).catch(() => []);
+  return rows.length === 1 ? rows[0] as ServerBotGroupTarget : null;
+}
+
+async function archiveAutomatedBotGroupMessage(
+  url: string,
+  key: string,
+  orgId: string,
+  group: ServerBotGroupTarget,
+  text: string,
+  providerResponse: any,
+  sourcePayload: Record<string, any>,
+) {
+  const identity = await getOrgBotSystemIdentity(url, key, orgId);
+  const payload = buildAutomatedBotSenderPayload({ payload: sourcePayload, systemAvatarUrl: identity.avatarUrl });
+  const providerMessageId = extractBotProviderMessageId(providerResponse);
+  try {
+    await dbInsert(url, key, 'counterparty_bot_messages', {
+      org_id: orgId,
+      bot_group_id: group.id,
+      customer_id: group.customer_id || null,
+      supplier_id: group.supplier_id || null,
+      employee_id: group.employee_id || null,
+      channel_type: group.channel_type,
+      direction: 'outbound',
+      message_type: 'text',
+      chat_id: group.bot_chat_id,
+      provider_message_id: providerMessageId,
+      content_text: text,
+      file_url: null,
+      file_name: null,
+      mime_type: null,
+      created_by: null,
+      payload: { ...payload, provider_response: providerResponse || {} },
+    });
+  } catch (error: any) {
+    const message = String(error?.message || error || '');
+    if (!/duplicate|23505|unique/i.test(message)) throw error;
+  }
+  await dbPatch(url, key, 'counterparty_bot_groups', `id=eq.${encodeURIComponent(group.id)}&org_id=eq.${encodeURIComponent(orgId)}`, {
+    status: 'active',
+    last_outbound_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+}
+
+async function sendAndArchiveAutomatedBotGroupMessage(
+  url: string,
+  key: string,
+  orgId: string,
+  group: ServerBotGroupTarget,
+  text: string,
+  settings: any,
+  sourcePayload: Record<string, any>,
+) {
+  const providerResponse = await sendBotMessage(group.bot_chat_id, text, settings, group.channel_type);
+  await archiveAutomatedBotGroupMessage(url, key, orgId, group, text, providerResponse, sourcePayload);
+  return providerResponse;
 }
 
 // ── Note insertion ─────────────────────────────────────────────────────────────
@@ -3086,12 +3206,22 @@ async function executeAction(
       ),
     ]);
     const targets = Array.from(new Map([
-      ...directChatIds.map((chatId) => [`${directChannel}:${chatId}`, { channel: directChannel, chatId }] as const),
+      ...directChatIds.map((chatId) => [`${directChannel}:${chatId}`, { channel: directChannel, chatId, group: null }] as const),
       ...counterpartyTargets.map((target) => [`${target.channel}:${target.chatId}`, target] as const),
     ]).values());
     if (targets.length === 0) return actionResult(action, 'skipped', 'گیرنده بات پیدا نشد.', { recipient_count: 0 });
 
     const settingsByChannel = new Map<string, any>();
+    const automatedSenderPayload = {
+      workflow_action_type: action.type,
+      workflow_action_id: action.id || null,
+      source_type: 'workflow',
+      message_source: String(config.message_source || '').trim() || 'workflow',
+      sender_kind: String(config.sender_kind || '').trim() || 'system',
+      sender_type: String(config.sender_type || '').trim() || 'system',
+      sender_display_name: String(config.sender_display_name || '').trim() || 'پیام‌های سیستم',
+      ai_generated: config.ai_generated === true,
+    };
     let sentCount = 0;
     for (const target of targets) {
       if (!settingsByChannel.has(target.channel)) {
@@ -3099,7 +3229,12 @@ async function executeAction(
       }
       const botSettings = settingsByChannel.get(target.channel);
       if (!botSettings) continue;
-      await sendBotMessage(target.chatId, text, botSettings, target.channel);
+      const botGroup = target.group || await findServerBotGroup(url, key, orgId, target.channel, target.chatId);
+      if (botGroup) {
+        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, text, botSettings, automatedSenderPayload);
+      } else {
+        await sendBotMessage(target.chatId, text, botSettings, target.channel);
+      }
       sentCount += 1;
     }
     if (sentCount === 0) return actionResult(action, 'skipped', 'تنظیمات بات برای گیرنده‌های پیدا شده فعال نیست.', { recipient_count: 0 });
@@ -3115,7 +3250,19 @@ async function executeAction(
     const chatIds = await resolveAssigneesToBotChatIds(url, key, orgId, config.recipient_assignees || [], config.recipient_fields || [], record, 'rubika');
     if (chatIds.length === 0) return actionResult(action, 'skipped', 'گیرنده روبیکا پیدا نشد.', { recipient_count: 0 });
     for (const chatId of chatIds) {
-      await sendBotMessage(chatId, text, botSettings, 'rubika');
+      const botGroup = await findServerBotGroup(url, key, orgId, 'rubika', chatId);
+      if (botGroup) {
+        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, text, botSettings, {
+          workflow_action_type: action.type,
+          workflow_action_id: action.id || null,
+          source_type: 'workflow',
+          message_source: 'workflow',
+          sender_kind: 'system',
+          sender_type: 'system',
+        });
+      } else {
+        await sendBotMessage(chatId, text, botSettings, 'rubika');
+      }
     }
     return actionResult(action, 'success', undefined, { recipient_count: chatIds.length });
   }
@@ -3515,15 +3662,16 @@ function getReportScheduleConfig(report: ReportDefinitionRow): Record<string, an
 function getReportScheduledDueAt(report: ReportDefinitionRow, now: Date): Date | null {
   const schedule = getReportScheduleConfig(report);
   if (schedule.enabled !== true) return null;
+  const reportTime = parseIntervalAt(String(schedule.interval_at || '').trim());
   return getWorkflowScheduledDueAt({
     last_run_at: report.last_run_at || null,
     interval_value: Math.max(1, parseInt(String(schedule.interval_value || 1), 10) || 1),
     interval_unit: ['hour', 'day', 'week', 'month'].includes(String(schedule.interval_unit || '').toLowerCase())
       ? String(schedule.interval_unit || '').toLowerCase()
       : 'day',
-    interval_at: null,
+    interval_at: reportTime ? String(schedule.interval_at).trim() : null,
     interval_first_run_at: null,
-    interval_minute: null,
+    interval_minute: reportTime?.minute ?? null,
     interval_allowed_from_hour: null,
     interval_allowed_to_hour: null,
     interval_day_of_month: null,
@@ -3534,8 +3682,9 @@ function getReportScheduledDueAt(report: ReportDefinitionRow, now: Date): Date |
 
 async function buildReportUrl(url: string, key: string, orgId: string, reportId: string): Promise<string> {
   const path = `/reports/${reportId}`;
-  const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
-  return baseUrl ? `${baseUrl}${path}` : path;
+  const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+  if (!baseUrl) throw new Error('دامنه اختصاصی سازمان برای ارسال گزارش تنظیم نشده است.');
+  return `${baseUrl}${path}`;
 }
 
 async function buildScheduledReportMessage(url: string, key: string, report: ReportDefinitionRow, scheduledDueAt: Date): Promise<string> {
@@ -3554,9 +3703,9 @@ async function getScheduledReportRecipients(url: string, key: string, orgId: str
   return await dbGet(url, key, `profiles?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${userIds.map(encodeURIComponent).join(',')})&select=id,email,mobile,mobile_1,mobile_2,is_active`).catch(() => []);
 }
 
-async function sendScheduledReportToBotGroups(url: string, key: string, orgId: string, groupIds: string[], text: string): Promise<number> {
+async function sendScheduledReportToBotGroups(url: string, key: string, orgId: string, groupIds: string[], text: string, reportId: string): Promise<number> {
   if (groupIds.length === 0) return 0;
-  const rows = await dbGet(url, key, `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${groupIds.map(encodeURIComponent).join(',')})&status=eq.active&select=bot_chat_id,channel_type`).catch(() => []);
+  const rows = await dbGet(url, key, `counterparty_bot_groups?org_id=eq.${encodeURIComponent(orgId)}&id=in.(${groupIds.map(encodeURIComponent).join(',')})&status=eq.active&select=id,org_id,customer_id,supplier_id,employee_id,bot_chat_id,channel_type`).catch(() => []);
   const settingsByChannel = new Map<string, any>();
   let sentCount = 0;
   for (const row of rows) {
@@ -3566,7 +3715,13 @@ async function sendScheduledReportToBotGroups(url: string, key: string, orgId: s
     if (!settingsByChannel.has(channel)) settingsByChannel.set(channel, await getOrgBotSettings(url, key, orgId, channel));
     const settings = settingsByChannel.get(channel);
     if (!settings) continue;
-    await sendBotMessage(chatId, text, settings, channel);
+    await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, row as ServerBotGroupTarget, text, settings, {
+      scheduled_report_id: reportId,
+      source_type: 'scheduled_report',
+      message_source: 'scheduled_report',
+      sender_kind: 'system',
+      sender_type: 'system',
+    });
     sentCount += 1;
   }
   return sentCount;
@@ -3625,7 +3780,7 @@ async function deliverScheduledReport(
     if (phones.length > 0 && smsSettings) deliveredCount += (await sendSmsViaProvider(smsSettings, phones, message, url, key)).length;
   }
   if (deliveryChannels.includes('bot_group')) {
-    deliveredCount += await sendScheduledReportToBotGroups(url, key, report.org_id, botGroupIds, message);
+    deliveredCount += await sendScheduledReportToBotGroups(url, key, report.org_id, botGroupIds, message, report.id);
   }
   return deliveredCount > 0
     ? { status: 'success', recipientCount: deliveredCount }

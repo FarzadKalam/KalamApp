@@ -20,6 +20,7 @@ export interface ReportScheduleConfig {
   enabled: boolean;
   interval_value: number;
   interval_unit: ReportScheduleUnit;
+  interval_at: string;
   recipient_user_ids: string[];
   bot_group_ids: string[];
   delivery_channels: ReportScheduleChannel[];
@@ -235,6 +236,7 @@ export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
   enabled: false,
   interval_value: 1,
   interval_unit: 'day',
+  interval_at: '',
   recipient_user_ids: [],
   bot_group_ids: [],
   delivery_channels: ['note'],
@@ -282,6 +284,8 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
   const defaults = createDefaultReportScheduleConfig();
   const raw = value && typeof value === 'object' ? (value as Record<string, any>) : {};
   const intervalValue = Number.parseInt(String(raw.interval_value || defaults.interval_value), 10);
+  const rawIntervalAt = String(raw.interval_at || '').trim();
+  const intervalAt = /^([01]\d|2[0-3]):[0-5]\d$/.test(rawIntervalAt) ? rawIntervalAt : defaults.interval_at;
   const channels = Array.isArray(raw.delivery_channels)
     ? raw.delivery_channels
         .map((item) => String(item || '').trim().toLowerCase())
@@ -292,6 +296,7 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
     enabled: raw.enabled === true,
     interval_value: Number.isFinite(intervalValue) ? Math.max(1, intervalValue) : defaults.interval_value,
     interval_unit: String(raw.interval_unit || '').trim().toLowerCase() === 'hour' ? 'hour' : 'day',
+    interval_at: intervalAt,
     recipient_user_ids: Array.isArray(raw.recipient_user_ids)
       ? raw.recipient_user_ids.map((item) => String(item || '').trim()).filter(Boolean)
       : defaults.recipient_user_ids,
@@ -382,7 +387,9 @@ export const getMainReportableFields = (
     ? buildSurveyReportFieldsFromSnapshot(surveyTemplateSnapshot)
     : [];
   return dedupeFields([
-    ...fields.filter((field) => isReportableField(field)),
+    // گزارش باید مسئول را از فیلد مصنوعی بخواند تا نام کاربر/نقش نمایش داده شود،
+    // نه شناسه خام assignee_id؛ در نتیجه این ستون دوبار هم ظاهر نمی‌شود.
+    ...fields.filter((field) => isReportableField(field) && (!assigneeField || String(field.key || '').trim() !== 'assignee_id')),
     ...surveyTemplateFields.filter((field) => isReportableField(field)),
     ...(assigneeField ? [assigneeField] : []),
   ]);

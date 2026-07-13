@@ -50,14 +50,16 @@ const getFieldOptions = (
   if (relationOptions[field.key]?.length) {
     return relationOptions[field.key] || [];
   }
+  // گزینه‌های پویا ممکن است گزینه‌های پایهٔ فیلد را هم در خود داشته باشند؛
+  // اولویت با این منبع است تا گزینه‌های افزوده‌شده برای شرط‌ساز هم دیده شوند.
+  if (field.dynamicOptionsCategory) {
+    return dynamicOptions[field.dynamicOptionsCategory] || [];
+  }
   if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) {
     return (field.options || []).map((opt) => ({
       label: String(opt?.label ?? opt?.value ?? ''),
       value: String(opt?.value ?? ''),
     }));
-  }
-  if (field.dynamicOptionsCategory) {
-    return dynamicOptions[field.dynamicOptionsCategory] || [];
   }
   if (
     (

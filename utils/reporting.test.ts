@@ -4,6 +4,7 @@ import {
   buildReportBaseSelectColumns,
   buildReportTableFieldKey,
   buildReportTableRelationFieldKey,
+  getMainReportableFields,
 } from './reporting';
 import { createWorkflowRelatedFieldKey } from './workflowTypes';
 
@@ -44,5 +45,13 @@ describe('buildReportBaseSelectColumns', () => {
       'invoiceItems',
     ]));
     expect(columns).not.toEqual(expect.arrayContaining(['deleted', '_deleted', 'deleted_at']));
+  });
+});
+
+describe('getMainReportableFields', () => {
+  it('keeps the resolved assignee field only once for task reports', () => {
+    const fields = getMainReportableFields('tasks');
+    expect(fields.map((field) => field.key)).toContain('__workflow_assignee');
+    expect(fields.map((field) => field.key)).not.toContain('assignee_id');
   });
 });

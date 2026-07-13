@@ -84,6 +84,7 @@ const ReportBuilderPage: React.FC = () => {
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleIntervalValue, setScheduleIntervalValue] = useState(1);
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<ReportScheduleUnit>('day');
+  const [scheduleIntervalAt, setScheduleIntervalAt] = useState('');
   const [scheduleRecipientIds, setScheduleRecipientIds] = useState<string[]>([]);
   const [scheduleChannels, setScheduleChannels] = useState<ReportScheduleChannel[]>(['note']);
   const [scheduleBotGroupIds, setScheduleBotGroupIds] = useState<string[]>([]);
@@ -275,6 +276,7 @@ const ReportBuilderPage: React.FC = () => {
       setScheduleEnabled(config.schedule.enabled);
       setScheduleIntervalValue(config.schedule.interval_value);
       setScheduleIntervalUnit(config.schedule.interval_unit);
+      setScheduleIntervalAt(config.schedule.interval_at);
       setScheduleRecipientIds(config.schedule.recipient_user_ids);
       setScheduleChannels(config.schedule.delivery_channels);
       setScheduleBotGroupIds(config.schedule.bot_group_ids);
@@ -314,6 +316,10 @@ const ReportBuilderPage: React.FC = () => {
             message.error('حداقل یک روش ارسال انتخاب کنید.');
             return false;
           }
+          if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduleIntervalAt)) {
+            message.error('ساعت ارسال دوره‌ای را مشخص کنید.');
+            return false;
+          }
         }
       }
       if (targetStep === 1 && columns.length === 0) {
@@ -332,7 +338,7 @@ const ReportBuilderPage: React.FC = () => {
       }
       return true;
     },
-    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleRecipientIds.length]
+    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleIntervalAt, scheduleRecipientIds.length]
   );
 
   const handleSave = async () => {
@@ -359,6 +365,7 @@ const ReportBuilderPage: React.FC = () => {
           enabled: scheduleEnabled,
           interval_value: Math.max(1, Number(scheduleIntervalValue || 1)),
           interval_unit: scheduleIntervalUnit,
+          interval_at: scheduleIntervalAt,
           recipient_user_ids: scheduleRecipientIds,
           bot_group_ids: scheduleBotGroupIds,
           delivery_channels: scheduleChannels,
@@ -508,6 +515,16 @@ const ReportBuilderPage: React.FC = () => {
                   <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3">
                     <InputNumber min={1} className="w-full persian-number" value={scheduleIntervalValue} onChange={(value) => setScheduleIntervalValue(Math.max(1, Number(value || 1)))} />
                     <Select className="w-full" value={scheduleIntervalUnit} onChange={(value) => setScheduleIntervalUnit(value as ReportScheduleUnit)} options={[{ label: 'ساعت', value: 'hour' }, { label: 'روز', value: 'day' }]} />
+                  </div>
+                  <div>
+                    <div className="mb-2 font-bold">ساعت ارسال گزارش</div>
+                    <Input
+                      type="time"
+                      className="w-full"
+                      value={scheduleIntervalAt}
+                      onChange={(event) => setScheduleIntervalAt(event.target.value)}
+                    />
+                    {scheduleIntervalUnit === 'hour' && <div className="mt-1 text-xs text-gray-500">در ارسال ساعتی، دقیقه انتخاب‌شده در هر ساعت اعمال می‌شود.</div>}
                   </div>
                   <div>
                     <div className="mb-2 font-bold">روش‌های ارسال دوره‌ای گزارش</div>
