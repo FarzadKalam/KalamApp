@@ -22,7 +22,7 @@ import { buildProcessActivatorRecordContext } from '../_shared/process-activator
 import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-14-record-links';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-14-saas-admin-host-routing';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -477,6 +477,7 @@ async function resolveWorkflowFieldValue(
 }
 
 const orgPublicBaseUrlCache = new Map<string, Promise<string>>();
+const orgSaasAdminAccessCache = new Map<string, Promise<boolean>>();
 const orgCurrencyLabelCache = new Map<string, Promise<string>>();
 const orgModulePriceFieldCache = new Map<string, Promise<Set<string>>>();
 
@@ -528,6 +529,7 @@ const SHARED_APP_HOSTNAMES = new Set([
   'tazesystem.ir',
   'www.tazesystem.ir',
   'app.tazesystem.ir',
+  'kalam.tazesystem.ir',
   'kalamapp.ir',
   'www.kalamapp.ir',
 ]);
@@ -543,8 +545,29 @@ function normalizeTenantBaseUrl(value: string): string {
   }
 }
 
-// Resolves the tenant's public base URL (e.g. https://kalam.tazesystem.ir) from saas_org_settings
-// so relative links like /i/{code} or /d/{code} can be expanded to absolute URLs in templates.
+function orgHasSaasAdminAccess(url: string, key: string, orgId: string): Promise<boolean> {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return Promise.resolve(false);
+  if (!orgSaasAdminAccessCache.has(normalizedOrgId)) {
+    orgSaasAdminAccessCache.set(normalizedOrgId, (async () => {
+      const roles = await dbGet(
+        url,
+        key,
+        `org_roles?org_id=eq.${encodeURIComponent(normalizedOrgId)}&select=permissions&limit=200`,
+      ).catch(() => []);
+      return roles.some((role: any) => {
+        const permission = role?.permissions?.__saas_admin || {};
+        return permission.view === true
+          || permission.edit === true
+          || Object.values(permission.fields || {}).some((value) => value === true);
+      });
+    })());
+  }
+  return orgSaasAdminAccessCache.get(normalizedOrgId)!;
+}
+
+// Tenant organizations always use their own resolved host. The internal SaaS-admin organization
+// is intentionally absent from tenant settings and uses its dedicated internal application host.
 function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<string> {
   const normalizedOrgId = String(orgId || '').trim();
   if (!normalizedOrgId) return Promise.resolve('');
@@ -552,8 +575,11 @@ function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<s
     orgPublicBaseUrlCache.set(normalizedOrgId, (async () => {
       const rows = await dbGet(url, key, `saas_org_settings?org_id=eq.${encodeURIComponent(normalizedOrgId)}&select=resolved_host&limit=1`).catch(() => []);
       const configuredHost = String(rows?.[0]?.resolved_host || '').trim().replace(/\/+$/, '');
-      // لینک‌های tenant-owned هرگز نباید با دامنه عمومی به‌عنوان fallback ساخته شوند.
-      return normalizeTenantBaseUrl(configuredHost);
+      const tenantBaseUrl = normalizeTenantBaseUrl(configuredHost);
+      if (tenantBaseUrl) return tenantBaseUrl;
+      return await orgHasSaasAdminAccess(url, key, normalizedOrgId)
+        ? 'https://kalam.tazesystem.ir'
+        : '';
     })());
   }
   return orgPublicBaseUrlCache.get(normalizedOrgId)!;
@@ -3143,6 +3169,83 @@ async function executeAction(
         process_operations: executedProcessOperations,
       },
     });
+  }
+
+  // ── send_web_form_link ────────────────────────────────────────────────
+  if (action.type === 'send_web_form_link') {
+    const webFormId = String(config.web_form_id || '').trim();
+    if (!webFormId) return actionResult(action, 'skipped', 'وب‌فرم انتخاب نشده است.');
+
+    const webForms = await dbGet(
+      url,
+      key,
+      `web_forms?id=eq.${encodeURIComponent(webFormId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id,route_slug,target_module_id,is_active&limit=1`,
+    );
+    const webForm = webForms[0] || null;
+    if (!webForm || webForm.is_active !== true) {
+      return actionResult(action, 'skipped', 'وب‌فرم فعال پیدا نشد.');
+    }
+
+    const relatedModuleId = String(config.related_module_id || moduleId || '').trim() || moduleId;
+    const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
+    const relatedRecordId = relatedModuleId === moduleId
+      ? recordId
+      : String(processLinks?.[relatedModuleId] || '').trim();
+    const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+    if (!baseUrl) return actionResult(action, 'skipped', 'دامنه معتبر سازمان برای وب‌فرم پیدا نشد.');
+    const tokenBytes = crypto.getRandomValues(new Uint8Array(24));
+    const accessToken = Array.from(tokenBytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    await dbInsert(url, key, 'web_form_link_tokens', {
+      org_id: orgId,
+      web_form_id: webFormId,
+      target_module_id: String(webForm.target_module_id || '').trim() || null,
+      related_module_id: relatedModuleId || null,
+      related_record_id: relatedRecordId || null,
+      access_token: accessToken,
+      expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      created_by: actorUserId || null,
+    });
+
+    const routeSlug = String(webForm.route_slug || '').trim();
+    const formPath = routeSlug ? `/inquiry/${encodeURIComponent(routeSlug)}` : '/inquiry';
+    const webFormLink = `${baseUrl}${formPath}?token=${encodeURIComponent(accessToken)}`;
+    const actionRecord = { ...record, web_form_link: webFormLink };
+    const channelConfigs = config.channel_configs && typeof config.channel_configs === 'object'
+      ? config.channel_configs
+      : {};
+    const deliveryChannels = Array.from(new Set(
+      asArray(config.delivery_channels)
+        .map((item) => String(item || '').trim().toLowerCase())
+        .filter((item) => ['sms', 'email', 'bot', 'note'].includes(item)),
+    ));
+    const channelResults: ActionExecutionResult[] = [];
+
+    for (const channel of deliveryChannels) {
+      const nestedAction = channel === 'sms'
+        ? { ...action, type: 'send_sms', config: { ...(channelConfigs.sms || {}) } }
+        : channel === 'email'
+          ? { ...action, type: 'send_email', config: { ...(channelConfigs.email || {}) } }
+          : channel === 'bot'
+            ? { ...action, type: 'send_bot_message', config: { ...(channelConfigs.bot || {}) } }
+            : { ...action, type: 'send_note', config: { ...(channelConfigs.note || {}) } };
+      channelResults.push(await executeAction(
+        nestedAction as WorkflowAction,
+        actionRecord,
+        moduleId,
+        orgId,
+        url,
+        key,
+        actorUserId,
+      ));
+    }
+
+    const successfulChannels = channelResults.filter((result) => result.status === 'success').length;
+    return actionResult(
+      action,
+      successfulChannels > 0 ? 'success' : 'skipped',
+      successfulChannels > 0 ? undefined : 'هیچ کانال فعالی برای ارسال لینک وب‌فرم اجرا نشد.',
+      { affected_count: successfulChannels, details: { channel_results: channelResults } },
+    );
   }
 
   // ── send_sms ──────────────────────────────────────────────────────────
