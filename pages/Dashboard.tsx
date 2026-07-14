@@ -52,7 +52,7 @@ import StoryEditorModal from '../components/stories/StoryEditorModal';
 import ResilientImage from '../components/common/ResilientImage';
 import type { RecordedVoice } from '../components/ai/AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from '../components/ai/AiFileUploadButton';
-import AiCapabilityComposerActions, { type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
+import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from '../components/ai/AiCapabilityComposerActions';
 import AiComposeModelBar from '../components/ai/AiComposeModelBar';
 import type { AiMediaSettings, AiMediaSourceImage } from '../components/ai/AiMediaSettingsPopover';
 import { notifyStorySms } from '../utils/storyNotification';
@@ -1079,8 +1079,11 @@ const Dashboard: React.FC = () => {
   const dashboardAiSendDisabled = !dashboardAiQuestion.trim() || dashboardNeedsRecordModule;
 
   const handleDashboardCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
-    const normalizedNext = Array.from(new Set(next));
+    const normalizedNext = normalizeAiComposerCapabilities(next);
     setDashboardAiCapabilities(normalizedNext);
+    if (normalizedNext.includes('text_chat')) {
+      setDashboardMediaSourceImages([]);
+    }
     if (normalizedNext.includes('process_operation') || !normalizedNext.includes('record_creation')) {
       setDashboardRecordCreationTargetModuleId(null);
     }

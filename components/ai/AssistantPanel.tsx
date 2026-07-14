@@ -14,7 +14,7 @@ import { fetchRecordReferenceLabels } from '../../utils/recordReference';
 import ProfileAvatar from '../common/ProfileAvatar';
 import type { RecordedVoice } from './AiVoiceRecorder';
 import type { AiUploadedFilePrompt } from './AiFileUploadButton';
-import AiCapabilityComposerActions, { type AiComposerCapability } from './AiCapabilityComposerActions';
+import AiCapabilityComposerActions, { normalizeAiComposerCapabilities, type AiComposerCapability } from './AiCapabilityComposerActions';
 import AiComposeModelBar from './AiComposeModelBar';
 import AiGenerationStatusCard, { type AiGenerationKind } from './AiGenerationStatusCard';
 import AiAudioPlayer from './AiAudioPlayer';
@@ -380,7 +380,7 @@ const buildPendingActionRevisionPrompt = (pendingAction: any, text: string) => {
 };
 
 const normalizeInitialCapabilities = (items?: AiComposerCapability[] | null) => {
-  return Array.from(new Set((items || []).filter(Boolean)));
+  return normalizeAiComposerCapabilities(items || []);
 };
 
 const AssistantPanel: React.FC<AssistantPanelProps> = ({
@@ -523,8 +523,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   const applyComposerPreferences = useCallback((raw: any, options: { preferCurrentInitial?: boolean } = {}) => {
     const prefs = raw && typeof raw === 'object' ? raw : {};
+    const preferenceCapabilities = Array.isArray(prefs.selectedCapabilities)
+      ? normalizeInitialCapabilities(prefs.selectedCapabilities)
+      : null;
     if (Array.isArray(prefs.selectedCapabilities)) {
-      const nextCapabilities = normalizeInitialCapabilities(prefs.selectedCapabilities);
+      const nextCapabilities = preferenceCapabilities || [];
       if (nextCapabilities.length || !options.preferCurrentInitial) {
         setSelectedCapabilities(nextCapabilities);
         setProcessOperationMode(nextCapabilities.includes('process_operation'));
@@ -550,6 +553,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     if (prefs.modelOverrides && typeof prefs.modelOverrides === 'object') setModelOverrides(loadedOverrides);
     if (Object.prototype.hasOwnProperty.call(prefs, 'currentModelOverride')) {
       modelOverrideRef.current = String(prefs.currentModelOverride || '').trim() || null;
+    }
+    if (preferenceCapabilities?.includes('text_chat')) {
+      setProcessOperationMode(false);
+      setRecordCreationTargetModuleId(null);
+      setMediaSourceImages([]);
+      setPendingAiAction(null);
     }
     if (prefs.skipGenerationConfirmationByKind && typeof prefs.skipGenerationConfirmationByKind === 'object') {
       setSkipGenerationConfirmationByKind(Object.fromEntries(Object.entries(prefs.skipGenerationConfirmationByKind)
@@ -702,18 +711,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const voiceOutputMode = selectedCapabilities.includes('voice_output');
   const videoMode = selectedCapabilities.includes('video_generation');
   const documentMode = selectedCapabilities.includes('document_generation');
+  const textChatMode = selectedCapabilities.includes('text_chat');
   const workflowCapabilityCount = selectedCapabilities.filter((capability) => (
     capability === 'record_creation'
     || capability === 'process_operation'
     || capability === 'document_generation'
   )).length;
-  const shouldUseTaskBundle = bundleInputs.length > 0 || workflowCapabilityCount > 1;
+  const shouldUseTaskBundle = !textChatMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
-    const normalizedNext = Array.from(new Set(next));
+    const normalizedNext = normalizeAiComposerCapabilities(next);
     setSelectedCapabilities(normalizedNext);
     setAutoSuggestedCapabilities([]);
     const wantsProcessOperation = normalizedNext.includes('process_operation');
     setProcessOperationMode(wantsProcessOperation);
+    if (normalizedNext.includes('text_chat')) {
+      setBundleInputs((current) => {
+        revokeBundleInputPreviewUrls(current);
+        return [];
+      });
+      setMediaSourceImages([]);
+      setPendingAiAction(null);
+    }
     if (!normalizedNext.includes('record_creation')) {
       setRecordCreationTargetModuleId(null);
     }
@@ -1355,14 +1373,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setEditingThreadTitle(false);
     setPendingAiAction(null);
     const nextInitialCapabilities = normalizeInitialCapabilities(initialCapabilities);
+    const startsInTextChatMode = nextInitialCapabilities.includes('text_chat');
     setSelectedCapabilities(nextInitialCapabilities);
     setAutoSuggestedCapabilities([]);
-    setRecordCreationTargetModuleId(String(initialRecordCreationTargetModuleId || '').trim() || null);
+    setRecordCreationTargetModuleId(startsInTextChatMode ? null : String(initialRecordCreationTargetModuleId || '').trim() || null);
     setProcessOperationMode(nextInitialCapabilities.includes('process_operation'));
     setMediaSettings(initialMediaSettings && typeof initialMediaSettings === 'object' ? initialMediaSettings : {});
-    setMediaSourceImages(sanitizeMediaSourceImagesForPreferences(Array.isArray(initialMediaSourceImages) ? initialMediaSourceImages : []));
-    const seededFiles = (Array.isArray(initialFiles) ? initialFiles : [])
-      .concat(initialFile?.fileName ? [initialFile] : [])
+    setMediaSourceImages(startsInTextChatMode ? [] : sanitizeMediaSourceImagesForPreferences(Array.isArray(initialMediaSourceImages) ? initialMediaSourceImages : []));
+    const seededFiles = (startsInTextChatMode
+      ? []
+      : (Array.isArray(initialFiles) ? initialFiles : []).concat(initialFile?.fileName ? [initialFile] : []))
       .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
     setBundleInputs(seededFiles.map((filePrompt, index) => ({
       id: `initial-file-${Date.now()}-${index}`,
@@ -1569,7 +1589,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       };
 
       if (!processOperationMode && !activeRecordCreationSchema) {
-        let streamCapabilities = selectedCapabilities;
+        let streamCapabilities = selectedCapabilities.filter((capability) => capability !== 'text_chat');
         let streamCapability = selectedCapabilities.includes('legal_assistant')
           ? 'legal_assistant'
           : selectedCapabilities.includes('deep_reasoning')
@@ -1620,7 +1640,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         : callAssistant(processOperationMode ? {
         action: 'process_operation_from_prompt',
         capability: 'record_chat',
-        capabilities: selectedCapabilities,
+        capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -1632,7 +1652,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         action: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record_from_prompt' : 'create_record_from_prompt',
         outputMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record' : 'create_record',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
-        capabilities: selectedCapabilities,
+        capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,
@@ -1650,7 +1670,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           : contextWithSelection.mode === 'record'
           ? 'record_chat'
           : 'dashboard_chat',
-        capabilities: selectedCapabilities,
+        capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         message: assistantText,
         inputKind,
         threadId: shouldStartProcessGuideThread ? null : threadId,

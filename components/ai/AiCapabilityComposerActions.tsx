@@ -12,6 +12,7 @@ import {
   SoundOutlined,
   VideoCameraOutlined,
   FileWordOutlined,
+  MessageOutlined,
   SnippetsOutlined,
 } from '@ant-design/icons';
 import AiFileUploadButton, { type AiUploadedFilePrompt } from './AiFileUploadButton';
@@ -21,6 +22,7 @@ import AiMediaSettingsPopover, { type AiMediaSettings } from './AiMediaSettingsP
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
 export type AiComposerCapability =
+  | 'text_chat'
   | 'document_analysis'
   | 'voice_input'
   | 'voice_output'
@@ -68,6 +70,7 @@ const CAPABILITY_META: Array<{
   icon: React.ReactNode;
   kind: 'toggle' | 'inline';
 }> = [
+  { key: 'text_chat', label: 'گفتگوی متنی', description: 'گفتگوی مستقیم بدون تصمیم‌گیری خودکار', icon: <MessageOutlined />, kind: 'toggle' },
   { key: 'document_analysis', label: 'تحلیل اسناد', description: 'تحلیل فایل، رسید، عکس یا سند', icon: <FileSearchOutlined />, kind: 'inline' },
   { key: 'voice_input', label: 'تحلیل صدا', description: 'ضبط و تبدیل ویس به متن', icon: <AudioOutlined />, kind: 'inline' },
   { key: 'voice_output', label: 'تولید صدا', description: 'تبدیل متن به فایل صوتی', icon: <SoundOutlined />, kind: 'toggle' },
@@ -90,7 +93,10 @@ const isCapabilityUsable = (availability: CapabilityAvailability | undefined, ke
     && item.hasReadyModel !== false;
 };
 
-const normalizeSelected = (items: AiComposerCapability[]) => Array.from(new Set(items));
+export const normalizeAiComposerCapabilities = (items: AiComposerCapability[]): AiComposerCapability[] => {
+  const normalized = Array.from(new Set((items || []).filter(Boolean)));
+  return normalized.includes('text_chat') ? ['text_chat'] : normalized;
+};
 
 const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = ({
   selected,
@@ -152,11 +158,13 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const setCapability = (key: AiComposerCapability, checked: boolean) => {
     const base = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
-    let next = checked
-      ? normalizeSelected([...base, key])
+    let next = key === 'text_chat' && checked
+      ? ['text_chat'] as AiComposerCapability[]
+      : checked
+      ? normalizeAiComposerCapabilities([...base.filter((item) => item !== 'text_chat'), key])
       : base.filter((item) => item !== key);
     if (key === 'legal_assistant' && checked) {
-      next = normalizeSelected([...next, 'web_search', 'deep_reasoning']);
+      next = normalizeAiComposerCapabilities([...next, 'web_search', 'deep_reasoning']);
     }
     if (key === 'record_creation' && !checked) {
       onRecordCreationTargetModuleChange?.(null);

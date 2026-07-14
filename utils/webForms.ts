@@ -248,8 +248,16 @@ const compareWebFormTargetFieldItems = (left: WebFormTargetFieldItem, right: Web
   return left.label.localeCompare(right.label, "fa");
 };
 
-export const formatWebFormTargetFieldLabel = (item: Pick<WebFormTargetFieldItem, "label" | "isModuleRequired">) =>
-  item.isModuleRequired ? `${item.label} *` : item.label;
+export const formatWebFormTargetFieldLabel = (
+  item: Pick<WebFormTargetFieldItem, "label" | "isModuleRequired" | "field">,
+) => {
+  const relatedModuleId = String(item.field?.relationConfig?.targetModule || "").trim();
+  const relatedModuleLabel = relatedModuleId
+    ? String(MODULES[relatedModuleId]?.titles?.fa || "").trim().replace(/^مدیریت\s+/, "")
+    : "";
+  const label = relatedModuleLabel ? `${item.label} (${relatedModuleLabel})` : item.label;
+  return item.isModuleRequired ? `${label} *` : label;
+};
 
 export const isWebFormVirtualTargetField = (fieldKey?: string | null) =>
   [WEB_FORM_RECORD_IMAGE_TARGET_KEY, WEB_FORM_RECORD_FILE_TARGET_KEY].includes(String(fieldKey || "").trim());

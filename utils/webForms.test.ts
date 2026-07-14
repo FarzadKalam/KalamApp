@@ -172,6 +172,15 @@ describe('web form utilities', () => {
     expect(applicantStatusField?.isManaged).toBe(false);
   });
 
+  it('shows the related module name beside every relation target field', () => {
+    const deliveryTargets = getWebFormTargetFields('delivery_forms', { accessScope: 'internal' });
+    const customerReceiver = deliveryTargets.find((item) => item.value === 'received_by_customer_id');
+    const employeeReceiver = deliveryTargets.find((item) => item.value === 'received_by_employee_id');
+
+    expect(formatWebFormTargetFieldLabel(customerReceiver!)).toBe('تحویل‌گیرنده (مشتریان)');
+    expect(formatWebFormTargetFieldLabel(employeeReceiver!)).toBe('تحویل‌گیرنده (کارکنان)');
+  });
+
   it('exposes module-required and module-default metadata for managed web form fields', () => {
     const attendanceTargets = getWebFormTargetFields('attendance_logs');
     const internalAttendanceTargets = getWebFormTargetFields('attendance_logs', { accessScope: 'internal' });

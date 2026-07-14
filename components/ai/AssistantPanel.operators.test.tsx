@@ -50,6 +50,7 @@ vi.mock('./AiCapabilityComposerActions', async () => {
     'div',
     { 'data-testid': 'ai-operator-actions' },
     React.createElement('div', { 'data-testid': 'selected-capabilities' }, (props.selected || []).join(',')),
+    button('cap-text_chat', () => props.onChange(['text_chat'])),
     button('cap-web_search', () => props.onChange(['web_search'])),
     button('cap-deep_reasoning', () => props.onChange(['deep_reasoning'])),
     button('cap-legal_assistant', () => props.onChange(['legal_assistant', 'web_search', 'deep_reasoning'])),
@@ -79,7 +80,13 @@ vi.mock('./AiCapabilityComposerActions', async () => {
       filename: 'voice.webm',
     })),
   );
-  return { default: MockActions };
+  return {
+    default: MockActions,
+    normalizeAiComposerCapabilities: (items: string[]) => {
+      const normalized = Array.from(new Set(items || []));
+      return normalized.includes('text_chat') ? ['text_chat'] : normalized;
+    },
+  };
 });
 
 const getBodies = () => invokeMock.mock.calls.map((call) => call[1]?.body).filter(Boolean);
@@ -273,6 +280,19 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
     await waitFor(() => expect(fetch).toHaveBeenCalled(), { timeout: 5000 });
     expect(findBody('chat')).toBeFalsy();
+  });
+
+  it('uses direct text chat without invoking the automatic decision engine', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('cap-text_chat')[0]);
+    await waitFor(() => expect(screen.getByTestId('selected-capabilities')).toHaveTextContent('text_chat'));
+    await typeAndSend('فقط یک گفتگوی متنی معمولی', 'ارسال');
+
+    await waitFor(() => expect(findFetchBody('chat_stream')).toBeTruthy());
+    const body = findFetchBody('chat_stream') as any;
+    expect(body?.capability).toBe('dashboard_chat');
+    expect(body?.capabilities).toEqual([]);
+    expect(findBody('suggest_auto_capabilities')).toBeFalsy();
   });
 
   it('does not generate an image automatically when the user only asks for an image prompt', async () => {
