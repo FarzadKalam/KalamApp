@@ -450,9 +450,10 @@ export const formatTemplateValueByField = ({
     const raw = String(value ?? '').trim();
     if (!raw) return '';
     // Public record links are stored as relative paths; prepend the org origin for messages.
-    if (raw.startsWith('/i/') || raw.startsWith('/d/')) {
+    if (/^\/?(?:i|d)\//i.test(raw)) {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      return origin ? `${origin}${raw}` : raw;
+      const path = raw.startsWith('/') ? raw : `/${raw}`;
+      return origin ? `${origin}${path}` : path;
     }
     return raw;
   }

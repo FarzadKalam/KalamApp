@@ -22,12 +22,13 @@ import { buildProcessActivatorRecordContext } from '../_shared/process-activator
 import { renderProcessStageForTaskCreation } from '../_shared/process-stage-template-renderer.ts';
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-13-process-template-identities';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-14-record-links';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
 const TEHRAN_OFFSET_MS = 3.5 * 60 * 60 * 1000;
 const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
+const WORKFLOW_RECORD_LINK_FIELD_KEY = '__workflow_record_link';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const PROCESS_NEXT_STAGE_FIELD_PREFIX = '__process_next_stage__';
@@ -419,10 +420,26 @@ async function resolveWorkflowFieldValue(
   key: string,
   fieldKey: string,
   record: Record<string, any>,
+  orgId = '',
+  moduleId = '',
 ): Promise<any> {
   const normalizedFieldKey = String(fieldKey || '').trim();
   if (!normalizedFieldKey) return null;
   if (normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return buildResolvedAssigneeCombo(record);
+  if (normalizedFieldKey === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+    return buildServerRecordUrl(url, key, orgId, moduleId, record?.id);
+  }
+  if (normalizedFieldKey === `__task__${WORKFLOW_RECORD_LINK_FIELD_KEY}`) {
+    return buildServerRecordUrl(url, key, orgId, 'tasks', record?.__task__id || record?.task_id || (moduleId === 'tasks' ? record?.id : ''));
+  }
+
+  const processLinkedMeta = normalizedFieldKey.match(/^__linked__(.+?)__(.+)$/);
+  if (processLinkedMeta?.[1] && processLinkedMeta?.[2] === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+    const linkedModuleId = String(processLinkedMeta[1] || '').trim();
+    const links = parseObjectValue(record?.process_links || record?.process_link_map);
+    const linkedRecordId = getFieldValue(record, `__linked__${linkedModuleId}__id`) || links?.[linkedModuleId];
+    return buildServerRecordUrl(url, key, orgId, linkedModuleId, linkedRecordId);
+  }
 
   const relatedMeta = parseWorkflowRelatedFieldKey(normalizedFieldKey);
   if (relatedMeta) {
@@ -431,6 +448,9 @@ async function resolveWorkflowFieldValue(
     const relatedRecord = await fetchRelatedRecord(url, key, relatedMeta.targetModuleId, relationId);
     if (!relatedRecord) return null;
     if (relatedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) return buildResolvedAssigneeCombo(relatedRecord);
+    if (relatedMeta.targetFieldKey === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+      return buildServerRecordUrl(url, key, orgId, relatedMeta.targetModuleId, relatedRecord.id);
+    }
     return getFieldValue(relatedRecord, relatedMeta.targetFieldKey);
   }
 
@@ -539,6 +559,15 @@ function getOrgPublicBaseUrl(url: string, key: string, orgId: string): Promise<s
   return orgPublicBaseUrlCache.get(normalizedOrgId)!;
 }
 
+async function buildServerRecordUrl(url: string, key: string, orgId: string, moduleId: string, recordId: unknown): Promise<string> {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!normalizedModuleId || !normalizedRecordId) return '';
+  const path = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(normalizedRecordId)}`;
+  const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
+  return baseUrl ? `${baseUrl}${path}` : path;
+}
+
 async function getOrgTenantBaseUrl(url: string, key: string, orgId: string): Promise<string> {
   return getOrgPublicBaseUrl(url, key, orgId);
 }
@@ -557,9 +586,10 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
       ? getServerRecordTitle(rows[0])
       : (identityReference.type === 'role' ? 'نقش سازمانی' : 'کاربر');
   }
-  if (typeof value === 'string' && (str.startsWith('/i/') || str.startsWith('/d/'))) {
+  if (typeof value === 'string' && /^\/?(?:i|d)\//i.test(str)) {
+    const path = str.startsWith('/') ? str : `/${str}`;
     const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
-    return baseUrl ? `${baseUrl}${str}` : str;
+    return baseUrl ? `${baseUrl}${path}` : path;
   }
   if (DATE_LIKE_REGEX.test(str)) {
     if (str.length > 10) return formatJalaliDateTime(str);
@@ -632,7 +662,7 @@ async function renderTemplateAsync(
     const token = match[0];
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) continue;
-    const value = await resolveWorkflowFieldValue(url, key, fieldKey, record);
+    const value = await resolveWorkflowFieldValue(url, key, fieldKey, record, orgId, moduleId);
     const text = await formatFieldValue(value, fieldKey, url, key, orgId, moduleId);
     rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
   }
@@ -2809,7 +2839,7 @@ async function prepareProcessRunForAutomaticExecution(
     const firstRenderedStage = await renderProcessStageForTaskCreation(
       { stageName: String(stage?.stage_name || ''), metadata },
       (template) => renderTemplateAsync(template, templateRecord, url, key, false, orgId, runModuleId),
-      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord),
+      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord, orgId, runModuleId),
     );
     // توضیح و مقادیر اختصاصی می‌توانند به {{task_name}} وابسته باشند؛
     // پاس دوم آن‌ها را با عنوان نهایی فعالیت حل می‌کند.
@@ -2817,7 +2847,7 @@ async function prepareProcessRunForAutomaticExecution(
     const renderedStage = await renderProcessStageForTaskCreation(
       firstRenderedStage,
       (template) => renderTemplateAsync(template, templateRecord, url, key, false, orgId, runModuleId),
-      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord),
+      (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord, orgId, runModuleId),
     );
     await dbPatch(url, key, 'process_run_stages', `id=eq.${encodeURIComponent(String(stage.id))}`, {
       stage_name: renderedStage.stageName,
@@ -2882,7 +2912,7 @@ async function resolveConfiguredActionValue(
   const valueMode = String(config.value_mode || 'static');
   if (valueMode === 'from_source') {
     const sourceField = String(config.source_field || '').trim();
-    return sourceField ? await resolveWorkflowFieldValue(url, key, sourceField, record) : null;
+    return sourceField ? await resolveWorkflowFieldValue(url, key, sourceField, record, orgId, moduleId) : null;
   }
   return config.value ?? null;
 }
@@ -3299,7 +3329,7 @@ async function executeAction(
       if (!tf) continue;
       if (mapping?.mode === 'from_source') {
         const sf = String(mapping?.source_field || '').trim();
-        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record) : null;
+        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record, orgId, moduleId) : null;
       } else {
         payload[tf] = mapping?.value ?? null;
       }
@@ -3321,7 +3351,7 @@ async function executeAction(
       if (!tf) continue;
       if (mapping?.mode === 'from_source') {
         const sf = String(mapping?.source_field || '').trim();
-        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record) : null;
+        payload[tf] = sf ? await resolveWorkflowFieldValue(url, key, sf, record, orgId, moduleId) : null;
       } else {
         payload[tf] = mapping?.value ?? null;
       }
@@ -3595,7 +3625,7 @@ async function executeAction(
       .map((v: any) => String(v || '').trim()).filter(Boolean);
     const fromFields: string[] = [];
     for (const fieldKey of (Array.isArray(config.recipient_fields) ? config.recipient_fields : [])) {
-      const val = await resolveWorkflowFieldValue(url, key, String(fieldKey || '').trim(), record);
+      const val = await resolveWorkflowFieldValue(url, key, String(fieldKey || '').trim(), record, orgId, moduleId);
       if (Array.isArray(val)) fromFields.push(...val.map(String));
       else if (val !== null && val !== undefined) fromFields.push(String(val));
     }

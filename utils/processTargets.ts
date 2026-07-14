@@ -1,5 +1,6 @@
 import { MODULES } from '../moduleRegistry';
 import { ModuleField, FieldType } from '../types';
+import { WORKFLOW_RECORD_LINK_FIELD_KEY } from './workflowTypes';
 
 type ProcessLinkMap = Record<string, string | null>;
 
@@ -193,7 +194,17 @@ export const getProcessTargetModuleFields = (
   const normalizedModuleIds = normalizeProcessTargetModuleIds(moduleIds);
   return normalizedModuleIds.flatMap((moduleId) => {
     const moduleTitle = MODULES[moduleId]?.titles?.fa || moduleId;
-    const baseFields = getVisibleFields(moduleId).map((field) => ({
+    const visibleFields = getVisibleFields(moduleId);
+    const sourceFields: ModuleField[] = visibleFields.some((field) => field.key === WORKFLOW_RECORD_LINK_FIELD_KEY)
+      ? visibleFields
+      : [{
+          key: WORKFLOW_RECORD_LINK_FIELD_KEY,
+          labels: { fa: 'لینک رکورد', en: 'Record Link' },
+          type: FieldType.LINK,
+          nature: 'system' as any,
+          readonly: true,
+        }, ...visibleFields];
+    const baseFields = sourceFields.map((field) => ({
       ...field,
       ...( { workflowOptionScopeModuleId: moduleId } as any ),
       key: createProcessLinkedFieldKey(moduleId, field.key),

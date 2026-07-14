@@ -157,10 +157,30 @@ describe('messageTemplateRenderer option values', () => {
     expect(text).toBe(`لینک فاکتور: ${window.location.origin}/i/2cdc74346be8394ea3a6a2bcd73589341afdcf1e68e57993`);
   });
 
+  it('normalizes an online invoice link stored without a leading slash', () => {
+    const text = renderTemplateText(
+      'لینک فاکتور: {{public_link}}',
+      { public_link: 'i/NPVShoPtwW' },
+      { moduleId: 'invoices' }
+    );
+
+    expect(text).toBe(`لینک فاکتور: ${window.location.origin}/i/NPVShoPtwW`);
+  });
+
   it('prepends the site origin to the online delivery link', () => {
     const text = renderTemplateText(
       'لینک تحویل: {{public_link}}',
       { public_link: '/d/AbC2345678' },
+      { moduleId: 'delivery_forms' }
+    );
+
+    expect(text).toBe(`لینک تحویل: ${window.location.origin}/d/AbC2345678`);
+  });
+
+  it('normalizes an online delivery link stored without a leading slash', () => {
+    const text = renderTemplateText(
+      'لینک تحویل: {{public_link}}',
+      { public_link: 'd/AbC2345678' },
       { moduleId: 'delivery_forms' }
     );
 

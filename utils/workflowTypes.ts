@@ -83,6 +83,7 @@ export type PublishStoryActionConfig = {
 };
 
 export const WORKFLOW_ASSIGNEE_FIELD_KEY = '__workflow_assignee';
+export const WORKFLOW_RECORD_LINK_FIELD_KEY = '__workflow_record_link';
 const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
 const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
 const WORKFLOW_NOTE_RECIPIENT_FIELD_PREFIX = '__workflow_note_recipient__';

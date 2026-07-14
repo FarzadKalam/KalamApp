@@ -4,6 +4,11 @@ import {
   getProcessTemplateIdentityFields,
   getWorkflowConditionFields,
 } from './workflowHelpers';
+import { createProcessLinkedFieldKey } from './processTargets';
+import {
+  createWorkflowRelatedFieldKey,
+  WORKFLOW_RECORD_LINK_FIELD_KEY,
+} from './workflowTypes';
 
 describe('workflowHelpers', () => {
   it('labels assignee profile fields by their own user-profile field names', () => {
@@ -18,6 +23,32 @@ describe('workflowHelpers', () => {
     expect(
       profileFields.filter((field) => field.labels?.fa === 'مسئول (فاکتورهای خرید)')
     ).toHaveLength(0);
+  });
+
+  it('exposes record links for the current record and every listed relation scope', () => {
+    const fields = getWorkflowConditionFields('invoices');
+
+    expect(fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: WORKFLOW_RECORD_LINK_FIELD_KEY,
+        labels: expect.objectContaining({ fa: 'لینک رکورد' }),
+      }),
+      expect.objectContaining({
+        key: createWorkflowRelatedFieldKey('customer_id', 'customers', WORKFLOW_RECORD_LINK_FIELD_KEY),
+        labels: expect.objectContaining({ fa: 'لینک رکورد (مدیریت مشتریان)' }),
+      }),
+    ]));
+  });
+
+  it('exposes a scoped record link for every process automation target module', () => {
+    const fields = getProcessAutomationConditionFieldsForModules(['marketing_leads']);
+
+    expect(fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: createProcessLinkedFieldKey('marketing_leads', WORKFLOW_RECORD_LINK_FIELD_KEY),
+        labels: expect.objectContaining({ fa: 'لینک رکورد (لیدهای بازاریابی)' }),
+      }),
+    ]));
   });
 
   it('keeps process-linked assignee profile labels scoped to the source module', () => {

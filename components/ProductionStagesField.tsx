@@ -80,6 +80,7 @@ import { fetchProcessRuntimeBatchForRecord } from '../utils/processRuntimeBatch'
 import { getProcessAutomationConditionFieldsForModules, getProcessTemplateIdentityFields, getProjectModuleOptions, getSyntheticWorkflowAssigneeField, getVisibleWorkflowModuleFields } from '../utils/workflowHelpers';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  WORKFLOW_RECORD_LINK_FIELD_KEY,
   createWorkflowId,
   createProcessNextStageFieldKey,
   intervalUnitOptions,
@@ -669,6 +670,7 @@ const createProcessAutomationTaskVariableFields = (): ModuleField[] => ([
   },
   { key: 'task_due_date', labels: { fa: 'موعد فعالیت', en: 'Task Due Date' }, type: FieldType.DATETIME, nature: 'standard' as any },
   { key: 'task_image_url', labels: { fa: 'تصویر اصلی همین فعالیت', en: 'Current Task Main Image' }, type: FieldType.IMAGE, nature: 'standard' as any },
+  { key: `${TASK_AUTOMATION_FIELD_PREFIX}${WORKFLOW_RECORD_LINK_FIELD_KEY}`, labels: { fa: 'لینک رکورد (فعالیت)', en: 'Task Record Link' }, type: FieldType.LINK, nature: 'system' as any, readonly: true },
 ]);
 
 const processTaskCustomFieldTypeLabels: Partial<Record<FieldType, string>> = {

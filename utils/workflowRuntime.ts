@@ -17,6 +17,7 @@ import {
   parseWorkflowMultiRelationFieldKey,
   parseProcessNextStageFieldKey,
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  WORKFLOW_RECORD_LINK_FIELD_KEY,
   WorkflowNoteRecipientStrategy,
   WorkflowAction,
   WorkflowCondition,
@@ -717,6 +718,15 @@ const buildWorkflowWebFormUrl = async (slug?: string | null, accessToken?: strin
   return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 };
 
+const buildWorkflowRecordUrl = async (targetModuleId: string, recordId: unknown) => {
+  const normalizedModuleId = String(targetModuleId || '').trim();
+  const normalizedRecordId = String(recordId || '').trim();
+  if (!normalizedModuleId || !normalizedRecordId) return '';
+  const path = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(normalizedRecordId)}`;
+  const baseUrl = await resolveWorkflowPublicBaseUrl();
+  return baseUrl ? `${baseUrl}${path}` : path;
+};
+
 const resolveConditionFieldValue = async (
   fieldKey: string,
   record: Record<string, any> | null | undefined,
@@ -748,6 +758,10 @@ const resolveConditionFieldValue = async (
       return buildResolvedAssigneeCombo(relatedRecord);
     }
 
+    if (relatedFieldMeta.targetFieldKey === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+      return buildWorkflowRecordUrl(relatedFieldMeta.targetModuleId, relatedRecord.id);
+    }
+
     if (relatedFieldMeta.targetFieldKey === 'tags') {
       const relatedRecordId = String(relatedRecord?.id || '').trim();
       if (!relatedRecordId) return [];
@@ -759,6 +773,14 @@ const resolveConditionFieldValue = async (
 
   if (fieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
     return buildResolvedAssigneeCombo(record);
+  }
+
+  if (fieldKey === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+    return buildWorkflowRecordUrl(moduleId, record.id);
+  }
+
+  if (fieldKey === `__task__${WORKFLOW_RECORD_LINK_FIELD_KEY}`) {
+    return buildWorkflowRecordUrl('tasks', record.__task__id || record.task_id || (moduleId === 'tasks' ? record.id : ''));
   }
 
   if (fieldKey === 'tags') {
@@ -786,6 +808,10 @@ const resolveConditionFieldValue = async (
 
     if (processLinkedMeta.targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY) {
       return buildResolvedAssigneeCombo(linkedRecord);
+    }
+
+    if (processLinkedMeta.targetFieldKey === WORKFLOW_RECORD_LINK_FIELD_KEY) {
+      return buildWorkflowRecordUrl(processLinkedMeta.moduleId, linkedRecordId);
     }
 
     if (processLinkedMeta.targetFieldKey === 'tags') {

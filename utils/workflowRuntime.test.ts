@@ -51,8 +51,12 @@ vi.mock('./processStageActivation', () => ({
   activateProcessStageAction: mocks.activateProcessStageAction,
 }));
 
-import { evaluateWorkflowConditions, executeWorkflowAction, runWorkflowsForEvent } from './workflowRuntime';
-import { createProcessNextStageFieldKey, createWorkflowNoteRecipientFieldKey } from './workflowTypes';
+import { evaluateWorkflowConditions, executeWorkflowAction, resolveWorkflowFieldValue, runWorkflowsForEvent } from './workflowRuntime';
+import {
+  createProcessNextStageFieldKey,
+  createWorkflowNoteRecipientFieldKey,
+  WORKFLOW_RECORD_LINK_FIELD_KEY,
+} from './workflowTypes';
 import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
@@ -62,6 +66,24 @@ const GROUP_ID = '11111111-1111-4111-8111-111111111111';
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const DIRECT_USER_ID = '33333333-3333-4333-8333-333333333333';
 const ROLE_ID = '44444444-4444-4444-8444-444444444444';
+
+describe('workflow record link variables', () => {
+  it('resolves the current record link as an absolute URL', async () => {
+    await expect(resolveWorkflowFieldValue({
+      fieldKey: WORKFLOW_RECORD_LINK_FIELD_KEY,
+      currentRecord: { id: 'record-1' },
+      moduleId: 'customers',
+    })).resolves.toBe(`${window.location.origin}/customers/record-1`);
+  });
+
+  it('resolves the current process task link as an absolute URL', async () => {
+    await expect(resolveWorkflowFieldValue({
+      fieldKey: `__task__${WORKFLOW_RECORD_LINK_FIELD_KEY}`,
+      currentRecord: { task_id: 'task-1' },
+      moduleId: 'customers',
+    })).resolves.toBe(`${window.location.origin}/tasks/task-1`);
+  });
+});
 
 const makeQuery = (table: string) => ({
   select: vi.fn(() => {

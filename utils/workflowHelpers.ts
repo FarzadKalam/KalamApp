@@ -10,6 +10,7 @@ import {
 } from './processTargets';
 import {
   WORKFLOW_ASSIGNEE_FIELD_KEY,
+  WORKFLOW_RECORD_LINK_FIELD_KEY,
   createWorkflowRelatedFieldKey,
 } from './workflowTypes';
 import { PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS } from './processModuleSupport';
@@ -65,6 +66,15 @@ const buildSyntheticAssigneeField = (moduleId: string): ModuleField => ({
   ...( { workflowOptionScopeModuleId: moduleId } as any ),
 });
 
+export const getSyntheticWorkflowRecordLinkField = (moduleId: string): ModuleField => ({
+  key: WORKFLOW_RECORD_LINK_FIELD_KEY,
+  labels: { fa: 'لینک رکورد', en: 'Record Link' },
+  type: FieldType.LINK,
+  nature: 'system' as any,
+  readonly: true,
+  ...( { workflowOptionScopeModuleId: moduleId } as any ),
+});
+
 const getAssigneeProfileFields = (sourceModuleId: string, assigneeFieldKey = 'assignee_id'): ModuleField[] => {
   if (!sourceModuleId || !supportsGlobalAssignee(sourceModuleId)) return [];
   const assigneeLabel = getAssigneeLabel(sourceModuleId);
@@ -97,7 +107,7 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
   if (!moduleId || !MODULES[moduleId]) return [];
 
   const currentFields = getVisibleWorkflowModuleFields(moduleId);
-  const result: ModuleField[] = [...currentFields];
+  const result: ModuleField[] = [getSyntheticWorkflowRecordLinkField(moduleId), ...currentFields];
 
   if (supportsGlobalAssignee(moduleId)) {
     result.push(buildSyntheticAssigneeField(moduleId));
@@ -111,6 +121,15 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
       if (!targetModuleId || !MODULES[targetModuleId]) return;
 
       const targetTitle = MODULES[targetModuleId]?.titles?.fa || targetModuleId;
+      result.push({
+        ...getSyntheticWorkflowRecordLinkField(targetModuleId),
+        key: createWorkflowRelatedFieldKey(
+          relationField.key,
+          targetModuleId,
+          WORKFLOW_RECORD_LINK_FIELD_KEY
+        ),
+        labels: { fa: `لینک رکورد (${targetTitle})`, en: 'Related Record Link' },
+      });
       const relatedFields = getVisibleWorkflowModuleFields(targetModuleId).map((targetField) => ({
         ...targetField,
         ...( { workflowOptionScopeModuleId: targetModuleId } as any ),
@@ -176,6 +195,12 @@ export const getProcessAutomationTaskFields = () => {
 
   const remaining = taskFields.filter((field) => !preferredOrder.includes(field.key));
   const result: ModuleField[] = [...prioritized, ...remaining];
+
+  result.push({
+    ...getSyntheticWorkflowRecordLinkField('tasks'),
+    key: '__task__' + WORKFLOW_RECORD_LINK_FIELD_KEY,
+    labels: { fa: 'لینک رکورد (فعالیت)', en: 'Task Record Link' },
+  });
 
   if (supportsGlobalAssignee('tasks')) {
     result.push({
