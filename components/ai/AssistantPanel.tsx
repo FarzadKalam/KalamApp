@@ -29,6 +29,7 @@ import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 import AiMessageRenderer from './AiMessageRenderer';
+import AiRecordMutationApprovalCard, { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
 
 type ChatMessage = {
   id: string;
@@ -100,6 +101,9 @@ const DIRECT_IMAGE_GENERATION_PATTERNS = [
   /(?:خودت|مستقیماً|مستقیم|همین حالا).*(?:تصویر|عکس|پوستر|بنر|کاور).*(?:بساز|تولید کن|ایجاد کن|طراحی کن)/i,
   /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:را|رو).*(?:بساز|تولید کن|ایجاد کن|طراحی کن)/i,
 ];
+
+const isRecordUpdateRequest = (text: string) =>
+  /(?:ویرایش|اصلاح|تغییر|بروزرسانی|به‌روزرسانی|آپدیت)/i.test(String(text || ''));
 
 const IMAGE_PROMPT_WORD_PATTERN = /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:تصویر|عکس|پوستر|بنر|کاور|image)|(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور)/i;
 
@@ -264,14 +268,6 @@ const formatUsageMetadata = (metadata?: Record<string, any> | null) => {
   return parts.join(' · ');
 };
 
-const formatDraftValue = (value: any): string => {
-  if (value === null || value === undefined || value === '') return 'خالی';
-  if (Array.isArray(value)) return value.map(formatDraftValue).join('، ');
-  if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
-  if (typeof value === 'object') return JSON.stringify(value);
-  return String(value);
-};
-
 const getGenerationConfirmationTitle = (kind: string) => {
   if (kind === 'image_generation') return 'تایید ساخت تصویر';
   if (kind === 'video_generation') return 'تایید ساخت ویدیو';
@@ -364,18 +360,22 @@ const buildLocalGenerationConfirmation = (params: {
 const buildPendingActionRevisionPrompt = (pendingAction: any, text: string) => {
   const proposedPayload = pendingAction?.proposedPayload || pendingAction?.proposed_payload || {};
   const payload = proposedPayload?.payload && typeof proposedPayload.payload === 'object' ? proposedPayload.payload : {};
+  const records = Array.isArray(proposedPayload?.records) && proposedPayload.records.length
+    ? proposedPayload.records
+    : [{ fields: payload }];
   const moduleLabel = String(pendingAction?.title || proposedPayload?.module_label || '').trim();
-  if (!Object.keys(payload).length) return text;
+  if (!records.some((record: any) => Object.keys(record?.fields || {}).length > 0)) return text;
+  const isUpdate = String(pendingAction?.actionType || '') === 'update_record_from_prompt';
   return [
-    'کاربر می‌خواهد پیش‌نویس ساخت رکورد قبلی را اصلاح یا تکمیل کند.',
+    `کاربر می‌خواهد پیش‌نویس ${isUpdate ? 'ویرایش' : 'ساخت'} رکورد قبلی را اصلاح یا تکمیل کند.`,
     moduleLabel ? `نوع رکورد: ${moduleLabel}` : '',
     'پیش‌نویس قبلی:',
-    JSON.stringify(payload),
+    JSON.stringify(records),
     '',
     'توضیح جدید کاربر:',
     text,
     '',
-    'با حفظ اطلاعات قبلی، فقط موارد جدید یا اصلاح‌شده را اعمال کن و دوباره پیش‌نویس تایید بساز.',
+    `با حفظ اطلاعات قبلی، فقط موارد جدید یا اصلاح‌شده را اعمال کن و دوباره پیش‌نویس تایید ${isUpdate ? 'ویرایش' : 'ساخت'} بساز.`,
   ].filter(Boolean).join('\n');
 };
 
@@ -724,7 +724,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     [recordCreationTargetModuleId],
   );
   const pendingRecordCreationSchema = useMemo(
-    () => pendingAiAction?.actionType === 'create_record_from_prompt' && pendingAiAction?.schema
+    () => ['create_record_from_prompt', 'update_record_from_prompt'].includes(String(pendingAiAction?.actionType || '')) && pendingAiAction?.schema
       ? pendingAiAction.schema
       : null,
     [pendingAiAction],
@@ -945,6 +945,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const result = {
       suggestedCapabilities,
       targetModuleId: String(data?.targetModuleId || '').trim() || null,
+      mutationMode: String(data?.mutationMode || '').trim() === 'update' ? 'update' as const : 'create' as const,
+      voiceTranscripts: Array.isArray(data?.voiceTranscripts) ? data.voiceTranscripts : [],
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
@@ -965,8 +967,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     });
     const routeCapabilities = route.suggestedCapabilities;
     const capabilitySet = new Set(routeCapabilities);
-    const autoRecordSchema = capabilitySet.has('record_creation') && route.targetModuleId
-      ? buildAiRecordCreationSchema(route.targetModuleId)
+    const mutationTargetModuleId = route.targetModuleId
+      || (route.mutationMode === 'update' ? String(contextWithSelection.moduleId || '').trim() : '');
+    const autoRecordSchema = capabilitySet.has('record_creation') && mutationTargetModuleId
+      ? buildAiRecordCreationSchema(mutationTargetModuleId)
       : null;
     if (capabilitySet.has('record_creation') && !autoRecordSchema) {
       throw new Error('برای ساخت خودکار، نوع رکورد هنوز روشن نیست. لطفاً نوع رکورد را در پیام مشخص کنید.');
@@ -1102,6 +1106,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
     }
 
+    const executionBundlePayload = bundlePayload.map((item) => {
+      if (String(item?.type || '') !== 'voice') return item;
+      const transcript = route.voiceTranscripts.find((entry: any) => String(entry?.inputId || '') === String(item?.id || ''));
+      return transcript?.transcript
+        ? { ...item, text: String(transcript.transcript), audio: null }
+        : item;
+    });
+
     if (bundlePayload.length > 0
       || capabilitySet.has('document_analysis')
       || capabilitySet.has('voice_input')
@@ -1116,13 +1128,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.'
           : 'ورودی‌های پیوست‌شده را بررسی کن.'),
         inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
-        bundle: bundlePayload.length ? { inputs: bundlePayload } : undefined,
+        bundle: executionBundlePayload.length ? { inputs: executionBundlePayload } : undefined,
         threadId: params.forceNewThread ? null : threadId,
         forceNewThread: params.forceNewThread === true,
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
         recordCreation: autoRecordSchema,
+        recordMutationMode: route.mutationMode,
         previewOnly: true,
       });
     }
@@ -1616,7 +1629,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : activeRecordCreationSchema ? {
-        action: 'create_record_from_prompt',
+        action: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record_from_prompt' : 'create_record_from_prompt',
+        outputMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record' : 'create_record',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities,
         message: assistantText,
@@ -2129,6 +2143,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current,
           settings: mediaSettings,
           recordCreation: activeRecordCreationSchema,
+          recordMutationMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantPrompt) ? 'update' : 'create',
           previewOnly: true,
         }));
       if (!data?.proposedAction && activeRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
@@ -2299,7 +2314,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         });
         return;
       }
-      await callAssistant({ action: 'confirm_action', actionLogId: actionId });
+      const proposedRecords = Array.isArray(pendingAiAction?.proposedPayload?.records)
+        ? pendingAiAction.proposedPayload.records
+        : null;
+      await callAssistant({
+        action: 'confirm_action',
+        actionLogId: actionId,
+        proposedRecords,
+      });
       message.success('اقدام تایید و اجرا شد.');
       setPendingAiAction(null);
       await loadThread();
@@ -2545,6 +2567,23 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   };
 
   const pendingGenerationKind = String(pendingAiAction?.generationKind || '').trim();
+  const pendingRecordMutationType = ['create_record_from_prompt', 'update_record_from_prompt'].includes(String(pendingAiAction?.actionType || ''))
+    ? String(pendingAiAction.actionType) as 'create_record_from_prompt' | 'update_record_from_prompt'
+    : null;
+  const pendingRecordMutationRecords = useMemo<AiRecordMutationDraft[]>(() => {
+    if (!pendingRecordMutationType) return [];
+    const proposedPayload = pendingAiAction?.proposedPayload || {};
+    if (Array.isArray(proposedPayload?.records) && proposedPayload.records.length) {
+      return proposedPayload.records.map((record: any) => ({
+        record_id: String(record?.record_id || '').trim() || null,
+        record_title: String(record?.record_title || '').trim() || null,
+        fields: record?.fields && typeof record.fields === 'object' ? record.fields : {},
+      }));
+    }
+    return proposedPayload?.payload && typeof proposedPayload.payload === 'object'
+      ? [{ fields: proposedPayload.payload }]
+      : [];
+  }, [pendingAiAction, pendingRecordMutationType]);
   const pendingGenerationCanChooseModel = pendingAiAction?.actionType === 'confirm_generation'
     && ['image_generation', 'video_generation', 'voice_output', 'document_generation', 'deep_reasoning'].includes(pendingGenerationKind);
   const pendingGenerationSourceImageCount = useMemo(() => {
@@ -2753,8 +2792,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 <div className="font-bold">
                   {String(pendingAiAction?.actionType || '') === 'confirm_generation'
                     ? String(pendingAiAction?.title || 'تایید ساخت خروجی')
-                    : String(pendingAiAction?.actionType || '') === 'create_record_from_prompt'
-                    ? `پیش‌نویس ساخت ${String(pendingAiAction?.title || 'رکورد').trim()}`
+                    : pendingRecordMutationType
+                    ? `پیش‌نویس ${pendingRecordMutationType === 'update_record_from_prompt' ? 'ویرایش' : 'ساخت'} ${String(pendingAiAction?.title || 'رکورد').trim()}`
                     : 'هوش مصنوعی یک اقدام قابل اجرا پیشنهاد داده است.'}
                 </div>
                 <div className="mt-1 text-amber-800 dark:text-amber-200/85">
@@ -2836,20 +2875,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 </Checkbox>
               </div>
             ) : null}
-            {pendingAiAction?.proposedPayload?.payload ? (
-              <div className="mt-2 space-y-1 rounded-xl border border-amber-200/70 bg-white/72 p-2 dark:border-amber-300/15 dark:bg-white/[0.045]">
-                {Object.entries(pendingAiAction.proposedPayload.payload).slice(0, 12).map(([key, value]) => {
-                  const field = Array.isArray(pendingAiAction?.schema?.fields)
-                    ? pendingAiAction.schema.fields.find((item: any) => String(item?.key || '') === key)
-                    : null;
-                  return (
-                    <div key={key} className="flex items-start justify-between gap-3 border-b border-amber-100/80 py-1 last:border-b-0 dark:border-white/10">
-                      <span className="shrink-0 font-semibold text-amber-900 dark:text-amber-100">{String(field?.label || key)}</span>
-                      <span className="min-w-0 text-left text-amber-800 dark:text-amber-200/85">{formatDraftValue(value)}</span>
-                    </div>
-                  );
-                })}
-              </div>
+            {pendingRecordMutationType && pendingRecordMutationRecords.length > 0 ? (
+              <AiRecordMutationApprovalCard
+                actionType={pendingRecordMutationType}
+                moduleId={String(pendingAiAction?.targetModuleId || pendingAiAction?.proposedPayload?.target_module_id || '').trim()}
+                schema={pendingAiAction?.schema}
+                records={pendingRecordMutationRecords}
+                onChange={(records) => setPendingAiAction((current: any) => current ? {
+                  ...current,
+                  proposedPayload: {
+                    ...(current.proposedPayload || {}),
+                    records,
+                    payload: records[0]?.fields || {},
+                  },
+                } : current)}
+              />
             ) : null}
             <div className="mt-2">
               {String(pendingAiAction?.actionType || '') === 'confirm_generation'

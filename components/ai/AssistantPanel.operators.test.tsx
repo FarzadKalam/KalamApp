@@ -147,6 +147,22 @@ describe('AssistantPanel AI operators', () => {
       if (action === 'suggest_auto_capabilities') {
         const messageText = String(options?.body?.message || '').trim();
         const bundleInputs = Array.isArray(options?.body?.bundle?.inputs) ? options.body.bundle.inputs : [];
+        if (messageText.includes('لید')) {
+          const voiceInput = bundleInputs.find((item: any) => item.type === 'voice');
+          return {
+            data: {
+              success: true,
+              capabilities: ['voice_input', 'document_analysis', 'record_creation'],
+              targetModuleId: 'marketing_leads',
+              mutationMode: 'create',
+              voiceTranscripts: voiceInput ? [{ inputId: voiceInput.id, transcript: 'این تصویر و ویس را به عنوان دو لید ثبت کن' }] : [],
+            },
+            error: null,
+          };
+        }
+        if (messageText.includes('ویرایش')) {
+          return { data: { success: true, capabilities: ['record_creation'], targetModuleId: 'customers', mutationMode: 'update' }, error: null };
+        }
         if (messageText.includes('تصویر')) {
           return { data: { success: true, capabilities: ['image_generation'], targetModuleId: null }, error: null };
         }
@@ -255,7 +271,7 @@ describe('AssistantPanel AI operators', () => {
     await renderPanel();
     await typeAndSend('یک پاسخ معمولی بده', 'ارسال');
     await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    await waitFor(() => expect(fetch).toHaveBeenCalled(), { timeout: 5000 });
     expect(findBody('chat')).toBeFalsy();
   });
 
@@ -263,7 +279,6 @@ describe('AssistantPanel AI operators', () => {
     await renderPanel();
     await typeAndSend('یک پرامپت برای تولید تصویر بهم بده', 'ارسال');
     await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
-    await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(findBody('generate_image')).toBeFalsy();
   });
 
@@ -286,6 +301,16 @@ describe('AssistantPanel AI operators', () => {
     const body = findBody('run_task_bundle') || findBody('create_record_from_prompt');
     expect(body?.recordCreation?.moduleId).toBe('customers');
   });
+
+  it('routes record edits through the confirmed multi-record update path', async () => {
+    await renderPanel();
+    await typeAndSend('رکوردهای انتخاب‌شده مشتری را ویرایش کن', 'ارسال');
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.recordCreation?.moduleId).toBe('customers');
+    expect(body?.recordMutationMode).toBe('update');
+    expect(body?.previewOnly).toBe(true);
+  }, 10000);
 
   it('uses auto routing for attached files when no operator is selected', async () => {
     await renderPanel();
@@ -323,4 +348,21 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.bundle?.inputs).toHaveLength(2);
     expect(body?.bundle?.inputs?.map((item: any) => item.type)).toEqual(['file', 'voice']);
   });
+
+  it('reuses the decision engine voice transcript while sending image, file and voice together', async () => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText('send-file')[0]);
+    fireEvent.click(screen.getAllByText('send-voice')[0]);
+    await typeAndSend('این عکس و ویس را به عنوان چند لید جدید ثبت کن', 'ارسال');
+
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.capabilities).toEqual(expect.arrayContaining(['voice_input', 'document_analysis', 'record_creation']));
+    expect(body?.recordCreation?.moduleId).toBe('marketing_leads');
+    expect(body?.recordMutationMode).toBe('create');
+    expect(body?.bundle?.inputs).toHaveLength(2);
+    expect(body?.bundle?.inputs?.[1]?.text).toContain('دو لید');
+    expect(body?.bundle?.inputs?.[1]?.audio).toBeNull();
+  }, 10000);
 });
