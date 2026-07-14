@@ -10,7 +10,7 @@ describe('MessagingSurfacePrototype', () => {
 
     expect(screen.getByTestId('messaging-v2-prototype')).toBeInTheDocument();
     expect(screen.getAllByText('پیام رسانی')[0]).toBeInTheDocument();
-    expect(screen.getByText('در حال بارگزاری لیست پیام‌ها...')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('باز کردن فهرست گفتگوها')[0]).toBeInTheDocument();
     expect(screen.queryByText('گروه فروش و پشتیبانی')).not.toBeInTheDocument();
     expect(screen.queryByText('دستیار هوش مصنوعی فروش')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('ارسال پیام')).not.toBeInTheDocument();

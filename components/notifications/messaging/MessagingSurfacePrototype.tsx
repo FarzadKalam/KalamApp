@@ -89,6 +89,8 @@ import ProfileAvatar from '../../common/ProfileAvatar';
 import MessageAttachmentGallery from '../../messaging/MessageAttachmentGallery';
 import AiSparkleIcon from '../../ai/AiSparkleIcon';
 import type { BotPlatformState } from '../../bot/CounterpartyBotStatusModal';
+import AiReplySuggestionAction from './AiReplySuggestionAction';
+import { buildRecentReplySuggestionMessages } from '../../../utils/replySuggestion';
 
 const ForwardMessageModalRuntime = React.lazy(() => import('../ForwardMessageModalRuntime'));
 const SmartForm = React.lazy(() => import('../../SmartForm'));
@@ -2065,11 +2067,13 @@ const MessagingHeader: React.FC<{
 const MessagingComposerDock: React.FC<{
   conversation: Conversation;
   onSendMessage?: (conversation: Conversation, payload: ComposerSendPayload) => Promise<boolean> | boolean;
+  onRequestReplySuggestion?: (instruction: string) => Promise<string>;
   mentionOptions?: Array<{ label: string; value: string }>;
   mentionsLoading?: boolean;
   replyTarget?: TimelineEvent | null;
   onClearReply?: () => void;
-}> = ({ conversation, onSendMessage, mentionOptions = [], mentionsLoading = false, replyTarget = null, onClearReply }) => {
+}> = ({ conversation, onSendMessage, onRequestReplySuggestion, mentionOptions = [], mentionsLoading = false, replyTarget = null, onClearReply }) => {
+  const { message } = App.useApp();
   const [draft, setDraft] = useState('');
   const [recording, setRecording] = useState(false);
   const [sending, setSending] = useState(false);
@@ -2079,6 +2083,7 @@ const MessagingComposerDock: React.FC<{
   const [linkedAttachments, setLinkedAttachments] = useState<NoteAttachment[]>([]);
   const [readyTextsOpen, setReadyTextsOpen] = useState(false);
   const [smsNotificationEnabled, setSmsNotificationEnabled] = useState(false);
+  const [suggestingReply, setSuggestingReply] = useState(false);
   const readyTextRecord = useMemo(
     () => (conversation.relatedRecordId ? { id: conversation.relatedRecordId } : null),
     [conversation.relatedRecordId],
@@ -2093,7 +2098,21 @@ const MessagingComposerDock: React.FC<{
     setLinkedAttachments([]);
     setReadyTextsOpen(false);
     setSmsNotificationEnabled(false);
+    setSuggestingReply(false);
   }, [conversation.key]);
+  const requestReplySuggestion = async (instruction: string) => {
+    if (!onRequestReplySuggestion || suggestingReply) return;
+    setSuggestingReply(true);
+    try {
+      const suggestedReply = String(await onRequestReplySuggestion(instruction) || '').trim();
+      if (!suggestedReply) throw new Error('متن پیشنهادی معتبری دریافت نشد.');
+      setDraft(suggestedReply);
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'دریافت پیشنهاد پاسخ هوش مصنوعی ناموفق بود.'));
+    } finally {
+      setSuggestingReply(false);
+    }
+  };
   const applyReadyText = (value: string) => {
     const text = String(value || '').trim();
     if (!text) return;
@@ -2127,7 +2146,7 @@ const MessagingComposerDock: React.FC<{
   }
   if (conversation.channel === 'internal' || conversation.channel === 'bot_group' || conversation.channel === 'bot_direct') {
     const disabled = Boolean(conversation.readOnly);
-    const canSubmit = !disabled && !sending && (draft.trim() || attachments.length > 0 || linkedAttachments.length > 0);
+    const canSubmit = !disabled && !sending && !suggestingReply && (draft.trim() || attachments.length > 0 || linkedAttachments.length > 0);
     const submitSharedDraft = async () => {
       if (!canSubmit) return;
       setSending(true);
@@ -2203,6 +2222,13 @@ const MessagingComposerDock: React.FC<{
           surfaceVariant="omni"
           extraActions={!disabled ? (
             <>
+              {onRequestReplySuggestion ? (
+                <AiReplySuggestionAction
+                  disabled={sending || suggestingReply}
+                  loading={suggestingReply}
+                  onSubmit={requestReplySuggestion}
+                />
+              ) : null}
               {conversation.actions.includes('ready_text') ? (
                 <Tooltip title="متن آماده">
                   <Button type="text" size="small" shape="circle" icon={<SnippetsOutlined />} aria-label="متن آماده" onClick={() => setReadyTextsOpen(true)} />
@@ -4790,6 +4816,45 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     }
   };
 
+  const requestActiveReplySuggestion = async (instruction: string) => {
+    if (activeConversation.channel !== 'bot_group' && activeConversation.channel !== 'bot_direct') {
+      throw new Error('پیشنهاد پاسخ برای این نوع گفتگو در دسترس نیست.');
+    }
+    const recentMessages = buildRecentReplySuggestionMessages(activeEvents);
+    if (recentMessages.length === 0) {
+      throw new Error('برای پیشنهاد پاسخ، هنوز پیامی در این گفتگو وجود ندارد.');
+    }
+
+    const botDirectThreadId = activeConversation.channel === 'bot_direct'
+      ? String(activeConversation.key || '').replace(/^live:bot_direct:/, '').trim()
+      : '';
+    const { data, error } = await supabase.functions.invoke('ai-assistant', {
+      body: {
+        action: 'suggest_reply',
+        channel: 'bot',
+        botGroupId: activeConversation.channel === 'bot_group' ? activeBotGroupId || null : null,
+        botDirectThreadId: botDirectThreadId || null,
+        instruction: String(instruction || '').trim() || null,
+        context: {
+          mode: activeConversation.relatedModuleId && activeConversation.relatedRecordId ? 'record' : 'page',
+          moduleId: activeConversation.relatedModuleId || null,
+          recordId: activeConversation.relatedRecordId || null,
+          route: '/messages',
+        },
+        counterparty: {
+          moduleId: activeConversation.relatedModuleId || null,
+          recordId: activeConversation.relatedRecordId || null,
+        },
+        recentMessages,
+      },
+    });
+    if (error) throw error;
+    if (!data?.success) throw new Error(String(data?.message || 'دریافت پیشنهاد پاسخ ناموفق بود.'));
+    const suggestedReply = String(data?.suggestedReply || '').trim();
+    if (!suggestedReply) throw new Error('متن پیشنهادی معتبری دریافت نشد.');
+    return suggestedReply;
+  };
+
   const forwardSelectedNoteUserId = (() => {
     const selection = resolveConversationSelection(selectedInternalSourceKey, liveData.profile.id);
     return typeof selection === 'string' && selection !== SYSTEM_MESSAGES_USER_ID && !selection.startsWith(CHAT_GROUP_PREFIX)
@@ -4908,8 +4973,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 </div>
               </div>
               <MessagingComposerDock
+                key={activeConversation.key}
                 conversation={activeConversation}
                 onSendMessage={sendMessage}
+                onRequestReplySuggestion={activeConversation.channel === 'bot_group' || activeConversation.channel === 'bot_direct'
+                  ? requestActiveReplySuggestion
+                  : undefined}
                 mentionOptions={mentionOptions}
                 mentionsLoading={mentionsLoading}
                 replyTarget={replyTarget?.conversationKey === activeConversation.key ? replyTarget : null}
