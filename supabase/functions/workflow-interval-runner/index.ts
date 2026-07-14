@@ -568,6 +568,17 @@ async function buildServerRecordUrl(url: string, key: string, orgId: string, mod
   return baseUrl ? `${baseUrl}${path}` : path;
 }
 
+async function absolutizeTenantPublicLinksInText(text: string, url: string, key: string, orgId: string): Promise<string> {
+  const raw = String(text || '');
+  if (!raw || !/(^|[\s(\[{"'«])\/?(?:i|d)\/[A-Za-z0-9_-]+/im.test(raw)) return raw;
+  const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
+  if (!baseUrl) return raw;
+  return raw.replace(
+    /(^|[\s(\[{"'«])\/?(i|d)\/([A-Za-z0-9_-]+)/gim,
+    (_match, prefix, routeType, publicCode) => `${prefix}${baseUrl}/${String(routeType).toLowerCase()}/${publicCode}`,
+  );
+}
+
 async function getOrgTenantBaseUrl(url: string, key: string, orgId: string): Promise<string> {
   return getOrgPublicBaseUrl(url, key, orgId);
 }
@@ -666,7 +677,7 @@ async function renderTemplateAsync(
     const text = await formatFieldValue(value, fieldKey, url, key, orgId, moduleId);
     rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
   }
-  return rendered;
+  return absolutizeTenantPublicLinksInText(rendered, url, key, orgId);
 }
 
 // ── Condition evaluation ───────────────────────────────────────────────────────
