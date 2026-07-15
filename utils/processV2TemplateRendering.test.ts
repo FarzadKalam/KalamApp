@@ -53,4 +53,16 @@ describe('process v2 template rendering', () => {
   it('does not remove unresolved tokens from stage titles', () => {
     expect(renderProcessV2TemplateValueFromRecord('طراحی "{{نام پروژه مرتبط}}"', {})).toBe('طراحی "{{نام پروژه مرتبط}}"');
   });
+
+  it('resolves stable field-key tokens used by the process variable picker', async () => {
+    const context = await buildProcessV2TemplateContext({
+      supabaseClient: createSupabaseMock({}),
+      moduleId: 'projects',
+      recordId: 'project-1',
+      recordData: { id: 'project-1', name: 'پروژه آذرخش', description: 'شرح پروژه' },
+    });
+
+    expect(renderProcessV2TemplateValueFromRecord('پیگیری {{name}}', context)).toBe('پیگیری پروژه آذرخش');
+    expect(renderProcessV2TemplateValueFromRecord('توضیحات: {{description}}', context)).toBe('توضیحات: شرح پروژه');
+  });
 });

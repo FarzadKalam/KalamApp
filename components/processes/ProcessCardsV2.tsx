@@ -28,6 +28,10 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { parseProcessLinkMap } from '../../utils/processTargets';
+import ProcessTemplateVariablePicker, {
+  appendProcessTemplateToken,
+  type ProcessTemplateVariableOption,
+} from './ProcessTemplateVariablePicker';
 
 export type ProcessV2StageKind = 'draft' | 'activity';
 export type ProcessV2StageStatus = 'draft' | 'waiting' | 'active' | 'done' | 'blocked' | 'canceled';
@@ -112,6 +116,7 @@ type ProcessCardsV2Props = {
   autoAssigning?: boolean;
   canAutoAssign?: boolean;
   highlightedStageIds?: string[];
+  templateVariableOptions?: ProcessTemplateVariableOption[];
 };
 
 type StageSizeMode = 'fit' | 'expanded';
@@ -650,28 +655,6 @@ const confirmProcessV2Delete = (title: string, onConfirm: () => void | Promise<v
     zIndex: 32000,
     onOk: onConfirm,
   });
-};
-
-const copyProcessTemplateToken = async (token: string) => {
-  const text = String(token || '').trim();
-  if (!text) return;
-  try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-  } catch {
-    // fallback below
-  }
-  if (typeof document === 'undefined') return;
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
 };
 
 const IconButton = ({
@@ -1522,7 +1505,8 @@ const ProcessLaneRow = memo(({
   onToggleCollapse,
   onDelete,
   onCopy,
-  onCopyVariable,
+  variableOptions,
+  onInsertVariable,
   onInsertStageBefore,
   onInsertStageAfter,
   onInsertStageAtSlot,
@@ -1559,7 +1543,8 @@ const ProcessLaneRow = memo(({
   onToggleCollapse: () => void;
   onDelete: () => void;
   onCopy?: () => void;
-  onCopyVariable?: () => void;
+  variableOptions?: ProcessTemplateVariableOption[];
+  onInsertVariable?: (token: string) => void;
   onInsertStageBefore: (stageId: string) => void;
   onInsertStageAfter: (stageId: string | null) => void;
   onInsertStageAtSlot: (slot: number) => void;
@@ -1696,8 +1681,12 @@ const ProcessLaneRow = memo(({
           <span className="min-w-0 flex-1">
             <InlineTitle value={lane.title} onSave={onUpdateTitle} className="max-w-[260px] text-[12px]" />
           </span>
-          {cardMode === 'template' && onCopyVariable ? (
-            <IconButton title="کپی متغیر نام ردیف" icon={<CopyOutlined />} onClick={onCopyVariable} />
+          {cardMode === 'template' && onInsertVariable ? (
+            <ProcessTemplateVariablePicker
+              options={variableOptions || []}
+              targetLabel="نام ردیف"
+              onInsert={onInsertVariable}
+            />
           ) : null}
           <Tag className={`!m-0 !rounded-full !border !px-2 !py-0 !text-[10px] !font-black ${laneStatusView.className}`}>
             {laneStatusView.label}
@@ -2014,6 +2003,7 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
   autoAssigning = false,
   canAutoAssign,
   highlightedStageIds = [],
+  templateVariableOptions = [],
 }) => {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [stageSizeMode, setStageSizeMode] = useState<StageSizeMode>('fit');
@@ -2765,10 +2755,12 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
               className="min-w-0 text-[14px]"
             />
           </span>
-          <IconButton
-            title="کپی متغیر نام فرآیند"
-            icon={<CopyOutlined />}
-            onClick={() => { void copyProcessTemplateToken('{{نام فرآیند}}'); }}
+          <ProcessTemplateVariablePicker
+            options={templateVariableOptions}
+            targetLabel="نام فرآیند"
+            onInsert={(token) => updateItem((current) => current.mode === 'template'
+              ? { ...current, title: appendProcessTemplateToken(current.title, token) }
+              : current)}
           />
           <Tag className={`!m-0 !rounded-full !border !px-2.5 !py-0.5 !text-[11px] !font-black ${computedStatusView.className}`}>
             {computedStatusView.label}
@@ -2845,7 +2837,13 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                   onToggleCollapse={() => updateLane(lane.id, (currentLane) => ({ ...currentLane, collapsed: !currentLane.collapsed }))}
                   onDelete={() => deleteLane(lane)}
                   onCopy={item.mode === 'run' ? () => updateItem((current) => ({ ...current, lanes: [...current.lanes, cloneLane(lane)] } as ProcessV2CardData)) : undefined}
-                  onCopyVariable={item.mode === 'template' ? () => { void copyProcessTemplateToken('{{نام ردیف}}'); } : undefined}
+                  variableOptions={templateVariableOptions}
+                  onInsertVariable={item.mode === 'template'
+                    ? (token) => updateLane(lane.id, (currentLane) => ({
+                        ...currentLane,
+                        title: appendProcessTemplateToken(currentLane.title, token),
+                      }))
+                    : undefined}
                   onInsertStageBefore={(stageId) => insertStageBefore(lane.id, stageId)}
                   onInsertStageAfter={(stageId) => insertStageAfter(lane.id, stageId)}
                   onInsertStageAtSlot={(slot) => insertStageAtSlot(lane.id, slot)}

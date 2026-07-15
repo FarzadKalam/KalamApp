@@ -20,6 +20,7 @@ import {
 } from './processTaskStatusOptions';
 import { normalizeProcessAutomationRules } from './processAutomationTypes';
 import {
+  attachProcessGraphToStages,
   getProcessStageLaneKey,
   getProcessStageNodeKey,
   materializeLegacyProcessGraph,
@@ -603,16 +604,79 @@ export const autoAssignProcessV2DraftStages = async ({
     startByStageKey.set(stage, manualStart || (startAt ? startAt.toISOString() : null));
   });
 
+  const resolvedProcessIdentityByGroup = new Map<string, {
+    processName: string;
+    laneNameByKey: Map<string, string>;
+  }>();
   const processRunContexts = await ensureProcessRunContextsForStageGroups(
     creatableStages,
-    async (firstStage) => ensureProcessRunForDraftStageGroup({
-      supabaseClient,
-      moduleId: normalizedModuleId,
-      recordId: normalizedRecordId,
-      stages: graphSnapshot.stages,
-      targetStage: firstStage,
-      currentUserId,
-    })
+    async (firstStage) => {
+      const stageMeta = getDraftStageProcessGroupMeta(firstStage);
+      const recurrence = parseObject(firstStage?.recurrence_info);
+      const processLinkMap = mergeProcessLinkMaps(
+        firstStage?.process_link_map && typeof firstStage.process_link_map === 'object' ? firstStage.process_link_map : {},
+        recurrence?.process_links && typeof recurrence.process_links === 'object' ? recurrence.process_links : {},
+      );
+      const templateContext = await buildProcessV2TemplateContext({
+        supabaseClient,
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+        recordData: sourceRecord,
+        processLinkMap: mergeProcessLinkMaps({ [normalizedModuleId]: normalizedRecordId }, processLinkMap),
+      });
+      const rawProcessName = stageMeta.groupLabel || stageMeta.templateName || 'فرآیند';
+      const resolvedProcessName = normalizeText(
+        renderProcessV2TemplateValueFromRecord(rawProcessName, templateContext, FieldType.TEXT) ?? rawProcessName,
+      ) || rawProcessName;
+      const resolvedLaneNameByKey = new Map(
+        graphSnapshot.graph.lanes.map((lane) => {
+          const rawLaneName = normalizeText(lane.name);
+          const resolvedLaneName = rawLaneName
+            ? normalizeText(renderProcessV2TemplateValueFromRecord(rawLaneName, {
+                ...templateContext,
+                process_name: resolvedProcessName,
+                'نام فرآیند': resolvedProcessName,
+                'نام فرایند': resolvedProcessName,
+              }, FieldType.TEXT) ?? rawLaneName)
+            : rawLaneName;
+          return [lane.key, resolvedLaneName || rawLaneName] as const;
+        }),
+      );
+      const resolvedGraph = {
+        ...graphSnapshot.graph,
+        lanes: graphSnapshot.graph.lanes.map((lane) => ({
+          ...lane,
+          name: resolvedLaneNameByKey.get(lane.key) || lane.name,
+        })),
+      };
+      const resolvedGraphStages = attachProcessGraphToStages(graphSnapshot.stages, resolvedGraph).map((stage) => {
+        if (getDraftStageProcessGroupMeta(stage).groupId !== stageMeta.groupId) return stage;
+        const metadata = parseObject(stage?.metadata);
+        return {
+          ...stage,
+          process_group_name: resolvedProcessName,
+          metadata: {
+            ...metadata,
+            process_group_name: resolvedProcessName,
+          },
+        };
+      });
+      const resolvedFirstStage = resolvedGraphStages.find((stage) => (
+        getProcessStageNodeKey(stage) === getProcessStageNodeKey(firstStage)
+      )) || firstStage;
+      resolvedProcessIdentityByGroup.set(stageMeta.groupId, {
+        processName: resolvedProcessName,
+        laneNameByKey: resolvedLaneNameByKey,
+      });
+      return ensureProcessRunForDraftStageGroup({
+        supabaseClient,
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+        stages: resolvedGraphStages,
+        targetStage: resolvedFirstStage,
+        currentUserId,
+      });
+    }
   );
 
   const payload: Record<string, any>[] = [];
@@ -621,6 +685,7 @@ export const autoAssignProcessV2DraftStages = async ({
   let previousResolvedTask: Record<string, any> | null = null;
   for (const [index, stage] of creatableStages.entries()) {
     const stageMeta = getDraftStageProcessGroupMeta(stage);
+    const resolvedProcessIdentity = resolvedProcessIdentityByGroup.get(stageMeta.groupId);
     const recurrenceBase = parseObject(stage?.recurrence_info);
     const processLinkMap = mergeProcessLinkMaps(
       stage?.process_link_map && typeof stage.process_link_map === 'object' ? stage.process_link_map : {},
@@ -652,8 +717,8 @@ export const autoAssignProcessV2DraftStages = async ({
       previousTask: previousResolvedTask,
     });
     assignProcessTemplateIdentityAliases(templateContext, {
-      processName: stageMeta.groupLabel || stageMeta.templateName,
-      laneName: resolveProcessTemplateLaneName(stage),
+      processName: resolvedProcessIdentity?.processName || stageMeta.groupLabel || stageMeta.templateName,
+      laneName: resolvedProcessIdentity?.laneNameByKey.get(getProcessStageLaneKey(stage)) || resolveProcessTemplateLaneName(stage),
     });
     const resolvedStageName = normalizeText(renderProcessV2TemplateValueFromRecord(rawStageName, templateContext, FieldType.TEXT) ?? rawStageName) || rawStageName;
     const resolvedDescription = normalizeText(renderProcessV2TemplateValueFromRecord(stageDescription, {
@@ -757,7 +822,7 @@ export const autoAssignProcessV2DraftStages = async ({
         [PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY]: stageCustomFieldValues,
         process_group: {
           id: stageMeta.groupId,
-          name: stageMeta.groupLabel,
+          name: resolvedProcessIdentity?.processName || stageMeta.groupLabel,
           template_id: stageMeta.templateId,
           template_name: stageMeta.templateName,
         },

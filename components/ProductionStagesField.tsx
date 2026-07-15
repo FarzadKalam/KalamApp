@@ -158,7 +158,12 @@ import { getFieldLabelFa } from '../utils/fieldLabel';
 import { canUseRecordLockPermission, fetchCurrentUserRoleContext, resolveFilesAccessPermissions, type PermissionMap } from '../utils/permissions';
 import { applyTaskRuntimeUpdate, TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../utils/taskRuntimeEvents';
 import { moveModuleRecordsToRecycleBin } from '../utils/recycleBin';
-import { assignProcessTemplateModuleAliases, resolveProcessTemplateTokenValue } from '../utils/processTemplateContext';
+import {
+  assignProcessTemplateIdentityAliases,
+  assignProcessTemplateModuleAliases,
+  resolveProcessTemplateLaneName,
+  resolveProcessTemplateTokenValue,
+} from '../utils/processTemplateContext';
 import { resolveProcessAssigneeReference } from '../utils/processAssigneeReference';
 import {
   createProcessGroupId,
@@ -810,7 +815,8 @@ const renderTemplateValueFromRecord = (
   }
   return String(rawValue || '').replace(TEMPLATE_TOKEN_REGEX, (_token, key: string) => {
     const tokenKey = String(key || '').trim();
-    return stringifyTemplateValue(resolveProcessTemplateTokenValue(record, tokenKey));
+    const resolved = resolveProcessTemplateTokenValue(record, tokenKey);
+    return resolved === undefined ? _token : stringifyTemplateValue(resolved);
   });
 };
 
@@ -1741,7 +1747,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       return {
         key,
         label,
-        token: `{{${label || key}}}`,
+        token: `{{${key}}}`,
       };
     }).filter((item) => item.key && item.label),
     [automationActionVariableFields]
@@ -4638,6 +4644,13 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         processLinkMap: effectiveStageProcessLinkMap,
         previousTask: previousTaskForTemplate,
       });
+      if (draftToCreate) {
+        const draftIdentity = getStageProcessGroupMeta(draftToCreate);
+        assignProcessTemplateIdentityAliases(templateContext, {
+          processName: activeProcessGroupMeta?.label || draftIdentity.groupLabel || draftIdentity.templateName,
+          laneName: resolveProcessTemplateLaneName(draftToCreate),
+        });
+      }
       const resolvedTaskName = String(
         renderTemplateValueFromRecord(values?.name, templateContext, FieldType.TEXT) ?? values?.name ?? ''
       ).trim();
@@ -7142,6 +7155,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
           processLinkMap: effectiveProcessLinkMap,
           previousTask: previousResolvedTask,
           relatedRecordCache: templateRecordCache,
+        });
+        assignProcessTemplateIdentityAliases(templateContext, {
+          processName: stageMeta.groupLabel || stageMeta.templateName,
+          laneName: resolveProcessTemplateLaneName(stage),
         });
         const assigneeReference = stage?.default_assignee_field || stage?.metadata?.default_assignee_field;
         const referencedAssignee = assigneeReference

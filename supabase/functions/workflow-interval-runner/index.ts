@@ -700,6 +700,7 @@ async function renderTemplateAsync(
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) continue;
     const value = await resolveWorkflowFieldValue(url, key, fieldKey, record, orgId, moduleId);
+    if (value === null || value === undefined) continue;
     const text = await formatFieldValue(value, fieldKey, url, key, orgId, moduleId);
     rendered = rendered.replaceAll(token, text ? (bold ? `**${text}**` : text) : '');
   }
@@ -2839,7 +2840,8 @@ async function prepareProcessRunForAutomaticExecution(
     `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=*&order=sort_order.asc&limit=500`
   ).catch(() => []);
   const templateRecord: Record<string, any> = { ...record };
-  assignProcessAutomationIdentityContext(templateRecord, runRows[0]?.process_name, null);
+  const rawProcessName = String(runRows[0]?.process_name || '').trim() || 'فرآیند';
+  assignProcessAutomationIdentityContext(templateRecord, rawProcessName, null);
   for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
     const linkedRecordId = String(linkedRecordIdRaw || '').trim();
     if (!linkedModuleId || !linkedRecordId) continue;
@@ -2853,16 +2855,38 @@ async function prepareProcessRunForAutomaticExecution(
     });
     if (String(record?.id || '').trim() === linkedRecordId) Object.assign(templateRecord, linkedRecord);
   }
+  const resolvedProcessName = (
+    await renderTemplateAsync(rawProcessName, templateRecord, url, key, false, orgId, runModuleId)
+  ).trim() || rawProcessName;
+  assignProcessAutomationIdentityContext(templateRecord, resolvedProcessName, null);
+  if (resolvedProcessName !== rawProcessName) {
+    await dbPatch(url, key, 'process_runs', `id=eq.${encodeURIComponent(processRunId)}`, {
+      process_name: resolvedProcessName,
+    });
+  }
   for (const stage of runStages) {
     const metadata = parseObjectValue(stage?.metadata);
     const graph = parseObjectValue(metadata?.process_graph);
+    const resolvedGraph = Array.isArray(graph?.lanes)
+      ? {
+          ...graph,
+          lanes: await Promise.all(graph.lanes.map(async (lane: any) => {
+            const rawLaneName = String(lane?.name || lane?.title || '').trim();
+            if (!rawLaneName) return lane;
+            const resolvedLaneName = (
+              await renderTemplateAsync(rawLaneName, templateRecord, url, key, false, orgId, runModuleId)
+            ).trim() || rawLaneName;
+            return { ...lane, name: resolvedLaneName };
+          })),
+        }
+      : graph;
     const laneKey = String(stage?.process_lane_key || metadata?.process_lane_key || 'lane_1').trim() || 'lane_1';
-    const lane = (Array.isArray(graph?.lanes) ? graph.lanes : []).find((item: any) => (
+    const lane = (Array.isArray(resolvedGraph?.lanes) ? resolvedGraph.lanes : []).find((item: any) => (
       String(item?.key || item?.id || '').trim() === laneKey
     ));
     assignProcessAutomationIdentityContext(
       templateRecord,
-      runRows[0]?.process_name,
+      resolvedProcessName,
       lane?.name || lane?.title || metadata?.process_lane_name || 'ردیف اصلی',
     );
     templateRecord.task_name = String(stage?.stage_name || '').trim();
@@ -2874,7 +2898,10 @@ async function prepareProcessRunForAutomaticExecution(
       ? parseProcessAssigneeToken(getFieldValueForCondition(templateRecord, assigneeReference))
       : { userId: null, roleId: null };
     const firstRenderedStage = await renderProcessStageForTaskCreation(
-      { stageName: String(stage?.stage_name || ''), metadata },
+      {
+        stageName: String(stage?.stage_name || ''),
+        metadata: { ...metadata, process_graph: resolvedGraph },
+      },
       (template) => renderTemplateAsync(template, templateRecord, url, key, false, orgId, runModuleId),
       (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, templateRecord, orgId, runModuleId),
     );

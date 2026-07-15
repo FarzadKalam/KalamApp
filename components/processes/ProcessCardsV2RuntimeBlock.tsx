@@ -29,6 +29,7 @@ import {
 } from '../../utils/processTemplateContext';
 import {
   buildProcessLinkMapFromRecord,
+  getProcessTargetModuleFields,
   normalizeProcessTargetModuleIds,
   parseProcessLinkMap,
 } from '../../utils/processTargets';
@@ -40,15 +41,22 @@ import { parseAssigneeValue } from '../../utils/assigneeValue';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { TASK_RUNTIME_UPDATED_EVENT, type TaskRuntimeUpdatedPayload } from '../../utils/taskRuntimeEvents';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
-import { getProcessAutomationConditionFieldsForModules } from '../../utils/workflowHelpers';
 import {
+  getProcessAutomationConditionFieldsForModules,
+  getSyntheticWorkflowAssigneeField,
+  getVisibleWorkflowModuleFields,
+} from '../../utils/workflowHelpers';
+import {
+  attachProcessGraphToStages,
   createProcessTriggerKey,
   getProcessStageNodeKey,
   getProcessStagesByLane,
   materializeLegacyProcessGraph,
+  PROCESS_GRAPH_METADATA_KEY,
   PROCESS_LANE_KEY,
   PROCESS_NODE_KEY,
 } from '../../utils/processGraph';
+import { getFieldLabelFa } from '../../utils/fieldLabel';
 import {
   getTaskStatusLabel,
   normalizeProcessTaskStatusOptions,
@@ -359,6 +367,25 @@ const hasTemplateTokens = (value: unknown) => typeof value === 'string' && /\{\{
 
 const collectStageTemplateSourceText = (stage: any) => normalizeText(stage?.stage_name || stage?.name || stage?.title || stage?.label);
 
+const collectStageTemplateSourceTexts = (stage: any) => {
+  const metadata = parseObject(stage?.metadata);
+  const graph = parseObject(stage?.[PROCESS_GRAPH_METADATA_KEY] || metadata?.[PROCESS_GRAPH_METADATA_KEY]);
+  const laneNames = Array.isArray(graph?.lanes)
+    ? graph.lanes.map((lane: any) => normalizeText(lane?.name)).filter(Boolean)
+    : [];
+  return [
+    collectStageTemplateSourceText(stage),
+    normalizeText(stage?.process_group_name || metadata?.process_group_name),
+    normalizeText(stage?.source_template_name || metadata?.source_template_name),
+    ...laneNames,
+  ].filter(Boolean);
+};
+
+const collectRunTemplateSourceTexts = (run: any) => [
+  normalizeText(run?.process_name),
+  normalizeText(run?.template_name || run?.metadata?.source_template_name),
+].filter(Boolean);
+
 const collectStageProcessLinks = (stage: any) => {
   const metadata = parseObject(stage?.metadata);
   const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
@@ -614,9 +641,14 @@ const buildLanesFromStages = (
 ): ProcessV2Lane[] => {
   const materialized = materializeLegacyProcessGraph(Array.isArray(stages) ? stages : []);
   const lanes = getProcessStagesByLane(materialized.stages, materialized.graph)
-    .map((lane, laneIndex) => ({
+    .map((lane, laneIndex) => {
+      const rawLaneTitle = normalizeText(lane.name) || `ردیف ${toPersianNumber(laneIndex + 1)}`;
+      const laneTitle = renderTemplateVariables
+        ? (renderTemplateText(rawLaneTitle, templateContext) || rawLaneTitle)
+        : rawLaneTitle;
+      return {
       id: normalizeText(lane.key) || `lane_${laneIndex + 1}`,
-      title: normalizeText(lane.name) || `ردیف ${toPersianNumber(laneIndex + 1)}`,
+      title: laneTitle,
       stages: lane.stages.map((stage: any, stageIndex: number) => {
         const stageWithGraphKeys = {
           ...stage,
@@ -634,7 +666,8 @@ const buildLanesFromStages = (
           materialized.graph,
         );
       }),
-    }))
+    };
+    })
     .filter((lane) => lane.stages.length > 0);
 
   return lanes.length > 0 ? lanes : [{ id: 'lane_1', title: 'ردیف اصلی', stages: [] }];
@@ -728,14 +761,16 @@ const buildRunCard = (
   const templateTitle = normalizeText(run?.template_name || run?.metadata?.source_template_name)
     || (templateId ? templateNameById?.get(templateId) : '')
     || 'الگوی فرآیند';
+  const rawProcessTitle = normalizeText(run?.process_name) || templateTitle || 'فرآیند';
+  const processTitle = renderTemplateText(rawProcessTitle, templateContext) || rawProcessTitle;
   const runTemplateContext = assignProcessTemplateIdentityAliases(
     { ...templateContext },
-    { processName: normalizeText(run?.process_name) || templateTitle },
+    { processName: processTitle },
   );
   return {
     mode: 'run',
     id,
-    title: normalizeText(run?.process_name) || templateTitle || 'فرآیند',
+    title: processTitle,
     templateId,
     templateTitle,
     relatedRecordLabel: fallbackRecordLabel,
@@ -1236,10 +1271,13 @@ const buildDraftProcessCards = (
 
   return Array.from(groups.values())
     .sort((left, right) => left.firstSort - right.firstSort)
-    .map((group) => ({
+    .map((group) => {
+      const rawProcessTitle = group.label || group.templateName || 'فرآیند پیش نویس';
+      const processTitle = renderTemplateText(rawProcessTitle, templateContext) || rawProcessTitle;
+      return {
       mode: 'run' as const,
       id: `draft:${group.id}`,
-      title: group.label || group.templateName || 'فرآیند پیش نویس',
+      title: processTitle,
       templateId: group.templateId,
       templateTitle: group.templateId ? (templateNameById.get(group.templateId) || group.templateName) : group.templateName,
       relatedRecordLabel: '',
@@ -1249,10 +1287,11 @@ const buildDraftProcessCards = (
         group.stages,
         'draft',
         directory,
-        assignProcessTemplateIdentityAliases({ ...templateContext }, { processName: group.label || group.templateName }),
+        assignProcessTemplateIdentityAliases({ ...templateContext }, { processName: processTitle }),
         fallbackModuleId,
       ),
-    }));
+    };
+    });
 };
 
 const fetchRunStages = async (runId: string, options?: { force?: boolean }) => {
@@ -1583,6 +1622,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     () => normalizeProcessTargetModuleIds(recordData?.module_ids, recordData?.module_id),
     [recordData?.module_id, recordData?.module_ids],
   );
+  const templateVariableOptions = useMemo(() => Array.from(
+    new Map(
+      getProcessTargetModuleFields(
+        processTemplateTargetModuleIds,
+        getVisibleWorkflowModuleFields,
+        getSyntheticWorkflowAssigneeField,
+      )
+        .map((field) => {
+          const key = normalizeText(field?.key);
+          const label = getFieldLabelFa(field, { fallback: key });
+          return [key, { key, label, token: `{{${key}}}` }] as const;
+        })
+        .filter(([key, option]) => Boolean(key && option.label)),
+    ).values(),
+  ), [processTemplateTargetModuleIds]);
   const activatorConditionFields = useMemo(
     () => getProcessAutomationConditionFieldsForModules(processTemplateTargetModuleIds),
     [processTemplateTargetModuleIds],
@@ -2250,11 +2304,13 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const templateContext = resolvedTemplateContext || baseTemplateContext;
   const templateTokenKey = useMemo(() => (
     [
-      ...effectiveDraftStages,
-      ...(runtime.stages || []),
-      ...(runtime.tasks || []),
+      ...[
+        ...effectiveDraftStages,
+        ...(runtime.stages || []),
+        ...(runtime.tasks || []),
+      ].flatMap((stage) => collectStageTemplateSourceTexts(stage)),
+      ...(runtime.runs || []).flatMap((run) => collectRunTemplateSourceTexts(run)),
     ]
-      .map((stage) => collectStageTemplateSourceText(stage))
       .filter((value) => hasTemplateTokens(value))
       .concat([
         ...effectiveDraftStages,
@@ -2262,7 +2318,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         ...(runtime.tasks || []),
       ].map((stage) => collectStageAssigneeFieldReference(stage)).filter(Boolean))
       .join('|')
-  ), [effectiveDraftStages, runtime.stages, runtime.tasks]);
+  ), [effectiveDraftStages, runtime.runs, runtime.stages, runtime.tasks]);
   const waitingForTemplateContext = Boolean(
     templateTokenKey
     && (templateContextResolving || templateContextResolvedKey !== templateTokenKey)
@@ -2275,17 +2331,22 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ...(runtime.stages || []),
       ...(runtime.tasks || []),
     ];
+    const templateTextSources = [
+      ...tokenSources.flatMap((stage) => collectStageTemplateSourceTexts(stage)),
+      ...(runtime.runs || []).flatMap((run) => collectRunTemplateSourceTexts(run)),
+    ];
     const tokenKey = tokenSources
       .flatMap((stage) => [
-        hasTemplateTokens(collectStageTemplateSourceText(stage)) ? collectStageTemplateSourceText(stage) : '',
+        ...collectStageTemplateSourceTexts(stage).filter((value) => hasTemplateTokens(value)),
         collectStageAssigneeFieldReference(stage),
       ])
+      .concat((runtime.runs || []).flatMap((run) => collectRunTemplateSourceTexts(run)).filter((value) => hasTemplateTokens(value)))
       .filter(Boolean)
       .join('|');
-    if (!tokenSources.some((stage) => (
-      hasTemplateTokens(collectStageTemplateSourceText(stage))
-      || Boolean(collectStageAssigneeFieldReference(stage))
-    ))) {
+    if (
+      !templateTextSources.some((value) => hasTemplateTokens(value))
+      && !tokenSources.some((stage) => Boolean(collectStageAssigneeFieldReference(stage)))
+    ) {
       setResolvedTemplateContext(null);
       setTemplateContextResolving(false);
       setTemplateContextResolvedKey('');
@@ -2334,7 +2395,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       disposed = true;
       window.clearTimeout(timeoutId);
     };
-  }, [effectiveDraftStages, enabled, normalizedModuleId, normalizedRecordId, recordData, runtime.stages, runtime.tasks]);
+  }, [effectiveDraftStages, enabled, normalizedModuleId, normalizedRecordId, recordData, runtime.runs, runtime.stages, runtime.tasks]);
 
   useEffect(() => {
     if (!activatorModal) return;
@@ -2804,6 +2865,45 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
   }, [cacheKey, markRuntimeModuleListsChanged, orgId, persistDraftStageList]);
 
+  const persistTemplateCardLabels = useCallback(async (card: ProcessV2CardData) => {
+    if (!isProcessTemplateModule(normalizedModuleId) || card.mode !== 'template') return;
+
+    const nextProcessTitle = normalizeText(card.title);
+    const currentProcessTitle = normalizeText(recordDataRef.current?.name);
+    if (nextProcessTitle && nextProcessTitle !== currentProcessTitle) {
+      const { error } = await (supabase.from('process_templates' as any) as any)
+        .update({ name: nextProcessTitle })
+        .eq('id', normalizedRecordId);
+      if (error) throw error;
+      recordDataRef.current = {
+        ...(recordDataRef.current || {}),
+        name: nextProcessTitle,
+      };
+      markRuntimeModuleListsChanged({ templateId: normalizedRecordId });
+    }
+
+    const sourceStages = Array.isArray(templateStagesRef.current) ? templateStagesRef.current : [];
+    if (sourceStages.length === 0) return;
+    const materialized = materializeLegacyProcessGraph(sourceStages);
+    const laneTitleByKey = new Map(card.lanes.map((lane) => [normalizeText(lane.id), normalizeText(lane.title)] as const));
+    let laneNamesChanged = false;
+    const nextGraph = {
+      ...materialized.graph,
+      lanes: materialized.graph.lanes.map((lane) => {
+        const nextTitle = laneTitleByKey.get(normalizeText(lane.key));
+        if (nextTitle === undefined || nextTitle === normalizeText(lane.name)) return lane;
+        laneNamesChanged = true;
+        return { ...lane, name: nextTitle };
+      }),
+    };
+    if (!laneNamesChanged) return;
+
+    const nextStages = attachProcessGraphToStages(materialized.stages, nextGraph);
+    templateStagesRef.current = nextStages;
+    setTemplateStages(nextStages);
+    await persistDraftStageList(nextStages);
+  }, [markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, persistDraftStageList]);
+
   const handleCardChange = useCallback((next: ProcessV2CardData) => {
     const patchedNext = patchV2CardStageSourcePositions(next);
     setCardOverrides((current) => ({
@@ -2813,7 +2913,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     void persistCardStagePositions(next).catch((error: any) => {
       message.error(normalizeText(error?.message || error?.details) || 'ذخیره جایگاه مرحله فرآیند ناموفق بود');
     });
-  }, [cardKey, message, persistCardStagePositions]);
+    void persistTemplateCardLabels(next).catch((error: any) => {
+      message.error(normalizeText(error?.message || error?.details) || 'ذخیره نام فرآیند یا ردیف ناموفق بود');
+    });
+  }, [cardKey, message, persistCardStagePositions, persistTemplateCardLabels]);
 
   const resolveRawDraftStagesForV2Stages = useCallback((
     stages: ProcessV2Stage[],
@@ -4443,6 +4546,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
                   autoAssigning={Boolean(autoAssigningCardIds[key])}
                   canAutoAssign={!isProcessTemplateModule(normalizedModuleId) && card.lanes.some((lane) => lane.stages.some((stage) => stage.kind === 'draft'))}
                   highlightedStageIds={getHighlightedStageIds(card)}
+                  templateVariableOptions={templateVariableOptions}
                 />
               </div>
             );
