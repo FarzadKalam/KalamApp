@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { App, Button, Empty, Input, Modal, Tag } from 'antd';
 import {
   CopyOutlined,
@@ -29,6 +29,8 @@ import PhoneDisplay from './PhoneDisplay';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { KALAM_POPUP_ROOT_Z_INDEX, resolveOverlayPopupContainer } from '../utils/popupContainer';
 import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
+import { extractTemplateTokens } from '../shared/recordRuntime';
+import { resolveWorkflowFieldValue } from '../utils/workflowRuntime';
 
 const MESSAGE_COMPOSER_MODAL_Z_INDEX = KALAM_POPUP_ROOT_Z_INDEX + 100;
 
@@ -97,12 +99,26 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     canDelete: true,
   });
   const [loadedRecord, setLoadedRecord] = useState<Record<string, any> | null>(null);
+  const [resolvedTemplateRecord, setResolvedTemplateRecord] = useState<Record<string, any>>({});
 
   const [activeBotsLoading, setActiveBotsLoading] = useState(false);
   const [activeBots, setActiveBots] = useState<Array<{ channel: NotificationBotChannel; label: string }>>([]);
 
   const moduleConfig = moduleId ? MODULES[moduleId] : null;
   const effectiveRecord = useMemo(() => loadedRecord || record || {}, [loadedRecord, record]);
+  const buildResolvedTemplateRecord = useCallback(async (template: string) => {
+    const nextRecord = { ...effectiveRecord };
+    if (!moduleId) return nextRecord;
+    await Promise.all(extractTemplateTokens(template).map(async (fieldKey) => {
+      if (Object.prototype.hasOwnProperty.call(nextRecord, fieldKey)) return;
+      nextRecord[fieldKey] = await resolveWorkflowFieldValue({
+        fieldKey,
+        currentRecord: effectiveRecord,
+        moduleId,
+      }).catch(() => null);
+    }));
+    return nextRecord;
+  }, [effectiveRecord, moduleId]);
   const scopedModuleId = getMessageReadyTextScopeModuleId(moduleId, readyTextScope);
   const readyTextCategoryLabel = readyTextScope === 'ai'
     ? 'هوش مصنوعی'
@@ -159,7 +175,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       const label = String(item?.label || key || token).trim();
       if (!token || optionsByToken.has(token)) return;
       optionsByToken.set(token, {
-        label: `${label} (${key || token})`,
+        label,
         value: token,
         searchText: `${label} ${key} ${token}`.toLowerCase(),
       });
@@ -191,7 +207,7 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     }
 
     let cancelled = false;
-    resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, effectiveRecord)
+    resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, resolvedTemplateRecord)
       .then((maps) => {
         if (!cancelled) setTemplateOptionLabelMaps(maps);
       })
@@ -203,11 +219,23 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [effectiveRecord, open, messageText, moduleId]);
+  }, [resolvedTemplateRecord, open, messageText, moduleId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open) {
+      setResolvedTemplateRecord(effectiveRecord);
+      return () => { cancelled = true; };
+    }
+    void buildResolvedTemplateRecord(messageText).then((nextRecord) => {
+      if (!cancelled) setResolvedTemplateRecord(nextRecord);
+    });
+    return () => { cancelled = true; };
+  }, [buildResolvedTemplateRecord, effectiveRecord, messageText, open]);
 
   const renderedPreview = useMemo(
-    () => renderRecordTemplate(messageText, effectiveRecord, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
-    [messageText, effectiveRecord, moduleId, templateOptionLabelMaps]
+    () => renderRecordTemplate(messageText, resolvedTemplateRecord, moduleId, { optionLabelMaps: templateOptionLabelMaps }),
+    [messageText, resolvedTemplateRecord, moduleId, templateOptionLabelMaps]
   );
 
   useEffect(() => {
@@ -510,9 +538,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const renderReadyTextForApply = async (content: string) => {
     const source = String(content || '').trim();
     if (!source) return '';
-    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, source, moduleId, effectiveRecord)
+    const finalRecord = await buildResolvedTemplateRecord(source);
+    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, source, moduleId, finalRecord)
       .catch(() => templateOptionLabelMaps);
-    return String(renderRecordTemplate(source, effectiveRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
+    return String(renderRecordTemplate(source, finalRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
   };
 
   const handleSend = async () => {
@@ -521,9 +550,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       return;
     }
 
-    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, effectiveRecord)
+    const finalRecord = await buildResolvedTemplateRecord(messageText);
+    const finalOptionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, messageText, moduleId, finalRecord)
       .catch(() => templateOptionLabelMaps);
-    const finalText = String(renderRecordTemplate(messageText, effectiveRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
+    const finalText = String(renderRecordTemplate(messageText, finalRecord, moduleId, { optionLabelMaps: finalOptionLabelMaps }) || '').trim();
     if (!finalText) {
       msg.warning('متن پیام خالی است.');
       return;

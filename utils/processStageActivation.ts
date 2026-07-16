@@ -40,18 +40,6 @@ const parseObject = (value: unknown): Record<string, any> => {
   }
 };
 
-const renderTemplateTree = (
-  value: any,
-  context: Record<string, any>,
-): any => {
-  if (typeof value === 'string') return renderProcessV2TemplateValueFromRecord(value, context);
-  if (Array.isArray(value)) return value.map((item) => renderTemplateTree(item, context));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderTemplateTree(item, context)]));
-  }
-  return value;
-};
-
 const resolveStageGraphTemplate = (
   rawGraph: unknown,
   context: Record<string, any>,
@@ -183,16 +171,16 @@ export const prepareProcessRunNodesForTaskCreation = async ({
       ? metadata.process_task_custom_fields.map((field: any) => ({
           ...field,
           ...(Object.prototype.hasOwnProperty.call(field || {}, 'defaultValue')
-            ? { defaultValue: renderTemplateTree(field.defaultValue, resolvedValueContext) }
+            ? { defaultValue: renderProcessV2TemplateValueFromRecord(field.defaultValue, resolvedValueContext) }
             : {}),
           ...(Object.prototype.hasOwnProperty.call(field || {}, 'default_value')
-            ? { default_value: renderTemplateTree(field.default_value, resolvedValueContext) }
+            ? { default_value: renderProcessV2TemplateValueFromRecord(field.default_value, resolvedValueContext) }
             : {}),
         }))
       : metadata?.process_task_custom_fields;
     const resolvedCustomValues = metadata?.process_task_custom_field_values
       && typeof metadata.process_task_custom_field_values === 'object'
-      ? renderTemplateTree(metadata.process_task_custom_field_values, resolvedValueContext)
+      ? renderProcessV2TemplateValueFromRecord(metadata.process_task_custom_field_values, resolvedValueContext)
       : metadata?.process_task_custom_field_values;
     const nextMetadata = {
       ...metadata,

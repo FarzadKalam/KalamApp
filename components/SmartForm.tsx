@@ -356,6 +356,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
     [module, surveyTemplateSnapshot, supportsTemplateRuntime]
   );
   const runtimeFields = effectiveModule.fields || [];
+  const runtimeFieldsSignature = useMemo(() => safeJsonStringify(runtimeFields), [runtimeFields]);
   const runtimeBlocks = effectiveModule.blocks || [];
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
@@ -596,7 +597,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
       // فراخوانی توابع کمکی
       fetchUserPermissions();
     }
-  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues, runtimeFields, supportsTemplateRuntime]);
+  }, [visible, recordId, isBulkEdit, module.id, initialValuesSignature, supportsAssignee, supportsAssigneeType, hasAutoNameToggle, draftKey, getRestorableDraftValues, applyProgrammaticValues, runtimeFieldsSignature, supportsTemplateRuntime]);
 
   useEffect(() => {
     if (!visible || !supportsTemplateRuntime) return;

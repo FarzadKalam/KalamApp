@@ -13,7 +13,10 @@ type OtpCodeInputProps = {
 /** ورودی مرکزی کد تایید؛ اعداد فارسی، عربی و انگلیسی را یکسان می‌پذیرد. */
 const OtpCodeInput = ({ value = '', onChange, length = 6, disabled, autoFocus }: OtpCodeInputProps) => {
   const refs = useRef<Array<HTMLInputElement | null>>([]);
-  const digits = useMemo(() => normalizeOtpToken(value).slice(0, length).padEnd(length, '').split(''), [length, value]);
+  const digits = useMemo(() => {
+    const normalized = normalizeOtpToken(value).slice(0, length);
+    return Array.from({ length }, (_, index) => normalized[index] || '');
+  }, [length, value]);
 
   const updateAt = (index: number, raw: unknown) => {
     const nextDigits = [...digits];

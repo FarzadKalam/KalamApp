@@ -428,13 +428,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
-  const composerImageSources = useMemo(() => bundleInputs
-    .filter((item) => item.type === 'image' && String(item.file?.data || '').trim())
-    .map((item) => ({
+  const composerImageSources = useMemo(() => bundleInputs.flatMap((item) => {
+    if (item.type !== 'image' || !String(item.file.data || '').trim()) return [];
+    return [{
       data: String(item.file.data || ''),
       mimeType: String(item.file.mimeType || 'image/png'),
       filename: String(item.file.fileName || 'image.png'),
-    })), [bundleInputs]);
+    }];
+  }), [bundleInputs]);
   const bundleInputsRef = useRef<AiBundleInput[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
@@ -1589,7 +1590,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       };
 
       if (!processOperationMode && !activeRecordCreationSchema) {
-        let streamCapabilities = selectedCapabilities.filter((capability) => capability !== 'text_chat');
+        let streamCapabilities: AiComposerCapability[] = selectedCapabilities.filter((capability) => capability !== 'text_chat');
         let streamCapability = selectedCapabilities.includes('legal_assistant')
           ? 'legal_assistant'
           : selectedCapabilities.includes('deep_reasoning')

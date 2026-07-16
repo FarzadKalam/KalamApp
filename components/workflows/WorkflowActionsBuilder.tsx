@@ -22,12 +22,17 @@ import {
   WorkflowModuleOption,
   actionTypeOptions,
   createWorkflowNoteRecipientFieldKey,
-  createWorkflowRelatedFieldKey,
   createWorkflowMultiRelationFieldKey,
   createWorkflowId,
   parseWorkflowNoteRecipientFieldKey,
   parseWorkflowRelatedFieldKey,
 } from '../../utils/workflowTypes';
+import { getWorkflowActionOutputVariables } from '../../shared/workflowActionContract';
+import {
+  buildDefaultWorkflowAttachmentConfig,
+  getWorkflowRecipientConfig,
+  shouldIncludeStarredWorkflowAttachments,
+} from '../../shared/workflowMessagingContract';
 import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
@@ -84,28 +89,6 @@ type CreateRelatedFieldMapping = {
 
 type BasicSelectOption = { label: string; value: string };
 
-const RUBIKA_RELATED_RECIPIENT_CHECKBOXES: Array<{
-  key: 'customer_related' | 'supplier_related' | 'employee_related';
-  label: string;
-  fieldKeys: string[];
-}> = [
-  {
-    key: 'customer_related',
-    label: 'مشتری مرتبط',
-    fieldKeys: ['customer_id', 'related_customer'],
-  },
-  {
-    key: 'supplier_related',
-    label: 'تامین‌کننده مرتبط',
-    fieldKeys: ['supplier_id', 'related_supplier'],
-  },
-  {
-    key: 'employee_related',
-    label: 'کارمند مرتبط',
-    fieldKeys: [WORKFLOW_ASSIGNEE_FIELD_KEY],
-  },
-];
-
 export const getDefaultActionConfig = (type: WorkflowActionType): Record<string, any> => {
   switch (type) {
     case 'send_note':
@@ -114,7 +97,7 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
         recipient_fields: [],
         recipient_assignees: [],
         note_text: '',
-        attachment_fields: [],
+        ...buildDefaultWorkflowAttachmentConfig(),
         variable_field: '',
         variable_target: 'note_text',
       };
@@ -141,13 +124,13 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
             recipient_assignees: [],
             title: 'لینک فرم',
             message: 'برای تکمیل فرم از این لینک استفاده کنید:\n{{web_form_link}}',
-            attachment_fields: [],
+            ...buildDefaultWorkflowAttachmentConfig(),
           },
           note: {
             recipient_fields: [],
             recipient_assignees: [],
             note_text: 'لینک فرم:\n{{web_form_link}}',
-            attachment_fields: [],
+            ...buildDefaultWorkflowAttachmentConfig(),
           },
         },
       };
@@ -184,7 +167,7 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
             recipient_fields: [],
             recipient_assignees: [],
             note_text: '{{ai_answer}}',
-            attachment_fields: [],
+            ...buildDefaultWorkflowAttachmentConfig(),
           },
           sms: {
             recipient_fields: [],
@@ -203,7 +186,7 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
             recipient_assignees: [],
             title: 'پیام هوش مصنوعی',
             message: '{{ai_answer}}',
-            attachment_fields: [],
+            ...buildDefaultWorkflowAttachmentConfig(),
           },
         },
       };
@@ -217,7 +200,7 @@ export const getDefaultActionConfig = (type: WorkflowActionType): Record<string,
         manual_chat_ids: [],
         title: '',
         message: '',
-        attachment_fields: [],
+        ...buildDefaultWorkflowAttachmentConfig(),
         variable_field: '',
         variable_target: 'message',
       };
@@ -444,19 +427,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   );
   const communicationFieldSource = useMemo(
     () => (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields),
-    [currentModuleFields, variableFields]
-  );
-  const attachmentFieldSource = useMemo(
-    () => Array.from(
-      new Map(
-        [
-          ...(Array.isArray(variableFields) ? variableFields : []),
-          ...currentModuleFields,
-        ]
-          .filter((field) => !!String(field?.key || '').trim())
-          .map((field) => [String(field.key), field] as const)
-      ).values()
-    ),
     [currentModuleFields, variableFields]
   );
   const relatedVariableFieldOptions = useMemo(
@@ -773,25 +743,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             token: `{{${key}}}`,
           };
         });
-      if (!sourceFields.some((item) => item.key === 'web_form_link')) {
-        sourceFields.push({
-          key: 'web_form_link',
-          label: 'لینک وب‌فرم',
-          token: '{{web_form_link}}',
-        });
-      }
-      [
-        { key: 'assignee_full_name', label: 'مسئول: نام و نام خانوادگی' },
-        { key: 'assignee_mobile_1', label: 'مسئول: شماره موبایل' },
-        { key: 'assignee_job_title', label: 'مسئول: جایگاه سازمانی' },
-        { key: 'assignee_voip_operator_code', label: 'مسئول: کد اپراتور تلفن گویا' },
-        { key: 'assignee_voip_extension', label: 'مسئول: داخلی تلفن گویا' },
-        { key: 'assignee_role_title', label: 'مسئول: نام نقش' },
-      ].forEach((item) => {
-        if (sourceFields.some((field) => field.key === item.key)) return;
-        sourceFields.push({ ...item, token: `{{${item.key}}}` });
-      });
-      return sourceFields;
+      return Array.from(new Map(sourceFields.map((item) => [item.key, item] as const)).values());
     },
     [currentModuleFields, variableFields]
   );
@@ -802,72 +754,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     })),
     [templateVariableOptions]
   );
-  const noteAttachmentFieldOptions = useMemo(() => {
-    const optionsByValue = new Map<string, { label: string; value: string }>();
-    const addOption = (value: string, label: string) => {
-      const normalizedValue = String(value || '').trim();
-      const normalizedLabel = String(label || '').trim();
-      if (!normalizedValue || !normalizedLabel || optionsByValue.has(normalizedValue)) return;
-      optionsByValue.set(normalizedValue, {
-        label: normalizedLabel,
-        value: normalizedValue,
-      });
-    };
-
-    attachmentFieldSource
-      .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
-      .forEach((field) => addOption(String(field.key), getFieldLabel(field)));
-
-    const relatedRefs = new Map<string, { relationFieldKey: string; targetModuleId: string }>();
-    attachmentFieldSource.forEach((field) => {
-      const parsed = parseWorkflowRelatedFieldKey(String(field?.key || ''));
-      if (!parsed) return;
-      const relationFieldKey = String(parsed.relationFieldKey || '').trim();
-      const targetModuleId = String(parsed.targetModuleId || '').trim();
-      if (!relationFieldKey || !targetModuleId) return;
-      relatedRefs.set(`${relationFieldKey}::${targetModuleId}`, { relationFieldKey, targetModuleId });
-    });
-
-    relatedRefs.forEach(({ relationFieldKey, targetModuleId }) => {
-      const targetModule = MODULES[targetModuleId];
-      if (!targetModule) return;
-      const targetTitle = String(targetModule?.titles?.fa || targetModuleId).trim() || targetModuleId;
-      (targetModule.fields || [])
-        .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
-        .forEach((field) => {
-          const fieldLabel = getFieldLabel(field);
-          addOption(
-            createWorkflowRelatedFieldKey(relationFieldKey, targetModuleId, String(field.key)),
-            `${fieldLabel} (${targetTitle})`
-          );
-        });
-    });
-
-    const linkedModuleIds = new Set<string>();
-    attachmentFieldSource.forEach((field) => {
-      const parsed = parseProcessLinkedFieldKey(String(field?.key || ''));
-      if (!parsed?.moduleId) return;
-      linkedModuleIds.add(String(parsed.moduleId).trim());
-    });
-
-    linkedModuleIds.forEach((linkedModuleId) => {
-      const targetModule = MODULES[linkedModuleId];
-      if (!targetModule) return;
-      const targetTitle = String(targetModule?.titles?.fa || linkedModuleId).trim() || linkedModuleId;
-      (targetModule.fields || [])
-        .filter((field) => field.type === FieldType.IMAGE && !!String(field?.key || '').trim())
-        .forEach((field) => {
-          const fieldLabel = getFieldLabel(field);
-          addOption(
-            createProcessLinkedFieldKey(linkedModuleId, String(field.key)),
-            `${fieldLabel} (${targetTitle})`
-          );
-        });
-    });
-
-    return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
-  }, [attachmentFieldSource]);
-
   const webFormRelationModuleOptions = useMemo(() => {
     const baseOptions = relationSourceModuleOptions && relationSourceModuleOptions.length > 0
       ? relationSourceModuleOptions
@@ -1528,18 +1414,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               maxTagCount="responsive"
             />
           </div>
-          <div className="text-xs text-gray-500">فیلدهای تصویر/فایل پیوست</div>
-          <Select
-            {...commonSelectProps}
-            mode="multiple"
-            value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
-            disabled={disabled || noteAttachmentFieldOptions.length === 0}
-            options={noteAttachmentFieldOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
-            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
-            className="w-full"
-            maxTagCount="responsive"
-          />
+          <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <div>
+              <div className="text-sm font-medium">ارسال تصاویر و فایل‌های ستاره‌دار</div>
+              <div className="text-xs text-gray-500">همه فایل‌های ستاره‌دار همین رکورد، بدون محدودیت به یک تصویر، پیوست می‌شوند.</div>
+            </div>
+            <Switch
+              checked={shouldIncludeStarredWorkflowAttachments(config)}
+              disabled={disabled}
+              onChange={(checked) => updateActionConfig(action.id, { include_starred_attachments: checked })}
+            />
+          </div>
           <div className="flex justify-end">
             {renderMessageTemplateButton(action.id, 'note_text', 'پیام‌های آماده یادداشت')}
           </div>
@@ -1585,8 +1470,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
       ]).values());
       const botRecipientFieldOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
@@ -1603,6 +1487,35 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           },
         });
       };
+      const webFormVariableOptions = Array.from(new Map([
+        ...variableFieldOptions.map((item) => [String(item.value), item] as const),
+        ...getWorkflowActionOutputVariables('send_web_form_link').map((item) => [item.key, { label: item.labelFa, value: item.key }] as const),
+      ]).values());
+      const renderWebFormVariablePicker = (
+        channelKey: 'sms' | 'email' | 'bot' | 'note',
+        targets: Array<{ key: string; label: string }>
+      ) => (
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <AdaptiveSelectField
+            {...commonSelectProps}
+            options={webFormVariableOptions}
+            disabled={disabled}
+            onChange={(nextValue) => {
+              const variableKey = String(nextValue || '').trim();
+              const targetKey = targets[0]?.key;
+              if (!variableKey || !targetKey) return;
+              const source = String((channelConfigs as any)?.[channelKey]?.[targetKey] || '');
+              const token = `{{${variableKey}}}`;
+              if (!source.includes(token)) updateChannelConfig(channelKey, { [targetKey]: source ? `${source} ${token}` : token });
+            }}
+            placeholder="درج متغیر"
+            pickerTitle="متغیرهای مجاز این وب‌فرم"
+          />
+          <div className="flex h-10 items-center rounded-md border border-gray-200 px-2 text-xs text-gray-500 dark:border-gray-700">
+            محل درج: {targets[0]?.label || '-'}
+          </div>
+        </div>
+      );
 
       return (
         <div className="space-y-3">
@@ -1685,7 +1598,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('sms', { message: e.target.value })}
                 placeholder="متن پیامک"
               />
-              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+              {renderWebFormVariablePicker('sms', [{ key: 'message', label: 'متن پیامک' }])}
             </div>
           ) : null}
 
@@ -1725,23 +1638,35 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('email', { body: e.target.value })}
                 placeholder="متن ایمیل"
               />
-              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+              {renderWebFormVariablePicker('email', [{ key: 'body', label: 'متن ایمیل' }])}
             </div>
           ) : null}
 
           {selectedChannels.includes('bot') ? (
             <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
               <div className="text-sm font-medium">ارسال با بات</div>
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(botConfig.recipient_fields) ? botConfig.recipient_fields : []}
-                disabled={disabled}
-                options={botRecipientFieldOptions}
-                onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal })}
-                placeholder="فیلدهای گیرنده"
-                maxTagCount="responsive"
-              />
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={getWorkflowRecipientConfig(botConfig).recipientFields}
+                  disabled={disabled}
+                  options={botRecipientFieldOptions}
+                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal, related_recipient_fields: [] })}
+                  placeholder="گیرنده‌های بات از روی فیلدها"
+                  maxTagCount="responsive"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={getWorkflowRecipientConfig(botConfig).recipientAssignees}
+                  disabled={disabled}
+                  options={noteAssigneeDirectoryOptions}
+                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] })}
+                  placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
+                  maxTagCount="responsive"
+                />
+              </div>
               <Input
                 value={botConfig.title}
                 disabled={disabled}
@@ -1755,17 +1680,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('bot', { message: e.target.value })}
                 placeholder="متن پیام"
               />
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(botConfig.attachment_fields) ? botConfig.attachment_fields : []}
-                disabled={disabled || noteAttachmentFieldOptions.length === 0}
-                options={noteAttachmentFieldOptions}
-                onChange={(nextVal) => updateChannelConfig('bot', { attachment_fields: nextVal })}
-                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
-                maxTagCount="responsive"
-              />
-              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+                <span className="text-sm">ارسال تصاویر و فایل‌های ستاره‌دار رکورد</span>
+                <Switch
+                  checked={shouldIncludeStarredWorkflowAttachments(botConfig)}
+                  disabled={disabled}
+                  onChange={(checked) => updateChannelConfig('bot', { include_starred_attachments: checked })}
+                />
+              </div>
+              {renderWebFormVariablePicker('bot', [{ key: 'message', label: 'متن پیام بات' }])}
             </div>
           ) : null}
 
@@ -1794,16 +1717,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   maxTagCount="responsive"
                 />
               </div>
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(noteConfig.attachment_fields) ? noteConfig.attachment_fields : []}
-                disabled={disabled || noteAttachmentFieldOptions.length === 0}
-                options={noteAttachmentFieldOptions}
-                onChange={(nextVal) => updateChannelConfig('note', { attachment_fields: nextVal })}
-                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
-                maxTagCount="responsive"
-              />
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+                <span className="text-sm">ارسال تصاویر و فایل‌های ستاره‌دار رکورد</span>
+                <Switch
+                  checked={shouldIncludeStarredWorkflowAttachments(noteConfig)}
+                  disabled={disabled}
+                  onChange={(checked) => updateChannelConfig('note', { include_starred_attachments: checked })}
+                />
+              </div>
               <Input.TextArea
                 rows={3}
                 value={noteConfig.note_text}
@@ -1811,7 +1732,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('note', { note_text: e.target.value })}
                 placeholder="متن یادداشت"
               />
-              <div className="text-xs text-gray-500">برای درج لینک از {'{{web_form_link}}'} استفاده کنید.</div>
+              {renderWebFormVariablePicker('note', [{ key: 'note_text', label: 'متن یادداشت' }])}
             </div>
           ) : null}
         </div>
@@ -1857,8 +1778,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
       ]).values());
       const botRecipientFieldOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
@@ -1874,6 +1794,40 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           },
         });
       };
+      const aiChannelVariableOptions = Array.from(new Map([
+        ...variableFieldOptions.map((item) => [String(item.value), item] as const),
+        ...getWorkflowActionOutputVariables('run_ai_prompt').map((item) => [
+          item.key,
+          { label: item.labelFa, value: item.key },
+        ] as const),
+      ]).values());
+      const renderAiChannelVariablePicker = (
+        channelKey: 'sms' | 'email' | 'bot' | 'note',
+        targetKey: string,
+        targetLabel: string,
+      ) => (
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+          <AdaptiveSelectField
+            {...commonSelectProps}
+            options={aiChannelVariableOptions}
+            disabled={disabled}
+            onChange={(nextValue) => {
+              const variableKey = String(nextValue || '').trim();
+              if (!variableKey) return;
+              const source = String((channelConfigs as any)?.[channelKey]?.[targetKey] || '');
+              const token = `{{${variableKey}}}`;
+              if (!source.includes(token)) {
+                updateChannelConfig(channelKey, { [targetKey]: source ? `${source} ${token}` : token });
+              }
+            }}
+            placeholder="درج متغیر"
+            pickerTitle="متغیرهای مجاز خروجی هوش مصنوعی"
+          />
+          <div className="flex h-10 items-center rounded-md border border-gray-200 px-2 text-xs text-gray-500 dark:border-gray-700">
+            محل درج: {targetLabel}
+          </div>
+        </div>
+      );
       const updateRecordCreationSchema = (nextModuleId: string, nextAllowedFieldKeys?: string[]) => {
         const allowedKeys = Array.isArray(nextAllowedFieldKeys) ? nextAllowedFieldKeys : [];
         const schemaAllowedKeys = outputMode === 'update_record' && allowedKeys.length === 0
@@ -2005,6 +1959,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('note', { note_text: e.target.value })}
                 placeholder="متن یادداشت؛ از {{ai_answer}} استفاده کنید"
               />
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+                <span className="text-sm">ارسال تصاویر و فایل‌های ستاره‌دار رکورد</span>
+                <Switch
+                  checked={shouldIncludeStarredWorkflowAttachments(noteConfig)}
+                  disabled={disabled}
+                  onChange={(checked) => updateChannelConfig('note', { include_starred_attachments: checked })}
+                />
+              </div>
+              {renderAiChannelVariablePicker('note', 'note_text', 'متن یادداشت')}
             </div>
           ) : null}
 
@@ -2028,6 +1991,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('sms', { message: e.target.value })}
                 placeholder="متن پیامک؛ از {{ai_answer}} استفاده کنید"
               />
+              {renderAiChannelVariablePicker('sms', 'message', 'متن پیامک')}
             </div>
           ) : null}
 
@@ -2057,22 +2021,35 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('email', { body: e.target.value })}
                 placeholder="متن ایمیل؛ از {{ai_answer}} استفاده کنید"
               />
+              {renderAiChannelVariablePicker('email', 'body', 'متن ایمیل')}
             </div>
           ) : null}
 
           {selectedChannels.includes('bot') ? (
             <div className="space-y-2 rounded-xl border border-gray-200 p-3 dark:border-white/10">
               <div className="text-sm font-medium">بات</div>
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(botConfig.recipient_fields) ? botConfig.recipient_fields : []}
-                disabled={disabled}
-                options={botRecipientFieldOptions}
-                onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal })}
-                placeholder="فیلدهای مقصد بات"
-                maxTagCount="responsive"
-              />
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={getWorkflowRecipientConfig(botConfig).recipientFields}
+                  disabled={disabled}
+                  options={botRecipientFieldOptions}
+                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_fields: nextVal, related_recipient_fields: [] })}
+                  placeholder="گیرنده‌های بات از روی فیلدها"
+                  maxTagCount="responsive"
+                />
+                <Select
+                  {...commonSelectProps}
+                  mode="multiple"
+                  value={getWorkflowRecipientConfig(botConfig).recipientAssignees}
+                  disabled={disabled}
+                  options={noteAssigneeDirectoryOptions}
+                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] })}
+                  placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
+                  maxTagCount="responsive"
+                />
+              </div>
               <Input.TextArea
                 rows={3}
                 value={botConfig.message}
@@ -2080,6 +2057,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 onChange={(e) => updateChannelConfig('bot', { message: e.target.value })}
                 placeholder="متن بات؛ از {{ai_answer}} استفاده کنید"
               />
+              <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+                <span className="text-sm">ارسال تصاویر و فایل‌های ستاره‌دار رکورد</span>
+                <Switch
+                  checked={shouldIncludeStarredWorkflowAttachments(botConfig)}
+                  disabled={disabled}
+                  onChange={(checked) => updateChannelConfig('bot', { include_starred_attachments: checked })}
+                />
+              </div>
+              {renderAiChannelVariablePicker('bot', 'message', 'متن پیام بات')}
             </div>
           ) : null}
         </div>
@@ -2200,74 +2186,38 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
     if (actionType === 'send_bot_message') {
       const botRecipientFieldOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
         ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
       ]).values());
-      const selectedRecipientFields = Array.isArray(config.recipient_fields)
-        ? config.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
-        : [];
-      const selectedCheckboxKeys = new Set(
-        RUBIKA_RELATED_RECIPIENT_CHECKBOXES
-          .filter((item) => item.fieldKeys.some((fieldKey) => selectedRecipientFields.includes(fieldKey)))
-          .map((item) => item.key)
-      );
-      if ((Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []).length > 0) {
-        selectedCheckboxKeys.add('employee_related');
-      }
-
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-            پلتفرم ارسال بر اساس تنظیمات پیش‌فرض بات هر مشتری/تامین‌کننده تعیین می‌شود.
-            اگر مقصدی انتخاب نکنید، گیرنده از اتصال بات مشتری/تامین‌کننده رکورد جاری تشخیص داده می‌شود.
+            گیرنده‌ها مانند «ارسال یادداشت» از فیلدهای رکورد یا انتخاب مستقیم کاربر، نقش و گروه تعیین می‌شوند. پلتفرم هر مخاطب از تنظیمات بات همان مخاطب تشخیص داده می‌شود.
           </div>
-          <div className="rounded-lg border border-gray-200 dark:border-white/10 px-3 py-2">
-            <div className="mb-2 text-xs text-gray-500">گیرنده‌های مرتبط</div>
-            <Space size={[12, 8]} wrap>
-              {RUBIKA_RELATED_RECIPIENT_CHECKBOXES.map((item) => {
-                const checked = selectedCheckboxKeys.has(item.key);
-                return (
-                  <Checkbox
-                    key={item.key}
-                    checked={checked}
-                    disabled={disabled}
-                    onChange={(e) => {
-                      const nextChecked = !!e.target.checked;
-                      const nextSelectedKeys = new Set(selectedCheckboxKeys);
-                      if (nextChecked) nextSelectedKeys.add(item.key);
-                      else nextSelectedKeys.delete(item.key);
-                      const nextRecipientFields = Array.from(
-                        new Set(
-                          RUBIKA_RELATED_RECIPIENT_CHECKBOXES
-                            .filter((entry) => nextSelectedKeys.has(entry.key))
-                            .flatMap((entry) => entry.fieldKeys)
-                        )
-                      );
-                      updateActionConfig(action.id, {
-                        recipient_fields: nextRecipientFields,
-                        recipient_assignees: [],
-                      });
-                    }}
-                  >
-                    {item.label}
-                  </Checkbox>
-                );
-              })}
-            </Space>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={getWorkflowRecipientConfig(config).recipientFields}
+              disabled={disabled}
+              options={botRecipientFieldOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal, related_recipient_fields: [] })}
+              placeholder="گیرنده‌های پیام بات از روی فیلدها"
+              maxTagCount="responsive"
+            />
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={getWorkflowRecipientConfig(config).recipientAssignees}
+              disabled={disabled}
+              options={noteAssigneeDirectoryOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] })}
+              placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
+              maxTagCount="responsive"
+            />
           </div>
-          <Select
-            {...commonSelectProps}
-            mode="multiple"
-            value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
-            disabled={disabled}
-            options={botRecipientFieldOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-            placeholder="فیلدهای اختصاصی گیرنده (اختیاری)"
-            maxTagCount="responsive"
-          />
           <Input
             value={config.title}
             disabled={disabled}
@@ -2284,18 +2234,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
             placeholder="متن پیام"
           />
-          <div className="text-xs text-gray-500">فیلدهای تصویر/فایل برای ارسال پیوست</div>
-          <Select
-            {...commonSelectProps}
-            mode="multiple"
-            value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
-            disabled={disabled || noteAttachmentFieldOptions.length === 0}
-            options={noteAttachmentFieldOptions}
-            onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
-            placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
-            className="w-full"
-            maxTagCount="responsive"
-          />
+          <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <div>
+              <div className="text-sm font-medium">ارسال تصاویر و فایل‌های ستاره‌دار</div>
+              <div className="text-xs text-gray-500">همه فایل‌های ستاره‌دار رکورد همراه پیام بات ارسال می‌شوند.</div>
+            </div>
+            <Switch
+              checked={shouldIncludeStarredWorkflowAttachments(config)}
+              disabled={disabled}
+              onChange={(checked) => updateActionConfig(action.id, { include_starred_attachments: checked })}
+            />
+          </div>
           {renderVariableTools(action, [
             { key: 'title', label: 'عنوان پیام' },
             { key: 'message', label: 'متن پیام' },
@@ -2309,103 +2258,40 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const isRubika = actionType === 'send_rubika_bot';
       const providerLabel = isRubika ? 'روبیکا' : (isTelegram ? 'تلگرام' : 'بله');
       const botRecipientFieldOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationProfileRecipientFields.map((item) => [String(item.value), item] as const),
+        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...(isRubika
           ? multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const)
           : isTelegram
             ? multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const)
             : multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const)),
       ]).values());
-      const selectedRecipientFields = Array.isArray(config.recipient_fields)
-        ? config.recipient_fields.map((item: any) => String(item || '').trim()).filter(Boolean)
-        : [];
-      const selectedRubikaCheckboxKeys = new Set(
-        RUBIKA_RELATED_RECIPIENT_CHECKBOXES
-          .filter((item) => item.fieldKeys.some((fieldKey) => selectedRecipientFields.includes(fieldKey)))
-          .map((item) => item.key)
-      );
-      if ((Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []).length > 0) {
-        selectedRubikaCheckboxKeys.add('employee_related');
-      }
-
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
-            اگر مقصدی انتخاب نکنید، گیرنده از اتصال بات مشتری/تامین‌کننده رکورد جاری تشخیص داده می‌شود.
+            گیرنده‌ها از فیلدهای رکورد یا انتخاب مستقیم کاربر، نقش و گروه تعیین می‌شوند.
           </div>
-          {isRubika ? (
-            <div className="rounded-lg border border-gray-200 dark:border-white/10 px-3 py-2">
-              <div className="mb-2 text-xs text-gray-500">گیرنده‌های مرتبط (روبیکا)</div>
-              <Space size={[12, 8]} wrap>
-                {RUBIKA_RELATED_RECIPIENT_CHECKBOXES.map((item) => {
-                  const checked = selectedRubikaCheckboxKeys.has(item.key);
-                  return (
-                    <Checkbox
-                      key={item.key}
-                      checked={checked}
-                      disabled={disabled}
-                      onChange={(e) => {
-                        const nextChecked = !!e.target.checked;
-                        const nextSelectedKeys = new Set(selectedRubikaCheckboxKeys);
-                        if (nextChecked) nextSelectedKeys.add(item.key);
-                        else nextSelectedKeys.delete(item.key);
-                        const nextRecipientFields = Array.from(
-                          new Set(
-                            RUBIKA_RELATED_RECIPIENT_CHECKBOXES
-                              .filter((entry) => nextSelectedKeys.has(entry.key))
-                              .flatMap((entry) => entry.fieldKeys)
-                          )
-                        );
-                        updateActionConfig(action.id, {
-                          recipient_fields: nextRecipientFields,
-                          recipient_assignees: [],
-                        });
-                      }}
-                    >
-                      {item.label}
-                    </Checkbox>
-                  );
-                })}
-              </Space>
-            </div>
-          ) : null}
-          {!isRubika ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
-                disabled={disabled}
-                options={botRecipientFieldOptions}
-                onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-                placeholder={`فیلدهای گیرنده ${providerLabel}`}
-                maxTagCount="responsive"
-              />
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
-                disabled={disabled}
-                options={assigneeDirectoryOptions}
-                onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-                placeholder="کاربر/نقش تکمیلی (اختیاری)"
-                maxTagCount="responsive"
-              />
-            </div>
-          ) : null}
-          {isRubika ? (
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <Select
               {...commonSelectProps}
               mode="multiple"
-              value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
+              value={getWorkflowRecipientConfig(config).recipientFields}
               disabled={disabled}
               options={botRecipientFieldOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
-              placeholder="فیلدهای اختصاصی گیرنده روبیکا"
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal, related_recipient_fields: [] })}
+              placeholder={`گیرنده‌های ${providerLabel} از روی فیلدها`}
               maxTagCount="responsive"
             />
-          ) : null}
+            <Select
+              {...commonSelectProps}
+              mode="multiple"
+              value={getWorkflowRecipientConfig(config).recipientAssignees}
+              disabled={disabled}
+              options={noteAssigneeDirectoryOptions}
+              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] })}
+              placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
+              maxTagCount="responsive"
+            />
+          </div>
           <Input
             value={config.title}
             disabled={disabled}
@@ -2422,22 +2308,17 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             onChange={(e) => updateActionConfig(action.id, { message: e.target.value })}
             placeholder={`متن پیام (${providerLabel})`}
           />
-          {isRubika ? (
-            <>
-              <div className="text-xs text-gray-500">فیلدهای تصویر/فایل برای ارسال در روبیکا</div>
-              <Select
-                {...commonSelectProps}
-                mode="multiple"
-                value={Array.isArray(config.attachment_fields) ? config.attachment_fields : []}
-                disabled={disabled || noteAttachmentFieldOptions.length === 0}
-                options={noteAttachmentFieldOptions}
-                onChange={(nextVal) => updateActionConfig(action.id, { attachment_fields: nextVal })}
-                placeholder={noteAttachmentFieldOptions.length > 0 ? 'فیلدهای تصویر/فایل' : 'فیلد تصویری مرتبطی پیدا نشد'}
-                className="w-full"
-                maxTagCount="responsive"
-              />
-            </>
-          ) : null}
+          <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
+            <div>
+              <div className="text-sm font-medium">ارسال تصاویر و فایل‌های ستاره‌دار</div>
+              <div className="text-xs text-gray-500">همه فایل‌های ستاره‌دار رکورد همراه پیام {providerLabel} ارسال می‌شوند.</div>
+            </div>
+            <Switch
+              checked={shouldIncludeStarredWorkflowAttachments(config)}
+              disabled={disabled}
+              onChange={(checked) => updateActionConfig(action.id, { include_starred_attachments: checked })}
+            />
+          </div>
           {renderVariableTools(action, [
             { key: 'title', label: `عنوان پیام (${providerLabel})` },
             { key: 'message', label: `متن پیام (${providerLabel})` },
@@ -2452,8 +2333,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         .map((field: any) => ({
           label: `${getFieldLabel(field)} (${MODULES[String(field.relationConfig.targetModule)]?.titles?.faSingular || MODULES[String(field.relationConfig.targetModule)]?.titles?.fa || field.relationConfig.targetModule})`,
           value: String(field.key),
+          targetModuleId: String(field.relationConfig.targetModule),
         })),
-        ...processLockLinkedRecordOptions,
+        ...processLockLinkedRecordOptions.map((item) => ({
+          ...item,
+          targetModuleId: parseProcessLinkedFieldKey(String(item.value || ''))?.moduleId || '',
+        })),
       ];
       const hasProcessTaskTargets = processStageOptions.length > 0;
       const lockTargetOptions = [
@@ -2490,7 +2375,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               value={config.relation_field_key || undefined}
               disabled={disabled || selectedTargetScope !== 'related_record' || relationLockOptions.length === 0}
               options={relationLockOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { relation_field_key: nextVal })}
+              onChange={(nextVal) => {
+                const selected = relationLockOptions.find((item) => String(item.value) === String(nextVal));
+                updateActionConfig(action.id, {
+                  relation_field_key: nextVal,
+                  relation_module_id: selected?.targetModuleId || '',
+                });
+              }}
               placeholder={relationLockOptions.length > 0 ? 'انتخاب رابطه' : 'رابطه‌ای در این ماژول پیدا نشد'}
               pickerTitle="رکورد مرتبط برای قفل"
             />
@@ -2506,6 +2397,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder={processStageOptions.length > 0 ? 'انتخاب فعالیت' : 'فعالیتی پیدا نشد'}
               pickerTitle="فعالیت خاص برای قفل"
             />
+          </div>
+          <div className="space-y-2 md:col-span-12">
+            <Input
+              value={config.reason}
+              disabled={disabled}
+              onChange={(event) => updateActionConfig(action.id, { reason: event.target.value })}
+              placeholder="دلیل قفل شدن رکورد"
+            />
+            {renderVariableTools(action, [{ key: 'reason', label: 'دلیل قفل' }])}
           </div>
         </div>
       );

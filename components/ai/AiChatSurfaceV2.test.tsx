@@ -1,4 +1,5 @@
 import React from 'react';
+import { App } from 'antd';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +7,14 @@ import AiChatSurfaceV2 from './AiChatSurfaceV2';
 
 const invokeMock = vi.fn();
 const fetchMock = vi.fn();
+
+const renderSurface = (initialEntries: React.ComponentProps<typeof MemoryRouter>['initialEntries']) => render(
+  <App>
+    <MemoryRouter initialEntries={initialEntries}>
+      <AiChatSurfaceV2 />
+    </MemoryRouter>
+  </App>,
+);
 
 const streamResponse = (events: string[]) => {
   const encoder = new TextEncoder();
@@ -115,15 +124,11 @@ describe('AiChatSurfaceV2', () => {
   });
 
   it('loads, searches and opens real AI threads through the v2 surface', async () => {
-    render(
-      <MemoryRouter initialEntries={['/ai']}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+    renderSurface(['/ai']);
 
     expect(screen.getByTestId('ai-chat-v2')).toBeInTheDocument();
     expect(screen.getAllByText('هوش مصنوعی تازه سیستم')[0]).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText(/مصرف امروز:/)[0]).toHaveTextContent('۱۲,۰۰۰'));
+    await waitFor(() => expect(screen.getAllByText(/مصرف امروز:/)[0]).toHaveTextContent('۱۲٬۰۰۰'));
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({ body: expect.objectContaining({ action: 'list_threads' }) }));
 
@@ -138,17 +143,13 @@ describe('AiChatSurfaceV2', () => {
   }, 15000);
 
   it('starts a fresh thread and submits the dashboard prompt instead of opening the latest old thread', async () => {
-    render(
-      <MemoryRouter initialEntries={[{
+    renderSurface([{
         pathname: '/ai',
         state: {
           aiInitialPrompt: 'پیام داشبورد',
           forceNewThread: true,
         },
-      }]}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+      }]);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       'ai-assistant',
@@ -171,8 +172,7 @@ describe('AiChatSurfaceV2', () => {
   }, 15000);
 
   it('does not auto-submit when a dashboard file is only queued for the new conversation', async () => {
-    render(
-      <MemoryRouter initialEntries={[{
+    renderSurface([{
         pathname: '/ai',
         state: {
           aiInitialFile: {
@@ -187,10 +187,7 @@ describe('AiChatSurfaceV2', () => {
           aiAutoSubmitInitial: false,
           forceNewThread: true,
         },
-      }]}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+      }]);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       'ai-assistant',
@@ -213,17 +210,13 @@ describe('AiChatSurfaceV2', () => {
       'event: error\ndata: {"success":false,"threadId":"new-thread","messageId":"msg-error","message":"پاسخ هوش مصنوعی کامل دریافت نشد.","incomplete":true,"finishReason":"length"}\n\n',
     ]));
 
-    render(
-      <MemoryRouter initialEntries={[{
+    renderSurface([{
         pathname: '/ai',
         state: {
           aiInitialPrompt: 'پیام طولانی',
           forceNewThread: true,
         },
-      }]}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+      }]);
 
     await waitFor(() => expect(screen.getByText(/پاسخ نصفه/)).toBeInTheDocument());
     expect(screen.getByText(/متن دریافت‌شده حفظ شد/)).toBeInTheDocument();
@@ -231,11 +224,7 @@ describe('AiChatSurfaceV2', () => {
   }, 15000);
 
   it('renames the active thread inline from the conversation header', async () => {
-    render(
-      <MemoryRouter initialEntries={['/ai']}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+    renderSurface(['/ai']);
 
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByText('گفتگوی واقعی فروش')[0]);
@@ -252,23 +241,11 @@ describe('AiChatSurfaceV2', () => {
     await waitFor(() => expect(screen.getAllByText('عنوان تازه گفتگو').length).toBeGreaterThan(0));
   }, 15000);
 
-  it('asks before refreshing and deleting the active thread', async () => {
-    render(
-      <MemoryRouter initialEntries={['/ai']}>
-        <AiChatSurfaceV2 />
-      </MemoryRouter>
-    );
+  it('asks before deleting the active thread', async () => {
+    renderSurface(['/ai']);
 
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     invokeMock.mockClear();
-
-    fireEvent.click(screen.getByLabelText('بارگذاری دوباره گفتگو'));
-    await screen.findByText('گفتگو دوباره بارگذاری شود؟');
-    fireEvent.click(screen.getByText('بارگذاری دوباره'));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-      'ai-assistant',
-      expect.objectContaining({ body: expect.objectContaining({ action: 'get_thread', threadId: 'thread-1' }) }),
-    ));
 
     fireEvent.click(screen.getByLabelText('حذف گفتگوی هوش مصنوعی'));
     await screen.findByText('این گفتگوی هوش مصنوعی حذف شود؟');

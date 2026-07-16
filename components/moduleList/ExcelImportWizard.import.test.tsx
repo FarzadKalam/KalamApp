@@ -197,8 +197,12 @@ const createMockSupabase = (db: MockDb) => ({
 });
 
 vi.mock('../../supabaseClient', () => ({
-  get supabase() {
-    return createMockSupabase(currentDb);
+  SUPABASE_URL: 'https://test.supabase.co',
+  SUPABASE_ANON_KEY: 'test-anon-key',
+  supabase: {
+    from(table: string) {
+      return createMockSupabase(currentDb).from(table);
+    },
   },
 }));
 

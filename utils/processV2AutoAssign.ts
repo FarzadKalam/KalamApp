@@ -50,6 +50,7 @@ import {
 } from './processTargets';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from './workflowTypes';
 import { resolveProcessAssigneeReference } from './processAssigneeReference';
+import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
 
 type AutoAssignArgs = {
   supabaseClient: any;
@@ -68,9 +69,6 @@ type AutoAssignResult = {
   createdTasks?: Record<string, any>[];
   missingAssigneeCount?: number;
 };
-
-const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
-const EXACT_TEMPLATE_TOKEN_REGEX = /^\s*\{\{\s*([^}]+)\s*\}\}\s*$/;
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 const UUID_LIKE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -142,6 +140,9 @@ const stringifyTemplateValue = (value: any): string => {
 
 const coerceResolvedTemplateValue = (value: any, fieldType?: FieldType) => {
   if (!fieldType) return value;
+  if ([FieldType.TEXT, FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT].includes(fieldType)) {
+    return sanitizeOutboundDisplay(value);
+  }
   if (fieldType === FieldType.CHECKBOX) {
     if (typeof value === 'boolean') return value;
     const normalized = normalizeText(value).toLowerCase();
@@ -164,15 +165,15 @@ const coerceResolvedTemplateValue = (value: any, fieldType?: FieldType) => {
 };
 
 export const renderProcessV2TemplateValueFromRecord = (rawValue: any, record: Record<string, any>, fieldType?: FieldType) => {
-  if (typeof rawValue !== 'string') return rawValue;
-  const exactMatch = rawValue.match(EXACT_TEMPLATE_TOKEN_REGEX);
-  if (exactMatch) {
-    const tokenKey = normalizeText(exactMatch[1]);
-    return coerceResolvedTemplateValue(resolveProcessTemplateTokenValue(record, tokenKey), fieldType);
-  }
-  return String(rawValue || '').replace(TEMPLATE_TOKEN_REGEX, (_token, key: string) => (
-    stringifyTemplateValue(resolveProcessTemplateTokenValue(record, normalizeText(key))) || _token
-  ));
+  return renderTypedTemplateValue(
+    rawValue,
+    (key) => resolveProcessTemplateTokenValue(record, normalizeText(key)),
+    {
+      coerceExact: (value) => coerceResolvedTemplateValue(value, fieldType),
+      stringify: stringifyTemplateValue,
+      unresolved: 'keep',
+    },
+  );
 };
 
 const resolveProcessTaskCustomFieldsFromRecord = (

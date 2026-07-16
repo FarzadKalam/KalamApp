@@ -9,6 +9,7 @@ import { supabase } from '../../supabaseClient';
 import { normalizeProcessTargetModuleIds } from '../../utils/processTargets';
 import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '../../utils/processTemplateStages';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
+import { persistProcessDraftField } from '../../utils/processDraftPersistence';
 
 const ProductionStagesField = React.lazy(() => import('../../components/ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../../components/processes/ProcessCardsV2RuntimeBlock'));
@@ -183,13 +184,16 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             : (data?.production_stages_draft || []);
           const handleDraftStagesChange = async (nextStages: any[]) => {
             if (!onDataUpdate) return;
+            const previousStages = Array.isArray(data?.[fieldKey]) ? data[fieldKey] : [];
             if (isTemplatePreviewField && module.id === 'process_templates' && data?.id) {
               onDataUpdate({ template_stages_preview: nextStages });
               try {
                 const refreshed = await syncProcessTemplateStages(String(data.id), nextStages);
                 onDataUpdate({ template_stages_preview: refreshed });
               } catch (err) {
+                onDataUpdate({ template_stages_preview: previousStages });
                 console.warn('Could not persist process template stages:', err);
+                throw err;
               }
               return;
             }
@@ -200,13 +204,17 @@ const TablesSection: React.FC<TablesSectionProps> = ({
             onDataUpdate({ [fieldKey]: nextStages });
             if (!data?.id || isRunPreviewField) return;
             try {
-              const { error } = await supabase
-                .from(module.id)
-                .update({ [fieldKey]: nextStages })
-                .eq('id', data.id);
-              if (error) throw error;
+              await persistProcessDraftField({
+                supabaseClient: supabase,
+                moduleId: module.id,
+                recordId: data.id,
+                fieldKey,
+                stages: nextStages,
+              });
             } catch (err) {
+              onDataUpdate({ [fieldKey]: previousStages });
               console.warn('Could not persist process draft stages from table section:', err);
+              throw err;
             }
           };
 
@@ -270,8 +278,10 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                         }
                         readOnly={!canEditModule || productionLocked}
                         compact={true}
+                        lazyLoad={true}
                         draftStages={stageDraftValue}
                         onDraftStagesChange={handleDraftStagesChange}
+                        runtimeSnapshot={processRuntimeSnapshot}
                         onRuntimeSnapshot={onProcessRuntimeSnapshot}
                       />
                     </React.Suspense>

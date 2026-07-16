@@ -4,6 +4,13 @@ import type { ButtonProps } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
 
+export type AiMediaSourceImage = {
+  data: string;
+  mimeType: string;
+  filename?: string;
+  previewUrl: string;
+};
+
 export type AiMediaSettings = {
   // image
   size?: string;

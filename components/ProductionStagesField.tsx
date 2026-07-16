@@ -73,7 +73,7 @@ import {
   type WorkflowEditorViewMode,
 } from './workflows/flow/viewModePreference';
 import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
-import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
+import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory, fetchProcessTemplateOptions } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
 import { fetchProcessRuntimeBatchForRecord } from '../utils/processRuntimeBatch';
@@ -100,7 +100,6 @@ import HelpHint from './HelpHint';
 import {
   buildProcessLinkMapFromRecord,
   createProcessLinkedFieldKey,
-  doesProcessTemplateSupportModule,
   extractProcessLinkMapFromStages,
   getProcessTargetModuleFields,
   mergeProcessLinkMaps,
@@ -165,6 +164,7 @@ import {
   resolveProcessTemplateTokenValue,
 } from '../utils/processTemplateContext';
 import { resolveProcessAssigneeReference } from '../utils/processAssigneeReference';
+import { renderTypedTemplateValue, sanitizeOutboundDisplay } from '../shared/recordRuntime';
 import {
   createProcessGroupId,
   ensureProcessRunForDraftStageGroup,
@@ -252,6 +252,7 @@ interface ProductionStagesFieldProps {
   onDraftStagesChange?: (stages: any[]) => void | Promise<void>;
   showWageSummary?: boolean;
   forceProcessRecordMode?: boolean;
+  runtimeSnapshot?: ProcessRuntimeSnapshot | null;
   onRuntimeSnapshot?: (snapshot: ProcessRuntimeSnapshot) => void;
 }
 
@@ -736,9 +737,6 @@ const processTaskDynamicOptionCapableTypes = new Set<FieldType>([
   FieldType.TAGS,
 ]);
 
-const TEMPLATE_TOKEN_REGEX = /\{\{\s*([^}]+)\s*\}\}/g;
-const EXACT_TEMPLATE_TOKEN_REGEX = /^\s*\{\{\s*([^}]+)\s*\}\}\s*$/;
-
 const stringifyTemplateValue = (value: any): string => {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return value.map((item) => String(item ?? '')).filter(Boolean).join(', ');
@@ -781,6 +779,9 @@ const insertTextAtSelection = (
 
 const coerceResolvedTemplateValue = (value: any, fieldType?: FieldType) => {
   if (!fieldType) return value;
+  if ([FieldType.TEXT, FieldType.LONG_TEXT, FieldType.SUPER_LONG_TEXT].includes(fieldType)) {
+    return sanitizeOutboundDisplay(value);
+  }
   if (fieldType === FieldType.CHECKBOX) {
     if (typeof value === 'boolean') return value;
     const normalized = String(value ?? '').trim().toLowerCase();
@@ -807,17 +808,15 @@ const renderTemplateValueFromRecord = (
   record: Record<string, any>,
   fieldType?: FieldType,
 ) => {
-  if (typeof rawValue !== 'string') return rawValue;
-  const exactMatch = rawValue.match(EXACT_TEMPLATE_TOKEN_REGEX);
-  if (exactMatch) {
-    const tokenKey = String(exactMatch[1] || '').trim();
-    return coerceResolvedTemplateValue(resolveProcessTemplateTokenValue(record, tokenKey), fieldType);
-  }
-  return String(rawValue || '').replace(TEMPLATE_TOKEN_REGEX, (_token, key: string) => {
-    const tokenKey = String(key || '').trim();
-    const resolved = resolveProcessTemplateTokenValue(record, tokenKey);
-    return resolved === undefined ? _token : stringifyTemplateValue(resolved);
-  });
+  return renderTypedTemplateValue(
+    rawValue,
+    (key) => resolveProcessTemplateTokenValue(record, String(key || '').trim()),
+    {
+      coerceExact: (value) => coerceResolvedTemplateValue(value, fieldType),
+      stringify: stringifyTemplateValue,
+      unresolved: 'keep',
+    },
+  );
 };
 
 const resolveProcessTaskCustomFieldsFromRecord = (
@@ -940,7 +939,7 @@ const PROCESS_ACTIVATOR_INTERVAL_FIELD_NAMES: WorkflowIntervalFieldNames = {
   batchSize: 'workflow_batch_size',
 };
 
-const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, onAutoOpenTaskClose = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, onRuntimeSnapshot }) => {
+const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId, moduleId, automationContextModuleId = null, automationContextModuleIds = null, autoOpenTaskId = null, autoOpenTask = null, onAutoOpenTaskClose = null, readOnly = false, compact = false, cardCompact = false, allowReportEditInReadOnly = false, lazyLoad = false, onlyLineId = null, onlyProcessGroupId = null, onQuantityChange, orderStatus, draftStages, onDraftStagesChange, showWageSummary = false, forceProcessRecordMode = false, runtimeSnapshot = null, onRuntimeSnapshot }) => {
   const screens = Grid.useBreakpoint();
   const isMobileProcessViewport = !screens.md;
   const processDragSensors = useSensors(useSensor(PointerSensor, {
@@ -6356,35 +6355,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }
     try {
       setProcessTemplateOptionsLoading(true);
-      const targetModule = String(moduleId);
-      let rows: any[] = [];
-
-      const primary = await supabase
-        .from('process_templates')
-        .select('id,name,module_id,module_ids,is_active')
-        .order('name', { ascending: true });
-      if (!primary.error) {
-        rows = primary.data || [];
-      } else {
-        const fallback = await supabase
-          .from('process_templates')
-          .select('id,name,module_id,module_ids')
-          .order('name', { ascending: true });
-        if (fallback.error) throw fallback.error;
-        rows = fallback.data || [];
-      }
-
-      const activeRows = rows.filter((row: any) => row?.is_active !== false);
-      const sourceRows = activeRows.filter((row: any) => doesProcessTemplateSupportModule(row, targetModule));
-
-      setProcessTemplateOptions(
-        sourceRows
-          .filter((row: any) => row?.id)
-          .map((row: any) => ({
-            value: String(row.id),
-            label: String(row?.name || row?.id),
-          }))
-      );
+      setProcessTemplateOptions(await fetchProcessTemplateOptions(supabase, String(moduleId)));
     } catch (err) {
       console.warn('Could not load process template options', err);
       setProcessTemplateOptions([]);
@@ -6699,7 +6670,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         return;
       }
 
-      const existing = Array.isArray(draftLocal) ? [...draftLocal] : [];
+      const existing = Array.isArray(draftLocalRef.current) ? [...draftLocalRef.current] : [];
       const nextGroupId = buildProcessGroupId();
       const existingGroupCount = new Set(
         existing
@@ -6711,7 +6682,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
       )}`;
       const nextGroupName = String(selectedTemplate?.label || fallbackGroupName).trim() || fallbackGroupName;
       const currentLinkedRecords = appendProcessLinkedRecordsRef.current || appendProcessLinkedRecords;
-      const maxExistingSortOrder = [...existing, ...(Array.isArray(tasks) ? tasks : [])]
+      const runtimeTasksForOrdering = Array.isArray(runtimeSnapshot?.tasks) ? runtimeSnapshot.tasks : [];
+      const maxExistingSortOrder = [...existing, ...(Array.isArray(tasks) ? tasks : []), ...runtimeTasksForOrdering]
         .reduce((maxValue: number, stage: any) => {
           const sortOrder = Number(stage?.sort_order || 0);
           return Number.isFinite(sortOrder) && sortOrder > maxValue ? sortOrder : maxValue;
@@ -6767,8 +6739,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     appendProcessTemplateId,
     buildTaskTemplateContextRecord,
     buildProcessGroupId,
-    draftLocal,
     processTemplateOptions,
+    runtimeSnapshot?.tasks,
     saveDraftStages,
     tasks,
   ]);

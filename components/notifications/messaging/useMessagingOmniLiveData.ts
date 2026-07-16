@@ -790,11 +790,14 @@ const fetchSmsMessagesFallback = async (profile: LiveProfile) => {
 };
 
 const fetchSmsMessages = async (profile: LiveProfile) => {
+  // Full-scope users are already protected by tenant RLS and the explicit
+  // org_id predicate in the fallback query. Avoid the per-record access RPC
+  // for them; on large organizations that RPC can exhaust statement_timeout.
+  if (profile.canViewAllSms) return fetchSmsMessagesFallback(profile);
   const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
   if (!rpcResult.error) {
     const rows = rpcResult.data || [];
-    if (rows.length > 0 || !profile.canViewAllSms) return rows;
-    return fetchSmsMessagesFallback(profile);
+    return rows;
   }
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
   return fetchSmsMessagesFallback(profile);

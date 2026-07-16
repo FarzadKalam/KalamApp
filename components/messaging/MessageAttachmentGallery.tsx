@@ -53,7 +53,15 @@ const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ att
                 onClick={() => setPreviewAttachment(attachment)}
               >
                 {attachment.url ? (
-                  <ResilientImage src={attachment.url} preset="thumb" alt={attachment.name} className="h-full w-full object-cover" />
+                  <ResilientImage
+                    src={attachment.url}
+                    preset="thumb"
+                    forcePreviewTransform
+                    loading="lazy"
+                    decoding="async"
+                    alt={attachment.name}
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center text-[rgb(var(--brand-500-rgb))] opacity-80">
                     <FileImageOutlined className="text-3xl" />
@@ -134,7 +142,14 @@ const MessageAttachmentGallery: React.FC<MessageAttachmentGalleryProps> = ({ att
         width={760}
       >
         {resolveNoteAttachmentFileType(previewAttachment) === 'image' && previewAttachment?.url ? (
-          <ResilientImage src={previewAttachment.url} preset="gallery" alt={previewAttachment.name} className="max-h-[70vh] w-full rounded-2xl object-contain" />
+          <ResilientImage
+            src={previewAttachment.url}
+            preset="gallery"
+            forcePreviewTransform
+            decoding="async"
+            alt={previewAttachment.name}
+            className="max-h-[70vh] w-full rounded-2xl object-contain"
+          />
         ) : resolveNoteAttachmentFileType(previewAttachment) === 'video' && previewAttachment?.url ? (
           <video src={previewAttachment.url} controls className="max-h-[70vh] w-full rounded-2xl bg-black" />
         ) : (

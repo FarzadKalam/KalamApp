@@ -1,6 +1,8 @@
 import { MODULES } from '../moduleRegistry';
 import { renderTemplateText, type TemplateOptionLabelMaps } from './messageTemplateRenderer';
 import { normalizePhoneForStorage } from './phoneNumber';
+import { getFieldLabelFa } from './fieldLabel';
+import { getWorkflowConditionFields } from './workflowHelpers';
 
 export type MessageReadyTextKind = 'field' | 'message' | 'ai' | 'workflow_automation';
 export type MessageReadyTextScope = 'module' | 'ai' | 'workflow_automation';
@@ -108,7 +110,7 @@ export const getMessageTemplateVariables = (
   const items: Array<{ key: string; label: string; token: string }> = [];
   const labelMap = new Map<string, string>();
 
-  (moduleConfig?.fields || []).forEach((field: any) => {
+  getWorkflowConditionFields(String(moduleId || '')).forEach((field: any) => {
     const key = String(field?.key || '').trim();
     if (!key) return;
     labelMap.set(key, getFieldLabelFa(field, { moduleId, fallback: field?.label || key }));
@@ -144,14 +146,14 @@ export const getMessageTemplateVariables = (
     });
   };
 
-  (moduleConfig?.fields || []).forEach((field: any) => {
+  getWorkflowConditionFields(String(moduleId || '')).forEach((field: any) => {
     pushVariable(String(field?.key || ''), getFieldLabelFa(field, { moduleId, fallback: field?.key || '' }));
   });
 
   Object.keys(record || {}).forEach((key) => {
-    pushVariable(key, labelMap.get(key) || key);
+    const label = labelMap.get(key);
+    if (label) pushVariable(key, label);
   });
 
   return items;
 };
-import { getFieldLabelFa } from './fieldLabel';

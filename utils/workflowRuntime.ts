@@ -21,7 +21,6 @@ import {
   WorkflowNoteRecipientStrategy,
   WorkflowAction,
   WorkflowCondition,
-  WorkflowRecord,
 } from './workflowTypes';
 import {
   getProcessTaskCustomFieldValuesFromRecurrence,
@@ -36,6 +35,12 @@ import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatc
 import { NoteAttachment, serializeNoteContent } from './noteContent';
 import { fetchAssigneeDirectory, fetchRecordTagsMap } from './referenceData';
 import { shortenAttachmentsForExternalShare } from './fileShortLinks';
+import { getOrCreateShortRecordUrl } from './recordShortLinks';
+import { resolveWorkflowMessageAttachments } from './workflowAttachments';
+import {
+  getWorkflowRecipientFieldBotChannel,
+  getWorkflowRecipientConfig,
+} from '../shared/workflowMessagingContract';
 import { evaluateFormulaExpression } from './formulaRuntime';
 import { getRecordTitle } from './recordTitle';
 import { mapProcessTemplateStagesToDraft } from './processRunRuntime';
@@ -44,14 +49,17 @@ import { loadProcessTemplateStages as loadProcessTemplateStagesShared } from './
 import { parseSurveyTemplateFieldKey } from './surveyTemplates';
 import { resolveSystemWorkflowStoryPublisher } from './workflowStoryPublisher';
 import { buildAiRecordCreationSchema } from './aiRecordCreation';
-import { loadBotWorkflowVirtualFieldPatch } from './botPlatform';
 import { lockRecord } from './recordLockRuntime';
 import { shouldSkipRecordForAutomation } from './recycleBinGuards';
 import { buildTaskSourceInitialValues } from './taskMeta';
 import { filterActiveGroupMentionTargets, filterActiveMentionTargets, isActiveProfileRow } from './activeProfileRecipients';
+import {
+  evaluateConditionCollection as evaluateCentralConditionCollection,
+  evaluateCoreConditionOperator,
+  renderTemplateAsync as renderCentralTemplateAsync,
+} from '../shared/recordRuntime';
 
 type WorkflowEvent = 'create' | 'upsert';
-type WorkflowRunType = 'event' | 'scheduled';
 type CounterpartyBotGroupRow = {
   id?: string | null;
   customer_id?: string | null;
@@ -116,37 +124,6 @@ export const prefetchWorkflowRecordTags = async ({
 };
 
 const getModuleTable = (moduleId: string) => MODULES[moduleId]?.table || moduleId;
-
-const hydrateWorkflowCurrentRecord = async (
-  moduleId: string,
-  currentRecord: Record<string, any>
-): Promise<Record<string, any>> => {
-  const recordId = String(currentRecord?.id || '').trim();
-  if (!moduleId || !recordId) return currentRecord;
-
-  const { data, error } = await supabase
-    .from(getModuleTable(moduleId))
-    .select('*')
-    .eq('id', recordId)
-    .maybeSingle();
-
-  if (error) {
-    console.warn(`Workflow record hydration failed (${moduleId}/${recordId}):`, error);
-    return currentRecord;
-  }
-
-  if (!data || typeof data !== 'object') {
-    return currentRecord;
-  }
-
-  const botVirtualPatch = await loadBotWorkflowVirtualFieldPatch(supabase, moduleId, data).catch(() => ({}));
-
-  return {
-    ...currentRecord,
-    ...data,
-    ...botVirtualPatch,
-  };
-};
 
 const toComparable = (value: any): any => {
   if (value === null || value === undefined) return value;
@@ -247,23 +224,6 @@ const parseDate = (value: any): Date | null => {
   if (Number.isNaN(d.getTime())) return null;
   return d;
 };
-
-const daysDiffFromNow = (value: any): number | null => {
-  const d = parseDate(value);
-  if (!d) return null;
-  return (Date.now() - d.getTime()) / (1000 * 60 * 60 * 24);
-};
-
-const hoursDiffFromNow = (value: any): number | null => {
-  const d = parseDate(value);
-  if (!d) return null;
-  return (Date.now() - d.getTime()) / (1000 * 60 * 60);
-};
-
-const isSameDate = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();
 
 const addDays = (date: Date, days: number) => {
   const next = new Date(date);
@@ -406,27 +366,19 @@ const renderWorkflowTemplate = async (
     ? await fetchAssigneeDirectory(supabase).catch(() => null)
     : null;
   const optionLabelMaps = await resolveTemplateOptionLabelMaps(supabase, rawTemplate, moduleId, record);
-  const matches = Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g));
-  let rendered = rawTemplate;
-  for (const match of matches) {
-    const fullToken = match[0];
-    const fieldKey = String(match[1] || '').trim();
-    if (!fieldKey) {
-      rendered = rendered.split(fullToken).join('');
-      continue;
-    }
-    const value = await resolveWorkflowTemplateValue(fieldKey, record, moduleId, context);
-    const text = formatTemplateValueByField({
+  return renderCentralTemplateAsync(
+    rawTemplate,
+    (fieldKey) => resolveWorkflowTemplateValue(fieldKey, record, moduleId, context),
+    (value, fieldKey) => formatTemplateValueByField({
       value,
       moduleId,
       fieldKey,
       sourceRecord: record,
       assigneeDirectory,
       optionLabelMaps,
-    }).trim();
-    rendered = rendered.split(fullToken).join(options.bold && text ? `**${text}**` : text);
-  }
-  return rendered;
+    }),
+    { bold: options.bold, unresolved: 'blank' },
+  );
 };
 
 const ATTACHMENT_FILE_NAME_REGEX = /[^0-9a-zA-Z._\-\u0600-\u06FF]+/g;
@@ -722,9 +674,7 @@ const buildWorkflowRecordUrl = async (targetModuleId: string, recordId: unknown)
   const normalizedModuleId = String(targetModuleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
   if (!normalizedModuleId || !normalizedRecordId) return '';
-  const path = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(normalizedRecordId)}`;
-  const baseUrl = await resolveWorkflowPublicBaseUrl();
-  return baseUrl ? `${baseUrl}${path}` : path;
+  return getOrCreateShortRecordUrl(normalizedModuleId, normalizedRecordId);
 };
 
 const resolveConditionFieldValue = async (
@@ -866,103 +816,17 @@ const evaluateResolvedCondition = async (
   currentValue: any,
   previousValue: any
 ): Promise<boolean> => {
-  const op = String(condition?.operator || 'eq');
+  const operator = String(condition?.operator || 'eq');
   const expectedValue = condition?.value;
+  const coreResult = evaluateCoreConditionOperator({
+    operator,
+    currentValue,
+    previousValue,
+    expectedValue,
+  });
+  if (coreResult !== undefined) return coreResult;
 
-  const cv = toComparable(currentValue);
-  const pv = toComparable(previousValue);
-  const ev = toComparable(expectedValue);
-
-  switch (op) {
-    case 'eq': {
-      if (Array.isArray(currentValue) || Array.isArray(expectedValue)) {
-        const currentList = normalizeListValues(currentValue);
-        const expectedList = normalizeListValues(expectedValue);
-        return JSON.stringify(currentList.sort()) === JSON.stringify(expectedList.sort());
-      }
-      return String(cv ?? '') === String(ev ?? '');
-    }
-    case 'neq':
-      return !(await evaluateResolvedCondition({ ...condition, operator: 'eq' }, currentValue, previousValue));
-    case 'contains': {
-      const actualList = normalizeListValues(currentValue);
-      const expectedList = normalizeListValues(expectedValue);
-      const normalizedActual = actualList.length > 0 ? actualList : [String(cv ?? '')].filter(Boolean);
-      const normalizedExpected = expectedList.length > 0 ? expectedList : [String(ev ?? '')].filter(Boolean);
-      if (normalizedExpected.length === 0) return false;
-      return normalizedActual.some((actual) => {
-        const actualText = normalizeSearchText(actual);
-        return normalizedExpected.some((expected) => {
-          const expectedText = normalizeSearchText(expected);
-          return !!expectedText && actualText.includes(expectedText);
-        });
-      });
-    }
-    case 'not_contains':
-      return !(await evaluateResolvedCondition({ ...condition, operator: 'contains' }, currentValue, previousValue));
-    case 'starts_with':
-      return String(cv ?? '').toLowerCase().startsWith(String(ev ?? '').toLowerCase());
-    case 'ends_with':
-      return String(cv ?? '').toLowerCase().endsWith(String(ev ?? '').toLowerCase());
-    case 'gt':
-      return Number(cv) > Number(ev);
-    case 'gte':
-      return Number(cv) >= Number(ev);
-    case 'lt':
-      return Number(cv) < Number(ev);
-    case 'lte':
-      return Number(cv) <= Number(ev);
-    case 'in': {
-      const actualList = normalizeListValues(currentValue);
-      const expectedList = normalizeListValues(expectedValue);
-      if (actualList.length > 0) {
-        return actualList.some((item) => expectedList.includes(item));
-      }
-      return expectedList.includes(String(cv ?? ''));
-    }
-    case 'not_in': {
-      const actualList = normalizeListValues(currentValue);
-      const expectedList = normalizeListValues(expectedValue);
-      if (actualList.length > 0) {
-        return !actualList.some((item) => expectedList.includes(item));
-      }
-      return !expectedList.includes(String(cv ?? ''));
-    }
-    case 'is_true':
-      return !!currentValue === true;
-    case 'is_false':
-      return !!currentValue === false;
-    case 'is_null':
-      return isEmptyValue(currentValue);
-    case 'not_null':
-      return !isEmptyValue(currentValue);
-    case 'changed':
-      return JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
-    case 'changed_from':
-      return JSON.stringify(pv ?? null) === JSON.stringify(ev ?? null) &&
-        JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
-    case 'changed_to':
-      return JSON.stringify(cv ?? null) === JSON.stringify(ev ?? null) &&
-        JSON.stringify(cv ?? null) !== JSON.stringify(pv ?? null);
-    case 'is_today': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      return isSameDate(d, new Date());
-    }
-    case 'is_yesterday': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const y = new Date();
-      y.setDate(y.getDate() - 1);
-      return isSameDate(d, y);
-    }
-    case 'is_tomorrow': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const t = new Date();
-      t.setDate(t.getDate() + 1);
-      return isSameDate(d, t);
-    }
+  switch (operator) {
     case 'is_friday': {
       const summary = await getHolidaySummaryForDate(currentValue);
       return !!summary?.isFriday;
@@ -979,104 +843,6 @@ const evaluateResolvedCondition = async (
       return !(await dateHasAnyOccasion(currentValue, expectedValue));
     case 'days_before_occasion':
       return dateIsDaysBeforeOccasion(currentValue, expectedValue);
-    case 'is_this_week': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const now = new Date();
-      const startOfWeek = new Date(now);
-      startOfWeek.setDate(now.getDate() - now.getDay());
-      startOfWeek.setHours(0, 0, 0, 0);
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-      endOfWeek.setHours(23, 59, 59, 999);
-      return d.getTime() >= startOfWeek.getTime() && d.getTime() <= endOfWeek.getTime();
-    }
-    case 'is_last_week': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const now = new Date();
-      const startOfThisWeek = new Date(now);
-      startOfThisWeek.setDate(now.getDate() - now.getDay());
-      startOfThisWeek.setHours(0, 0, 0, 0);
-      const startOfLastWeek = new Date(startOfThisWeek);
-      startOfLastWeek.setDate(startOfThisWeek.getDate() - 7);
-      const endOfLastWeek = new Date(startOfThisWeek);
-      endOfLastWeek.setMilliseconds(-1);
-      return d.getTime() >= startOfLastWeek.getTime() && d.getTime() <= endOfLastWeek.getTime();
-    }
-    case 'is_this_month': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const now = new Date();
-      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    }
-    case 'is_last_month': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      const now = new Date();
-      const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      return d.getFullYear() === lastMonth.getFullYear() && d.getMonth() === lastMonth.getMonth();
-    }
-    case 'day_of_month_eq': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      return d.getDate() === Number(expectedValue || 0);
-    }
-    case 'day_of_month_neq': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      return d.getDate() !== Number(expectedValue || 0);
-    }
-    case 'day_of_week_eq': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      return d.getDay() === Number(expectedValue || 0);
-    }
-    case 'day_of_week_neq': {
-      const d = parseDate(currentValue);
-      if (!d) return false;
-      return d.getDay() !== Number(expectedValue || 0);
-    }
-    case 'days_passed_eq': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && Math.floor(diff) === Number(expectedValue || 0);
-    }
-    case 'days_passed_gt': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && diff > Number(expectedValue || 0);
-    }
-    case 'days_passed_lt': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && diff < Number(expectedValue || 0);
-    }
-    case 'days_remaining_eq': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && diff < 0 && Math.floor(Math.abs(diff)) === Number(expectedValue || 0);
-    }
-    case 'days_remaining_gt': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && diff < 0 && Math.abs(diff) > Number(expectedValue || 0);
-    }
-    case 'days_remaining_lt': {
-      const diff = daysDiffFromNow(currentValue);
-      return diff !== null && diff < 0 && Math.abs(diff) < Number(expectedValue || 0);
-    }
-    case 'hours_passed_gt': {
-      const diff = hoursDiffFromNow(currentValue);
-      return diff !== null && diff > Number(expectedValue || 0);
-    }
-    case 'hours_passed_lt': {
-      const diff = hoursDiffFromNow(currentValue);
-      return diff !== null && diff < Number(expectedValue || 0);
-    }
-    case 'hours_remaining_gt': {
-      const diff = hoursDiffFromNow(currentValue);
-      return diff !== null && diff < 0 && Math.abs(diff) > Number(expectedValue || 0);
-    }
-    case 'hours_remaining_lt': {
-      const diff = hoursDiffFromNow(currentValue);
-      return diff !== null && diff < 0 && Math.abs(diff) < Number(expectedValue || 0);
-    }
     default:
       return false;
   }
@@ -1106,38 +872,6 @@ export const evaluateWorkflowCondition = async ({
   );
 };
 
-const NEGATIVE_ANY_GROUP_OPERATORS = new Set(['neq', 'not_in', 'not_contains', 'occasion_neq', 'occasion_not_contains']);
-
-const buildAnyConditionGroups = (conditions: WorkflowCondition[]) => {
-  const conditionsByField = new Map<string, WorkflowCondition[]>();
-  const groups: WorkflowCondition[][] = [];
-
-  for (const condition of conditions) {
-    const fieldKey = String(condition?.field || '').trim();
-    if (!fieldKey) {
-      groups.push([condition]);
-      continue;
-    }
-    const existing = conditionsByField.get(fieldKey) || [];
-    existing.push(condition);
-    conditionsByField.set(fieldKey, existing);
-  }
-
-  conditionsByField.forEach((fieldConditions) => {
-    const shouldMergeAsNegativeGroup = fieldConditions.length > 1
-      && fieldConditions.every((condition) => NEGATIVE_ANY_GROUP_OPERATORS.has(String(condition?.operator || '').trim()));
-
-    if (shouldMergeAsNegativeGroup) {
-      groups.push(fieldConditions);
-      return;
-    }
-
-    fieldConditions.forEach((condition) => groups.push([condition]));
-  });
-
-  return groups;
-};
-
 export const evaluateWorkflowConditionCollection = async ({
   conditionsAll = [],
   conditionsAny = [],
@@ -1147,27 +881,11 @@ export const evaluateWorkflowConditionCollection = async ({
   conditionsAny?: WorkflowCondition[] | null;
   evaluate: (condition: WorkflowCondition) => Promise<boolean>;
 }) => {
-  const all = Array.isArray(conditionsAll) ? conditionsAll : [];
-  const any = Array.isArray(conditionsAny) ? conditionsAny : [];
-
-  for (const condition of all) {
-    if (!await evaluate(condition as WorkflowCondition)) return false;
-  }
-
-  if (any.length === 0) return true;
-
-  for (const group of buildAnyConditionGroups(any as WorkflowCondition[])) {
-    let groupPassed = true;
-    for (const condition of group) {
-      if (!await evaluate(condition as WorkflowCondition)) {
-        groupPassed = false;
-        break;
-      }
-    }
-    if (groupPassed) return true;
-  }
-
-  return false;
+  return evaluateCentralConditionCollection({
+    conditionsAll: Array.isArray(conditionsAll) ? conditionsAll : [],
+    conditionsAny: Array.isArray(conditionsAny) ? conditionsAny : [],
+    evaluate,
+  });
 };
 
 const evaluateCondition = async (
@@ -1231,21 +949,6 @@ export const resolveWorkflowFieldValue = async ({
 }) => {
   const resolvedContext = context || createWorkflowEvaluationContext(moduleId);
   return resolveConditionFieldValue(fieldKey, currentRecord, moduleId, resolvedContext);
-};
-
-const evaluateWorkflow = async (
-  workflow: WorkflowRecord,
-  currentRecord: Record<string, any>,
-  previousRecord: Record<string, any> | null | undefined,
-  moduleId: string
-) => {
-  return evaluateWorkflowConditions({
-    conditionsAll: workflow.conditions_all || [],
-    conditionsAny: workflow.conditions_any || [],
-    currentRecord,
-    previousRecord,
-    moduleId,
-  });
 };
 
 const resolveSmsRequestUrl = (url: string) => {
@@ -1401,6 +1104,8 @@ const sendSms = async ({
 };
 
 type CommunicationChannel = 'sms' | 'email' | 'telegram' | 'bale' | 'rubika';
+type WorkflowBotChannel = 'rubika' | 'telegram' | 'bale';
+const WORKFLOW_BOT_CHANNEL_PRIORITY: WorkflowBotChannel[] = ['rubika', 'telegram', 'bale'];
 
 const getProfileCommunicationSelect = (channel: CommunicationChannel) => {
   if (channel === 'sms') return 'id, is_active, mobile_1';
@@ -1667,43 +1372,6 @@ const resolveChatGroupMentionTargets = async (groupIds: string[]) => {
 
 const UUID_LIKE_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const resolveRubikaCounterpartyGroupChatIds = async (candidateValues: string[]) => {
-  const customerIds = Array.from(
-    new Set(
-      candidateValues
-        .map((value) => String(value || '').trim())
-        .filter((value) => UUID_LIKE_REGEX.test(value))
-    )
-  );
-  if (customerIds.length === 0) return [] as string[];
-
-  const { data, error } = await supabase
-    .from('counterparty_bot_groups')
-    .select('customer_id,supplier_id,bot_chat_id,channel_type,status')
-    .eq('channel_type', 'rubika')
-    .eq('status', 'active')
-    .in('customer_id', customerIds);
-  if (error) throw error;
-
-  const customerChatIds = ((data || []) as Array<Record<string, any>>)
-    .map((row) => String(row?.bot_chat_id || '').trim())
-    .filter(Boolean);
-
-  const { data: supplierData, error: supplierError } = await supabase
-    .from('counterparty_bot_groups')
-    .select('customer_id,supplier_id,bot_chat_id,channel_type,status')
-    .eq('channel_type', 'rubika')
-    .eq('status', 'active')
-    .in('supplier_id', customerIds);
-  if (supplierError) throw supplierError;
-
-  const supplierChatIds = ((supplierData || []) as Array<Record<string, any>>)
-    .map((row) => String(row?.bot_chat_id || '').trim())
-    .filter(Boolean);
-
-  return Array.from(new Set([...customerChatIds, ...supplierChatIds]));
-};
-
 const resolveCounterpartyBotGroupChatIds = async (
   channel: 'rubika' | 'bale' | 'telegram',
   customerIds: string[],
@@ -1885,11 +1553,54 @@ const resolveCommunicationValuesFromFields = async ({
     ];
   })();
   const uniqueValues = Array.from(new Set(resolvedValues));
-  if (channel !== 'rubika') return uniqueValues;
+  if (channel === 'sms' || channel === 'email') return uniqueValues;
 
-  const groupChatIds = await resolveRubikaCounterpartyGroupChatIds(uniqueValues);
-  const uuidOnlyValues = uniqueValues.filter((value) => !UUID_LIKE_REGEX.test(value));
-  return Array.from(new Set([...uuidOnlyValues, ...groupChatIds]));
+  const candidateIds = uniqueValues.filter((value) => UUID_LIKE_REGEX.test(value));
+  const groupChatIds = await resolveCounterpartyBotGroupChatIds(channel, candidateIds, candidateIds);
+  const displaySafeValues = uniqueValues.filter((value) => !UUID_LIKE_REGEX.test(value));
+  return Array.from(new Set([...displaySafeValues, ...groupChatIds]));
+};
+
+const resolveUnifiedAssigneeBotTargets = async (recipientAssignees: any[]) => {
+  const directValues: string[] = [];
+  const userIds = new Set<string>();
+  const roleIds = new Set<string>();
+  const groupIds = new Set<string>();
+  collectRecipientTargets(recipientAssignees, { directValues, userIds, roleIds, groupIds });
+  await expandChatGroupsToMentionTargets(Array.from(groupIds), userIds, roleIds);
+
+  const rows: Array<Record<string, any>> = [];
+  if (userIds.size > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id,is_active,rubika_chat_id,telegram_chat_id,bale_chat_id')
+      .in('id', Array.from(userIds));
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  if (roleIds.size > 0) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id,is_active,rubika_chat_id,telegram_chat_id,bale_chat_id')
+      .in('role_id', Array.from(roleIds));
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+
+  const uniqueProfiles = Array.from(new Map(
+    rows.filter(isActiveProfileRow).map((row) => [String(row?.id || ''), row]),
+  ).values());
+  const directTargets = Array.from(new Set(directValues))
+    .filter((chatId) => chatId && !UUID_LIKE_REGEX.test(chatId))
+    .map((chatId) => ({ channel: 'rubika' as const, chatId }));
+  const profileTargets = uniqueProfiles.flatMap((row) => {
+    const channel = WORKFLOW_BOT_CHANNEL_PRIORITY.find((candidate) => String(row?.[`${candidate}_chat_id`] || '').trim());
+    if (!channel) return [];
+    return [{ channel, chatId: String(row[`${channel}_chat_id`]).trim() }];
+  });
+  return Array.from(new Map(
+    [...directTargets, ...profileTargets].map((target) => [`${target.channel}:${target.chatId}`, target]),
+  ).values());
 };
 
 export const resolveNoteRecipientsFromFields = async ({
@@ -2578,11 +2289,17 @@ export const executeWorkflowAction = async (
   }
 
   if (action.type === 'send_note' || action.type === 'send_note_sms') {
+    const recipientConfig = getWorkflowRecipientConfig(config);
     const noteText = (await renderWorkflowTemplate(String(config.note_text || ''), currentRecord, moduleId, { bold: true })).trim();
-    const attachments = await resolveNoteAttachmentsFromFields({
-      currentRecord,
+    const attachments = await resolveWorkflowMessageAttachments({
       moduleId,
-      attachmentFields: asArray(config.attachment_fields),
+      recordId: currentRecord?.id ? String(currentRecord.id) : null,
+      config,
+      resolveLegacyFields: (attachmentFields) => resolveNoteAttachmentsFromFields({
+        currentRecord,
+        moduleId,
+        attachmentFields,
+      }),
     });
     if (!noteText && attachments.length === 0) return;
     const recordId = currentRecord?.id;
@@ -2591,8 +2308,8 @@ export const executeWorkflowAction = async (
     const recipients = await resolveNoteRecipientsFromFields({
       currentRecord,
       moduleId,
-      recipientFields: asArray(config.recipient_fields),
-      recipientAssignees: asArray(config.recipient_assignees),
+      recipientFields: recipientConfig.recipientFields,
+      recipientAssignees: recipientConfig.recipientAssignees,
     });
     const baseMetadata = {
       source_type: 'system',
@@ -2663,10 +2380,15 @@ export const executeWorkflowAction = async (
   if (action.type === 'send_bot_message') {
     // پیام یکپارچه بات: پلتفرم از تنظیمات پیش‌فرض counterparty_bot_config خوانده می‌شود
     const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
-    const attachments = await resolveNoteAttachmentsFromFields({
-      currentRecord,
+    const attachments = await resolveWorkflowMessageAttachments({
       moduleId,
-      attachmentFields: asArray(config.attachment_fields),
+      recordId: currentRecord?.id ? String(currentRecord.id) : null,
+      config,
+      resolveLegacyFields: (attachmentFields) => resolveNoteAttachmentsFromFields({
+        currentRecord,
+        moduleId,
+        attachmentFields,
+      }),
     });
     if (!rawMessageText && attachments.length === 0) return;
     const externalAttachments = attachments.length > 0
@@ -2687,8 +2409,9 @@ export const executeWorkflowAction = async (
       message_source: String(config.message_source || '').trim() || null,
       ai_generated: config.ai_generated === true || String(config.sender_kind || '').trim().toLowerCase() === 'ai',
     };
-    const configuredRecipientFields = asArray(config.recipient_fields).map((item) => String(item || '').trim()).filter(Boolean);
-    const configuredRecipientAssignees = asArray(config.recipient_assignees).map((item) => String(item || '').trim()).filter(Boolean);
+    const recipientConfig = getWorkflowRecipientConfig(config);
+    const configuredRecipientFields = recipientConfig.recipientFields;
+    const configuredRecipientAssignees = recipientConfig.recipientAssignees;
 
     // تعیین پلتفرم برای هر counterparty از counterparty_bot_config
     const resolveChannelForCounterparty = async (counterpartyId: string, counterpartyType: 'customers' | 'suppliers'): Promise<'rubika' | 'telegram' | 'bale'> => {
@@ -2713,44 +2436,75 @@ export const executeWorkflowAction = async (
       return firstActive ? (String(firstActive.channel_type || defaultChannel) as 'rubika' | 'telegram' | 'bale') : defaultChannel;
     };
 
-    // resolve recipients همانند bot actions قدیمی ولی بدون channel مشخص
-    // ابتدا از طریق رکورد جاری counterparty را پیدا می‌کنیم
+    // گیرنده ضمنی نداریم: فقط فیلدها و کاربر/نقش/گروه ذخیره‌شده در اکشن اجرا می‌شوند.
     const customerId = String(currentRecord?.customer_id || (moduleId === 'customers' ? currentRecord?.id : '') || '').trim();
     const supplierId = String(currentRecord?.supplier_id || (moduleId === 'suppliers' ? currentRecord?.id : '') || '').trim();
+    const targetMap = new Map<string, { channel: WorkflowBotChannel; chatId: string }>();
+    const addTarget = (channel: WorkflowBotChannel, chatId: unknown) => {
+      const normalizedChatId = String(chatId || '').trim();
+      if (normalizedChatId && !UUID_LIKE_REGEX.test(normalizedChatId)) {
+        targetMap.set(`${channel}:${normalizedChatId}`, { channel, chatId: normalizedChatId });
+      }
+    };
 
-    if (customerId || supplierId) {
+    const directFieldKeys = configuredRecipientFields.filter((fieldKey) => !isCounterpartyRelatedRecipientField(fieldKey));
+    const identityRecipientEntries: any[] = [...configuredRecipientAssignees];
+    const fieldContext: WorkflowEvaluationContext = {
+      moduleId,
+      relatedRecordCache: new Map(),
+      tagsCache: new Map(),
+    };
+    for (const storedFieldKey of directFieldKeys) {
+      const wrappedMeta = parseWorkflowNoteRecipientFieldKey(String(storedFieldKey || '').trim());
+      const resolvedFieldKey = wrappedMeta?.fieldKey || String(storedFieldKey || '').trim();
+      const explicitChannel = getWorkflowRecipientFieldBotChannel(storedFieldKey);
+      if (explicitChannel) {
+        const values = await resolveCommunicationValuesFromFields({
+          currentRecord,
+          moduleId,
+          recipientFields: [resolvedFieldKey],
+          recipientAssignees: [],
+          channel: explicitChannel,
+        });
+        values.forEach((chatId) => addTarget(explicitChannel, chatId));
+        continue;
+      }
+      const rawValue = await resolveConditionFieldValue(resolvedFieldKey, currentRecord, moduleId, fieldContext);
+      const strategy = wrappedMeta?.strategy || inferLegacyNoteRecipientStrategy(moduleId, resolvedFieldKey);
+      const normalizedValue = strategy ? normalizeNoteRecipientValuesByStrategy(rawValue, strategy) : rawValue;
+      identityRecipientEntries.push(...asArray(normalizedValue));
+    }
+
+    const assigneeTargets = await resolveUnifiedAssigneeBotTargets(identityRecipientEntries);
+    assigneeTargets.forEach((target) => addTarget(target.channel, target.chatId));
+
+    const hasConfiguredCounterparty = configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey));
+    if (hasConfiguredCounterparty && (customerId || supplierId)) {
       const counterpartyId = customerId || supplierId;
       const counterpartyType = customerId ? 'customers' : 'suppliers';
       const channel = await resolveChannelForCounterparty(counterpartyId, counterpartyType);
-      const fallbackText = channel === 'rubika' && externalAttachments.length > 0
+      const counterpartyChatIds = await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord);
+      counterpartyChatIds.forEach((chatId) => addTarget(channel, chatId));
+    }
+
+    for (const channel of WORKFLOW_BOT_CHANNEL_PRIORITY) {
+      const channelTargets = Array.from(targetMap.values()).filter((target) => target.channel === channel);
+      if (channelTargets.length === 0) continue;
+      const fallbackText = externalAttachments.length > 0
         ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
         : undefined;
-      const messageText = channel === 'rubika' && externalAttachments.length > 0
-        ? (rawMessageText || 'پیوست ارسال شد')
-        : rawMessageText;
-      const recipientsFromFields = await resolveCommunicationValuesFromFields({
-        currentRecord,
-        moduleId,
-        recipientFields: configuredRecipientFields,
-        recipientAssignees: configuredRecipientAssignees,
-        channel,
-      });
-      const counterpartyChatIds = await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord);
-      const recipients = Array.from(new Set([...recipientsFromFields, ...counterpartyChatIds])).filter(Boolean);
-      if (recipients.length > 0) {
-        const handledChatIds = new Set<string>();
-        if (channel === 'rubika') {
-          const groupRows = await resolveCounterpartyBotGroupsByChatIds('rubika', recipients);
-          for (const group of groupRows) {
-            const groupChatId = String(group?.bot_chat_id || '').trim();
-            if (!groupChatId || handledChatIds.has(groupChatId)) continue;
-            handledChatIds.add(groupChatId);
-            await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: botSenderPayload, extraPayload: botSenderPayload, messageType: attachments.length > 0 ? 'file' : 'text' });
-          }
-        }
-        for (const chatId of recipients.filter((r) => !handledChatIds.has(String(r || '').trim()))) {
-          await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments: channel === 'rubika' ? attachments : undefined, fallbackText: channel === 'rubika' ? fallbackText : undefined, extraPayload: botSenderPayload, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
-        }
+      const messageText = rawMessageText || (attachments.length > 0 ? 'پیوست ارسال شد' : '');
+      const recipients = channelTargets.map((target) => target.chatId);
+      const handledChatIds = new Set<string>();
+      const groupRows = await resolveCounterpartyBotGroupsByChatIds(channel, recipients);
+      for (const group of groupRows) {
+        const groupChatId = String(group?.bot_chat_id || '').trim();
+        if (!groupChatId || handledChatIds.has(groupChatId)) continue;
+        handledChatIds.add(groupChatId);
+        await sendCounterpartyBotGroupMessage({ group, text: messageText, fallbackText, attachments, payload: botSenderPayload, extraPayload: botSenderPayload, messageType: attachments.length > 0 ? 'file' : 'text' });
+      }
+      for (const chatId of recipients.filter((recipient) => !handledChatIds.has(recipient))) {
+        await sendBotMessageViaGateway({ channel, chatId, text: messageText, attachments, fallbackText, extraPayload: botSenderPayload, title: titleText || undefined, moduleId, recordId: currentRecord?.id ? String(currentRecord.id) : undefined });
       }
     }
     return;
@@ -2765,13 +2519,16 @@ export const executeWorkflowAction = async (
     const isRubika = action.type === 'send_rubika_bot';
     const channel: 'telegram' | 'bale' | 'rubika' = isTelegram ? 'telegram' : (isRubika ? 'rubika' : 'bale');
     const rawMessageText = (await renderWorkflowTemplate(String(config.message || ''), currentRecord, moduleId)).trim();
-    const attachments = isRubika
-      ? await resolveNoteAttachmentsFromFields({
-          currentRecord,
-          moduleId,
-          attachmentFields: asArray(config.attachment_fields),
-        })
-      : [];
+    const attachments = await resolveWorkflowMessageAttachments({
+      moduleId,
+      recordId: currentRecord?.id ? String(currentRecord.id) : null,
+      config,
+      resolveLegacyFields: (attachmentFields) => resolveNoteAttachmentsFromFields({
+        currentRecord,
+        moduleId,
+        attachmentFields,
+      }),
+    });
     if (!rawMessageText && attachments.length === 0) return;
     const externalAttachments = attachments.length > 0
       ? await shortenAttachmentsForExternalShare(attachments, {
@@ -2784,19 +2541,14 @@ export const executeWorkflowAction = async (
           },
         })
       : [];
-    const messageText = isRubika && externalAttachments.length > 0
-      ? (rawMessageText || 'پیوست ارسال شد')
-      : rawMessageText;
-    const fallbackText = isRubika && externalAttachments.length > 0
+    const messageText = attachments.length > 0 ? (rawMessageText || 'پیوست ارسال شد') : rawMessageText;
+    const fallbackText = externalAttachments.length > 0
       ? [rawMessageText, buildAttachmentNameText(externalAttachments)].filter(Boolean).join('\n')
       : undefined;
     const titleText = (await renderWorkflowTemplate(String(config.title || ''), currentRecord, moduleId)).trim();
-    const configuredRecipientFields = asArray(config.recipient_fields)
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
-    const configuredRecipientAssignees = asArray(config.recipient_assignees)
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
+    const recipientConfig = getWorkflowRecipientConfig(config);
+    const configuredRecipientFields = recipientConfig.recipientFields;
+    const configuredRecipientAssignees = recipientConfig.recipientAssignees;
     const recipientsFromFields = await resolveCommunicationValuesFromFields({
       currentRecord,
       moduleId,
@@ -2807,34 +2559,14 @@ export const executeWorkflowAction = async (
     const recipientsManual = asArray(config.manual_chat_ids)
       .map((chatId) => String(chatId || '').trim())
       .filter(Boolean);
-    const directFallbackChatId = isInactiveProfileRecord(moduleId, currentRecord)
-      ? ''
-      : isRubika
-        ? String(currentRecord?.rubika_chat_id || '').trim()
-        : isTelegram
-          ? String(currentRecord?.telegram_chat_id || '').trim()
-          : String(currentRecord?.bale_chat_id || '').trim();
-    const hasExplicitRecipients = configuredRecipientFields.length > 0 || configuredRecipientAssignees.length > 0;
-    const canUseCounterpartyFallbackForExplicitRecipients = isRubika
-      && configuredRecipientFields.some((fieldKey) => isCounterpartyRelatedRecipientField(fieldKey))
-      && recipientsFromFields.length === 0;
-    const fallbackRecipients =
-      recipientsFromFields.length > 0
-      || recipientsManual.length > 0
-      || (hasExplicitRecipients && !canUseCounterpartyFallbackForExplicitRecipients)
-        ? []
-        : [
-            ...[directFallbackChatId].filter(Boolean),
-            ...(await resolveCounterpartyBotChatIdsForRecord(channel, moduleId, currentRecord)),
-          ];
     const recipients = Array.from(
-      new Set([...recipientsFromFields, ...recipientsManual, ...fallbackRecipients])
+      new Set([...recipientsFromFields, ...recipientsManual])
     ).filter(Boolean);
     if (recipients.length === 0) return;
 
     const handledChatIds = new Set<string>();
-    if (isRubika) {
-      const groupRows = await resolveCounterpartyBotGroupsByChatIds('rubika', recipients);
+    {
+      const groupRows = await resolveCounterpartyBotGroupsByChatIds(channel, recipients);
       for (const group of groupRows) {
         const groupChatId = String(group?.bot_chat_id || '').trim();
         if (!groupChatId || handledChatIds.has(groupChatId)) continue;
@@ -2859,8 +2591,8 @@ export const executeWorkflowAction = async (
         channel,
         chatId,
         text: messageText,
-        attachments: isRubika ? attachments : undefined,
-        fallbackText: isRubika ? fallbackText : undefined,
+        attachments,
+        fallbackText,
         title: titleText || undefined,
         moduleId,
         recordId: currentRecord?.id ? String(currentRecord.id) : undefined,
@@ -2948,10 +2680,11 @@ export const executeWorkflowAction = async (
     }
 
     if (!targetModuleId || !targetRecordId) return;
+    const renderedReason = (await renderWorkflowTemplate(String(config.reason || ''), currentRecord, moduleId)).trim();
     await lockRecord({
       moduleId: targetModuleId,
       recordId: targetRecordId,
-      reason: String(config.reason || '').trim() || null,
+      reason: renderedReason || null,
       sourceType: String(config.source_type || '').trim() === 'process_automation' ? 'process_automation' : 'workflow',
       sourceId: String(action.id || '').trim() || null,
     });
@@ -3240,139 +2973,6 @@ export const executeWorkflowAction = async (
       await activateInitialProcessRunNodes({ processRunId: normalizedProcessRunId });
     }
   }
-};
-
-const hasWorkflowLogForRecord = async (
-  workflowId: string,
-  moduleId: string,
-  recordId: string,
-  runType: WorkflowRunType = 'event'
-) => {
-  const { data, error } = await supabase
-    .from('workflow_logs')
-    .select('id')
-    .eq('workflow_id', workflowId)
-    .eq('run_type', runType)
-    .eq('module_id', moduleId)
-    .eq('record_id', recordId)
-    .eq('status', 'success')
-    .limit(1);
-  if (error) throw error;
-  return Array.isArray(data) && data.length > 0;
-};
-
-const logWorkflowRun = async ({
-  workflow,
-  moduleId,
-  currentRecord,
-  event,
-  status,
-  runType = 'event',
-  errorMessage,
-}: {
-  workflow: WorkflowRecord;
-  moduleId: string;
-  currentRecord: Record<string, any>;
-  event: WorkflowEvent;
-  status: 'success' | 'failed';
-  runType?: WorkflowRunType;
-  errorMessage?: string;
-}) => {
-  const orgId = await resolveWorkflowOrgId(currentRecord);
-  const recordId = String(currentRecord?.id || '').trim() || null;
-  await supabase.from('workflow_logs').insert({
-    workflow_id: workflow.id,
-    org_id: orgId,
-    run_type: runType,
-    status,
-    module_id: moduleId,
-    record_id: recordId,
-    message: errorMessage || null,
-    details: {
-      event,
-      execution_mode: workflow.execution_mode || 'first_match',
-      action_count: Array.isArray(workflow.actions) ? workflow.actions.length : 0,
-      trigger_type: workflow.trigger_type || null,
-    },
-  });
-};
-
-const executeWorkflowForRecord = async ({
-  workflow,
-  moduleId,
-  currentRecord,
-  previousRecord = null,
-  event,
-  runType,
-  executedRecordIds,
-}: {
-  workflow: WorkflowRecord;
-  moduleId: string;
-  currentRecord: Record<string, any>;
-  previousRecord?: Record<string, any> | null | undefined;
-  event: WorkflowEvent;
-  runType: WorkflowRunType;
-  executedRecordIds?: Set<string> | null;
-}) => {
-  if (await shouldSkipRecordForAutomation({ moduleId, record: currentRecord })) {
-    return { matched: false, success: false, skippedDeleted: true };
-  }
-
-  const matched = await evaluateWorkflow(workflow, currentRecord, previousRecord, moduleId);
-  if (!matched) {
-    return { matched: false, success: false };
-  }
-
-  const executionMode = String(workflow.execution_mode || 'first_match');
-  const recordId = String(currentRecord?.id || '').trim();
-  if (executionMode === 'first_match' && recordId) {
-    const alreadyExecuted = executedRecordIds
-      ? executedRecordIds.has(recordId)
-      : await hasWorkflowLogForRecord(workflow.id, moduleId, recordId, runType);
-    if (alreadyExecuted) {
-      return { matched: true, success: false, skippedByExecutionMode: true };
-    }
-  }
-
-  const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-  const actionErrors: string[] = [];
-  for (const action of actions) {
-    try {
-      await executeWorkflowAction(action as WorkflowAction, moduleId, currentRecord);
-    } catch (actionErr) {
-      actionErrors.push(
-        String((actionErr as any)?.message || (action as any)?.type || 'workflow action failed')
-      );
-      console.error(
-        `Workflow action failed (${workflow?.name || workflow?.id} / ${String((action as any)?.type || '-')})`,
-        actionErr
-      );
-    }
-  }
-
-  if (actionErrors.length > 0) {
-    const errorMessage = actionErrors.join(' | ');
-    await logWorkflowRun({
-      workflow,
-      moduleId,
-      currentRecord,
-      event,
-      runType,
-      status: 'failed',
-      errorMessage,
-    });
-    return { matched: true, success: false, errorMessage };
-  }
-
-  await logWorkflowRun({
-    workflow,
-    moduleId,
-    currentRecord,
-    event,
-    runType,
-    status: 'success',
-  });
-  return { matched: true, success: true };
 };
 
 export const runWorkflowsForEvent = async ({

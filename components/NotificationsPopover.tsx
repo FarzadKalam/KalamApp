@@ -113,6 +113,10 @@ import {
   type LikeReceiptEntry,
   type ReadReceiptEntry,
 } from '../utils/messageReceipts';
+import {
+  canCurrentUserAccessInternalSystemNote,
+  isInternalSystemNoteRow,
+} from '../utils/internalNoteAccess';
 
 const NOTIFICATIONS_MODAL_Z_INDEX = 15100;
 const VoipCallsPanel = React.lazy(() => import('./notifications/VoipCallsPanel'));
@@ -758,13 +762,7 @@ const getNoteMentionUserIds = (note: any) =>
     ? note.mention_user_ids.map((id: string) => String(id))
     : [];
 
-const isSystemNote = (note: any) =>
-  !String(note?.metadata?.chat_group_id || '').trim()
-  && (String(note?.source_type || '').trim() === 'system'
-  || String(note?.metadata?.source_type || '').trim() === 'system'
-  || String(note?.source_type || '').trim() === 'ai'
-  || String(note?.metadata?.source_type || '').trim() === 'ai'
-  || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id));
+const isSystemNote = isInternalSystemNoteRow;
 
 const isAiNote = (note: any) =>
   String(note?.source_type || '').trim() === 'ai'
@@ -5031,6 +5029,7 @@ useEffect(() => {
     selectedBotGroupId,
     selectedBotDirectThreadId,
     currentUserId: String(profile.id || '').trim(),
+    currentRoleId: String(profile.role_id || '').trim(),
     orgId: String(profile.org_id || '').trim(),
   });
   realtimeAppendCtxRef.current = {
@@ -5042,6 +5041,7 @@ useEffect(() => {
     selectedBotGroupId,
     selectedBotDirectThreadId,
     currentUserId: String(profile.id || '').trim(),
+    currentRoleId: String(profile.role_id || '').trim(),
     orgId: String(profile.org_id || '').trim(),
   };
   useEffect(() => {
@@ -5053,7 +5053,10 @@ useEffect(() => {
       const rowGroupId = String(row?.metadata?.chat_group_id || '').trim();
       if (ctx.selectedChatGroupId) return rowGroupId === ctx.selectedChatGroupId;
       if (rowGroupId) return false;
-      if (ctx.selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) return isSystemNote(row);
+      if (ctx.selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
+        return isSystemNote(row)
+          && canCurrentUserAccessInternalSystemNote(row, ctx.currentUserId, ctx.currentRoleId);
+      }
       if (!ctx.selectedNoteUserId) {
         return Boolean(ctx.currentUserId)
           && String(row?.author_id || '').trim() === ctx.currentUserId
@@ -5129,7 +5132,10 @@ useEffect(() => {
         ));
       }
       if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID || selectedConversationKey === 'system') {
-        return sourceNotes.filter((note: any) => isSystemNote(note));
+        return sourceNotes.filter((note: any) => (
+          isSystemNote(note)
+          && canCurrentUserAccessInternalSystemNote(note, profile.id, profile.role_id)
+        ));
       }
       if (selectedChatGroupId) {
         return sourceNotes.filter((note: any) => String(note?.metadata?.chat_group_id || '').trim() === selectedChatGroupId);
@@ -5150,7 +5156,10 @@ useEffect(() => {
       ));
     }
     if (selectedNoteUserId === SYSTEM_MESSAGES_USER_ID) {
-      return sourceNotes.filter((note: any) => isSystemNote(note));
+      return sourceNotes.filter((note: any) => (
+        isSystemNote(note)
+        && canCurrentUserAccessInternalSystemNote(note, profile.id, profile.role_id)
+      ));
     }
     if (selectedChatGroupId) {
       return sourceNotes.filter((note: any) => String(note?.metadata?.chat_group_id || '').trim() === selectedChatGroupId);
@@ -5160,7 +5169,7 @@ useEffect(() => {
     return sourceNotes.filter((note: any) =>
       isDirectConversationNote(note, currentUserId, targetUserId, noteLookup)
     );
-  }, [noteLookup, notes, profile.id, selectedChatGroupId, selectedConversationKey, selectedConversationNotes, selectedNoteUserId]);
+  }, [noteLookup, notes, profile.id, profile.role_id, selectedChatGroupId, selectedConversationKey, selectedConversationNotes, selectedNoteUserId]);
   const inferredDirectUsers = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     if (!currentUserId) return [] as Array<{ id: string; display_name: string; avatar_url?: string | null; role_id?: string | null }>;
@@ -5219,7 +5228,10 @@ useEffect(() => {
     [directoryUsers, inferredDirectUsers, profile.id]
   );
   const systemNoteStats = useMemo(() => {
-    const systemNotes = notes.filter((note: any) => isSystemNote(note));
+    const systemNotes = notes.filter((note: any) => (
+      isSystemNote(note)
+      && canCurrentUserAccessInternalSystemNote(note, profile.id, profile.role_id)
+    ));
     const latestMessageAt = systemNotes.reduce<number>((latest, note: any) => {
       const createdAt = new Date(note?.created_at || '').getTime();
       return Number.isFinite(createdAt) ? Math.max(latest, createdAt) : latest;
@@ -5228,7 +5240,7 @@ useEffect(() => {
       !isNotificationRead('notes', 'note', String(note?.id || ''), seenNoteIds.has(String(note?.id || '')))
     )).length;
     return { noteCount: systemNotes.length, latestMessageAt, unreadCount };
-  }, [isNotificationRead, notes, seenNoteIds]);
+  }, [isNotificationRead, notes, profile.id, profile.role_id, seenNoteIds]);
   const myNoteStats = useMemo(() => {
     const currentUserId = String(profile.id || '').trim();
     const rpcMyNotesSummary = noteConversationSummaryAvailable && rpcNoteConversationSummaries
@@ -5373,7 +5385,10 @@ useEffect(() => {
       return baseStats;
     }
 
-    const loadedSystemNotes = (selectedConversationNotes || []).filter((note: any) => isSystemNote(note));
+    const loadedSystemNotes = (selectedConversationNotes || []).filter((note: any) => (
+      isSystemNote(note)
+      && canCurrentUserAccessInternalSystemNote(note, profile.id, profile.role_id)
+    ));
     if (loadedSystemNotes.length === 0) {
       return baseStats;
     }
@@ -5391,6 +5406,8 @@ useEffect(() => {
     isUnreadNoteRow,
     noteConversationSummaryAvailable,
     noteConversationsFromRpc,
+    profile.id,
+    profile.role_id,
     rpcNoteConversationSummaries,
     selectedConversationNotes,
     selectedConversationUnreadCount,

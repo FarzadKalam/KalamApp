@@ -28,6 +28,7 @@ import {
 import { getTaskStatusLabel } from './processTaskStatusOptions';
 import { insertNotesWithFallback, sendNoteSmsNotifications } from './noteDispatch';
 import { serializeNoteContent } from './noteContent';
+import { resolveWorkflowMessageAttachments } from './workflowAttachments';
 import { clampIntervalValue, isIntervalDue, normalizeIntervalUnit } from './intervalSchedule';
 import { fetchAssigneeDirectory } from './referenceData';
 import { resolveTemplateOptionLabelMaps } from './messageTemplateRenderer';
@@ -848,19 +849,23 @@ const insertAutomationNote = async (
     resolvedModuleId,
     assigneeDirectory
   )).trim();
-  const attachments = await resolveNoteAttachmentsFromFields({
-    currentRecord: actionRecord,
-    moduleId: resolvedModuleId,
-    attachmentFields: Array.isArray((ruleNoteAction as any)?.config?.attachment_fields)
-      ? (ruleNoteAction as any).config.attachment_fields
-      : [],
-  });
-  if (!noteText && attachments.length === 0) return;
   const scope = normalizeNoteScope(
     resolvedModuleId,
     sourceLink.recordId || String(task?.id || '')
   );
   if (!scope.hasLinkedRecord) return;
+  const actionConfig = ((ruleNoteAction as any)?.config || {}) as Record<string, any>;
+  const attachments = await resolveWorkflowMessageAttachments({
+    moduleId: resolvedModuleId,
+    recordId: scope.record_id,
+    config: actionConfig,
+    resolveLegacyFields: (attachmentFields) => resolveNoteAttachmentsFromFields({
+      currentRecord: actionRecord,
+      moduleId: resolvedModuleId,
+      attachmentFields,
+    }),
+  });
+  if (!noteText && attachments.length === 0) return;
 
   const mentionTarget = await filterActiveMentionTargets(
     supabase,

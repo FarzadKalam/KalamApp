@@ -148,6 +148,7 @@ describe('SaasPortalPage OTP flow', () => {
           fullName: 'علی رضایی',
           email: 'owner@testco.ir',
           password: 'secret1',
+          phone: '+989121234567',
           skipProfileUpsert: true,
         },
       });

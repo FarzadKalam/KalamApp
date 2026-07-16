@@ -61,7 +61,7 @@ describe('fetchRelationOptionsForField', () => {
 
     const options = await fetchRelationOptionsForField(
       supabase,
-      { relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+      { relationConfig: { targetModule: 'customers', targetField: 'full_name' } },
       { exactId: '20000000-0000-4000-8000-000000000002', limit: 1 },
     );
 
@@ -88,7 +88,7 @@ describe('fetchRelationOptionsForField', () => {
 
     const options = await fetchRelationOptionsForField(
       supabase,
-      { relationConfig: { targetModule: 'profiles', targetField: 'full_name' } },
+      { relationConfig: { targetModule: 'customers', targetField: 'full_name' } },
       { search: 'کاربر', limit: 1 },
     );
 

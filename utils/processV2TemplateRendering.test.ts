@@ -4,6 +4,7 @@ import {
   renderProcessV2TemplateValueFromRecord,
 } from './processV2AutoAssign';
 import { createProcessLinkedFieldKey } from './processTargets';
+import { FieldType } from '../types';
 
 const createSupabaseMock = (rows: Record<string, Record<string, any>>) => ({
   from: (table: string) => ({
@@ -52,6 +53,14 @@ describe('process v2 template rendering', () => {
 
   it('does not remove unresolved tokens from stage titles', () => {
     expect(renderProcessV2TemplateValueFromRecord('طراحی "{{نام پروژه مرتبط}}"', {})).toBe('طراحی "{{نام پروژه مرتبط}}"');
+  });
+
+  it('never exposes a raw relation uuid in a visible stage title', () => {
+    expect(renderProcessV2TemplateValueFromRecord(
+      '{{customer_id}}',
+      { customer_id: '20000000-0000-4000-8000-000000000002' },
+      FieldType.TEXT,
+    )).toBe('[رکورد مرتبط]');
   });
 
   it('resolves stable field-key tokens used by the process variable picker', async () => {

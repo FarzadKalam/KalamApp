@@ -18,8 +18,15 @@ import {
   PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY,
   PROCESS_NAME_TEMPLATE_FIELD_KEY,
 } from './processTemplateContext';
+import {
+  buildRelatedVariableLabel,
+  dedupeModuleFields,
+  getCanonicalModuleFields,
+} from './recordVariableCatalog';
 
 const HIDDEN_WORKFLOW_FIELD_KEYS = new Set([
+  'id',
+  'org_id',
   'execution_process_draft',
   'marketing_process_draft',
   'production_stages_draft',
@@ -101,7 +108,7 @@ export const getSyntheticWorkflowAssigneeField = (moduleId: string) =>
   supportsGlobalAssignee(moduleId) ? buildSyntheticAssigneeField(moduleId) : null;
 
 export const getVisibleWorkflowModuleFields = (moduleId: string) =>
-  (MODULES[moduleId]?.fields || []).filter((field) => shouldIncludeWorkflowField(field));
+  getCanonicalModuleFields(moduleId).filter((field) => shouldIncludeWorkflowField(field));
 
 export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
   if (!moduleId || !MODULES[moduleId]) return [];
@@ -120,15 +127,18 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
       const targetModuleId = String(relationField.relationConfig?.targetModule || '').trim();
       if (!targetModuleId || !MODULES[targetModuleId]) return;
 
-      const targetTitle = MODULES[targetModuleId]?.titles?.fa || targetModuleId;
+      const relatedRecordLinkField = getSyntheticWorkflowRecordLinkField(targetModuleId);
       result.push({
-        ...getSyntheticWorkflowRecordLinkField(targetModuleId),
+        ...relatedRecordLinkField,
         key: createWorkflowRelatedFieldKey(
           relationField.key,
           targetModuleId,
           WORKFLOW_RECORD_LINK_FIELD_KEY
         ),
-        labels: { fa: `لینک رکورد (${targetTitle})`, en: 'Related Record Link' },
+        labels: {
+          fa: buildRelatedVariableLabel(moduleId, relationField, targetModuleId, relatedRecordLinkField),
+          en: 'Related Record Link',
+        },
       });
       const relatedFields = getVisibleWorkflowModuleFields(targetModuleId).map((targetField) => ({
         ...targetField,
@@ -136,7 +146,7 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
         key: createWorkflowRelatedFieldKey(relationField.key, targetModuleId, targetField.key),
         labels: {
           ...targetField.labels,
-          fa: `${targetField.labels?.fa || targetField.key} (${targetTitle})`,
+          fa: buildRelatedVariableLabel(moduleId, relationField, targetModuleId, targetField),
         },
       }));
 
@@ -151,14 +161,14 @@ export const getWorkflowConditionFields = (moduleId: string): ModuleField[] => {
             WORKFLOW_ASSIGNEE_FIELD_KEY
           ),
           labels: {
-            fa: `${getAssigneeLabel(targetModuleId)} (${targetTitle})`,
+            fa: `${getFieldLabelFa(relationField, { moduleId, fallback: relationField.key })} (${getAssigneeLabel(targetModuleId)})`,
             en: 'Related Assignee',
           },
         });
       }
     });
 
-  return result;
+  return dedupeModuleFields(result);
 };
 
 export const getProcessAutomationTaskFields = () => {
@@ -233,21 +243,21 @@ export const getProcessTemplateIdentityFields = (): ModuleField[] => ([
 export const getProcessAutomationConditionFields = (moduleId?: string | null): ModuleField[] => {
   const taskFields = getProcessAutomationTaskFields();
   if (!moduleId || !MODULES[moduleId]) return taskFields;
-  return [...taskFields, ...getWorkflowConditionFields(moduleId)];
+  return dedupeModuleFields([...taskFields, ...getWorkflowConditionFields(moduleId)]);
 };
 
 export const getProcessAutomationConditionFieldsForModules = (moduleIds?: Array<string | null | undefined>) => {
   const taskFields = getProcessAutomationTaskFields();
   const normalizedModuleIds = normalizeProcessTargetModuleIds(moduleIds || []);
   if (normalizedModuleIds.length === 0) return taskFields;
-  return [
+  return dedupeModuleFields([
     ...taskFields,
     ...getProcessTargetModuleFields(
       normalizedModuleIds,
       getWorkflowConditionFields,
       getSyntheticWorkflowAssigneeField
     ),
-  ];
+  ]);
 };
 
 export const resolveWorkflowProcessDraftFieldKey = (moduleId: string) => {

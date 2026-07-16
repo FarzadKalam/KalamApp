@@ -171,6 +171,11 @@ export const useNotificationConversationList = ({
         ? (data as NotificationConversationSummary[])
         : [];
       if (mergeFallbackInitial && fallbackLoadInitial) {
+        // The communication RPC is the fast, paginated source of truth for the
+        // first paint. Publish it before running compatibility loaders, which
+        // can require several larger table queries on older installations.
+        setItemsState(nextItems);
+        _convListCache.set(cacheKey, { items: nextItems, fetchedAt: Date.now() });
         const fallbackItems = await fallbackLoadInitial();
         if (fallbackItems.length > 0) {
           const merged = new Map<string, NotificationConversationSummary>();

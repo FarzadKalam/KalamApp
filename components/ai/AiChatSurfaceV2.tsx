@@ -223,7 +223,6 @@ const AiChatSurfaceV2: React.FC = () => {
   useEffect(() => {
     if (!forceNewThread) return;
     setActiveThreadId(null);
-    setNewConversationSeed((value) => value + 1);
   }, [forceNewThread, location.key]);
 
   useEffect(() => {

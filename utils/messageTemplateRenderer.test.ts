@@ -101,6 +101,16 @@ describe('messageTemplateRenderer option values', () => {
     expect(text).toBe('نوع فعالیت: تماس خروجی');
   });
 
+  it('does not expose an unresolved technical option code', () => {
+    const text = renderTemplateText(
+      'اولویت: {{priority}}',
+      { priority: 'unknown_internal_code' },
+      { moduleId: 'tasks' }
+    );
+    expect(text).toBe('اولویت: مقدار ثبت‌شده');
+    expect(text).not.toContain('unknown_internal_code');
+  });
+
   it('renders relation uid values from runtime option maps', () => {
     const text = renderTemplateText(
       'برند اکران: {{opening_brand_id}}',
@@ -116,6 +126,17 @@ describe('messageTemplateRenderer option values', () => {
     );
 
     expect(text).toBe('برند اکران: برند نمونه');
+  });
+
+  it('never exposes an unresolved UUID as a template value', () => {
+    const text = renderTemplateText(
+      'برند اکران: {{opening_brand_id}}',
+      { opening_brand_id: '33333333-3333-4333-8333-333333333333' },
+      { moduleId: 'billboards' }
+    );
+
+    expect(text).toBe('برند اکران: [رکورد مرتبط]');
+    expect(text).not.toContain('33333333-3333-4333-8333-333333333333');
   });
 
   it('renders multi-select values as option labels', () => {

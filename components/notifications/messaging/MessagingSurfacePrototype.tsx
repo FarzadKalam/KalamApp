@@ -32,7 +32,6 @@ import {
 import { App, Avatar, Badge, Button, Checkbox, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
 import { BOT_CHANNEL_LABELS_FA, BOT_CHANNELS, getBotChatIdFieldKey, getBotPlatformAvatarSrc, isBotTargetModuleId, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
-import { MODULES } from '../../../moduleRegistry';
 import { useMessagingOmniLiveData } from './useMessagingOmniLiveData';
 import PhoneMatchPickerModal from '../PhoneMatchPickerModal';
 import VoipRecordingPlayer from '../VoipRecordingPlayer';
@@ -58,14 +57,8 @@ import { insertNotesWithFallback, sendNoteSmsNotifications } from '../../../util
 import { shortenAttachmentsForExternalShare } from '../../../utils/fileShortLinks';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../../../utils/recordReference';
 import { likeReceiptMapFromBox, readReceiptMapFromBox } from '../../../utils/messageReceipts';
-import { buildClientFallbackSystemCode, supportsSystemCode } from '../../../utils/systemCode';
-import { buildTaskSourceInitialValues, normalizeTaskSourceValues } from '../../../utils/taskMeta';
-import { attachTaskCompletionIfNeeded } from '../../../utils/taskCompletion';
+import { buildTaskSourceInitialValues } from '../../../utils/taskMeta';
 import { buildMessageActivityDescription, buildMessageActivityTitle, filterUsableMessageAttachments } from '../../../utils/messageActivity';
-import { createFileManagerShortcut } from '../../../utils/fileManagerService';
-import { syncRecordTags } from '../../../utils/recordTags';
-import { insertRecordActivity } from '../../../utils/recordActivity';
-import { runWorkflowsForEvent } from '../../../utils/workflowRuntime';
 import { loadScopedCompanySettings } from '../../../utils/companySettings';
 import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
 import { sendBotMessageViaGateway, sendCounterpartyBotGroupMessage, type BotChannel } from '../../../utils/botGateway';
@@ -91,12 +84,17 @@ import AiSparkleIcon from '../../ai/AiSparkleIcon';
 import type { BotPlatformState } from '../../bot/CounterpartyBotStatusModal';
 import AiReplySuggestionAction from './AiReplySuggestionAction';
 import { buildRecentReplySuggestionMessages } from '../../../utils/replySuggestion';
+import {
+  canCurrentUserAccessInternalSystemNote,
+  isInternalSystemNoteRow,
+} from '../../../utils/internalNoteAccess';
+import type { MessageActivityDraft } from './MessageActivityModalRuntime';
 
 const ForwardMessageModalRuntime = React.lazy(() => import('../ForwardMessageModalRuntime'));
-const SmartForm = React.lazy(() => import('../../SmartForm'));
 const MessageComposerModal = React.lazy(() => import('../../MessageComposerModal'));
 const BotChatIdentityBindModal = React.lazy(() => import('../BotChatIdentityBindModal'));
 const CounterpartyBotStatusModal = React.lazy(() => import('../../bot/CounterpartyBotStatusModal'));
+const MessageActivityModalRuntime = React.lazy(() => import('./MessageActivityModalRuntime'));
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 type EventKind = 'message' | 'sms' | 'call';
@@ -774,6 +772,7 @@ const getInternalNotePreview = (row: any) => {
 const buildInternalConversationFallbackSummaries = (
   rows: any[],
   currentUserId: string,
+  currentRoleId?: string | null,
 ): NotificationConversationSummary[] => {
   const normalizedCurrentUserId = String(currentUserId || '').trim();
   if (!normalizedCurrentUserId) return [];
@@ -814,6 +813,10 @@ const buildInternalConversationFallbackSummaries = (
   };
 
   rows.forEach((row) => {
+    if (
+      isInternalSystemNoteRow(row)
+      && !canCurrentUserAccessInternalSystemNote(row, normalizedCurrentUserId, currentRoleId)
+    ) return;
     const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
     const authorId = resolveInternalAuthorId(row);
     const mentionUserIds = normalizeIdArray(row?.mention_user_ids);
@@ -870,6 +873,7 @@ const doesInternalNoteBelongToConversation = (
   row: any,
   conversationKey: string,
   currentUserId: string,
+  currentRoleId?: string | null,
 ) => {
   const key = String(conversationKey || '').trim();
   const normalizedCurrentUserId = String(currentUserId || '').trim();
@@ -883,7 +887,10 @@ const doesInternalNoteBelongToConversation = (
       && !isInternalSystemNote(row)
       && (metadata?.saved_message === true || normalizeIdArray(row?.mention_user_ids).length === 0);
   }
-  if (key === 'system') return isInternalSystemNote(row);
+  if (key === 'system') {
+    return isInternalSystemNote(row)
+      && canCurrentUserAccessInternalSystemNote(row, normalizedCurrentUserId, currentRoleId);
+  }
   if (key.startsWith(CHAT_GROUP_PREFIX)) return groupId === getChatGroupSelectionId(key);
   if (!key.startsWith('direct:') || groupId || isInternalSystemNote(row)) return false;
   return normalizeIdArray(row?.mention_user_ids).some((targetUserId) => (
@@ -1122,15 +1129,7 @@ const BotSmsNotificationConfirmContent: React.FC<{
   );
 };
 
-const isInternalSystemNote = (note: any) =>
-  !String(note?.metadata?.chat_group_id || '').trim()
-  && (
-    String(note?.source_type || '').trim() === 'system'
-    || String(note?.metadata?.source_type || '').trim() === 'system'
-    || String(note?.source_type || '').trim() === 'ai'
-    || String(note?.metadata?.source_type || '').trim() === 'ai'
-    || Boolean(note?.metadata?.workflow_id || note?.metadata?.automation_rule_id || note?.metadata?.process_automation_rule_id)
-  );
+const isInternalSystemNote = isInternalSystemNoteRow;
 
 const getRecordPayload = (value: any) => (
   value && typeof value === 'object' && !Array.isArray(value)
@@ -1305,10 +1304,12 @@ const MediaAttachmentPreview: React.FC<{ attachments: TimelineEvent['attachments
   />
 );
 
+let messagingModuleLabelMap: Record<string, string> = {};
+
 const getModuleLabelFa = (moduleId?: string | null) => {
   const key = String(moduleId || '').trim();
   if (!key) return '';
-  return MODULES[key]?.titles?.fa || key;
+  return messagingModuleLabelMap[key] || '';
 };
 
 const buildRecordHref = (moduleId?: string | null, recordId?: string | null) => {
@@ -2333,14 +2334,6 @@ type BotStatusModalContext = {
   counterpartyLabel: string;
 };
 
-type MessageActivityDraft = {
-  initialValues: Record<string, any>;
-  attachments: NoteAttachment[];
-  relatedModuleId: string | null;
-  relatedRecordId: string | null;
-  sourceLabel: string;
-};
-
 type ChatGroupRow = {
   id: string;
   name?: string | null;
@@ -2390,6 +2383,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const [retryingBotMediaIds, setRetryingBotMediaIds] = useState<Set<string>>(() => new Set());
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
   const [orgDisplayName, setOrgDisplayName] = useState('');
+  const [moduleLabelsRevision, setModuleLabelsRevision] = useState(0);
   const [reelBootstrapped, setReelBootstrapped] = useState(false);
   const [internalConversationLocalOverrides, setInternalConversationLocalOverrides] = useState<Record<string, { preview: string; lastActivityAt: string }>>({});
   const [localReadThroughByConversation, setLocalReadThroughByConversation] = useState<Record<string, string>>({});
@@ -2421,12 +2415,31 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const botStatusWatchTimerRef = useRef<number | null>(null);
   const botTimelineRefreshRef = useRef<null | ((options?: { force?: boolean }) => Promise<any>)>(null);
   const liveData = useMessagingOmniLiveData({ realtimeEnabled: !notificationRuntime.ready });
+  useEffect(() => {
+    if (!liveData.profile.id || Object.keys(messagingModuleLabelMap).length > 0) return undefined;
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      void import('../../../moduleRegistry').then(({ MODULES }) => {
+        if (disposed) return;
+        messagingModuleLabelMap = Object.fromEntries(Object.entries(MODULES).map(([moduleId, definition]) => [
+          moduleId,
+          String(definition?.titles?.fa || '').trim(),
+        ]));
+        setModuleLabelsRevision((value) => value + 1);
+      });
+    }, 1500);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [liveData.profile.id]);
   const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
   const loadInternalConversationFallback = useMemo(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
+    const currentRoleId = String(liveData.profile.roleId || '').trim();
     if (!currentUserId) return undefined;
     return async () => {
-      const [authoredResult, mentionedResult] = await Promise.all([
+      const [authoredResult, mentionedResult, mentionedRoleResult] = await Promise.all([
         supabase
           .from('notes')
           .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
@@ -2439,17 +2452,34 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           .contains('mention_user_ids', [currentUserId])
           .order('created_at', { ascending: false })
           .limit(180),
+        currentRoleId
+          ? supabase
+              .from('notes')
+              .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+              .contains('mention_role_ids', [currentRoleId])
+              .order('created_at', { ascending: false })
+              .limit(180)
+          : Promise.resolve({ data: [] as any[], error: null }),
       ]);
       if (authoredResult.error) throw authoredResult.error;
       if (mentionedResult.error) throw mentionedResult.error;
+      if (mentionedRoleResult.error) throw mentionedRoleResult.error;
       const uniqueRows = new Map<string, any>();
-      [...(authoredResult.data || []), ...(mentionedResult.data || [])].forEach((row: any) => {
+      [
+        ...(authoredResult.data || []),
+        ...(mentionedResult.data || []),
+        ...(mentionedRoleResult.data || []),
+      ].forEach((row: any) => {
         const key = String(row?.id || '').trim();
         if (key) uniqueRows.set(key, row);
       });
-      return buildInternalConversationFallbackSummaries(Array.from(uniqueRows.values()), currentUserId);
+      return buildInternalConversationFallbackSummaries(
+        Array.from(uniqueRows.values()),
+        currentUserId,
+        currentRoleId,
+      );
     };
-  }, [liveData.profile.id]);
+  }, [liveData.profile.id, liveData.profile.roleId]);
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',
@@ -2478,13 +2508,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       if (error) throw error;
       const rows = Array.isArray(data) ? data : [];
       const filtered = rows.filter((row: any) => {
-        return doesInternalNoteBelongToConversation(row, conversationKey, currentUserId);
+        return doesInternalNoteBelongToConversation(row, conversationKey, currentUserId, liveData.profile.roleId);
       });
       return filtered.sort((left: any, right: any) => (
         new Date(left?.created_at || 0).getTime() - new Date(right?.created_at || 0).getTime()
       ));
     };
-  }, [liveData.profile.id, selectedInternalSourceKey]);
+  }, [liveData.profile.id, liveData.profile.roleId, selectedInternalSourceKey]);
   const internalTimeline = useInternalConversationTimeline<any>({
     supabase,
     enabled: Boolean(liveData.profile.id && selectedInternalSourceKey),
@@ -2763,10 +2793,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       const rowMentionUserIds = normalizeIdArray(row?.mention_user_ids);
       const mightAffectCurrentUser = rowAuthorId === profileId
         || rowMentionUserIds.includes(profileId)
-        || isInternalSystemNote(row)
+        || (
+          isInternalSystemNote(row)
+          && canCurrentUserAccessInternalSystemNote(row, profileId, liveData.profile.roleId)
+        )
         || Boolean(String(row?.metadata?.chat_group_id || '').trim());
       if (!mightAffectCurrentUser) return;
-      const summaries = buildInternalConversationFallbackSummaries([row], profileId);
+      const summaries = buildInternalConversationFallbackSummaries([row], profileId, liveData.profile.roleId);
       if (summaries.length > 0) {
         internalConversations.setItems((prev) => {
           const existing = Array.isArray(prev) ? prev : [];
@@ -2788,7 +2821,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       }
       if (
         selectedInternalSourceKey
-        && doesInternalNoteBelongToConversation(row, selectedInternalSourceKey, profileId)
+        && doesInternalNoteBelongToConversation(row, selectedInternalSourceKey, profileId, liveData.profile.roleId)
       ) {
         internalTimeline.setItems((prev: any[]) => {
           const id = String(row?.id || '').trim();
@@ -2815,7 +2848,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         channel = null as any;
       }
     };
-  }, [internalConversations.setItems, internalTimeline.setItems, liveData.profile.id, liveData.profile.orgId, refreshInternalConversations, refreshInternalTimeline, selectedInternalSourceKey]);
+  }, [internalConversations.setItems, internalTimeline.setItems, liveData.profile.id, liveData.profile.orgId, liveData.profile.roleId, refreshInternalConversations, refreshInternalTimeline, selectedInternalSourceKey]);
   const directoryReadyForReel = assigneeDirectory.users.length > 0;
   const internalConversationsReady = !internalConversations.available || internalConversations.items !== null;
   const internalReelReady = internalConversationsReady || directoryReadyForReel;
@@ -2907,11 +2940,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     internalRecordTitleMap,
     internalTimeline.items,
     liveData.profile.id,
+    moduleLabelsRevision,
     roleLookup,
     selectedInternalSourceKey,
   ]);
   const displayConversations = useMemo(() => {
-    if (reelInitialLoading || liveData.loading) return [];
+    if (reelInitialLoading) return [];
     const liveInternal = liveInternalConversations;
     const liveBotGroups = mergeBotRpcConversations(
       liveData.conversations.filter((conversation) => conversation.channel === 'bot_group'),
@@ -2927,7 +2961,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ...liveSms,
       ...liveCalls,
     ].map((conversation) => applyLocalReadThrough(conversation, localReadThroughByConversation)));
-  }, [botConversations.items, liveData.conversations, liveData.loading, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
+  }, [botConversations.items, liveData.conversations, liveInternalConversations, localReadThroughByConversation, reelInitialLoading]);
   const initialMessagingLoading = displayConversations.length === 0 && (reelInitialLoading || liveData.loading);
   const messagingUnreadSummary = useMemo<MessagingUnreadSummary>(() => {
     const systemConversation = displayConversations.find((conversation) => conversation.channel === 'internal' && conversation.internalKind === 'system');
@@ -4412,78 +4446,6 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     });
   };
 
-  const handleMessageActivitySave = async (values: any, meta?: { selectedTags?: any[] }) => {
-    if (!messageActivityDraft) return;
-    const tasksModule = MODULES.tasks;
-    if (!tasksModule?.table) throw new Error('ماژول فعالیت‌ها در دسترس نیست.');
-    const userId = String(liveData.profile.id || '').trim() || null;
-    const selectedTags = Array.isArray(meta?.selectedTags) ? meta?.selectedTags || [] : [];
-    let payload = attachTaskCompletionIfNeeded(normalizeTaskSourceValues(values || {}));
-    if (supportsSystemCode('tasks') && !payload.system_code) {
-      payload = {
-        ...payload,
-        system_code: await buildClientFallbackSystemCode(supabase, 'tasks', tasksModule.table),
-      };
-    }
-    const withAudit = userId
-      ? { ...payload, created_by: payload.created_by ?? userId, updated_by: payload.updated_by ?? userId }
-      : payload;
-    const isMissingAuditColumnError = (error: any) => {
-      const code = String(error?.code || '').toUpperCase();
-      const text = String(error?.message || error?.details || '').toLowerCase();
-      return code === '42703' || code === 'PGRST204' || text.includes('created_by') || text.includes('updated_by');
-    };
-    let insertResult = await supabase.from(tasksModule.table).insert(withAudit).select('*').single();
-    if (insertResult.error && isMissingAuditColumnError(insertResult.error)) {
-      insertResult = await supabase.from(tasksModule.table).insert(payload).select('*').single();
-    }
-    if (insertResult.error) throw insertResult.error;
-    const inserted = insertResult.data;
-    const taskId = String(inserted?.id || '').trim();
-    if (!taskId) throw new Error('ایجاد فعالیت ناموفق بود.');
-    if (selectedTags.length > 0) await syncRecordTags(supabase, 'tasks', taskId, selectedTags);
-    for (const [index, attachment] of messageActivityDraft.attachments.entries()) {
-      try {
-        await createFileManagerShortcut({
-          assetId: attachment.assetId || null,
-          sourceEntryId: attachment.entryId || null,
-          sourceModuleId: attachment.moduleId || messageActivityDraft.relatedModuleId,
-          sourceRecordId: attachment.recordId || messageActivityDraft.relatedRecordId,
-          sourceRecordTitle: messageActivityDraft.sourceLabel,
-          targetModuleId: 'tasks',
-          targetRecordId: taskId,
-          targetRecordTitle: String(inserted?.name || payload?.name || 'فعالیت').trim(),
-          fileUrl: attachment.url,
-          fileName: attachment.name || null,
-          mimeType: attachment.mimeType || null,
-          fileType: attachment.fileType || null,
-          sortOrder: index,
-        });
-      } catch (error) {
-        console.warn('Could not attach message file to created activity', error);
-      }
-    }
-    try {
-      await insertRecordActivity({
-        supabase,
-        moduleId: 'tasks',
-        recordId: taskId,
-        action: 'create',
-        userId,
-        recordTitle: String(inserted?.name || payload?.name || '').trim() || null,
-      });
-    } catch (error) {
-      console.warn('Changelog insert failed:', error);
-    }
-    await runWorkflowsForEvent({
-      moduleId: 'tasks',
-      event: 'create',
-      currentRecord: inserted as Record<string, any>,
-    });
-    message.success('فعالیت ثبت شد');
-    setMessageActivityDraft(null);
-  };
-
   const toggleMessageLike = async (item: TimelineEvent) => {
     const noteId = String(item.sourceRow?.id || '').trim();
     const userId = String(liveData.profile.id || '').trim();
@@ -5190,14 +5152,10 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
       ) : null}
       {messageActivityDraft ? (
         <React.Suspense fallback={null}>
-          <SmartForm
-            module={MODULES.tasks}
-            visible={Boolean(messageActivityDraft)}
-            title="ایجاد فعالیت"
-            initialValues={messageActivityDraft.initialValues}
-            onCancel={() => setMessageActivityDraft(null)}
-            onSave={handleMessageActivitySave}
-            overlayZIndex={15100}
+          <MessageActivityModalRuntime
+            draft={messageActivityDraft}
+            profileId={liveData.profile.id}
+            onClose={() => setMessageActivityDraft(null)}
           />
         </React.Suspense>
       ) : null}

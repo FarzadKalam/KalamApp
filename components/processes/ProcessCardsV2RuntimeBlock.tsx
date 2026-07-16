@@ -21,6 +21,7 @@ import {
 import { supportsGlobalRoleAssignee } from '../../utils/assigneeSupport';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
+import { persistProcessDraftField } from '../../utils/processDraftPersistence';
 import {
   assignProcessTemplateIdentityAliases,
   assignProcessTemplateModuleAliases,
@@ -157,8 +158,8 @@ type ProcessRuntimeReferencePayload = Omit<ProcessRuntimeReferenceCache, 'savedA
 const PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS = 30_000;
 const PROCESS_RUNTIME_REFERENCE_CACHE_TTL_MS = 90_000;
 const processRuntimeBlockCache = new Map<string, ProcessRuntimeBlockCacheEntry>();
-let processRuntimeReferenceCache: ProcessRuntimeReferenceCache | null = null;
-let processRuntimeReferencePromise: Promise<ProcessRuntimeReferencePayload> | null = null;
+const processRuntimeReferenceCacheByOrg = new Map<string, ProcessRuntimeReferenceCache>();
+const processRuntimeReferencePromiseByOrg = new Map<string, Promise<ProcessRuntimeReferencePayload>>();
 const EMPTY_RUNTIME_STATE: RuntimeState = { runs: [], stages: [], tasks: [] };
 const EMPTY_STAGE_LIST: any[] = [];
 
@@ -1563,8 +1564,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const { message } = App.useApp();
   const normalizedModuleId = normalizeText(moduleId);
   const normalizedRecordId = normalizeText(recordId || recordData?.id);
-  const cacheKey = `${normalizedModuleId}:${normalizedRecordId}`;
-  const cachedRuntimeBlock = processRuntimeBlockCache.get(cacheKey);
+  const cacheOrgId = normalizeText(recordData?.org_id);
+  const cacheKey = `${cacheOrgId || '__unknown_org__'}:${normalizedModuleId}:${normalizedRecordId}`;
+  const cachedRuntimeBlock = cacheOrgId ? processRuntimeBlockCache.get(cacheKey) : undefined;
   const cacheFresh = Boolean(cachedRuntimeBlock && Date.now() - cachedRuntimeBlock.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
   const runtimeSnapshotReady = Boolean(
     variant !== 'full'
@@ -1642,6 +1644,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     [processTemplateTargetModuleIds],
   );
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshRequestIdRef = useRef(0);
   const pendingScrollToFirstCardRef = useRef(false);
   const pendingScrollCardKeyRef = useRef<string | null>(null);
   const cardElementRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
@@ -1721,21 +1724,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       if (payload.directory) setDirectory(payload.directory);
       setTemplates(payload.templates);
     };
-    if (
-      processRuntimeReferenceCache
-      && Date.now() - processRuntimeReferenceCache.savedAt < PROCESS_RUNTIME_REFERENCE_CACHE_TTL_MS
-    ) {
-      applyReferencePayload(processRuntimeReferenceCache);
+    const bootstrap = await fetchSessionBootstrap(supabase);
+    const currentOrgId = normalizeText(bootstrap?.orgId);
+    const orgCacheKey = currentOrgId || '__no_org__';
+    const cachedReference = processRuntimeReferenceCacheByOrg.get(orgCacheKey);
+    if (cachedReference && Date.now() - cachedReference.savedAt < PROCESS_RUNTIME_REFERENCE_CACHE_TTL_MS) {
+      applyReferencePayload(cachedReference);
       return;
     }
-    if (!processRuntimeReferencePromise) {
-      processRuntimeReferencePromise = (async () => {
-        const [bootstrap, assignees, templateRows] = await Promise.all([
-          fetchSessionBootstrap(supabase),
+    let referencePromise = processRuntimeReferencePromiseByOrg.get(orgCacheKey);
+    if (!referencePromise) {
+      referencePromise = (async () => {
+        const [assignees, templateRows] = await Promise.all([
           fetchAssigneeDirectory(supabase).catch(() => null),
           fetchProcessTemplateRows(supabase).catch(() => []),
         ]);
-        const nextOrgId = normalizeText(bootstrap?.orgId);
         const nextTemplates = (templateRows || [])
           .filter((row: any) => row?.is_active !== false)
           .map((row: any) => ({
@@ -1746,21 +1749,22 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           }))
           .filter((item) => item.id);
         return {
-          orgId: nextOrgId,
+          orgId: currentOrgId,
           directory: assignees || null,
           templates: nextTemplates,
         };
       })().finally(() => {
-        processRuntimeReferencePromise = null;
+        processRuntimeReferencePromiseByOrg.delete(orgCacheKey);
       });
+      processRuntimeReferencePromiseByOrg.set(orgCacheKey, referencePromise);
     }
 
-    const payload = await processRuntimeReferencePromise;
+    const payload = await referencePromise;
     applyReferencePayload(payload);
-    processRuntimeReferenceCache = {
+    processRuntimeReferenceCacheByOrg.set(orgCacheKey, {
       ...payload,
       savedAt: Date.now(),
-    };
+    });
   }, []);
 
   const publishRuntimeSnapshot = useCallback((nextRuntime: RuntimeState) => {
@@ -1810,7 +1814,11 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const refresh = useCallback(async (force = false) => {
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
-    if (force) clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
+    const requestId = ++refreshRequestIdRef.current;
+    if (force) {
+      clearAppRuntimeCache(`process-runtime:${normalizedModuleId}:${normalizedRecordId}`);
+      clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
+    }
     if (readOnlyVariant && !force) {
       const cached = processRuntimeBlockCache.get(cacheKey);
       if (cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS) {
@@ -1829,6 +1837,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     try {
       if (isProcessTemplateModule(normalizedModuleId)) {
         const stages = await loadProcessTemplateStages(supabase, normalizedRecordId);
+        if (requestId !== refreshRequestIdRef.current) return;
         setTemplateStages(stages);
         processRuntimeBlockCache.set(cacheKey, {
           runtime: runtimeRef.current,
@@ -1854,6 +1863,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
           stages,
           tasks,
         };
+        if (requestId !== refreshRequestIdRef.current) return;
         setRuntime(nextRuntime);
         publishRuntimeSnapshot(nextRuntime);
         if (liveRuntimeEnabled) {
@@ -1902,6 +1912,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         }).catch(() => [])
         : [];
       const nextRuntime = { runs: snapshot.runs || [], stages: snapshotStages, tasks };
+      if (requestId !== refreshRequestIdRef.current) return;
       setRuntime(nextRuntime);
       setLinkedDraftStages(nextLinkedDraftStages);
       publishRuntimeSnapshot(nextRuntime);
@@ -1915,8 +1926,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         savedAt: Date.now(),
       });
     } catch (error: any) {
+      if (requestId !== refreshRequestIdRef.current) return;
       setErrorText(normalizeText(error?.message || error?.details) || 'خواندن نسخه جدید فرآیند ناموفق بود.');
     } finally {
+      if (requestId !== refreshRequestIdRef.current) return;
       setHasLoadedRuntime(true);
       setLoading(false);
     }
@@ -1928,6 +1941,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [refresh]);
 
   const scheduleRefresh = useCallback(() => {
+    clearAppRuntimeCache(`process-runtime:${normalizedModuleId}:${normalizedRecordId}`);
     clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
@@ -2494,7 +2508,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       ...taskBackedRunCards,
       ...buildDraftProcessCards(effectiveDraftStages, directory, templateNameById, runtime.runs, runtimeTasks, templateContext, normalizedModuleId),
     ];
-  }, [directory, effectiveDraftStages, enabled, fallbackRecordLabel, hasLoadedRuntime, mergeRuntimeStageWithTask, normalizedModuleId, normalizedRecordId, readOnlyVariant, recordData, runtime.runs, runtime.stages, templateContext, templateNameById, templateStages, waitingForTemplateContext]);
+  }, [directory, effectiveDraftStages, enabled, fallbackRecordLabel, hasLoadedRuntime, mergeRuntimeStageWithTask, normalizedModuleId, normalizedRecordId, readOnlyVariant, recordData, runtime.runs, runtime.stages, runtime.tasks, templateContext, templateNameById, templateStages, waitingForTemplateContext]);
 
   const cardKey = useCallback((card: ProcessV2CardData) => `${card.mode}:${card.id}`, []);
 
@@ -2651,11 +2665,17 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   const persistDraftStageList = useCallback(async (nextStages: any[]) => {
     const normalizedStages = Array.isArray(nextStages) ? nextStages : [];
+    const previousStages = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
     setDraftStagesOverride(normalizedStages);
     processRuntimeBlockCache.delete(cacheKey);
 
     if (onDraftStagesChange) {
-      await onDraftStagesChange(normalizedStages);
+      try {
+        await onDraftStagesChange(normalizedStages);
+      } catch (error) {
+        setDraftStagesOverride(previousStages);
+        throw error;
+      }
       markRuntimeModuleListsChanged();
       void syncProjectStatusForRuntime(runtimeRef.current, normalizedStages);
       return;
@@ -2665,10 +2685,18 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     if (!normalizedModuleId || !normalizedRecordId || !normalizedFieldKey) return;
     if (isProcessTemplateModule(normalizedModuleId) || isProcessRunModule(normalizedModuleId)) return;
 
-    const { error } = await (supabase.from(normalizedModuleId as any) as any)
-      .update({ [normalizedFieldKey]: normalizedStages })
-      .eq('id', normalizedRecordId);
-    if (error) throw error;
+    try {
+      await persistProcessDraftField({
+        supabaseClient: supabase,
+        moduleId: normalizedModuleId,
+        recordId: normalizedRecordId,
+        fieldKey: normalizedFieldKey,
+        stages: normalizedStages,
+      });
+    } catch (error) {
+      setDraftStagesOverride(previousStages);
+      throw error;
+    }
     markRuntimeModuleListsChanged();
     void syncProjectStatusForRuntime(runtimeRef.current, normalizedStages);
   }, [cacheKey, fieldKey, markRuntimeModuleListsChanged, normalizedModuleId, normalizedRecordId, onDraftStagesChange, syncProjectStatusForRuntime]);

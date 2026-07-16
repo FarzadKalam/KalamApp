@@ -69,6 +69,7 @@ import {
 } from '../../utils/instructionSupport';
 import { updateTaskStatusWithAutomation } from '../../utils/taskUpdateRuntime';
 import { syncProcessRunStageFromTask } from '../../utils/processRunRuntime';
+import { patchProcessTaskCustomFieldValues } from '../../utils/processTaskCustomFieldPersistence';
 import { insertRecordActivity } from '../../utils/recordActivity';
 import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { MODULES } from '../../moduleRegistry';
@@ -1266,13 +1267,25 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
       ));
     }
     try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .update(nextPatch)
-        .eq('id', taskRecordId)
-        .select('id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,due_date,start_date,actual_start_at,completed_at,description,task_report,wage,weight,recurrence_info,process_run_stage_id,process_node_key,process_lane_key,source_template_id,source_module_id,source_record_id,process_group_id')
-        .maybeSingle();
-      if (error) throw error;
+      const customFieldValuesPatch = recurrencePatch?.[PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY];
+      let data: any = null;
+      if (customFieldValuesPatch && typeof customFieldValuesPatch === 'object' && !Array.isArray(customFieldValuesPatch)) {
+        data = await patchProcessTaskCustomFieldValues({
+          supabaseClient: supabase,
+          taskId: taskRecordId,
+          values: customFieldValuesPatch,
+          fallbackRecurrence: parseObject(nextPatch.recurrence_info),
+        });
+      } else {
+        const result = await supabase
+          .from('tasks')
+          .update(nextPatch)
+          .eq('id', taskRecordId)
+          .select('id,name,status,task_type,assignee_id,assignee_role_id,assignee_type,due_date,start_date,actual_start_at,completed_at,description,task_report,wage,weight,recurrence_info,process_run_stage_id,process_node_key,process_lane_key,source_template_id,source_module_id,source_record_id,process_group_id')
+          .maybeSingle();
+        if (result.error) throw result.error;
+        data = result.data;
+      }
       if (!data?.id) {
         throw new Error('ذخیره فعالیت روی سرور اعمال نشد.');
       }
@@ -1293,10 +1306,21 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
           ...parseObject(data?.recurrence_info),
         },
       }));
-      await syncProcessRunStageFromTask({
-        supabaseClient: supabase,
-        task: updatedTask,
-      });
+      const runStageRelevantKeys = new Set([
+        'status',
+        'assignee_id',
+        'assignee_role_id',
+        'due_date',
+        'start_date',
+        'actual_start_at',
+        'completed_at',
+      ]);
+      if (Object.keys(patch || {}).some((key) => runStageRelevantKeys.has(key))) {
+        await syncProcessRunStageFromTask({
+          supabaseClient: supabase,
+          task: updatedTask,
+        });
+      }
       if (stage?.id) {
         onStageStatusChange?.(
           stage.id,

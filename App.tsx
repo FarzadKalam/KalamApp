@@ -727,6 +727,7 @@ function App() {
           <Route path="/d/:code" element={<LazyRouteBoundary><DeliveryPublicPage /></LazyRouteBoundary>} />
           <Route path="/payment/callback" element={<LazyRouteBoundary><PaymentCallbackPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
+          <Route path="/r/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
 
           <Route
             element={

@@ -386,7 +386,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   onPageChange,
   mainImageUrl = null,
   canSetMainImage = false,
-  setMainImageLabel = 'ستاره تصویر اصلی',
+  setMainImageLabel = 'ستاره‌دار کردن فایل',
   onSetMainImages,
   directShareTargetOptions = [],
   onDirectShareItems,
@@ -500,10 +500,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
     return visibleFolders.filter((folder) => selectedFolderKeySet.has(folder.key));
   }, [selectedFolderKeySet, visibleFolders]);
   const totalSelectedCount = selectedItems.length + selectedFolders.length;
-  const selectedImageItems = useMemo(
-    () => selectedItems.filter((item) => item.file_type === 'image'),
-    [selectedItems],
-  );
+  const selectedStarItems = selectedItems;
   const normalizedMainImageUrl = String(mainImageUrl || '').trim();
   const getDeleteConfirmBody = (nextItems: FileManagerBrowserItem[], nextFolders: FileManagerBrowserFolder[]) => {
     const previewLines = [
@@ -577,7 +574,7 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
   };
 
   const markAsMainImages = (nextItems: FileManagerBrowserItem[]) => {
-    const validItems = nextItems.filter((item) => item.file_type === 'image');
+    const validItems = nextItems.filter((item) => String(item.entry_id || '').trim());
     if (validItems.length === 0 || !onSetMainImages) return;
     onSetMainImages(validItems);
   };
@@ -879,8 +876,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         : <Tag>خصوصی</Tag>;
     const actions = (
       <Space size={4}>
-        {canSetMainImage && item.file_type === 'image' ? (
-          <Tooltip title={isMainImage ? 'تصویر اصلی' : 'ستاره تصویر اصلی'}>
+        {canSetMainImage ? (
+          <Tooltip title={isMainImage ? 'برداشتن ستاره فایل' : 'ستاره‌دار کردن فایل'}>
             <Button
               size="small"
               type={isMainImage ? 'primary' : 'default'}
@@ -1198,8 +1195,8 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
               <Tooltip title={setMainImageLabel}>
                 <Button
                   icon={<StarOutlined />}
-                  disabled={!onSetMainImages || selectedImageItems.length === 0}
-                  onClick={() => markAsMainImages(selectedImageItems)}
+                  disabled={!onSetMainImages || selectedStarItems.length === 0}
+                  onClick={() => markAsMainImages(selectedStarItems)}
                 />
               </Tooltip>
             ) : null}
@@ -1527,13 +1524,13 @@ const FileManagerBrowser: React.FC<FileManagerBrowserProps> = ({
         footer={previewItem ? (
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Space wrap>
-              {canSetMainImage && previewItem.file_type === 'image' ? (
+              {canSetMainImage ? (
                 <Button
                   icon={isMainImageItem(previewItem) ? <StarFilled /> : <StarOutlined />}
                   type={isMainImageItem(previewItem) ? 'primary' : 'default'}
                   onClick={() => markAsMainImages([previewItem])}
                 >
-                  تصویر اصلی
+                  {isMainImageItem(previewItem) ? 'برداشتن ستاره' : 'ستاره‌دار کردن'}
                 </Button>
               ) : null}
               {onOpenItem ? (

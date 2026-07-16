@@ -1,8 +1,34 @@
 const EXACT_TOKEN = /^\{\{\s*([^}]+?)\s*\}\}$/;
+const INLINE_TOKEN = /\{\{\s*([^}]+?)\s*\}\}/g;
 
 type StageTemplateInput = {
   stageName: string;
   metadata: Record<string, any>;
+};
+
+const renderTextKeepingUnresolvedTokens = async (
+  template: string,
+  renderText: (template: string) => Promise<string>,
+  resolveRaw: (fieldKey: string) => Promise<any>,
+) => {
+  const tokens = Array.from(template.matchAll(INLINE_TOKEN));
+  if (tokens.length === 0) return await renderText(template);
+  let protectedTemplate = template;
+  const protectedTokens: Array<{ marker: string; token: string }> = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = String(tokens[index]?.[0] || '');
+    const fieldKey = String(tokens[index]?.[1] || '').trim();
+    const resolved = await resolveRaw(fieldKey);
+    if (resolved !== null && resolved !== undefined) continue;
+    const marker = `__TAZE_UNRESOLVED_PROCESS_TOKEN_${index}__`;
+    protectedTemplate = protectedTemplate.replace(token, marker);
+    protectedTokens.push({ marker, token });
+  }
+  let rendered = await renderText(protectedTemplate);
+  protectedTokens.forEach(({ marker, token }) => {
+    rendered = rendered.replace(marker, token);
+  });
+  return rendered;
 };
 
 const renderTemplateData = async (
@@ -12,8 +38,11 @@ const renderTemplateData = async (
 ): Promise<any> => {
   if (typeof value === 'string') {
     const exact = value.match(EXACT_TOKEN);
-    if (exact) return await resolveRaw(String(exact[1] || '').trim());
-    return await renderText(value);
+    if (exact) {
+      const resolved = await resolveRaw(String(exact[1] || '').trim());
+      return resolved === null || resolved === undefined ? value : resolved;
+    }
+    return await renderTextKeepingUnresolvedTokens(value, renderText, resolveRaw);
   }
   if (Array.isArray(value)) {
     return await Promise.all(value.map((item) => renderTemplateData(item, renderText, resolveRaw)));
@@ -34,12 +63,12 @@ export const renderProcessStageForTaskCreation = async (
   resolveRaw: (fieldKey: string) => Promise<any>,
 ) => {
   const metadata = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
-  const renderedStageName = String(await renderText(String(input.stageName || ''))).trim()
+  const renderedStageName = String(await renderTextKeepingUnresolvedTokens(String(input.stageName || ''), renderText, resolveRaw)).trim()
     || String(input.stageName || '').trim()
     || 'فعالیت فرآیند';
 
   const renderedDescription = typeof metadata.description === 'string'
-    ? String(await renderText(metadata.description)).trim() || null
+    ? String(await renderTextKeepingUnresolvedTokens(metadata.description, renderText, resolveRaw)).trim() || null
     : metadata.description ?? null;
   const renderedCustomFields = Array.isArray(metadata.process_task_custom_fields)
     ? await Promise.all(metadata.process_task_custom_fields.map(async (field: any) => {

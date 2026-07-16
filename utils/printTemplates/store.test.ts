@@ -16,6 +16,8 @@ describe('print template store grouping', () => {
     expect(variableOptions.find((item) => item.value === 'record.name')?.group).toBe('فیلدهای عمومی');
     expect(variableOptions.find((item) => item.value === 'record.width')?.group).toBe('بخش: اطلاعات پایه');
     expect(variableOptions.find((item) => item.value === 'record.address')?.group).toBe('بخش: اطلاعات پایه');
+    expect(variableOptions.find((item) => item.value === 'record.created_by')?.label).toBe('ایجادکننده');
+    expect(variableOptions.find((item) => item.value === 'record.updated_by')?.label).toBe('آخرین ویرایشگر');
 
     expect(systemFieldOptions.find((item) => item.key === 'record.name')?.group).toBe('فیلدهای عمومی');
     expect(systemFieldOptions.find((item) => item.key === 'record.width')?.group).toBe('بخش: اطلاعات پایه');

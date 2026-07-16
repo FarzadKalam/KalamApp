@@ -3,14 +3,12 @@ import OperationalFinancialOverviewPanel from './OperationalFinancialOverviewPan
 
 type CustomerFinancialOverviewPanelProps = {
   customerId: string;
-  customerData?: Record<string, any> | null;
 };
 
-const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelProps> = ({ customerId, customerData }) => (
+const CustomerFinancialOverviewPanel: React.FC<CustomerFinancialOverviewPanelProps> = ({ customerId }) => (
   <OperationalFinancialOverviewPanel
     entityType="customer"
     entityId={customerId}
-    entityData={customerData}
   />
 );
 

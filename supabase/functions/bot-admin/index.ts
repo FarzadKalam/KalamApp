@@ -477,6 +477,8 @@ const parseResponse = async (response: Response) => {
 };
 
 const verifyUserToken = async (supabaseUrl: string, serviceRoleKey: string, userToken: string) => {
+  // فراخوانی داخلی edge-functionها با service role مجاز است؛ این کلید هرگز به کلاینت ارسال نمی‌شود.
+  if (userToken === serviceRoleKey) return { id: 'service-role', role: 'service_role' };
   const response = await fetch(`${supabaseUrl.replace(/\/+$/, '')}/auth/v1/user`, {
     method: 'GET',
     headers: {

@@ -10,6 +10,10 @@ import { resolveAssigneePresentation } from '../../utils/assigneePresentation';
 import ProcessTaskModalV2 from '../processes/ProcessTaskModalV2';
 import type { ProcessV2CardData, ProcessV2Stage } from '../processes/ProcessCardsV2';
 import { mapTaskStatusToStageStatus } from '../processes/ProcessCardsV2';
+import {
+  mergeProcessTaskModalContext,
+  processTaskModalContextNeedsStage,
+} from '../../utils/processTaskModalContext';
 
 type TaskProcessTarget = {
   moduleId: string;
@@ -88,6 +92,39 @@ const TASK_MODAL_SELECT_COLUMNS = [
 ] as const;
 
 const normalizeText = (value: unknown) => String(value || '').trim();
+
+const loadProcessTaskStageContext = async (task: any) => {
+  if (!processTaskModalContextNeedsStage(task)) return mergeProcessTaskModalContext(task);
+  const runStageId = normalizeText(task?.process_run_stage_id);
+  const taskId = normalizeText(task?.id);
+  let runStage: any = null;
+  try {
+    let query = supabase
+      .from('process_run_stages')
+      .select('id,process_run_id,template_stage_id,stage_name,sort_order,status,task_id,metadata');
+    query = runStageId ? query.eq('id', runStageId) : query.eq('task_id', taskId);
+    const result = await query.maybeSingle();
+    if (!result.error) runStage = result.data || null;
+  } catch {
+    runStage = null;
+  }
+
+  const templateStageId = normalizeText(runStage?.template_stage_id);
+  let templateStage: any = null;
+  if (templateStageId) {
+    try {
+      const result = await supabase
+        .from('process_template_stages')
+        .select('id,template_id,stage_name,sort_order,metadata')
+        .eq('id', templateStageId)
+        .maybeSingle();
+      if (!result.error) templateStage = result.data || null;
+    } catch {
+      templateStage = null;
+    }
+  }
+  return mergeProcessTaskModalContext(task, runStage, templateStage);
+};
 
 const parseObject = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -204,10 +241,6 @@ const GlobalTaskProcessModalHost: React.FC = () => {
         message.info('این مرحله هنوز به فعالیت واقعی تبدیل نشده است.');
         return;
       }
-      if (providedTask) {
-        openSession(providedTask);
-        return;
-      }
       setLoading(true);
       try {
         const result = await runSelectWithCompatibleColumns<any>({
@@ -220,9 +253,21 @@ const GlobalTaskProcessModalHost: React.FC = () => {
               .eq('id', resolvedTaskId)
               .maybeSingle(),
         });
-        if (result.error) throw result.error;
-        const data = result.data;
-        const nextTask = data || providedTask;
+        if (result?.error) throw result.error;
+        const data = result?.data;
+        const nextTaskBase = data || providedTask;
+        const nextTask = nextTaskBase ? await loadProcessTaskStageContext({
+          ...(providedTask || {}),
+          ...(data || {}),
+          recurrence_info: {
+            ...parseObject(providedTask?.recurrence_info),
+            ...parseObject(data?.recurrence_info),
+          },
+          metadata: {
+            ...parseObject(providedTask?.metadata),
+            ...parseObject(data?.metadata),
+          },
+        }) : null;
         if (!nextTask) {
           message.warning('فعالیت موردنظر پیدا نشد.');
           return;
@@ -230,9 +275,10 @@ const GlobalTaskProcessModalHost: React.FC = () => {
         if (!mountedRef.current) return;
         openSession(nextTask);
       } catch {
-        if (!providedTask) {
+        if (providedTask) {
+          openSession(mergeProcessTaskModalContext(providedTask));
+        } else {
           message.error('باز کردن جزئیات فعالیت ناموفق بود.');
-          return;
         }
       } finally {
         if (mountedRef.current) setLoading(false);

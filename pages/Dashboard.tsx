@@ -1461,8 +1461,6 @@ const Dashboard: React.FC = () => {
                       onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
                       mediaSettings={dashboardMediaSettings}
                       onMediaSettingsChange={setDashboardMediaSettings}
-                      mediaSourceImages={dashboardMediaSourceImages}
-                      onMediaSourceImagesChange={setDashboardMediaSourceImages}
                     />
                   </div>
                   <div className="mt-1 px-7">

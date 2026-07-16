@@ -58,6 +58,7 @@ import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
 import { buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
+import { sanitizeOutboundDisplay } from '../../shared/recordRuntime';
 import {
   buildDefaultPrintSignatureConfigs,
   buildPrintSignatureBandHtml,
@@ -2423,6 +2424,11 @@ export const usePrintManager = ({
       const resolveRecordFieldDisplay = (fieldKey: string) => {
         const raw = data?.[fieldKey];
         if (raw === null || raw === undefined || raw === '') return '';
+        if (fieldKey === 'created_by' || fieldKey === 'updated_by') {
+          const user = (assigneeDirectory?.users || []).find((item: any) => String(item?.id || '').trim() === String(raw).trim());
+          const userLabel = String(user?.display_name || user?.full_name || user?.email || user?.mobile_1 || '').trim();
+          return userLabel || '[کاربر سازمان]';
+        }
         const field = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields.find((item: any) => item.key === fieldKey) : null;
         if (field) {
           const option = Array.isArray(field.options) ? field.options.find((item: any) => String(item.value) === String(raw)) : null;
@@ -2434,7 +2440,7 @@ export const usePrintManager = ({
             // noop
           }
         }
-        return normalizeOptionalDisplay(localizePlainText(raw));
+        return normalizeOptionalDisplay(sanitizeOutboundDisplay(localizePlainText(raw)));
       };
 
       const now = new Date();
@@ -2778,7 +2784,7 @@ export const usePrintManager = ({
       if (!templateHtml) return '';
       const filled = templateHtml.replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (match: string, key: string) => {
         if (key.startsWith('row.') || key.startsWith('summary.')) return match;
-        return resolveVariableValue(key);
+        return sanitizeOutboundDisplay(resolveVariableValue(key));
       });
       return DOMPurify.sanitize(filled, {
         ADD_TAGS: ['colgroup', 'col'],

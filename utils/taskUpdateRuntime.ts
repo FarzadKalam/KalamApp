@@ -158,7 +158,6 @@ export const updateTaskStatusWithAutomation = async ({
   taskId,
   nextStatus,
   previousTask = null,
-  currentUser = null,
 }: UpdateTaskStatusWithAutomationArgs): Promise<Record<string, any>> => {
   let currentTask: Record<string, any> | null = previousTask || null;
 
@@ -217,21 +216,26 @@ export const updateTaskStatusWithAutomation = async ({
     supabaseClient: supabase,
     task: updatedTask,
   });
-  await dispatchProcessSiblingScheduleUpdates(updatedTask);
+  dispatchTaskRuntimeUpdated({
+    task: updatedTask,
+    previousTask: currentTask,
+    reason: 'status',
+  });
 
-  await runWorkflowsForEvent({
+  // The database workflow-event queue is created by the committed task update.
+  // UI reconciliation for siblings and derived project status must not keep the
+  // status button spinning after the task and its runtime stage are durable.
+  void dispatchProcessSiblingScheduleUpdates(updatedTask).catch((error) => {
+    console.warn('Could not refresh process sibling schedules after task status update', error);
+  });
+  void runWorkflowsForEvent({
     moduleId: 'tasks',
     event: 'upsert',
     currentRecord: updatedTask,
     previousRecord: currentTask,
   });
-
-  await syncProjectStatusesForTask(updatedTask);
-
-  dispatchTaskRuntimeUpdated({
-    task: updatedTask,
-    previousTask: currentTask,
-    reason: 'status',
+  void syncProjectStatusesForTask(updatedTask).catch((error) => {
+    console.warn('Could not sync project status after task status update', error);
   });
 
   return updatedTask;
@@ -248,7 +252,6 @@ export const updateTaskDueDateWithAutomation = async ({
   taskId,
   nextDueDate,
   previousTask = null,
-  currentUser = null,
 }: UpdateTaskDueDateWithAutomationArgs) => {
   let currentTask = previousTask;
 

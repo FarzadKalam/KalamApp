@@ -7,6 +7,7 @@ import { readCurrencyConfig } from './currency';
 import { fetchDynamicOptionsMap } from './referenceData';
 import { fetchRelationOptionsForField } from './relationOptions';
 import { localizeFinancialValue, FinancialValueKind } from './financialValueLabels';
+import { sanitizeOutboundDisplay } from '../shared/recordRuntime';
 
 type RenderTemplateOptions = {
   moduleId?: string | null;
@@ -426,6 +427,14 @@ export const formatTemplateValueByField = ({
     if (financialLabel) return financialLabel;
   }
 
+  if (
+    [FieldType.SELECT, FieldType.MULTI_SELECT, FieldType.STATUS].includes(fieldType as FieldType)
+    && typeof value === 'string'
+    && /^[a-z][a-z0-9_-]*$/i.test(value.trim())
+  ) {
+    return 'مقدار ثبت‌شده';
+  }
+
   if (fieldType === FieldType.CHECKBOX || typeof value === 'boolean') {
     return value === true || String(value).toLowerCase() === 'true' ? 'بله' : 'خیر';
   }
@@ -468,7 +477,7 @@ export const formatTemplateValueByField = ({
       }
     }
     try {
-      return JSON.stringify(value);
+      return sanitizeOutboundDisplay(JSON.stringify(value));
     } catch {
       return '';
     }
@@ -476,7 +485,7 @@ export const formatTemplateValueByField = ({
 
   const fallbackDate = formatDateLikeValue(value);
   if (fallbackDate) return fallbackDate;
-  return String(value);
+  return sanitizeOutboundDisplay(value);
 };
 
 const resolveValueFromRecord = (record: Record<string, any> | null | undefined, path: string) => {
@@ -502,14 +511,14 @@ export const renderTemplateText = (
     const fieldKey = String(key || '').trim();
     if (!fieldKey) return '';
     const value = resolveValueFromRecord(record || {}, fieldKey);
-    const rendered = formatTemplateValueByField({
+    const rendered = sanitizeOutboundDisplay(formatTemplateValueByField({
       value,
       moduleId: options.moduleId,
       fieldKey,
       sourceRecord: record || null,
       assigneeDirectory: options.assigneeDirectory,
       optionLabelMaps: options.optionLabelMaps,
-    }).trim();
+    })).trim();
     if (!options.bold) return rendered;
     return rendered ? `**${rendered}**` : '';
   });

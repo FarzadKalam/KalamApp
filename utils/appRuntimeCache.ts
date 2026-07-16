@@ -2,6 +2,7 @@ type CacheEntry<T> = {
   value?: T;
   expiresAt: number;
   promise: Promise<T> | null;
+  generation: number;
 };
 
 type RuntimeCacheStore = {
@@ -23,7 +24,7 @@ const { entries } = runtimeCacheStore;
 const getOrCreateEntry = <T>(key: string): CacheEntry<T> => {
   const existing = entries.get(key);
   if (existing) return existing as CacheEntry<T>;
-  const created: CacheEntry<T> = { expiresAt: 0, promise: null };
+  const created: CacheEntry<T> = { expiresAt: 0, promise: null, generation: 0 };
   entries.set(key, created);
   return created;
 };
@@ -79,15 +80,19 @@ export const getAppRuntimeCached = async <T>({
     return entry.promise;
   }
 
+  const generation = entry.generation + 1;
+  entry.generation = generation;
   const pending = loader()
     .then((value) => {
-      entry.value = value;
-      entry.expiresAt = Date.now() + Math.max(0, Number(ttlMs) || 0);
-      entry.promise = null;
+      if (entry.generation === generation) {
+        entry.value = value;
+        entry.expiresAt = Date.now() + Math.max(0, Number(ttlMs) || 0);
+        entry.promise = null;
+      }
       return value;
     })
     .catch((error) => {
-      entry.promise = null;
+      if (entry.generation === generation) entry.promise = null;
       throw error;
     });
 

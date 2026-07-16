@@ -32,6 +32,7 @@ import {
 } from '../utils/fileManagerService';
 import {
   buildFileManagerTree,
+  invalidateFileManagerFolderCaches,
   type FileManagerListItem,
   type FileManagerTreeResult,
 } from '../utils/fileManagerQueries';
@@ -1920,19 +1921,20 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
   };
 
   const handleSetMainImages = async (selected: RecordFileItem[]) => {
-    if (!canEdit || !onMainImageChange) {
-      msg.warning('دسترسی تغییر تصویر اصلی ندارید');
+    if (!canEdit) {
+      msg.warning('دسترسی تغییر ستاره فایل‌ها را ندارید');
       return;
     }
-    const imageSelections = selected.filter((item) => item.file_type === 'image' && String(item.file_url || '').trim());
-    if (imageSelections.length === 0) {
-      msg.warning('برای تصویر اصلی، حداقل یک عکس انتخاب کنید');
+    const fileSelections = selected.filter((item) => String(item.entry_id || '').trim() && String(item.file_url || '').trim());
+    if (fileSelections.length === 0) {
+      msg.warning('حداقل یک فایل قابل مدیریت انتخاب کنید');
       return;
     }
 
+    const nextStarred = fileSelections.length === 1 ? fileSelections[0].is_main_image !== true : true;
     const starredAt = new Date().toISOString();
     try {
-      const entryIds = imageSelections.map((item) => String(item.entry_id || '').trim()).filter(Boolean);
+      const entryIds = fileSelections.map((item) => String(item.entry_id || '').trim()).filter(Boolean);
       if (fileManagerEnabled && entryIds.length > 0) {
         const { data: entryRows, error: entryRowsError } = await supabase
           .from('file_entries')
@@ -1956,8 +1958,8 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
                 ...previousMetadata,
                 main_image: {
                   ...(previousMetadata as any)?.main_image,
-                  starred: true,
-                  starred_at: starredAt,
+                  starred: nextStarred,
+                  starred_at: nextStarred ? starredAt : null,
                   module_id: moduleId,
                   record_id: recordId || null,
                 },
@@ -1969,17 +1971,25 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
         if (failed?.error) throw failed.error;
       }
 
-      const lastStarred = imageSelections[imageSelections.length - 1];
-      await Promise.resolve(onMainImageChange(lastStarred.file_url));
+      const imageSelections = fileSelections.filter((item) => item.file_type === 'image');
+      const lastStarredImage = imageSelections[imageSelections.length - 1];
+      if (nextStarred && lastStarredImage && onMainImageChange) {
+        await Promise.resolve(onMainImageChange(lastStarredImage.file_url));
+      } else if (!nextStarred && onMainImageChange && fileSelections.some((item) => String(item.file_url) === String(mainImage || ''))) {
+        await Promise.resolve(onMainImageChange(null));
+      }
       setItems((prev) => prev.map((item) => (
-        imageSelections.some((selectedItem) => selectedItem.id === item.id)
-          ? { ...item, is_main_image: true }
+        fileSelections.some((selectedItem) => selectedItem.id === item.id)
+          ? { ...item, is_main_image: nextStarred }
           : item
       )));
-      msg.success(imageSelections.length > 1 ? 'تصاویر اصلی علامت‌گذاری شدند' : 'تصویر اصلی بروزرسانی شد');
+      invalidateFileManagerFolderCaches(moduleId, recordId || null);
+      msg.success(nextStarred
+        ? (fileSelections.length > 1 ? 'فایل‌های انتخاب‌شده ستاره‌دار شدند' : 'فایل ستاره‌دار شد')
+        : 'ستاره فایل برداشته شد');
     } catch (error) {
-      console.warn('Set main image failed', error);
-      msg.error('بروزرسانی تصویر اصلی ناموفق بود');
+      console.warn('Update starred files failed', error);
+      msg.error('بروزرسانی ستاره فایل‌ها ناموفق بود');
     }
   };
 
@@ -2238,7 +2248,7 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
             iconTileMinWidth={118}
             mainImageUrl={mainImage || null}
             canSetMainImage={canEdit}
-            setMainImageLabel={`افزودن بعنوان تصویر اصلی "${recordDisplayTitle || 'رکورد'}"`}
+            setMainImageLabel={`ستاره‌دار کردن فایل‌های "${recordDisplayTitle || 'رکورد'}"`}
             onSetMainImages={(selected) => void handleSetMainImages(selected as RecordFileItem[])}
             canDelete={canDeleteFiles}
             canShare={true}
@@ -2401,4 +2411,3 @@ const RecordFilesManager: React.FC<RecordFilesManagerProps> = ({
 };
 
 export default RecordFilesManager;
-

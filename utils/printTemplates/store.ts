@@ -7,6 +7,9 @@ import { loadScopedIntegrationSettings } from '../integrationSettings';
 import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode } from './imageDisplay';
 import { buildDefaultPrintFooterTemplate } from './footerLayout';
+import { getFieldLabelFa } from '../fieldLabel';
+import { getCanonicalModuleFields } from '../recordVariableCatalog';
+import { getPrintVariableProviderOptions } from './variableProviders';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
@@ -708,7 +711,10 @@ export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplate
   if (!module) return [];
 
   const seen = new Set<string>();
-  return module.fields
+  const sourceFields = module?.id && MODULES[module.id]
+    ? getCanonicalModuleFields(module.id)
+    : (module.fields || []);
+  return sourceFields
     .filter((field: any) => {
       if (!field?.key) return false;
       if (!isFieldPrintableFromBlockConfig(module, field)) return false;
@@ -718,7 +724,7 @@ export const buildPrintTemplateVariablesForModule = (module: any): PrintTemplate
       return true;
     })
     .map((field: any) => ({
-      label: field.labels?.fa || field.key,
+      label: getFieldLabelFa(field, { moduleId: module?.id, fallback: field.key }),
       value: `record.${field.key}`,
       kind: 'field' as const,
       group: getFieldGroupLabel(module, field),
@@ -759,6 +765,8 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
     { label: 'تعداد پیوست‌های رکورد', value: 'record.attachment_count', kind: 'field', group: 'فیلدهای عمومی' },
     { label: 'تاریخ ایجاد', value: 'record.created_at', kind: 'field', group: 'فیلدهای عمومی' },
     { label: 'تاریخ آخرین ویرایش', value: 'record.updated_at', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'ایجادکننده', value: 'record.created_by', kind: 'field', group: 'فیلدهای عمومی' },
+    { label: 'آخرین ویرایشگر', value: 'record.updated_by', kind: 'field', group: 'فیلدهای عمومی' },
     { label: 'نام کامل سازمان', value: 'company.company_full_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام سازمان', value: 'company.company_name', kind: 'field', group: 'اطلاعات سازمان' },
     { label: 'نام تجاری سازمان', value: 'company.trade_name', kind: 'field', group: 'اطلاعات سازمان' },
@@ -811,59 +819,7 @@ export const getPrintTemplateVariables = (moduleId: string): PrintTemplateVariab
   const moduleFields = buildUniqueFieldOptions(moduleId);
   const moduleBlocks = buildBlockOptions(moduleId);
 
-  const moduleSpecificExtras: PrintTemplateVariableOption[] =
-    moduleId === 'invoices'
-      ? [
-          { label: 'تاریخ فاکتور', value: 'record.invoice_date', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'وضعیت فاکتور', value: 'record.status', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'جمع کل فاکتور', value: 'record.total_invoice_amount', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'جمع کل به حروف', value: 'record.total_invoice_amount_words', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'جمع دریافت‌شده', value: 'record.total_received_amount', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'مانده فاکتور', value: 'record.remaining_balance', kind: 'field', group: 'فیلدهای رکورد' },
-          { label: 'نام مشتری', value: 'customer.full_name', kind: 'field', group: 'طرف حساب' },
-          { label: 'پیشوند مشتری', value: 'customer.prefix', kind: 'field', group: 'طرف حساب' },
-          { label: 'نام کوچک مشتری', value: 'customer.first_name', kind: 'field', group: 'طرف حساب' },
-          { label: 'نام خانوادگی مشتری', value: 'customer.last_name', kind: 'field', group: 'طرف حساب' },
-          { label: 'نام کسب و کار مشتری', value: 'customer.business_name', kind: 'field', group: 'طرف حساب' },
-          { label: 'نوع شخص مشتری', value: 'customer.person_type', kind: 'field', group: 'طرف حساب' },
-          { label: 'شناسه ملی / کد ملی مشتری', value: 'customer.national_identifier', kind: 'field', group: 'طرف حساب' },
-          { label: 'شماره ثبت مشتری', value: 'customer.registration_number', kind: 'field', group: 'طرف حساب' },
-          { label: 'کد اقتصادی مشتری', value: 'customer.economic_code', kind: 'field', group: 'طرف حساب' },
-          { label: 'کد پستی مشتری', value: 'customer.postal_code', kind: 'field', group: 'طرف حساب' },
-          { label: 'استان مشتری', value: 'customer.province', kind: 'field', group: 'طرف حساب' },
-          { label: 'شهر مشتری', value: 'customer.city', kind: 'field', group: 'طرف حساب' },
-          { label: 'تلفن مشتری', value: 'customer.mobile_1', kind: 'field', group: 'طرف حساب' },
-          { label: 'آدرس مشتری', value: 'customer.address', kind: 'field', group: 'طرف حساب' },
-        ]
-      : moduleId === 'purchase_invoices'
-        ? [
-            { label: 'تاریخ فاکتور', value: 'record.invoice_date', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'وضعیت فاکتور', value: 'record.status', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'جمع کل فاکتور', value: 'record.total_invoice_amount', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'جمع پرداخت‌شده', value: 'record.total_received_amount', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'مانده بدهی', value: 'record.remaining_balance', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'نام تامین‌کننده', value: 'supplier.full_name', kind: 'field', group: 'طرف حساب' },
-            { label: 'پیشوند تامین‌کننده', value: 'supplier.prefix', kind: 'field', group: 'طرف حساب' },
-            { label: 'نام رابط تامین‌کننده', value: 'supplier.first_name', kind: 'field', group: 'طرف حساب' },
-            { label: 'نام خانوادگی رابط تامین‌کننده', value: 'supplier.last_name', kind: 'field', group: 'طرف حساب' },
-            { label: 'نام کسب و کار تامین‌کننده', value: 'supplier.business_name', kind: 'field', group: 'طرف حساب' },
-            { label: 'شناسه ملی / کد ملی تامین‌کننده', value: 'supplier.national_identifier', kind: 'field', group: 'طرف حساب' },
-            { label: 'شماره ثبت تامین‌کننده', value: 'supplier.registration_number', kind: 'field', group: 'طرف حساب' },
-            { label: 'کد اقتصادی تامین‌کننده', value: 'supplier.economic_code', kind: 'field', group: 'طرف حساب' },
-            { label: 'کد پستی تامین‌کننده', value: 'supplier.postal_code', kind: 'field', group: 'طرف حساب' },
-            { label: 'استان تامین‌کننده', value: 'supplier.province', kind: 'field', group: 'طرف حساب' },
-            { label: 'شهر تامین‌کننده', value: 'supplier.city', kind: 'field', group: 'طرف حساب' },
-            { label: 'تلفن تامین‌کننده', value: 'supplier.mobile_1', kind: 'field', group: 'طرف حساب' },
-            { label: 'آدرس تامین‌کننده', value: 'supplier.address', kind: 'field', group: 'طرف حساب' },
-          ]
-      : moduleId === 'product_bundles'
-        ? [
-            { label: 'جمع قبل از تخفیف پکیج', value: 'record.package_gross_total', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'جمع تخفیف پکیج', value: 'record.package_discount_total', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'مبلغ نهایی پکیج', value: 'record.package_final_total', kind: 'field', group: 'فیلدهای رکورد' },
-            { label: 'جدول خلاصه پکیج', value: 'system.package_summary_table', kind: 'field', group: 'سیستم' },
-          ]
-      : [];
+  const moduleSpecificExtras = getPrintVariableProviderOptions(moduleId);
 
   const merged = [...commonFields, ...commonListFields, ...moduleFields, ...moduleBlocks, ...moduleSpecificExtras, ...operationalFinancialSummaryFields];
   const seen = new Set<string>();

@@ -98,7 +98,7 @@ type AiModel = {
   metadata: Record<string, any>;
 };
 
-type ModelFormValues = Omit<AiModel, 'metadata'>;
+type ModelFormValues = AiModel;
 
 type ProviderModel = {
   id: string;

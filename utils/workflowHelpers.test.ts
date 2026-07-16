@@ -35,9 +35,22 @@ describe('workflowHelpers', () => {
       }),
       expect.objectContaining({
         key: createWorkflowRelatedFieldKey('customer_id', 'customers', WORKFLOW_RECORD_LINK_FIELD_KEY),
-        labels: expect.objectContaining({ fa: 'لینک رکورد (مدیریت مشتریان)' }),
+        labels: expect.objectContaining({ fa: 'نام مشتری (لینک رکورد)' }),
       }),
     ]));
+  });
+
+  it('uses the source relation label and exposes every common system field once', () => {
+    const fields = getWorkflowConditionFields('invoices');
+    const customerMobile = fields.find((field) =>
+      String(field.key) === createWorkflowRelatedFieldKey('customer_id', 'customers', 'mobile_1')
+    );
+
+    expect(customerMobile?.labels?.fa).toBe('نام مشتری (موبایل اصلی)');
+    ['created_at', 'created_by', 'updated_at', 'updated_by'].forEach((key) => {
+      expect(fields.filter((field) => field.key === key)).toHaveLength(1);
+    });
+    expect(fields.some((field) => field.key === 'id' || field.key === 'org_id')).toBe(false);
   });
 
   it('exposes a scoped record link for every process automation target module', () => {
