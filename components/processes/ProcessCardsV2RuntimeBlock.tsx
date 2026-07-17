@@ -192,13 +192,13 @@ const loadActivatorFieldOptions = async (
     const directory = await fetchAssigneeDirectory(supabase);
     const userOptions = (directory.users || []).map((user) => ({
       label: normalizeText(user?.display_name || user?.full_name || user?.id),
-      value: `user_${normalizeText(user?.id)}`,
+      value: `user:${normalizeText(user?.id)}`,
     })).filter((item) => item.value !== 'user_');
 
     const roleOptions = supportsGlobalRoleAssignee(scopeModuleId)
       ? (directory.roles || []).map((role) => ({
           label: normalizeText(role?.title || role?.id),
-          value: `role_${normalizeText(role?.id)}`,
+          value: `role:${normalizeText(role?.id)}`,
         })).filter((item) => item.value !== 'role_')
       : [];
 

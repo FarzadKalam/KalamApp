@@ -8,6 +8,8 @@ import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import PersianDatePicker from '../PersianDatePicker';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import { parseIdentityToken, type IdentityOption } from '../../utils/identityDirectory';
 import { getHolidayOccasionOptions, type HolidayOccasionOption } from '../../utils/holidayCalendar';
 import { AdaptivePickerMode, resolveOverlayPopupContainer, resolveSelectPopupContainer } from '../../utils/popupContainer';
 import {
@@ -304,6 +306,40 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
         && (condition.operator === 'contains' || condition.operator === 'not_contains')
       );
 
+    if (field.key === WORKFLOW_ASSIGNEE_FIELD_KEY || field.type === FieldType.USER) {
+      const isAssigneeField = field.key === WORKFLOW_ASSIGNEE_FIELD_KEY;
+      const additionalIdentityOptions = options.flatMap((option: any) => {
+        const parsed = parseIdentityToken(option?.value, isAssigneeField ? null : 'user');
+        if (!parsed.kind || !parsed.id || !parsed.token) return [];
+        return [{
+          kind: parsed.kind,
+          id: parsed.id,
+          token: parsed.token,
+          label: String(option?.label || '').trim() || (parsed.kind === 'role' ? 'نقش بدون عنوان' : 'کاربر بدون نام'),
+          active: true,
+        } satisfies IdentityOption];
+      });
+      return (
+        <AdaptiveIdentityPicker
+          mode={expectsListValue ? 'multiple' : undefined}
+          scopes={isAssigneeField ? ['user', 'role'] : ['user']}
+          valueMode={isAssigneeField ? 'token' : 'raw'}
+          additionalOptions={additionalIdentityOptions}
+          value={expectsListValue
+            ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : []))
+            : condition.value}
+          disabled={disabled || isLocked}
+          onChange={(nextVal) => updateCondition(condition.id, {
+            value: normalizeWorkflowValueByFieldType(field, nextVal),
+          })}
+          placeholder={getFieldLabelFa(field)}
+          pickerTitle={getFieldLabelFa(field)}
+          overlayZIndexBase={overlayZIndexBase}
+          adaptiveMode={adaptiveMode}
+        />
+      );
+    }
+
     if (field.dynamicOptionsCategory) {
       return (
         <DynamicSelectField
@@ -336,8 +372,7 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
       field.type === FieldType.SELECT ||
       field.type === FieldType.STATUS ||
       field.type === FieldType.RELATION ||
-      field.type === FieldType.MULTI_RELATION ||
-      field.type === FieldType.USER
+      field.type === FieldType.MULTI_RELATION
     ) {
       return (
         <AdaptiveSelectField

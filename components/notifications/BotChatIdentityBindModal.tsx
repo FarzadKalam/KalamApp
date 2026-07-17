@@ -2,9 +2,10 @@ import React from 'react';
 import { Alert, Checkbox, Empty, Input, Modal, Radio, Space, Tabs, Tag } from 'antd';
 import type { BotTargetModuleId } from '../../utils/botPlatform';
 import { FieldType } from '../../types';
-import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import type { IdentityKind, IdentityOption } from '../../utils/identityDirectory';
 
 type TargetOption = {
   value: string;
@@ -60,27 +61,14 @@ const MODULE_OPTIONS: Array<{ label: string; value: BotTargetModuleId }> = [
 const BOT_IDENTITY_MODAL_Z_INDEX = 15220;
 const BOT_IDENTITY_SELECT_Z_INDEX = 15320;
 
-const ensureSelectedOptions = (
-  options: Array<{ label: string; value: string }>,
-  selectedValues: string[],
-  fallbackPrefix: string,
-) => {
-  const map = new Map<string, { label: string; value: string }>();
-  (options || []).forEach((option) => {
-    const value = String(option?.value || '').trim();
-    if (!value) return;
-    map.set(value, {
-      label: String(option?.label || value).trim() || value,
-      value,
-    });
-  });
-  (selectedValues || []).forEach((rawValue) => {
-    const value = String(rawValue || '').trim();
-    if (!value || map.has(value)) return;
-    map.set(value, { value, label: `${fallbackPrefix} ${value}` });
-  });
-  return Array.from(map.values());
-};
+const toIdentityOptions = (options: Array<{ label: string; value: string }>, kind: IdentityKind): IdentityOption[] =>
+  (options || []).map((option) => ({
+    kind,
+    id: String(option.value || '').trim(),
+    token: `${kind}:${String(option.value || '').trim()}` as IdentityOption['token'],
+    label: String(option.label || '').trim() || (kind === 'role' ? 'نقش بدون عنوان' : 'کاربر بدون نام'),
+    active: true,
+  })).filter((option) => Boolean(option.id));
 
 const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
   open,
@@ -110,14 +98,8 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
   onClose,
   onSave,
 }) => {
-  const normalizedUserOptions = React.useMemo(
-    () => ensureSelectedOptions(userOptions, allowedUserIds, 'کاربر'),
-    [allowedUserIds, userOptions],
-  );
-  const normalizedRoleOptions = React.useMemo(
-    () => ensureSelectedOptions(roleOptions, allowedRoleIds, 'نقش'),
-    [allowedRoleIds, roleOptions],
-  );
+  const additionalUserOptions = React.useMemo(() => toIdentityOptions(userOptions, 'user'), [userOptions]);
+  const additionalRoleOptions = React.useMemo(() => toIdentityOptions(roleOptions, 'role'), [roleOptions]);
   const resolveModalPopupContainer = React.useCallback((trigger?: HTMLElement | null) => {
     const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
     return modalBodyHost || resolveOverlayPopupContainer(trigger);
@@ -205,41 +187,31 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای ارسال پیام خصوصی</div>
-                    <AdaptiveSelectField
+                    <AdaptiveIdentityPicker
                       mode="multiple"
+                      scopes={['user']}
+                      valueMode="raw"
                       allowClear
-                      showSearch
                       value={allowedUserIds}
-                      options={normalizedUserOptions}
-                      onChange={(value: any) => onChangeAllowedUserIds((value || []).map((id: any) => String(id)))}
-                      optionFilterProp="label"
-                      optionLabelProp="label"
+                      additionalOptions={additionalUserOptions}
+                      onChange={(value) => onChangeAllowedUserIds((Array.isArray(value) ? value : []).map(String))}
                       placeholder="اگر خالی باشد، محدودیت اختصاصی ندارد"
-                      getPopupContainer={(trigger: HTMLElement) => resolveModalPopupContainer(trigger)}
-                      modalContainer={resolveModalPopupContainer}
-                      preferLocalPopupContainer
                       overlayZIndexBase={BOT_IDENTITY_SELECT_Z_INDEX}
-                      styles={{ popup: { root: { zIndex: 19000 } } }}
                       className="w-full"
                     />
                   </div>
                   <div>
                     <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز برای ارسال پیام خصوصی</div>
-                    <AdaptiveSelectField
+                    <AdaptiveIdentityPicker
                       mode="multiple"
+                      scopes={['role']}
+                      valueMode="raw"
                       allowClear
-                      showSearch
                       value={allowedRoleIds}
-                      options={normalizedRoleOptions}
-                      onChange={(value: any) => onChangeAllowedRoleIds((value || []).map((id: any) => String(id)))}
-                      optionFilterProp="label"
-                      optionLabelProp="label"
+                      additionalOptions={additionalRoleOptions}
+                      onChange={(value) => onChangeAllowedRoleIds((Array.isArray(value) ? value : []).map(String))}
                       placeholder="اگر خالی باشد، محدودیت اختصاصی ندارد"
-                      getPopupContainer={(trigger: HTMLElement) => resolveModalPopupContainer(trigger)}
-                      modalContainer={resolveModalPopupContainer}
-                      preferLocalPopupContainer
                       overlayZIndexBase={BOT_IDENTITY_SELECT_Z_INDEX}
-                      styles={{ popup: { root: { zIndex: 19000 } } }}
                       className="w-full"
                     />
                   </div>

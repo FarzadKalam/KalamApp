@@ -3,6 +3,15 @@ import { Button, Input, Modal, Select } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { parseNoteContent } from '../../utils/noteContent';
 import type { ForwardTargetOption } from '../../hooks/useNotificationForwardRuntime';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import { parseIdentityToken } from '../../utils/identityDirectory';
+import {
+  CHAT_GROUP_PREFIX,
+  isBotDirectForwardSelection,
+  isBotGroupForwardSelection,
+  isChatGroupSelection,
+  isSavedMessagesForwardSelection,
+} from '../../utils/notificationConversationKeys';
 
 type ForwardMessageModalProps = {
   open: boolean;
@@ -37,7 +46,18 @@ const ForwardMessageModal: React.FC<ForwardMessageModalProps> = ({
   onTextChange,
   onTargetsChange,
   onOpenReadyTexts,
-}) => (
+}) => {
+  const identityValues = forwardTargetUserIds.flatMap((target) => {
+    if (isChatGroupSelection(target)) return [`chat_group:${target.slice(CHAT_GROUP_PREFIX.length)}`];
+    if (isBotDirectForwardSelection(target) || isBotGroupForwardSelection(target) || isSavedMessagesForwardSelection(target)) return [];
+    return [`user:${target}`];
+  });
+  const externalValues = forwardTargetUserIds.filter((target) =>
+    isBotDirectForwardSelection(target) || isBotGroupForwardSelection(target) || isSavedMessagesForwardSelection(target));
+  const externalOptions = forwardTargetOptions.filter((option) =>
+    isBotDirectForwardSelection(option.value) || isBotGroupForwardSelection(option.value) || isSavedMessagesForwardSelection(option.value));
+
+  return (
   <Modal
     title="فوروارد پیام"
     open={open}
@@ -66,23 +86,45 @@ const ForwardMessageModal: React.FC<ForwardMessageModalProps> = ({
         placeholder="متن اختیاری قبل از محتوای فوروارد"
         className="w-full"
       />
-      <Select
+      <AdaptiveIdentityPicker
+        mode="multiple"
+        scopes={['user', 'chat_group']}
+        value={identityValues}
+        onChange={(values) => {
+          const nextIdentityTargets = (Array.isArray(values) ? values : []).flatMap((value) => {
+            const parsed = parseIdentityToken(value);
+            if (!parsed.id) return [];
+            return parsed.kind === 'chat_group' ? [`${CHAT_GROUP_PREFIX}${parsed.id}`] : [parsed.id];
+          });
+          onTargetsChange([...externalValues, ...nextIdentityTargets]);
+        }}
+        placeholder="انتخاب افراد یا گروه‌های داخلی"
+        pickerTitle="انتخاب گیرندگان داخلی"
+        className="w-full"
+        overlayZIndexBase={1710}
+      />
+      {externalOptions.length > 0 ? <Select
         mode="multiple"
         showSearch
         allowClear
-        value={forwardTargetUserIds}
-        onChange={(values) => onTargetsChange((values || []).map((value) => String(value)))}
-        placeholder="یک یا چند گیرنده انتخاب کنید"
+        value={externalValues}
+        onChange={(values) => onTargetsChange([...identityValues.flatMap((value) => {
+          const parsed = parseIdentityToken(value);
+          if (!parsed.id) return [];
+          return parsed.kind === 'chat_group' ? [`${CHAT_GROUP_PREFIX}${parsed.id}`] : [parsed.id];
+        }), ...(values || []).map((value) => String(value))])}
+        placeholder="گروه بات، پیام شخصی بات یا پیام‌های من"
         optionFilterProp="searchText"
         filterOption={(input, option) => String(option?.searchText || '').includes(String(input || '').trim().toLowerCase())}
         getPopupContainer={(trigger) => trigger.parentElement || document.body}
         styles={{ popup: { root: { zIndex: 1710 } } }}
-        options={forwardTargetOptions}
+        options={externalOptions}
         maxTagCount="responsive"
         className="w-full"
-      />
+      /> : null}
     </div>
   </Modal>
-);
+  );
+};
 
 export default React.memo(ForwardMessageModal);

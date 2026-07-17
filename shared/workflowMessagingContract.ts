@@ -5,6 +5,13 @@ const normalizeList = (value: unknown): string[] => {
   return Array.from(new Set(raw.map((item) => String(item || '').trim()).filter(Boolean)));
 };
 
+const normalizeIdentityRecipientList = (value: unknown): string[] =>
+  normalizeList(value).map((item) => {
+    const match = item.match(/^(user|role|chat_group)[:_](.+)$/i);
+    if (!match) return item;
+    return `${String(match[1]).toLowerCase()}:${String(match[2]).trim()}`;
+  });
+
 export type WorkflowRecipientConfig = {
   recipientFields: string[];
   recipientAssignees: string[];
@@ -76,7 +83,7 @@ export const getWorkflowRecipientConfig = (config: Record<string, any> | null | 
     ...(Array.isArray(config?.recipient_fields) ? config!.recipient_fields : []),
     ...(Array.isArray(config?.related_recipient_fields) ? config!.related_recipient_fields : []),
   ]),
-  recipientAssignees: normalizeList([
+  recipientAssignees: normalizeIdentityRecipientList([
     ...(Array.isArray(config?.recipient_assignees) ? config!.recipient_assignees : []),
     ...(Array.isArray(config?.recipient_targets) ? config!.recipient_targets : []),
   ]),

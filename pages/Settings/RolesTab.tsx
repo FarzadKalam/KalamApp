@@ -11,6 +11,7 @@ import {
   Radio,
   Select,
   Badge,
+  Modal,
 } from 'antd';
 import {
   SaveOutlined,
@@ -78,6 +79,15 @@ import { getDefaultWorkflowOperator, getWorkflowOperatorOptions } from '../../ut
 import { WORKFLOW_ASSIGNEE_FIELD_KEY } from '../../utils/workflowTypes';
 import { OrgChart } from './OrgChart';
 import { useRoleDragDrop } from './useRoleDragDrop';
+import {
+  DEFAULT_ROLE_ICON_KEY,
+  ROLE_ICON_OPTIONS,
+  normalizeRoleIconKey,
+  renderRoleIcon,
+  type RoleIconKey,
+} from '../../utils/roleIconCatalog';
+import { clearIdentityDirectoryCache } from '../../utils/identityDirectory';
+import { clearReferenceDataCache } from '../../utils/referenceData';
 
 const CURRENT_USER_OPTION_VALUE = '__current_user__';
 const CURRENT_ROLE_OPTION_VALUE = '__current_role__';
@@ -118,6 +128,11 @@ const isRoleTreeColumnMissingError = (error: any) => {
   return text.includes('parent_id') || text.includes('sort_order');
 };
 
+const isRoleIconColumnMissingError = (error: any) => {
+  const text = String(error?.message || error?.details || error || '').toLowerCase();
+  return text.includes('icon_key');
+};
+
 const RolesTab: React.FC = () => {
   const { message, modal } = App.useApp();
   const permissionsPanelRef = useRef<HTMLDivElement>(null);
@@ -132,6 +147,9 @@ const RolesTab: React.FC = () => {
   const [currentOrgId, setCurrentOrgId] = useState<string | null>(null);
   const [isSaasAdminOrg, setIsSaasAdminOrg] = useState(false);
   const [supportsRoleTreeSchema, setSupportsRoleTreeSchema] = useState<boolean | null>(null);
+  const [supportsRoleIconSchema, setSupportsRoleIconSchema] = useState<boolean | null>(null);
+  const [selectedRoleIconKey, setSelectedRoleIconKey] = useState<RoleIconKey>(DEFAULT_ROLE_ICON_KEY);
+  const [roleIconPickerOpen, setRoleIconPickerOpen] = useState(false);
   const [permissionSchemaVersion, setPermissionSchemaVersion] = useState(0);
   const [fieldSearchByModule, setFieldSearchByModule] = useState<Record<string, string>>({});
   const [conditionEditorOpen, setConditionEditorOpen] = useState<Record<string, boolean>>({});
@@ -179,6 +197,7 @@ const RolesTab: React.FC = () => {
     const role = roles.find((r) => r.id === selectedRoleId);
     setPermissions(mergePermissionsWithDefaults(role?.permissions || {}, defaultPermissions));
     setSelectedRoleTitle(String(role?.title || ''));
+    setSelectedRoleIconKey(normalizeRoleIconKey(role?.icon_key));
   }, [selectedRoleId, roles, defaultPermissions]);
 
   // ─── Data helpers ──────────────────────────────────────────────────────────
@@ -234,27 +253,37 @@ const RolesTab: React.FC = () => {
   const fetchRoles = async () => {
     if (!currentOrgId) { setRoles([]); return; }
 
-    const runQuery = async (tree: boolean) =>
+    const runQuery = async (tree: boolean, withIcon: boolean) =>
       tree
         ? supabase
             .from('org_roles')
-            .select('id, org_id, title, permissions, created_at, parent_id, sort_order, is_system')
+            .select(`id, org_id, title, permissions, created_at, parent_id, sort_order, is_system${withIcon ? ', icon_key' : ''}`)
             .eq('org_id', currentOrgId)
             .order('created_at')
         : supabase
             .from('org_roles')
-            .select('id, org_id, title, permissions, created_at, is_system')
+            .select(`id, org_id, title, permissions, created_at, is_system${withIcon ? ', icon_key' : ''}`)
             .eq('org_id', currentOrgId)
             .order('created_at');
 
     const preferTree = supportsRoleTreeSchema !== false;
-    const primary = await runQuery(preferTree);
+    const preferIcon = supportsRoleIconSchema !== false;
+    const primary = await runQuery(preferTree, preferIcon);
     let data = primary.data;
     let error = primary.error;
 
+    if (error && preferIcon && isRoleIconColumnMissingError(error)) {
+      setSupportsRoleIconSchema(false);
+      const withoutIcon = await runQuery(preferTree, false);
+      data = withoutIcon.data;
+      error = withoutIcon.error;
+    } else if (!error && preferIcon) {
+      setSupportsRoleIconSchema(true);
+    }
+
     if (error && isRoleTreeColumnMissingError(error) && preferTree) {
       setSupportsRoleTreeSchema(false);
-      const fallback = await runQuery(false);
+      const fallback = await runQuery(false, supportsRoleIconSchema !== false);
       data = (fallback.data || []).map((r: any) => ({ ...r, parent_id: null, sort_order: 0 }));
       error = fallback.error;
     } else if (!error && preferTree) {
@@ -387,10 +416,19 @@ const RolesTab: React.FC = () => {
     if (!selectedRoleId) return;
     const nextTitle = String(selectedRoleTitle || '').trim();
     if (!nextTitle) { message.error('عنوان نقش نمی‌تواند خالی باشد'); return; }
-    const { error } = await supabase.from('org_roles').update({ title: nextTitle }).eq('id', selectedRoleId);
-    if (error) { message.error(toFaErrorMessage(error, 'بروزرسانی عنوان نقش ناموفق بود.')); return; }
-    message.success('عنوان نقش بروزرسانی شد');
-    setRoles((prev) => prev.map((r) => (r.id === selectedRoleId ? { ...r, title: nextTitle } : r)));
+    let result = await supabase
+      .from('org_roles')
+      .update({ title: nextTitle, icon_key: selectedRoleIconKey })
+      .eq('id', selectedRoleId);
+    if (result.error && isRoleIconColumnMissingError(result.error)) {
+      setSupportsRoleIconSchema(false);
+      result = await supabase.from('org_roles').update({ title: nextTitle }).eq('id', selectedRoleId);
+    }
+    if (result.error) { message.error(toFaErrorMessage(result.error, 'بروزرسانی مشخصات نقش ناموفق بود.')); return; }
+    message.success('مشخصات نقش بروزرسانی شد');
+    setRoles((prev) => prev.map((r) => (r.id === selectedRoleId ? { ...r, title: nextTitle, icon_key: selectedRoleIconKey } : r)));
+    clearReferenceDataCache();
+    clearIdentityDirectoryCache(currentOrgId);
   };
 
   // ─── Edit + scroll ─────────────────────────────────────────────────────────
@@ -711,14 +749,21 @@ const RolesTab: React.FC = () => {
           {selectedRoleId ? (
             <>
               {/* Role title editor */}
-              <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end">
+              <div className="mb-4 grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-2 items-end">
                 <Input
                   value={selectedRoleTitle}
                   onChange={(e) => setSelectedRoleTitle(e.target.value)}
                   placeholder="عنوان نمایشی جایگاه (فارسی)"
                   className="dark:bg-[#303030] dark:border-gray-700 dark:text-white"
                 />
-                <Button onClick={handleUpdateRoleTitle} icon={<TeamOutlined />}>ذخیره عنوان</Button>
+                <Button
+                  onClick={() => setRoleIconPickerOpen(true)}
+                  icon={renderRoleIcon(selectedRoleIconKey)}
+                  disabled={supportsRoleIconSchema === false}
+                >
+                  انتخاب آیکون
+                </Button>
+                <Button onClick={handleUpdateRoleTitle} icon={<SaveOutlined />}>ذخیره مشخصات</Button>
               </div>
 
               {/* Mobile footer module preferences */}
@@ -1015,6 +1060,37 @@ const RolesTab: React.FC = () => {
         .dark .ant-collapse-content { background-color: #1f1f1f; color: #ddd; border-color: #303030; }
         .dark .ant-collapse-header { color: #ddd !important; }
       `}</style>
+      <Modal
+        open={roleIconPickerOpen}
+        onCancel={() => setRoleIconPickerOpen(false)}
+        footer={null}
+        centered
+        title="انتخاب آیکون جایگاه"
+        width={620}
+        destroyOnHidden={false}
+      >
+        <div className="grid max-h-[60vh] grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-5 md:grid-cols-6" dir="rtl">
+          {ROLE_ICON_OPTIONS.map((item) => {
+            const selected = item.key === selectedRoleIconKey;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={`flex min-h-[76px] flex-col items-center justify-center gap-2 rounded-xl border p-2 text-xs transition ${selected
+                  ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-300'
+                  : 'border-gray-200 hover:border-blue-300 dark:border-gray-700'}`}
+                onClick={() => {
+                  setSelectedRoleIconKey(item.key);
+                  setRoleIconPickerOpen(false);
+                }}
+              >
+                <span className="text-xl">{item.icon}</span>
+                <span className="line-clamp-2 text-center">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Modal>
     </div>
   );
 };

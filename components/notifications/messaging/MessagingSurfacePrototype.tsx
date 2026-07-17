@@ -29,7 +29,7 @@ import {
   UserAddOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { App, Avatar, Badge, Button, Checkbox, Input, Modal, Select, Spin, Tag, Tooltip } from 'antd';
+import { App, Avatar, Badge, Button, Checkbox, Input, Modal, Spin, Tag, Tooltip } from 'antd';
 import { BOT_CHANNEL_LABELS_FA, BOT_CHANNELS, getBotChatIdFieldKey, getBotPlatformAvatarSrc, isBotTargetModuleId, type BotTargetModuleId } from '../../../utils/botPlatform';
 import { safeJalaliFormat, toPersianNumber } from '../../../utils/persianNumberFormatter';
 import { useMessagingOmniLiveData } from './useMessagingOmniLiveData';
@@ -49,7 +49,9 @@ import { syncBotDirectChatIdForTarget } from '../../../utils/botIdentityBindings
 import { toFaErrorMessage } from '../../../utils/errorMessageFa';
 import { sendSmsViaGateway } from '../../../utils/smsGateway';
 import SharedNoteComposer from '../../notes/SharedNoteComposer';
-import { fetchAssigneeDirectory, type AssigneeDirectory } from '../../../utils/referenceData';
+import AdaptiveIdentityPicker from '../../AdaptiveIdentityPicker';
+import type { AssigneeDirectory } from '../../../utils/referenceData';
+import { clearIdentityDirectoryCache, searchIdentityOptions } from '../../../utils/identityDirectory';
 import { isMissingColumnError, isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { parseNoteContent, resolveNoteAttachmentFileType, serializeNoteContent, type NoteAttachment } from '../../../utils/noteContent';
 import { ensureNoteAttachmentShortcuts, uploadNoteAttachments } from '../../../utils/noteAttachments';
@@ -2581,16 +2583,41 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   useEffect(() => {
     if (!liveData.profile.id || !liveData.profile.orgId) return;
     let disposed = false;
-    setMentionsLoading(true);
-    void fetchAssigneeDirectory(supabase).then((directory) => {
-      if (!disposed) setAssigneeDirectory(directory);
-    }).catch((error: any) => {
-      if (!disposed) message.error(toFaErrorMessage(error, 'خواندن فهرست منشن ناموفق بود.'));
-    }).finally(() => {
-      if (!disposed) setMentionsLoading(false);
-    });
+    const loadDirectoryPreview = () => {
+      setMentionsLoading(true);
+      void searchIdentityOptions(supabase, { scopes: ['user', 'role'], limitPerScope: 50 }).then((result) => {
+        if (disposed) return;
+        setAssigneeDirectory({
+          users: result.items.filter((item) => item.kind === 'user').map((item) => ({
+            id: item.id,
+            display_name: item.label,
+            full_name: item.label,
+            avatar_url: item.avatarUrl || null,
+            role_id: item.roleId || null,
+            job_title: item.subtitle || null,
+            is_active: item.active,
+          })),
+          roles: result.items.filter((item) => item.kind === 'role').map((item) => ({
+            id: item.id,
+            title: item.label,
+            icon_key: item.iconKey || 'team',
+          })),
+        });
+      }).catch((error: any) => {
+        if (!disposed) message.error(toFaErrorMessage(error, 'خواندن فهرست منشن ناموفق بود.'));
+      }).finally(() => {
+        if (!disposed) setMentionsLoading(false);
+      });
+    };
+    const requestIdle = (window as any).requestIdleCallback as undefined | ((callback: () => void, options?: { timeout: number }) => number);
+    const cancelIdle = (window as any).cancelIdleCallback as undefined | ((handle: number) => void);
+    const handle = requestIdle
+      ? requestIdle(loadDirectoryPreview, { timeout: 1200 })
+      : window.setTimeout(loadDirectoryPreview, 150);
     return () => {
       disposed = true;
+      if (requestIdle && cancelIdle) cancelIdle(handle);
+      else window.clearTimeout(handle);
     };
   }, [liveData.profile.id, liveData.profile.orgId, message]);
   useEffect(() => {
@@ -4157,6 +4184,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         const existingId = String(row.id || '').trim();
         return [...prev.filter((item) => String(item.id || '').trim() !== existingId), row];
       });
+      clearIdentityDirectoryCache(orgId);
       await refreshInternalConversations({ force: true });
       const nextConversationKey = getLiveInternalConversationKey(`${CHAT_GROUP_PREFIX}${row.id}`);
       setSelectedKey(nextConversationKey);
@@ -5084,29 +5112,29 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           </div>
           <div>
             <div className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">اعضا</div>
-            <Select
+            <AdaptiveIdentityPicker
               mode="multiple"
+              scopes={['user']}
+              valueMode="raw"
               allowClear
-              showSearch
-              optionFilterProp="label"
               value={internalGroupUserIds}
-              onChange={(values) => setInternalGroupUserIds(values)}
-              options={internalGroupUserOptions}
+              onChange={(values) => setInternalGroupUserIds(Array.isArray(values) ? values : [])}
               placeholder="انتخاب کاربران"
+              pickerTitle="انتخاب اعضای گروه داخلی"
               className="w-full"
             />
           </div>
           <div>
             <div className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">نقش‌ها</div>
-            <Select
+            <AdaptiveIdentityPicker
               mode="multiple"
+              scopes={['role']}
+              valueMode="raw"
               allowClear
-              showSearch
-              optionFilterProp="label"
               value={internalGroupRoleIds}
-              onChange={(values) => setInternalGroupRoleIds(values)}
-              options={internalGroupRoleOptions}
+              onChange={(values) => setInternalGroupRoleIds(Array.isArray(values) ? values : [])}
               placeholder="انتخاب نقش‌ها"
+              pickerTitle="انتخاب نقش‌های گروه داخلی"
               className="w-full"
             />
           </div>

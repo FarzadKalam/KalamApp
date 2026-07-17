@@ -47,7 +47,8 @@ import {
 import { toFaErrorMessage } from "../../utils/errorMessageFa";
 import DynamicSelectField from "../DynamicSelectField";
 import PersianDatePicker from "../PersianDatePicker";
-import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from "../../utils/referenceData";
+import { fetchDynamicOptionsByCategory } from "../../utils/referenceData";
+import AdaptiveIdentityPicker from "../AdaptiveIdentityPicker";
 import { fetchRelationOptionsForField } from "../../utils/relationOptions";
 import { MODULES } from "../../moduleRegistry";
 import { normalizeAutoNameEnabled } from "../../utils/autoName";
@@ -1800,7 +1801,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
   const [autoSyncCustomerStats, setAutoSyncCustomerStats] = useState<boolean>(moduleId === "invoices");
   const [defaultEditorRelationOptions, setDefaultEditorRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [defaultEditorDynamicOptions, setDefaultEditorDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [defaultEditorAssigneeOptions, setDefaultEditorAssigneeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const parsedSheet = useMemo(() => matrixToSheetData(rawMatrix, hasHeader), [rawMatrix, hasHeader]);
 
   const headerImportableFields = useMemo(() => {
@@ -1965,7 +1965,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     setAutoSyncCustomerStats(moduleId === "invoices");
     setDefaultEditorRelationOptions({});
     setDefaultEditorDynamicOptions({});
-    setDefaultEditorAssigneeOptions([]);
   }, [moduleId, supportsGroupedInvoiceImport]);
 
   useEffect(() => {
@@ -2375,7 +2374,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     const neededRelationFields = selectedFields.filter((field) =>
       field.key !== "assignee_id" && (field.type === FieldType.RELATION || field.type === FieldType.USER)
     );
-    const needsAssigneeOptions = selectedFields.some((field) => field.key === "assignee_id");
     let cancelled = false;
 
     const loadEditorOptions = async () => {
@@ -2399,21 +2397,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       if (!cancelled && nextRelationEntries.length > 0) {
         setDefaultEditorRelationOptions((prev) => ({ ...prev, ...Object.fromEntries(nextRelationEntries) }));
       }
-      if (!cancelled && needsAssigneeOptions && defaultEditorAssigneeOptions.length === 0) {
-        const directory = await fetchAssigneeDirectory(supabase);
-        setDefaultEditorAssigneeOptions([
-          ...directory.users.map((user) => ({
-            label: String(user.display_name || user.full_name || user.email || user.mobile_1 || user.id).trim(),
-            value: `user_${String(user.id)}`,
-          })),
-          ...(supportsGlobalRoleAssignee(moduleId)
-            ? directory.roles.map((role) => ({
-                label: String(role.title || role.id).trim(),
-                value: `role_${String(role.id)}`,
-              }))
-            : []),
-        ]);
-      }
     };
 
     void loadEditorOptions();
@@ -2421,7 +2404,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       cancelled = true;
     };
   }, [
-    defaultEditorAssigneeOptions.length,
     defaultEditorDynamicOptions,
     defaultEditorRelationOptions,
     getMappingTargetField,
@@ -2451,14 +2433,11 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
 
     if (field.key === "assignee_id") {
       return (
-        <Select
-          {...wizardSelectProps}
+        <AdaptiveIdentityPicker
           value={editorValue}
+          scopes={supportsGlobalRoleAssignee(moduleId) ? ['user', 'role'] : ['user']}
           allowClear
-          showSearch
           className="w-full"
-          optionFilterProp="label"
-          options={defaultEditorAssigneeOptions}
           placeholder="انتخاب مسئول پیش فرض"
           onChange={(nextValue) => setEditorValue(nextValue)}
         />
@@ -2582,7 +2561,6 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       />
     );
   }, [
-    defaultEditorAssigneeOptions,
     defaultEditorDynamicOptions,
     defaultEditorRelationOptions,
     getMappingTargetField,
@@ -3132,7 +3110,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
           "دریافت مسئول‌ها برای تطبیق"
         );
         (users || []).forEach((item: { id: string; full_name: string | null; email?: string | null }) => {
-          const encodedValue = `user_${item.id}`;
+          const encodedValue = `user:${item.id}`;
           setLookupValue(map, item.id, encodedValue);
           if (item.full_name) setLookupValue(map, item.full_name, encodedValue);
           if (item.email) setLookupValue(map, item.email, encodedValue);
@@ -3145,7 +3123,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
             "دریافت نقش‌ها برای تطبیق"
           );
           (roles || []).forEach((item: { id: string; title?: string | null }) => {
-            const encodedValue = `role_${item.id}`;
+            const encodedValue = `role:${item.id}`;
             setLookupValue(map, item.id, encodedValue);
             if (item.title) setLookupValue(map, item.title, encodedValue);
           });

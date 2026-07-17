@@ -6,6 +6,7 @@ import { loadProfilesWithCompat } from './profileDirectory';
 import { getMergedTaskTypeOptions } from './taskMeta';
 import { doesProcessTemplateSupportModule } from './processTargets';
 import { collectAllKnownDynamicCategories } from './moduleListOptions';
+import { normalizeRoleIconKey, type RoleIconKey } from './roleIconCatalog';
 
 type DynamicOptionRow = { label: string; value: string };
 type ProcessTemplateOptionRow = {
@@ -35,6 +36,7 @@ export type AssigneeDirectory = {
     parent_id?: string | null;
     sort_order?: number;
     is_system?: boolean;
+    icon_key?: RoleIconKey;
   }>;
 };
 
@@ -212,16 +214,17 @@ const normalizeUsers = (rows: any[]) =>
       String(user?.email || '').trim() ||
       String(user?.mobile_1 || '').trim() ||
       String(user?.mobile || '').trim() ||
-      `کاربر ${String(user?.id || '').slice(0, 8)}`,
+      'کاربر بدون نام',
   }));
 
 const normalizeRoles = (rows: any[]) =>
   (rows || []).map((role: any) => ({
     id: String(role?.id || ''),
-    title: String(role?.title || role?.name || role?.id || '').trim() || 'بدون عنوان',
+    title: String(role?.title || role?.name || '').trim() || 'نقش بدون عنوان',
     parent_id: role?.parent_id ? String(role.parent_id) : null,
     sort_order: Number.isFinite(Number(role?.sort_order)) ? Number(role.sort_order) : 0,
     is_system: role?.is_system === true,
+    icon_key: normalizeRoleIconKey(role?.icon_key),
   }));
 
 const mergeRoleRows = (...sources: any[][]): any[] => {
@@ -624,11 +627,11 @@ export const fetchAssigneeDirectory = async (
       let query = treeSchema
         ? supabaseClient
             .from('org_roles')
-            .select('id, org_id, title, parent_id, sort_order, is_system')
+            .select('id, org_id, title, parent_id, sort_order, is_system, icon_key')
             .limit(400)
         : supabaseClient
             .from('org_roles')
-            .select('id, org_id, title, is_system')
+            .select('id, org_id, title, is_system, icon_key')
             .limit(400);
 
       return query.eq('org_id', orgId);
@@ -696,8 +699,8 @@ export const fetchAssigneeDirectory = async (
 
     if (assignedRoleIds.length > 0) {
       const missingRolesResult = assigneeDirectoryCache.supportsRoleTreeSchema === false
-        ? await supabaseClient.from('org_roles').select('id, org_id, title, is_system').eq('org_id', orgId).in('id', assignedRoleIds)
-        : await supabaseClient.from('org_roles').select('id, org_id, title, parent_id, sort_order, is_system').eq('org_id', orgId).in('id', assignedRoleIds);
+        ? await supabaseClient.from('org_roles').select('id, org_id, title, is_system, icon_key').eq('org_id', orgId).in('id', assignedRoleIds)
+        : await supabaseClient.from('org_roles').select('id, org_id, title, parent_id, sort_order, is_system, icon_key').eq('org_id', orgId).in('id', assignedRoleIds);
       const missingRoles = assigneeDirectoryCache.supportsRoleTreeSchema === false
         ? (missingRolesResult?.data || []).map((row: any) => ({ ...row, parent_id: null, sort_order: 0 }))
         : (missingRolesResult?.data || []);

@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Checkbox, Empty, Input, Segmented, Tag } from 'antd';
 import { DeleteOutlined, DownOutlined, PlusOutlined, UpOutlined } from '@ant-design/icons';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import type {
   PrintSignatureDerivedState,
   PrintSignatureKind,
@@ -30,6 +31,7 @@ type PrintSignatureConfiguratorProps = {
 };
 
 const SIGNER_MODULE_OPTIONS = [
+  { label: 'کاربر سازمان', value: 'profiles' },
   { label: 'کارمند', value: 'employees' },
   { label: 'مشتری', value: 'customers' },
   { label: 'تامین‌کننده', value: 'suppliers' },
@@ -128,23 +130,35 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
                     </div>
                     <div>
                       <div className="print-signature-label">رکورد امضاکننده</div>
-                      <AdaptiveSelectField
-                        value={row.signerId || undefined}
-                        onChange={(value) => onChangeSignerId(row.id, value || null)}
-                        options={signatureOptionsByRow[row.id] || []}
-                        showSearch
-                        allowClear
-                        placeholder="انتخاب کنید"
-                        optionFilterProp="label"
-                        onSearch={(value) => {
-                          const signerModule = (row.signerModule || 'customers') as PrintSignatureSignerModule;
-                          void onSearchSignerOptions(row.id, signerModule, value);
-                        }}
-                        onFocus={() => {
-                          const signerModule = (row.signerModule || 'customers') as PrintSignatureSignerModule;
-                          void onSearchSignerOptions(row.id, signerModule, '', row.signerId || null);
-                        }}
-                      />
+                      {row.signerModule === 'profiles' ? (
+                        <AdaptiveIdentityPicker
+                          value={row.signerId || undefined}
+                          valueMode="raw"
+                          scopes={['user']}
+                          onChange={(value) => onChangeSignerId(row.id, typeof value === 'string' ? value : null)}
+                          allowClear
+                          placeholder="انتخاب کاربر سازمان"
+                          pickerTitle="انتخاب امضاکننده"
+                        />
+                      ) : (
+                        <AdaptiveSelectField
+                          value={row.signerId || undefined}
+                          onChange={(value) => onChangeSignerId(row.id, value || null)}
+                          options={signatureOptionsByRow[row.id] || []}
+                          showSearch
+                          allowClear
+                          placeholder="انتخاب کنید"
+                          optionFilterProp="label"
+                          onSearch={(value) => {
+                            const signerModule = (row.signerModule || 'customers') as PrintSignatureSignerModule;
+                            void onSearchSignerOptions(row.id, signerModule, value);
+                          }}
+                          onFocus={() => {
+                            const signerModule = (row.signerModule || 'customers') as PrintSignatureSignerModule;
+                            void onSearchSignerOptions(row.id, signerModule, '', row.signerId || null);
+                          }}
+                        />
+                      )}
                     </div>
                   </div>
                 ) : null}

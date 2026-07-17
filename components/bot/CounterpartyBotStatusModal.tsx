@@ -9,6 +9,8 @@ import {
   resolveSelectPopupContainer,
 } from '../../utils/popupContainer';
 import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
+import type { IdentityKind, IdentityOption } from '../../utils/identityDirectory';
 
 export type BotChannel = 'rubika' | 'telegram' | 'bale';
 
@@ -75,27 +77,14 @@ const STATUS_COLOR: Record<string, string> = {
   disabled: 'text-gray-400',
 };
 
-const ensureSelectedOptions = (
-  options: Array<{ label: string; value: string }>,
-  selectedValues: string[],
-  fallbackPrefix: string
-) => {
-  const map = new Map<string, { label: string; value: string }>();
-  (options || []).forEach((option) => {
-    const value = String(option?.value || '').trim();
-    if (!value) return;
-    map.set(value, {
-      label: String(option?.label || value).trim() || value,
-      value,
-    });
-  });
-  (selectedValues || []).forEach((rawValue) => {
-    const value = String(rawValue || '').trim();
-    if (!value || map.has(value)) return;
-    map.set(value, { value, label: `${fallbackPrefix} ${value}` });
-  });
-  return Array.from(map.values());
-};
+const toIdentityOptions = (options: Array<{ label: string; value: string }>, kind: IdentityKind): IdentityOption[] =>
+  (options || []).map((option) => ({
+    kind,
+    id: String(option.value || '').trim(),
+    token: `${kind}:${String(option.value || '').trim()}` as IdentityOption['token'],
+    label: String(option.label || '').trim() || (kind === 'role' ? 'نقش بدون عنوان' : 'کاربر بدون نام'),
+    active: true,
+  })).filter((option) => Boolean(option.id));
 
 export type CounterpartyBotStatusModalProps = {
   open: boolean;
@@ -158,14 +147,8 @@ const PlatformTabContent: React.FC<{
   onCopyActivationCode,
 }) => {
   const channelLabel = CHANNEL_LABEL_BY_VALUE[channel] || '';
-  const normalizedUserOptions = React.useMemo(
-    () => ensureSelectedOptions(userOptions, state.allowedUserIds, 'کاربر'),
-    [state.allowedUserIds, userOptions]
-  );
-  const normalizedRoleOptions = React.useMemo(
-    () => ensureSelectedOptions(roleOptions, state.allowedRoleIds, 'نقش'),
-    [state.allowedRoleIds, roleOptions]
-  );
+  const additionalUserOptions = React.useMemo(() => toIdentityOptions(userOptions, 'user'), [userOptions]);
+  const additionalRoleOptions = React.useMemo(() => toIdentityOptions(roleOptions, 'role'), [roleOptions]);
   const statusColor = STATUS_COLOR[state.currentStatus] || 'text-gray-700 dark:text-gray-300';
 
   return (
@@ -241,38 +224,30 @@ const PlatformTabContent: React.FC<{
       </div>
       <div>
         <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">کاربران مجاز برای این گروه بات</div>
-        <Select
+        <AdaptiveIdentityPicker
           mode="multiple"
+          scopes={['user']}
+          valueMode="raw"
           allowClear
-          showSearch
           value={state.allowedUserIds}
-          options={normalizedUserOptions}
-          onChange={(value) => onChangePlatform('allowedUserIds', (value || []).map((id: any) => String(id)))}
-          className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
-          optionFilterProp="label"
-          optionLabelProp="label"
+          additionalOptions={additionalUserOptions}
+          onChange={(value) => onChangePlatform('allowedUserIds', (Array.isArray(value) ? value : []).map(String))}
+          className="w-full"
           placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
-          getPopupContainer={resolveSelectPopupContainer}
-          popupMatchSelectWidth={false}
-          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
         />
       </div>
       <div>
         <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">نقش‌های مجاز برای این گروه بات</div>
-        <Select
+        <AdaptiveIdentityPicker
           mode="multiple"
+          scopes={['role']}
+          valueMode="raw"
           allowClear
-          showSearch
           value={state.allowedRoleIds}
-          options={normalizedRoleOptions}
-          onChange={(value) => onChangePlatform('allowedRoleIds', (value || []).map((id: any) => String(id)))}
-          className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
-          optionFilterProp="label"
-          optionLabelProp="label"
+          additionalOptions={additionalRoleOptions}
+          onChange={(value) => onChangePlatform('allowedRoleIds', (Array.isArray(value) ? value : []).map(String))}
+          className="w-full"
           placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
-          getPopupContainer={resolveSelectPopupContainer}
-          popupMatchSelectWidth={false}
-          styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 260 }) } }}
         />
       </div>
       <div className="flex justify-end pt-1">

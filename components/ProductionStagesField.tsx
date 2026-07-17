@@ -18,6 +18,7 @@ import { supabase } from '../supabaseClient';
 import { formatPersianPrice, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import PersianDatePicker from './PersianDatePicker';
 import AdaptiveSelectField from './AdaptiveSelectField';
+import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
 import DynamicSelectField from './DynamicSelectField';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import RecordImageBox from './RecordImageBox';
@@ -1881,11 +1882,11 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         nextRelationOptions[field.key] = [
           ...directory.users.map((user) => ({
             label: String(user.display_name || user.full_name || 'کاربر بدون نام').trim(),
-            value: `user_${String(user.id)}`,
+            value: `user:${String(user.id)}`,
           })),
           ...directory.roles.map((role) => ({
             label: String(role.title || 'نقش بدون نام').trim(),
-            value: `role_${String(role.id)}`,
+            value: `role:${String(role.id)}`,
           })),
         ];
         return;
@@ -5851,32 +5852,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     const currentAssigneeCombo = task?.assignee_role_id
       ? `role:${String(task.assignee_role_id)}`
       : (task?.assignee_id ? `user:${String(task.assignee_id)}` : undefined);
-    const currentAssigneeRoleId = task?.assignee_role_id ? String(task.assignee_role_id) : null;
-    const currentAssigneeUserId = !currentAssigneeRoleId && task?.assignee_id ? String(task.assignee_id) : null;
-    const currentAssigneeRole = currentAssigneeRoleId
-      ? (task?.assigned_role || assignees.roles.find((item: any) => String(item?.id) === currentAssigneeRoleId))
-      : null;
-    const currentAssigneeUser = currentAssigneeUserId
-      ? (task?.assignee || assignees.users.find((item: any) => String(item?.id) === currentAssigneeUserId))
-      : null;
-    const currentAssigneeLabel = currentAssigneeRoleId
-      ? String(currentAssigneeRole?.title || currentAssigneeRole?.name || '').trim() || 'در حال بارگذاری نام تیم...'
-      : (
-          String(
-            currentAssigneeUser?.display_name
-            || currentAssigneeUser?.full_name
-            || currentAssigneeUser?.email
-            || currentAssigneeUser?.mobile_1
-            || ''
-          ).trim() || (currentAssigneeUserId ? 'در حال بارگذاری نام مسئول...' : '')
-        );
-    const shouldRenderCurrentAssigneeFallbackOption = Boolean(
-      currentAssigneeCombo
-      && (
-        (currentAssigneeRoleId && !assignees.roles.some((item: any) => String(item?.id) === currentAssigneeRoleId))
-        || (currentAssigneeUserId && !assignees.users.some((item: any) => String(item?.id) === currentAssigneeUserId))
-      )
-    );
     const fallback = getTaskOptionalFieldFallback(task);
     const customFields = getTaskCustomFields(task);
     const currentCustomFieldValues = getTaskCustomFieldValues(task);
@@ -5980,45 +5955,17 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
             <div className="min-w-0">
               <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
                 <span className="text-xs text-gray-400 shrink-0">نام مسئول:</span>
-                <Select
+                <AdaptiveIdentityPicker
                   variant="borderless"
                   value={currentAssigneeCombo}
-                  onChange={(val) => { void handleTaskAssigneeChange(task, val); }}
+                  onChange={(val) => { void handleTaskAssigneeChange(task, typeof val === 'string' ? val : undefined); }}
+                  scopes={['user', 'role']}
+                  pickerTitle="انتخاب مسئول فعالیت"
                   className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
                   disabled={!canEditTaskAssignee || isTaskLocked}
                   allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  getPopupContainer={resolveSelectPopupContainer}
-                  styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: 12050, maxWidth: 'calc(100vw - 1rem)' }) } }}
-                >
-                  {shouldRenderCurrentAssigneeFallbackOption && currentAssigneeCombo ? (
-                    <Select.Option
-                      key={`popup-current-assignee-${currentAssigneeCombo}`}
-                      value={currentAssigneeCombo}
-                      label={currentAssigneeLabel}
-                    >
-                      <Space>
-                        {currentAssigneeRoleId ? <TeamOutlined /> : <UserOutlined />}
-                        {currentAssigneeLabel}
-                      </Space>
-                    </Select.Option>
-                  ) : null}
-                  <Select.OptGroup label="کاربران">
-                    {assignees.users.map((u) => (
-                      <Select.Option key={`popup-user-${u.id}`} value={`user:${u.id}`} label={u.display_name || u.full_name || u.email || u.mobile_1}>
-                        <Space><UserOutlined /> {u.display_name || u.full_name || u.email || u.mobile_1}</Space>
-                      </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                  <Select.OptGroup label="تیم‌ها">
-                    {assignees.roles.map((r) => (
-                      <Select.Option key={`popup-role-${r.id}`} value={`role:${r.id}`} label={r.title}>
-                        <Space><TeamOutlined /> {r.title}</Space>
-                      </Select.Option>
-                    ))}
-                  </Select.OptGroup>
-                </Select>
+                  overlayZIndexBase={12050}
+                />
               </div>
             </div>
 
@@ -11073,10 +11020,10 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
             <div className="col-span-12">
               <Form.Item name="assignee_combo" label="مسئول انجام">
-                <AdaptiveSelectField
-                  {...adaptiveModalSelectProps}
+                <AdaptiveIdentityPicker
+                  scopes={['user', 'role']}
                   placeholder="انتخاب کنید..."
-                  options={assigneeComboOptions}
+                  overlayZIndexBase={15180}
                 />
               </Form.Item>
             </div>

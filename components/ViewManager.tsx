@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   App,
@@ -12,7 +12,6 @@ import {
   Radio,
   Skeleton,
   Tabs,
-  Tag,
   Tooltip,
 } from 'antd';
 import {
@@ -35,6 +34,7 @@ import { FieldType, ModuleField, SavedView, ViewConfig } from '../types';
 import WorkflowConditionsGroup from './workflows/WorkflowConditionsGroup';
 import AdaptivePickerSurface from './AdaptivePickerSurface';
 import AdaptiveSelectField from './AdaptiveSelectField';
+import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
 import { getDefaultWorkflowOperator, getWorkflowOperatorOptions, workflowOperatorNeedsValue } from '../utils/filterUtils';
 import { loadWorkflowConditionEditorOptions } from '../utils/workflowConditionOptions';
 import { getWorkflowConditionFields } from '../utils/workflowHelpers';
@@ -91,10 +91,7 @@ const ViewManager: React.FC<ViewManagerProps> = ({
   const [config, setConfig] = useState<ViewConfig>({ columns: [], filters: [] });
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [accessDirectory, setAccessDirectory] = useState<{ users: Array<{ id: string; display_name?: string; full_name?: string; role_id?: string | null }>; roles: Array<{ id: string; title?: string }> } | null>(null);
-  const [loadingAccessDirectory, setLoadingAccessDirectory] = useState(false);
   const [activeModalTab, setActiveModalTab] = useState('columns');
-  const accessDirectoryLoadedRef = useRef(false);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
   const moduleConfig = MODULES[moduleId];
@@ -364,28 +361,12 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     };
   }, [isModalOpen, moduleId, moduleConfig, viewConditionFields]);
 
-  useEffect(() => {
-    if (!isModalOpen || activeModalTab !== 'access' || accessDirectoryLoadedRef.current) return;
-    accessDirectoryLoadedRef.current = true;
-    let active = true;
-    setLoadingAccessDirectory(true);
-    fetchAssigneeDirectory(supabase)
-      .then((dir) => {
-        if (!active) return;
-        setAccessDirectory(dir as any);
-      })
-      .catch(() => { if (active) setAccessDirectory(null); })
-      .finally(() => { if (active) setLoadingAccessDirectory(false); });
-    return () => { active = false; };
-  }, [isModalOpen, activeModalTab]);
-
   const handleOpenNewView = () => {
     setConfig({ columns: defaultViewColumnKeys, filters: [] });
     setViewName('');
     setEditingViewId(null);
     setEditingDefaultView(false);
     setActiveModalTab('columns');
-    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -411,7 +392,6 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setEditingViewId(view.id.startsWith('default_') ? null : view.id);
     setEditingDefaultView(Boolean(getBuiltInViewKey(view)));
     setActiveModalTab('columns');
-    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -435,7 +415,6 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setEditingViewId(null);
     setEditingDefaultView(false);
     setActiveModalTab('columns');
-    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -456,7 +435,6 @@ const ViewManager: React.FC<ViewManagerProps> = ({
     setEditingDefaultView(Boolean(getBuiltInViewKey(view)));
     setIsMobileSheetOpen(false);
     setActiveModalTab('columns');
-    accessDirectoryLoadedRef.current = false;
     setIsModalOpen(true);
   };
 
@@ -1106,71 +1084,43 @@ const ViewManager: React.FC<ViewManagerProps> = ({
                             <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
                               <TeamOutlined /> کاربران
                             </div>
-                            {loadingAccessDirectory ? (
-                              <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
-                            ) : (
-                              <AdaptiveSelectField
+                              <AdaptiveIdentityPicker
                                 mode="multiple"
+                                scopes={['user']}
+                                valueMode="raw"
                                 className="w-full"
                                 placeholder="انتخاب کاربران..."
                                 value={config.access?.userIds || []}
                                 onChange={(val) =>
                                   setConfig((prev) => ({
                                     ...prev,
-                                    access: { ...prev.access, type: 'specific', userIds: val, roleIds: prev.access?.roleIds || [] },
+                                    access: { ...prev.access, type: 'specific', userIds: Array.isArray(val) ? val : [], roleIds: prev.access?.roleIds || [] },
                                   }))
                                 }
                                 overlayZIndexBase={1200}
                                 pickerTitle="انتخاب کاربران"
-                                tagRender={({ label, value, closable, onClose }: any) => (
-                                  <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
-                                    {label}
-                                  </Tag>
-                                )}
-                                options={(accessDirectory?.users || []).map((u) => ({
-                                  label: String(u?.display_name || u?.full_name || u?.id || ''),
-                                  value: String(u?.id || ''),
-                                }))}
-                                filterOption={(input: string, opt: any) =>
-                                  String(opt?.label || '').includes(input)
-                                }
                               />
-                            )}
                           </div>
                           <div>
                             <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">
                               <LockOutlined /> نقش‌ها
                             </div>
-                            {loadingAccessDirectory ? (
-                              <Skeleton.Input active block style={{ height: 36, borderRadius: 8 }} />
-                            ) : (
-                              <AdaptiveSelectField
+                              <AdaptiveIdentityPicker
                                 mode="multiple"
+                                scopes={['role']}
+                                valueMode="raw"
                                 className="w-full"
                                 placeholder="انتخاب نقش‌ها..."
                                 value={config.access?.roleIds || []}
                                 onChange={(val) =>
                                   setConfig((prev) => ({
                                     ...prev,
-                                    access: { ...prev.access, type: 'specific', userIds: prev.access?.userIds || [], roleIds: val },
+                                    access: { ...prev.access, type: 'specific', userIds: prev.access?.userIds || [], roleIds: Array.isArray(val) ? val : [] },
                                   }))
                                 }
                                 overlayZIndexBase={1200}
                                 pickerTitle="انتخاب نقش‌ها"
-                                tagRender={({ label, value, closable, onClose }: any) => (
-                                  <Tag closable={closable} onClose={onClose} className="!rounded-lg !text-xs" key={value}>
-                                    {label}
-                                  </Tag>
-                                )}
-                                options={(accessDirectory?.roles || []).map((r) => ({
-                                  label: String(r?.title || r?.id || ''),
-                                  value: String(r?.id || ''),
-                                }))}
-                                filterOption={(input: string, opt: any) =>
-                                  String(opt?.label || '').includes(input)
-                                }
                               />
-                            )}
                           </div>
                           {(config.access.userIds?.length || 0) + (config.access.roleIds?.length || 0) === 0 && (
                             <div className="text-xs text-amber-500">

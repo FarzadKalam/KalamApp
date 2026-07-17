@@ -59,8 +59,7 @@ import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
-import { resolveAssigneePresentation } from '../utils/assigneePresentation';
-import { getResolvedAssigneeId } from '../utils/assigneeValue';
+import { getResolvedAssigneeId, parseAssigneeValue } from '../utils/assigneeValue';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { getCachedAuthUser } from '../utils/sessionCache';
@@ -2516,7 +2515,10 @@ const ModuleShow: React.FC = () => {
         msg.error('برای این ماژول ارجاع مسئول فعال نشده است.');
         return;
       }
-      const [type, assignId] = value.split('_');
+      const parsedAssignee = parseAssigneeValue(value);
+      const type = parsedAssignee.assigneeType || 'user';
+      const assignId = parsedAssignee.assigneeId || '';
+      if (!assignId) return;
       if (type === 'role' && !supportsRoleAssignee) {
         msg.error('در این ماژول فقط امکان انتخاب مسئول از نوع پرسنل وجود دارد.');
         return;
@@ -5147,88 +5149,6 @@ const ModuleShow: React.FC = () => {
     return user?.full_name || user?.email || user?.mobile_1 || 'نامشخص';
   }, [allUsers]);
 
-  const currentAssigneeOption = useMemo(() => {
-    if (!supportsAssignee) return null;
-    const explicitLabel = String(data?.assignee_name || data?.assignee_label || data?.assignee_role_name || '').trim();
-    const presentation = resolveAssigneePresentation({
-      source: data,
-      allUsers,
-      allRoles,
-      explicitLabel,
-    });
-    if (!presentation.assigneeId) return null;
-    return {
-      label: presentation.label || (presentation.assigneeType === 'role' ? 'تیم انتخاب‌شده' : 'مسئول انتخاب‌شده'),
-      value: `${presentation.assigneeType}_${presentation.assigneeId}`,
-      emoji: (
-        <AssigneeAvatarDisplay
-          source={data}
-          allUsers={allUsers}
-          allRoles={allRoles}
-          explicitLabel={explicitLabel}
-          avatarSize={20}
-          showLabel={false}
-          className="flex items-center"
-        />
-      ),
-      type: presentation.assigneeType,
-    };
-  }, [allRoles, allUsers, data, data?.assignee_label, data?.assignee_name, data?.assignee_role_name, data?.assignee_type, supportsAssignee]);
-
-  const getAssigneeOptions = () => {
-    if (!supportsAssignee) return [];
-    const userOptions = allUsers.map((u) => ({
-      label: u.full_name || u.email || u.mobile_1 || `کاربر ${String(u.id || '').slice(0, 8)}`,
-      value: `user_${u.id}`,
-      emoji: (
-        <AssigneeAvatarDisplay
-          source={{ assignee_id: u.id, assignee_type: 'user' }}
-          allUsers={allUsers}
-          allRoles={allRoles}
-          explicitLabel={u.full_name || u.display_name || u.email || u.mobile_1}
-          avatarSize={20}
-          showLabel={false}
-          className="flex items-center"
-        />
-      ),
-    }));
-    const roleOptions = allRoles.map((r) => ({
-      label: r.title,
-      value: `role_${r.id}`,
-      emoji: (
-        <AssigneeAvatarDisplay
-          source={{ assignee_role_id: r.id, assignee_type: 'role' }}
-          allUsers={allUsers}
-          allRoles={allRoles}
-          explicitLabel={r.title}
-          avatarSize={20}
-          showLabel={false}
-          className="flex items-center"
-        />
-      ),
-    }));
-    const hasCurrentUser = currentAssigneeOption?.type === 'user' && userOptions.some((item) => item.value === currentAssigneeOption.value);
-    const hasCurrentRole = currentAssigneeOption?.type === 'role' && roleOptions.some((item) => item.value === currentAssigneeOption.value);
-    return [
-      {
-        label: 'پرسنل',
-        title: 'users',
-        options: currentAssigneeOption?.type === 'user' && !hasCurrentUser
-          ? [currentAssigneeOption, ...userOptions]
-          : userOptions,
-      },
-      ...(supportsRoleAssignee
-        ? [{
-            label: 'تیم‌ها (جایگاه سازمانی)',
-            title: 'roles',
-            options: currentAssigneeOption?.type === 'role' && !hasCurrentRole
-              ? [currentAssigneeOption, ...roleOptions]
-              : roleOptions,
-          }]
-        : []),
-    ];
-  };
-
   const handleConfirmStartProduction = async () => {
     try {
       const confirmedGroups = startMaterials.filter((group) => group.isConfirmed === true);
@@ -6358,7 +6278,7 @@ const ModuleShow: React.FC = () => {
         getOptionLabel={getOptionLabel}
         getUserName={getUserName}
         handleAssigneeChange={handleAssigneeChange}
-        getAssigneeOptions={getAssigneeOptions}
+        supportsRoleAssignee={supportsRoleAssignee}
         assigneeIcon={assigneeIcon}
         canManageAssignee={supportsAssignee}
         onImageUpdate={handleImageUpdate}

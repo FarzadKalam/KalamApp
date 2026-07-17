@@ -1,5 +1,5 @@
 ﻿import React, { useMemo } from 'react';
-import { Select, Space, Tag } from 'antd';
+import { Tag } from 'antd';
 import {
   AppstoreOutlined,
   ClockCircleOutlined,
@@ -20,6 +20,7 @@ import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { shouldHideManagedAssigneeField } from '../../utils/assigneeSupport';
 import { buildResolvedAssigneeCombo } from '../../utils/assigneeValue';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 
 interface HeroSectionProps {
   data: any;
@@ -32,7 +33,7 @@ interface HeroSectionProps {
   getOptionLabel: (field: any, value: any) => string;
   getUserName: (uid: string) => string;
   handleAssigneeChange: (value: string) => void;
-  getAssigneeOptions: () => any[];
+  supportsRoleAssignee?: boolean;
   assigneeIcon: React.ReactNode;
   onImageUpdate: (file: File) => Promise<boolean> | boolean;
   onMainImageChange?: (url: string | null) => void;
@@ -60,7 +61,7 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   getOptionLabel,
   getUserName,
   handleAssigneeChange,
-  getAssigneeOptions,
+  supportsRoleAssignee = true,
   assigneeIcon,
   onImageUpdate,
   onMainImageChange,
@@ -208,27 +209,14 @@ const HeroSection: React.FC<HeroSectionProps> = ({
               {canManageAssignee && (canViewField ? canViewField('assignee_id') !== false : true) && (
                 <div className="flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2 mb-4">
                   <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
-                  <Select
+                  <AdaptiveIdentityPicker
                     variant="borderless"
                     value={buildResolvedAssigneeCombo(data)}
-                    onChange={handleAssigneeChange}
+                    onChange={(value) => handleAssigneeChange(typeof value === 'string' ? value : '')}
                     placeholder="جستجو یا انتخاب مسئول / نقش"
+                    pickerTitle={`انتخاب ${assigneeLabel}`}
+                    scopes={supportsRoleAssignee ? ['user', 'role'] : ['user']}
                     className="min-w-[140px] font-bold text-gray-700 dark:text-gray-300"
-                    styles={{ popup: { root: { minWidth: 200 } } }}
-                    options={getAssigneeOptions()}
-                    showSearch
-                    optionFilterProp="label"
-                    filterOption={(input, option) =>
-                      String(option?.label || '')
-                        .toLowerCase()
-                        .includes(String(input || '').trim().toLowerCase())
-                    }
-                    optionRender={(option) => (
-                      <Space>
-                        <span role="img" aria-label={option.data.label}>{(option.data as any).emoji}</span>
-                        {option.data.label}
-                      </Space>
-                    )}
                     disabled={!canEditModule}
                   />
                   <div className="w-6 h-6 flex items-center justify-center">{assigneeIcon}</div>
@@ -338,5 +326,3 @@ const HeroSection: React.FC<HeroSectionProps> = ({
 };
 
 export default HeroSection;
-
-

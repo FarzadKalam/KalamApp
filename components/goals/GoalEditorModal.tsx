@@ -13,7 +13,6 @@ import {
 import { PlusOutlined } from '@ant-design/icons';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
-import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import {
   GOAL_ALL_USERS_VALUE,
   getGoalUserSelectionValue,
@@ -35,6 +34,7 @@ import { resolveModuleGoalAccessPermissions } from '../../utils/permissions';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import PersianDatePicker from '../PersianDatePicker';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import WorkflowConditionsGroup from '../workflows/WorkflowConditionsGroup';
 
@@ -112,8 +112,6 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const [conditionsAny, setConditionsAny] = useState<any[]>([]);
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [userOptions, setUserOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [roleOptions, setRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaOptions, setFormulaOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [formulaModalOpen, setFormulaModalOpen] = useState(false);
   const [formulaTargetIndex, setFormulaTargetIndex] = useState<number | null>(null);
@@ -127,13 +125,14 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
   const moduleOptions = useMemo(() => getGoalModuleOptions(permissions), [permissions]);
   const numericFieldOptions = useMemo(() => getGoalNumericFieldOptions(moduleId), [moduleId]);
   const dateFieldOptions = useMemo(() => getGoalDateFieldOptions(moduleId), [moduleId]);
-  const userSelectOptions = useMemo(
-    () => [
-      { label: 'همه کاربران', value: GOAL_ALL_USERS_VALUE },
-      ...userOptions,
-    ],
-    [userOptions]
-  );
+  const allUsersIdentityOption = useMemo(() => ({
+    kind: 'user' as const,
+    id: GOAL_ALL_USERS_VALUE,
+    token: `user:${GOAL_ALL_USERS_VALUE}` as const,
+    label: 'همه کاربران',
+    subtitle: 'تمام اعضای فعال سازمان',
+    active: true,
+  }), []);
   const availableSubperiodOptions = useMemo(() => {
     const selectedIndex = GOAL_PERIOD_UNIT_OPTIONS.findIndex((item) => item.value === periodUnit);
     if (selectedIndex < 0) return GOAL_PERIOD_UNIT_OPTIONS;
@@ -224,42 +223,6 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
       cancelled = true;
     };
   }, [conditionFields, moduleId, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const run = async () => {
-      try {
-        const directory = await fetchAssigneeDirectory(supabase);
-        if (cancelled) return;
-        setUserOptions(
-          (directory.users || [])
-            .map((item) => ({
-              label: String(item?.display_name || item?.full_name || item?.email || item?.id || '').trim(),
-              value: String(item?.id || '').trim(),
-            }))
-            .filter((item) => item.value)
-        );
-        setRoleOptions(
-          (directory.roles || [])
-            .map((item) => ({
-              label: String(item?.title || item?.id || '').trim(),
-              value: String(item?.id || '').trim(),
-            }))
-            .filter((item) => item.value)
-        );
-      } catch {
-        if (!cancelled) {
-          setUserOptions([]);
-          setRoleOptions([]);
-        }
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -540,27 +503,20 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           <h4 className="mb-3 font-bold">انتساب هدف</h4>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="اشخاص" name="assignee_user_ids" initialValue={[]}>
-              <AdaptiveSelectField
+              <AdaptiveIdentityPicker
                 mode="multiple"
-                options={userSelectOptions}
-                optionFilterProp="label"
-                showSearch
-                getPopupContainer={popupContainer as any}
-                modalContainer={popupContainer}
-                preferLocalPopupContainer
+                scopes={['user']}
+                valueMode="raw"
+                additionalOptions={[allUsersIdentityOption]}
                 overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند کاربر"
               />
             </Form.Item>
             <Form.Item label="نقش‌ها" name="assignee_role_ids" initialValue={[]}>
-              <AdaptiveSelectField
+              <AdaptiveIdentityPicker
                 mode="multiple"
-                options={roleOptions}
-                optionFilterProp="label"
-                showSearch
-                getPopupContainer={popupContainer as any}
-                modalContainer={popupContainer}
-                preferLocalPopupContainer
+                scopes={['role']}
+                valueMode="raw"
                 overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند نقش"
               />
@@ -575,27 +531,19 @@ const GoalEditorModal: React.FC<GoalEditorModalProps> = ({
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Form.Item label="کاربران مجاز" name="result_share_user_ids" initialValue={[]}>
-              <AdaptiveSelectField
+              <AdaptiveIdentityPicker
                 mode="multiple"
-                options={userOptions}
-                optionFilterProp="label"
-                showSearch
-                getPopupContainer={popupContainer as any}
-                modalContainer={popupContainer}
-                preferLocalPopupContainer
+                scopes={['user']}
+                valueMode="raw"
                 overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند کاربر"
               />
             </Form.Item>
             <Form.Item label="نقش‌های مجاز" name="result_share_role_ids" initialValue={[]}>
-              <AdaptiveSelectField
+              <AdaptiveIdentityPicker
                 mode="multiple"
-                options={roleOptions}
-                optionFilterProp="label"
-                showSearch
-                getPopupContainer={popupContainer as any}
-                modalContainer={popupContainer}
-                preferLocalPopupContainer
+                scopes={['role']}
+                valueMode="raw"
                 overlayZIndexBase={overlayZIndexBase}
                 placeholder="انتخاب چند نقش"
               />

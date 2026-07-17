@@ -58,7 +58,7 @@ export const buildResolvedAssigneeCombo = (source: any): string | null => {
     : normalizeAssigneeType(source?.assignee_type);
   const normalized = parseAssigneeValue(assigneeId, assigneeType);
   return normalized.assigneeType && normalized.assigneeId
-    ? `${normalized.assigneeType}_${normalized.assigneeId}`
+    ? `${normalized.assigneeType}:${normalized.assigneeId}`
     : null;
 };
 

@@ -10,6 +10,7 @@ import {
 import { FieldType, ModuleField } from '../../types';
 import DynamicSelectField from '../DynamicSelectField';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import FormulaEditorModal from '../formulas/FormulaEditorModal';
 import MessageComposerModal from '../MessageComposerModal';
 import PersianDatePicker from '../PersianDatePicker';
@@ -590,65 +591,22 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ),
     [communicationFieldSource]
   );
-  const assigneeDirectoryOptions = useMemo(() => {
-    const optionsByValue = new Map<string, { label: string; value: string }>();
-    Object.entries(relationOptions || {}).forEach(([fieldKey, items]) => {
-      const normalizedFieldKey = String(fieldKey || '').trim();
-      const isAssigneeField =
-        normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY
-        || normalizedFieldKey === `__task__${WORKFLOW_ASSIGNEE_FIELD_KEY}`
-        || normalizedFieldKey.endsWith(`__${WORKFLOW_ASSIGNEE_FIELD_KEY}`)
-        || normalizedFieldKey.endsWith(`::${WORKFLOW_ASSIGNEE_FIELD_KEY}`);
-      if (!isAssigneeField) return;
-      (Array.isArray(items) ? items : []).forEach((item) => {
-        const value = String(item?.value || '').trim();
-        const label = String(item?.label || item?.value || '').trim();
-        if (!value || !label || optionsByValue.has(value)) return;
-        optionsByValue.set(value, { label, value });
-      });
-    });
-    return Array.from(optionsByValue.values()).sort((a, b) => a.label.localeCompare(b.label, 'fa'));
-  }, [relationOptions]);
-  const [chatGroupOptions, setChatGroupOptions] = useState<Array<{ label: string; value: string }>>([]);
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadChatGroups = async () => {
-      const { data, error } = await supabase
-        .from('chat_groups')
-        .select('id, name')
-        .order('name', { ascending: true })
-        .limit(300);
-      if (cancelled) return;
-      if (error) {
-        setChatGroupOptions([]);
-        return;
-      }
-      setChatGroupOptions(
-        (data || [])
-          .map((row: any) => {
-            const id = String(row?.id || '').trim();
-            const name = String(row?.name || '').trim() || 'گروه';
-            return id ? { label: `گروه داخلی: ${name}`, value: `chat_group:${id}` } : null;
-          })
-          .filter((item): item is { label: string; value: string } => Boolean(item))
-      );
-    };
-
-    void loadChatGroups();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const noteAssigneeDirectoryOptions = useMemo(
-    () => Array.from(new Map([
-      ...assigneeDirectoryOptions.map((item) => [String(item.value), item] as const),
-      ...chatGroupOptions.map((item) => [String(item.value), item] as const),
-    ]).values()).sort((a, b) => a.label.localeCompare(b.label, 'fa')),
-    [assigneeDirectoryOptions, chatGroupOptions]
+  const renderIdentityRecipientPicker = (
+    value: unknown,
+    onChange: (nextValue: string[]) => void,
+    placeholder: string,
+  ) => (
+    <AdaptiveIdentityPicker
+      mode="multiple"
+      scopes={['user', 'role', 'chat_group']}
+      value={Array.isArray(value) ? value.map((item) => String(item || '')).filter(Boolean) : []}
+      disabled={disabled}
+      onChange={(nextValue) => onChange(Array.isArray(nextValue) ? nextValue : [])}
+      placeholder={placeholder}
+      pickerTitle="انتخاب کاربر، نقش یا گروه داخلی"
+      className="w-full"
+    />
   );
-  const [storyMentionUserOptions, setStoryMentionUserOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [storyViewerRoleOptions, setStoryViewerRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [workflowAssigneeRoleOptions, setWorkflowAssigneeRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
   const assigneeRoleOptions = useMemo(
     () => workflowAssigneeRoleOptions.map((role) => ({
@@ -665,20 +623,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const directory = await fetchAssigneeDirectory(supabase);
       if (cancelled) return;
 
-      setStoryMentionUserOptions(
-        directory.users.map((user) => ({
-          label: user.display_name,
-          value: user.id,
-        }))
-      );
-      setStoryViewerRoleOptions(
-        directory.roles
-          .filter((role) => !role.is_system)
-          .map((role) => ({
-            label: role.title,
-            value: role.id,
-          }))
-      );
       setWorkflowAssigneeRoleOptions(
         directory.roles.map((role) => ({
           label: role.title,
@@ -1402,17 +1346,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               className="w-full"
               maxTagCount="responsive"
             />
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
-              disabled={disabled}
-              options={noteAssigneeDirectoryOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)"
-              className="w-full"
-              maxTagCount="responsive"
-            />
+            {renderIdentityRecipientPicker(
+              config.recipient_assignees,
+              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal }),
+              'انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)',
+            )}
           </div>
           <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
             <div>
@@ -1572,15 +1510,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   onChange={(nextVal) => updateChannelConfig('sms', { recipient_fields: nextVal })}
                   placeholder="فیلدهای مقصد شماره تماس"
                 />
-                <Select
-                  {...commonSelectProps}
-                  mode="multiple"
-                  value={Array.isArray(smsConfig.recipient_assignees) ? smsConfig.recipient_assignees : []}
-                  disabled={disabled}
-                  options={noteAssigneeDirectoryOptions}
-                  onChange={(nextVal) => updateChannelConfig('sms', { recipient_assignees: nextVal })}
-                  placeholder="کاربر/نقش تکمیلی"
-                />
+                {renderIdentityRecipientPicker(
+                  smsConfig.recipient_assignees,
+                  (nextVal) => updateChannelConfig('sms', { recipient_assignees: nextVal }),
+                  'کاربر/نقش/گروه تکمیلی',
+                )}
               </div>
               <Select
                 {...commonSelectProps}
@@ -1656,16 +1590,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   placeholder="گیرنده‌های بات از روی فیلدها"
                   maxTagCount="responsive"
                 />
-                <Select
-                  {...commonSelectProps}
-                  mode="multiple"
-                  value={getWorkflowRecipientConfig(botConfig).recipientAssignees}
-                  disabled={disabled}
-                  options={noteAssigneeDirectoryOptions}
-                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] })}
-                  placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
-                  maxTagCount="responsive"
-                />
+                {renderIdentityRecipientPicker(
+                  getWorkflowRecipientConfig(botConfig).recipientAssignees,
+                  (nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] }),
+                  'انتخاب کاربر/نقش/گروه (اختیاری)',
+                )}
               </div>
               <Input
                 value={botConfig.title}
@@ -1706,16 +1635,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   placeholder="گیرنده‌های یادداشت"
                   maxTagCount="responsive"
                 />
-                <Select
-                  {...commonSelectProps}
-                  mode="multiple"
-                  value={Array.isArray(noteConfig.recipient_assignees) ? noteConfig.recipient_assignees : []}
-                  disabled={disabled}
-                  options={noteAssigneeDirectoryOptions}
-                  onChange={(nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal })}
-                  placeholder="کاربر/نقش/گروه تکمیلی"
-                  maxTagCount="responsive"
-                />
+                {renderIdentityRecipientPicker(
+                  noteConfig.recipient_assignees,
+                  (nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal }),
+                  'کاربر/نقش/گروه تکمیلی',
+                )}
               </div>
               <div className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 dark:border-white/10">
                 <span className="text-sm">ارسال تصاویر و فایل‌های ستاره‌دار رکورد</span>
@@ -1941,16 +1865,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   placeholder="گیرنده‌های یادداشت"
                   maxTagCount="responsive"
                 />
-                <Select
-                  {...commonSelectProps}
-                  mode="multiple"
-                  value={Array.isArray(noteConfig.recipient_assignees) ? noteConfig.recipient_assignees : []}
-                  disabled={disabled}
-                  options={noteAssigneeDirectoryOptions}
-                  onChange={(nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal })}
-                  placeholder="کاربر/نقش/گروه"
-                  maxTagCount="responsive"
-                />
+                {renderIdentityRecipientPicker(
+                  noteConfig.recipient_assignees,
+                  (nextVal) => updateChannelConfig('note', { recipient_assignees: nextVal }),
+                  'کاربر/نقش/گروه',
+                )}
               </div>
               <Input.TextArea
                 rows={3}
@@ -2039,16 +1958,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   placeholder="گیرنده‌های بات از روی فیلدها"
                   maxTagCount="responsive"
                 />
-                <Select
-                  {...commonSelectProps}
-                  mode="multiple"
-                  value={getWorkflowRecipientConfig(botConfig).recipientAssignees}
-                  disabled={disabled}
-                  options={noteAssigneeDirectoryOptions}
-                  onChange={(nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] })}
-                  placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
-                  maxTagCount="responsive"
-                />
+                {renderIdentityRecipientPicker(
+                  getWorkflowRecipientConfig(botConfig).recipientAssignees,
+                  (nextVal) => updateChannelConfig('bot', { recipient_assignees: nextVal, recipient_targets: [] }),
+                  'انتخاب کاربر/نقش/گروه (اختیاری)',
+                )}
               </div>
               <Input.TextArea
                 rows={3}
@@ -2093,15 +2007,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="فیلدهای مقصد شماره تماس"
             />
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={Array.isArray(config.recipient_assignees) ? config.recipient_assignees : []}
-              disabled={disabled}
-              options={noteAssigneeDirectoryOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal })}
-              placeholder="انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)"
-            />
+            {renderIdentityRecipientPicker(
+              config.recipient_assignees,
+              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal }),
+              'انتخاب کاربر/نقش/گروه داخلی تکمیلی (اختیاری)',
+            )}
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             <Select
@@ -2207,16 +2117,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder="گیرنده‌های پیام بات از روی فیلدها"
               maxTagCount="responsive"
             />
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={getWorkflowRecipientConfig(config).recipientAssignees}
-              disabled={disabled}
-              options={noteAssigneeDirectoryOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] })}
-              placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
-              maxTagCount="responsive"
-            />
+            {renderIdentityRecipientPicker(
+              getWorkflowRecipientConfig(config).recipientAssignees,
+              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] }),
+              'انتخاب کاربر/نقش/گروه (اختیاری)',
+            )}
           </div>
           <Input
             value={config.title}
@@ -2281,16 +2186,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               placeholder={`گیرنده‌های ${providerLabel} از روی فیلدها`}
               maxTagCount="responsive"
             />
-            <Select
-              {...commonSelectProps}
-              mode="multiple"
-              value={getWorkflowRecipientConfig(config).recipientAssignees}
-              disabled={disabled}
-              options={noteAssigneeDirectoryOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] })}
-              placeholder="انتخاب کاربر/نقش/گروه (اختیاری)"
-              maxTagCount="responsive"
-            />
+            {renderIdentityRecipientPicker(
+              getWorkflowRecipientConfig(config).recipientAssignees,
+              (nextVal) => updateActionConfig(action.id, { recipient_assignees: nextVal, recipient_targets: [] }),
+              'انتخاب کاربر/نقش/گروه (اختیاری)',
+            )}
           </div>
           <Input
             value={config.title}
@@ -3066,15 +2966,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
 
           <div className="space-y-1">
             <div className="text-xs text-gray-500">منشن کاربران</div>
-            <Select
-              {...commonSelectProps}
+            <AdaptiveIdentityPicker
               mode="multiple"
+              scopes={['user']}
+              valueMode="raw"
               value={Array.isArray(config.mention_user_ids) ? config.mention_user_ids : []}
               disabled={disabled}
-              options={storyMentionUserOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, { mention_user_ids: nextVal })}
+              onChange={(nextVal) => updateActionConfig(action.id, { mention_user_ids: Array.isArray(nextVal) ? nextVal : [] })}
               placeholder="@ انتخاب کاربران برای منشن"
-              maxTagCount="responsive"
             />
           </div>
 
@@ -3107,29 +3006,27 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-white/10">
               <div className="space-y-1">
                 <div className="text-xs text-gray-500">کاربران مجاز</div>
-                <Select
-                  {...commonSelectProps}
+                <AdaptiveIdentityPicker
                   mode="multiple"
+                  scopes={['user']}
+                  valueMode="raw"
                   value={Array.isArray(config.viewer_user_ids) ? config.viewer_user_ids : []}
                   disabled={disabled}
-                  options={storyMentionUserOptions}
-                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_user_ids: nextVal })}
+                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_user_ids: Array.isArray(nextVal) ? nextVal : [] })}
                   placeholder="انتخاب کاربران مجاز"
-                  maxTagCount="responsive"
                 />
               </div>
 
               <div className="space-y-1">
                 <div className="text-xs text-gray-500">نقش‌های مجاز</div>
-                <Select
-                  {...commonSelectProps}
+                <AdaptiveIdentityPicker
                   mode="multiple"
+                  scopes={['role']}
+                  valueMode="raw"
                   value={Array.isArray(config.viewer_role_ids) ? config.viewer_role_ids : []}
                   disabled={disabled}
-                  options={storyViewerRoleOptions}
-                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_role_ids: nextVal })}
+                  onChange={(nextVal) => updateActionConfig(action.id, { viewer_role_ids: Array.isArray(nextVal) ? nextVal : [] })}
                   placeholder="انتخاب نقش‌های مجاز"
-                  maxTagCount="responsive"
                 />
               </div>
             </div>

@@ -15,6 +15,7 @@ type OptionLike = {
   label?: React.ReactNode;
   value?: string | number | null;
   disabled?: boolean;
+  options?: OptionLike[];
   [key: string]: any;
 };
 
@@ -53,6 +54,8 @@ interface AdaptiveSelectFieldProps {
   renderMobileOption?: (option: OptionLike, selected: boolean) => React.ReactNode;
   mobileSearchPlaceholder?: string;
   optionDisplayFallback?: (option: OptionLike) => string;
+  renderTriggerValue?: (options: OptionLike[]) => React.ReactNode;
+  renderSelectedTag?: (option: OptionLike) => React.ReactNode;
   closeMobileOnToolbarClick?: boolean;
   styles?: any;
   preferLocalPopupContainer?: boolean;
@@ -120,6 +123,8 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   renderMobileOption,
   mobileSearchPlaceholder = 'جستجو...',
   optionDisplayFallback = defaultOptionLabel,
+  renderTriggerValue,
+  renderSelectedTag,
   closeMobileOnToolbarClick = false,
   styles,
   preferLocalPopupContainer = false,
@@ -133,15 +138,23 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   const mobileSheetMode = resolvedMode === 'mobile-sheet';
 
   const normalizedOptions = useMemo(() => Array.isArray(options) ? options : [], [options]);
+  const flatOptions = useMemo(
+    () => normalizedOptions.flatMap((option) =>
+      Array.isArray(option?.options)
+        ? option.options.map((child) => ({ ...child, __groupLabel: option.label }))
+        : [option]
+    ),
+    [normalizedOptions]
+  );
   const optionMap = useMemo(() => {
     const map = new Map<string, OptionLike>();
-    normalizedOptions.forEach((option) => {
+    flatOptions.forEach((option) => {
       const key = normalizeScalar(option?.value);
       if (!key) return;
       map.set(key, option);
     });
     return map;
-  }, [normalizedOptions]);
+  }, [flatOptions]);
 
   const currentSearch = searchValue ?? internalSearch;
   const isMulti = mode === 'multiple' || mode === 'tags';
@@ -161,14 +174,14 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
   }, [displayValue, isMulti, mobileOpen, searchValue]);
 
   const filteredOptions = useMemo(() => {
-    if (!mobileSheetMode) return normalizedOptions;
+    if (!mobileSheetMode) return flatOptions;
     const term = String(currentSearch || '').trim().toLowerCase();
-    if (!term) return normalizedOptions;
+    if (!term) return flatOptions;
     if (typeof filterOption === 'function') {
-      return normalizedOptions.filter((option) => filterOption(term, { ...option, label: option?.label, value: option?.value }));
+      return flatOptions.filter((option) => filterOption(term, { ...option, label: option?.label, value: option?.value }));
     }
-    if (filterOption === false) return normalizedOptions;
-    return normalizedOptions.filter((option) => {
+    if (filterOption === false) return flatOptions;
+    return flatOptions.filter((option) => {
       const haystack = [
         option?.[optionFilterProp],
         option?.label,
@@ -179,7 +192,7 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         .join(' ');
       return haystack.includes(term);
     });
-  }, [currentSearch, filterOption, mobileSheetMode, normalizedOptions, optionFilterProp]);
+  }, [currentSearch, filterOption, flatOptions, mobileSheetMode, optionFilterProp]);
 
   const displayText = useMemo(() => {
     if (selectedValues.length === 0) return placeholder;
@@ -191,6 +204,10 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
       .filter(Boolean);
     return labels.join('، ');
   }, [optionDisplayFallback, optionMap, placeholder, selectedValues]);
+  const selectedOptionRows = useMemo(
+    () => selectedValues.map((item) => optionMap.get(item)).filter(Boolean) as OptionLike[],
+    [optionMap, selectedValues]
+  );
   const comfortableMobileTrigger = mobileSheetMode
     && selectedValues.length > 0
     && (selectedValues.length > 1 || String(displayText || '').trim().length >= 18);
@@ -285,6 +302,23 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
         popupMatchSelectWidth={popupMatchSelectWidth}
         optionRender={optionRender}
         popupRender={popupRender as any}
+        labelRender={renderTriggerValue ? (() => renderTriggerValue(selectedOptionRows)) : undefined}
+        tagRender={renderSelectedTag ? ((tagProps: any) => {
+          const option = optionMap.get(normalizeScalar(tagProps?.value));
+          return (
+            <Tag
+              closable={tagProps?.closable}
+              onClose={tagProps?.onClose}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              className="inline-flex max-w-full items-center"
+            >
+              {option ? renderSelectedTag(option) : tagProps?.label}
+            </Tag>
+          );
+        }) : undefined}
         styles={{
           popup: {
             root: {
@@ -325,7 +359,9 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
             comfortableMobileTrigger && 'is-comfortable'
           )}
         >
-          {displayText}
+          {selectedOptionRows.length > 0 && renderTriggerValue
+            ? renderTriggerValue(selectedOptionRows)
+            : displayText}
         </span>
         <span className="kalam-adaptive-picker__trigger-icon">
           <DownOutlined />
@@ -401,7 +437,9 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
           <div className="kalam-adaptive-picker__selected-tags">
             {draftSelectedValues.map((item) => (
               <Tag key={item} className="kalam-adaptive-picker__tag">
-                {optionDisplayFallback(optionMap.get(item) || { value: item })}
+                {renderSelectedTag
+                  ? renderSelectedTag(optionMap.get(item) || { value: item })
+                  : optionDisplayFallback(optionMap.get(item) || { value: item })}
               </Tag>
             ))}
           </div>
@@ -412,22 +450,30 @@ const AdaptiveSelectField: React.FC<AdaptiveSelectFieldProps> = ({
           ) : filteredOptions.length === 0 ? (
             <div className="kalam-adaptive-picker__empty">{notFoundContent}</div>
           ) : (
-            filteredOptions.map((option) => {
+            filteredOptions.map((option, optionIndex) => {
               const optionValue = normalizeScalar(option?.value);
               const selected = draftSelectedValues.includes(optionValue);
+              const groupLabel = option?.__groupLabel;
+              const previousGroupLabel = optionIndex > 0 ? filteredOptions[optionIndex - 1]?.__groupLabel : undefined;
               return (
-                <button
-                  key={optionValue || optionDisplayFallback(option)}
-                  type="button"
-                  className={`kalam-adaptive-picker__option ${selected ? 'is-selected' : ''}`}
-                  disabled={option?.disabled}
-                  onClick={() => toggleDraftValue(option)}
-                >
-                  <span className="kalam-adaptive-picker__option-main">
-                    {renderMobileOption ? renderMobileOption(option, selected) : optionDisplayFallback(option)}
-                  </span>
-                  {selected ? <span className="kalam-adaptive-picker__option-check">انتخاب شد</span> : null}
-                </button>
+                <React.Fragment key={optionValue || optionDisplayFallback(option)}>
+                  {groupLabel && groupLabel !== previousGroupLabel ? (
+                    <div className="px-2 pb-1 pt-3 text-xs font-bold text-gray-500 dark:text-gray-400">
+                      {groupLabel}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`kalam-adaptive-picker__option ${selected ? 'is-selected' : ''}`}
+                    disabled={option?.disabled}
+                    onClick={() => toggleDraftValue(option)}
+                  >
+                    <span className="kalam-adaptive-picker__option-main">
+                      {renderMobileOption ? renderMobileOption(option, selected) : optionDisplayFallback(option)}
+                    </span>
+                    {selected ? <span className="kalam-adaptive-picker__option-check">انتخاب شد</span> : null}
+                  </button>
+                </React.Fragment>
               );
             })
           )}

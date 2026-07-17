@@ -95,13 +95,13 @@ const loadWorkflowFieldOptions = async (
     const directory = await fetchAssigneeDirectory(supabase);
     const userOptions = (directory.users || []).map((user) => ({
       label: String(user?.display_name || user?.full_name || 'کاربر بدون نام').trim(),
-      value: `user_${String(user?.id || '').trim()}`,
+      value: `user:${String(user?.id || '').trim()}`,
     })).filter((item) => item.value !== 'user_');
 
     const roleOptions = supportsGlobalRoleAssignee(scopeModuleId)
       ? (directory.roles || []).map((role) => ({
           label: String(role?.title || 'نقش بدون نام').trim(),
-          value: `role_${String(role?.id || '').trim()}`,
+          value: `role:${String(role?.id || '').trim()}`,
         })).filter((item) => item.value !== 'role_')
       : [];
 

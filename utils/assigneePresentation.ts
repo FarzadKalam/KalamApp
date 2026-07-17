@@ -13,6 +13,7 @@ type AssigneeRole = {
   id?: string | null;
   title?: string | null;
   name?: string | null;
+  icon_key?: string | null;
 };
 
 export type AssigneePresentation = {

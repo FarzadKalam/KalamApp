@@ -1,5 +1,5 @@
 import React, { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Select, Tabs } from 'antd';
+import { App, Badge, Button, Drawer, Empty, Input, Modal, Popover, Tabs } from 'antd';
 import { BellOutlined, TeamOutlined, CloseOutlined, ReloadOutlined, RobotOutlined, MessageOutlined, EyeOutlined, EditOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
@@ -77,6 +77,8 @@ import {
   resolveConversationSelection,
 } from '../utils/notificationConversationKeys';
 import ProfileAvatar from './common/ProfileAvatar';
+import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
+import { clearIdentityDirectoryCache } from '../utils/identityDirectory';
 import { preloadAvatarUrls } from '../utils/profileAvatar';
 import { PROFILE_AVATAR_UPDATED_EVENT, type ProfileAvatarUpdatedDetail } from '../utils/profileAvatarEvents';
 import type { BotChannel, BotPlatformState } from './bot/CounterpartyBotStatusModal';
@@ -6963,20 +6965,6 @@ useEffect(() => {
     }
   };
 
-  const groupMemberOptions = useMemo(
-    () => [
-      ...directoryRoles.map((role) => ({
-        label: `نقش: ${role.title}`,
-        value: `role:${role.id}`,
-      })),
-      ...directoryUsers.map((user) => ({
-        label: `عضو: ${user.display_name}`,
-        value: `user:${user.id}`,
-      })),
-    ],
-    [directoryRoles, directoryUsers]
-  );
-
   const handleSubmitGroup = async () => {
     const trimmedName = String(groupNameDraft || '').trim();
     if (!trimmedName) {
@@ -7050,6 +7038,7 @@ useEffect(() => {
         setSelectedNoteUserId(`${CHAT_GROUP_PREFIX}${nextGroup.id}`);
       }
 
+      clearIdentityDirectoryCache(profile.org_id);
       setGroupModalOpen(false);
       setEditingGroup(null);
       setGroupNameDraft('');
@@ -8860,20 +8849,15 @@ useEffect(() => {
             onChange={(event) => setGroupNameDraft(event.target.value)}
             placeholder="نام گروه"
           />
-          <Select
+          <AdaptiveIdentityPicker
             mode="multiple"
-            showSearch
+            scopes={['user', 'role']}
             allowClear
             value={groupMemberDrafts}
-            onChange={(values) => setGroupMemberDrafts((values || []).map((value) => String(value)))}
-            options={groupMemberOptions}
-            optionFilterProp="label"
+            onChange={(values) => setGroupMemberDrafts((Array.isArray(values) ? values : []).map(String))}
             placeholder="انتخاب اعضا و نقش‌ها"
             className="w-full"
-            maxTagCount="responsive"
-            getPopupContainer={(trigger) => trigger.parentElement || document.body}
-            styles={{ popup: { root: { zIndex: 1400 } } }}
-            listHeight={280}
+            overlayZIndexBase={1400}
           />
           <div className="text-xs text-gray-500">
             با انتخاب نقش، همه اعضای دارای آن نقش تا زمانی که همان نقش را داشته باشند عضو گروه می‌مانند.

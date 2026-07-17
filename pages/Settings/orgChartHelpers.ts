@@ -4,6 +4,7 @@ export type RoleNode = {
   sort_order: number;
   parent_id: string | null;
   is_system?: boolean;
+  icon_key?: string | null;
   children: RoleNode[];
 };
 
@@ -41,6 +42,7 @@ export function buildTree(flatRoles: any[]): RoleNode[] {
     sort_order: Number(role.sort_order || 0),
     parent_id: role.parent_id ? String(role.parent_id) : null,
     is_system: Boolean(role.is_system),
+    icon_key: role?.icon_key ? String(role.icon_key) : null,
     children: (childrenMap.get(String(role.id)) || []).map(buildNode),
   });
 

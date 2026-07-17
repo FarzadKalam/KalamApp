@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Form, Button, Spin, Divider, Select, Space, Modal, Checkbox, App, Switch } from 'antd';
-import { TeamOutlined } from '@ant-design/icons';
+import { Form, Button, Spin, Divider, Modal, Checkbox, App, Switch } from 'antd';
 import { SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
-import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import SmartFieldRenderer from './SmartFieldRenderer';
 import EditableTable from './EditableTable.tsx';
 import GridTable from './GridTable';
@@ -22,10 +20,11 @@ import { attachTaskCompletionIfNeeded } from '../utils/taskCompletion';
 import { mergeSelectOptions } from '../utils/selectOptions';
 import { ACTIVE_NOTIFICATION_BOTS_CATEGORY, listActiveNotificationBotOptions } from '../utils/channelSettings';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
-import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
+import { buildResolvedAssigneeCombo, parseAssigneeValue } from '../utils/assigneeValue';
+import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchCurrentUserRoleContext } from '../utils/permissions';
-import { fetchAssigneeDirectory, fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
+import { fetchDynamicOptionsMap, fetchFormulaOptions } from '../utils/referenceData';
 import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { getCachedAuthUser } from '../utils/sessionCache';
 import { shouldHideManagedAssigneeField, supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
@@ -50,11 +49,6 @@ import { syncProcessTemplateStages as syncProcessTemplateStagesShared } from '..
 import { mapProcessTemplateStagesToDraft } from '../utils/processRunRuntime';
 import { insertRecordActivity } from '../utils/recordActivity';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
-import {
-  buildStandardSelectPopupRootStyle,
-  KALAM_SELECT_FIELD_CLASSNAME,
-  mergeClassNames,
-} from '../utils/popupContainer';
 import { useConditionalFieldRuntime } from '../hooks/useConditionalFieldRuntime';
 import { evaluateLegacyVisibilityRule, isConditionalFieldValueEmpty } from '../utils/conditionalFieldRules';
 import { buildModuleOnChangePatch, normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
@@ -214,9 +208,6 @@ const isDuplicateSystemCodeError = (error: any) => {
   const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
   return code === '23505' && text.includes('system_code');
 };
-type AssigneeOptionsState = { users: any[]; roles: any[] };
-let assigneesCache: AssigneeOptionsState | null = null;
-let assigneesPromise: Promise<AssigneeOptionsState> | null = null;
 const PROJECT_PROCESS_HIDDEN_LINK_MODULE_IDS = new Set([
   'projects',
   'tasks',
@@ -361,11 +352,8 @@ const SmartForm: React.FC<SmartFormProps> = ({
   
   const [relationOptions, setRelationOptions] = useState<Record<string, any[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, any[]>>({});
-  const [optionsBootstrapping, setOptionsBootstrapping] = useState(false);
   const [modulePermissions, setModulePermissions] = useState<{ view?: boolean; edit?: boolean; delete?: boolean }>({});
   const [fieldPermissions, setFieldPermissions] = useState<Record<string, boolean>>({});
-  const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
-  const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [lastAppliedBomId, setLastAppliedBomId] = useState<string | null>(null);
   const bomConfirmOpenRef = useRef<string | null>(null);
   const [lastAppliedProcessTemplateId, setLastAppliedProcessTemplateId] = useState<string | null>(null);
@@ -392,13 +380,12 @@ const SmartForm: React.FC<SmartFormProps> = ({
 
   const buildAssigneeCombo = (assigneeType?: string | null, assigneeId?: string | null) => {
     if (!assigneeType || !assigneeId) return null;
-    return `${assigneeType}_${assigneeId}`;
+    return `${assigneeType}:${assigneeId}`;
   };
 
   const parseAssigneeCombo = (val?: string | null) => {
-    if (!val) return { assignee_type: null, assignee_id: null };
-    const [type, id] = String(val).split('_');
-    return { assignee_type: type || 'user', assignee_id: id || null };
+    const parsed = parseAssigneeValue(val);
+    return { assignee_type: parsed.assigneeType, assignee_id: parsed.assigneeId };
   };
 
   const getRelationFieldValueSignature = useMemo(() => {
@@ -668,136 +655,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
     void commitTemplateChange(previousTemplateId !== nextTemplateId && !recordId);
   }, [currentValues?.survey_template_id, form, recordId, surveyTemplateSnapshot, visible, supportsTemplateRuntime]);
 
-  const fetchAssignees = useCallback(async () => {
-    try {
-      if (assigneesCache) {
-        setAssignees(assigneesCache);
-        writeModuleOptionSnapshot(module.id, {
-          allUsers: assigneesCache.users,
-          allRoles: assigneesCache.roles,
-        });
-        return;
-      }
-      setAssigneesLoading(true);
-      if (!assigneesPromise) {
-        assigneesPromise = (async () => {
-          return await fetchAssigneeDirectory(supabase);
-        })();
-      }
-      const nextAssignees = await assigneesPromise;
-      assigneesCache = nextAssignees;
-      setAssignees(nextAssignees);
-      writeModuleOptionSnapshot(module.id, {
-        allUsers: nextAssignees.users,
-        allRoles: nextAssignees.roles,
-      });
-    } catch (e) {
-      if (isAbortLikeError(e)) return;
-      console.warn('Could not fetch assignees', e);
-    } finally {
-      setAssigneesLoading(false);
-      assigneesPromise = null;
-    }
-  }, [module.id]);
-
-  const currentAssigneeComboValue = String(
-    watchedValues?.assignee_combo ??
-    formData?.assignee_combo ??
-    ''
-  ).trim();
-  const currentAssigneePlaceholder = useMemo(() => {
-    if (!currentAssigneeComboValue) return null;
-    const { assignee_id, assignee_type } = parseAssigneeCombo(currentAssigneeComboValue);
-    if (!assignee_id) return null;
-
-    const normalizedType = String(assignee_type || 'user');
-    const matchedUser = assignees.users.find((item: any) => String(item?.id || '') === String(assignee_id));
-    const matchedRole = assignees.roles.find((item: any) => String(item?.id || '') === String(assignee_id));
-    const explicitLabel =
-      String(
-        formData?.assignee_name ||
-        formData?.assignee_label ||
-        initialRecord?.assignee_name ||
-        initialRecord?.assignee_label ||
-        ''
-      ).trim();
-
-    const label = explicitLabel
-      || (normalizedType === 'role' ? matchedRole?.title : matchedUser?.display_name || matchedUser?.full_name)
-      || (assigneesLoading || optionsBootstrapping
-        ? (normalizedType === 'role' ? 'در حال بارگذاری نام تیم...' : 'در حال بارگذاری نام مسئول...')
-        : (normalizedType === 'role' ? 'تیم انتخاب‌شده' : 'مسئول انتخاب‌شده'));
-
-    return {
-      label,
-      value: currentAssigneeComboValue,
-      emoji: normalizedType === 'role'
-        ? <TeamOutlined />
-        : (
-          <AssigneeAvatarDisplay
-            source={{ assignee_id, assignee_type: normalizedType }}
-            allUsers={assignees.users}
-            allRoles={assignees.roles}
-            explicitLabel={label}
-            avatarSize={20}
-            showLabel={false}
-            className="flex items-center"
-          />
-        ),
-      type: normalizedType,
-    };
-  }, [assignees.roles, assignees.users, assigneesLoading, currentAssigneeComboValue, formData?.assignee_label, formData?.assignee_name, initialRecord?.assignee_label, initialRecord?.assignee_name, optionsBootstrapping]);
-
-  const assigneeOptions = useMemo(() => {
-    const userOptions = assignees.users.map((u) => ({
-      label: u.display_name || u.full_name,
-      value: `user_${u.id}`,
-      emoji: (
-        <AssigneeAvatarDisplay
-          source={{ assignee_id: u.id, assignee_type: 'user' }}
-          allUsers={assignees.users}
-          allRoles={assignees.roles}
-          explicitLabel={u.display_name || u.full_name}
-          avatarSize={20}
-          showLabel={false}
-          className="flex items-center"
-        />
-      ),
-    }));
-    const roleOptions = assignees.roles.map((r) => ({
-      label: r.title,
-      value: `role_${r.id}`,
-      emoji: <TeamOutlined />,
-    }));
-
-    const hasCurrentUser = currentAssigneePlaceholder?.type === 'user'
-      && userOptions.some((item) => item.value === currentAssigneePlaceholder.value);
-    const hasCurrentRole = currentAssigneePlaceholder?.type === 'role'
-      && roleOptions.some((item) => item.value === currentAssigneePlaceholder.value);
-
-    const mergedUserOptions = currentAssigneePlaceholder?.type === 'user' && !hasCurrentUser
-      ? [currentAssigneePlaceholder, ...userOptions]
-      : userOptions;
-    const mergedRoleOptions = currentAssigneePlaceholder?.type === 'role' && !hasCurrentRole
-      ? [currentAssigneePlaceholder, ...roleOptions]
-      : roleOptions;
-
-    return [
-      {
-        label: 'پرسنل',
-        title: 'users',
-        options: mergedUserOptions,
-      },
-      ...(supportsRoleAssignee
-        ? [{
-            label: 'تیم‌ها',
-            title: 'roles',
-            options: mergedRoleOptions,
-          }]
-        : []),
-    ];
-  }, [assignees.roles, assignees.users, currentAssigneePlaceholder, supportsRoleAssignee]);
-
   const fetchUserPermissions = async () => {
     try {
       const context = await fetchCurrentUserRoleContext(supabase);
@@ -972,17 +829,11 @@ const SmartForm: React.FC<SmartFormProps> = ({
   }, [module.id, runtimeBlocks, runtimeFields]);
 
   const fetchAllRelationOptionsWrapper = useCallback(async () => {
-    setOptionsBootstrapping(true);
-    try {
-      await Promise.all([
-        fetchRelationOptions(),
-        loadDynamicOptions(),
-        supportsAssignee ? fetchAssignees() : Promise.resolve(),
-      ]);
-    } finally {
-      setOptionsBootstrapping(false);
-    }
-  }, [fetchAssignees, fetchRelationOptions, loadDynamicOptions, supportsAssignee]);
+    await Promise.all([
+      fetchRelationOptions(),
+      loadDynamicOptions(),
+    ]);
+  }, [fetchRelationOptions, loadDynamicOptions]);
 
   useEffect(() => {
     if (!visible) return;
@@ -990,12 +841,6 @@ const SmartForm: React.FC<SmartFormProps> = ({
     if (cachedSnapshot) {
       setRelationOptions(cachedSnapshot.relationOptions || {});
       setDynamicOptions(cachedSnapshot.dynamicOptions || {});
-      if ((cachedSnapshot.allUsers?.length || 0) > 0 || (cachedSnapshot.allRoles?.length || 0) > 0) {
-        setAssignees({
-          users: cachedSnapshot.allUsers || [],
-          roles: cachedSnapshot.allRoles || [],
-        });
-      }
     }
     void fetchAllRelationOptionsWrapper();
   }, [fetchAllRelationOptionsWrapper, module.id, visible]);
@@ -2919,31 +2764,16 @@ const SmartForm: React.FC<SmartFormProps> = ({
                       <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
                         <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
                         <Form.Item name="assignee_combo" noStyle>
-                          <Select
+                          <AdaptiveIdentityPicker
                             variant="borderless"
                             placeholder="جستجو یا انتخاب مسئول / نقش"
-                            className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300')}
-                            styles={{ popup: { root: buildStandardSelectPopupRootStyle({ minWidth: 220, zIndex: fieldPopupZIndexBase }) } }}
-                            loading={assigneesLoading}
-                            options={assigneeOptions}
-                            showSearch
-                            optionFilterProp="label"
-                            optionLabelProp="label"
-                            filterOption={(input, option) =>
-                              String(option?.label || '')
-                                .toLowerCase()
-                                .includes(String(input || '').trim().toLowerCase())
-                            }
-                            optionRender={(option) => (
-                              <Space>
-                                <span role="img" aria-label={option.data.label}>{(option.data as any).emoji}</span>
-                                {option.data.label}
-                              </Space>
-                            )}
+                            pickerTitle={`انتخاب ${assigneeLabel}`}
+                            scopes={supportsRoleAssignee ? ['user', 'role'] : ['user']}
+                            className="w-full max-w-full smartform-inline-assignee-select font-semibold text-gray-700 dark:text-gray-300"
+                            overlayZIndexBase={fieldPopupZIndexBase}
                             disabled={!canEditModule}
-                            getPopupContainer={resolveSmartFormPopupContainer}
                             onChange={(val) => {
-                              const { assignee_id, assignee_type } = parseAssigneeCombo(String(val));
+                              const { assignee_id, assignee_type } = parseAssigneeCombo(String(val || ''));
                               const normalizedType = String(assignee_type || 'user');
                               form.setFieldValue('assignee_id', normalizedType === 'role' ? null : (assignee_id || null));
                               form.setFieldValue('assignee_role_id', normalizedType === 'role' && supportsRoleAssignee ? assignee_id : null);

@@ -50,7 +50,7 @@ export const loadWorkflowFieldOptions = async (
     const userOptions = (directory.users || [])
       .map((user) => ({
         label: String(user?.display_name || user?.full_name || user?.id || '').trim(),
-        value: `user_${String(user?.id || '').trim()}`,
+        value: `user:${String(user?.id || '').trim()}`,
       }))
       .filter((item) => item.value !== 'user_');
 
@@ -58,7 +58,7 @@ export const loadWorkflowFieldOptions = async (
       ? (directory.roles || [])
           .map((role) => ({
             label: String(role?.title || role?.id || '').trim(),
-            value: `role_${String(role?.id || '').trim()}`,
+            value: `role:${String(role?.id || '').trim()}`,
           }))
           .filter((item) => item.value !== 'role_')
       : [];

@@ -1,8 +1,8 @@
 import React, { memo, useMemo } from 'react';
-import { TeamOutlined, UserOutlined } from '@ant-design/icons';
 import type { AvatarProps } from 'antd';
-import ProfileAvatar from './ProfileAvatar';
 import { resolveAssigneePresentation } from '../../utils/assigneePresentation';
+import IdentityAvatar from './IdentityAvatar';
+import { normalizeRoleIconKey } from '../../utils/roleIconCatalog';
 
 type AssigneeAvatarDisplayProps = {
   source: any;
@@ -45,12 +45,15 @@ const AssigneeAvatarDisplayComponent: React.FC<AssigneeAvatarDisplayProps> = ({
   if (presentation.kind === 'role') {
     return (
       <div className={className || 'flex min-h-[24px] items-center gap-1 min-w-0'}>
-        <ProfileAvatar
+        <IdentityAvatar
           size={avatarSize}
-          icon={<TeamOutlined />}
           className={roleAvatarClassName}
-          fallback={<TeamOutlined />}
-          name={presentation.label}
+          option={{
+            kind: 'role',
+            id: presentation.assigneeId || presentation.label || 'role',
+            label: presentation.label || 'نقش خارج از دسترس',
+            iconKey: normalizeRoleIconKey(presentation.role?.icon_key),
+          }}
         />
         {labelNode}
       </div>
@@ -60,11 +63,14 @@ const AssigneeAvatarDisplayComponent: React.FC<AssigneeAvatarDisplayProps> = ({
   if (presentation.kind === 'user') {
     return (
       <div className={className || 'flex min-h-[24px] items-center gap-1 min-w-0'}>
-        <ProfileAvatar
+        <IdentityAvatar
           size={avatarSize}
-          src={presentation.avatarUrl}
-          icon={<UserOutlined />}
-          name={presentation.label}
+          option={{
+            kind: 'user',
+            id: presentation.assigneeId || presentation.label || 'user',
+            label: presentation.label || 'کاربر خارج از دسترس',
+            avatarUrl: presentation.avatarUrl,
+          }}
         />
         {labelNode}
       </div>
@@ -73,7 +79,10 @@ const AssigneeAvatarDisplayComponent: React.FC<AssigneeAvatarDisplayProps> = ({
 
   return (
     <div className={className || 'flex min-h-[24px] items-center gap-1 min-w-0'}>
-      <ProfileAvatar size={avatarSize} icon={<UserOutlined />} name={presentation.label || ''} />
+      <IdentityAvatar
+        size={avatarSize}
+        option={{ kind: 'user', id: presentation.assigneeId || 'unknown', label: presentation.label || 'کاربر خارج از دسترس' }}
+      />
       {labelNode}
     </div>
   );

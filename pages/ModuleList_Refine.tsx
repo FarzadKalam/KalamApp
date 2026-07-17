@@ -1979,10 +1979,10 @@ export const ModuleListRefine: React.FC<{
       if (Array.isArray(value)) return value.map(resolveAssigneeValue);
       const normalized = String(value || "").trim();
       if (normalized === "__current_user__") {
-        return currentUserId ? `user_${currentUserId}` : normalized;
+        return currentUserId ? `user:${currentUserId}` : normalized;
       }
       if (normalized === "__current_role__") {
-        return currentUserRoleId ? `role_${currentUserRoleId}` : normalized;
+        return currentUserRoleId ? `role:${currentUserRoleId}` : normalized;
       }
       return value;
     };

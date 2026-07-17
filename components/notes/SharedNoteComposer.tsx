@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import type { NoteAttachment } from '../../utils/noteContent';
 import FileManagerPickerModal from '../files/FileManagerPickerModal';
-import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 
 interface SharedNoteComposerProps {
   header?: React.ReactNode;
@@ -106,10 +106,8 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
   onSubmit,
   placeholder = 'یادداشت جدید...',
   submitText = 'ارسال',
-  mentionOptions = [],
   mentionValues = [],
   onMentionChange = () => undefined,
-  mentionsLoading = false,
   mentionPickerOpen = false,
   onToggleMentionPicker = () => undefined,
   allowMentions = true,
@@ -454,16 +452,13 @@ const SharedNoteComposer: React.FC<SharedNoteComposerProps> = ({
 
           {allowMentions && mentionPickerOpen ? (
             <div className="mt-2">
-              <AdaptiveSelectField
+              <AdaptiveIdentityPicker
                 mode="multiple"
+                scopes={['user', 'role']}
                 allowClear
-                showSearch
                 placeholder="منشن عضو یا تیم"
                 value={mentionValues}
-                onChange={(nextValues) => onMentionChange(nextValues || [])}
-                options={mentionOptions}
-                loading={mentionsLoading}
-                optionFilterProp="label"
+                onChange={(nextValues) => onMentionChange(Array.isArray(nextValues) ? nextValues : [])}
                 className="w-full"
                 overlayZIndexBase={2400}
                 pickerTitle="منشن عضو یا تیم"

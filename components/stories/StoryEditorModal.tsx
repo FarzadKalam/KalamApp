@@ -22,8 +22,7 @@ import {
 } from 'antd';
 import { supabase } from '../../supabaseClient';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
-import { fetchAssigneeDirectory } from '../../utils/referenceData';
-import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import PersianDatePicker from '../PersianDatePicker';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
 import { STORY_GRADIENT_PRESET_LIST, getGradientPreset } from '../../utils/storyGradients';
@@ -89,10 +88,6 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // دایرکتوری کاربران/نقش‌ها
-  const [userOptions, setUserOptions] = useState<Array<{ label: string; value: string }>>([]);
-  const [roleOptions, setRoleOptions] = useState<Array<{ label: string; value: string }>>([]);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // popup container — دراپ‌داون‌ها و تقویم داخل مودال باز می‌شوند نه زیر آن
@@ -133,21 +128,6 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
     }
     setActiveSlideIdx(0);
   }, [open, editingStory]);
-
-  // بارگذاری لیست کاربران و نقش‌ها
-  useEffect(() => {
-    if (!open) return;
-    fetchAssigneeDirectory(supabase).then((dir) => {
-      setUserOptions(
-        dir.users.map((u) => ({ label: u.display_name, value: u.id }))
-      );
-      setRoleOptions(
-        dir.roles
-          .filter((r) => !r.is_system)
-          .map((r) => ({ label: r.title, value: r.id }))
-      );
-    });
-  }, [open]);
 
   const activeSlide = slides[activeSlideIdx] ?? null;
 
@@ -672,11 +652,12 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
 
           {/* منشن کاربران */}
           <Form.Item label="منشن کاربران" style={{ marginBottom: 10 }}>
-            <AdaptiveSelectField
+            <AdaptiveIdentityPicker
               mode="multiple"
+              scopes={['user']}
+              valueMode="raw"
               value={mentionUserIds}
               onChange={(v) => setMentionUserIds(v as string[])}
-              options={userOptions}
               placeholder="@ انتخاب کاربران"
               getPopupContainer={popupContainer as any}
               modalContainer={popupContainer}
@@ -698,11 +679,12 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
           {!isOrgWide && (
             <>
               <Form.Item label="کاربران مجاز" style={{ marginBottom: 8 }}>
-                <AdaptiveSelectField
+                <AdaptiveIdentityPicker
                   mode="multiple"
+                  scopes={['user']}
+                  valueMode="raw"
                   value={viewerUserIds}
                   onChange={(v) => setViewerUserIds(v as string[])}
-                  options={userOptions}
                   placeholder="انتخاب کاربران"
                   getPopupContainer={popupContainer as any}
                   modalContainer={popupContainer}
@@ -711,11 +693,12 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
                 />
               </Form.Item>
               <Form.Item label="نقش‌های مجاز" style={{ marginBottom: 8 }}>
-                <AdaptiveSelectField
+                <AdaptiveIdentityPicker
                   mode="multiple"
+                  scopes={['role']}
+                  valueMode="raw"
                   value={viewerRoleIds}
                   onChange={(v) => setViewerRoleIds(v as string[])}
-                  options={roleOptions}
                   placeholder="انتخاب نقش‌ها"
                   getPopupContainer={popupContainer as any}
                   modalContainer={popupContainer}
@@ -799,11 +782,12 @@ const StoryEditorModal: React.FC<StoryEditorModalProps> = ({
                 />
               </Form.Item>
               <Form.Item label="گیرندگان پیامک" style={{ marginBottom: 8 }}>
-                <AdaptiveSelectField
+                <AdaptiveIdentityPicker
                   mode="multiple"
+                  scopes={['user']}
+                  valueMode="raw"
                   value={smsRecipientIds}
                   onChange={(v) => setSmsRecipientIds(v as string[])}
-                  options={userOptions}
                   placeholder="انتخاب کاربران"
                   getPopupContainer={popupContainer as any}
                   modalContainer={popupContainer}

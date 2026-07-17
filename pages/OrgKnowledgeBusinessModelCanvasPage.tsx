@@ -28,6 +28,7 @@ import {
   normalizeKnowledgeVisibilityIds,
 } from '../utils/knowledgeVisibility';
 import RecordFilesManager from '../components/RecordFilesManager';
+import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
 import AiSparkleIcon from '../components/ai/AiSparkleIcon';
 import {
   buildBusinessModelCanvasDocumentContent,
@@ -476,31 +477,25 @@ const OrgKnowledgeBusinessModelCanvasPage: React.FC = () => {
               <div className="rounded-[28px] border border-white/75 bg-[linear-gradient(145deg,rgba(255,255,255,0.94),rgba(246,241,234,0.9))] px-4 py-4 shadow-[12px_12px_24px_rgba(210,199,185,0.2),-10px_-10px_22px_rgba(255,255,255,0.88)] dark:border-white/10 dark:bg-[linear-gradient(145deg,rgba(33,38,44,0.96),rgba(20,24,29,0.98))] dark:shadow-[12px_12px_24px_rgba(0,0,0,0.28),-6px_-6px_18px_rgba(255,255,255,0.03)]">
                 <h3 className="m-0 text-base font-black text-[#3d342a] dark:text-slate-100">دسترسی</h3>
                 <div className="mt-3 space-y-3">
-                  <Select
+                  <AdaptiveIdentityPicker
                     mode="multiple"
+                    scopes={['user']}
+                    valueMode="raw"
                     allowClear
-                    showSearch
                     value={allowedUserIds}
-                    onChange={(values) => setAllowedUserIds(normalizeKnowledgeVisibilityIds(values))}
-                    options={visibilityUserOptions}
-                    optionFilterProp="label"
+                    onChange={(values) => setAllowedUserIds(normalizeKnowledgeVisibilityIds(Array.isArray(values) ? values : []))}
                     placeholder="اشخاص مجاز"
-                    maxTagCount="responsive"
                     className="w-full"
-                    getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
                   />
-                  <Select
+                  <AdaptiveIdentityPicker
                     mode="multiple"
+                    scopes={['role']}
+                    valueMode="raw"
                     allowClear
-                    showSearch
                     value={allowedRoleIds}
-                    onChange={(values) => setAllowedRoleIds(normalizeKnowledgeVisibilityIds(values))}
-                    options={visibilityRoleOptions}
-                    optionFilterProp="label"
+                    onChange={(values) => setAllowedRoleIds(normalizeKnowledgeVisibilityIds(Array.isArray(values) ? values : []))}
                     placeholder="نقش‌های مجاز"
-                    maxTagCount="responsive"
                     className="w-full"
-                    getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
                   />
                 </div>
               </div>

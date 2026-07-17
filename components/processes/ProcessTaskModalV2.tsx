@@ -24,6 +24,7 @@ import {
 } from '@ant-design/icons';
 import { Link, useInRouterContext } from 'react-router-dom';
 import AdaptiveSelectField from '../AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import DynamicSelectField from '../DynamicSelectField';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import FileExtensionTile from '../files/FileExtensionTile';
@@ -74,7 +75,8 @@ import { insertRecordActivity } from '../../utils/recordActivity';
 import { moveModuleRecordsToRecycleBin } from '../../utils/recycleBin';
 import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
-import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { fetchDynamicOptionsByCategory } from '../../utils/referenceData';
+import { searchIdentityOptions } from '../../utils/identityDirectory';
 import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { buildTaskSourcePatch, getMergedTaskTypeOptions } from '../../utils/taskMeta';
 import { buildAssigneeSelectValue, parseAssigneeValue } from '../../utils/assigneeValue';
@@ -658,6 +660,7 @@ type InlineEditableFieldProps = {
   displayNode?: React.ReactNode;
   onOptionsUpdate?: () => void;
   saving?: boolean;
+  renderEditor?: (args: { value: any; onChange: (value: any) => void }) => React.ReactNode;
 };
 
 const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
@@ -677,6 +680,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   displayNode,
   onOptionsUpdate,
   saving = false,
+  renderEditor,
 }) => {
   const [editing, setEditing] = useState(false);
   const [draftValue, setDraftValue] = useState<any>(value);
@@ -764,7 +768,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
     setEditing(false);
   }, [value]);
 
-  const fieldNode = (
+  const fieldNode = renderEditor ? renderEditor({ value: rendererValue, onChange: handleChange }) : (
     <SmartFieldRenderer
       field={fieldModel}
       value={rendererValue}
@@ -1007,7 +1011,6 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   const [loadingInstructions, setLoadingInstructions] = useState(false);
   const [loadedInstructions, setLoadedInstructions] = useState<any[]>([]);
   const [activeInstructionId, setActiveInstructionId] = useState<string | null>(null);
-  const [assigneeOptions, setAssigneeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [assigneeUsers, setAssigneeUsers] = useState<any[]>([]);
   const [assigneeRoles, setAssigneeRoles] = useState<any[]>([]);
   const [taskTypeOptions, setTaskTypeOptions] = useState<Array<{ value: string; label: string }>>([]);
@@ -1561,33 +1564,32 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetchAssigneeDirectory(supabase)
-      .then((directory) => {
+    const selectedToken = String(assigneeValue || '').trim();
+    if (!selectedToken) {
+      setAssigneeUsers([]);
+      setAssigneeRoles([]);
+      return;
+    }
+    searchIdentityOptions(supabase, { scopes: ['user', 'role'], exactTokens: [selectedToken] })
+      .then((result) => {
         if (cancelled) return;
-        setAssigneeUsers(directory?.users || []);
-        setAssigneeRoles(directory?.roles || []);
-        setAssigneeOptions([
-          ...(directory?.users || []).map((user: any) => ({
-            value: `user:${user.id}`,
-            label: String(user.display_name || user.full_name || user.email || user.mobile_1 || 'کاربر').trim(),
-          })),
-          ...(directory?.roles || []).map((role: any) => ({
-            value: `role:${role.id}`,
-            label: String(role.title || 'نقش').trim(),
-          })),
-        ]);
+        setAssigneeUsers(result.items.filter((item) => item.kind === 'user').map((item) => ({
+          id: item.id, display_name: item.label, avatar_url: item.avatarUrl, role_id: item.roleId,
+        })));
+        setAssigneeRoles(result.items.filter((item) => item.kind === 'role').map((item) => ({
+          id: item.id, title: item.label, icon_key: item.iconKey,
+        })));
       })
       .catch(() => {
         if (!cancelled) {
           setAssigneeUsers([]);
           setAssigneeRoles([]);
-          setAssigneeOptions([]);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [assigneeValue, open]);
 
   const handleStatusActionClick = async (nextStatus: string) => {
     const normalizedStatus = String(nextStatus || '').trim();
@@ -3217,9 +3219,19 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                   value={assigneeValue}
                   onSave={isDraftActivityCreationMode ? setAssigneeValue : (value) => { void saveTaskAssignee(value); }}
                   onDraftChange={(value) => writeModalFieldDraftPatch({ assigneeValue: value })}
-                  options={assigneeOptions.length > 0 ? assigneeOptions : (assigneeValue ? [{ value: assigneeValue, label: assigneeValue }] : [])}
+                  options={[]}
                   fieldType={FieldType.SELECT}
                   forceEditMode={isDraftActivityCreationMode}
+                  renderEditor={({ value, onChange }) => (
+                    <AdaptiveIdentityPicker
+                      value={String(value || '') || undefined}
+                      scopes={['user', 'role']}
+                      onChange={(nextValue) => onChange(typeof nextValue === 'string' ? nextValue : '')}
+                      placeholder="انتخاب مسئول یا نقش"
+                      pickerTitle="انتخاب مسئول فعالیت"
+                      overlayZIndexBase={17020}
+                    />
+                  )}
                   displayNode={(
                     <AssigneeAvatarDisplay
                       source={assigneeDisplaySource}

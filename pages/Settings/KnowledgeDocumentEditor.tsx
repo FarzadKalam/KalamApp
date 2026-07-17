@@ -26,6 +26,7 @@ import {
   normalizeKnowledgeVisibilityIds,
 } from '../../utils/knowledgeVisibility';
 import AiSparkleIcon from '../../components/ai/AiSparkleIcon';
+import AdaptiveIdentityPicker from '../../components/AdaptiveIdentityPicker';
 import {
   buildKnowledgeDocumentPrintHtml,
   downloadKnowledgePrintPdf,
@@ -91,8 +92,6 @@ const escapePrintHtml = (value: string) =>
 const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
   document,
   typeOptions,
-  visibilityUserOptions = [],
-  visibilityRoleOptions = [],
   onClose,
   onSaved,
   rebuildChunks,
@@ -429,36 +428,28 @@ const KnowledgeDocumentEditor: React.FC<KnowledgeDocumentEditorProps> = ({
             style={{ width: 110 }}
           />
 
-          <Select
+          <AdaptiveIdentityPicker
             mode="multiple"
+            scopes={['user']}
+            valueMode="raw"
             allowClear
-            showSearch
             value={allowedUserIds}
-            onChange={(values) => setAllowedUserIds(normalizeKnowledgeVisibilityIds(values))}
-            options={visibilityUserOptions}
-            optionFilterProp="label"
+            onChange={(values) => setAllowedUserIds(normalizeKnowledgeVisibilityIds(Array.isArray(values) ? values : []))}
             placeholder="اشخاص مجاز"
-            maxTagCount="responsive"
-            size="small"
             style={{ width: 180 }}
-            getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
-            styles={{ popup: { root: { zIndex: 1710 } } }}
+            overlayZIndexBase={1710}
           />
 
-          <Select
+          <AdaptiveIdentityPicker
             mode="multiple"
+            scopes={['role']}
+            valueMode="raw"
             allowClear
-            showSearch
             value={allowedRoleIds}
-            onChange={(values) => setAllowedRoleIds(normalizeKnowledgeVisibilityIds(values))}
-            options={visibilityRoleOptions}
-            optionFilterProp="label"
+            onChange={(values) => setAllowedRoleIds(normalizeKnowledgeVisibilityIds(Array.isArray(values) ? values : []))}
             placeholder="نقش‌های مجاز"
-            maxTagCount="responsive"
-            size="small"
             style={{ width: 180 }}
-            getPopupContainer={(trigger) => trigger.parentElement || window.document.body}
-            styles={{ popup: { root: { zIndex: 1710 } } }}
+            overlayZIndexBase={1710}
           />
 
           {/* استفاده برای هوش مصنوعی */}

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Space, Tooltip } from 'antd';
+import { Form, Input, InputNumber, Select, Switch, Upload, Modal, App, Tag, Button, Tooltip } from 'antd';
 import {
   UploadOutlined,
   LoadingOutlined,
@@ -13,8 +13,6 @@ import {
   PushpinOutlined,
   PushpinFilled,
   SaveOutlined,
-  TeamOutlined,
-  UserOutlined,
   DownOutlined,
   UpOutlined,
 } from '@ant-design/icons';
@@ -24,6 +22,7 @@ import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import DynamicSelectField from './DynamicSelectField';
 import AdaptiveSelectField from './AdaptiveSelectField';
+import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
 import TagInput from './TagInput';
 import PersianDatePicker from './PersianDatePicker';
 import RelatedRecordPopover from './RelatedRecordPopover';
@@ -45,7 +44,7 @@ import { fileStorageClient, FILE_STORAGE_BUCKET } from '../utils/storageClient';
 import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { getSafeOptionFallback } from '../utils/optionHelpers';
 import { fetchCurrentUserRolePermissions, resolveReadyTextPermissions } from '../utils/permissions';
-import { fetchAssigneeDirectory, fetchDynamicOptionsByCategory } from '../utils/referenceData';
+import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { buildClientFallbackSystemCode, supportsSystemCode } from '../utils/systemCode';
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { syncRecordTags } from '../utils/recordTags';
@@ -53,7 +52,7 @@ import { getPreferredRelationTargetField } from '../utils/relationTargetField';
 import { fetchRelationOptionsForField, RELATION_DEFAULT_LIMIT } from '../utils/relationOptions';
 import { mergeSelectOptions } from '../utils/selectOptions';
 import { getAssigneeLabel } from '../utils/assigneeLabel';
-import { buildResolvedAssigneeCombo } from '../utils/assigneeValue';
+import { buildResolvedAssigneeCombo, parseAssigneeValue } from '../utils/assigneeValue';
 import { supportsGlobalAssignee, supportsGlobalAssigneeType, supportsGlobalRoleAssignee } from '../utils/assigneeSupport';
 import { getFieldLabelFa } from '../utils/fieldLabel';
 import { fetchSessionBootstrap } from '../utils/sessionCache';
@@ -3351,8 +3350,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
 }) => {
   const [fallbackForm] = Form.useForm();
   const effectiveForm = form || fallbackForm;
-  const [assignees, setAssignees] = useState<{ users: any[]; roles: any[] }>({ users: [], roles: [] });
-  const [assigneesLoading, setAssigneesLoading] = useState(false);
   const [showAllFields, setShowAllFields] = useState(false);
   const pendingAutoNameToggleValueRef = useRef<boolean | null>(null);
   const pendingAutoNameToggleFrameRef = useRef<number | null>(null);
@@ -3418,9 +3415,8 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     return onOk();
   }, [flushPendingAutoNameToggleWrite, onOk]);
   const parseAssigneeCombo = (value?: string | null) => {
-    if (!value) return { assignee_type: null, assignee_id: null };
-    const [type, id] = String(value).split('_');
-    return { assignee_type: type || 'user', assignee_id: id || null };
+    const parsed = parseAssigneeValue(value);
+    return { assignee_type: parsed.assigneeType, assignee_id: parsed.assigneeId };
   };
   const currentAssigneeComboValue = String(
     watchedAssigneeCombo
@@ -3431,67 +3427,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
     })
     || ''
   ).trim();
-  const currentAssigneePlaceholder = useMemo(() => {
-    if (!currentAssigneeComboValue) return null;
-    const { assignee_id, assignee_type } = parseAssigneeCombo(currentAssigneeComboValue);
-    if (!assignee_id) return null;
-    const normalizedType = String(assignee_type || 'user');
-    const matchedUser = assignees.users.find((item: any) => String(item?.id || '') === String(assignee_id));
-    const matchedRole = assignees.roles.find((item: any) => String(item?.id || '') === String(assignee_id));
-    return {
-      label: normalizedType === 'role'
-        ? (matchedRole?.title || 'تیم انتخاب‌شده')
-        : (matchedUser?.display_name || matchedUser?.full_name || 'مسئول انتخاب‌شده'),
-      value: currentAssigneeComboValue,
-      emoji: normalizedType === 'role' ? <TeamOutlined /> : <UserOutlined />,
-      type: normalizedType,
-    };
-  }, [assignees.roles, assignees.users, currentAssigneeComboValue]);
-  const assigneeOptions = useMemo(() => {
-    const userOptions = assignees.users.map((user) => ({
-      label: user.display_name || user.full_name,
-      value: `user_${user.id}`,
-      emoji: <UserOutlined />,
-    }));
-    const roleOptions = assignees.roles.map((role) => ({
-      label: role.title,
-      value: `role_${role.id}`,
-      emoji: <TeamOutlined />,
-    }));
-
-    const hasCurrentUser = currentAssigneePlaceholder?.type === 'user'
-      && userOptions.some((item) => item.value === currentAssigneePlaceholder.value);
-    const hasCurrentRole = currentAssigneePlaceholder?.type === 'role'
-      && roleOptions.some((item) => item.value === currentAssigneePlaceholder.value);
-
-    return [
-      {
-        label: 'پرسنل',
-        title: 'users',
-        options: currentAssigneePlaceholder?.type === 'user' && !hasCurrentUser
-          ? [currentAssigneePlaceholder, ...userOptions]
-          : userOptions,
-      },
-      ...(supportsRoleAssignee ? [{
-        label: 'تیم‌ها',
-        title: 'roles',
-        options: currentAssigneePlaceholder?.type === 'role' && !hasCurrentRole
-          ? [currentAssigneePlaceholder, ...roleOptions]
-          : roleOptions,
-      }] : []),
-    ];
-  }, [assignees.roles, assignees.users, currentAssigneePlaceholder, supportsRoleAssignee]);
-  const assigneeSelectOptions = useMemo(
-    () => assigneeOptions.flatMap((group: any) =>
-      Array.isArray(group?.options)
-        ? group.options.map((option: any) => ({
-            ...option,
-            searchText: [group?.label, option?.label, option?.value].filter(Boolean).join(' '),
-          }))
-        : []
-    ),
-    [assigneeOptions]
-  );
   const baseVisibleFields = useMemo(
     () => (supportsAssignee
       ? fields.filter((field) => !['assignee_id', 'assignee_type', 'assignee_role_id', 'assignee_combo'].includes(String(field?.key || '')))
@@ -3537,32 +3472,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
   }, [handleQuickCreateCancel, label, moduleId, open]);
 
   useEffect(() => {
-    if (!open || !supportsAssignee) return;
-    let cancelled = false;
-
-    const loadAssignees = async () => {
-      try {
-        setAssigneesLoading(true);
-        const directory = await fetchAssigneeDirectory(supabase);
-        if (!cancelled) {
-          setAssignees(directory);
-        }
-      } catch (err) {
-        console.warn('Failed loading assignee directory for quick create', err);
-      } finally {
-        if (!cancelled) {
-          setAssigneesLoading(false);
-        }
-      }
-    };
-
-    void loadAssignees();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, supportsAssignee]);
-
-  useEffect(() => {
     if (!open || !supportsAssignee || currentAssigneeComboValue) return;
     let cancelled = false;
 
@@ -3572,31 +3481,13 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
         const userId = String(snapshot?.user?.id || '').trim();
         if (!userId || cancelled) return;
 
-        effectiveForm.setFieldValue('assignee_combo', `user_${userId}`);
+        effectiveForm.setFieldValue('assignee_combo', `user:${userId}`);
         effectiveForm.setFieldValue('assignee_id', userId);
         effectiveForm.setFieldValue('assignee_role_id', null);
         if (supportsAssigneeType) {
           effectiveForm.setFieldValue('assignee_type', 'user');
         }
 
-        const profile = snapshot?.profile;
-        if (profile?.id) {
-          setAssignees((prev) => {
-            const exists = prev.users.some((item: any) => String(item?.id || '') === userId);
-            if (exists) return prev;
-            return {
-              ...prev,
-              users: [
-                {
-                  id: profile.id,
-                  full_name: profile.full_name,
-                  display_name: profile.full_name,
-                },
-                ...prev.users,
-              ],
-            };
-          });
-        }
       } catch (err) {
         console.warn('Failed setting default assignee for quick create', err);
       }
@@ -3701,25 +3592,11 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
               <div className="h-11 flex items-center justify-between sm:justify-start bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full pl-2 sm:pl-1 pr-3 py-1 gap-1 sm:gap-2">
                 <span className="text-xs text-gray-400 shrink-0">{assigneeLabel}:</span>
                 <Form.Item name="assignee_combo" noStyle>
-                  <AdaptiveSelectField
+                  <AdaptiveIdentityPicker
                     placeholder="جستجو یا انتخاب مسئول / نقش"
-                    className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full max-w-full font-semibold text-gray-700 dark:text-gray-300')}
-                    loading={assigneesLoading}
-                    options={assigneeSelectOptions}
-                    showSearch
-                    optionFilterProp="searchText"
-                    optionLabelProp="label"
-                    filterOption={(input, option) =>
-                      String(option?.searchText || option?.label || '').toLowerCase().includes(String(input || '').trim().toLowerCase())
-                    }
-                    optionRender={(option) => (
-                      <Space>
-                        <span role="img" aria-label={option.data.label}>{(option.data as any).emoji}</span>
-                        {option.data.label}
-                      </Space>
-                    )}
-                    getPopupContainer={quickCreatePopupContainer}
-                    modalContainer={quickCreatePopupContainer}
+                    pickerTitle={`انتخاب ${assigneeLabel}`}
+                    scopes={supportsRoleAssignee ? ['user', 'role'] : ['user']}
+                    className="w-full max-w-full font-semibold text-gray-700 dark:text-gray-300"
                     overlayZIndexBase={childOverlayZIndexBase}
                     onChange={(value) => {
                       const { assignee_id, assignee_type } = parseAssigneeCombo(String(value || ''));
@@ -3732,14 +3609,6 @@ export const RelationQuickCreateInline: React.FC<QuickCreateProps> = ({
                       }
                     }}
                     allowClear
-                    onClear={() => {
-                      effectiveForm.setFieldValue('assignee_combo', null);
-                      effectiveForm.setFieldValue('assignee_id', null);
-                      effectiveForm.setFieldValue('assignee_role_id', null);
-                      if (supportsAssigneeType) {
-                        effectiveForm.setFieldValue('assignee_type', null);
-                      }
-                    }}
                   />
                 </Form.Item>
               </div>

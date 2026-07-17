@@ -18,7 +18,7 @@ import WorkflowConditionsGroup from '../components/workflows/WorkflowConditionsG
 import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRoleContext, resolveReportsAccessPermissions } from '../utils/permissions';
-import { fetchAssigneeDirectory } from '../utils/referenceData';
+import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
 import {
   clampReportRowLimit,
   createDefaultReportConfig,
@@ -45,7 +45,6 @@ import { resolveOverlayPopupContainer } from '../utils/popupContainer';
 const { Title, Text } = Typography;
 
 type WizardStep = 0 | 1 | 2 | 3;
-
 type UserOption = { label: string; value: string };
 
 const STEPS = ['اطلاعات اولیه', 'ستون‌ها', 'فیلترها', 'تحلیل و خروجی'];
@@ -92,7 +91,6 @@ const ReportBuilderPage: React.FC = () => {
 
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
   const [relationOptions, setRelationOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [botGroupOptions, setBotGroupOptions] = useState<UserOption[]>([]);
   const popupContainer = useCallback((triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode), []);
 
@@ -172,17 +170,12 @@ const ReportBuilderPage: React.FC = () => {
     let cancelled = false;
     const run = async () => {
       try {
-        const [directory, botGroupsResult] = await Promise.all([
-          fetchAssigneeDirectory(supabase),
-          supabase.from('counterparty_bot_groups').select('id, group_title, channel_type, status').eq('status', 'active').order('group_title'),
-        ]);
+        const botGroupsResult = await supabase
+          .from('counterparty_bot_groups')
+          .select('id, group_title, channel_type, status')
+          .eq('status', 'active')
+          .order('group_title');
         if (cancelled) return;
-        setUserOptions(
-          (directory.users || []).map((user) => ({
-            label: String(user?.display_name || user?.full_name || user?.email || user?.id || '').trim(),
-            value: String(user?.id || '').trim(),
-          })).filter((item) => item.value)
-        );
         setBotGroupOptions(
           (botGroupsResult.data || []).map((group: any) => ({
             label: `${String(group?.group_title || 'گروه بات').trim()} (${String(group?.channel_type || '').trim() || 'بات'})`,
@@ -191,7 +184,6 @@ const ReportBuilderPage: React.FC = () => {
         );
       } catch {
         if (!cancelled) {
-          setUserOptions([]);
           setBotGroupOptions([]);
         }
       }
@@ -540,15 +532,14 @@ const ReportBuilderPage: React.FC = () => {
                     />
                   </div>
                   <div className="md:col-span-2">
-                    <Select
+                    <AdaptiveIdentityPicker
                       className="w-full"
                       mode="multiple"
-                      showSearch
-                      optionFilterProp="label"
+                      scopes={['user']}
+                      valueMode="raw"
                       value={scheduleRecipientIds}
-                      options={userOptions}
                       placeholder="یک یا چند کاربر را انتخاب کنید"
-                      onChange={(value) => setScheduleRecipientIds((value || []).map((item) => String(item)))}
+                      onChange={(value) => setScheduleRecipientIds((Array.isArray(value) ? value : []).map((item) => String(item)))}
                     />
                   </div>
                   {scheduleChannels.includes('bot_group') && (

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import type { RoleNode } from './orgChartHelpers';
+import { renderRoleIcon } from '../../utils/roleIconCatalog';
 
 export const ORG_NODE_WIDTH = 180;
 
@@ -100,6 +101,9 @@ export const OrgChartNode: React.FC<OrgChartNodeProps> = ({
             <HolderOutlined />
           </div>
         )}
+        <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300">
+          {renderRoleIcon(node.icon_key)}
+        </span>
         <span
           className="flex-1 text-sm font-bold text-gray-800 dark:text-gray-100 truncate"
           title={node.title}

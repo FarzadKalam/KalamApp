@@ -33,6 +33,8 @@ import ProfileAvatar from '../../components/common/ProfileAvatar';
 import { emitProfileAvatarUpdated } from '../../utils/profileAvatarEvents';
 import OtpCodeInput from '../../components/common/OtpCodeInput';
 import { normalizeDigitsToEnglish } from '../../utils/persianNumericInput';
+import AdaptiveIdentityPicker from '../../components/AdaptiveIdentityPicker';
+import { clearIdentityDirectoryCache } from '../../utils/identityDirectory';
 
 type ResponsiveBreakpoint = 'xxl' | 'xl' | 'lg' | 'md' | 'sm' | 'xs';
 
@@ -253,10 +255,6 @@ const UsersTab: React.FC = () => {
     }
   };
 
-  const getRoleDisplayTitle = (role: any) => {
-    return String(role?.title || role?.name || '').trim() || 'بدون عنوان';
-  };
-
   const canEditRecord = (record: UserRow) => {
     if (!canManageUsers) return false;
     if (record._rowType !== 'profile') return true;
@@ -312,6 +310,7 @@ const UsersTab: React.FC = () => {
       clearSessionBootstrapCache();
     }
     clearReferenceDataCache();
+    clearIdentityDirectoryCache(currentOrgId);
     message.success('وضعیت کاربر بروزرسانی شد');
     fetchData();
   };
@@ -522,6 +521,7 @@ const UsersTab: React.FC = () => {
           });
         }
         clearReferenceDataCache();
+        clearIdentityDirectoryCache(currentOrgId);
         message.success('اطلاعات کاربر بروزرسانی شد');
         await fetchData();
         const updatedRecord = rows.find((row) => row._rowType === 'profile' && row.id === editingUser.id) || editingUser;
@@ -546,6 +546,7 @@ const UsersTab: React.FC = () => {
 
         message.success('کاربر با موفقیت ایجاد شد. حالا می‌توانید شماره او را همین‌جا تایید کنید.');
         clearReferenceDataCache();
+        clearIdentityDirectoryCache(currentOrgId);
         await fetchData();
         const createdId = String(created?.profile?.id || created?.user?.id || '').trim();
         if (createdId) {
@@ -709,15 +710,15 @@ const UsersTab: React.FC = () => {
       key: 'role',
       render: (_: any, record: UserRow) =>
         record._rowType === 'profile' ? (
-          <Select
+          <AdaptiveIdentityPicker
             value={record.role_id || undefined}
-            style={{ width: '100%', minWidth: 140 }}
+            className="w-full min-w-[140px]"
             placeholder="انتخاب جایگاه"
-            onChange={(val) => handleRoleChange(record, val)}
-            options={roles.map((role) => ({ label: getRoleDisplayTitle(role), value: role.id }))}
-            className="custom-select"
+            pickerTitle="انتخاب جایگاه سازمانی"
+            scopes={['role']}
+            valueMode="raw"
+            onChange={(val) => handleRoleChange(record, typeof val === 'string' ? val : '')}
             disabled={!canEditRecord(record)}
-            getPopupContainer={resolveOverlayPopupContainer}
           />
         ) : (
           <Tag>{record.role_id ? roles.find((role) => role.id === record.role_id)?.title || 'در انتظار تعیین' : 'در انتظار تعیین'}</Tag>
@@ -826,7 +827,7 @@ const UsersTab: React.FC = () => {
             <Input dir="ltr" placeholder="0912..." />
           </Form.Item>
           <Form.Item label="جایگاه سازمانی" name="role_id" rules={[{ required: true, message: 'جایگاه سازمانی الزامی است' }]}>
-            <Select placeholder="انتخاب کنید" options={roles.map((role) => ({ label: getRoleDisplayTitle(role), value: role.id }))} getPopupContainer={resolveOverlayPopupContainer} />
+            <AdaptiveIdentityPicker placeholder="انتخاب کنید" pickerTitle="انتخاب جایگاه سازمانی" scopes={['role']} valueMode="raw" />
           </Form.Item>
           <Form.Item label="نقش سیستمی" name="role" rules={[{ required: true, message: 'نقش سیستمی الزامی است' }]}>
             <Select placeholder="انتخاب نقش" options={SYSTEM_ROLE_OPTIONS} getPopupContainer={resolveOverlayPopupContainer} />

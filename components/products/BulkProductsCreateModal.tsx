@@ -294,7 +294,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
       const roles = Array.isArray(directory?.roles) ? directory.roles : [];
       setAssigneeOptions([
         ...((users || []).map((user: any) => ({
-          value: `user_${String(user?.id || '')}`,
+          value: `user:${String(user?.id || '')}`,
           label:
             String(user?.display_name || user?.full_name || '').trim() ||
             String(user?.email || '').trim() ||
@@ -303,7 +303,7 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
           group: 'user' as const,
         })).filter((item) => item.value !== 'user_')),
         ...((roles || []).map((role: any) => ({
-          value: `role_${String(role?.id || '')}`,
+          value: `role:${String(role?.id || '')}`,
           label: String(role?.title || role?.name || role?.id || '').trim(),
           group: 'role' as const,
         })).filter((item) => item.value !== 'role_' && item.label)),
@@ -644,7 +644,9 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
                   setSharedValues((prev) => ({ ...prev, assignee_id: null, assignee_type: null }));
                   return;
                 }
-                const [nextType, nextId] = raw.split('_');
+                const separatorIndex = Math.max(raw.indexOf(':'), raw.indexOf('_'));
+                const nextType = separatorIndex > 0 ? raw.slice(0, separatorIndex) : 'user';
+                const nextId = separatorIndex > 0 ? raw.slice(separatorIndex + 1) : raw;
                 setSharedValues((prev) => ({
                   ...prev,
                   assignee_id: nextId || null,
