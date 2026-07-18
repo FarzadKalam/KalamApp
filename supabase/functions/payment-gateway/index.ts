@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'payment-gateway-2026-07-19-staged-invoice-payment';
+const FUNCTION_BUILD = 'payment-gateway-2026-07-19-invoice-payment-host-fallback';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -63,7 +63,8 @@ const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string
     `saas_org_settings?select=resolved_host&org_id=eq.${enc(orgId)}&limit=1`
   ).catch(() => []));
   const host = String(row?.resolved_host || '').trim().replace(/\/+$/, '');
-  if (!host) return '';
+  // سازمان داخلی SaaS الزاماً رکورد tenant با resolved_host ندارد؛ پرداخت مرکزی باید به میزبان داخلی برگردد.
+  if (!host) return allowCentralHost ? 'https://kalam.tazesystem.ir' : '';
   const candidate = /^https?:\/\//i.test(host) ? host : `https://${host}`;
   try {
     const parsed = new URL(candidate);

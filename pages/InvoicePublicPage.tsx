@@ -3,7 +3,6 @@ import {
   Alert,
   App,
   Avatar,
-  Badge,
   Button,
   ConfigProvider,
   Divider,
@@ -1938,18 +1937,23 @@ ${invoice.description ? `
                 {formatPrice(payableAmount, currencyLabel)}
               </div>
             </div>
-            <Badge count={pendingPaymentOptions.length > 0 ? 'امکان پیش‌پرداخت وجود دارد' : 0} color={primaryColor} offset={[-4, 2]}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 4, minWidth: 180, maxWidth: '100%' }}>
+              {pendingPaymentOptions.length > 0 ? (
+                <Text style={{ fontSize: 11, color: primaryColor, fontWeight: 700, textAlign: 'center' }}>
+                  امکان پیش‌پرداخت وجود دارد
+                </Text>
+              ) : null}
               <Button
                 type="primary"
                 size="large"
                 icon={<CreditCardOutlined />}
                 loading={paymentStarting}
                 onClick={() => pendingPaymentOptions.length > 0 ? setPaymentChoiceOpen(true) : void handleStartOnlinePayment()}
-                style={{ minWidth: 180, fontWeight: 800, background: primaryColor }}
+                style={{ width: '100%', fontWeight: 800, background: primaryColor }}
               >
                 پرداخت سریع
               </Button>
-            </Badge>
+            </div>
           </div>
         </div>
       ) : null}
@@ -1965,14 +1969,15 @@ ${invoice.description ? `
             const selected = selectedPendingPaymentKey === option.key;
             return (
               <button key={option.key} type="button" onClick={() => setSelectedPendingPaymentKey(option.key)} className={`w-full rounded-xl border p-3 text-right transition-colors ${selected ? 'border-leather-500 bg-leather-50 dark:bg-leather-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
-                <div className="flex items-center justify-between gap-3"><span className="font-bold">{option.title}</span><span className="font-black">{formatPrice(option.amount, currencyLabel)}</span></div>
+                <div className="flex items-center justify-between gap-3"><span className="font-bold">مبلغ قابل پیش پرداخت</span><span className="font-black">{formatPrice(option.amount, currencyLabel)}</span></div>
                 <div className="mt-1 text-xs text-gray-500">پرداخت این ردیف به‌عنوان پیش‌پرداخت ثبت می‌شود.</div>
               </button>
             );
           })}
-          <Button block size="large" type={selectedPendingPaymentKey === null ? 'primary' : 'default'} onClick={() => setSelectedPendingPaymentKey(null)} style={selectedPendingPaymentKey === null ? { background: primaryColor, fontWeight: 900 } : { fontWeight: 800 }}>
-            تسویه کامل فاکتور — {formatPrice(payableAmount, currencyLabel)}
-          </Button>
+          <button type="button" onClick={() => setSelectedPendingPaymentKey(null)} className={`w-full rounded-xl border p-3 text-right transition-colors ${selectedPendingPaymentKey === null ? 'border-leather-500 bg-leather-50 dark:bg-leather-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
+            <div className="flex items-center justify-between gap-3"><span className="font-bold">تسویه کامل فاکتور</span><span className="font-black">{formatPrice(payableAmount, currencyLabel)}</span></div>
+            <div className="mt-1 text-xs text-gray-500">کل مانده فاکتور در این پرداخت تسویه می‌شود.</div>
+          </button>
           <div className="rounded-xl bg-gray-50 p-3 text-sm dark:bg-white/5">
             <div className="flex justify-between"><span>مبلغ نهایی قابل پرداخت</span><strong>{formatPrice(selectedPaymentAmount, currencyLabel)}</strong></div>
             <div className="mt-2 flex justify-between text-gray-500"><span>مانده فاکتور پس از این پرداخت</span><span>{formatPrice(remainingAfterSelectedPayment, currencyLabel)}</span></div>
