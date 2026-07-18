@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'payment-gateway-2026-07-09-ai-credit-topup';
+const FUNCTION_BUILD = 'payment-gateway-2026-07-19-staged-invoice-payment';
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -56,7 +56,7 @@ const normalizeSafeReturnOrigin = (value: any) => {
   return '';
 };
 
-const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string) => {
+const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string, allowCentralHost = false) => {
   const row = first(await rest(
     urlBase,
     key,
@@ -67,7 +67,7 @@ const getTenantPublicOrigin = async (urlBase: string, key: string, orgId: string
   const candidate = /^https?:\/\//i.test(host) ? host : `https://${host}`;
   try {
     const parsed = new URL(candidate);
-    if (['tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir', 'kalamapp.ir', 'www.kalamapp.ir'].includes(parsed.hostname.toLowerCase())) return '';
+    if (!allowCentralHost && ['tazesystem.ir', 'www.tazesystem.ir', 'app.tazesystem.ir', 'kalamapp.ir', 'www.kalamapp.ir'].includes(parsed.hostname.toLowerCase())) return '';
     return parsed.origin;
   } catch {
     return '';
@@ -463,7 +463,9 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
   const selectedPendingPayment = pendingPaymentRowKey
     ? (Array.isArray(invoice?.payments) ? invoice.payments : []).find((row: any) => {
         const rowKey = String(row?.row_key || row?.payment_id || row?.id || '').trim();
-        return rowKey === pendingPaymentRowKey && String(row?.status || '').trim().toLowerCase() === 'pending';
+        return rowKey === pendingPaymentRowKey
+          && String(row?.status || '').trim().toLowerCase() === 'pending'
+          && String(row?.payment_type || '').trim().toLowerCase() === 'online';
       })
     : null;
   if (pendingPaymentRowKey && !selectedPendingPayment) {
@@ -482,7 +484,12 @@ const createInvoicePayment = async (urlBase: string, key: string, centralMerchan
     || `پرداخت فاکتور ${invoice.system_code || invoice.name || ''}`.trim()
     || 'پرداخت آنلاین فاکتور';
   // منبع بازگشت باید از تنظیمات سازمان مالک فاکتور تعیین شود، نه دامنه عمومی یا ورودی کاربر.
-  const returnOrigin = await getTenantPublicOrigin(urlBase, key, String(invoice.org_id || ''));
+  const returnOrigin = await getTenantPublicOrigin(
+    urlBase,
+    key,
+    String(invoice.org_id || ''),
+    gatewayScope === 'system',
+  );
   if (!returnOrigin) {
     return json(503, { success: false, message: 'دامنه اختصاصی این سازمان برای پرداخت آنلاین تنظیم نشده است.' });
   }
@@ -704,7 +711,7 @@ const verifyCallbackPayload = async (urlBase: string, key: string, merchantId: s
       await creditAiWalletFromTransaction(urlBase, key, { ...tx, authority: authority || tx.authority, ref_id: data?.ref_id ? String(data.ref_id) : tx.ref_id });
     } else {
       const previousInvoice = await getInvoiceWorkflowRecord(urlBase, key, tx.record_id);
-      const appendResult = await rpc(urlBase, key, 'append_online_invoice_payment_from_transaction', {
+      const appendResult = await rpc(urlBase, key, 'apply_online_invoice_payment_transaction', {
         p_transaction_id: tx.id,
       });
       await runInvoiceWorkflowEvent(urlBase, key, tx, previousInvoice, appendResult);

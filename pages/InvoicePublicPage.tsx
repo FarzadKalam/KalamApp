@@ -198,6 +198,12 @@ type PublicInvoicePaymentState = {
   callback_path?: string;
 };
 
+type PublicOnlinePaymentOption = {
+  key: string;
+  title?: string;
+  amount: number;
+};
+
 type OnlineConfig = {
   enabled?: boolean;
   showItemsTable?: boolean;
@@ -303,6 +309,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
   const [receiptUploading, setReceiptUploading] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null);
   const [paymentState, setPaymentState] = useState<PublicInvoicePaymentState | null>(null);
+  const [onlinePaymentOptions, setOnlinePaymentOptions] = useState<PublicOnlinePaymentOption[]>([]);
   const [paymentStarting, setPaymentStarting] = useState(false);
   const [paymentChoiceOpen, setPaymentChoiceOpen] = useState(false);
   const [selectedPendingPaymentKey, setSelectedPendingPaymentKey] = useState<string | null>(null);
@@ -339,20 +346,31 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
         setData(invData);
         setNotes(invData.notes || []);
         setPaymentState(null);
+        setOnlinePaymentOptions([]);
         if (moduleId === 'invoices') {
-          void Promise.resolve(
+          void Promise.all([
             anonClient.rpc('get_public_invoice_payment_state', {
               p_system_code: code,
               p_module: moduleId,
-            })
-          )
-            .then(({ data: paymentResult }: any) => {
+            }),
+            anonClient.rpc('get_public_invoice_online_payment_options', {
+              p_system_code: code,
+              p_module: moduleId,
+            }),
+          ])
+            .then(([{ data: paymentResult }, { data: paymentOptions }]: any[]) => {
               if (!cancelled && paymentResult && typeof paymentResult === 'object') {
                 setPaymentState(paymentResult as PublicInvoicePaymentState);
               }
+              if (!cancelled && Array.isArray(paymentOptions)) {
+                setOnlinePaymentOptions(paymentOptions as PublicOnlinePaymentOption[]);
+              }
             })
             .catch(() => {
-              if (!cancelled) setPaymentState(null);
+              if (!cancelled) {
+                setPaymentState(null);
+                setOnlinePaymentOptions([]);
+              }
             });
         }
 
@@ -850,6 +868,10 @@ ${invoice.description ? `
   const cfg = useMemo<OnlineConfig>(() => data?.online_config || {}, [data]);
   const invoice = data?.invoice || {};
   const items = data?.items || [];
+  const hasItemImages = useMemo(
+    () => items.some((item) => Boolean(String(item?.image_url || '').trim())),
+    [items],
+  );
   const payments = data?.payments || [];
   const companySt = data?.branding?.company_settings as Record<string, any> | undefined;
   const currencyLabel = String(companySt?.currency_label || 'ریال').trim() || 'ریال';
@@ -883,16 +905,14 @@ ${invoice.description ? `
   const onlinePaymentAvailable = isSales && paymentState?.available === true && payableAmount > 0;
 
   const pendingPaymentOptions = useMemo(
-    () => payments
-      .map((payment) => ({ payment }))
-      .filter(({ payment }) => String(payment?.status || '').trim().toLowerCase() === 'pending' && Number(payment?.amount || 0) > 0)
-      .map(({ payment }) => ({
-        key: String(payment?.row_key || payment?.payment_id || payment?.id || '').trim(),
-        title: String(payment?.description || payment?.payment_type_label || PAYMENT_TYPE_LABELS[String(payment?.payment_type || '').trim()] || 'دریافت در انتظار').trim(),
+    () => onlinePaymentOptions
+      .map((payment) => ({
+        key: String(payment?.key || '').trim(),
+        title: String(payment?.title || 'دریافت آنلاین در انتظار').trim(),
         amount: Math.min(payableAmount, Math.max(0, Number(payment?.amount || 0))),
       }))
       .filter((item) => item.key && item.amount > 0),
-    [payableAmount, payments]
+    [onlinePaymentOptions, payableAmount]
   );
   const selectedPendingPayment = pendingPaymentOptions.find((item) => item.key === selectedPendingPaymentKey) || null;
   const selectedPaymentAmount = selectedPendingPayment?.amount || payableAmount;
@@ -1242,7 +1262,7 @@ ${invoice.description ? `
                 size="small"
                 style={{ direction: 'rtl' }}
                 columns={[
-                  {
+                  ...(hasItemImages ? [{
                     title: 'تصویر',
                     dataIndex: 'image_url',
                     width: 76,
@@ -1278,7 +1298,7 @@ ${invoice.description ? `
                         </button>
                       );
                     },
-                  },
+                  }] : []),
                   {
                     title: 'ردیف',
                     width: 44,
@@ -1399,9 +1419,10 @@ ${invoice.description ? `
                   },
                 ]}
                 summary={() => {
-                  // تصویر + ردیف + کالا/شرح + تعداد + قیمت واحد = 5، سپس تخفیف و مالیات اختیاری
+                  // ردیف + کالا/شرح + تعداد + قیمت واحد، به‌همراه ستون تصویر در صورت وجود آن
                   const labelSpan =
-                    5 +
+                    4 +
+                    (hasItemImages ? 1 : 0) +
                     (cfg.showDiscount !== false ? 1 : 0) +
                     (cfg.showVat !== false ? 1 : 0);
                   return (
