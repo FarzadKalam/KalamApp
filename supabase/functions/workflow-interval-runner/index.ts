@@ -36,7 +36,7 @@ import {
 } from '../../../shared/workflowMessagingContract.ts';
 import { evaluateFormulaExpression } from '../../../utils/formulaRuntime.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-14-saas-admin-host-routing';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-19-event-queue-fix';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -5300,7 +5300,9 @@ async function runServerProcessAutomationRules(
         errors.push(String(error?.message || error || 'automation action failed'));
       }
     }
-    const status = errors.length > 0 ? 'failed' : 'success';
+    const hasFailedAction = results.some((result) => result.status === 'failed');
+    const hasSuccessfulAction = results.some((result) => result.status === 'success');
+    const status = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
     await insertWorkflowLog(url, key, {
       workflow_id: null,
       org_id: orgId,
@@ -5308,7 +5310,9 @@ async function runServerProcessAutomationRules(
       record_id: taskId,
       run_type: 'process_automation',
       status,
-      message: errors.length > 0 ? errors.join(' | ') : undefined,
+      message: errors.length > 0
+        ? errors.join(' | ')
+        : (!hasSuccessfulAction ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.' : undefined),
       details: {
         process_automation_rule_id: ruleId || null,
         process_automation_rule_name: String(rule?.name || '').trim() || null,
@@ -5326,7 +5330,8 @@ async function runServerProcessAutomationRules(
       },
     });
     if (status === 'success') stats.succeeded += 1;
-    else stats.failed += 1;
+    else if (status === 'failed') stats.failed += 1;
+    else stats.skipped += 1;
   }
   return stats;
 }
@@ -5444,11 +5449,16 @@ async function completeWorkflowEvent(
 async function runQueuedWorkflowEvents(url: string, key: string): Promise<Record<string, number>> {
   const stats = { scanned: 0, claimed: 0, succeeded: 0, failed: 0 };
   await callRpc(url, key, 'requeue_stale_workflow_events', {}).catch(() => 0);
+  // PostgREST filters accept values, not SQL expressions. Passing `now()` here
+  // makes the fetch fail and the catch below silently turns every event into an
+  // empty queue. Use an explicit UTC timestamp; the claim RPC remains the final
+  // atomic due-time guard.
+  const dueAt = encodeURIComponent(new Date().toISOString());
   const rows = await dbGet(url, key,
-    'workflow_event_queue?status=eq.pending&available_at=lte.now()&order=created_at.asc&limit=100'
+    `workflow_event_queue?status=eq.pending&available_at=lte.${dueAt}&order=created_at.asc&limit=100`
   ).catch((error) => {
     console.warn('[workflow-runner] Event queue fetch failed:', error?.message || error);
-    return [];
+    throw error;
   }) as WorkflowEventQueueRow[];
 
   for (const queuedEvent of rows) {
