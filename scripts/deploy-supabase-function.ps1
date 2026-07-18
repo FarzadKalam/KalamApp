@@ -211,6 +211,7 @@ function Normalize-RequestedFunctions {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $functionsRoot = Join-Path $repoRoot 'supabase/functions'
 $localArchive = $null
+$archiveStagingRoot = $null
 $sshCommonArgs = $null
 $target = $null
 $sharedSessionOpened = $false
@@ -258,8 +259,29 @@ try {
     Remove-Item -LiteralPath $localArchive -Force
   }
 
+  # Edge Functions are deployed as isolated folders. The workflow runner uses
+  # a few pure runtime modules that intentionally live outside supabase/functions
+  # for frontend reuse, so materialize deploy-local copies before creating its
+  # archive. This avoids unresolved /home/shared and /home/utils imports in Deno.
+  $archiveSourceRoot = $functionsRoot
+  if ($selectedFunctions -contains 'workflow-interval-runner') {
+    $archiveStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kalamapp-functions-{0}" -f [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $archiveStagingRoot -Force | Out-Null
+
+    foreach ($functionName in $selectedFunctions) {
+      Copy-Item -LiteralPath (Join-Path $functionsRoot $functionName) -Destination (Join-Path $archiveStagingRoot $functionName) -Recurse -Force
+    }
+
+    $runtimeDepsRoot = Join-Path $archiveStagingRoot 'workflow-interval-runner/_runtime-deps'
+    New-Item -ItemType Directory -Path $runtimeDepsRoot -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/recordRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'recordRuntime.ts') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMessagingContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMessagingContract.ts') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'utils/formulaRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'formulaRuntime.ts') -Force
+    $archiveSourceRoot = $archiveStagingRoot
+  }
+
   Write-Step "Packing functions: $($selectedFunctions -join ', ')"
-  $tarArgs = @('-czf', $localArchive, '-C', $functionsRoot, '--') + $selectedFunctions
+  $tarArgs = @('-czf', $localArchive, '-C', $archiveSourceRoot, '--') + $selectedFunctions
   & tar @tarArgs
   if ($LASTEXITCODE -ne 0) {
     throw 'Could not create function deploy archive.'
@@ -403,5 +425,9 @@ finally {
 
   if ($localArchive -and (Test-Path -LiteralPath $localArchive)) {
     Remove-Item -LiteralPath $localArchive -Force -ErrorAction SilentlyContinue
+  }
+
+  if ($archiveStagingRoot -and (Test-Path -LiteralPath $archiveStagingRoot)) {
+    Remove-Item -LiteralPath $archiveStagingRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
 }

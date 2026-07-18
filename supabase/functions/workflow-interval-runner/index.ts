@@ -25,7 +25,7 @@ import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
   evaluateCoreConditionOperator,
   renderTemplateAsync as renderCentralTemplateAsync,
-} from '../../../shared/recordRuntime.ts';
+} from './_runtime-deps/recordRuntime.ts';
 import {
   getLegacyWorkflowAttachmentFields,
   getWorkflowRecipientConfig,
@@ -33,10 +33,10 @@ import {
   normalizeWorkflowRecipientFieldValues,
   parseWorkflowRecipientFieldReference,
   shouldIncludeStarredWorkflowAttachments,
-} from '../../../shared/workflowMessagingContract.ts';
-import { evaluateFormulaExpression } from '../../../utils/formulaRuntime.ts';
+} from './_runtime-deps/workflowMessagingContract.ts';
+import { evaluateFormulaExpression } from './_runtime-deps/formulaRuntime.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-19-event-queue-fix';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-19-self-contained-deploy';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
