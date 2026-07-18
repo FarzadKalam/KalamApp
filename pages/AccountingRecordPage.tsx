@@ -21,7 +21,6 @@ import {
   PlusOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { MODULES } from '../moduleRegistry';
@@ -31,6 +30,7 @@ import ChequePreviewCard from '../components/accounting/ChequePreviewCard';
 import RelatedSidebar from '../components/Sidebar/RelatedSidebar';
 import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
+import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
 import RecordImageBox from '../components/RecordImageBox';
 import TagInput from '../components/TagInput';
 import { supabase } from '../supabaseClient';
@@ -51,6 +51,8 @@ import { fetchRelationOptionsForField } from '../utils/relationOptions';
 import { normalizeModuleFormValues, transformModulePayloadForSave, validateModuleFormValues } from '../utils/moduleFormRuntime';
 import { resolveSelectPopupContainer } from '../utils/popupContainer';
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from '../utils/cashBankLegacyAccountKeys';
+import { buildResolvedAssigneeCombo, parseAssigneeValue } from '../utils/assigneeValue';
+import { supportsModuleRoleAssignee } from '../utils/assigneeSupport';
 import RecordLockControl from '../components/recordLocks/RecordLockControl';
 import {
   fetchRecordLockState,
@@ -329,6 +331,8 @@ const AccountingRecordPage: React.FC = () => {
     if (!assigneeField) return [] as FieldOption[];
     return getFieldOptions(assigneeField);
   }, [assigneeField, getFieldOptions]);
+  const usesCentralAssignee = assigneeField?.key === 'assignee_id';
+  const supportsRoleAssignee = supportsModuleRoleAssignee(moduleConfig);
 
   const statusFieldOptions = useMemo(() => {
     if (!statusField) return [] as FieldOption[];
@@ -770,6 +774,31 @@ const AccountingRecordPage: React.FC = () => {
 
   const renderHeaderAssigneeField = useCallback(() => {
     if (!assigneeField) return null;
+    if (usesCentralAssignee) {
+      const currentValue = buildResolvedAssigneeCombo(currentRecordValues);
+      return (
+        <AdaptiveIdentityPicker
+          variant="borderless"
+          value={currentValue}
+          onChange={(value) => {
+            const parsed = parseAssigneeValue(value, 'user');
+            const patch = {
+              assignee_id: parsed.assigneeType === 'user' ? parsed.assigneeId : null,
+              assignee_role_id: parsed.assigneeType === 'role' ? parsed.assigneeId : null,
+              assignee_type: parsed.assigneeId ? parsed.assigneeType : null,
+            };
+            setFormData((prev) => ({ ...prev, ...patch }));
+            form.setFieldsValue(patch);
+          }}
+          scopes={supportsRoleAssignee ? ['user', 'role'] : ['user']}
+          className="min-w-[160px] font-semibold text-gray-700 dark:text-gray-300"
+          disabled={!isEditMode || !canEdit}
+          allowClear={isEditMode}
+          pickerTitle={`انتخاب ${assigneeField.labels?.fa || 'مسئول'}`}
+          getPopupContainer={resolveSelectPopupContainer}
+        />
+      );
+    }
     if (isEditMode) {
       return (
         <AdaptiveSelectField
@@ -791,7 +820,7 @@ const AccountingRecordPage: React.FC = () => {
       );
     }
     return renderReadValue(assigneeField, record?.[assigneeField.key]);
-  }, [assigneeField, assigneeFieldOptions, canEdit, currentRecordValues, form, isEditMode, record, renderReadValue]);
+  }, [assigneeField, assigneeFieldOptions, canEdit, currentRecordValues, form, isEditMode, record, renderReadValue, supportsRoleAssignee, usesCentralAssignee]);
 
   const buildPayload = useCallback(
     (values: Record<string, any>) => {
@@ -825,6 +854,15 @@ const AccountingRecordPage: React.FC = () => {
 
         payload[field.key] = raw;
       });
+
+      if (usesCentralAssignee && Object.prototype.hasOwnProperty.call(values, 'assignee_id')) {
+        const parsed = parseAssigneeValue(buildResolvedAssigneeCombo(values), 'user');
+        payload.assignee_id = parsed.assigneeType === 'user' ? parsed.assigneeId : null;
+        if (supportsRoleAssignee) {
+          payload.assignee_role_id = parsed.assigneeType === 'role' ? parsed.assigneeId : null;
+          payload.assignee_type = parsed.assigneeId ? parsed.assigneeType : null;
+        }
+      }
 
       if (isChequeModule) {
         const issueDate =
@@ -866,6 +904,8 @@ const AccountingRecordPage: React.FC = () => {
       relationOptions.bank_account_id,
       relationOptions.payment_account_id,
       relationOptions.receipt_account_id,
+      supportsRoleAssignee,
+      usesCentralAssignee,
       visibleFields,
     ]
   );
@@ -1313,9 +1353,6 @@ const AccountingRecordPage: React.FC = () => {
                     <div className="h-11 flex items-center bg-gray-50 dark:bg-white/5 border border-gray-100 dark:border-gray-700 rounded-lg sm:rounded-full px-3 py-1 gap-2">
                       <span className="text-xs text-gray-400 shrink-0">{assigneeField.labels?.fa || 'مسئول'}:</span>
                       <div className="min-w-[140px]">{renderHeaderAssigneeField()}</div>
-                      <div className="w-6 h-6 flex items-center justify-center text-gray-500">
-                        <UserOutlined />
-                      </div>
                     </div>
                   )}
                 </div>

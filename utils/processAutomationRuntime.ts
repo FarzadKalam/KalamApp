@@ -17,6 +17,7 @@ import {
   ProcessAutomationRule,
 } from './processAutomationTypes';
 import { WORKFLOW_ASSIGNEE_FIELD_KEY, WorkflowCondition } from './workflowTypes';
+import { buildResolvedAssigneeCombo } from './assigneeValue';
 import {
   getProcessTaskCustomFieldValuesFromRecurrence,
   getProcessTaskCustomFieldsFromRecurrence,
@@ -117,16 +118,9 @@ const PROCESS_AUTOMATION_INTERVAL_TASK_SELECT = [
   'image_url',
 ].join(',');
 const WORKFLOW_OPERATORS_WITHOUT_VALUE = new Set([
-  'is_true',
-  'is_false',
-  'is_null',
-  'not_null',
-  'changed',
-  'is_today',
-  'is_yesterday',
-  'is_tomorrow',
-  'is_friday',
-  'is_official_holiday',
+  'is_true', 'is_false', 'is_null', 'not_null', 'is_empty', 'not_empty', 'changed',
+  'is_today', 'is_yesterday', 'is_tomorrow', 'is_this_week', 'is_last_week',
+  'is_this_month', 'is_last_month', 'is_friday', 'is_official_holiday',
 ]);
 
 const parseRecurrenceInfo = (value: any): Record<string, any> => {
@@ -223,10 +217,8 @@ const assignProcessLinkedRecordFields = (
     target[createProcessLinkedFieldKey(normalizedModuleId, fieldKey)] = value;
   });
   assignProcessTemplateModuleAliases(target, normalizedModuleId, record);
-  const linkedAssignee = record
-    ? `${String(record?.assignee_role_id ? 'role' : 'user')}_${String(record?.assignee_role_id || record?.assignee_id || '').trim()}`
-    : '';
-  if (linkedAssignee && !linkedAssignee.endsWith('_')) {
+  const linkedAssignee = record ? buildResolvedAssigneeCombo(record) : null;
+  if (linkedAssignee) {
     target[createProcessLinkedFieldKey(normalizedModuleId, WORKFLOW_ASSIGNEE_FIELD_KEY)] = linkedAssignee;
   }
 };

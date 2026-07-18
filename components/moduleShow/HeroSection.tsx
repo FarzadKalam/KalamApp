@@ -34,7 +34,6 @@ interface HeroSectionProps {
   getUserName: (uid: string) => string;
   handleAssigneeChange: (value: string) => void;
   supportsRoleAssignee?: boolean;
-  assigneeIcon: React.ReactNode;
   onImageUpdate: (file: File) => Promise<boolean> | boolean;
   onMainImageChange?: (url: string | null) => void;
   canViewField?: (fieldKey: string) => boolean;
@@ -62,7 +61,6 @@ const HeroSection: React.FC<HeroSectionProps> = ({
   getUserName,
   handleAssigneeChange,
   supportsRoleAssignee = true,
-  assigneeIcon,
   onImageUpdate,
   onMainImageChange,
   canViewField,
@@ -219,7 +217,6 @@ const HeroSection: React.FC<HeroSectionProps> = ({
                     className="min-w-[140px] font-bold text-gray-700 dark:text-gray-300"
                     disabled={!canEditModule}
                   />
-                  <div className="w-6 h-6 flex items-center justify-center">{assigneeIcon}</div>
                 </div>
               )}
             </div>

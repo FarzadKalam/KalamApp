@@ -6,6 +6,7 @@ import {
   getTaskProcessAutomationRules,
   getTaskProcessIdentity,
   resolveProcessAutomationTargetTokens,
+  runnableProcessConditions,
 } from './process-automation-core';
 
 describe('server process automation core', () => {
@@ -60,7 +61,7 @@ describe('server process automation core', () => {
       { target_type: 'next_stage_assignee' },
       task,
       [task, nextTask],
-    )).toEqual(['role_role-b']);
+    )).toEqual(['role:role-b']);
   });
 
   it('preserves AND semantics for grouped negative OR conditions', async () => {
@@ -78,6 +79,17 @@ describe('server process automation core', () => {
 
     expect(result).toBe(false);
     expect(evaluate).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps all value-less date and state operators runnable on the server', () => {
+    const conditions = runnableProcessConditions([
+      { field: 'due_date', operator: 'is_this_week' },
+      { field: 'due_date', operator: 'is_last_month' },
+      { field: 'status', operator: 'is_empty' },
+      { field: 'status', operator: 'changed' },
+    ]);
+
+    expect(conditions).toHaveLength(4);
   });
 
   it('resolves process and lane names from the existing process snapshot', () => {

@@ -1,8 +1,9 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Avatar, Button, Dropdown, Input, Modal, Select, Tag, Tooltip } from 'antd';
+import { Button, Dropdown, Input, Modal, Select, Tag, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import ProcessTaskModalV2 from './ProcessTaskModalV2';
 import TaskStatusIcon from '../tasks/TaskStatusIcon';
+import IdentityAvatar from '../common/IdentityAvatar';
 import {
   getTaskStatusIconKey,
   getTaskStatusLabel,
@@ -46,6 +47,9 @@ export type ProcessV2Stage = {
   layoutSlot?: number;
   assigneeLabel?: string;
   assigneeAvatarUrl?: string;
+  assigneeKind?: 'user' | 'role';
+  assigneeId?: string;
+  assigneeIconKey?: string;
   activityTypeLabel?: string;
   dueLabel?: string;
   actionCount?: number;
@@ -1172,14 +1176,17 @@ const ProcessStagePill = memo(({
       <div
         className="relative flex h-full min-h-[inherit] min-w-0 items-center gap-1.5 overflow-hidden rounded-xl px-2.5 py-1"
       >
-        <Avatar
+        <IdentityAvatar
           size={compact ? 20 : 24}
-          src={stage.assigneeAvatarUrl}
           className="shrink-0 !border !border-white/80 !bg-white/75 !text-[10px] !font-black dark:!border-white/20 dark:!bg-slate-950/30"
-          style={{ color: 'inherit' }}
-        >
-          {getAssigneeInitial(stage.assigneeLabel)}
-        </Avatar>
+          option={{
+            kind: stage.assigneeKind || 'user',
+            id: stage.assigneeId || stage.id,
+            label: stage.assigneeLabel || getAssigneeInitial(stage.assigneeLabel),
+            avatarUrl: stage.assigneeAvatarUrl,
+            iconKey: stage.assigneeIconKey as any,
+          }}
+        />
         <div className="min-w-0 flex-1 overflow-hidden">
           <div className={`${sizeMode === 'expanded' ? 'whitespace-nowrap' : 'truncate'} flex min-w-0 items-center gap-1 text-[11px] font-black leading-5`}>
             <span className="inline-flex shrink-0 items-center justify-center text-[11px] opacity-90" aria-label={visual.label}>

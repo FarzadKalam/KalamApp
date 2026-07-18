@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom';
 import { Popover, Button, Tooltip, Modal, Form, Input, message, Spin, Select, InputNumber, Space, Checkbox, Steps, Switch, Alert, Empty, Tag, Radio, Grid, Segmented, Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
-import { PlusOutlined, ClockCircleOutlined, UserOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, TeamOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined, MoreOutlined, ColumnWidthOutlined, CompressOutlined } from '@ant-design/icons';
+import { PlusOutlined, ClockCircleOutlined, ArrowRightOutlined, ArrowLeftOutlined, UpOutlined, DownOutlined, OrderedListOutlined, CopyOutlined, DeleteOutlined, EditOutlined, SettingOutlined, SaveOutlined, LinkOutlined, HourglassOutlined, CheckOutlined, CloseOutlined, SnippetsOutlined, InfoCircleOutlined, ApartmentOutlined, UnorderedListOutlined, ThunderboltOutlined, DragOutlined, MoreOutlined, ColumnWidthOutlined, CompressOutlined } from '@ant-design/icons';
 import {
   DndContext,
   PointerSensor,
@@ -25,7 +25,7 @@ import RecordImageBox from './RecordImageBox';
 import TaskActionButtons from './tasks/TaskActionButtons';
 import TaskStatusIcon from './tasks/TaskStatusIcon';
 import RecordLockControl from './recordLocks/RecordLockControl';
-import ProfileAvatar from './common/ProfileAvatar';
+import AssigneeAvatarDisplay from './common/AssigneeAvatarDisplay';
 import type { StageHandoverConfirm, StageHandoverGroup, StageHandoverDeliveryRow } from './production/TaskHandoverModal';
 import type {
   StageHandoverFormListRow,
@@ -982,6 +982,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
   const watchedTaskDurationFrom = Form.useWatch('duration_from', taskForm);
   const watchedDraftStartDurationFrom = Form.useWatch('start_duration_from', draftForm);
   const watchedDraftDurationFrom = Form.useWatch('duration_from', draftForm);
+  const watchedDraftDefaultAssigneeCombo = Form.useWatch('default_assignee_combo', draftForm);
   const requiresSystemScheduleStageAnchor = useCallback((value: any) => (
     String(value || '').trim().startsWith('specific_stage_')
   ), []);
@@ -1248,21 +1249,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     }),
     []
   );
-  const assigneeComboOptions = useMemo(
-    () => ([
-      ...assignees.users.map((user) => ({
-        value: `user:${user.id}`,
-        label: user.display_name || user.full_name || user.email || user.mobile_1 || 'کاربر بدون نام',
-        searchText: [user.display_name, user.full_name, user.email, user.mobile_1, 'کاربر'].filter(Boolean).join(' '),
-      })),
-      ...assignees.roles.map((role) => ({
-        value: `role:${role.id}`,
-        label: role.title || 'تیم بدون نام',
-        searchText: [role.title, 'تیم'].filter(Boolean).join(' '),
-      })),
-    ]),
-    [assignees.roles, assignees.users]
-  );
   const filesAccess = useMemo(
     () => resolveFilesAccessPermissions(rolePermissions),
     [rolePermissions]
@@ -1353,7 +1339,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     ),
     [draftCustomAutomationFields, stageAutomationScopeModuleIds]
   );
-  const defaultAssigneeComboOptions = useMemo(() => {
+  const defaultAssigneeFieldOptions = useMemo(() => {
     const fieldOptions = automationActionModuleFields
       .filter((field: any) => String(field?.key || '').includes(WORKFLOW_ASSIGNEE_FIELD_KEY))
       .map((field: any) => ({
@@ -1362,8 +1348,8 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
         searchText: [field?.labels?.fa, field?.key, 'مسئول', 'فیلد'].filter(Boolean).join(' '),
       }))
       .filter((option) => option.value && option.label);
-    return [...assigneeComboOptions, ...fieldOptions];
-  }, [assigneeComboOptions, automationActionModuleFields]);
+    return fieldOptions;
+  }, [automationActionModuleFields]);
   const workflowModuleOptions = useMemo(
     () => getProjectModuleOptions(),
     []
@@ -5285,20 +5271,6 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     </div>
   ), []);
 
-  const getAssigneeLabel = (task: any) => {
-    const roleId = task?.assignee_role_id ? String(task.assignee_role_id) : null;
-    const userId = task?.assignee_id ? String(task.assignee_id) : null;
-    if (roleId) {
-      const role = task?.assigned_role || assignees.roles.find((item: any) => String(item?.id) === roleId);
-      return role?.title ? `تیم ${role.title}` : 'در حال بارگذاری نام تیم...';
-    }
-    if (userId) {
-      const user = task?.assignee || assignees.users.find((item: any) => String(item?.id) === userId);
-      return user?.display_name || user?.full_name || user?.email || user?.mobile_1 || 'در حال بارگذاری نام مسئول...';
-    }
-    return 'تعیین نشده';
-  };
-
   const getDraftAssigneeLabel = useCallback((stage: any) => {
     const roleId = stage?.default_assignee_role_id ? String(stage.default_assignee_role_id) : null;
     const userId = stage?.default_assignee_id ? String(stage.default_assignee_id) : null;
@@ -5431,67 +5403,22 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
     return raw.slice(0, 2);
   }, []);
 
-  const getTaskAssigneeVisual = useCallback((task: any) => {
-    const roleId = String(task?.assignee_role_id || '').trim();
-    const userId = String(task?.assignee_id || '').trim();
-    const assigneeType = String(task?.assignee_type || '').trim().toLowerCase();
-
-    if (roleId || assigneeType === 'role') {
-      const resolvedRoleId = roleId || userId;
-      const role = assignees.roles.find((item: any) => String(item?.id || '') === resolvedRoleId);
-      const label = String(role?.title || role?.name || task?.assigned_role?.title || 'نقش').trim();
-      return {
-        type: 'role' as const,
-        label,
-        avatarUrl: String(role?.avatar_url || '').trim() || null,
-      };
-    }
-
-    if (!userId) return null;
-
-    const joinedUser = task?.assignee && typeof task.assignee === 'object' ? task.assignee : {};
-    const directoryUser = assignees.users.find((item: any) => String(item?.id || '') === userId) || {};
-    const label = String(
-      joinedUser?.display_name ||
-      joinedUser?.full_name ||
-      directoryUser?.display_name ||
-      directoryUser?.full_name ||
-      joinedUser?.email ||
-      directoryUser?.email ||
-      joinedUser?.mobile_1 ||
-      directoryUser?.mobile_1 ||
-      'کاربر'
-    ).trim();
-
-    return {
-      type: 'user' as const,
-      label,
-      avatarUrl: String(joinedUser?.avatar_url || directoryUser?.avatar_url || '').trim() || null,
-    };
-  }, [assignees.roles, assignees.users]);
-
   const renderTaskAssigneeAvatar = useCallback((task: any, displayMode: ProcessBarDisplayMode) => {
     const hasCreatedTask = Boolean(task?.task_id || (!task?.isProcessRunStagePreview && task?.id));
     if (!hasCreatedTask) return null;
-
-    const visual = getTaskAssigneeVisual(task);
-    if (!visual) return null;
-
     const avatarSize = displayMode === 'dense' ? 14 : 16;
-    const iconClassName = displayMode === 'dense' ? 'text-[9px]' : 'text-[10px]';
     return (
-      <span className="inline-flex shrink-0" title={visual.label}>
-      <ProfileAvatar
-        size={avatarSize}
-        src={visual.avatarUrl}
-        icon={visual.type === 'role' ? <TeamOutlined className={iconClassName} /> : <UserOutlined className={iconClassName} />}
-        name={visual.label}
-        className="shrink-0 border border-white/70 bg-white/20 text-white shadow-sm"
-        imageLoading="lazy"
+      <AssigneeAvatarDisplay
+        source={task}
+        allUsers={assignees.users}
+        allRoles={assignees.roles}
+        avatarSize={avatarSize}
+        showLabel={false}
+        className="inline-flex shrink-0"
+        roleAvatarClassName="shrink-0 border border-white/70 bg-white/20 text-white shadow-sm"
       />
-      </span>
     );
-  }, [getTaskAssigneeVisual]);
+  }, [assignees.roles, assignees.users]);
 
   const getSegmentProgressState = useCallback((segment: any) => {
     if (!segment || segment.type !== 'task') return 'draft' as const;
@@ -6048,8 +5975,14 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
               </span>
             </div>
             <div className="flex items-center gap-2">
-              {task.assignee_type === 'role' ? <TeamOutlined className="text-[rgba(var(--brand-700-rgb),1)]" /> : <UserOutlined className="text-[rgba(var(--brand-700-rgb),1)]" />}
-              <span>مسئول: {getAssigneeLabel(task)}</span>
+              <span>مسئول:</span>
+              <AssigneeAvatarDisplay
+                source={task}
+                allUsers={assignees.users}
+                allRoles={assignees.roles}
+                avatarSize={20}
+                labelClassName="text-xs text-gray-700 dark:text-gray-300 truncate"
+              />
             </div>
             {processTemplateName ? (
               <div className="flex items-center gap-2">
@@ -11262,14 +11195,37 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
                         <div className="col-span-12">
                           <Form.Item
                             name="default_assignee_combo"
-                            label="مسئول انجام پیش‌فرض"
+                            noStyle
                             rules={[{ required: true, message: 'مسئول انجام پیش‌فرض را انتخاب کنید.' }]}
                           >
-                            <AdaptiveSelectField
-                              {...adaptiveModalSelectProps}
-                              placeholder="انتخاب کنید..."
-                              options={defaultAssigneeComboOptions}
-                            />
+                            <Input type="hidden" />
+                          </Form.Item>
+                          <Form.Item label="مسئول انجام پیش‌فرض" required>
+                            <div className="space-y-2">
+                              {!String(watchedDraftDefaultAssigneeCombo || '').startsWith('field:') ? (
+                                <AdaptiveIdentityPicker
+                                  value={watchedDraftDefaultAssigneeCombo || undefined}
+                                  onChange={(value) => draftForm.setFieldsValue({ default_assignee_combo: value || undefined })}
+                                  scopes={['user', 'role']}
+                                  placeholder="کاربر یا نقش را انتخاب کنید..."
+                                  pickerTitle="انتخاب مسئول پیش‌فرض"
+                                  overlayZIndexBase={13120}
+                                />
+                              ) : (
+                                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-white/5 dark:text-gray-300">
+                                  مسئول از رکورد مرتبط انتخاب شده است.
+                                </div>
+                              )}
+                              {defaultAssigneeFieldOptions.length > 0 ? (
+                                <AdaptiveSelectField
+                                  {...adaptiveModalSelectProps}
+                                  value={String(watchedDraftDefaultAssigneeCombo || '').startsWith('field:') ? watchedDraftDefaultAssigneeCombo : undefined}
+                                  onChange={(value) => draftForm.setFieldsValue({ default_assignee_combo: value || undefined })}
+                                  placeholder="یا مسئول را از رکورد مرتبط بگیرید"
+                                  options={defaultAssigneeFieldOptions}
+                                />
+                              ) : null}
+                            </div>
                           </Form.Item>
                         </div>
                         <div className="col-span-12 grid grid-cols-1 gap-3 lg:grid-cols-2">

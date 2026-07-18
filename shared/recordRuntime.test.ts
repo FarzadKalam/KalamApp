@@ -42,4 +42,19 @@ describe('record runtime shared contract', () => {
       expectedValue: ['لغوشده'],
     })).toBe(true);
   });
+
+  it('covers change and date operators with deterministic values', () => {
+    const now = new Date('2026-07-18T12:00:00.000Z');
+    const date = '2026-07-18T08:30:00.000Z';
+
+    expect(evaluateCoreConditionOperator({ operator: 'changed', currentValue: 'b', previousValue: 'a', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'changed_from', currentValue: 'b', previousValue: 'a', expectedValue: 'a', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'changed_to', currentValue: 'b', previousValue: 'a', expectedValue: 'b', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'is_today', currentValue: date, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'day_of_month_eq', currentValue: date, expectedValue: 18, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'is_this_month', currentValue: date, now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'contains', currentValue: ['فروش', 'ویژه'], expectedValue: 'ویژ', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'not_contains', currentValue: ['فروش'], expectedValue: 'لغوشده', now })).toBe(true);
+    expect(evaluateCoreConditionOperator({ operator: 'unsupported_operator', currentValue: 'x', now })).toBe(false);
+  });
 });

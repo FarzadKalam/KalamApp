@@ -18,9 +18,9 @@ export const buildProcessActivatorRecordContext = (
   const assigneeRoleId = normalizeText(record.assignee_role_id);
   const assigneeUserId = normalizeText(record.assignee_id);
   record[createProcessLinkedFieldKey(normalizedModuleId, '__workflow_assignee')] = assigneeRoleId
-    ? `role_${assigneeRoleId}`
+    ? `role:${assigneeRoleId}`
     : assigneeUserId
-      ? `user_${assigneeUserId}`
+      ? `user:${assigneeUserId}`
       : null;
 
   record.process_links = {

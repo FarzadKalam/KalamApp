@@ -367,9 +367,9 @@ function buildResolvedAssigneeCombo(record: Record<string, any>): string | null 
   const userId = String(record?.assignee_id || '').trim();
   if (assigneeType === 'role' || (!assigneeType && roleId)) {
     const id = roleId || userId;
-    return id ? `role_${id}` : null;
+    return id ? `role:${id}` : null;
   }
-  return userId ? `user_${userId}` : null;
+  return userId ? `user:${userId}` : null;
 }
 
 function parseWorkflowRelatedFieldKey(value: string) {
@@ -436,7 +436,7 @@ function normalizeMultiRelationCommunicationValues(targetModuleId: string, targe
     return values
       .map((value) => String(value || '').trim())
       .filter(Boolean)
-      .map((value) => `user_${value}`);
+      .map((value) => `user:${value}`);
   }
   if (
     (normalizedTargetModuleId === 'org_roles' || normalizedTargetModuleId === 'roles')
@@ -445,7 +445,7 @@ function normalizeMultiRelationCommunicationValues(targetModuleId: string, targe
     return values
       .map((value) => String(value || '').trim())
       .filter(Boolean)
-      .map((value) => `role_${value}`);
+      .map((value) => `role:${value}`);
   }
   return values;
 }
@@ -935,7 +935,8 @@ async function evaluateConditionWithPrevious(
       return dateIsDaysBeforeOccasion(current, expected);
     default:
       console.warn(`[workflow-runner] Unknown operator: ${operator}`);
-      return true;
+      // fail closed: یک عملگر ناشناخته نباید هیچ workflow یا automationی را اجرا کند.
+      return false;
   }
 }
 
@@ -5182,8 +5183,8 @@ function buildProcessAutomationTaskRecord(
       record[`__linked__${sourceModuleId}__${field}`] = value;
     });
     record[`__linked__${sourceModuleId}____workflow_assignee`] = sourceRecord?.assignee_role_id
-      ? `role_${sourceRecord.assignee_role_id}`
-      : sourceRecord?.assignee_id ? `user_${sourceRecord.assignee_id}` : null;
+      ? `role:${sourceRecord.assignee_role_id}`
+      : sourceRecord?.assignee_id ? `user:${sourceRecord.assignee_id}` : null;
   }
   return record;
 }
@@ -5201,8 +5202,8 @@ async function hydrateProcessLinkedFields(url: string, key: string, record: Reco
     if (!linked) continue;
     Object.entries(linked).forEach(([field, value]) => { record[`__linked__${moduleId}__${field}`] = value; });
     record[`__linked__${moduleId}____workflow_assignee`] = linked?.assignee_role_id
-      ? `role_${linked.assignee_role_id}`
-      : linked?.assignee_id ? `user_${linked.assignee_id}` : null;
+      ? `role:${linked.assignee_role_id}`
+      : linked?.assignee_id ? `user:${linked.assignee_id}` : null;
   }
 }
 

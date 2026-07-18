@@ -52,7 +52,12 @@ export const resolvePrintAssigneeComboLabel = (
   const parsed = parseAssigneeValue(rawValue);
   if (!parsed.assigneeType || !parsed.assigneeId) return '';
 
-  const comboValue = `${parsed.assigneeType}_${parsed.assigneeId}`;
+  // انتخاب‌گر مرکزی مقدار canonical با colon می‌نویسد؛ underscore فقط برای
+  // داده‌های قدیمی خوانده می‌شود. هر دو قرارداد باید در نمایش قابل تطبیق باشند.
+  const comboValues = [
+    `${parsed.assigneeType}:${parsed.assigneeId}`,
+    `${parsed.assigneeType}_${parsed.assigneeId}`,
+  ];
   const roleOptions = [
     ...(relationOptions.org_roles || []),
     ...(relationOptions.roles || []),
@@ -64,7 +69,9 @@ export const resolvePrintAssigneeComboLabel = (
   ];
   const mergedOptions = Object.values(relationOptions || {}).flat();
 
-  const directComboLabel = resolvePrintOptionLabel(mergedOptions, comboValue);
+  const directComboLabel = comboValues
+    .map((comboValue) => resolvePrintOptionLabel(mergedOptions, comboValue))
+    .find(Boolean);
   if (directComboLabel) return directComboLabel;
 
   const scopedOptions = parsed.assigneeType === 'role' ? roleOptions : userOptions;

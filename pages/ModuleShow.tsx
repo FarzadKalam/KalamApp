@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button, App, Checkbox, Modal, Select, Form, Input, Skeleton } from 'antd';
-import { EditOutlined, CheckOutlined, CloseOutlined, UserOutlined, CopyOutlined } from '@ant-design/icons';
+import { EditOutlined, CheckOutlined, CloseOutlined, CopyOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { MODULES } from '../moduleRegistry';
 import { FieldType, BlockType, FieldLocation, FieldNature } from '../types';
@@ -36,7 +36,6 @@ import {
   syncProductStock,
 } from '../utils/productionWorkflow';
 import { applyInvoiceFinalizationInventory } from '../utils/invoiceInventoryWorkflow';
-import AssigneeAvatarDisplay from '../components/common/AssigneeAvatarDisplay';
 import { applyStockTransferInventory } from '../utils/stockTransferInventoryWorkflow';
 import { createJournalFromInvoice, getAccountingEventLabelFa, syncInvoiceAccountingEntries, type ResolvedJournalEntry } from '../utils/accountingAutoPosting';
 import { shouldAutoSyncInvoiceAccounting } from '../utils/invoiceAccountingPolicy';
@@ -6190,18 +6189,6 @@ const ModuleShow: React.FC = () => {
       });
     });
 
-  const currentAssigneeId = getResolvedAssigneeId(data);
-  const assigneeIcon = currentAssigneeId ? (
-    <AssigneeAvatarDisplay
-      source={data}
-      allUsers={allUsers}
-      allRoles={allRoles}
-      explicitLabel={String(data?.assignee_name || data?.assignee_label || data?.assignee_role_name || '').trim()}
-      avatarSize="small"
-      showLabel={false}
-      className="flex items-center"
-    />
-  ) : <UserOutlined />;
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
   const recordTitleField = (moduleConfig?.fields || []).find((field: any) => {
     if (!field?.key || field.readonly || canViewField(field.key) === false) return false;
@@ -6279,7 +6266,6 @@ const ModuleShow: React.FC = () => {
         getUserName={getUserName}
         handleAssigneeChange={handleAssigneeChange}
         supportsRoleAssignee={supportsRoleAssignee}
-        assigneeIcon={assigneeIcon}
         canManageAssignee={supportsAssignee}
         onImageUpdate={handleImageUpdate}
         onMainImageChange={handleMainImageChange}

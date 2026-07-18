@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Modal, Select, Spin } from 'antd';
 import { PaperClipOutlined } from '@ant-design/icons';
 import EditableTable from '../EditableTable';
+import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import SmartFieldRenderer from '../SmartFieldRenderer';
 import { MODULES } from '../../moduleRegistry';
 import { FieldLocation, FieldNature, FieldType, LogicOperator, ModuleField } from '../../types';
@@ -11,7 +12,7 @@ import { supportsSystemCode } from '../../utils/systemCode';
 import { getPreferredRelationTargetField } from '../../utils/relationTargetField';
 import { isAutoNameEnabled, normalizeAutoNameEnabled } from '../../utils/autoName';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
-import { fetchAssigneeDirectory } from '../../utils/referenceData';
+import { buildResolvedAssigneeCombo, parseAssigneeValue } from '../../utils/assigneeValue';
 
 interface BulkProductsCreateModalProps {
   open: boolean;
@@ -21,7 +22,6 @@ interface BulkProductsCreateModalProps {
 
 type DynamicOption = { label: string; value: string };
 type RelationOption = { label: string; value: string };
-type AssigneeOption = { label: string; value: string; group: 'user' | 'role' };
 type BulkRow = Record<string, unknown> & { key: string };
 
 const PRODUCTS_MODULE = MODULES.products;
@@ -161,7 +161,6 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
   const [rows, setRows] = useState<BulkRow[]>([]);
   const [relationOptions, setRelationOptions] = useState<Record<string, RelationOption[]>>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, DynamicOption[]>>({});
-  const [assigneeOptions, setAssigneeOptions] = useState<AssigneeOption[]>([]);
   const initializedRef = useRef(false);
 
   const productTypeField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'product_type'), []);
@@ -189,44 +188,6 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
   const imageField = useMemo(() => PRODUCTS_MODULE.fields.find((f) => f.key === 'image_url'), []);
 
   const visibility = useMemo(() => ({ product_type: productType, category: rawCategory, product_category: productCategory }), [productType, rawCategory, productCategory]);
-  const currentAssigneeOption = useMemo<AssigneeOption | null>(() => {
-    const assigneeId = String(sharedValues.assignee_id || '').trim();
-    if (!assigneeId) return null;
-    const assigneeType = String(sharedValues.assignee_type || 'user').trim() === 'role' ? 'role' : 'user';
-    const currentValue = `${assigneeType}_${assigneeId}`;
-    const matched = assigneeOptions.find((item) => item.value === currentValue);
-    if (matched) return matched;
-    return {
-      value: currentValue,
-      label: assigneeType === 'role' ? 'در حال بارگذاری نام تیم...' : 'در حال بارگذاری نام مسئول...',
-      group: assigneeType,
-    };
-  }, [assigneeOptions, sharedValues.assignee_id, sharedValues.assignee_type]);
-  const groupedAssigneeOptions = useMemo(() => {
-    const userOptions = assigneeOptions
-      .filter((item) => item.group === 'user')
-      .map((item) => ({ label: item.label, value: item.value }));
-    const roleOptions = assigneeOptions
-      .filter((item) => item.group === 'role')
-      .map((item) => ({ label: item.label, value: item.value }));
-    const hasCurrentUser = currentAssigneeOption?.group === 'user' && userOptions.some((item) => item.value === currentAssigneeOption.value);
-    const hasCurrentRole = currentAssigneeOption?.group === 'role' && roleOptions.some((item) => item.value === currentAssigneeOption.value);
-    return [
-      {
-        label: 'پرسنل',
-        options: currentAssigneeOption?.group === 'user' && !hasCurrentUser
-          ? [{ label: currentAssigneeOption.label, value: currentAssigneeOption.value }, ...userOptions]
-          : userOptions,
-      },
-      {
-        label: 'تیم‌ها',
-        options: currentAssigneeOption?.group === 'role' && !hasCurrentRole
-          ? [{ label: currentAssigneeOption.label, value: currentAssigneeOption.value }, ...roleOptions]
-          : roleOptions,
-      },
-    ];
-  }, [assigneeOptions, currentAssigneeOption]);
-
   const topFields = useMemo(
     () => [productTypeField, assigneeField, statusField]
       .filter((field): field is ModuleField => Boolean(field))
@@ -288,26 +249,6 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
         if (!error) dynMap[cat] = (data || []) as DynamicOption[];
       });
       setDynamicOptions(dynMap);
-
-      const directory = await fetchAssigneeDirectory(supabase);
-      const users = Array.isArray(directory?.users) ? directory.users : [];
-      const roles = Array.isArray(directory?.roles) ? directory.roles : [];
-      setAssigneeOptions([
-        ...((users || []).map((user: any) => ({
-          value: `user:${String(user?.id || '')}`,
-          label:
-            String(user?.display_name || user?.full_name || '').trim() ||
-            String(user?.email || '').trim() ||
-            String(user?.mobile_1 || '').trim() ||
-            `کاربر ${String(user?.id || '').slice(0, 8)}`,
-          group: 'user' as const,
-        })).filter((item) => item.value !== 'user_')),
-        ...((roles || []).map((role: any) => ({
-          value: `role:${String(role?.id || '')}`,
-          label: String(role?.title || role?.name || role?.id || '').trim(),
-          group: 'role' as const,
-        })).filter((item) => item.value !== 'role_' && item.label)),
-      ]);
 
       const relMap: Record<string, RelationOption[]> = {};
       const relFields = [...topFields, ...sharedFields, ...rowFields]
@@ -623,34 +564,22 @@ const BulkProductsCreateModal: React.FC<BulkProductsCreateModalProps> = ({ open,
           </div>
           <div className="text-xs [&_.ant-input]:!h-8 [&_.ant-input-number]:!h-8 [&_.ant-input-number-input]:!h-8 [&_.ant-select-selector]:!min-h-8 [&_.ant-select-selector]:!h-8 [&_.ant-select-selection-item]:!text-xs [&_.ant-input]:!text-xs [&_.ant-input-number-input]:!text-xs">
             <div className="text-xs text-gray-500 mb-1">{assigneeField.labels?.fa || 'نام مسئول'}</div>
-            <Select
-              value={
-                sharedValues.assignee_id
-                  ? `${String(sharedValues.assignee_type || 'user')}_${String(sharedValues.assignee_id || '')}`
-                  : undefined
-              }
-              options={groupedAssigneeOptions}
-              loading={loading}
-              showSearch
-              optionFilterProp="label"
+            <AdaptiveIdentityPicker
+              value={buildResolvedAssigneeCombo(sharedValues)}
+              scopes={['user', 'role']}
               allowClear
-              placeholder="انتخاب کنید"
+              placeholder="انتخاب کاربر یا نقش"
               className="w-full"
-              getPopupContainer={(node) => node?.parentElement || document.body}
-              styles={{ popup: { root: { zIndex: 1100 } } }}
               onChange={(val) => {
-                const raw = String(val || '').trim();
-                if (!raw) {
+                const next = parseAssigneeValue(typeof val === 'string' ? val : null, null);
+                if (!next.assigneeId || !next.assigneeType) {
                   setSharedValues((prev) => ({ ...prev, assignee_id: null, assignee_type: null }));
                   return;
                 }
-                const separatorIndex = Math.max(raw.indexOf(':'), raw.indexOf('_'));
-                const nextType = separatorIndex > 0 ? raw.slice(0, separatorIndex) : 'user';
-                const nextId = separatorIndex > 0 ? raw.slice(separatorIndex + 1) : raw;
                 setSharedValues((prev) => ({
                   ...prev,
-                  assignee_id: nextId || null,
-                  assignee_type: nextType === 'role' ? 'role' : 'user',
+                  assignee_id: next.assigneeId,
+                  assignee_type: next.assigneeType,
                 }));
               }}
             />

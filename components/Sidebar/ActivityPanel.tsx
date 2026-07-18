@@ -347,13 +347,13 @@ const ActivityPanel: React.FC<ActivityPanelProps> = ({
         setAssigneeRoles(directory.roles || []);
         setAssigneeNameMap(
           directory.users.reduce<Record<string, string>>((acc, user) => {
-            acc[user.id] = user.display_name || user.full_name || user.id;
+            acc[user.id] = user.display_name || user.full_name || 'کاربر خارج از دسترس';
             return acc;
           }, {}),
         );
         setRoleNameMap(
           directory.roles.reduce<Record<string, string>>((acc, role) => {
-            acc[role.id] = role.title || role.id;
+            acc[role.id] = role.title || 'نقش خارج از دسترس';
             return acc;
           }, {}),
         );

@@ -5,6 +5,7 @@ import { safeJalaliFormat } from '../../utils/persianNumberFormatter';
 import type { NoteAttachment } from '../../utils/noteContent';
 import UnreadCountBadge from './UnreadCountBadge';
 import VoipRecordingPlayer from './VoipRecordingPlayer';
+import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
 
 export type VoipThreadItem = {
   id: string;
@@ -25,6 +26,9 @@ type VoipCallsPanelProps = {
   selectedVoipThread: VoipThreadItem | null;
   displayedVoipCalls: any[];
   assigneeNameMap: Record<string, string>;
+  roleNameMap: Record<string, string>;
+  directoryUsers: any[];
+  directoryRoles: any[];
   setSelectedVoipThreadKey: (key: string) => void;
   openPreviewRecord: (moduleId: string, recordId: string, label?: string) => void;
   getCentralRecordLabel: (moduleId?: string | null, recordId?: string | null, fallback?: string | null) => string;
@@ -47,6 +51,9 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
   selectedVoipThread,
   displayedVoipCalls,
   assigneeNameMap,
+  roleNameMap,
+  directoryUsers,
+  directoryRoles,
   setSelectedVoipThreadKey,
   openPreviewRecord,
   getCentralRecordLabel,
@@ -262,9 +269,7 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                   const relatedLabel = row?.module_id && row?.record_id
                     ? getCentralRecordLabel(row.module_id, row.record_id, row.title || row.source_number)
                     : '';
-                  const operatorLabel = row?.assignee_id
-                    ? assigneeNameMap[String(row.assignee_id)] || ''
-                    : '';
+                  const operatorId = String(row?.assignee_role_id || row?.assignee_id || '').trim();
                   const direction = String(row?.direction || '').trim();
                   const directionLabel = direction === 'outgoing'
                     ? 'خروجی'
@@ -333,9 +338,21 @@ const VoipCallsPanel: React.FC<VoipCallsPanelProps> = ({
                             {relatedLabel}
                           </span>
                         ) : null}
-                        {operatorLabel ? (
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
-                            اپراتور: {operatorLabel}
+                        {operatorId ? (
+                          <span className="inline-flex max-w-full items-center rounded-full bg-slate-100 px-2 py-0.5 text-gray-600 dark:bg-white/[0.055] dark:text-gray-200">
+                            <span className="ml-1">اپراتور:</span>
+                            <AssigneeAvatarDisplay
+                              source={{
+                                ...row,
+                                assignee_name: row?.assignee_name || assigneeNameMap[String(row?.assignee_id || '')],
+                                assignee_role_title: row?.assignee_role_title || roleNameMap[String(row?.assignee_role_id || row?.assignee_id || '')],
+                              }}
+                              allUsers={directoryUsers}
+                              allRoles={directoryRoles}
+                              avatarSize={18}
+                              labelClassName="truncate text-[11px]"
+                              className="flex min-w-0 items-center gap-1"
+                            />
                           </span>
                         ) : null}
                       </div>

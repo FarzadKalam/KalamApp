@@ -134,9 +134,9 @@ export const getAdjacentProcessTasks = (
 
 export const taskRecipientToken = (task: Record<string, any> | null | undefined): string | null => {
   const roleId = String(task?.assignee_role_id || '').trim();
-  if (roleId) return `role_${roleId}`;
+  if (roleId) return `role:${roleId}`;
   const userId = String(task?.assignee_id || '').trim();
-  return userId ? `user_${userId}` : null;
+  return userId ? `user:${userId}` : null;
 };
 
 export const resolveProcessAutomationTargetTokens = (
@@ -157,8 +157,8 @@ export const resolveProcessAutomationTargetTokens = (
         row?.task_type || parseAutomationObject(row?.recurrence_info)?.task_type || ''
       ).trim() === String(rule?.target_task_type || '').trim()).slice(0, 1);
       break;
-    case 'specific_user': return String(rule?.target_user_id || '').trim() ? [`user_${String(rule.target_user_id).trim()}`] : [];
-    case 'specific_role': return String(rule?.target_role_id || '').trim() ? [`role_${String(rule.target_role_id).trim()}`] : [];
+    case 'specific_user': return String(rule?.target_user_id || '').trim() ? [`user:${String(rule.target_user_id).trim()}`] : [];
+    case 'specific_role': return String(rule?.target_role_id || '').trim() ? [`role:${String(rule.target_role_id).trim()}`] : [];
   }
   return Array.from(new Set(targets.map(taskRecipientToken).filter(Boolean) as string[]));
 };
@@ -226,8 +226,9 @@ export const getTaskProcessAutomationRules = (task: Record<string, any>): any[] 
 
 export const runnableProcessConditions = (value: any): any[] => {
   const noValueOperators = new Set([
-    'is_true', 'is_false', 'is_null', 'not_null', 'changed', 'is_today', 'is_yesterday',
-    'is_tomorrow', 'is_friday', 'is_official_holiday',
+    'is_true', 'is_false', 'is_null', 'not_null', 'is_empty', 'not_empty', 'changed',
+    'is_today', 'is_yesterday', 'is_tomorrow', 'is_this_week', 'is_last_week',
+    'is_this_month', 'is_last_month', 'is_friday', 'is_official_holiday',
   ]);
   return (Array.isArray(value) ? value : []).filter((condition: any) => {
     if (!String(condition?.field || '').trim()) return false;
@@ -250,7 +251,10 @@ export const evaluateProcessAutomationConditions = async (
     if (!await evaluate(condition, currentRecord, previousRecord)) return false;
   }
   if (conditionsAny.length === 0) return true;
-  const negativeOperators = new Set(['neq', 'not_in', 'not_contains', 'occasion_neq', 'occasion_not_contains']);
+  const negativeOperators = new Set([
+    'neq', 'not_in', 'not_contains', 'occasion_neq', 'occasion_not_contains',
+    'is_false', 'is_null', 'is_empty',
+  ]);
   const byField = new Map<string, any[]>();
   conditionsAny.forEach((condition) => {
     const field = String(condition?.field || '').trim();

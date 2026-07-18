@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { App, Button, Empty, Modal, Spin, Tag } from 'antd';
-import { ArrowRightOutlined, EnvironmentOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { ArrowRightOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import { MODULES } from '../../moduleRegistry';
 import { FieldLocation, FieldType } from '../../types';
-import { getResolvedAssigneeId } from '../../utils/assigneeValue';
 import { getAssigneeLabel } from '../../utils/assigneeLabel';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
 import { buildRelationValueMap, formatRecordFieldValue, type RelationValueMap } from '../../utils/recordDisplayFormatter';
 import { getRecordTitle } from '../../utils/recordTitle';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import ResilientImage from '../common/ResilientImage';
+import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
 
 type MapRecordModalProps = {
   moduleId: string;
@@ -65,8 +65,8 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
   const [record, setRecord] = useState<any>(null);
   const [relationValueMap, setRelationValueMap] = useState<RelationValueMap>({});
   const [dynamicOptions, setDynamicOptions] = useState<Record<string, Array<{ label: string; value: string }>>>({});
-  const [userNameMap, setUserNameMap] = useState<Record<string, string>>({});
-  const [roleNameMap, setRoleNameMap] = useState<Record<string, string>>({});
+  const [assigneeUsers, setAssigneeUsers] = useState<any[]>([]);
+  const [assigneeRoles, setAssigneeRoles] = useState<any[]>([]);
 
   const moduleConfig = MODULES[moduleId];
   const isMobileViewport = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
@@ -127,26 +127,16 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
 
         setRelationValueMap(relationMap || {});
         setDynamicOptions(Object.fromEntries(dynamicEntries));
-        setUserNameMap(
-          assigneeDirectory?.users?.reduce<Record<string, string>>((acc, user: any) => {
-            acc[String(user.id)] = String(user.display_name || user.full_name || user.id);
-            return acc;
-          }, {}) || {},
-        );
-        setRoleNameMap(
-          assigneeDirectory?.roles?.reduce<Record<string, string>>((acc, role: any) => {
-            acc[String(role.id)] = String(role.title || role.id);
-            return acc;
-          }, {}) || {},
-        );
+        setAssigneeUsers(assigneeDirectory?.users || []);
+        setAssigneeRoles(assigneeDirectory?.roles || []);
       } catch (error) {
         console.error(error);
         if (!cancelled) {
           setRecord(null);
           setRelationValueMap({});
           setDynamicOptions({});
-          setUserNameMap({});
-          setRoleNameMap({});
+          setAssigneeUsers([]);
+          setAssigneeRoles([]);
           message.error('خواندن اطلاعات رکورد روی نقشه ناموفق بود.');
         }
       } finally {
@@ -200,17 +190,7 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
     };
   }, [moduleConfig, record]);
 
-  const assigneeMeta = useMemo(() => {
-    if (!record) return null;
-    const assigneeId = String(getResolvedAssigneeId(record) || '').trim();
-    if (!assigneeId) return null;
-    const assigneeType = String(record?.assignee_type || (record?.assignee_role_id ? 'role' : 'user')).trim();
-    return {
-      label: assigneeType === 'role' ? (roleNameMap[assigneeId] || assigneeId) : (userNameMap[assigneeId] || assigneeId),
-      title: getAssigneeLabel(moduleId),
-      type: assigneeType,
-    };
-  }, [moduleId, record, roleNameMap, userNameMap]);
+  const assigneeMeta = record?.assignee_id || record?.assignee_role_id ? record : null;
 
   const recentFieldKeys = useMemo(
     () => new Set((moduleConfig?.dashboard?.recentListFields || []).map((key) => String(key || '').trim()).filter(Boolean)),
@@ -364,9 +344,16 @@ const MapRecordModal: React.FC<MapRecordModalProps> = ({
                         </Tag>
                       ) : null}
                       {assigneeMeta ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm dark:bg-white/10 dark:text-gray-200">
-                          {assigneeMeta.type === 'role' ? <TeamOutlined /> : <UserOutlined />}
-                          {assigneeMeta.title}: {assigneeMeta.label}
+                        <span className="inline-flex min-w-0 items-center gap-1 rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm dark:bg-white/10 dark:text-gray-200">
+                          <span>{getAssigneeLabel(moduleId)}:</span>
+                          <AssigneeAvatarDisplay
+                            source={assigneeMeta}
+                            allUsers={assigneeUsers}
+                            allRoles={assigneeRoles}
+                            avatarSize={20}
+                            labelClassName="truncate text-xs font-semibold"
+                            className="flex min-w-0 items-center gap-1"
+                          />
                         </span>
                       ) : null}
                     </div>

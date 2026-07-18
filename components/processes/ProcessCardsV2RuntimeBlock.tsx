@@ -450,12 +450,20 @@ const resolveFieldAssigneeLabel = (rawValue: unknown, stage: any, fallbackModule
   return normalizeText(field?.labels?.fa || field?.labelFa) || 'مسئول پیش فرض';
 };
 
+type ResolvedProcessAssignee = {
+  label: string;
+  avatarUrl?: string;
+  kind?: 'user' | 'role';
+  id?: string;
+  iconKey?: string;
+};
+
 const resolveAssignee = (
   stage: any,
   directory: AssigneeDirectory | null,
   fallbackModuleId?: string | null,
   templateContext?: Record<string, any> | null,
-) => {
+): ResolvedProcessAssignee => {
   const metadata = parseObject(stage?.metadata);
   const recurrence = parseObject(stage?.recurrence_info || metadata?.recurrence_info);
   const rawUserId = stage?.assignee_user_id || stage?.assignee_id || stage?.default_assignee_id || metadata?.assignee_user_id || metadata?.assignee_id || metadata?.default_assignee_id || recurrence?.assignee_user_id || recurrence?.assignee_id || recurrence?.default_assignee_id;
@@ -479,6 +487,9 @@ const resolveAssignee = (
       return {
         label: role?.title || 'نقش مسئول',
         avatarUrl: undefined,
+        kind: 'role' as const,
+        id: resolvedId,
+        iconKey: role?.icon_key,
       };
     }
     if (parsedReference.assigneeType === 'user' && resolvedId) {
@@ -486,6 +497,8 @@ const resolveAssignee = (
       return {
         label: user?.display_name || user?.full_name || 'کاربر مسئول',
         avatarUrl: user?.avatar_url || undefined,
+        kind: 'user' as const,
+        id: resolvedId,
       };
     }
   }
@@ -525,6 +538,8 @@ const resolveAssignee = (
     return {
       label: user?.display_name || user?.full_name || 'کاربر مسئول',
       avatarUrl: user?.avatar_url || undefined,
+      kind: 'user' as const,
+      id: userId,
     };
   }
   if (roleId) {
@@ -532,6 +547,9 @@ const resolveAssignee = (
     return {
       label: role?.title || 'نقش مسئول',
       avatarUrl: undefined,
+      kind: 'role' as const,
+      id: roleId,
+      iconKey: role?.icon_key,
     };
   }
   return { label: 'تعیین نشده', avatarUrl: undefined };
@@ -618,6 +636,9 @@ const mapRawStageToV2 = (
     layoutSlot: index,
     assigneeLabel: assignee.label,
     assigneeAvatarUrl: assignee.avatarUrl,
+    assigneeKind: assignee.kind,
+    assigneeId: assignee.id,
+    assigneeIconKey: assignee.iconKey,
     activityTypeLabel: activityType,
     dueLabel: effectiveKind === 'draft'
       ? scheduleRuleLabel

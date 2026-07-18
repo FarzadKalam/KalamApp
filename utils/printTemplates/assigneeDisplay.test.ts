@@ -12,6 +12,18 @@ describe('print assignee display', () => {
     ).toBe('تیم فروش');
   });
 
+  it('resolves canonical colon tokens used by reports and charts', () => {
+    const userId = '33333333-3333-4333-8333-333333333333';
+    const roleId = '44444444-4444-4444-8444-444444444444';
+
+    expect(resolvePrintAssigneeComboLabel(`user:${userId}`, {
+      __workflow_assignee: [{ value: `user:${userId}`, label: 'کاربر گزارش' }],
+    })).toBe('کاربر گزارش');
+    expect(resolvePrintAssigneeComboLabel(`role:${roleId}`, {
+      __workflow_assignee: [{ value: `role:${roleId}`, label: 'نقش گزارش' }],
+    })).toBe('نقش گزارش');
+  });
+
   it('uses a deleted user label for typed assignee values without a readable option', () => {
     const userId = '11111111-1111-1111-1111-111111111111';
 

@@ -2863,21 +2863,21 @@ useEffect(() => {
 
     if (assigneeIds.length) {
       const map = assigneeIds.reduce<Record<string, string>>((acc, assigneeId) => {
-        acc[String(assigneeId)] = userNameMap[String(assigneeId)] || String(assigneeId);
+        acc[String(assigneeId)] = userNameMap[String(assigneeId)] || 'کاربر خارج از دسترس';
         return acc;
       }, {});
       setAssigneeNameMap((prev) => ({ ...prev, ...map }));
     }
     if (roleIds.length) {
       const map = roleIds.reduce<Record<string, string>>((acc, roleLookupId) => {
-        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || 'نقش';
+        acc[String(roleLookupId)] = roleTitleMap[String(roleLookupId)] || 'نقش خارج از دسترس';
         return acc;
       }, {});
       setRoleNameMap((prev) => ({ ...prev, ...map }));
     }
     if (createdByIds.length) {
       const map = createdByIds.reduce<Record<string, string>>((acc, creatorId) => {
-        acc[String(creatorId)] = userNameMap[String(creatorId)] || String(creatorId);
+        acc[String(creatorId)] = userNameMap[String(creatorId)] || 'کاربر خارج از دسترس';
         return acc;
       }, {});
       setCreatedByNameMap((prev) => ({ ...prev, ...map }));
@@ -7765,6 +7765,9 @@ useEffect(() => {
       selectedVoipThread={selectedVoipThread}
       displayedVoipCalls={displayedVoipCalls}
       assigneeNameMap={assigneeNameMap}
+      roleNameMap={roleNameMap}
+      directoryUsers={directoryUsers}
+      directoryRoles={directoryRoles}
       setSelectedVoipThreadKey={setSelectedVoipThreadKey}
       openPreviewRecord={openPreviewRecord}
       getCentralRecordLabel={getCentralRecordLabelStable}

@@ -1,10 +1,8 @@
 import React from 'react';
 import { InputNumber, Tag } from 'antd';
-import { AppstoreOutlined, FileOutlined, LockOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, FileOutlined, LockOutlined } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import { safeJalaliFormat, toPersianNumber } from '../../utils/persianNumberFormatter';
-import { getResolvedAssigneeId } from '../../utils/assigneeValue';
-import { resolveAssigneePresentation } from '../../utils/assigneePresentation';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import {
   getTaskStatusOptions,
@@ -18,6 +16,7 @@ import ProcessCardsV2RuntimeBlock from '../processes/ProcessCardsV2RuntimeBlock'
 import { supabase } from '../../supabaseClient';
 import { hasProcessTaskTitleTokens, resolveProcessTaskTitle } from '../../utils/processTaskTitle';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
+import AssigneeAvatarDisplay from '../common/AssigneeAvatarDisplay';
 
 const ProductionStagesField = React.lazy(() => import('../ProductionStagesField'));
 
@@ -187,20 +186,6 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
   const canEditProducedQty = !isLocked && !['todo', 'pending'].includes(String(effectiveTask?.status || '').toLowerCase());
   const taskMainFileUrl = String(effectiveTask?.image_url || '').trim();
   const taskMainFileName = taskMainFileUrl.split('?')[0].split('/').pop() || 'file';
-  const assigneeId = String(getResolvedAssigneeId(effectiveTask) || '');
-  const effectiveAssigneeType = String(effectiveTask?.assignee_type || '').trim()
-    || (effectiveTask?.assignee_role_id ? 'role' : 'user');
-  const assigneePresentation = resolveAssigneePresentation({
-    source: {
-      ...effectiveTask,
-      assignee_type: effectiveAssigneeType,
-      assignee_name: effectiveTask.assignee_name || (effectiveAssigneeType === 'user' ? assigneeNameMap[assigneeId] : undefined),
-      assignee_role_title: effectiveTask.assignee_role_title || (effectiveAssigneeType === 'role' ? roleNameMap[assigneeId] : undefined),
-    },
-    allUsers,
-    allRoles,
-  });
-  const assigneeLabel = assigneePresentation.label || 'تعیین نشده';
   const canReview = resolvedStatusOptions.some((option) => String(option?.value || '') === 'review');
   const taskTags = React.useMemo(() => {
     const raw = effectiveTask?.tags;
@@ -281,10 +266,18 @@ const TaskSummaryCard: React.FC<TaskSummaryCardProps> = ({
         </div>
 
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
-          <span className="flex min-w-0 items-center gap-1 shrink-0">
-            {effectiveTask.assignee_type === 'role' ? <TeamOutlined /> : <UserOutlined />}
-            <span className="truncate font-semibold">{toPersianNumber(String(assigneeLabel))}</span>
-          </span>
+          <AssigneeAvatarDisplay
+            source={{
+              ...effectiveTask,
+              assignee_name: effectiveTask.assignee_name || assigneeNameMap[String(effectiveTask?.assignee_id || '')],
+              assignee_role_title: effectiveTask.assignee_role_title || roleNameMap[String(effectiveTask?.assignee_role_id || effectiveTask?.assignee_id || '')],
+            }}
+            allUsers={allUsers}
+            allRoles={allRoles}
+            avatarSize={20}
+            labelClassName="truncate font-semibold"
+            className="flex min-w-0 shrink items-center gap-1"
+          />
           {recordTitle && relatedModuleId && relatedRecordId ? (
             <span className="min-w-0 truncate">
               رکورد مرتبط:{' '}
