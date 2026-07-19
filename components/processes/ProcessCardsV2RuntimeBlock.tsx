@@ -8,6 +8,10 @@ import { fetchProcessAudit } from '../../utils/processAudit';
 import { fetchProcessRuntimeBatchForRecord } from '../../utils/processRuntimeBatch';
 import { fetchProcessRuntimeTasksForRecord } from '../../utils/processRuntimeTasks';
 import { clearAppRuntimeCache } from '../../utils/appRuntimeCache';
+import {
+  resolveProcessRuntimeSurfaceMode,
+  shouldLoadProcessRuntime,
+} from '../../utils/processRuntimePresentation';
 import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
 import { isProcessExecutionStarted, type ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import {
@@ -1590,15 +1594,14 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const cachedRuntimeBlock = cacheOrgId ? processRuntimeBlockCache.get(cacheKey) : undefined;
   const cacheFresh = Boolean(cachedRuntimeBlock && Date.now() - cachedRuntimeBlock.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
   const runtimeSnapshotReady = Boolean(
-    variant !== 'full'
-    && runtimeSnapshot
+    runtimeSnapshot
     && runtimeSnapshot.loaded !== false
     && normalizeText(runtimeSnapshot.moduleId) === normalizedModuleId
     && normalizeText(runtimeSnapshot.recordId) === normalizedRecordId
   );
-  const initialRuntimeSnapshot = variant === 'full'
-    ? EMPTY_RUNTIME_STATE
-    : (runtimeSnapshotReady && runtimeSnapshot ? runtimeSnapshot : EMPTY_RUNTIME_STATE);
+  const initialRuntimeSnapshot = runtimeSnapshotReady && runtimeSnapshot
+    ? runtimeSnapshot
+    : EMPTY_RUNTIME_STATE;
   const [orgId, setOrgId] = useState<string>('');
   const [templateStages, setTemplateStages] = useState<any[]>(() => (
     cacheFresh && cachedRuntimeBlock ? cachedRuntimeBlock.templateStages : (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST)
@@ -1666,6 +1669,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   );
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshRequestIdRef = useRef(0);
+  const initialRefreshKeyRef = useRef('');
+  const activeRuntimeCacheKeyRef = useRef(cacheKey);
   const pendingScrollToFirstCardRef = useRef(false);
   const pendingScrollCardKeyRef = useRef<string | null>(null);
   const cardElementRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
@@ -1714,7 +1719,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [recordData]);
 
   useEffect(() => {
+    // در نمای کامل snapshot فقط مقدار اولیه است و حق بازنویسی پاسخ authoritative همین بلاک را ندارد.
     if (!runtimeSnapshot || variant === 'full' || runtimeSnapshot.loaded === false) return;
+    if (
+      normalizeText(runtimeSnapshot.moduleId) !== normalizedModuleId
+      || normalizeText(runtimeSnapshot.recordId) !== normalizedRecordId
+    ) return;
     setRuntime({
       runs: runtimeSnapshot?.runs || [],
       stages: runtimeSnapshot?.stages || [],
@@ -1722,7 +1732,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
     setLinkedDraftStages([]);
     setHasLoadedRuntime(true);
-  }, [runtimeSnapshot?.loaded, runtimeSnapshot?.runs, runtimeSnapshot?.stages, runtimeSnapshot?.tasks, variant]);
+  }, [normalizedModuleId, normalizedRecordId, runtimeSnapshot?.loaded, runtimeSnapshot?.moduleId, runtimeSnapshot?.recordId, runtimeSnapshot?.runs, runtimeSnapshot?.stages, runtimeSnapshot?.tasks, variant]);
 
   useEffect(() => {
     if (Array.isArray(draftStages)) setTemplateStages(draftStages);
@@ -1732,12 +1742,41 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   useEffect(() => {
     const cached = processRuntimeBlockCache.get(cacheKey);
     const nextCacheFresh = Boolean(cached && Date.now() - cached.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
+    const identityChanged = activeRuntimeCacheKeyRef.current !== cacheKey;
+    if (identityChanged) {
+      activeRuntimeCacheKeyRef.current = cacheKey;
+      refreshRequestIdRef.current += 1;
+      const nextRuntime = nextCacheFresh && cached
+        ? cached.runtime
+        : runtimeSnapshotReady && runtimeSnapshot
+          ? {
+              runs: runtimeSnapshot.runs || [],
+              stages: runtimeSnapshot.stages || [],
+              tasks: runtimeSnapshot.tasks || [],
+            }
+          : EMPTY_RUNTIME_STATE;
+      const nextTemplateStages = nextCacheFresh && cached
+        ? cached.templateStages
+        : (Array.isArray(draftStages) ? draftStages : []);
+      runtimeRef.current = nextRuntime;
+      templateStagesRef.current = nextTemplateStages;
+      linkedDraftStagesRef.current = nextCacheFresh && cached ? cached.linkedDraftStages || [] : [];
+      setRuntime(nextRuntime);
+      setTemplateStages(nextTemplateStages);
+      setLoading(false);
+      setErrorText('');
+      setCardOverrides({});
+      setExtraCards([]);
+      setHiddenCardIds(new Set());
+      setDraftStagesOverride(null);
+      cardElementRefs.current.clear();
+    }
     setHasLoadedRuntime(nextCacheFresh || runtimeSnapshotReady);
     setLinkedDraftStages(nextCacheFresh ? cached?.linkedDraftStages || [] : []);
     setResolvedTemplateContext(null);
     setTemplateContextResolving(false);
     setTemplateContextResolvedKey('');
-  }, [cacheKey, runtimeSnapshotReady]);
+  }, [cacheKey, draftStages, runtimeSnapshot, runtimeSnapshotReady]);
 
   const loadDirectoryAndTemplates = useCallback(async () => {
     const applyReferencePayload = (payload: ProcessRuntimeReferencePayload) => {
@@ -2170,19 +2209,19 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [enabled, loadDirectoryAndTemplates]);
 
   useEffect(() => {
-    if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
-    if (snapshotOnly && readOnlyVariant) return;
-    if (
-      runtimeSnapshot
-      && normalizeText(runtimeSnapshot.moduleId) === normalizedModuleId
-      && normalizeText(runtimeSnapshot.recordId) === normalizedRecordId
-      && !readOnlyVariant
-      && !isProcessTemplateModule(normalizedModuleId)
-    ) {
-      return;
-    }
-    void refresh(false);
-  }, [enabled, normalizedModuleId, normalizedRecordId, readOnlyVariant, refresh, runtimeSnapshot, snapshotOnly]);
+    if (!shouldLoadProcessRuntime({
+      enabled,
+      moduleId: normalizedModuleId,
+      recordId: normalizedRecordId,
+      variant,
+      snapshotOnly,
+    })) return;
+    const initialRefreshKey = `${cacheKey}:${variant}:${snapshotOnly ? 'snapshot' : 'live'}`;
+    if (initialRefreshKeyRef.current === initialRefreshKey) return;
+    initialRefreshKeyRef.current = initialRefreshKey;
+    // نمای کامل همیشه منبع اصلی را می‌خواند؛ snapshot فقط برای جلوگیری از پرش بصری است.
+    void refresh(variant === 'full');
+  }, [cacheKey, enabled, normalizedModuleId, normalizedRecordId, refresh, snapshotOnly, variant]);
 
   useEffect(() => {
     if (!enabled || !liveRuntimeEnabled || !orgId || !normalizedModuleId || !normalizedRecordId) return undefined;
@@ -4519,14 +4558,21 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     return false;
   }, [normalizedModuleId, normalizedRecordId]);
 
-  const canShowEmptyAddProcess = (
+  const hasValidRuntimeRecord = Boolean(enabled && normalizedModuleId && normalizedRecordId);
+  const supportsEmptyCreate = (
     variant === 'full'
-    && hasLoadedRuntime
     && !isProcessTemplateModule(normalizedModuleId)
     && !isProcessRunModule(normalizedModuleId)
-    && Boolean(normalizedModuleId && normalizedRecordId)
   );
-  const shouldRender = displayCards.length > 0 || loading || waitingForTemplateContext || errorText || canShowEmptyAddProcess;
+  const surfaceMode = resolveProcessRuntimeSurfaceMode({
+    variant,
+    hasValidRecord: hasValidRuntimeRecord,
+    hasLoadedRuntime,
+    loading,
+    waitingForContext: waitingForTemplateContext,
+    hasError: Boolean(errorText),
+    cardCount: displayCards.length,
+  });
   const stageDeleteHasTask = Boolean(stageDeleteRequest && getTaskIdForProcessStage(stageDeleteRequest.stage));
   const bulkDeleteStages = getBulkDeleteStages(bulkDeleteRequest);
   const bulkDeleteHasTask = bulkDeleteStages.some((stage) => Boolean(getTaskIdForProcessStage(stage)));
@@ -4534,27 +4580,55 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const bulkDeleteSubject = bulkDeleteRequest?.kind === 'lane'
     ? (bulkDeleteRequest.lane?.title || 'این ردیف')
     : (bulkDeleteRequest?.process.title || 'این فرآیند');
-  if (!shouldRender) return null;
+  if (surfaceMode === 'hidden') return null;
 
   return (
     <div className={variant === 'full' ? 'mt-5' : 'mt-0'} dir="rtl">
       {errorText ? (
         <Alert type="warning" showIcon message={errorText} className="mb-3 !rounded-xl" />
       ) : null}
-      {(loading || waitingForTemplateContext) && cards.length === 0 ? (
+      {surfaceMode === 'loading' ? (
         <Skeleton active title={variant === 'full'} paragraph={{ rows: readOnlyVariant ? 1 : 3 }} />
-      ) : displayCards.length === 0 && canShowEmptyAddProcess ? (
+      ) : surfaceMode === 'error' ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-5 text-center dark:border-amber-400/20 dark:bg-amber-400/[0.04]">
+          <div className="mb-3 text-sm font-bold text-slate-700 dark:text-slate-200">
+            نمایش فرآیندهای این رکورد کامل نشد.
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button
+              className="!rounded-full !px-5"
+              loading={loading}
+              onClick={() => void refresh(true)}
+            >
+              تلاش دوباره
+            </Button>
+            {supportsEmptyCreate ? (
+              <Button
+                type="primary"
+                className="kalam-btn-brand !rounded-full !px-5"
+                onClick={handleAddRun}
+              >
+                ایجاد فرآیند جدید
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : surfaceMode === 'empty' ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 px-4 py-5 text-center dark:border-white/10 dark:bg-white/[0.025]">
           <div className="mb-3 text-sm font-bold text-slate-600 dark:text-slate-200">
-            برای این رکورد هنوز فرآیندی ثبت نشده است.
+            {supportsEmptyCreate
+              ? 'برای این رکورد هنوز فرآیندی ثبت نشده است.'
+              : 'هنوز اطلاعاتی برای نمایش در این فرآیند ثبت نشده است.'}
           </div>
-          <Button
-            type="primary"
-            className="kalam-btn-brand !rounded-full !px-5"
-            onClick={handleAddRun}
-          >
-            افزودن فرآیند جدید
-          </Button>
+          {supportsEmptyCreate ? (
+            <Button
+              type="primary"
+              className="kalam-btn-brand !rounded-full !px-5"
+              onClick={handleAddRun}
+            >
+              ایجاد فرآیند جدید
+            </Button>
+          ) : null}
         </div>
       ) : (
         <div className="space-y-3">
