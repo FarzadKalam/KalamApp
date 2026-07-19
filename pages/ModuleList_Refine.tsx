@@ -80,7 +80,6 @@ import {
   isModuleListSearchFilter,
 } from "../utils/moduleListSearch";
 import { buildJsonArrayViewCrudFilters, isJsonArrayViewFilterField } from "../utils/viewCrudFilters";
-import { getBaseModuleFieldDefinition } from "../utils/moduleSettingsRuntime";
 import {
   buildSurveyRuntimeModule,
   getSurveyTemplateScopedIdFromCrudFilters,
@@ -88,7 +87,12 @@ import {
   normalizeSurveyTemplateSnapshot,
   supportsWebFormTemplateRuntime,
 } from "../utils/surveyTemplates";
-import { shouldSkipModuleListField } from "../utils/moduleListFieldSelection";
+import {
+  collectDeferredModuleListFieldKeys,
+  shouldDeferModuleListField,
+  shouldSkipModuleListField,
+} from "../utils/moduleListFieldSelection";
+import { fetchDeferredModuleListFields } from "../utils/moduleListDeferredData";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import {
   fetchRecordLockMap,
@@ -367,13 +371,6 @@ const buildModuleListRowSelect = (
 ) => {
   if (!moduleConfig) return "*";
 
-  const hasCustomFields = (moduleConfig.fields || []).some((field) => {
-    if (isWorkflowVirtualField(field)) return false;
-    const key = String(field?.key || "").trim();
-    return key && !getBaseModuleFieldDefinition(moduleConfig.id, key);
-  });
-  if (hasCustomFields) return "*";
-
   const selectedKeys = new Set<string>();
   const moduleFieldKeys = new Set(
     (moduleConfig.fields || [])
@@ -387,28 +384,31 @@ const buildModuleListRowSelect = (
       .filter(Boolean)
   );
   const extraSelectKeys = new Set(MODULE_LIST_EXTRA_SELECT_KEYS[moduleConfig.id] || []);
-  const hasSyntheticVisibleColumns = (visibleColumns || []).some((key) => {
-    const normalized = String(key || "").trim();
-    return selectableFieldKeys.has(normalized) && !moduleFieldKeys.has(normalized);
-  });
-  if (hasSyntheticVisibleColumns) return "*";
+  const selectableFieldsByKey = new Map(
+    getModuleListSelectableFields(moduleConfig)
+      .map((field) => [String(field?.key || "").trim(), field] as const)
+      .filter(([key]) => Boolean(key))
+  );
+  const shouldDeferHeavyFields = options?.viewMode === ViewMode.LIST;
   // ستون‌های assignee فقط برای ماژول‌هایی که از global assignee پشتیبانی می‌کنند اضافه می‌شوند
   const MANAGED_SYSTEM_COLUMNS = new Set(['assignee_type', 'assignee_id', 'assignee_role_id']);
   const moduleSupportsAssignee = GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.id) || GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.table || '');
   const addKey = (key?: string | null) => {
     if (isSelectableColumnKey(key)) selectedKeys.add(String(key).trim());
   };
-  const addKnownKey = (key?: string | null) => {
+  const addKnownKey = (key?: string | null, force = false) => {
     const normalized = String(key || "").trim();
     if (shouldSkipModuleListField(moduleConfig.id, normalized)) return;
+    const field = selectableFieldsByKey.get(normalized);
+    if (!force && shouldDeferHeavyFields && shouldDeferModuleListField(moduleConfig.id, field as any)) return;
     if (normalized === "id" || moduleFieldKeys.has(normalized) || selectableFieldKeys.has(normalized) || extraSelectKeys.has(normalized) || (MANAGED_SYSTEM_COLUMNS.has(normalized) && moduleSupportsAssignee)) {
       addKey(normalized);
     }
   };
 
-  MODULE_LIST_BASE_SELECT_KEYS.forEach(addKnownKey);
+  MODULE_LIST_BASE_SELECT_KEYS.forEach((key) => addKnownKey(key, true));
   getModuleListVisibleFields(moduleConfig, visibleColumns || undefined).forEach((field) => addKnownKey(field.key));
-  collectCrudFilterFields(options?.filters).forEach(addKnownKey);
+  collectCrudFilterFields(options?.filters).forEach((key) => addKnownKey(key));
   (options?.sorters || []).forEach((sorter) => addKnownKey(String(sorter?.field || "")));
 
   (moduleConfig.fields || []).forEach((field) => {
@@ -904,6 +904,15 @@ export const ModuleListRefine: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [calendarDateField, defaultSorters, stableFiltersKey, kanbanGroupBy, moduleConfig, viewMode, visibleColumns]
   );
+  const moduleListDeferredFieldKeys = useMemo(
+    () => viewMode === ViewMode.LIST
+      ? collectDeferredModuleListFieldKeys(
+        moduleConfig?.id,
+        getModuleListVisibleFields(moduleConfig, visibleColumns || undefined) as any[],
+      )
+      : [],
+    [moduleConfig, viewMode, visibleColumns]
+  );
   const hasInitializedModuleStateRef = useRef(false);
   const searchSyncInitializedRef = useRef(false);
   const autoSortSyncDoneRef = useRef(false);
@@ -916,6 +925,7 @@ export const ModuleListRefine: React.FC<{
   const moduleListLiveRefetchingRef = useRef(false);
   const moduleListLivePendingMarkerRef = useRef<ModuleListLocalInvalidationMarker | null>(null);
   const [hasListInitialPaintCompleted, setHasListInitialPaintCompleted] = useState(false);
+  const [deferredModuleRowsById, setDeferredModuleRowsById] = useState<Record<string, any>>({});
   const [utilitySlotHeight, setUtilitySlotHeight] = useState<number | null>(null);
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -990,12 +1000,61 @@ export const ModuleListRefine: React.FC<{
   const allData = isListView
     ? (hasActiveTagViewFilters ? tagViewFilterRows : baseAllData)
     : nonListRows;
-  const effectiveAllData = useMemo(() => {
+  const effectiveBaseAllData = useMemo(() => {
     if (resolvedModuleId !== "cash_bank_operations" || cashBankFallbackRows.length === 0) return allData;
     const existingIds = new Set((allData || []).map((row: any) => String(row?.id || "").trim()).filter(Boolean));
     const fallbackRows = cashBankFallbackRows.filter((row: any) => !existingIds.has(String(row?.id || "").trim()));
     return [...(allData || []), ...fallbackRows];
   }, [allData, cashBankFallbackRows, resolvedModuleId]);
+  const deferredModuleRowsSignature = useMemo(
+    () => (effectiveBaseAllData || [])
+      .map((row: any) => `${String(row?.id || "").trim()}:${String(row?.updated_at || "").trim()}`)
+      .filter((value: string) => !value.startsWith(":"))
+      .join("|"),
+    [effectiveBaseAllData]
+  );
+
+  useEffect(() => {
+    if (
+      viewMode !== ViewMode.LIST
+      || !dataResource
+      || moduleListDeferredFieldKeys.length === 0
+      || effectiveBaseAllData.length === 0
+    ) {
+      setDeferredModuleRowsById((current) => Object.keys(current).length > 0 ? {} : current);
+      return;
+    }
+
+    let cancelled = false;
+    void fetchDeferredModuleListFields({
+      supabaseClient: supabase,
+      orgId: currentOrgId,
+      resource: dataResource,
+      rows: effectiveBaseAllData,
+      fieldKeys: moduleListDeferredFieldKeys,
+    })
+      .then((rowsById) => {
+        if (!cancelled) setDeferredModuleRowsById(rowsById);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("Could not load deferred module list fields", error);
+          setDeferredModuleRowsById({});
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrgId, dataResource, deferredModuleRowsSignature, effectiveBaseAllData, moduleListDeferredFieldKeys, viewMode]);
+
+  const effectiveAllData = useMemo(
+    () => (effectiveBaseAllData || []).map((row: any) => {
+      const deferredRow = deferredModuleRowsById[String(row?.id || "").trim()];
+      return deferredRow ? { ...row, ...deferredRow } : row;
+    }),
+    [deferredModuleRowsById, effectiveBaseAllData]
+  );
   const hasQueryResult = isListView
     ? (hasActiveTagViewFilters
       ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
@@ -2440,7 +2499,7 @@ export const ModuleListRefine: React.FC<{
     viewMode === ViewMode.LIST &&
     (
       !isListPageSizeReady ||
-      (!hasListInitialPaintCompleted && (queryPending || deferredListDataLoading))
+      (!hasListInitialPaintCompleted && queryPending)
     );
   const gridLoadStep = getGridLoadStep();
 
@@ -2465,9 +2524,8 @@ export const ModuleListRefine: React.FC<{
     if (viewMode !== ViewMode.LIST) return;
     if (!isListPageSizeReady) return;
     if (queryPending) return;
-    if (deferredListDataLoading) return;
     setHasListInitialPaintCompleted(true);
-  }, [deferredListDataLoading, isListPageSizeReady, queryPending, viewMode]);
+  }, [isListPageSizeReady, queryPending, viewMode]);
 
   useEffect(() => {
     if (!canShowGoalCards || selectedRowKeys.length > 0) return;

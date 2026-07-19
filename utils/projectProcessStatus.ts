@@ -2,6 +2,7 @@ import { supabase } from '../supabaseClient';
 import { applyTaskSourceRecordFilter } from './taskMeta';
 import { isTaskDoneStatus, normalizeTaskStatus } from './taskCompletion';
 import { parseProcessLinkMap } from './processTargets';
+import { filterDeletedProcessRunStageMarks } from './processDeletedStageMarks';
 
 export type ProjectProcessStatus =
   | 'draft'
@@ -79,6 +80,41 @@ const extractProcessLinks = (value: ProcessRuntimeCarrier | null | undefined) =>
   );
 };
 
+const isActualDraftStage = (stage: ProcessRuntimeCarrier) => {
+  const status = normalizeTaskStatus(stage?.status);
+  if (stage?.is_draft === true || status === 'draft') return true;
+  if (
+    normalizeText(stage?.task_id)
+    || normalizeText(stage?.process_task_id)
+    || normalizeText(stage?.process_run_stage_id)
+    || normalizeText(stage?.activity_id)
+  ) return false;
+  // contextهای runtime که قبلاً به اشتباه داخل JSON پیش‌نویس ذخیره شده‌اند
+  // نباید یک مرحله باز و زنده برای پروژه محسوب شوند.
+  if (normalizeText(stage?.process_run_id)) return false;
+  return Boolean(normalizeText(stage?.id || stage?.name || stage?.stage_name));
+};
+
+export const reconcileProjectProcessStatusCarriers = (
+  tasks: ProcessRuntimeCarrier[],
+  runStages: ProcessRuntimeCarrier[],
+) => {
+  const normalizedTasks = dedupeRowsById((Array.isArray(tasks) ? tasks : [])
+    .filter((task) => Boolean(normalizeText(task?.id || task?.name))));
+  const taskIds = new Set(normalizedTasks.map((task) => normalizeText(task?.id)).filter(Boolean));
+  const taskStageIds = new Set(normalizedTasks
+    .map((task) => normalizeText(task?.process_run_stage_id))
+    .filter(Boolean));
+  const remainingRunStages = dedupeRowsById((Array.isArray(runStages) ? runStages : [])
+    .filter((stage) => Boolean(normalizeText(stage?.id || stage?.stage_name || stage?.name)))
+    .filter((stage) => {
+      const linkedTaskId = normalizeText(stage?.task_id);
+      const stageId = normalizeText(stage?.id);
+      return !(linkedTaskId && taskIds.has(linkedTaskId)) && !(stageId && taskStageIds.has(stageId));
+    }));
+  return [...normalizedTasks, ...remainingRunStages];
+};
+
 export const collectProjectIdsFromProcessCarriers = (
   carriers: Array<ProcessRuntimeCarrier | null | undefined>,
 ) => Array.from(new Set(
@@ -120,14 +156,13 @@ export const deriveProjectStatusFromProcessState = (
   runStages?: Array<Record<string, any>>
 ): ProjectProcessStatus | null => {
   const normalizedDraftStages = parseDraftStages(draftStages)
-    .filter((stage) => !!String(stage?.id || stage?.name || '').trim());
+    .filter(isActualDraftStage);
   const hasDraftStages = normalizedDraftStages.length > 0;
 
-  const normalizedTasks = (Array.isArray(tasks) ? tasks : [])
-    .filter((task) => !!String(task?.id || task?.name || '').trim());
-  const normalizedRunStages = (Array.isArray(runStages) ? runStages : [])
-    .filter((stage) => !!String(stage?.id || stage?.stage_name || stage?.name || '').trim());
-  const statusCarriers = [...normalizedTasks, ...normalizedRunStages];
+  const statusCarriers = reconcileProjectProcessStatusCarriers(
+    Array.isArray(tasks) ? tasks : [],
+    Array.isArray(runStages) ? runStages : [],
+  );
   if (statusCarriers.length === 0) return hasDraftStages ? 'draft' : null;
 
   const normalizedStatuses = statusCarriers.map((item) => normalizeTaskStatus(item?.status));
@@ -144,11 +179,14 @@ export const deriveProjectStatusFromProcessState = (
   return 'planning';
 };
 
-export const fetchProjectProcessTasks = async (projectId: string) => {
+export const fetchProjectProcessTasks = async (
+  projectId: string,
+  options?: { runIds?: string[] },
+) => {
   const normalizedProjectId = String(projectId || '').trim();
   if (!normalizedProjectId) return [] as Array<Record<string, any>>;
 
-  const rows: Array<Record<string, any>> = [];
+  let rows: Array<Record<string, any>> = [];
 
   let query = supabase
     .from('tasks')
@@ -158,7 +196,12 @@ export const fetchProjectProcessTasks = async (projectId: string) => {
   if (error) throw error;
   if (Array.isArray(data)) rows.push(...data);
 
-  const runIds = await fetchProjectProcessRunIds(normalizedProjectId);
+  const runIds = options?.runIds || await fetchProjectProcessRunIds(normalizedProjectId);
+  const validRunIds = new Set(runIds);
+  rows = rows.filter((task) => {
+    const runId = normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id);
+    return !runId || validRunIds.has(runId);
+  });
   if (runIds.length > 0) {
     const { data: processTasks, error: processTasksError } = await supabase
       .from('tasks')
@@ -211,11 +254,29 @@ export const fetchProjectProcessRunIds = async (projectId: string) => {
       .forEach((runId) => runIds.add(runId));
   }
 
-  return Array.from(runIds);
+  const candidateRunIds = Array.from(runIds);
+  if (candidateRunIds.length === 0) return [];
+
+  // لینک باقی‌مانده به اجرای حذف‌شده نباید وضعیت پروژه را تغییر دهد.
+  const { data: existingRuns, error: existingRunsError } = await supabase
+    .from('process_runs')
+    .select('id')
+    .in('id', candidateRunIds)
+    .limit(1000);
+  if (existingRunsError) {
+    if (!isMissingColumnLikeError(existingRunsError)) throw existingRunsError;
+    return candidateRunIds;
+  }
+  return (Array.isArray(existingRuns) ? existingRuns : [])
+    .map((row: any) => normalizeText(row?.id))
+    .filter(Boolean);
 };
 
-export const fetchProjectProcessRunStages = async (projectId: string) => {
-  const runIds = await fetchProjectProcessRunIds(projectId);
+export const fetchProjectProcessRunStages = async (
+  projectId: string,
+  options?: { runIds?: string[] },
+) => {
+  const runIds = options?.runIds || await fetchProjectProcessRunIds(projectId);
   if (runIds.length === 0) return [] as Array<Record<string, any>>;
   const { data, error } = await supabase
     .from('process_run_stages')
@@ -226,7 +287,7 @@ export const fetchProjectProcessRunStages = async (projectId: string) => {
     if (isMissingColumnLikeError(error)) return [];
     throw error;
   }
-  return Array.isArray(data) ? data : [];
+  return filterDeletedProcessRunStageMarks(supabase, Array.isArray(data) ? data : []);
 };
 
 export const syncProjectStatusWithProcessState = async (
@@ -251,8 +312,11 @@ export const syncProjectStatusWithProcessState = async (
     projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
   }
 
-  const projectTasks = options?.tasks || await fetchProjectProcessTasks(normalizedProjectId);
-  const projectRunStages = await fetchProjectProcessRunStages(normalizedProjectId);
+  const runIds = await fetchProjectProcessRunIds(normalizedProjectId);
+  const [projectTasks, projectRunStages] = await Promise.all([
+    options?.tasks || fetchProjectProcessTasks(normalizedProjectId, { runIds }),
+    fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
+  ]);
   const nextStatus = deriveProjectStatusFromProcessState(projectDraftStages, projectTasks, projectRunStages);
   if (!nextStatus) return null;
 

@@ -32,6 +32,52 @@ import { isImageFileLike } from '../utils/imagePreview';
 const ProductionStagesField = React.lazy(() => import('./ProductionStagesField'));
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('./processes/ProcessCardsV2RuntimeBlock'));
 
+const DeferredProcessRuntimeCell: React.FC<{
+  moduleId?: string;
+  recordId: string;
+  recordData: any;
+  draftStages: any[];
+  fieldKey: string;
+}> = ({ moduleId, recordId, recordData, draftStages, fieldKey }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [shouldMount, setShouldMount] = useState(() => typeof IntersectionObserver === 'undefined');
+
+  useEffect(() => {
+    if (shouldMount) return;
+    const node = containerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setShouldMount(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setShouldMount(true);
+      observer.disconnect();
+    }, { rootMargin: '280px 0px' });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [shouldMount]);
+
+  return (
+    <div ref={containerRef} className="min-h-[44px] min-w-[340px] max-w-[520px] overflow-hidden">
+      {shouldMount ? (
+        <React.Suspense fallback={<Skeleton active title={false} paragraph={{ rows: 1 }} />}>
+          <ProcessCardsV2RuntimeBlock
+            moduleId={moduleId}
+            recordId={recordId}
+            recordData={recordData}
+            draftStages={draftStages}
+            fieldKey={fieldKey}
+            variant="column"
+          />
+        </React.Suspense>
+      ) : (
+        <Skeleton active title={false} paragraph={{ rows: 1 }} />
+      )}
+    </div>
+  );
+};
+
 interface SmartTableRendererProps {
   moduleConfig: ModuleDefinition | null | undefined;
   data: any[];
@@ -1155,18 +1201,13 @@ const SmartTableRenderer: React.FC<SmartTableRendererProps> = ({
           const draftStages = Array.isArray(record?.[draftKey]) ? record[draftKey] : [];
           if (draftKey !== 'production_stages_draft') {
             return (
-              <div className="min-w-[340px] max-w-[520px] overflow-hidden">
-                <React.Suspense fallback={<Skeleton active title={false} paragraph={{ rows: 1 }} />}>
-                  <ProcessCardsV2RuntimeBlock
-                    moduleId={moduleConfig?.id}
-                    recordId={record.id}
-                    recordData={record}
-                    draftStages={draftStages}
-                    fieldKey={draftKey}
-                    variant="column"
-                  />
-                </React.Suspense>
-              </div>
+              <DeferredProcessRuntimeCell
+                moduleId={moduleConfig?.id}
+                recordId={record.id}
+                recordData={record}
+                draftStages={draftStages}
+                fieldKey={draftKey}
+              />
             );
           }
           return (

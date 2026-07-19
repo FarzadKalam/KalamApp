@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { deriveProjectStatusFromProcessState } from './projectProcessStatus';
+import {
+  deriveProjectStatusFromProcessState,
+  reconcileProjectProcessStatusCarriers,
+} from './projectProcessStatus';
 
 describe('deriveProjectStatusFromProcessState', () => {
   it('returns draft while any draft stage remains', () => {
@@ -65,5 +68,41 @@ describe('deriveProjectStatusFromProcessState', () => {
 
   it('returns null when there is no process draft and no task', () => {
     expect(deriveProjectStatusFromProcessState([], [])).toBeNull();
+  });
+
+  it('does not let a stale run-stage status override its completed real task', () => {
+    expect(deriveProjectStatusFromProcessState([], [
+      { id: 'task-1', status: 'completed', process_run_stage_id: 'stage-1' },
+      { id: 'task-2', status: 'done', process_run_stage_id: 'stage-2' },
+    ], [
+      { id: 'stage-1', task_id: 'task-1', status: 'in_progress' },
+      { id: 'stage-2', task_id: 'task-2', status: 'todo' },
+    ])).toBe('completed');
+  });
+
+  it('does not count accidentally persisted runtime context as a draft stage', () => {
+    expect(deriveProjectStatusFromProcessState([
+      { id: 'runtime-copy', process_run_id: 'run-1', task_id: 'task-1', status: 'in_progress' },
+    ], [
+      { id: 'task-1', status: 'completed' },
+    ])).toBe('completed');
+  });
+
+  it('keeps an explicit draft stage in mixed completed state', () => {
+    expect(deriveProjectStatusFromProcessState([
+      { id: 'draft-1', process_run_id: 'run-1', is_draft: true, status: 'draft' },
+    ], [
+      { id: 'task-1', status: 'completed' },
+    ])).toBe('in_progress');
+  });
+
+  it('keeps only run stages that do not already have a real task carrier', () => {
+    expect(reconcileProjectProcessStatusCarriers(
+      [{ id: 'task-1', status: 'done', process_run_stage_id: 'stage-1' }],
+      [
+        { id: 'stage-1', task_id: 'task-1', status: 'in_progress' },
+        { id: 'stage-2', status: 'todo' },
+      ],
+    ).map((row) => row.id)).toEqual(['task-1', 'stage-2']);
   });
 });
