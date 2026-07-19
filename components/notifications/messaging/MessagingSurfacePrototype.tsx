@@ -4659,18 +4659,25 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           ));
         });
         if (payload.smsNotificationEnabled && (finalMentionUserIds.length > 0 || finalMentionRoleIds.length > 0)) {
-          await sendNoteSmsNotifications({
+          // پیام داخلی با موفقیت در سرور ثبت شده است؛ اطلاع‌رسانی پیامکی و
+          // همگام‌سازی فهرست نباید دکمهٔ ارسال را معطل کنند.
+          void sendNoteSmsNotifications({
             authorName: directoryUserMap[authorId]?.display_name || 'کاربر',
             noteText: normalizedText || (mergedAttachments.length > 0 ? 'فایل یا تصویر پیوست' : ''),
             mentionUserIds: finalMentionUserIds,
             mentionRoleIds: finalMentionRoleIds,
             title: 'اطلاع‌رسانی پیام داخلی',
+          }).catch((notificationError) => {
+            console.warn('Could not send internal-message SMS notification', notificationError);
+            message.warning('پیام داخلی ارسال شد، اما اطلاع‌رسانی پیامکی ناموفق بود.');
           });
         }
-        await Promise.all([
+        void Promise.all([
           refreshInternalConversations({ force: true }),
           refreshInternalTimeline({ force: true }),
-        ]);
+        ]).catch((refreshError) => {
+          console.warn('Could not refresh internal conversation after send', refreshError);
+        });
         message.success('پیام داخلی ارسال شد.');
         return true;
       } catch (error: any) {
@@ -4738,14 +4745,18 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             },
           });
         }
-        await Promise.all([
+        // ارسال بات و ثبت پیام کامل شده است. refreshهای عمومی می‌توانند در
+        // پس‌زمینه اجرا شوند؛ منتظر ماندن برای آن‌ها باعث گیرکردن دکمه می‌شد.
+        void Promise.all([
           liveData.refresh(),
           conversation.channel === 'bot_group'
             ? refreshBotConversations({ force: true })
             : Promise.resolve(null),
-        ]);
+        ]).catch((refreshError) => {
+          console.warn('Could not refresh bot conversation after send', refreshError);
+        });
         if (botSmsNotification) {
-          try {
+          void (async () => {
             await sendSmsViaGateway({
               to: [botSmsNotification.phone],
               text: botSmsNotification.text,
@@ -4762,13 +4773,13 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             if (botSmsNotification.remember) {
               await persistBotSmsNotificationTemplate(conversation, botSmsNotification.text);
             }
-            message.success('پیام بات و اطلاع‌رسانی پیامکی ارسال شد.');
-          } catch (smsError: any) {
+            message.success('اطلاع‌رسانی پیامکی پیام بات ارسال شد.');
+          })().catch((smsError: any) => {
+            console.warn('Could not send bot-message SMS notification', smsError);
             message.warning(toFaErrorMessage(smsError, 'پیام بات ارسال شد، اما اطلاع‌رسانی پیامکی ناموفق بود.'));
-          }
-        } else {
-          message.success('پیام بات ارسال شد.');
+          });
         }
+        message.success('پیام بات ارسال شد.');
         return true;
       } catch (error: any) {
         message.error(toFaErrorMessage(error, 'ارسال پیام بات ناموفق بود.'));
@@ -4797,7 +4808,9 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           conversation_key: conversation.key,
         },
       });
-      await liveData.refresh();
+      void liveData.refresh().catch((refreshError) => {
+        console.warn('Could not refresh SMS conversation after send', refreshError);
+      });
       message.success('پیامک ارسال شد.');
       return true;
     } catch (error: any) {
