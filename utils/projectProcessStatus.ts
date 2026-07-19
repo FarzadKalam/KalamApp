@@ -16,6 +16,7 @@ const CANCELED_TASK_STATUS = 'canceled';
 const PROJECTS_MODULE_ID = 'projects';
 
 type ProcessRuntimeCarrier = Record<string, any>;
+type ProjectProcessRun = { id: string; status?: string | null };
 
 type ProcessStatusSyncContext = {
   moduleId?: string | null;
@@ -153,15 +154,32 @@ export const collectProjectIdsFromProcessContext = ({
 export const deriveProjectStatusFromProcessState = (
   draftStages: any,
   tasks: Array<Record<string, any>>,
-  runStages?: Array<Record<string, any>>
+  runStages?: Array<Record<string, any>>,
+  processRuns?: ProjectProcessRun[],
 ): ProjectProcessStatus | null => {
   const normalizedDraftStages = parseDraftStages(draftStages)
     .filter(isActualDraftStage);
   const hasDraftStages = normalizedDraftStages.length > 0;
 
+  const completedRunIds = new Set((Array.isArray(processRuns) ? processRuns : [])
+    .filter((run) => isTaskDoneStatus(run?.status))
+    .map((run) => normalizeText(run?.id))
+    .filter(Boolean));
+  const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => {
+    const runId = normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id);
+    return !runId || !completedRunIds.has(runId);
+  });
+  const activeRunStages = (Array.isArray(runStages) ? runStages : []).filter((stage) => (
+    !completedRunIds.has(normalizeText(stage?.process_run_id))
+  ));
+  const completedRunCarriers = Array.from(completedRunIds).map((id) => ({
+    id: `completed-process-run:${id}`,
+    process_run_id: id,
+    status: 'completed',
+  }));
   const statusCarriers = reconcileProjectProcessStatusCarriers(
-    Array.isArray(tasks) ? tasks : [],
-    Array.isArray(runStages) ? runStages : [],
+    [...activeTasks, ...completedRunCarriers],
+    activeRunStages,
   );
   if (statusCarriers.length === 0) return hasDraftStages ? 'draft' : null;
 
@@ -218,9 +236,9 @@ export const fetchProjectProcessTasks = async (
   return dedupeRowsById(rows);
 };
 
-export const fetchProjectProcessRunIds = async (projectId: string) => {
+export const fetchProjectProcessRuns = async (projectId: string): Promise<ProjectProcessRun[]> => {
   const normalizedProjectId = normalizeText(projectId);
-  if (!normalizedProjectId) return [] as string[];
+  if (!normalizedProjectId) return [];
 
   const runIds = new Set<string>();
 
@@ -260,17 +278,21 @@ export const fetchProjectProcessRunIds = async (projectId: string) => {
   // لینک باقی‌مانده به اجرای حذف‌شده نباید وضعیت پروژه را تغییر دهد.
   const { data: existingRuns, error: existingRunsError } = await supabase
     .from('process_runs')
-    .select('id')
+    .select('id,status')
     .in('id', candidateRunIds)
     .limit(1000);
   if (existingRunsError) {
     if (!isMissingColumnLikeError(existingRunsError)) throw existingRunsError;
-    return candidateRunIds;
+    return candidateRunIds.map((id) => ({ id }));
   }
   return (Array.isArray(existingRuns) ? existingRuns : [])
-    .map((row: any) => normalizeText(row?.id))
-    .filter(Boolean);
+    .map((row: any) => ({ id: normalizeText(row?.id), status: row?.status }))
+    .filter((row) => Boolean(row.id));
 };
+
+export const fetchProjectProcessRunIds = async (projectId: string) => (
+  (await fetchProjectProcessRuns(projectId)).map((run) => run.id)
+);
 
 export const fetchProjectProcessRunStages = async (
   projectId: string,
@@ -312,12 +334,18 @@ export const syncProjectStatusWithProcessState = async (
     projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
   }
 
-  const runIds = await fetchProjectProcessRunIds(normalizedProjectId);
+  const processRuns = await fetchProjectProcessRuns(normalizedProjectId);
+  const runIds = processRuns.map((run) => run.id);
   const [projectTasks, projectRunStages] = await Promise.all([
     options?.tasks || fetchProjectProcessTasks(normalizedProjectId, { runIds }),
     fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
   ]);
-  const nextStatus = deriveProjectStatusFromProcessState(projectDraftStages, projectTasks, projectRunStages);
+  const nextStatus = deriveProjectStatusFromProcessState(
+    projectDraftStages,
+    projectTasks,
+    projectRunStages,
+    processRuns,
+  );
   if (!nextStatus) return null;
 
   const { data: currentProject, error: currentProjectError } = await supabase
@@ -344,22 +372,9 @@ export const syncProjectStatusesForProcessContext = async (
   const projectIds = collectProjectIdsFromProcessContext(context);
   const results: Array<{ projectId: string; status: ProjectProcessStatus | null }> = [];
   for (const projectId of projectIds) {
-    const projectDraftStages = [
-      ...parseDraftStages(context.draftStages).filter((stage) => {
-        const links = extractProcessLinks(stage);
-        return normalizeText(links[PROJECTS_MODULE_ID]) === projectId || normalizeText(context.moduleId) === PROJECTS_MODULE_ID;
-      }),
-    ];
-    const projectTasks = (Array.isArray(context.tasks) ? context.tasks : []).filter((task) => {
-      const links = extractProcessLinks(task);
-      return normalizeText(task?.project_id) === projectId
-        || (normalizeText(task?.source_module_id) === PROJECTS_MODULE_ID && normalizeText(task?.source_record_id) === projectId)
-        || normalizeText(links[PROJECTS_MODULE_ID]) === projectId;
-    });
-    const status = await syncProjectStatusWithProcessState(projectId, {
-      draftStages: projectDraftStages.length > 0 ? projectDraftStages : undefined,
-      tasks: projectTasks.length > 0 ? projectTasks : undefined,
-    });
+    // Snapshot صفحه ممکن است کامل نباشد یا هم‌زمان با حذف/تبدیل مرحله قدیمی شده باشد.
+    // وضعیت پروژه همیشه از رکوردهای فعلی سرور محاسبه می‌شود، نه از همین snapshot.
+    const status = await syncProjectStatusWithProcessState(projectId);
     results.push({ projectId, status });
   }
   return results;

@@ -1885,7 +1885,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     if (!enabled || !normalizedModuleId || !normalizedRecordId) return;
     const requestId = ++refreshRequestIdRef.current;
     if (force) {
-      clearAppRuntimeCache(`process-runtime:${normalizedModuleId}:${normalizedRecordId}`);
+      clearAppRuntimeCache(`process-runtime:full:${normalizedModuleId}:${normalizedRecordId}`);
+      clearAppRuntimeCache(`process-runtime:summary:${normalizedModuleId}:${normalizedRecordId}`);
       clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     }
     if (readOnlyVariant && !force) {
@@ -1951,20 +1952,29 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
         supabase,
         normalizedModuleId,
         normalizedRecordId,
-        force ? { force: true } : undefined,
+        {
+          force,
+          // نمای ستونی فقط وضعیت و نام مرحله‌ها را نشان می‌دهد؛ داده کامل
+          // فعالیت‌ها و پیش‌نویس‌ها همچنان فقط در نمای کامل دریافت می‌شود.
+          mode: variant === 'column' ? 'summary' : 'full',
+        },
       );
-      const snapshotStages = await filterDeletedProcessRunStageMarks(
-        supabase,
-        snapshot.stages || [],
-        force ? { force: true } : undefined,
-      );
-      const tasks = await fetchProcessRuntimeTasksForRecord(
-        supabase,
-        normalizedModuleId,
-        normalizedRecordId,
-        { runs: snapshot.runs || [], stages: snapshotStages },
-        { force },
-      );
+      const snapshotStages = snapshot.isSummary
+        ? (snapshot.stages || [])
+        : await filterDeletedProcessRunStageMarks(
+          supabase,
+          snapshot.stages || [],
+          force ? { force: true } : undefined,
+        );
+      const tasks = variant === 'column'
+        ? []
+        : await fetchProcessRuntimeTasksForRecord(
+          supabase,
+          normalizedModuleId,
+          normalizedRecordId,
+          { runs: snapshot.runs || [], stages: snapshotStages },
+          { force },
+        );
       const directDrafts = Array.isArray(directDraftStagesRef.current) ? directDraftStagesRef.current : [];
       const shouldLoadLinkedDrafts = (
         loadLegacyLinkedDrafts
@@ -2010,7 +2020,8 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [refresh]);
 
   const scheduleRefresh = useCallback(() => {
-    clearAppRuntimeCache(`process-runtime:${normalizedModuleId}:${normalizedRecordId}`);
+    clearAppRuntimeCache(`process-runtime:full:${normalizedModuleId}:${normalizedRecordId}`);
+    clearAppRuntimeCache(`process-runtime:summary:${normalizedModuleId}:${normalizedRecordId}`);
     clearAppRuntimeCache(`process-runtime-tasks:${normalizedModuleId}:${normalizedRecordId}`);
     processRuntimeBlockCache.delete(cacheKey);
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);

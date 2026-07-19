@@ -80,6 +80,16 @@ describe('deriveProjectStatusFromProcessState', () => {
     ])).toBe('completed');
   });
 
+  it('does not let a stale activity from a completed process run reopen the project', () => {
+    expect(deriveProjectStatusFromProcessState([], [
+      { id: 'task-1', status: 'in_progress', process_run_id: 'run-1' },
+    ], [
+      { id: 'stage-1', status: 'in_progress', process_run_id: 'run-1' },
+    ], [
+      { id: 'run-1', status: 'completed' },
+    ])).toBe('completed');
+  });
+
   it('does not count accidentally persisted runtime context as a draft stage', () => {
     expect(deriveProjectStatusFromProcessState([
       { id: 'runtime-copy', process_run_id: 'run-1', task_id: 'task-1', status: 'in_progress' },
