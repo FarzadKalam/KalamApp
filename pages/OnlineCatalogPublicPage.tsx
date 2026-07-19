@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Empty, Image, Input, Spin, Tag } from 'antd';
+import { Alert, Button, Empty, Image, Input, Tag } from 'antd';
 import { ArrowLeftOutlined, ArrowRightOutlined, EnvironmentOutlined, GlobalOutlined, MailOutlined, PhoneOutlined, SearchOutlined, SendOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import maplibregl from 'maplibre-gl';
@@ -17,6 +17,8 @@ import { getPublicOnlineCatalog } from '../utils/onlineCatalog';
 import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { buildImagePreviewUrl } from '../utils/imagePreview';
 import { getOnlineCatalogIcon } from '../utils/onlineCatalogIcons';
+import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
+import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 
 const STATUS_COLORS: Record<string, string> = { green: '#16a34a', red: '#dc2626', blue: '#2563eb', orange: '#ea580c', yellow: '#ca8a04', purple: '#7c3aed', cyan: '#0891b2', gray: '#64748b', grey: '#64748b', pink: '#db2777', gold: '#d97706', volcano: '#e34d20', default: '#64748b' };
 const resolveStatusColor = (value: unknown) => { const color = String(value || '').trim().toLowerCase(); return color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl') ? color : STATUS_COLORS[color] || STATUS_COLORS.default; };
@@ -54,7 +56,10 @@ const OnlineCatalogPublicPage: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    void getPublicOnlineCatalog(supabasePublic, token).then((result) => { if (!cancelled) setPayload(result); }).catch(() => { if (!cancelled) setPayload({ error: 'not_found' }); }).finally(() => { if (!cancelled) setLoading(false); });
+    void getPublicOnlineCatalog(supabasePublic, token).then((result) => {
+      persistLoadingBrandIdentity(resolveLoadingBrandIdentity(result?.company));
+      if (!cancelled) setPayload(result);
+    }).catch(() => { if (!cancelled) setPayload({ error: 'not_found' }); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [token]);
 
@@ -114,7 +119,7 @@ const OnlineCatalogPublicPage: React.FC = () => {
   const renderGrid = () => <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{filteredItems.map((item: any, index: number) => { const status = statusMeta.get(text(item?.status)); return <article key={`${index}-${text(item?.title)}`} className="group overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-[0_15px_35px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_20px_42px_rgba(15,23,42,0.14)]">{renderImage(item?.image_url, text(item?.title), 'h-48 w-full object-cover') }<div className="space-y-3 p-4"><div className="flex items-start justify-between gap-2"><h2 className="min-w-0 text-lg font-black">{text(item?.title) || 'بدون عنوان'}</h2>{status ? <Tag style={{ color: '#fff', backgroundColor: status.color, borderColor: status.color }} className="m-0 shrink-0">{status.label}</Tag> : null}</div>{renderFields(item)}{moduleId === 'billboards' && parseLocationValue(item?.location || item?.fields?.location) ? <Button type="primary" icon={<EnvironmentOutlined />} onClick={() => openNavigation(item)}>مسیریابی</Button> : null}</div></article>; })}</div>;
   const renderSlide = () => { const item = filteredItems[Math.min(slideIndex, Math.max(0, filteredItems.length - 1))]; if (!item) return null; const status = statusMeta.get(text(item?.status)); return <div className="relative overflow-hidden rounded-[2rem] border border-slate-200 bg-white p-3 shadow-[0_20px_55px_rgba(15,23,42,.12)]"><div className="grid min-h-[28rem] gap-5 md:grid-cols-2">{renderImage(item?.image_url, text(item?.title), 'h-full min-h-[18rem] w-full rounded-[1.5rem] object-cover') }<div className="flex flex-col justify-center p-4 md:p-8"><div className="mb-3 text-sm text-slate-400">{toPersianNumber(slideIndex + 1)} از {toPersianNumber(filteredItems.length)}</div><div className="flex items-start gap-2"><h2 className="text-3xl font-black text-[rgb(var(--brand-700-rgb,30,64,175))]">{text(item?.title) || 'بدون عنوان'}</h2>{status ? <Tag style={{ color: '#fff', backgroundColor: status.color, borderColor: status.color }}>{status.label}</Tag> : null}</div><div className="mt-5">{renderFields(item)}</div>{moduleId === 'billboards' && parseLocationValue(item?.location || item?.fields?.location) ? <Button className="mt-5 w-fit" type="primary" icon={<EnvironmentOutlined />} onClick={() => openNavigation(item)}>مسیریابی</Button> : null}</div></div><div className="mt-3 flex justify-center gap-2"><Button icon={<ArrowRightOutlined />} disabled={slideIndex <= 0} onClick={() => setSlideIndex((value) => Math.max(0, value - 1))}>قبلی</Button><Button icon={<ArrowLeftOutlined />} disabled={slideIndex >= filteredItems.length - 1} onClick={() => setSlideIndex((value) => Math.min(filteredItems.length - 1, value + 1))}>بعدی</Button></div></div>; };
 
-  if (loading) return <div className="flex min-h-screen items-center justify-center bg-slate-100"><Spin size="large" /></div>;
+  if (loading) return <BrandLoadingScreen message="در حال بارگذاری کاتالوگ آنلاین…" />;
   if (!catalog || payload?.error) return <div className="flex min-h-screen items-center justify-center bg-slate-100 p-5"><Empty description="کاتالوگ عمومی فعال پیدا نشد" /></div>;
   const palette = text(company?.palette_key || 'blue');
   const catalogTags = Array.isArray(catalog?.tags) ? catalog.tags : [];

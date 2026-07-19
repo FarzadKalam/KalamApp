@@ -7,7 +7,6 @@ import {
   ConfigProvider,
   Input,
   Modal,
-  Spin,
   Steps,
   Table,
   Tag,
@@ -36,6 +35,8 @@ import { normalizePublicAssetUrl } from '../utils/assetUrl';
 import { isImageFileLike } from '../utils/imagePreview';
 import { supabasePublic } from '../supabaseClient';
 import ResilientImage from '../components/common/ResilientImage';
+import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
+import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 
 const { Text, Title } = Typography;
 const anonClient = supabasePublic;
@@ -328,6 +329,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
 
     const bs = loaded.branding?.branding_settings;
     const cs = loaded.branding?.company_settings;
+    persistLoadingBrandIdentity(resolveLoadingBrandIdentity(cs));
     const brandName = String(bs?.brand_name || bs?.brandName || cs?.company_full_name || cs?.trade_name || DEFAULT_BRANDING.brandName);
     const shortName = String(bs?.short_name || bs?.shortName || cs?.trade_name || cs?.company_full_name || DEFAULT_BRANDING.shortName);
     setBranding({ ...DEFAULT_BRANDING, brandName, shortName, logoUrl: String(cs?.logo_url || '').trim() || null });
@@ -484,12 +486,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
   };
 
   if (loading) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, background: token.colorBgLayout, flexDirection: 'column' }}>
-        <Spin size="large" />
-        <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>در حال بارگذاری فرم تحویل...</Text>
-      </div>
-    );
+    return <BrandLoadingScreen branding={branding} message="در حال بارگذاری فرم تحویل…" />;
   }
 
   if (error) {

@@ -1,5 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, App, Button, Card, Form, Input, InputNumber, Select, Slider, Space, Spin, Typography, Upload } from "antd";
+import { Alert, App, Button, Card, Form, Input, InputNumber, Select, Slider, Space, Typography, Upload } from "antd";
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, LockOutlined, LoginOutlined } from "@ant-design/icons";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../App.css";
@@ -16,6 +16,8 @@ import { joinStoragePath, sanitizeStorageFileName } from "../utils/storagePath";
 import { toFaErrorMessage } from "../utils/errorMessageFa";
 import { fetchDynamicOptionsMap } from "../utils/referenceData";
 import ResilientImage from "../components/common/ResilientImage";
+import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
+import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 import { toPersianNumber } from "../utils/persianNumberFormatter";
 import {
   formatNumericForInput,
@@ -730,6 +732,8 @@ const InquiryForm = () => {
             : [];
 
           if (!cancelled) {
+            const normalizedCompanySettings = toRecord(normalizeCompanyAssetFields(response.company_settings));
+            persistLoadingBrandIdentity(resolveLoadingBrandIdentity(normalizedCompanySettings));
             setPublicForm({
               mode: "dynamic",
               slug: String(webForm.route_slug || requestedSlug),
@@ -738,7 +742,7 @@ const InquiryForm = () => {
               targetModuleId,
               config,
               fields,
-              companySettings: toRecord(normalizeCompanyAssetFields(response.company_settings)),
+              companySettings: normalizedCompanySettings,
               conditionalDisplay: normalizeConditionalFieldSettings(toRecord(response.conditional_display)),
             });
           }
@@ -1715,11 +1719,7 @@ const InquiryForm = () => {
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={pageStyle}>
-        <Spin size="large" />
-      </div>
-    );
+    return <BrandLoadingScreen branding={branding} message="در حال بارگذاری وب‌فرم…" />;
   }
 
   if (!publicForm) {

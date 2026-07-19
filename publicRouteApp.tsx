@@ -7,6 +7,7 @@ import AntdApp from "antd/es/app";
 import faIR from "antd/locale/fa_IR";
 import { JalaliLocaleListener } from "antd-jalali";
 import { trackPageView } from "./utils/analytics";
+import BrandLoadingScreen from './components/common/BrandLoadingScreen';
 
 const loadInquiryForm = () => import("./pages/InquiryForm");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
@@ -18,10 +19,10 @@ const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
 
-const SilentRouteFallback = () => null;
+const PublicRouteFallback = () => <BrandLoadingScreen message="در حال آماده‌سازی صفحه…" />;
 
 const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
+  <Suspense fallback={<PublicRouteFallback />}>{children}</Suspense>
 );
 
 const RouteTracker: React.FC = () => {

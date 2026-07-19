@@ -11,6 +11,11 @@ import {
 import { normalizeCurrencyConfig, persistCurrencyConfig, type CurrencyConfig } from "./currency";
 import { normalizePublicAssetUrl } from "./assetUrl";
 import { isLocalHost, isSharedAppHost, isTenantHost, isTazeSystemFamilyHost } from "./hostRouting";
+import {
+  persistLoadingBrandIdentity,
+  resolveLoadingBrandIdentity,
+  type LoadingBrandIdentity,
+} from './loadingBrand';
 
 export const BRANDING_CACHE_KEY = "erp:branding-cache";
 
@@ -18,9 +23,10 @@ const BRAND_TITLE_ATTRIBUTE = "data-brand-title";
 const BRAND_LOGO_ATTRIBUTE = "data-brand-logo";
 const BRAND_ICON_ATTRIBUTE = "data-brand-icon";
 
-type RuntimeBrandingResult = {
+export type RuntimeBrandingResult = {
   branding: BrandingConfig;
   currency: CurrencyConfig;
+  loadingIdentity: LoadingBrandIdentity;
 };
 
 const RUNTIME_BRANDING_TTL_MS = 5 * 60_000;
@@ -89,7 +95,11 @@ const buildRuntimeBranding = (
     label: String(companyRow.currency_label || "").trim(),
   });
 
-  return { branding, currency };
+  return {
+    branding,
+    currency,
+    loadingIdentity: resolveLoadingBrandIdentity(companyRow, branding),
+  };
 };
 
 export const readCachedBranding = (): BrandingConfig | null => {
@@ -289,4 +299,5 @@ export const loadRuntimeBranding = async (
 export const persistRuntimeBranding = (result: RuntimeBrandingResult) => {
   persistCurrencyConfig(result.currency);
   applyBrandingRuntime(result.branding);
+  persistLoadingBrandIdentity(result.loadingIdentity);
 };

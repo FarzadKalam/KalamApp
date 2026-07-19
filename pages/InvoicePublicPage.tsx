@@ -8,7 +8,6 @@ import {
   Divider,
   Input,
   Modal,
-  Spin,
   Steps,
   Table,
   Tag,
@@ -50,6 +49,8 @@ import { joinStoragePath, sanitizeStorageFileName } from '../utils/storagePath';
 import { uploadFileWithProgress } from '../utils/uploadFileWithProgress';
 import { parseNoteContent, resolveNoteAttachmentFileType } from '../utils/noteContent';
 import SharedNoteCard from '../components/notes/SharedNoteCard';
+import BrandLoadingScreen from '../components/common/BrandLoadingScreen';
+import { persistLoadingBrandIdentity, resolveLoadingBrandIdentity } from '../utils/loadingBrand';
 
 const anonClient = supabasePublic;
 
@@ -375,6 +376,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
 
         const bs = invData.branding?.branding_settings as Record<string, any> | undefined;
         const cs = invData.branding?.company_settings as Record<string, any> | undefined;
+        persistLoadingBrandIdentity(resolveLoadingBrandIdentity(cs));
 
         // Logo: from company_settings (authoritative source for logo_url)
         const logoFromCompany = String(cs?.logo_url || '').trim() || null;
@@ -985,20 +987,7 @@ ${invoice.description ? `
   // ── loading / error ────────────────────────────────────────────────────────
 
   if (loading) {
-    return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 12,
-        background: token.colorBgLayout,
-      }}>
-        <Spin size="large" />
-        <Text style={{ color: token.colorTextSecondary, fontSize: 13 }}>در حال بارگذاری فاکتور...</Text>
-      </div>
-    );
+    return <BrandLoadingScreen branding={branding} message="در حال بارگذاری فاکتور…" />;
   }
 
   if (error) {

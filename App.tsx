@@ -21,6 +21,7 @@ import { NotificationRuntimeProvider } from "./components/notifications/Notifica
 import OrganizationAvatarPreloader from "./components/common/OrganizationAvatarPreloader";
 import PwaInstallPrompt from "./components/PwaInstallPrompt";
 import OfflineOverlay from "./components/OfflineOverlay";
+import BrandLoadingScreen from './components/common/BrandLoadingScreen';
 import "./App.css";
 import {
   BRANDING_APPLIED_EVENT,
@@ -48,6 +49,7 @@ import {
 import { resolveOverlayPopupContainer } from "./utils/popupContainer";
 import { isMarketingHost, isSaasAppHost } from "./utils/hostRouting";
 import { signOutLocalSession } from "./utils/authSession";
+import { readCachedLoadingBrandIdentity, type LoadingBrandIdentity } from './utils/loadingBrand';
 
 declare global {
   interface Window {
@@ -271,6 +273,10 @@ const LazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }
   <Suspense fallback={<SilentRouteFallback />}>{children}</Suspense>
 );
 
+const PublicLazyRouteBoundary: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <Suspense fallback={<BrandLoadingScreen branding={getInitialBranding()} message="در حال آماده‌سازی صفحه…" />}>{children}</Suspense>
+);
+
 const AuthenticatedOutletBoundary: React.FC = () => {
   const location = useLocation();
   return (
@@ -357,6 +363,7 @@ function App() {
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(getInitialDarkMode);
   const [branding, setBranding] = useState<BrandingConfig>(getInitialBranding);
+  const [loadingBrandIdentity, setLoadingBrandIdentity] = useState<LoadingBrandIdentity | null>(() => readCachedLoadingBrandIdentity());
   const [moduleSettingsVersion, setModuleSettingsVersion] = useState(0);
   const [moduleSettingsReady, setModuleSettingsReady] = useState(false);
   const authLifecycleRef = useRef<{ initialized: boolean; userId: string | null }>({
@@ -388,6 +395,7 @@ function App() {
       const runtimeBranding = await loadRuntimeBranding({ force });
       persistRuntimeBranding(runtimeBranding);
       setBranding(runtimeBranding.branding);
+      setLoadingBrandIdentity(runtimeBranding.loadingIdentity);
     } catch (error) {
       console.warn("Could not load branding settings", error);
     }
@@ -725,10 +733,10 @@ function App() {
             </>
           ) : null}
           <Route path="/login" element={<LazyRouteBoundary><Login /></LazyRouteBoundary>} />
-          <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
-          <Route path="/i/:code" element={<LazyRouteBoundary><InvoicePublicPage /></LazyRouteBoundary>} />
-          <Route path="/d/:code" element={<LazyRouteBoundary><DeliveryPublicPage /></LazyRouteBoundary>} />
-          <Route path="/c/:token" element={<LazyRouteBoundary><OnlineCatalogPublicPage /></LazyRouteBoundary>} />
+          <Route path="/inquiry/*" element={<PublicLazyRouteBoundary><InquiryForm /></PublicLazyRouteBoundary>} />
+          <Route path="/i/:code" element={<PublicLazyRouteBoundary><InvoicePublicPage /></PublicLazyRouteBoundary>} />
+          <Route path="/d/:code" element={<PublicLazyRouteBoundary><DeliveryPublicPage /></PublicLazyRouteBoundary>} />
+          <Route path="/c/:token" element={<PublicLazyRouteBoundary><OnlineCatalogPublicPage /></PublicLazyRouteBoundary>} />
           <Route path="/payment/callback" element={<LazyRouteBoundary><PaymentCallbackPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
           <Route path="/r/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
@@ -833,9 +841,11 @@ function App() {
   if (!moduleSettingsReady) {
     return (
       <ConfigProvider direction="rtl" locale={faIR}>
-        <div className="min-h-screen flex items-center justify-center text-sm text-gray-500">
-          در حال بارگذاری تنظیمات سازمان...
-        </div>
+        <BrandLoadingScreen
+          branding={branding}
+          identity={loadingBrandIdentity}
+          message="در حال آماده‌سازی فضای سازمان…"
+        />
       </ConfigProvider>
     );
   }

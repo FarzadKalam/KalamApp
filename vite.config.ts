@@ -36,6 +36,16 @@ const normalizeVersionChangesRelease = (value: unknown): VersionChangesRelease |
 const resolveManualChunk = (id: string) => {
     const normalizedId = toPosixPath(id);
 
+    // This screen is shown before route data is available. Keep it independent
+    // from feature chunks so a loading state never downloads an editor, map, or
+    // module registry just to render a few CSS elements.
+    if (
+      normalizedId.endsWith('/components/common/BrandLoadingScreen.tsx') ||
+      normalizedId.endsWith('/utils/loadingBrand.ts')
+    ) {
+      return 'brand-loading';
+    }
+
     if (
       normalizedId.endsWith('/moduleRegistry.ts') ||
       normalizedId.endsWith('/types.ts') ||
