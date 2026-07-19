@@ -33,6 +33,7 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_MAP_STYLE_URL: ${{ secrets.VITE_MAP_STYLE_URL }}
         run: npm run build
 
       - uses: actions/upload-artifact@v4
