@@ -127,6 +127,51 @@ export const buildOnlineCatalogPublicUrl = async (client: SupabaseClient, token:
   return `${origin}${buildOnlineCatalogPath(token)}`;
 };
 
+const SHORT_CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const generateOnlineCatalogShortCode = (length = 7) => {
+  const values = new Uint32Array(length);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(values);
+  else values.forEach((_, index) => { values[index] = Math.floor(Math.random() * 0xffffffff); });
+  return Array.from(values).map((value) => SHORT_CODE_ALPHABET[value % SHORT_CODE_ALPHABET.length]).join('');
+};
+
+export const getOrCreateShortOnlineCatalogUrl = async (client: SupabaseClient, catalog: Pick<OnlineCatalogRow, 'id' | 'module_id' | 'public_token' | 'org_id' | 'title'>) => {
+  const catalogId = String(catalog?.id || '').trim();
+  const targetUrl = await buildOnlineCatalogPublicUrl(client, catalog.public_token);
+  if (!catalogId || !targetUrl) return targetUrl;
+  try {
+    const { data: existing, error: existingError } = await client
+      .from('short_links')
+      .select('code')
+      .eq('link_type', 'generic')
+      .contains('metadata', { kind: 'online_catalog', catalog_id: catalogId })
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    const origin = (() => { try { return new URL(targetUrl).origin; } catch { return typeof window !== 'undefined' ? window.location.origin : ''; } })();
+    if (existing?.code) return `${origin}/r/${encodeURIComponent(String(existing.code))}`;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const { data, error } = await client.from('short_links').insert({
+        org_id: catalog.org_id || undefined,
+        code: generateOnlineCatalogShortCode(),
+        link_type: 'generic',
+        target_url: targetUrl,
+        module_id: catalog.module_id,
+        title: catalog.title,
+        metadata: { kind: 'online_catalog', catalog_id: catalogId },
+      }).select('code').single();
+      if (!error && data?.code) return `${origin}/r/${encodeURIComponent(String(data.code))}`;
+      if (String(error?.code || '') === '23505') continue;
+      throw error;
+    }
+  } catch (error) {
+    console.warn('Could not create short online catalog link', error);
+  }
+  return targetUrl;
+};
+
 export const getPublicOnlineCatalog = async (client: SupabaseClient, token: string) => {
   const { data, error } = await client.rpc('get_public_online_catalog', { p_token: String(token || '').trim() });
   if (error) throw error;

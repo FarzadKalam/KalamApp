@@ -22,6 +22,10 @@ export interface ReportScheduleConfig {
   interval_value: number;
   interval_unit: ReportScheduleUnit;
   interval_at: string;
+  /** ISO timestamp in UTC for the first scheduled execution. */
+  first_run_at: string | null;
+  /** Persian module title captured with the schedule for delivery messages. */
+  module_label: string;
   recipient_user_ids: string[];
   bot_group_ids: string[];
   delivery_channels: ReportScheduleChannel[];
@@ -265,6 +269,8 @@ export const createDefaultReportScheduleConfig = (): ReportScheduleConfig => ({
   interval_value: 1,
   interval_unit: 'day',
   interval_at: '',
+  first_run_at: null,
+  module_label: '',
   recipient_user_ids: [],
   bot_group_ids: [],
   delivery_channels: ['note'],
@@ -314,6 +320,9 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
   const intervalValue = Number.parseInt(String(raw.interval_value || defaults.interval_value), 10);
   const rawIntervalAt = String(raw.interval_at || '').trim();
   const intervalAt = /^([01]\d|2[0-3]):[0-5]\d$/.test(rawIntervalAt) ? rawIntervalAt : defaults.interval_at;
+  const rawFirstRunAt = String(raw.first_run_at || '').trim();
+  const firstRunDate = rawFirstRunAt ? new Date(rawFirstRunAt) : null;
+  const firstRunAt = firstRunDate && !Number.isNaN(firstRunDate.getTime()) ? firstRunDate.toISOString() : defaults.first_run_at;
   const channels = Array.isArray(raw.delivery_channels)
     ? raw.delivery_channels
         .map((item) => String(item || '').trim().toLowerCase())
@@ -325,6 +334,8 @@ export const normalizeReportScheduleConfig = (value: unknown): ReportScheduleCon
     interval_value: Number.isFinite(intervalValue) ? Math.max(1, intervalValue) : defaults.interval_value,
     interval_unit: String(raw.interval_unit || '').trim().toLowerCase() === 'hour' ? 'hour' : 'day',
     interval_at: intervalAt,
+    first_run_at: firstRunAt,
+    module_label: String(raw.module_label || '').trim(),
     recipient_user_ids: Array.isArray(raw.recipient_user_ids)
       ? raw.recipient_user_ids.map((item) => String(item || '').trim()).filter(Boolean)
       : defaults.recipient_user_ids,

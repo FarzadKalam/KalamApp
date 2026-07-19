@@ -31,8 +31,9 @@ import { KALAM_POPUP_ROOT_Z_INDEX, resolveOverlayPopupContainer } from '../utils
 import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 import { extractTemplateTokens } from '../shared/recordRuntime';
 import { resolveWorkflowFieldValue } from '../utils/workflowRuntime';
-import { ONLINE_CATALOG_MODULE_IDS, buildOnlineCatalogUrl } from '../utils/onlineCatalogs';
+import { ONLINE_CATALOG_MODULE_IDS } from '../utils/onlineCatalogs';
 import { safeJalaliFormat } from '../utils/persianNumberFormatter';
+import { getOrCreateShortOnlineCatalogUrl } from '../utils/onlineCatalog';
 
 const MESSAGE_COMPOSER_MODAL_Z_INDEX = KALAM_POPUP_ROOT_Z_INDEX + 100;
 
@@ -361,7 +362,13 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const insertOnlineCatalogLink = async () => {
     const catalog = catalogOptions.find((item) => item.value === catalogId);
     if (!catalog?.public_token) { msg.warning('ابتدا کاتالوگ آنلاین را انتخاب کنید.'); return; }
-    const url = await buildOnlineCatalogUrl(catalog);
+    const url = await getOrCreateShortOnlineCatalogUrl(supabase, {
+      id: catalog.value,
+      module_id: catalogModuleId as any,
+      public_token: catalog.public_token,
+      org_id: catalog.org_id,
+      title: catalog.label,
+    });
     if (!url) { msg.error('ساخت لینک کاتالوگ ناموفق بود.'); return; }
     insertTokenIntoMessage(url);
     setSelectedVariable(undefined);

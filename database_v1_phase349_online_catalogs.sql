@@ -137,7 +137,7 @@ begin
     'company_name', coalesce(company_full_name, company_name, trade_name), 'trade_name', trade_name,
     'company_name_en', company_name_en, 'slogan', slogan, 'logo_url', logo_url, 'phone', phone,
     'mobile', mobile, 'email', email, 'website', website, 'address', address, 'instagram_id', instagram_id,
-    'whatsapp_number', whatsapp_number, 'telegram_id', telegram_id, 'palette_key', brand_palette_key
+    'whatsapp_number', whatsapp_number, 'telegram_id', telegram_id, 'palette_key', brand_palette_key, 'currency_label', currency_label
   )) into v_company from public.company_settings where org_id = v_catalog.org_id order by updated_at desc limit 1;
 
   select coalesce(array_agg(value::uuid), '{}'::uuid[]) into v_ids
@@ -183,7 +183,7 @@ begin
   return jsonb_build_object(
     'catalog', jsonb_build_object('title', v_catalog.title, 'description', v_catalog.public_description,
       'template_id', v_catalog.template_id, 'presentation', v_catalog.presentation, 'record_count', jsonb_array_length(v_items),
-      'last_refreshed_at', v_catalog.last_refreshed_at, 'module_id', v_catalog.module_id, 'display_field_keys', v_catalog.display_field_keys),
+      'last_refreshed_at', v_catalog.last_refreshed_at, 'module_id', v_catalog.module_id, 'display_field_keys', v_catalog.display_field_keys, 'tags', v_catalog.tags),
     'company', coalesce(v_company, '{}'::jsonb), 'items', v_items
   );
 end;

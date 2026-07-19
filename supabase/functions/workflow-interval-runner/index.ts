@@ -4148,7 +4148,7 @@ function getReportScheduledDueAt(report: ReportDefinitionRow, now: Date): Date |
       ? String(schedule.interval_unit || '').toLowerCase()
       : 'day',
     interval_at: reportTime ? String(schedule.interval_at).trim() : null,
-    interval_first_run_at: null,
+    interval_first_run_at: String(schedule.first_run_at || '').trim() || null,
     interval_minute: reportTime?.minute ?? null,
     interval_allowed_from_hour: null,
     interval_allowed_to_hour: null,
@@ -4165,13 +4165,77 @@ async function buildReportUrl(url: string, key: string, orgId: string, reportId:
   return `${baseUrl}${path}`;
 }
 
+async function buildShortScheduledReportUrl(url: string, key: string, orgId: string, reportId: string): Promise<string> {
+  const targetUrl = await buildReportUrl(url, key, orgId, reportId);
+  const baseUrl = await getOrgTenantBaseUrl(url, key, orgId);
+  try {
+    const existing = await dbGet(
+      url,
+      key,
+      `short_links?org_id=eq.${encodeURIComponent(orgId)}&link_type=eq.generic&metadata->>kind=eq.scheduled_report&metadata->>report_id=eq.${encodeURIComponent(reportId)}&is_active=eq.true&select=code&order=created_at.desc&limit=1`,
+    );
+    if (existing?.[0]?.code) return `${baseUrl}/r/${encodeURIComponent(String(existing[0].code))}`;
+    const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const bytes = crypto.getRandomValues(new Uint8Array(7));
+      const code = Array.from(bytes).map((value) => alphabet[value % alphabet.length]).join('');
+      try {
+        const inserted = await dbInsert(url, key, 'short_links', {
+          org_id: orgId,
+          code,
+          link_type: 'generic',
+          target_url: targetUrl,
+          metadata: { kind: 'scheduled_report', report_id: reportId },
+        });
+        return `${baseUrl}/r/${encodeURIComponent(String(inserted?.code || code))}`;
+      } catch (error: any) {
+        if (/23505|duplicate|unique/i.test(String(error?.message || error))) continue;
+        throw error;
+      }
+    }
+  } catch (error) {
+    console.warn('Could not create short scheduled report link', error);
+  }
+  return targetUrl;
+}
+
+const REPORT_MODULE_LABELS_FA: Record<string, string> = {
+  billboards: 'تبلیغات محیطی', products_services: 'کالاها و خدمات', price_lists: 'لیست قیمت‌ها',
+  product_bundles: 'پکیج‌ها', contacts: 'اشخاص', organizations: 'سازمان‌ها', invoices: 'فاکتورها',
+  tasks: 'وظایف', activities: 'فعالیت‌ها', reports: 'گزارش‌ها', customers: 'مشتریان', suppliers: 'تأمین‌کنندگان',
+  employees: 'کارکنان', leads: 'سرنخ‌ها', opportunities: 'فرصت‌ها', products: 'کالاها', services: 'خدمات',
+  sales_invoices: 'فاکتورهای فروش', purchase_invoices: 'فاکتورهای خرید', receipts: 'دریافت‌ها', payments: 'پرداخت‌ها',
+  projects: 'پروژه‌ها', contracts: 'قراردادها', warehouses: 'انبارها', inventory: 'موجودی کالا',
+};
+
+async function executeScheduledReport(url: string, key: string, report: ReportDefinitionRow): Promise<number> {
+  const config = report?.config && typeof report.config === 'object' ? report.config as Record<string, any> : {};
+  const moduleId = String(report.module_id || '').trim();
+  const table = getModuleTable(moduleId);
+  if (!moduleId || !table) return 0;
+  const rowLimit = Math.min(500, Math.max(1, Number(config.row_limit || 200)));
+  const rows = await dbGet(url, key, `${table}?org_id=eq.${encodeURIComponent(report.org_id)}&select=*&limit=${rowLimit}`).catch(() => []);
+  const conditionsAll = Array.isArray(config.conditions_all) ? config.conditions_all : [];
+  const conditionsAny = Array.isArray(config.conditions_any) ? config.conditions_any : [];
+  if (conditionsAll.length === 0 && conditionsAny.length === 0) return rows.length;
+  let count = 0;
+  for (const row of rows) {
+    if (await evaluateConditions(conditionsAll, conditionsAny, row, null, { url, key, orgId: report.org_id, moduleId })) count += 1;
+  }
+  return count;
+}
+
 async function buildScheduledReportMessage(url: string, key: string, report: ReportDefinitionRow, scheduledDueAt: Date): Promise<string> {
-  const reportUrl = await buildReportUrl(url, key, report.org_id, report.id);
-  const moduleLabel = String(report.module_id || '').trim() || 'نامشخص';
+  const reportUrl = await buildShortScheduledReportUrl(url, key, report.org_id, report.id);
+  const schedule = getReportScheduleConfig(report);
+  const moduleLabel = String(schedule.module_label || '').trim() || REPORT_MODULE_LABELS_FA[String(report.module_id || '').trim()] || 'ماژول انتخاب‌شده';
+  const executedCount = await executeScheduledReport(url, key, report);
+  const executedAt = new Date();
   return [
     `گزارش دوره‌ای «${String(report.name || 'گزارش').trim()}» آماده مشاهده است.`,
     `ماژول: ${moduleLabel}`,
-    `زمان اجرا: ${formatJalaliDateTime(scheduledDueAt.toISOString())}`,
+    `تعداد نتیجه: ${toPersianDigits(String(executedCount))}`,
+    `زمان اجرا: ${formatJalaliDateTime(executedAt.toISOString())}`,
     `لینک گزارش: ${reportUrl}`,
   ].join('\n');
 }

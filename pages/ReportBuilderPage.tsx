@@ -19,6 +19,7 @@ import { MODULES } from '../moduleRegistry';
 import { supabase } from '../supabaseClient';
 import { fetchCurrentUserRoleContext, resolveReportsAccessPermissions } from '../utils/permissions';
 import AdaptiveIdentityPicker from '../components/AdaptiveIdentityPicker';
+import PersianDatePicker from '../components/PersianDatePicker';
 import {
   clampReportRowLimit,
   createDefaultReportConfig,
@@ -84,6 +85,7 @@ const ReportBuilderPage: React.FC = () => {
   const [scheduleIntervalValue, setScheduleIntervalValue] = useState(1);
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<ReportScheduleUnit>('day');
   const [scheduleIntervalAt, setScheduleIntervalAt] = useState('');
+  const [scheduleFirstRunAt, setScheduleFirstRunAt] = useState<string | null>(null);
   const [scheduleRecipientIds, setScheduleRecipientIds] = useState<string[]>([]);
   const [scheduleChannels, setScheduleChannels] = useState<ReportScheduleChannel[]>(['note']);
   const [scheduleBotGroupIds, setScheduleBotGroupIds] = useState<string[]>([]);
@@ -269,6 +271,7 @@ const ReportBuilderPage: React.FC = () => {
       setScheduleIntervalValue(config.schedule.interval_value);
       setScheduleIntervalUnit(config.schedule.interval_unit);
       setScheduleIntervalAt(config.schedule.interval_at);
+      setScheduleFirstRunAt(config.schedule.first_run_at);
       setScheduleRecipientIds(config.schedule.recipient_user_ids);
       setScheduleChannels(config.schedule.delivery_channels);
       setScheduleBotGroupIds(config.schedule.bot_group_ids);
@@ -312,6 +315,13 @@ const ReportBuilderPage: React.FC = () => {
             message.error('ساعت ارسال دوره‌ای را مشخص کنید.');
             return false;
           }
+          if (scheduleFirstRunAt) {
+            const firstRun = new Date(scheduleFirstRunAt);
+            if (Number.isNaN(firstRun.getTime())) {
+              message.error('زمان اولین ارسال معتبر نیست.');
+              return false;
+            }
+          }
         }
       }
       if (targetStep === 1 && columns.length === 0) {
@@ -330,7 +340,7 @@ const ReportBuilderPage: React.FC = () => {
       }
       return true;
     },
-    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleIntervalAt, scheduleRecipientIds.length]
+    [columns.length, groupBys, mainModuleId, message, metricFields.length, metricType, name, scheduleBotGroupIds.length, scheduleChannels.length, scheduleEnabled, scheduleFirstRunAt, scheduleIntervalAt, scheduleRecipientIds.length]
   );
 
   const handleSave = async () => {
@@ -358,6 +368,8 @@ const ReportBuilderPage: React.FC = () => {
           interval_value: Math.max(1, Number(scheduleIntervalValue || 1)),
           interval_unit: scheduleIntervalUnit,
           interval_at: scheduleIntervalAt,
+          first_run_at: scheduleFirstRunAt,
+          module_label: MODULES[mainModuleId]?.titles?.fa || mainModuleId,
           recipient_user_ids: scheduleRecipientIds,
           bot_group_ids: scheduleBotGroupIds,
           delivery_channels: scheduleChannels,
@@ -517,6 +529,18 @@ const ReportBuilderPage: React.FC = () => {
                       onChange={(event) => setScheduleIntervalAt(event.target.value)}
                     />
                     {scheduleIntervalUnit === 'hour' && <div className="mt-1 text-xs text-gray-500">در ارسال ساعتی، دقیقه انتخاب‌شده در هر ساعت اعمال می‌شود.</div>}
+                  </div>
+                  <div>
+                    <div className="mb-2 font-bold">زمان اولین ارسال</div>
+                    <PersianDatePicker
+                      type="DATETIME"
+                      value={scheduleFirstRunAt}
+                      onChange={setScheduleFirstRunAt}
+                      className="w-full"
+                      placeholder="اختیاری؛ از زمان فعلی محاسبه می‌شود"
+                      modalContainer={popupContainer}
+                    />
+                    <div className="mt-1 text-xs text-gray-500">پس از این زمان، گزارش در هر نوبت ابتدا اجرا و سپس ارسال می‌شود.</div>
                   </div>
                   <div>
                     <div className="mb-2 font-bold">روش‌های ارسال دوره‌ای گزارش</div>
