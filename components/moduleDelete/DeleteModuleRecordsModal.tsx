@@ -13,6 +13,7 @@ import {
   fetchModuleDeleteReplacementOptions,
   normalizeDeleteModuleRecordsOptions,
 } from '../../utils/moduleDelete';
+import { fetchRecordLockMap } from '../../utils/recordLockRuntime';
 
 const { Text } = Typography;
 
@@ -135,6 +136,16 @@ const DeleteModuleRecordsModal: React.FC<DeleteModuleRecordsModalProps> = ({
     if (!preview || !canSubmit) return;
     setDeleting(true);
     try {
+      // قفل در لحظهٔ باز شدن مودال ممکن است توسط اتوماسیون تغییر کرده باشد.
+      // پیش از عملیات مخرب، وضعیت تازهٔ همان رکوردها را می‌گیریم تا UI هرگز
+      // «باز» نشان ندهد ولی پایگاه‌داده عملیات را با خطای قفل رد کند.
+      const latestLocks = await fetchRecordLockMap(moduleId, normalizedIds, {
+        forceRefresh: true,
+        throwOnError: true,
+      });
+      if (latestLocks.size > 0) {
+        throw new Error('حداقل یکی از رکوردهای انتخاب‌شده اکنون قفل است. ابتدا قفل آن را باز کنید و دوباره تلاش کنید.');
+      }
       const result = await deleteModuleRecordsWithOptions({
         moduleId,
         moduleConfig,

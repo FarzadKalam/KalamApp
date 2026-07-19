@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const SHELL_CACHE = `tazesystem-shell-${CACHE_VERSION}`;
 const PAGE_CACHE = `tazesystem-pages-${CACHE_VERSION}`;
 const ASSET_CACHE = `tazesystem-assets-${CACHE_VERSION}`;
@@ -135,10 +135,15 @@ const limitCacheEntries = async (cacheName, maxEntries) => {
 
 const putInCache = async (cacheName, request, response, maxEntries) => {
   if (!shouldCacheResponse(response)) return response;
-  const cache = await caches.open(cacheName);
-  await cache.put(request, response.clone());
-  if (maxEntries) {
-    await limitCacheEntries(cacheName, maxEntries);
+  try {
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+    if (maxEntries) {
+      await limitCacheEntries(cacheName, maxEntries);
+    }
+  } catch {
+    // Cache Storage is an optional acceleration layer. A broken or interrupted
+    // cache write must never reject the user request or create console noise.
   }
   return response;
 };
@@ -211,8 +216,6 @@ const handleDataRequest = async (request) => {
 };
 
 const handleVersionManifestRequest = async (request) => {
-  const cacheKey = new Request(new URL(VERSION_MANIFEST_PATH, self.location.origin).toString());
-
   try {
     const response = await fetch(request, { cache: 'no-store' });
     const headers = new Headers(response.headers);
@@ -225,14 +228,8 @@ const handleVersionManifestRequest = async (request) => {
       headers,
     });
 
-    if (response.ok) {
-      void putInCache(DATA_CACHE, cacheKey, normalizedResponse.clone(), MAX_DATA_ENTRIES);
-    }
-
     return normalizedResponse;
   } catch {
-    const cached = await caches.match(cacheKey, { ignoreSearch: true });
-    if (cached) return cached;
     return buildUnavailableJsonResponse('version_manifest_unavailable');
   }
 };

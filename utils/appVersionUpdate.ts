@@ -22,6 +22,10 @@ export const APP_VERSION_MANIFEST_URL = '/version.json';
 const REFRESH_INTENT_KEY = 'tazesystem:app-update-refresh-intent:v1';
 const REFRESH_ATTEMPT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_REFRESH_ATTEMPTS_PER_VERSION = 3;
+const MANIFEST_MEMORY_TTL_MS = 60_000;
+
+let manifestRequestPromise: Promise<AppVersionManifest> | null = null;
+let latestManifestSnapshot: { value: AppVersionManifest; fetchedAt: number } | null = null;
 
 const normalizeVersion = (value?: string | null) => String(value || '').trim();
 
@@ -168,26 +172,40 @@ export const validateAppVersionManifest = (value: unknown): AppVersionManifest |
   };
 };
 
-export const fetchAppVersionManifest = async (signal?: AbortSignal) => {
+export const fetchAppVersionManifest = async (_signal?: AbortSignal) => {
+  const now = Date.now();
+  if (latestManifestSnapshot && now - latestManifestSnapshot.fetchedAt < MANIFEST_MEMORY_TTL_MS) {
+    return latestManifestSnapshot.value;
+  }
+  if (manifestRequestPromise) return manifestRequestPromise;
+
   const url = `${APP_VERSION_MANIFEST_URL}?t=${Date.now()}`;
-  const response = await fetch(url, {
-    signal,
-    cache: 'no-store',
-    headers: {
-      'Cache-Control': 'no-cache',
-      Pragma: 'no-cache',
-    },
-  });
+  manifestRequestPromise = (async () => {
+    const response = await fetch(url, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+    });
 
-  if (!response.ok) {
-    throw new Error(`Version manifest request failed with ${response.status}`);
-  }
+    if (!response.ok) {
+      throw new Error(`Version manifest request failed with ${response.status}`);
+    }
 
-  const manifest = validateAppVersionManifest(await response.json());
-  if (!manifest) {
-    throw new Error('Version manifest is invalid');
+    const manifest = validateAppVersionManifest(await response.json());
+    if (!manifest) {
+      throw new Error('Version manifest is invalid');
+    }
+    latestManifestSnapshot = { value: manifest, fetchedAt: Date.now() };
+    return manifest;
+  })();
+
+  try {
+    return await manifestRequestPromise;
+  } finally {
+    manifestRequestPromise = null;
   }
-  return manifest;
 };
 
 const updateServiceWorkers = async () => {

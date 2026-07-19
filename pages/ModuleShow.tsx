@@ -98,6 +98,8 @@ import { enrichAttendancePresenceRows } from '../utils/attendancePresence';
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
 import type { SmartFormSaveMeta } from '../components/SmartForm';
 import { normalizeNoteScope } from '../utils/noteScope';
+import { buildModuleRecordProjection } from '../utils/moduleRecordProjection';
+import { runSelectWithCompatibleColumns } from '../utils/selectCompat';
 import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { sendSmsViaGateway } from '../utils/smsGateway';
@@ -1486,11 +1488,18 @@ const ModuleShow: React.FC = () => {
     setLoading((prev) => (hasRecordDataRef.current ? prev : true));
     const run = (async () => {
       try {
-        const { data: record, error } = await supabase
-          .from(moduleTable)
-          .select('*')
-          .eq('id', id)
-          .maybeSingle();
+        const recordProjection = buildModuleRecordProjection(moduleConfig);
+        const recordResult = await runSelectWithCompatibleColumns<any | null>({
+          cacheKey: `module-show:${moduleId}`,
+          columns: recordProjection.initialColumns,
+          execute: (selectExpr) => supabase
+            .from(moduleTable)
+            .select(selectExpr)
+            .eq('id', id)
+            .maybeSingle(),
+        });
+        const record = recordResult.data;
+        const error = recordResult.error;
 
         if (error && String(error.code) !== 'PGRST116') throw error;
         if (activeRecordRequestRef.current !== requestId) return;
@@ -1594,6 +1603,30 @@ const ModuleShow: React.FC = () => {
         skipNextOptionsFetchRef.current = true;
         setData(nextRecord);
         void fetchOptions(nextRecord, requestId);
+        if (recordProjection.deferredProcessDraftColumns.length > 0) {
+          void runSelectWithCompatibleColumns<any | null>({
+            cacheKey: `module-show-process-drafts:${moduleId}`,
+            columns: ['id', ...recordProjection.deferredProcessDraftColumns],
+            execute: (selectExpr) => supabase
+              .from(moduleTable)
+              .select(selectExpr)
+              .eq('id', id)
+              .maybeSingle(),
+          }).then((draftResult) => {
+            if (activeRecordRequestRef.current !== requestId || draftResult.error || !draftResult.data) return;
+            const draftPatch = recordProjection.deferredProcessDraftColumns.reduce<Record<string, any>>((patch, key) => {
+              if (Object.prototype.hasOwnProperty.call(draftResult.data, key)) patch[key] = draftResult.data[key];
+              return patch;
+            }, {});
+            if (Object.keys(draftPatch).length === 0) return;
+            const mergedRecord = { ...nextRecord, ...draftPatch };
+            skipNextOptionsFetchRef.current = true;
+            setData((previous: any) => ({ ...(previous || {}), ...draftPatch }));
+            void fetchOptions(mergedRecord, requestId);
+          }).catch((draftError) => {
+            console.warn('Could not load process draft snapshot for ModuleShow', draftError);
+          });
+        }
         void (async () => {
           const { data: tagsData } = await supabase
             .from('record_tags')
@@ -2182,6 +2215,9 @@ const ModuleShow: React.FC = () => {
           .forEach((targetModuleId) => {
             const fieldKey = createProcessLinkedFieldKey(targetModuleId, 'id');
             const exactId = linkedRecordMap[targetModuleId];
+            // مقصدی که هنوز به رکوردی وصل نشده است، نباید برای پرکردن یک
+            // dropdown پنهان صدها رکورد را در زمان بازشدن صفحه دریافت کند.
+            if (!exactId) return;
             relationRequests.push((async () => {
               const syntheticField = {
                 key: fieldKey,
@@ -2189,8 +2225,8 @@ const ModuleShow: React.FC = () => {
                 relationConfig: { targetModule: targetModuleId },
               } as any;
               const options = await fetchRelationOptionsForField(supabase, syntheticField, {
-                exactId: exactId || null,
-                limit: exactId ? 1 : 200,
+                exactId,
+                limit: 1,
               });
               return {
                 keys: [fieldKey],

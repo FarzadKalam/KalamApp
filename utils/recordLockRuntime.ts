@@ -86,17 +86,18 @@ export const canUnlockRecord = (
 
 export const fetchRecordLockMap = async (
   moduleId: string,
-  recordIds: Array<string | null | undefined>
+  recordIds: Array<string | null | undefined>,
+  options?: { forceRefresh?: boolean; throwOnError?: boolean },
 ): Promise<Map<string, RecordLockState>> => {
   const ids = Array.from(new Set(recordIds.map((id) => String(id || '').trim()).filter(Boolean)));
   const map = new Map<string, RecordLockState>();
   if (!moduleId || ids.length === 0) return map;
   const cacheKey = `${String(moduleId || '').trim()}:${ids.slice().sort().join(',')}`;
   const cached = recordLockMapCache.get(cacheKey);
-  if (cached && Date.now() - cached.savedAt < RECORD_LOCK_MAP_TTL_MS) {
+  if (!options?.forceRefresh && cached && Date.now() - cached.savedAt < RECORD_LOCK_MAP_TTL_MS) {
     return new Map(cached.rows);
   }
-  const inFlight = recordLockMapInFlight.get(cacheKey);
+  const inFlight = options?.forceRefresh ? null : recordLockMapInFlight.get(cacheKey);
   if (inFlight) return inFlight;
 
   const promise = (async () => {
@@ -106,6 +107,7 @@ export const fetchRecordLockMap = async (
     });
     if (error) {
       console.warn('Could not load record lock map', error);
+      if (options?.throwOnError) throw error;
       return map;
     }
 
@@ -132,9 +134,10 @@ export const fetchRecordLockMap = async (
 
 export const fetchRecordLockState = async (
   moduleId: string,
-  recordId?: string | null
+  recordId?: string | null,
+  options?: { forceRefresh?: boolean; throwOnError?: boolean },
 ): Promise<RecordLockState> => {
-  const map = await fetchRecordLockMap(moduleId, [recordId]);
+  const map = await fetchRecordLockMap(moduleId, [recordId], options);
   return map.get(String(recordId || '').trim()) || EMPTY_RECORD_LOCK_STATE;
 };
 

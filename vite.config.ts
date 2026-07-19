@@ -14,6 +14,8 @@ interface VersionChangesRelease {
   changes: string[];
 }
 
+const VERSION_MANIFEST_RELEASE_LIMIT = 30;
+
 const normalizeVersionChangesRelease = (value: unknown): VersionChangesRelease | null => {
   if (!value || typeof value !== 'object') return null;
   const candidate = value as Partial<VersionChangesRelease>;
@@ -132,7 +134,7 @@ const generateVersionJson = () => ({
       version: pkg.version,
       releasedAt,
       changes: currentRelease.changes,
-      releases: releases.map((release) => ({
+      releases: releases.slice(0, VERSION_MANIFEST_RELEASE_LIMIT).map((release) => ({
         ...release,
         releasedAt: release.version === pkg.version ? releasedAt : release.releasedAt,
       })),
