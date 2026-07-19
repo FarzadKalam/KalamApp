@@ -434,7 +434,7 @@ export const computeOperationalFinancialTotals = (rows: Array<Pick<OperationalFi
   };
 };
 
-export const fetchOperationalFinancialOverview = async ({
+const fetchSingleOperationalFinancialOverview = async ({
   entityType,
   entityId,
   supabase = sharedSupabase,
@@ -853,6 +853,90 @@ export const fetchOperationalFinancialOverview = async ({
   return {
     rows: finalizedRows,
     recentItems: [...finalizedRows].sort((a, b) => {
+      const aDate = new Date(a.date || a.createdAt || 0).getTime();
+      const bDate = new Date(b.date || b.createdAt || 0).getTime();
+      return bDate - aDate;
+    }).slice(0, 6),
+    summary: totals,
+    totals,
+    printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
+  };
+};
+
+type LinkedFinancialEntity = {
+  entityType: OperationalFinancialEntityType;
+  entityId: string;
+};
+
+const resolveLinkedFinancialEntities = async (
+  supabase: typeof sharedSupabase,
+  entityType: OperationalFinancialEntityType,
+  entityId: string,
+): Promise<LinkedFinancialEntity[]> => {
+  const table = entityType === 'customer' ? 'customers' : entityType === 'supplier' ? 'suppliers' : 'employees';
+  const fields = entityType === 'customer'
+    ? 'is_supplier, is_employee, linked_supplier_id, linked_employee_id'
+    : entityType === 'supplier'
+      ? 'is_customer, is_employee, linked_customer_id, linked_employee_id'
+      : 'is_customer, is_supplier, linked_customer_id, linked_supplier_id';
+  const { data, error } = await supabase
+    .from(table)
+    .select(fields)
+    .eq('id', entityId)
+    .maybeSingle();
+
+  // تا پیش از اجرای migration جدید، نمایش مالی نقش اصلی باید بدون اختلال ادامه پیدا کند.
+  if (error || !data) return [];
+
+  const linkedEntities: LinkedFinancialEntity[] = [];
+  const add = (type: OperationalFinancialEntityType, id: any, enabled: any) => {
+    const normalizedId = normalizeOperationalText(id);
+    if (enabled === true && normalizedId) linkedEntities.push({ entityType: type, entityId: normalizedId });
+  };
+
+  if (entityType !== 'customer') add('customer', data.linked_customer_id, data.is_customer);
+  if (entityType !== 'supplier') add('supplier', data.linked_supplier_id, data.is_supplier);
+  if (entityType !== 'employee') add('employee', data.linked_employee_id, data.is_employee);
+  return linkedEntities;
+};
+
+/**
+ * گردش عملیاتی رکورد و نقش‌های مالی متصل آن را یکجا برمی‌گرداند.
+ * هر منبع با کلید پایدار خود فقط یک‌بار وارد محاسبه می‌شود تا اتصال دوطرفه باعث دوباره‌شماری نشود.
+ */
+export const fetchOperationalFinancialOverview = async ({
+  entityType,
+  entityId,
+  supabase = sharedSupabase,
+}: OverviewArgs): Promise<OperationalFinancialOverviewResult> => {
+  const normalizedEntityId = normalizeOperationalText(entityId);
+  if (!normalizedEntityId) return fetchSingleOperationalFinancialOverview({ entityType, entityId, supabase });
+
+  const linkedEntities = await resolveLinkedFinancialEntities(supabase, entityType, normalizedEntityId);
+  const overviews = await Promise.all([
+    fetchSingleOperationalFinancialOverview({ entityType, entityId: normalizedEntityId, supabase }),
+    ...linkedEntities.map((linked) => fetchSingleOperationalFinancialOverview({ ...linked, supabase })),
+  ]);
+
+  const distinctRows = Array.from(
+    new Map(overviews.flatMap((overview) => overview.rows).map((row) => [row.key, row])).values(),
+  ).sort((a, b) => {
+    const aDate = new Date(a.date || a.createdAt || 0).getTime();
+    const bDate = new Date(b.date || b.createdAt || 0).getTime();
+    if (aDate === bDate) return String(a.key).localeCompare(String(b.key));
+    return aDate - bDate;
+  });
+
+  let runningBalance = 0;
+  const rows = distinctRows.map((row) => {
+    runningBalance += Number(row.debit || 0) - Number(row.credit || 0);
+    return buildBalanceRow(row, runningBalance);
+  });
+  const totals = computeOperationalFinancialTotals(rows);
+
+  return {
+    rows,
+    recentItems: [...rows].sort((a, b) => {
       const aDate = new Date(a.date || a.createdAt || 0).getTime();
       const bDate = new Date(b.date || b.createdAt || 0).getTime();
       return bDate - aDate;

@@ -27,6 +27,11 @@ import { fetchSessionBootstrap } from '../../utils/sessionCache';
 import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
 import { persistProcessDraftField } from '../../utils/processDraftPersistence';
 import {
+  buildMaterializedProcessIdentityIndex,
+  collectProcessInstanceIdentityKeys,
+  isDraftProcessInstanceMaterialized,
+} from '../../utils/processInstanceIdentity';
+import {
   assignProcessTemplateIdentityAliases,
   assignProcessTemplateModuleAliases,
   resolveProcessTemplateTokenValue,
@@ -1168,22 +1173,7 @@ const mergeRuntimeDraftStageForAutoAssign = (
 };
 
 const collectProcessGroupIdentityKeys = (value: any) => {
-  const metadata = parseObject(value?.metadata);
-  const recurrence = parseObject(value?.recurrence_info || metadata?.recurrence_info);
-  const processGroup = parseObject(value?.process_group || metadata?.process_group || recurrence?.process_group);
-  return [
-    value?.process_group_id,
-    metadata?.process_group_id,
-    recurrence?.process_group_id,
-    processGroup?.id,
-    value?.process_run_id,
-    metadata?.process_run_id,
-    recurrence?.process_run_id,
-    value?.source_template_id,
-    metadata?.source_template_id,
-    recurrence?.source_template_id,
-    processGroup?.template_id,
-  ].map(normalizeText).filter(Boolean);
+  return collectProcessInstanceIdentityKeys(value);
 };
 
 const mapRuntimeTaskToStage = (task: any, index = 0) => {
@@ -1270,17 +1260,15 @@ const buildDraftProcessCards = (
   templateContext: Record<string, any>,
   fallbackModuleId?: string | null,
 ): ProcessV2CardData[] => {
-  const runtimeGroupIds = new Set(
-    [...(runtimeRuns || []), ...(runtimeTasks || [])]
-      .flatMap((item: any) => collectProcessGroupIdentityKeys(item))
-      .filter(Boolean),
-  );
+  const materializedProcessIndex = buildMaterializedProcessIdentityIndex([
+    ...(runtimeRuns || []),
+    ...(runtimeTasks || []),
+  ]);
   const groups = new Map<string, { id: string; label: string; templateId: string; templateName: string; stages: any[]; firstSort: number }>();
 
   (Array.isArray(draftStages) ? draftStages : []).forEach((stage: any, index: number) => {
     const meta = resolveDraftGroupMeta(stage);
-    const stageGroupKeys = new Set([meta.groupId, meta.templateId, ...collectProcessGroupIdentityKeys(stage)].filter(Boolean));
-    if (Array.from(stageGroupKeys).some((key) => runtimeGroupIds.has(key))) return;
+    if (isDraftProcessInstanceMaterialized(stage, materializedProcessIndex)) return;
     const sortOrder = Number(stage?.sort_order || ((index + 1) * 10));
     if (!groups.has(meta.groupId)) {
       groups.set(meta.groupId, {
