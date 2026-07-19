@@ -868,6 +868,15 @@ type LinkedFinancialEntity = {
   entityId: string;
 };
 
+type LinkedFinancialEntityRow = {
+  is_customer?: boolean | null;
+  is_supplier?: boolean | null;
+  is_employee?: boolean | null;
+  linked_customer_id?: string | null;
+  linked_supplier_id?: string | null;
+  linked_employee_id?: string | null;
+};
+
 const resolveLinkedFinancialEntities = async (
   supabase: typeof sharedSupabase,
   entityType: OperationalFinancialEntityType,
@@ -887,6 +896,7 @@ const resolveLinkedFinancialEntities = async (
 
   // تا پیش از اجرای migration جدید، نمایش مالی نقش اصلی باید بدون اختلال ادامه پیدا کند.
   if (error || !data) return [];
+  const linkedRow = data as unknown as LinkedFinancialEntityRow;
 
   const linkedEntities: LinkedFinancialEntity[] = [];
   const add = (type: OperationalFinancialEntityType, id: any, enabled: any) => {
@@ -894,9 +904,9 @@ const resolveLinkedFinancialEntities = async (
     if (enabled === true && normalizedId) linkedEntities.push({ entityType: type, entityId: normalizedId });
   };
 
-  if (entityType !== 'customer') add('customer', data.linked_customer_id, data.is_customer);
-  if (entityType !== 'supplier') add('supplier', data.linked_supplier_id, data.is_supplier);
-  if (entityType !== 'employee') add('employee', data.linked_employee_id, data.is_employee);
+  if (entityType !== 'customer') add('customer', linkedRow.linked_customer_id, linkedRow.is_customer);
+  if (entityType !== 'supplier') add('supplier', linkedRow.linked_supplier_id, linkedRow.is_supplier);
+  if (entityType !== 'employee') add('employee', linkedRow.linked_employee_id, linkedRow.is_employee);
   return linkedEntities;
 };
 

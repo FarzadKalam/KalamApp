@@ -10768,7 +10768,7 @@ const handleEmbedDocumentChunks = async (supabaseUrl: string, serviceRoleKey: st
     return json(403, { success: false, message: 'دسترسی بازسازی embedding اسناد را ندارید.' });
   }
   const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'embedding');
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
   const documentId = normalizeId(body?.documentId || body?.document_id);
   if (!isUuid(documentId)) return json(400, { success: false, message: 'شناسه سند معتبر نیست.' });
   const chunks = await restSelect(supabaseUrl, serviceRoleKey, 'document_chunks', {
@@ -10858,7 +10858,7 @@ const handleRebuildInstructionAiContext = async (supabaseUrl: string, serviceRol
   if (!isUuid(instructionId)) return json(400, { success: false, message: 'شناسه دستورالعمل معتبر نیست.' });
 
   const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'embedding');
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
 
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'instructions', {
     org_id: `eq.${authContext.orgId}`,
@@ -11023,7 +11023,7 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
   if (!isUuid(jobDescriptionId)) return json(400, { success: false, message: 'شناسه شرح شغل معتبر نیست.' });
 
   const settings = await ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext);
-  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'embedding');
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
 
   const rows = await restSelect(supabaseUrl, serviceRoleKey, 'job_descriptions', {
     org_id: `eq.${authContext.orgId}`,

@@ -111,6 +111,7 @@ const loadShareTargetPage = () => import("./pages/ShareTargetPage");
 const loadFileShortLinkRedirectPage = () => import("./pages/FileShortLinkRedirectPage");
 const loadInvoicePublicPage = () => import("./pages/InvoicePublicPage");
 const loadDeliveryPublicPage = () => import("./pages/DeliveryPublicPage");
+const loadOnlineCatalogPublicPage = () => import("./pages/OnlineCatalogPublicPage");
 const loadPaymentCallbackPage = () => import("./pages/PaymentCallbackPage");
 const loadGlobalSearchPage = () => import("./pages/GlobalSearchPage");
 const loadOrgKnowledgePage = () => import("./pages/OrgKnowledgePage");
@@ -163,6 +164,7 @@ const ShareTargetPage = lazy(loadShareTargetPage);
 const FileShortLinkRedirectPage = lazy(loadFileShortLinkRedirectPage);
 const InvoicePublicPage = lazy(loadInvoicePublicPage);
 const DeliveryPublicPage = lazy(loadDeliveryPublicPage);
+const OnlineCatalogPublicPage = lazy(loadOnlineCatalogPublicPage);
 const PaymentCallbackPage = lazy(loadPaymentCallbackPage);
 const GlobalSearchPage = lazy(loadGlobalSearchPage);
 const OrgKnowledgePage = lazy(loadOrgKnowledgePage);
@@ -333,6 +335,7 @@ const MarketingSiteHostApp: React.FC = () => {
             <Routes>
               <Route path="/i/:code" element={<InvoicePublicPage />} />
               <Route path="/d/:code" element={<DeliveryPublicPage />} />
+              <Route path="/c/:token" element={<OnlineCatalogPublicPage />} />
               <Route path="/payment/callback" element={<PaymentCallbackPage />} />
               <Route path="/*" element={<PublicSite />} />
             </Routes>
@@ -725,6 +728,7 @@ function App() {
           <Route path="/inquiry/*" element={<LazyRouteBoundary><InquiryForm /></LazyRouteBoundary>} />
           <Route path="/i/:code" element={<LazyRouteBoundary><InvoicePublicPage /></LazyRouteBoundary>} />
           <Route path="/d/:code" element={<LazyRouteBoundary><DeliveryPublicPage /></LazyRouteBoundary>} />
+          <Route path="/c/:token" element={<LazyRouteBoundary><OnlineCatalogPublicPage /></LazyRouteBoundary>} />
           <Route path="/payment/callback" element={<LazyRouteBoundary><PaymentCallbackPage /></LazyRouteBoundary>} />
           <Route path="/f/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />
           <Route path="/r/:code" element={<LazyRouteBoundary><FileShortLinkRedirectPage /></LazyRouteBoundary>} />

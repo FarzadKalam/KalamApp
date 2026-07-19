@@ -5,6 +5,7 @@ import {
   ensureProcessRunForDraftStageGroup,
   ensureProcessRunContextsForStageGroups,
   mapProcessTemplateStagesToDraft,
+  removeDraftStagesForProcessGroups,
   resolveProcessRunStageId,
   syncProcessRunStageFromTask,
 } from './processRunRuntime';
@@ -74,6 +75,18 @@ describe('process run draft helpers', () => {
     expect(first[0].process_lane_key).toBe('group-a__lane_1');
     expect(second[0].process_lane_key).toBe('group-b__lane_1');
     expect(new Set([...first, ...second].map((stage) => stage.process_node_key)).size).toBe(4);
+  });
+
+  it('removes only the requested draft group when multiple groups share a template', () => {
+    const stages = [
+      { id: 'draft-a-1', process_group_id: 'group-a', source_template_id: 'template-1', template_stage_id: 'stage-1' },
+      { id: 'draft-a-2', process_group_id: 'group-a', source_template_id: 'template-1', template_stage_id: 'stage-2' },
+      { id: 'draft-b-1', process_group_id: 'group-b', source_template_id: 'template-1', template_stage_id: 'stage-1' },
+      { id: 'draft-b-2', process_group_id: 'group-b', source_template_id: 'template-1', template_stage_id: 'stage-2' },
+    ];
+
+    expect(removeDraftStagesForProcessGroups(stages, ['group-b']).map((stage) => stage.id))
+      .toEqual(['draft-a-1', 'draft-a-2']);
   });
 
   it('keeps field-based assignee references when applying template stages to a draft', () => {

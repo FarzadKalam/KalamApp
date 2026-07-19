@@ -3,6 +3,7 @@ import {
   buildMaterializedProcessIdentityIndex,
   collectProcessInstanceIdentityKeys,
   isDraftProcessInstanceMaterialized,
+  isProcessInstanceMutationScopeCompatible,
 } from './processInstanceIdentity';
 
 describe('process instance identity', () => {
@@ -61,5 +62,38 @@ describe('process instance identity', () => {
     expect(isDraftProcessInstanceMaterialized({
       source_template_id: 'template-2',
     }, runtimeIndex)).toBe(false);
+  });
+
+  it('never allows a mutation to cross groups that use the same template stage', () => {
+    const target = {
+      id: 'draft-b-1',
+      process_group_id: 'group-b',
+      source_template_id: 'template-1',
+      template_stage_id: 'template-stage-1',
+    };
+
+    expect(isProcessInstanceMutationScopeCompatible({
+      id: 'draft-a-1',
+      process_group_id: 'group-a',
+      source_template_id: 'template-1',
+      template_stage_id: 'template-stage-1',
+    }, target)).toBe(false);
+    expect(isProcessInstanceMutationScopeCompatible({
+      id: 'draft-b-1',
+      process_group_id: 'group-b',
+      source_template_id: 'template-1',
+      template_stage_id: 'template-stage-1',
+    }, target)).toBe(true);
+  });
+
+  it('fails closed when only one mutation side has a modern group identity', () => {
+    expect(isProcessInstanceMutationScopeCompatible({
+      id: 'legacy-stage',
+      source_template_id: 'template-1',
+    }, {
+      id: 'modern-stage',
+      process_group_id: 'group-b',
+      source_template_id: 'template-1',
+    })).toBe(false);
   });
 });

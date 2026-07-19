@@ -31,6 +31,8 @@ import { KALAM_POPUP_ROOT_Z_INDEX, resolveOverlayPopupContainer } from '../utils
 import { resolveTemplateOptionLabelMaps, type TemplateOptionLabelMaps } from '../utils/messageTemplateRenderer';
 import { extractTemplateTokens } from '../shared/recordRuntime';
 import { resolveWorkflowFieldValue } from '../utils/workflowRuntime';
+import { ONLINE_CATALOG_MODULE_IDS, buildOnlineCatalogUrl } from '../utils/onlineCatalogs';
+import { safeJalaliFormat } from '../utils/persianNumberFormatter';
 
 const MESSAGE_COMPOSER_MODAL_Z_INDEX = KALAM_POPUP_ROOT_Z_INDEX + 100;
 
@@ -76,6 +78,10 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
   const messageInputRef = useRef<any>(null);
   const [messageText, setMessageText] = useState('');
   const [selectedVariable, setSelectedVariable] = useState<string | undefined>(undefined);
+  const [catalogModuleId, setCatalogModuleId] = useState<string | undefined>(undefined);
+  const [catalogId, setCatalogId] = useState<string | undefined>(undefined);
+  const [catalogOptionsLoading, setCatalogOptionsLoading] = useState(false);
+  const [catalogOptions, setCatalogOptions] = useState<Array<{ value: string; label: string; public_token: string; org_id: string }>>([]);
   const [selectedPhone, setSelectedPhone] = useState('');
   const [selectedPhones, setSelectedPhones] = useState<string[]>([]);
   const [selectedBotChannel, setSelectedBotChannel] = useState<NotificationBotChannel | undefined>(undefined);
@@ -179,6 +185,9 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
         value: token,
         searchText: `${label} ${key} ${token}`.toLowerCase(),
       });
+    });
+    optionsByToken.set('__online_catalog__', {
+      label: 'کاتالوگ آنلاین', value: '__online_catalog__', searchText: 'کاتالوگ آنلاین لینک عمومی catalog',
     });
     return Array.from(optionsByToken.values());
   }, [effectiveRecord, moduleId, templateVariableOptions]);
@@ -302,6 +311,9 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
     if (!open) return;
     setMessageText('');
     setSelectedVariable(undefined);
+    setCatalogModuleId(undefined);
+    setCatalogId(undefined);
+    setCatalogOptions([]);
     setSelectedPhones(() => {
       if (!isBulkSmsMode) return [];
       return phoneOptions.map((item) => String(item.value || '')).filter(Boolean);
@@ -319,6 +331,42 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
       return availableBotOptions[0]?.value as NotificationBotChannel | undefined;
     });
   }, [open, phoneOptions, availableBotOptions, isBulkSmsMode]);
+
+  useEffect(() => {
+    if (!open || !catalogModuleId) {
+      setCatalogOptions([]);
+      setCatalogId(undefined);
+      return;
+    }
+    let cancelled = false;
+    setCatalogOptionsLoading(true);
+    supabase.from('online_catalogs')
+      .select('id, title, public_token, org_id, record_count, last_refreshed_at, is_active')
+      .eq('module_id', catalogModuleId)
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(200)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) setCatalogOptions([]);
+        else setCatalogOptions((data || []).map((item: any) => ({
+          value: String(item.id), public_token: String(item.public_token || ''), org_id: String(item.org_id || ''),
+          label: `${String(item.title || 'بدون عنوان')} (${Number(item.record_count || 0).toLocaleString('fa-IR')} رکورد · ${safeJalaliFormat(item.last_refreshed_at, 'YYYY/MM/DD HH:mm')})`,
+        })));
+        setCatalogOptionsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [catalogModuleId, open]);
+
+  const insertOnlineCatalogLink = async () => {
+    const catalog = catalogOptions.find((item) => item.value === catalogId);
+    if (!catalog?.public_token) { msg.warning('ابتدا کاتالوگ آنلاین را انتخاب کنید.'); return; }
+    const url = await buildOnlineCatalogUrl(catalog);
+    if (!url) { msg.error('ساخت لینک کاتالوگ ناموفق بود.'); return; }
+    insertTokenIntoMessage(url);
+    setSelectedVariable(undefined);
+    setCatalogId(undefined);
+  };
 
   const loadReadyTexts = async () => {
     if (!readyTextPermissions.canView) {
@@ -718,7 +766,13 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
                 {...commonSelectProps}
                 allowClear
                 value={selectedVariable}
-                onChange={(value) => setSelectedVariable(value)}
+                onChange={(value) => {
+                  setSelectedVariable(value);
+                  if (value !== '__online_catalog__') {
+                    setCatalogModuleId(undefined);
+                    setCatalogId(undefined);
+                  }
+                }}
                 options={variableOptions}
                 pickerTitle="انتخاب متغیر"
                 placeholder="انتخاب متغیر ماژول"
@@ -727,13 +781,36 @@ const MessageComposerModal: React.FC<MessageComposerModalProps> = ({
               <Button
                 onClick={() => {
                   if (!selectedVariable) return;
+                  if (selectedVariable === '__online_catalog__') return;
                   insertTokenIntoMessage(selectedVariable);
                 }}
-                disabled={!selectedVariable}
+                disabled={!selectedVariable || selectedVariable === '__online_catalog__'}
               >
                 درج متغیر
               </Button>
             </div>
+
+            {selectedVariable === '__online_catalog__' ? (
+              <div className="mb-3 grid grid-cols-1 gap-2 rounded-2xl border border-[rgba(var(--brand-200-rgb),.7)] bg-[rgba(var(--brand-50-rgb),.55)] p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_120px]">
+                <AdaptiveSelectField
+                  {...commonSelectProps}
+                  value={catalogModuleId}
+                  onChange={(value) => setCatalogModuleId(String(value || '') || undefined)}
+                  options={ONLINE_CATALOG_MODULE_IDS.map((id) => ({ value: id, label: MODULES[id]?.titles?.fa || id }))}
+                  placeholder="ماژول کاتالوگ"
+                />
+                <AdaptiveSelectField
+                  {...commonSelectProps}
+                  value={catalogId}
+                  onChange={(value) => setCatalogId(String(value || '') || undefined)}
+                  options={catalogOptions}
+                  loading={catalogOptionsLoading}
+                  disabled={!catalogModuleId}
+                  placeholder={catalogModuleId ? 'انتخاب کاتالوگ ثبت‌شده' : 'ابتدا ماژول را انتخاب کنید'}
+                />
+                <Button type="primary" disabled={!catalogId} onClick={() => { void insertOnlineCatalogLink(); }}>درج لینک</Button>
+              </div>
+            ) : null}
 
             {!isTemplateMode ? (
               <Input.TextArea

@@ -28,8 +28,10 @@ import { loadProcessTemplateStages } from '../../utils/processTemplateStages';
 import { persistProcessDraftField } from '../../utils/processDraftPersistence';
 import {
   buildMaterializedProcessIdentityIndex,
+  collectExplicitProcessGroupIds,
   collectProcessInstanceIdentityKeys,
   isDraftProcessInstanceMaterialized,
+  isProcessInstanceMutationScopeCompatible,
 } from '../../utils/processInstanceIdentity';
 import {
   assignProcessTemplateIdentityAliases,
@@ -798,6 +800,8 @@ const buildRunCard = (
     { ...templateContext },
     { processName: processTitle },
   );
+  const runMetadata = parseObject(run?.metadata);
+  const runGroupId = collectExplicitProcessGroupIds(run)[0] || '';
   return {
     mode: 'run',
     id,
@@ -811,6 +815,8 @@ const buildRunCard = (
     lanes: buildLanesFromStages(
       stages.map((stage) => ({
         ...stage,
+        process_group_id: stage?.process_group_id || parseObject(stage?.metadata)?.process_group_id || runGroupId || null,
+        source_template_id: stage?.source_template_id || run?.template_id || runMetadata?.source_template_id || null,
         process_started_at: stage?.process_started_at || run?.started_at || run?.created_at || null,
       })),
       'activity',
@@ -870,9 +876,23 @@ const collectRawStageIdentityIds = (stage: any, index = 0) => {
 };
 
 const rawStageMatchesV2Stage = (rawStage: any, stage: ProcessV2Stage, index = 0) => {
+  const stageSource = stage.source && typeof stage.source === 'object' ? stage.source : stage;
+  if (!isProcessInstanceMutationScopeCompatible(rawStage, stageSource)) return false;
   const matchIds = getProcessV2StageMatchIds(stage);
   if (matchIds.size === 0) return false;
   return collectRawStageIdentityIds(rawStage, index).some((id) => matchIds.has(id));
+};
+
+const rawStageMatchesV2StageIdsWithinInstance = (
+  rawStage: any,
+  stage: ProcessV2Stage,
+  wantedIds: Set<string>,
+  index = 0,
+) => {
+  const stageSource = stage.source && typeof stage.source === 'object' ? stage.source : stage;
+  if (!isProcessInstanceMutationScopeCompatible(rawStage, stageSource)) return false;
+  return rawStageMatchesV2Stage(rawStage, stage, index)
+    || collectRawStageIdentityIds(rawStage, index).some((id) => wantedIds.has(id));
 };
 
 const collectV2StageAutoAssignIds = (stage: ProcessV2Stage, index = 0) => {
@@ -1004,11 +1024,12 @@ const getRawStageTitleKey = (stage: any) => {
 };
 
 const rawDraftCandidateMatchesV2StagePoint = (candidate: any, candidateIndex: number, stage: ProcessV2Stage, stageIndex = 0) => {
+  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+  if (!isProcessInstanceMutationScopeCompatible(candidate, source)) return false;
   if (rawStageMatchesV2Stage(candidate, stage, candidateIndex)) return true;
   const wantedIds = new Set(collectV2StageAutoAssignIds(stage, stageIndex));
   if (collectRawStageIdentityIds(candidate, candidateIndex).some((id) => wantedIds.has(id))) return true;
 
-  const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
   const sourceStage = source?.source_stage && typeof source.source_stage === 'object' ? source.source_stage : {};
   const sourceMetadata = parseObject(source?.metadata);
   const candidateMeta = resolveDraftGroupMeta(candidate);
@@ -2770,8 +2791,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     let directChanged = false;
     const nextDirectStages = directStages.map((candidate, index) => {
       const match = draftPositions.find((entry) => (
-        rawStageMatchesV2Stage(candidate, entry.stage, index)
-        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+        rawStageMatchesV2StageIdsWithinInstance(candidate, entry.stage, entry.wantedIds, index)
       ));
       if (!match) return candidate;
       directChanged = true;
@@ -2800,8 +2820,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }>();
     linkedStages.forEach((candidate, index) => {
       const match = draftPositions.find((entry) => (
-        rawStageMatchesV2Stage(candidate, entry.stage, index)
-        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+        rawStageMatchesV2StageIdsWithinInstance(candidate, entry.stage, entry.wantedIds, index)
       ));
       if (!match) return;
       const ownerModuleId = normalizeText(candidate?.__process_v2_linked_owner_module_id);
@@ -2829,8 +2848,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       let ownerChanged = false;
       const nextOwnerStages = ownerStages.map((candidate: any, index: number) => {
         const match = owner.entries.find((entry) => (
-          rawStageMatchesV2Stage(candidate, entry.stage, index)
-          || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+          rawStageMatchesV2StageIdsWithinInstance(candidate, entry.stage, entry.wantedIds, index)
         ));
         if (!match) return candidate;
         ownerChanged = true;
@@ -2918,8 +2936,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
     setLinkedDraftStages((current) => current.map((candidate, index) => {
       const match = draftPositions.find((entry) => (
-        rawStageMatchesV2Stage(candidate, entry.stage, index)
-        || collectRawStageIdentityIds(candidate, index).some((id) => entry.wantedIds.has(id))
+        rawStageMatchesV2StageIdsWithinInstance(candidate, entry.stage, entry.wantedIds, index)
       ));
       if (!match) return candidate;
       const metadata = parseObject(candidate?.metadata);

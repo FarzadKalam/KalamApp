@@ -7,6 +7,7 @@ import { formatLocationValue, IRAN_BOUNDS, IRAN_CENTER, isInsideIran, parseLocat
 import { buildMapStyle, buildMapTransformRequest, buildRasterStyle, MAP_MAX_ZOOM, MAP_STYLE_URL, sanitizeMapStyle } from '../../utils/mapConfig';
 import { attachMissingMapImageFallback, ensureMapLibreRTLTextPlugin } from '../../utils/maplibreRuntime';
 import { createThemeMapPinElement } from '../../utils/mapPin';
+import { resolveMapStatusColor } from '../../utils/mapStatusColor';
 import MapRecordModal from './MapRecordModal';
 
 type MapViewProps = {
@@ -23,25 +24,6 @@ type PointRecord = {
   label: string;
   rawLocation: string;
   statusColor?: string;
-};
-
-const STATUS_COLOR_MAP: Record<string, string> = {
-  green: '#16a34a',
-  red: '#dc2626',
-  blue: '#2563eb',
-  orange: '#ea580c',
-  yellow: '#ca8a04',
-  purple: '#7c3aed',
-  cyan: '#0891b2',
-  gray: '#64748b',
-  grey: '#64748b',
-};
-
-const resolveStatusColor = (rawColor: any) => {
-  const color = String(rawColor || '').trim().toLowerCase();
-  if (!color) return '';
-  if (color.startsWith('#') || color.startsWith('rgb') || color.startsWith('hsl')) return color;
-  return STATUS_COLOR_MAP[color] || '';
 };
 
 const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigate }) => {
@@ -93,7 +75,7 @@ const MapView: React.FC<MapViewProps> = ({ data, moduleId, moduleConfig, navigat
     options.forEach((opt: any) => {
       const value = String(opt?.value || '').trim();
       if (!value) return;
-      const color = resolveStatusColor(opt?.color);
+      const color = resolveMapStatusColor(opt?.color);
       if (color) map[value] = color;
     });
     return map;

@@ -79,7 +79,7 @@ const DEFAULT_PAGE_MARGINS = {
 const PRINT_COLUMN_IGNORE_KEYS = new Set(['id', 'key', 'created_at', 'updated_at']);
 const INVOICE_MODULE_IDS = new Set(['invoices', 'purchase_invoices']);
 const LONG_TEXT_FIELD_TYPES = new Set(['long_text', 'superlongtext']);
-const CATALOG_FULL_PAGE_MODULE_IDS = new Set(['products', 'billboards']);
+const CATALOG_FULL_PAGE_MODULE_IDS = new Set(['products', 'billboards', 'price_lists', 'product_bundles']);
 
 export const isCatalogFullPageAvailableForModule = (moduleId: string) =>
   CATALOG_FULL_PAGE_MODULE_IDS.has(String(moduleId || '').trim());
@@ -1276,6 +1276,35 @@ const buildCatalogFullPageRecordTemplate = (moduleId: string, now: string): Stor
   updatedAt: now,
 });
 
+const buildCatalogGridRecordTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
+  id: `default_${moduleId}_catalog_grid`,
+  moduleId,
+  scope: 'record',
+  title: 'کاتالوگ شبکه‌ای',
+  description: 'قالب کارت شبکه‌ای برای چاپ یک رکورد با تصویر و فیلدهای انتخاب‌شده',
+  paperSize: 'A4',
+  orientation: 'portrait',
+  isActive: true,
+  isSystem: true,
+  showHeader: true,
+  showFooter: true,
+  pageMarginTop: 10,
+  pageMarginRight: 10,
+  pageMarginBottom: 10,
+  pageMarginLeft: 10,
+  headerHtml: '<div style="direction:rtl;text-align:right;font-size:15px;font-weight:800;color:rgb(var(--brand-500-rgb));">{{company.company_full_name}}</div>',
+  footerHtml: '<div style="direction:rtl;text-align:center;color:#64748b;font-size:9px;">{{company.phone}} · {{company.website}}</div>',
+  contentHtml: `<div style="direction:rtl;border:1px solid rgba(148,163,184,.45);border-radius:18px;padding:18px;background:linear-gradient(135deg,rgba(var(--brand-50-rgb),.8),#fff);font-family:inherit;">
+  <div style="display:flex;gap:16px;align-items:flex-start;">
+    <div style="width:42%;min-height:180px;border-radius:14px;background:rgba(255,255,255,.9);display:flex;align-items:center;justify-content:center;overflow:hidden;"><img src="{{system.record_image_url}}" alt="تصویر رکورد" style="max-width:100%;max-height:240px;object-fit:contain;" /></div>
+    <div style="flex:1;"><h1 style="margin:0 0 8px;font-size:23px;color:rgb(var(--brand-500-rgb));">{{record.name}}</h1><div style="font-size:11px;color:#64748b;line-height:1.9;">{{system.compact_fields_inline}}</div></div>
+  </div>
+  <div style="margin-top:16px;">{{system.compact_fields_sidebar}}</div>
+</div>`,
+  createdAt: now,
+  updatedAt: now,
+});
+
 const buildCatalogFullPageListTemplate = (moduleId: string, now: string): StoredPrintTemplate => ({
   id: `default_${moduleId}_catalog_fullpage_list_landscape`,
   moduleId,
@@ -1707,6 +1736,7 @@ export const buildDefaultTemplatesForModule = (
   const listCatalogPortraitTemplate = buildListCatalogA4PortraitDefaultTemplate(moduleId, now);
   const catalogFullPageDefaults = isCatalogFullPageAvailableForModule(moduleId)
     ? [
+        buildCatalogGridRecordTemplate(moduleId, now),
         buildCatalogFullPageRecordTemplate(moduleId, now),
         buildCatalogFullPageListTemplate(moduleId, now),
       ]

@@ -72,6 +72,7 @@ import { enrichAttendancePresenceRows } from "../utils/attendancePresence";
 import { backfillOperationalCashBankOperations } from "../utils/cashBankBackfill";
 import { fetchMissingCashBankFallbackRows } from "../utils/cashBankFallbackRows";
 import { CASH_BANK_LEGACY_ACCOUNT_KEYS } from "../utils/cashBankLegacyAccountKeys";
+import { isOnlineCatalogModule } from "../utils/onlineCatalog";
 import type { SaasAdminUserRow } from "../utils/saasUserAdmin";
 import {
   buildModuleListSearchFieldKeys,
@@ -112,6 +113,7 @@ const MessageComposerModal = React.lazy(() => import("../components/MessageCompo
 const SaasUserAdminDrawer = React.lazy(() => import("../components/saas/SaasUserAdminDrawer"));
 const RelatedRecordPopover = React.lazy(() => import("../components/RelatedRecordPopover"));
 const DeleteModuleRecordsModal = React.lazy(() => import("../components/moduleDelete/DeleteModuleRecordsModal"));
+const OnlineCatalogManagerModal = React.lazy(() => import("../components/onlineCatalog/OnlineCatalogManagerModal"));
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
@@ -844,6 +846,7 @@ export const ModuleListRefine: React.FC<{
   const [canOpenGoals, setCanOpenGoals] = useState(true);
   const [canShowGoalCards, setCanShowGoalCards] = useState(true);
   const [isListPrintModalOpen, setIsListPrintModalOpen] = useState(false);
+  const [isOnlineCatalogManagerOpen, setIsOnlineCatalogManagerOpen] = useState(false);
   const [listPrintRows, setListPrintRows] = useState<any[]>([]);
   const [bulkBuildTarget, setBulkBuildTarget] = useState<BulkBuildTarget>(null);
   const [previewRecordId, setPreviewRecordId] = useState<string | null>(null);
@@ -4541,8 +4544,14 @@ export const ModuleListRefine: React.FC<{
           void handleExportPrint();
         },
       },
+      ...(isOnlineCatalogModule(resolvedModuleId) && canEditModule ? [{
+        key: 'online_catalog_export',
+        icon: <EnvironmentOutlined />,
+        label: 'کاتالوگ آنلاین',
+        onClick: () => setIsOnlineCatalogManagerOpen(true),
+      }] : []),
     ];
-  }, [handleExportExcel, handleExportPrint, selectedRowKeys.length]);
+  }, [canEditModule, handleExportExcel, handleExportPrint, resolvedModuleId, selectedRowKeys.length]);
 
   const moduleActionItems: MenuProps["items"] = useMemo(() => {
     const items: MenuProps["items"] = [];
@@ -4565,6 +4574,9 @@ export const ModuleListRefine: React.FC<{
 
     if (isWebFormTargetModule(resolvedModuleId)) {
       items.push({ key: "web_forms", label: "وب فرم‌ها" });
+    }
+    if (isOnlineCatalogModule(resolvedModuleId) && canEditModule) {
+      items.push({ key: "online_catalogs", icon: <EnvironmentOutlined />, label: "کاتالوگ‌های آنلاین" });
     }
     if (canOpenModuleSettings && items.length > 0) {
       items.push({ type: "divider" });
@@ -4605,6 +4617,10 @@ export const ModuleListRefine: React.FC<{
     }
     if (key === "web_forms") {
       navigate(`/web_forms?targetModule=${resolvedModuleId}`);
+      return;
+    }
+    if (key === "online_catalogs") {
+      setIsOnlineCatalogManagerOpen(true);
       return;
     }
     if (key === "module_settings") {
@@ -5329,6 +5345,17 @@ export const ModuleListRefine: React.FC<{
               setSaasUserDrawerRecord(null);
               void tableQueryResult.refetch();
             }}
+          />
+        </React.Suspense>
+      ) : null}
+      {isOnlineCatalogManagerOpen && isOnlineCatalogModule(resolvedModuleId) ? (
+        <React.Suspense fallback={null}>
+          <OnlineCatalogManagerModal
+            open
+            moduleId={resolvedModuleId}
+            sourceRecordIds={selectedRowKeys.map((key) => String(key))}
+            onCancel={() => setIsOnlineCatalogManagerOpen(false)}
+            onSaved={async () => { await tableQueryResult.refetch(); }}
           />
         </React.Suspense>
       ) : null}

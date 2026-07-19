@@ -85,6 +85,7 @@ import {
 } from '../utils/processTaskCustomFields';
 import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
 import { isRecycleBinEnabledModule } from '../utils/recycleBin';
+import { isOnlineCatalogModule } from '../utils/onlineCatalog';
 import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
 import { BOT_CHANNELS, BOT_CHANNEL_LABELS_FA, getBotChatIdFieldKey, type BotTargetModuleId } from '../utils/botPlatform';
 import { syncBotDirectChatIdForTarget } from '../utils/botIdentityBindings';
@@ -130,6 +131,7 @@ const TaxpayerInvoiceModal = React.lazy(() => import('../components/taxpayer/Tax
 const CounterpartyBotStatusModal = React.lazy(() => import('../components/bot/CounterpartyBotStatusModal'));
 const MessageComposerModal = React.lazy(() => import('../components/MessageComposerModal'));
 const DeleteModuleRecordsModal = React.lazy(() => import('../components/moduleDelete/DeleteModuleRecordsModal'));
+const OnlineCatalogManagerModal = React.lazy(() => import('../components/onlineCatalog/OnlineCatalogManagerModal'));
 
 const DEFAULT_BOT_PLATFORM_STATE: BotPlatformState = {
   groupTitle: '',
@@ -1403,6 +1405,7 @@ const ModuleShow: React.FC = () => {
   }>>([]);
   const [pendingPrintShareFile, setPendingPrintShareFile] = useState<{ url: string; name: string } | null>(null);
   const [printShareMessageText, setPrintShareMessageText] = useState('');
+  const [isOnlineCatalogManagerOpen, setIsOnlineCatalogManagerOpen] = useState(false);
 
   const mergeUsersById = _msMergeUsersById;
 
@@ -6189,6 +6192,15 @@ const ModuleShow: React.FC = () => {
       });
     });
 
+  if (isOnlineCatalogModule(moduleId) && ['price_lists', 'product_bundles'].includes(moduleId) && canEditModule && id) {
+    headerActions.push({
+      id: 'online_catalog',
+      label: 'کاتالوگ‌های آنلاین',
+      variant: 'default',
+      onClick: async () => { setIsOnlineCatalogManagerOpen(true); },
+    });
+  }
+
   const resolvedRecordTitle = getRecordTitle(data, moduleConfig, { fallback: '' });
   const recordTitleField = (moduleConfig?.fields || []).find((field: any) => {
     if (!field?.key || field.readonly || canViewField(field.key) === false) return false;
@@ -6825,6 +6837,17 @@ const ModuleShow: React.FC = () => {
             allowFieldSelectionTab={printManager.allowFieldSelectionTab}
             showImageDisplayModeControl={printManager.showImageDisplayModeControl}
             previewMeta={printManager.previewMeta}
+          />
+        </React.Suspense>
+      ) : null}
+      {isOnlineCatalogManagerOpen && isOnlineCatalogModule(moduleId) && ['price_lists', 'product_bundles'].includes(moduleId) ? (
+        <React.Suspense fallback={null}>
+          <OnlineCatalogManagerModal
+            open={isOnlineCatalogManagerOpen}
+            moduleId={moduleId}
+            sourceRecordIds={id ? [String(id)] : []}
+            onCancel={() => setIsOnlineCatalogManagerOpen(false)}
+            onSaved={() => setIsOnlineCatalogManagerOpen(false)}
           />
         </React.Suspense>
       ) : null}
