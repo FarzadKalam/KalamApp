@@ -5,7 +5,7 @@
 body {
   background-color: #141414;
   color: #e5e5e5;
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: var(--font-family-app);
 }
 
 /* Custom Scrollbar */

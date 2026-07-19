@@ -71,7 +71,7 @@ const rewriteRetinaSpriteUrl = (rawUrl: string) => {
   }
 };
 
-const MAP_LOCAL_TEXT_FONT = 'Vazirmatn';
+const MAP_LOCAL_TEXT_FONT = 'Peyda';
 
 const getLocalMapFontStack = (rawFonts: unknown): string[] => {
   const fontText = Array.isArray(rawFonts) ? rawFonts.join(' ') : String(rawFonts || '');

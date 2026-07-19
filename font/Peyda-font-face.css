@@ -1,0 +1,141 @@
+/*
+ * فونت‌های پایهٔ پروژه
+ *
+ * Peyda: متن فارسی و انگلیسی با ارقام لاتین (پیش‌فرض)
+ * Peyda Farsi Numerals: فقط برای محتوایی که ارقام فارسی نمایش می‌دهد
+ * Peyda Non-English: خانوادهٔ مکمل برای محتوای کاملاً فارسی در صورت نیاز
+ */
+
+:root {
+  --font-family-app: 'Peyda', Tahoma, Arial, sans-serif;
+  --font-family-persian-numerals: 'Peyda Farsi Numerals', 'Peyda', Tahoma, Arial, sans-serif;
+  --font-family-non-english: 'Peyda Non-English', 'Peyda', Tahoma, Arial, sans-serif;
+}
+
+@font-face {
+  font-family: 'Peyda';
+  src: url('./peyada/PeydaWeb-ExtraLight.woff2') format('woff2');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda';
+  src: url('./peyada/PeydaWeb-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda';
+  src: url('./peyada/PeydaWeb-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda';
+  src: url('./peyada/PeydaWeb-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda';
+  src: url('./peyada/PeydaWeb-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Farsi Numerals';
+  src: url('./peyada/PeydaFaNumWeb-ExtraLight.woff2') format('woff2');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Farsi Numerals';
+  src: url('./peyada/PeydaFaNumWeb-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Farsi Numerals';
+  src: url('./peyada/PeydaFaNumWeb-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Farsi Numerals';
+  src: url('./peyada/PeydaFaNumWeb-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Farsi Numerals';
+  src: url('./peyada/PeydaFaNumWeb-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Non-English';
+  src: url('./peyada/PeydaNoEnWeb-ExtraLight.woff2') format('woff2');
+  font-weight: 200;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Non-English';
+  src: url('./peyada/PeydaNoEnWeb-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Non-English';
+  src: url('./peyada/PeydaNoEnWeb-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Non-English';
+  src: url('./peyada/PeydaNoEnWeb-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Peyda Non-English';
+  src: url('./peyada/PeydaNoEnWeb-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+.font-persian-numerals {
+  font-family: var(--font-family-persian-numerals);
+}
+
+.font-non-english {
+  font-family: var(--font-family-non-english);
+}

@@ -2684,7 +2684,7 @@ const SmartForm: React.FC<SmartFormProps> = ({
           ? 'fixed inset-0 bg-black/50 flex items-center justify-center p-3 md:p-4 backdrop-blur-sm animate-fadeIn'
           : 'w-full animate-fadeIn'
       }
-      style={{ fontFamily: 'Vazirmatn, sans-serif', ...(displayMode === 'modal' ? { zIndex: typeof overlayZIndex === 'number' ? overlayZIndex : 1300 } : {}) }}
+      style={{ fontFamily: 'Peyda, Tahoma, Arial, sans-serif', ...(displayMode === 'modal' ? { zIndex: typeof overlayZIndex === 'number' ? overlayZIndex : 1300 } : {}) }}
     >
       <div
         className={

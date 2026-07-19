@@ -501,7 +501,7 @@ const DeliveryPublicContent = ({ primaryColor, onBrandingLoad }: { primaryColor:
   }
 
   return (
-    <div dir="rtl" style={{ minHeight: '100vh', background: token.colorBgLayout, fontFamily: 'Vazirmatn, sans-serif' }}>
+    <div dir="rtl" style={{ minHeight: '100vh', background: token.colorBgLayout, fontFamily: 'Peyda, Tahoma, Arial, sans-serif' }}>
       <div style={{ background: `linear-gradient(135deg, ${primaryColor} 0%, ${hexToRgba(primaryColor, 0.82)} 100%)` }}>
         <div style={{ maxWidth: 820, margin: '0 auto', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14 }}>
           {logoUrl ? (
@@ -699,7 +699,7 @@ const DeliveryPublicPage = () => {
         algorithm: antdTheme.defaultAlgorithm,
         token: {
           colorPrimary: primaryColor,
-          fontFamily: 'Vazirmatn, sans-serif',
+          fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
         },
       }}
     >

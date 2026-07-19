@@ -36,14 +36,14 @@ const OfflineOverlay: React.FC = () => {
           />
         }
         title={
-          <span style={{ fontFamily: 'Vazirmatn, sans-serif', fontSize: 20, fontWeight: 600 }}>
+          <span style={{ fontFamily: 'Peyda, Tahoma, Arial, sans-serif', fontSize: 20, fontWeight: 600 }}>
             ارتباط با سرور قطع شده
           </span>
         }
         subTitle={
           <Text
             style={{
-              fontFamily: 'Vazirmatn, sans-serif',
+              fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
               color: token.colorTextSecondary,
               display: 'block',
               marginTop: 8,
@@ -62,7 +62,7 @@ const OfflineOverlay: React.FC = () => {
             icon={<ReloadOutlined />}
             onClick={retry}
             loading={isChecking}
-            style={{ fontFamily: 'Vazirmatn, sans-serif' }}
+            style={{ fontFamily: 'Peyda, Tahoma, Arial, sans-serif' }}
           >
             تلاش مجدد
           </Button>

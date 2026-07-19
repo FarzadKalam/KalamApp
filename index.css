@@ -1,4 +1,4 @@
-@import './font/Vazirmatn-Variable-font-face.css';
+@import './font/Peyda-font-face.css';
 
 @tailwind base;
 @tailwind components;
@@ -26,7 +26,7 @@
    ========================================= */
 @layer base {
   html, body, #root {
-    font-family: 'Vazirmatn', system-ui, sans-serif;
+    font-family: var(--font-family-app);
     height: 100%;
     direction: rtl;
     max-width: 100%;
@@ -219,9 +219,8 @@ body.ant-scrolling-effect {
 
 /* کلاس کمکی برای اعداد فارسی */
 .persian-number {
-  font-family: 'Vazirmatn', system-ui, sans-serif;
+  font-family: var(--font-family-persian-numerals);
   font-weight: 600;
-  font-feature-settings: "ss01";
 }
 
 /* اعمال فونت وزیر روی تمام کامپوننت‌های Ant Design */
@@ -238,11 +237,12 @@ body.ant-scrolling-effect {
 .ant-modal, 
 .ant-message, 
 .ant-notification {
-  font-family: 'Vazirmatn', system-ui, sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
-.ant-input-number-input {
-  font-feature-settings: "ss01";
+.ant-input-number-input.persian-number,
+.persian-number .ant-input-number-input {
+  font-family: var(--font-family-persian-numerals) !important;
 }
 
 /* خوانایی دکمه‌های اصلی در حالت روز */
@@ -302,7 +302,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
 
 .ant-pagination-item {
   border-radius: 8px !important;
-  font-family: 'Vazirmatn', sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
 .ant-pagination-item-active {
@@ -378,12 +378,12 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
 .module-list-header-count .ant-badge-count,
 .invoice-summary-card,
 .invoice-summary-card * {
-  font-family: 'Vazirmatn', system-ui, sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
 .smarttable-shell .ant-pagination-options,
 .smarttable-shell .ant-pagination-options * {
-  font-feature-settings: "ss01";
+  font-family: var(--font-family-persian-numerals) !important;
 }
 
 .view-manager-modal-tabs > .ant-tabs-nav {
@@ -441,7 +441,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
 .module-list-page .ant-pagination-options .ant-select-selector,
 .module-list-page .ant-pagination-options .ant-select-selection-item,
 .module-list-page .ant-pagination-options .ant-select-selection-placeholder {
-  font-family: 'Vazirmatn', system-ui, sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
 .module-list-page .ant-table-selection-column {
@@ -470,7 +470,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   .module-list-page .ant-pagination-options,
   .module-list-page .ant-pagination-options .ant-select-selection-item,
   .module-list-page .ant-pagination-options .ant-select-selection-placeholder {
-    font-family: 'Vazirmatn', system-ui, sans-serif !important;
+    font-family: var(--font-family-app) !important;
   }
 
   .module-list-page .custom-erp-table .ant-table-thead > tr > th.ant-table-selection-column {
@@ -495,8 +495,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
 .ant-picker-header,
 .ant-picker-header button,
 .ant-picker-time-panel-column {
-  font-family: 'Vazirmatn', sans-serif !important;
-  font-feature-settings: "ss01"; /* اعداد فارسی */
+  font-family: var(--font-family-persian-numerals) !important;
 }
 
 /* 3. تنظیم رنگ‌بندی روزهای هفته (فقط در پنل تاریخ) */
@@ -530,8 +529,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   border-left: 1px solid #f0f0f0; /* خط جداکننده */
 }
 .ant-picker-time-panel-cell-inner {
-  font-family: 'Vazirmatn', sans-serif !important;
-  font-feature-settings: "ss01" !important; /* اعداد فارسی */
+  font-family: var(--font-family-persian-numerals) !important;
   font-variant-numeric: normal !important;
   direction: ltr; /* جهت LTR برای اینکه ساعت برعکس نشود (12:30) */
   text-align: center;
@@ -539,8 +537,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
 }
 .ant-picker-time-panel-column > li,
 .ant-picker-time-panel-column > li * {
-  font-family: 'Vazirmatn', sans-serif !important;
-  font-feature-settings: "ss01" !important;
+  font-family: var(--font-family-persian-numerals) !important;
   font-variant-numeric: normal !important;
 }
 
@@ -549,7 +546,17 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   font-weight: bold;
 }
 .ant-picker-year-btn, .ant-picker-month-btn {
-  font-feature-settings: "ss01";
+  font-family: var(--font-family-persian-numerals);
+}
+
+/* ورودی‌های عددی RTL با ارقام فارسی؛ فرم‌های LTR با ارقام لاتین Peyda نمایش داده می‌شوند. */
+.ant-input-number-input {
+  font-family: var(--font-family-persian-numerals) !important;
+}
+
+[dir="ltr"] .ant-input-number-input,
+.latin-number {
+  font-family: var(--font-family-app) !important;
 }
 
 /* اسکرول‌بار پهن‌تر برای صفحات و مودال‌های اصلی */
@@ -741,7 +748,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   height: 297mm;
   background: white;
   padding: 16px;
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: var(--font-family-app);
   page-break-after: avoid;
 }
 
@@ -1244,7 +1251,7 @@ html:not(.dark) .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-danger
   border: 1px solid rgba(var(--brand-500-rgb), 0.2);
   background: #ffffff;
   box-shadow: 0 12px 26px -16px rgba(var(--brand-700-rgb), 0.65);
-  font-family: 'Vazirmatn', system-ui, sans-serif;
+  font-family: var(--font-family-app);
 }
 
 .kalam-map-floating-popup__close {

@@ -282,7 +282,7 @@ const AuthenticatedOutletBoundary: React.FC = () => {
 
 const MarketingSiteHostApp: React.FC = () => {
   useEffect(() => {
-    document.body.style.fontFamily = "Vazirmatn, sans-serif";
+    document.body.style.fontFamily = "var(--font-family-app)";
     // تنظیم favicon اختصاصی تازه سیستم
     const existing = document.querySelector<HTMLLinkElement>('link[rel*="icon"]');
     const link: HTMLLinkElement = existing || document.createElement("link");
@@ -323,7 +323,7 @@ const MarketingSiteHostApp: React.FC = () => {
       <ConfigProvider
         direction="rtl"
         locale={faIR}
-        theme={{ token: { fontFamily: "Vazirmatn, sans-serif" } }}
+        theme={{ token: { fontFamily: "Peyda, Tahoma, Arial, sans-serif" } }}
       >
         <JalaliLocaleListener />
         <AntdApp
@@ -365,7 +365,7 @@ function App() {
   });
 
   useEffect(() => {
-    document.body.style.fontFamily = "Vazirmatn, sans-serif";
+    document.body.style.fontFamily = "var(--font-family-app)";
   }, []);
 
   useEffect(() => {
@@ -860,7 +860,7 @@ function App() {
           algorithm: isDarkMode ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
           token: {
             colorPrimary: branding.palette.primary,
-            fontFamily: "Vazirmatn, sans-serif",
+            fontFamily: "Peyda, Tahoma, Arial, sans-serif",
             zIndexPopupBase: 13000,
           },
         }}

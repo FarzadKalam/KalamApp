@@ -36,7 +36,7 @@ const htmlError = (status: number, title: string, message: string) =>
         place-items: center;
         background: #ffffff;
         color: #991b1b;
-        font-family: Vazirmatn, system-ui, sans-serif;
+        font-family: Peyda, Tahoma, Arial, sans-serif;
         padding: 24px;
         text-align: center;
       }

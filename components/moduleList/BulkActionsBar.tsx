@@ -98,7 +98,7 @@ const BulkActionsBar: React.FC<BulkActionsBarProps> = ({
         }`}
       >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <Tag className={`!m-0 rounded-full border-[rgba(var(--brand-500-rgb),0.3)] px-2 py-0.5 font-['Vazirmatn'] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:text-white ${isInline ? 'bg-white dark:bg-white/10' : 'bg-white/70 dark:bg-white/10'}`}>
+        <Tag className={`!m-0 rounded-full border-[rgba(var(--brand-500-rgb),0.3)] px-2 py-0.5 font-['Peyda'] text-[rgb(var(--brand-700-rgb))] shadow-sm dark:text-white ${isInline ? 'bg-white dark:bg-white/10' : 'bg-white/70 dark:bg-white/10'}`}>
           <span className="persian-number">{selectedCount.toLocaleString('fa-IR')} انتخاب شده</span>
         </Tag>
         <Button onClick={onClear} size="small" type="text" danger className="!px-2 !text-[rgb(var(--brand-700-rgb))] hover:!bg-white/40 dark:!text-white dark:hover:!bg-white/10">

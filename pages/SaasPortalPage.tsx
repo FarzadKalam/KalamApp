@@ -608,7 +608,7 @@ const SaasPortalPage: React.FC = () => {
           colorBorder: '#cbd5e1',
           colorPrimary: '#0f172a',
           borderRadius: 12,
-          fontFamily: 'Vazirmatn, sans-serif',
+          fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
         },
         components: {
           Input: {
@@ -631,7 +631,7 @@ const SaasPortalPage: React.FC = () => {
     >
       <div
         className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex items-center justify-center px-4 py-12"
-        style={{ fontFamily: 'Vazirmatn, sans-serif' }}
+        style={{ fontFamily: 'Peyda, Tahoma, Arial, sans-serif' }}
       >
         <div className="w-full max-w-md">
           <Logo />

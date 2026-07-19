@@ -36,7 +36,7 @@ const RouteTracker: React.FC = () => {
 
 const PublicRouteApp: React.FC = () => {
   useEffect(() => {
-    document.body.style.fontFamily = "Vazirmatn, sans-serif";
+    document.body.style.fontFamily = "var(--font-family-app)";
   }, []);
 
   return (
@@ -46,7 +46,7 @@ const PublicRouteApp: React.FC = () => {
         <ConfigProvider
           direction="rtl"
           locale={faIR}
-          theme={{ token: { fontFamily: "Vazirmatn, sans-serif" } }}
+          theme={{ token: { fontFamily: "Peyda, Tahoma, Arial, sans-serif" } }}
         >
           <JalaliLocaleListener />
           <AntdApp

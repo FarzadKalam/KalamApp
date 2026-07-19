@@ -4654,7 +4654,7 @@ export const ModuleListRefine: React.FC<{
             <Badge
                 overflowCount={999}
                 count={
-                  <span className="inline-flex min-w-[2rem] items-center justify-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600 shadow-none font-['Vazirmatn'] persian-number">
+                  <span className="inline-flex min-w-[2rem] items-center justify-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600 shadow-none font-['Peyda'] persian-number">
                     {toPersianNumber(totalFilteredRecordCount)}
                   </span>
                 }

@@ -5814,7 +5814,7 @@ const ProductionStagesField: React.FC<ProductionStagesFieldProps> = ({ recordId,
 
     return (
       <div
-        className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Vazirmatn']"
+        className="w-full max-w-full overflow-x-hidden overflow-y-auto font-['Peyda']"
         style={{
           width: '100%',
           maxWidth: 'calc(100vw - 1rem)',

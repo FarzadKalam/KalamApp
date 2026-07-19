@@ -1,5 +1,9 @@
 import { printStyles } from './styles';
-import vazirmatnVariableUrl from '../../font/fonts/webfonts/Vazirmatn[wght].woff2?url';
+import peydaExtraLightUrl from '../../font/peyada/PeydaWeb-ExtraLight.woff2?url';
+import peydaRegularUrl from '../../font/peyada/PeydaWeb-Regular.woff2?url';
+import peydaSemiBoldUrl from '../../font/peyada/PeydaWeb-SemiBold.woff2?url';
+import peydaBoldUrl from '../../font/peyada/PeydaWeb-Bold.woff2?url';
+import peydaBlackUrl from '../../font/peyada/PeydaWeb-Black.woff2?url';
 
 interface BuildPrintDocumentHtmlOptions {
   pageSize?: string;
@@ -7,11 +11,13 @@ interface BuildPrintDocumentHtmlOptions {
   title?: string;
 }
 
-const FONT_FACE_DEFINITION = {
-  weight: '100 900',
-  file: 'Vazirmatn[wght].woff2',
-  url: vazirmatnVariableUrl,
-} as const;
+const FONT_FACE_DEFINITIONS = [
+  { weight: 200, file: 'PeydaWeb-ExtraLight.woff2', url: peydaExtraLightUrl },
+  { weight: 400, file: 'PeydaWeb-Regular.woff2', url: peydaRegularUrl },
+  { weight: 600, file: 'PeydaWeb-SemiBold.woff2', url: peydaSemiBoldUrl },
+  { weight: 700, file: 'PeydaWeb-Bold.woff2', url: peydaBoldUrl },
+  { weight: 900, file: 'PeydaWeb-Black.woff2', url: peydaBlackUrl },
+] as const;
 
 // All brand-* RGB variables used across catalog and print layouts.
 // Values are Tailwind blue-* defaults; the actual brand color is read from the DOM
@@ -74,40 +80,36 @@ const resolveAssetUrl = (assetUrl: string, origin: string) => {
   return new URL(assetUrl, baseUrl).toString();
 };
 
-const buildRemoteFontFaceCss = (origin: string) =>
+const buildFontFaceCss = (source: string, weight: number) =>
   `
     @font-face {
-      font-family: 'Vazirmatn';
-      src: url('${resolveAssetUrl(FONT_FACE_DEFINITION.url, origin)}') format('woff2 supports variations'),
-           url('${resolveAssetUrl(FONT_FACE_DEFINITION.url, origin)}') format('woff2-variations');
-      font-weight: ${FONT_FACE_DEFINITION.weight};
+      font-family: 'Peyda';
+      src: url('${source}') format('woff2');
+      font-weight: ${weight};
       font-style: normal;
       font-display: swap;
     }
   `;
 
+const buildRemoteFontFaceCss = (origin: string) =>
+  FONT_FACE_DEFINITIONS
+    .map((font) => buildFontFaceCss(resolveAssetUrl(font.url, origin), font.weight))
+    .join('\n');
+
 const buildEmbeddedFontFaceCss = async (origin: string) => {
-  const fontUrl = resolveAssetUrl(FONT_FACE_DEFINITION.url, origin);
-
   try {
-    const response = await fetch(fontUrl, { credentials: 'same-origin' });
-    if (!response.ok) {
-      throw new Error(`font fetch failed: ${response.status}`);
-    }
-
-    const base64 = arrayBufferToBase64(await response.arrayBuffer());
-    return `
-      @font-face {
-        font-family: 'Vazirmatn';
-        src: url('data:font/woff2;base64,${base64}') format('woff2 supports variations'),
-             url('data:font/woff2;base64,${base64}') format('woff2-variations');
-        font-weight: ${FONT_FACE_DEFINITION.weight};
-        font-style: normal;
-        font-display: swap;
+    const fontFaces = await Promise.all(FONT_FACE_DEFINITIONS.map(async (font) => {
+      const response = await fetch(resolveAssetUrl(font.url, origin), { credentials: 'same-origin' });
+      if (!response.ok) {
+        throw new Error(`font fetch failed: ${response.status}`);
       }
-    `;
+
+      const base64 = arrayBufferToBase64(await response.arrayBuffer());
+      return buildFontFaceCss(`data:font/woff2;base64,${base64}`, font.weight);
+    }));
+    return fontFaces.join('\n');
   } catch (error) {
-    console.warn('Embedded print font fetch failed, falling back to URL font source', FONT_FACE_DEFINITION.file, error);
+    console.warn('Embedded print font fetch failed, falling back to URL font sources', error);
     return buildRemoteFontFaceCss(origin);
   }
 };
@@ -151,7 +153,7 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
         padding: 0;
         background: #ffffff;
         color: #111827;
-        font-family: 'Vazirmatn', system-ui, sans-serif;
+        font-family: 'Peyda', Tahoma, Arial, sans-serif;
         direction: rtl;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
@@ -170,12 +172,12 @@ export const buildPrintDocumentHtml = async ({ pageSize, sourceHtml, title }: Bu
         margin: 0 !important;
         padding: 0 !important;
         background: #ffffff !important;
-        font-family: 'Vazirmatn', system-ui, sans-serif !important;
+        font-family: 'Peyda', Tahoma, Arial, sans-serif !important;
       }
 
       #print-root,
       #print-root * {
-        font-family: 'Vazirmatn', system-ui, sans-serif !important;
+        font-family: 'Peyda', Tahoma, Arial, sans-serif !important;
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
       }

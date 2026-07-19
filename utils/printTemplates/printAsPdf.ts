@@ -64,7 +64,7 @@ const writePreparedWindowState = (targetWindow: Window, title?: string) => {
         place-items: center;
         background: #ffffff;
         color: #0f172a;
-        font-family: Vazirmatn, system-ui, sans-serif;
+        font-family: Peyda, Tahoma, Arial, sans-serif;
         padding: 24px;
         text-align: center;
       }
@@ -115,7 +115,7 @@ const writeErrorState = (targetWindow: Window | null | undefined, title?: string
         place-items: center;
         background: #ffffff;
         color: #991b1b;
-        font-family: Vazirmatn, system-ui, sans-serif;
+        font-family: Peyda, Tahoma, Arial, sans-serif;
         padding: 24px;
         text-align: center;
       }
@@ -171,7 +171,7 @@ const writeSuccessState = ({
         place-items: center;
         background: #ffffff;
         color: #0f172a;
-        font-family: Vazirmatn, system-ui, sans-serif;
+        font-family: Peyda, Tahoma, Arial, sans-serif;
         padding: 24px;
         text-align: center;
       }

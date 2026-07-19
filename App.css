@@ -414,7 +414,7 @@ html.dark .kalam-adaptive-picker__trigger-text.is-filled {
 .kalam-adaptive-picker__chip,
 .kalam-adaptive-picker__action {
   border: 0;
-  font-family: 'Vazirmatn', sans-serif;
+  font-family: var(--font-family-app);
   cursor: pointer;
 }
 
@@ -708,7 +708,7 @@ html.dark .kalam-adaptive-picker__empty {
 .kalam-adaptive-picker__calendar-wrap .rmdp-arrow-container,
 .kalam-adaptive-picker__calendar-wrap .rmdp-time-picker,
 .kalam-adaptive-picker__calendar-wrap .rmdp-time-picker * {
-  font-family: 'Vazirmatn', sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
 .kalam-adaptive-picker__calendar-wrap .rmdp-header-values {
@@ -1226,7 +1226,7 @@ html.dark .kalam-adaptive-picker__action.is-muted {
 .kalam-adaptive-picker-modal *,
 .rmdp-container,
 .rmdp-container * {
-  font-family: 'Vazirmatn', sans-serif !important;
+  font-family: var(--font-family-app) !important;
 }
 
 .kalam-list-message {

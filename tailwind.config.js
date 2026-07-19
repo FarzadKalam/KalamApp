@@ -35,7 +35,7 @@ export default {
         }
       },
       fontFamily: {
-        sans: ['Vazirmatn', 'ui-sans-serif', 'system-ui'],
+        sans: ['Peyda', 'Tahoma', 'Arial', 'sans-serif'],
       }
     },
   },

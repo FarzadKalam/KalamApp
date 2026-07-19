@@ -1317,7 +1317,7 @@ const ReportViewerPage: React.FC = () => {
       <div class="list-print-page report-print-page ${orientation === 'landscape' ? 'report-print-landscape' : ''}" dir="rtl">
         <style>
           .report-print-page, .report-print-page * { box-sizing:border-box; }
-          .report-print-page { width:100%; max-width:${orientation === 'landscape' ? '297mm' : '210mm'}; min-height:${orientation === 'landscape' ? '210mm' : '297mm'}; padding:${orientation === 'landscape' ? '7mm' : '8mm'}; background:#fff; color:#111827; font-family:Vazirmatn,Tahoma,sans-serif; overflow:hidden; }
+          .report-print-page { width:100%; max-width:${orientation === 'landscape' ? '297mm' : '210mm'}; min-height:${orientation === 'landscape' ? '210mm' : '297mm'}; padding:${orientation === 'landscape' ? '7mm' : '8mm'}; background:#fff; color:#111827; font-family:Peyda,Tahoma,Arial,sans-serif; overflow:hidden; }
           .report-print-header { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; border-bottom:2px solid #111827; padding-bottom:8px; margin-bottom:10px; }
           .report-print-title { font-size:18px; font-weight:900; }
           .report-print-meta { font-size:10px; color:#6b7280; text-align:left; }

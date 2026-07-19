@@ -75,7 +75,7 @@ export async function printOrgChart(
   const sourceHtml = `
     <div style="
       direction:rtl;
-      font-family:'Vazirmatn',Tahoma,Arial,sans-serif;
+      font-family:'Peyda',Tahoma,Arial,sans-serif;
       padding:16px 20px;
       background:#fff;
       min-width:max-content;

@@ -708,7 +708,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
 <style>
   @page { size: A4 portrait; margin: 10mm 8mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { margin: 0; font-family: Vazirmatn, Tahoma, sans-serif; font-size: 11px; color: #111827; direction: rtl; background: #fff; }
+  body { margin: 0; font-family: Peyda, Tahoma, Arial, sans-serif; font-size: 11px; color: #111827; direction: rtl; background: #fff; }
   table { width: 100%; border-collapse: collapse; }
   .brand-bg { background: ${pc}; }
   .brand-color { color: ${pc}; }
@@ -1029,7 +1029,7 @@ ${invoice.description ? `
       style={{
         minHeight: '100vh',
         background: token.colorBgLayout,
-        fontFamily: 'Vazirmatn, sans-serif',
+        fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
         paddingBottom: onlinePaymentAvailable ? 92 : 0,
       }}
     >
@@ -2013,7 +2013,7 @@ const InvoicePublicPage = () => {
         algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
           colorPrimary: primaryColor,
-          fontFamily: 'Vazirmatn, sans-serif',
+          fontFamily: 'Peyda, Tahoma, Arial, sans-serif',
         },
       }}
     >

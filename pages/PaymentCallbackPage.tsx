@@ -51,7 +51,7 @@ const PaymentCallbackPage = () => {
   }, [params]);
 
   return (
-    <div dir="rtl" className="min-h-screen bg-zinc-50 px-4 py-12 font-[Vazirmatn]">
+    <div dir="rtl" className="min-h-screen bg-zinc-50 px-4 py-12 font-[Peyda]">
       <Card className="mx-auto max-w-md rounded-2xl border-0 shadow-sm">
         <div className="flex flex-col items-center text-center">
           {status === 'loading' ? (

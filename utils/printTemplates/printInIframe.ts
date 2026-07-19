@@ -106,7 +106,7 @@ const ensureSessionStyle = (pageSize?: string) => {
       padding: 0 !important;
       overflow: visible !important;
       background: #fff !important;
-      font-family: 'Vazirmatn', system-ui, sans-serif !important;
+      font-family: 'Peyda', Tahoma, Arial, sans-serif !important;
     }
     body[${PRINT_SESSION_ATTR}="true"] #${PRINT_ROOT_ID} * {
       -webkit-print-color-adjust: exact !important;
