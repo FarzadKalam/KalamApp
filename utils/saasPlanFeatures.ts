@@ -1,6 +1,6 @@
 import { supabase } from '../supabaseClient';
 import { getAppRuntimeCached } from './appRuntimeCache';
-import { fetchCurrentUserRoleContext } from './permissions';
+import { fetchCurrentUserRoleContext, SAAS_ADMIN_PERMISSION_KEY } from './permissions';
 
 export const MULTI_LANE_PROCESSES_FEATURE = 'multi_lane_processes';
 
@@ -12,6 +12,8 @@ export const hasCurrentOrgPlanFeature = async (
   if (!normalizedFeatureKey) return false;
 
   const roleContext = await fetchCurrentUserRoleContext(supabase, { force: options?.force });
+  const saasAdminPermission = roleContext?.permissions?.[SAAS_ADMIN_PERMISSION_KEY] || {};
+  if (saasAdminPermission.view === true || saasAdminPermission.edit === true) return true;
   const orgId = String(roleContext?.orgId || '').trim() || '__guest__';
   const defaultEnabled = options?.defaultEnabled === true;
 
