@@ -1,5 +1,5 @@
 import { MODULES } from '../moduleRegistry';
-import { FieldType, ModuleDefinition } from '../types';
+import { FieldType, ModuleNature, ModuleDefinition } from '../types';
 import { getRelationDisplayFields, getRelationSearchFields } from './relationDisplay';
 import { getRelationLabelFallbackFields, getPreferredRelationTargetField } from './relationTargetField';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
@@ -392,6 +392,12 @@ const runCompatibleRefineRead = async <T>(
 ) => {
   const requestedColumns = parseSimpleSelectColumns(params?.meta?.select);
   if (requestedColumns.length === 0) return operation(params);
+
+  // فاکتورهای فروش/خرید دادهٔ مالی و ردیف‌های JSON وابسته دارند. provider نباید
+  // در مواجهه با schema خطادار، پاسخ آن‌ها را به `id` یا ستون ناقص تقلیل دهد؛
+  // این کار از نمایش اشتباهِ فاکتور خالی جلوگیری می‌کند.
+  const moduleConfig = MODULES[String(params?.resource || '').trim()];
+  if (moduleConfig?.nature === ModuleNature.INVOICE) return operation(params);
 
   const schema = String(params?.meta?.schema || 'public').trim() || 'public';
   const resource = String(params?.resource || '').trim();

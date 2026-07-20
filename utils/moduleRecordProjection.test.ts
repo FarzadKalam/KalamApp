@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FieldType } from '../types';
+import { FieldType, ModuleNature } from '../types';
 import { buildModuleRecordProjection } from './moduleRecordProjection';
 
 describe('module record projection', () => {
@@ -17,5 +17,19 @@ describe('module record projection', () => {
     expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'name', 'customer_id']));
     expect(projection.initialColumns).not.toContain('execution_process_draft');
     expect(projection.deferredProcessDraftColumns).toEqual(['execution_process_draft']);
+  });
+
+  it('always reads a complete financial document so invoice lines cannot be omitted', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'invoices',
+      table: 'invoices',
+      nature: ModuleNature.INVOICE,
+      fields: [
+        { key: 'invoiceItems', type: FieldType.JSON },
+        { key: 'total_invoice_amount', type: FieldType.PRICE },
+      ],
+    } as any);
+
+    expect(projection).toEqual({ initialColumns: ['*'], deferredProcessDraftColumns: [] });
   });
 });

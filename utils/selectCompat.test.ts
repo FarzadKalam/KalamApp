@@ -124,18 +124,35 @@ describe('createSchemaCompatibleDataProvider', () => {
     const getList = vi.fn()
       .mockRejectedValueOnce({
         code: 'PGRST204',
-        message: "Could not find the 'total_invoice_amount' column of 'invoices' in the schema cache",
+        message: "Could not find the 'optional_legacy_field' column of 'projects' in the schema cache",
       })
-      .mockResolvedValueOnce({ data: [{ id: 'invoice-1', name: 'فاکتور فروش' }], total: 1 });
+      .mockResolvedValueOnce({ data: [{ id: 'project-1', name: 'پروژه' }], total: 1 });
     const provider = createSchemaCompatibleDataProvider({ getList });
 
     const result = await provider.getList({
-      resource: 'invoices',
-      meta: { select: 'id,name,total_invoice_amount' },
+      resource: 'projects',
+      meta: { select: 'id,name,optional_legacy_field' },
     });
 
     expect(result.data).toHaveLength(1);
     expect(getList).toHaveBeenCalledTimes(2);
     expect(getList.mock.calls[1][0].meta.select).toBe('id,name');
+  });
+
+  it('never reduces financial documents to a sparse schema fallback', async () => {
+    const getList = vi.fn().mockResolvedValue({
+      data: [{ id: 'invoice-1', invoiceItems: [{ quantity: 1 }], total_invoice_amount: 100 }],
+      total: 1,
+    });
+    const provider = createSchemaCompatibleDataProvider({ getList });
+
+    const result = await provider.getList({
+      resource: 'invoices',
+      meta: { select: 'id,invoiceItems,total_invoice_amount' },
+    });
+
+    expect(result.data[0].invoiceItems).toEqual([{ quantity: 1 }]);
+    expect(getList).toHaveBeenCalledTimes(1);
+    expect(getList.mock.calls[0][0].meta.select).toBe('id,invoiceItems,total_invoice_amount');
   });
 });

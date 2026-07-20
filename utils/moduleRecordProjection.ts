@@ -1,4 +1,4 @@
-import type { ModuleDefinition } from '../types';
+import { ModuleNature, type ModuleDefinition } from '../types';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
 import { shouldSkipModuleListField } from './moduleListFieldSelection';
 
@@ -40,6 +40,13 @@ export const isDeferredProcessDraftField = (field: any) => (
 export const buildModuleRecordProjection = (moduleConfig?: ModuleDefinition | null) => {
   if (!moduleConfig) {
     return { initialColumns: ['id'], deferredProcessDraftColumns: [] as string[] };
+  }
+
+  // ردیف‌های اقلام و مبالغ فاکتور یک snapshot مالی واحد هستند. دریافت انتخابی
+  // آن‌ها می‌تواند در schemaهای قدیمی پاسخ ناقص بسازد؛ صفحهٔ فاکتور باید همیشه
+  // همان رکورد کامل را بخواند و هرگز با fallback ستونی، اقلام را خالی نشان ندهد.
+  if (moduleConfig.nature === ModuleNature.INVOICE) {
+    return { initialColumns: ['*'], deferredProcessDraftColumns: [] as string[] };
   }
 
   const initial = new Set<string>(BASE_RECORD_COLUMNS);
