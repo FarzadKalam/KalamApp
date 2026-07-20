@@ -41,7 +41,7 @@ const unique = (items: string[]): string[] => Array.from(new Set(items.filter(Bo
 
 const isUuidLike = (value: string): boolean => UUID_REGEX.test(value);
 
-const getCandidateKeys = (moduleConfig?: ModuleDefinition): string[] => {
+export const getRecordTitleCandidateKeys = (moduleConfig?: ModuleDefinition): string[] => {
   if (!moduleConfig?.fields?.length) return STATIC_TITLE_KEYS;
 
   const keyFields = moduleConfig.fields.filter((f) => f.isKey).map((f) => f.key);
@@ -72,7 +72,7 @@ export const getRecordTitle = (
     return [firstName, lastName].filter(Boolean).join(" ").trim();
   }
 
-  const candidateKeys = getCandidateKeys(moduleConfig);
+  const candidateKeys = getRecordTitleCandidateKeys(moduleConfig);
   for (const key of candidateKeys) {
     const value = normalize(record[key]);
     if (!value) continue;

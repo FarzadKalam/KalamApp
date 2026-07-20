@@ -11,22 +11,22 @@ import {
 } from '../../utils/permissions';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { parseProcessLinkMap } from '../../utils/processTargets';
+import { getRecordTitle, getRecordTitleCandidateKeys } from '../../utils/recordTitle';
 import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { toPersianNumber } from '../../utils/persianNumberFormatter';
-import { fetchProcessWorkItems } from '../../utils/processWorkItems';
+import {
+  fetchProcessWorkItems,
+  getPreferredProcessRecordRef,
+  getProcessWorkItemIdentity,
+  type ProcessWorkItem,
+} from '../../utils/processWorkItems';
 
 const ProcessCardsV2RuntimeBlock = React.lazy(() => import('../processes/ProcessCardsV2RuntimeBlock'));
 
-type ProcessWidgetItem = {
-  key: string;
-  moduleId: string;
-  recordId: string;
-  lineId: string | null;
-  groupId: string | null;
-  templateId: string | null;
-  templateName: string | null;
-  updatedAt: string | null;
-  reason: 'task' | 'draft_stage' | 'record' | 'linked_record';
+type ProcessWidgetItem = ProcessWorkItem & {
+  displayModuleId: string;
+  displayRecordId: string;
+  displayTitle: string;
 };
 
 const INITIAL_VISIBLE_LIMIT = 15;
@@ -251,6 +251,60 @@ const getItemTime = (item: ProcessWidgetItem) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const resolveProcessDisplayTitles = async (
+  processItems: ProcessWorkItem[],
+  access: CurrentUserRecordAccessContext,
+): Promise<ProcessWidgetItem[]> => {
+  const canViewModule = (moduleId: string) => access.permissions?.[moduleId]?.view !== false;
+  const displayRefs = processItems.map((item) => getPreferredProcessRecordRef(item, canViewModule));
+  const recordsByReference = new Map<string, any>();
+  const recordIdsByModule = new Map<string, Set<string>>();
+
+  displayRefs.forEach((reference) => {
+    if (!reference || !MODULES[reference.moduleId]?.table) return;
+    if (!recordIdsByModule.has(reference.moduleId)) recordIdsByModule.set(reference.moduleId, new Set());
+    recordIdsByModule.get(reference.moduleId)!.add(reference.recordId);
+  });
+
+  await runWithConcurrencyLimit(
+    Array.from(recordIdsByModule.entries()).map(([moduleId, recordIds]) => async () => {
+      const module = MODULES[moduleId] as any;
+      const columns = Array.from(new Set([
+        'id',
+        ...getRecordTitleCandidateKeys(module),
+      ]));
+      const result = await runSelectWithCompatibleColumns<any[]>({
+        cacheKey: `dashboard:our-processes:titles:${moduleId}`,
+        columns,
+        execute: (selectExpr) => supabase
+          .from(module.table)
+          .select(selectExpr)
+          .in('id', Array.from(recordIds)),
+      });
+      if (result.error) return;
+      (result.data || []).forEach((record: any) => {
+        const recordId = normalizeId(record?.id);
+        if (recordId) recordsByReference.set(`${moduleId}:${recordId}`, record);
+      });
+    }),
+    PROCESS_MODULE_QUERY_CONCURRENCY,
+  );
+
+  return processItems.map((item, index) => {
+    const displayRef = displayRefs[index] || { moduleId: item.moduleId, recordId: item.recordId };
+    const displayModule = MODULES[displayRef.moduleId];
+    const displayRecord = recordsByReference.get(`${displayRef.moduleId}:${displayRef.recordId}`);
+    return {
+      ...item,
+      displayModuleId: displayRef.moduleId,
+      displayRecordId: displayRef.recordId,
+      displayTitle: getRecordTitle(displayRecord, displayModule, {
+        fallback: getModuleTitle(displayRef.moduleId),
+      }),
+    };
+  });
+};
+
 const OurProcessesWidget: React.FC = () => {
   const navigate = useNavigate();
   const { message } = App.useApp();
@@ -264,11 +318,7 @@ const OurProcessesWidget: React.FC = () => {
 
   const addItem = useCallback((map: Map<string, ProcessWidgetItem>, item: ProcessWidgetItem) => {
     if (!item.moduleId || !item.recordId || !MODULES[item.moduleId]) return;
-    const key = [
-      item.moduleId,
-      item.recordId,
-      item.groupId || item.templateId || 'default_process_group',
-    ].join(':');
+    const key = getProcessWorkItemIdentity(item);
     const previous = map.get(key);
     const next = { ...item, key };
     if (!previous || getItemTime(next) >= getItemTime(previous)) {
@@ -278,6 +328,10 @@ const OurProcessesWidget: React.FC = () => {
         lineId: previous && previous.lineId !== next.lineId ? null : next.lineId,
         templateName: next.templateName || previous?.templateName || null,
         templateId: next.templateId || previous?.templateId || null,
+        processLinks: {
+          ...(previous?.processLinks || {}),
+          ...(next.processLinks || {}),
+        },
       });
     }
   }, []);
@@ -298,7 +352,8 @@ const OurProcessesWidget: React.FC = () => {
       setCanViewWidget(true);
       const rpcItems = await fetchProcessWorkItems(supabase, access, { limit: nextVisibleLimit + 1 });
       if (rpcItems) {
-        setItems(rpcItems.slice(0, nextVisibleLimit));
+        const titledItems = await resolveProcessDisplayTitles(rpcItems, access);
+        setItems(titledItems.slice(0, nextVisibleLimit));
         setCanLoadMore(rpcItems.length > nextVisibleLimit);
         return;
       }
@@ -344,6 +399,13 @@ const OurProcessesWidget: React.FC = () => {
           templateName: meta.templateName,
           updatedAt: normalizeId(task?.updated_at || task?.created_at) || null,
           reason,
+          processLinks: {
+            ...parseProcessLinkMap(parseJsonObject(task?.recurrence_info)?.process_links),
+            [moduleId]: recordId,
+          },
+          displayModuleId: moduleId,
+          displayRecordId: recordId,
+          displayTitle: '',
         });
       };
 
@@ -461,6 +523,16 @@ const OurProcessesWidget: React.FC = () => {
               templateName: group.templateName,
               updatedAt: normalizeId(record?.updated_at || record?.created_at) || null,
               reason: assignedStages.length > 0 ? 'draft_stage' : 'record',
+              processLinks: {
+                ...candidateStages.reduce<Record<string, string>>((links, stage) => ({
+                  ...links,
+                  ...parseProcessLinkMap(stage?.process_link_map || stage?.process_links),
+                }), {}),
+                [moduleId]: recordId,
+              },
+              displayModuleId: moduleId,
+              displayRecordId: recordId,
+              displayTitle: '',
             });
           });
         });
@@ -486,7 +558,7 @@ const OurProcessesWidget: React.FC = () => {
         });
       }
 
-      const sortedItems = itemsBeforeTemplateNames
+      const sortedItems = (await resolveProcessDisplayTitles(itemsBeforeTemplateNames, access))
         .map((item) => ({
           ...item,
           templateName: item.templateName || (item.templateId ? templateNameMap.get(item.templateId) || null : null),
@@ -561,10 +633,10 @@ const OurProcessesWidget: React.FC = () => {
                     <button
                       type="button"
                       className="min-w-0 truncate text-right text-xs font-semibold text-gray-700 hover:text-[rgba(var(--brand-600-rgb),1)] dark:text-gray-200"
-                      onClick={() => navigate(`/${item.moduleId}/${item.recordId}`)}
-                      title={item.templateName ? `${getModuleTitle(item.moduleId)} - ${item.templateName}` : getModuleTitle(item.moduleId)}
+                      onClick={() => navigate(`/${item.displayModuleId}/${item.displayRecordId}`)}
+                      title={item.templateName ? `${item.displayTitle} - ${item.templateName}` : item.displayTitle}
                     >
-                      {getModuleTitle(item.moduleId)}
+                      {toPersianNumber(item.displayTitle)}
                     </button>
                     <Tooltip title="رکوردهای مرتبط با این فرآیند">
                       <Button

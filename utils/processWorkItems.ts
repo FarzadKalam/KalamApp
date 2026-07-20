@@ -11,6 +11,7 @@ export type ProcessWorkItem = {
   templateName: string | null;
   updatedAt: string | null;
   reason: 'task' | 'draft_stage' | 'record' | 'linked_record';
+  processLinks: Record<string, string>;
 };
 
 export type ProcessWorkItemModuleSpec = {
@@ -37,6 +38,92 @@ const PROCESS_RECORD_SCAN_EXCLUDED_MODULE_IDS = new Set([
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
+const PROCESS_RECORD_MODULE_PRIORITY = [
+  'projects',
+  'invoices',
+  'purchase_invoices',
+  'customers',
+  'marketing_leads',
+  'personas',
+  'employees',
+] as const;
+
+const normalizeProcessLinks = (value: unknown): Record<string, string> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((links, [moduleId, recordId]) => {
+    const normalizedModuleId = normalizeText(moduleId);
+    const normalizedRecordId = normalizeText(recordId);
+    if (normalizedModuleId && normalizedRecordId && MODULES[normalizedModuleId]) {
+      links[normalizedModuleId] = normalizedRecordId;
+    }
+    return links;
+  }, {});
+};
+
+export const getProcessWorkItemIdentity = (item: Pick<ProcessWorkItem, 'moduleId' | 'recordId' | 'groupId' | 'templateId'>) => {
+  const groupId = normalizeText(item.groupId);
+  const templateId = normalizeText(item.templateId);
+  // فرآیندهای قدیمی ممکن است شناسهٔ گروه نداشته باشند و شناسهٔ الگو را به‌جای آن ذخیره کرده باشند.
+  // در آن حالت، رکورد والد بخشی از هویت فرآیند باقی می‌ماند تا اجرای مستقل یک الگو پنهان نشود.
+  if (groupId && groupId !== templateId) return `group:${groupId}`;
+  return [
+    'record',
+    normalizeText(item.moduleId),
+    normalizeText(item.recordId),
+    groupId || templateId || 'default_process_group',
+  ].join(':');
+};
+
+export const dedupeProcessWorkItems = (items: ProcessWorkItem[]): ProcessWorkItem[] => {
+  const deduped = new Map<string, ProcessWorkItem>();
+  items.forEach((item) => {
+    const identity = getProcessWorkItemIdentity(item);
+    const previous = deduped.get(identity);
+    const itemTime = new Date(item.updatedAt || 0).getTime() || 0;
+    const previousTime = new Date(previous?.updatedAt || 0).getTime() || 0;
+    const newest = !previous || itemTime >= previousTime ? item : previous;
+    const oldest = newest === item ? previous : item;
+    deduped.set(identity, {
+      ...newest,
+      key: identity,
+      processLinks: {
+        ...(oldest?.processLinks || {}),
+        ...(newest.processLinks || {}),
+      },
+    });
+  });
+  return Array.from(deduped.values());
+};
+
+export const getPreferredProcessRecordRef = (
+  item: Pick<ProcessWorkItem, 'moduleId' | 'recordId' | 'processLinks'>,
+  canViewModule?: (moduleId: string) => boolean,
+) => {
+  const candidates = new Map<string, { moduleId: string; recordId: string }>();
+  Object.entries(item.processLinks || {}).forEach(([moduleId, recordId]) => {
+    const normalizedModuleId = normalizeText(moduleId);
+    const normalizedRecordId = normalizeText(recordId);
+    if (normalizedModuleId && normalizedRecordId && MODULES[normalizedModuleId]) {
+      candidates.set(`${normalizedModuleId}:${normalizedRecordId}`, { moduleId: normalizedModuleId, recordId: normalizedRecordId });
+    }
+  });
+  const sourceModuleId = normalizeText(item.moduleId);
+  const sourceRecordId = normalizeText(item.recordId);
+  if (sourceModuleId && sourceRecordId && MODULES[sourceModuleId]) {
+    candidates.set(`${sourceModuleId}:${sourceRecordId}`, { moduleId: sourceModuleId, recordId: sourceRecordId });
+  }
+
+  return Array.from(candidates.values())
+    .filter((candidate) => !canViewModule || canViewModule(candidate.moduleId))
+    .sort((left, right) => {
+      const leftPriority = PROCESS_RECORD_MODULE_PRIORITY.indexOf(left.moduleId as typeof PROCESS_RECORD_MODULE_PRIORITY[number]);
+      const rightPriority = PROCESS_RECORD_MODULE_PRIORITY.indexOf(right.moduleId as typeof PROCESS_RECORD_MODULE_PRIORITY[number]);
+      const normalizedLeftPriority = leftPriority === -1 ? Number.MAX_SAFE_INTEGER : leftPriority;
+      const normalizedRightPriority = rightPriority === -1 ? Number.MAX_SAFE_INTEGER : rightPriority;
+      return normalizedLeftPriority - normalizedRightPriority;
+    })[0] || null;
+};
+
 const isMissingProcessWorkItemsRpcError = (error: any) => {
   const code = String(error?.code || '').toUpperCase();
   const message = String(error?.message || error?.details || error?.hint || '').toLowerCase();
@@ -45,6 +132,7 @@ const isMissingProcessWorkItemsRpcError = (error: any) => {
     || code === 'PGRST202'
     || code === 'PGRST204'
     || message.includes('get_process_work_items_v1')
+    || message.includes('get_process_work_items_v2')
     || message.includes('could not find the function')
   );
 };
@@ -86,6 +174,7 @@ const normalizeProcessWorkItem = (row: any): ProcessWorkItem | null => {
     templateName: normalizeText(row?.templateName) || null,
     updatedAt: normalizeText(row?.updatedAt) || null,
     reason: ['task', 'draft_stage', 'record', 'linked_record'].includes(reason) ? reason : 'record',
+    processLinks: normalizeProcessLinks(row?.processLinks),
   };
 };
 
@@ -96,17 +185,33 @@ export const fetchProcessWorkItems = async (
 ): Promise<ProcessWorkItem[] | null> => {
   const limit = Math.max(1, Math.min(Number(options?.limit || 15), 80));
   const moduleSpecs = buildProcessWorkItemModuleSpecs(access);
-  const { data, error } = await supabaseClient.rpc('get_process_work_items_v1', {
+  const { data, error } = await supabaseClient.rpc('get_process_work_items_v2', {
     p_module_specs: moduleSpecs,
     p_limit: limit,
   });
 
   if (error) {
-    if (isMissingProcessWorkItemsRpcError(error)) return null;
+    if (isMissingProcessWorkItemsRpcError(error)) {
+      const fallback = await supabaseClient.rpc('get_process_work_items_v1', {
+        p_module_specs: moduleSpecs,
+        p_limit: limit,
+      });
+      if (fallback.error) {
+        if (isMissingProcessWorkItemsRpcError(fallback.error)) return null;
+        throw fallback.error;
+      }
+      return dedupeProcessWorkItems(
+        (Array.isArray(fallback.data) ? fallback.data : [])
+          .map(normalizeProcessWorkItem)
+          .filter(Boolean) as ProcessWorkItem[]
+      );
+    }
     throw error;
   }
 
-  return (Array.isArray(data) ? data : [])
-    .map(normalizeProcessWorkItem)
-    .filter(Boolean) as ProcessWorkItem[];
+  return dedupeProcessWorkItems(
+    (Array.isArray(data) ? data : [])
+      .map(normalizeProcessWorkItem)
+      .filter(Boolean) as ProcessWorkItem[]
+  );
 };

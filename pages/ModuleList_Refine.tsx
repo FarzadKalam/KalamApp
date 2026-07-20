@@ -6,7 +6,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
-import { GLOBAL_ASSIGNEE_MODULES } from "../utils/assigneeSupport";
+import { supportsModuleAssignee } from "../utils/assigneeSupport";
 import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
@@ -393,7 +393,7 @@ const buildModuleListRowSelect = (
   const shouldDeferHeavyFields = options?.viewMode === ViewMode.LIST;
   // ستون‌های assignee فقط برای ماژول‌هایی که از global assignee پشتیبانی می‌کنند اضافه می‌شوند
   const MANAGED_SYSTEM_COLUMNS = new Set(['assignee_type', 'assignee_id', 'assignee_role_id']);
-  const moduleSupportsAssignee = GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.id) || GLOBAL_ASSIGNEE_MODULES.has(moduleConfig.table || '');
+  const moduleSupportsAssignee = supportsModuleAssignee(moduleConfig);
   const addKey = (key?: string | null) => {
     if (isSelectableColumnKey(key)) selectedKeys.add(String(key).trim());
   };
