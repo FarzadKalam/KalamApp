@@ -46,3 +46,23 @@ export const shouldLoadProcessRuntime = ({
   && recordId
   && !(snapshotOnly && variant !== 'full')
 );
+
+/**
+ * در فهرست الگوها preview اغلب عمداً انتخاب نمی‌شود تا payload سبک بماند.
+ * بنابراین یک آرایهٔ خالیِ موقتی نباید نتیجهٔ معتبرِ خوانده‌شده از
+ * process_template_stages را پاک کند.
+ */
+export const shouldApplyProcessTemplateStagePreview = ({
+  isProcessTemplate,
+  currentStages,
+  previewStages,
+}: {
+  isProcessTemplate: boolean;
+  currentStages: unknown;
+  previewStages: unknown;
+}) => {
+  if (!isProcessTemplate) return true;
+  const currentCount = Array.isArray(currentStages) ? currentStages.length : 0;
+  const previewCount = Array.isArray(previewStages) ? previewStages.length : 0;
+  return previewCount > 0 || currentCount === 0;
+};

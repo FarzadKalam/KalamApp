@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveProcessRuntimeSurfaceMode, shouldLoadProcessRuntime } from './processRuntimePresentation';
+import {
+  resolveProcessRuntimeSurfaceMode,
+  shouldApplyProcessTemplateStagePreview,
+  shouldLoadProcessRuntime,
+} from './processRuntimePresentation';
 
 describe('process runtime presentation contract', () => {
   it('always loads the full ModuleShow runtime even when a snapshot is used for immediate rendering', () => {
@@ -35,5 +39,18 @@ describe('process runtime presentation contract', () => {
     };
     expect(resolveProcessRuntimeSurfaceMode({ ...base, hasError: false })).toBe('empty');
     expect(resolveProcessRuntimeSurfaceMode({ ...base, hasError: true })).toBe('error');
+  });
+
+  it('does not let an omitted template preview clear loaded template stages in a column', () => {
+    expect(shouldApplyProcessTemplateStagePreview({
+      isProcessTemplate: true,
+      currentStages: [{ id: 'stage-1' }],
+      previewStages: [],
+    })).toBe(false);
+    expect(shouldApplyProcessTemplateStagePreview({
+      isProcessTemplate: true,
+      currentStages: [],
+      previewStages: [{ id: 'stage-1' }],
+    })).toBe(true);
   });
 });

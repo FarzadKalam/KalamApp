@@ -10,6 +10,7 @@ import { fetchProcessRuntimeTasksForRecord } from '../../utils/processRuntimeTas
 import { clearAppRuntimeCache } from '../../utils/appRuntimeCache';
 import {
   resolveProcessRuntimeSurfaceMode,
+  shouldApplyProcessTemplateStagePreview,
   shouldLoadProcessRuntime,
 } from '../../utils/processRuntimePresentation';
 import { filterDeletedProcessRunStageMarks } from '../../utils/processDeletedStageMarks';
@@ -1745,9 +1746,18 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   }, [normalizedModuleId, normalizedRecordId, runtimeSnapshot?.loaded, runtimeSnapshot?.moduleId, runtimeSnapshot?.recordId, runtimeSnapshot?.runs, runtimeSnapshot?.stages, runtimeSnapshot?.tasks, variant]);
 
   useEffect(() => {
-    if (Array.isArray(draftStages)) setTemplateStages(draftStages);
+    if (
+      Array.isArray(draftStages)
+      && shouldApplyProcessTemplateStagePreview({
+        isProcessTemplate: isProcessTemplateModule(normalizedModuleId),
+        currentStages: templateStagesRef.current,
+        previewStages: draftStages,
+      })
+    ) {
+      setTemplateStages(draftStages);
+    }
     setDraftStagesOverride(null);
-  }, [draftStages]);
+  }, [draftStages, normalizedModuleId]);
 
   useEffect(() => {
     const cached = processRuntimeBlockCache.get(cacheKey);
