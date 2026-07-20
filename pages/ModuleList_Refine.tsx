@@ -95,6 +95,7 @@ import {
 import { fetchDeferredModuleListFields } from "../utils/moduleListDeferredData";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
 import { createSchemaCompatibleDataProvider } from "../utils/selectCompat";
+import { buildViewDateBoundaryValue } from "../utils/viewDateFilters";
 import {
   fetchRecordLockMap,
   getRecordLockStateFromRecord,
@@ -3271,24 +3272,6 @@ export const ModuleListRefine: React.FC<{
   async function buildViewCrudFilters(nextViewFiltersConfig: any[], logic?: 'and' | 'or'): Promise<CrudFilters> {
     if (!moduleConfig || !Array.isArray(nextViewFiltersConfig)) return [];
 
-    const buildDateBoundaryValue = (
-      field: ModuleField | undefined,
-      date: Date,
-      boundary: "start" | "end"
-    ) => {
-      const normalized = new Date(date);
-      if (boundary === "start") {
-        normalized.setHours(0, 0, 0, 0);
-      } else {
-        normalized.setHours(23, 59, 59, 999);
-      }
-
-      if (field?.type === FieldType.DATE) {
-        return normalized.toISOString().slice(0, 10);
-      }
-      return normalized.toISOString();
-    };
-
     const resolveAssigneeTargets = async (rawValue: any) => {
       const normalizedValues = (Array.isArray(rawValue) ? rawValue : rawValue !== undefined && rawValue !== null && rawValue !== "" ? [rawValue] : [])
         .map((item) => String(item ?? "").trim())
@@ -3567,8 +3550,8 @@ export const ModuleListRefine: React.FC<{
           if (operator === "is_yesterday") baseDate.setDate(baseDate.getDate() - 1);
           if (operator === "is_tomorrow") baseDate.setDate(baseDate.getDate() + 1);
           filters.push(
-            { field: fieldKey, operator: "gte", value: buildDateBoundaryValue(field, baseDate, "start") } as any,
-            { field: fieldKey, operator: "lte", value: buildDateBoundaryValue(field, baseDate, "end") } as any
+            { field: fieldKey, operator: "gte", value: buildViewDateBoundaryValue(field, baseDate, "start") } as any,
+            { field: fieldKey, operator: "lte", value: buildViewDateBoundaryValue(field, baseDate, "end") } as any
           );
           continue;
         }
