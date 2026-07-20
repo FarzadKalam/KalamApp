@@ -366,6 +366,43 @@ type RefineReadParams = {
   [key: string]: any;
 };
 
+const quotePostgrestInValue = (value: unknown) => (
+  `"${String(value ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+);
+
+const serializePostgrestInValues = (value: unknown) => {
+  const values = Array.isArray(value) ? value : [value];
+  return `(${values.map(quotePostgrestInValue).join(',')})`;
+};
+
+const normalizePostgrestNotInFilter = (filter: any): any => {
+  if (!filter || typeof filter !== 'object') return filter;
+
+  if ((filter.operator === 'or' || filter.operator === 'and') && Array.isArray(filter.value)) {
+    const value = filter.value.map(normalizePostgrestNotInFilter);
+    return value.every((entry, index) => entry === filter.value[index]) ? filter : { ...filter, value };
+  }
+
+  // نسخهٔ فعلی providerِ Refine برای nin، فهرست مقادیر را بدون پرانتز به
+  // PostgREST می‌فرستد و باعث خطای parse می‌شود. filter خام، قالب معتبر
+  // not.in.(...) را بدون وابستگی به مسیر تولیدکنندهٔ فیلتر حفظ می‌کند.
+  if (filter.operator === 'nin') {
+    return {
+      ...filter,
+      operator: 'not.in',
+      value: serializePostgrestInValues(filter.value),
+    };
+  }
+
+  return filter;
+};
+
+const normalizePostgrestNotInFilters = (params: RefineReadParams): RefineReadParams => {
+  if (!Array.isArray(params?.filters)) return params;
+  const filters = params.filters.map(normalizePostgrestNotInFilter);
+  return filters.every((filter, index) => filter === params.filters[index]) ? params : { ...params, filters };
+};
+
 const SIMPLE_SELECT_COLUMN_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 const parseSimpleSelectColumns = (select: unknown) => {
@@ -449,13 +486,13 @@ const runCompatibleRefineRead = async <T>(
 export const createSchemaCompatibleDataProvider = <T extends Record<string, any>>(provider: T): T => ({
   ...provider,
   getList: provider.getList
-    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getList.bind(provider), params, 'get-list')
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getList.bind(provider), normalizePostgrestNotInFilters(params), 'get-list')
     : provider.getList,
   getMany: provider.getMany
-    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getMany.bind(provider), params, 'get-many')
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getMany.bind(provider), normalizePostgrestNotInFilters(params), 'get-many')
     : provider.getMany,
   getOne: provider.getOne
-    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getOne.bind(provider), params, 'get-one')
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getOne.bind(provider), normalizePostgrestNotInFilters(params), 'get-one')
     : provider.getOne,
 });
 

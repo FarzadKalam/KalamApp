@@ -155,4 +155,30 @@ describe('createSchemaCompatibleDataProvider', () => {
     expect(getList).toHaveBeenCalledTimes(1);
     expect(getList.mock.calls[0][0].meta.select).toBe('id,invoiceItems,total_invoice_amount');
   });
+
+  it('serializes excluded view values in the PostgREST not.in format', async () => {
+    const getList = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    const provider = createSchemaCompatibleDataProvider({ getList });
+
+    await provider.getList({
+      resource: 'tasks',
+      filters: [
+        { field: 'status', operator: 'nin', value: ['canceled', 'completed', 'on_hold'] },
+        {
+          operator: 'or',
+          value: [{ field: 'priority', operator: 'nin', value: ['low', 'medium'] }],
+        },
+      ],
+    });
+
+    expect(getList).toHaveBeenCalledWith(expect.objectContaining({
+      filters: [
+        { field: 'status', operator: 'not.in', value: '("canceled","completed","on_hold")' },
+        {
+          operator: 'or',
+          value: [{ field: 'priority', operator: 'not.in', value: '("low","medium")' }],
+        },
+      ],
+    }));
+  });
 });
