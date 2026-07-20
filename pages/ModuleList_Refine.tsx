@@ -94,6 +94,7 @@ import {
 } from "../utils/moduleListFieldSelection";
 import { fetchDeferredModuleListFields } from "../utils/moduleListDeferredData";
 import { isWorkflowVirtualField } from "../utils/moduleFieldVisibility";
+import { createSchemaCompatibleDataProvider } from "../utils/selectCompat";
 import {
   fetchRecordLockMap,
   getRecordLockStateFromRecord,
@@ -932,7 +933,10 @@ export const ModuleListRefine: React.FC<{
     return window.innerWidth < 768;
   });
   const [isMobileViewModeSheetOpen, setIsMobileViewModeSheetOpen] = useState(false);
-  const refineProvider = useMemo(() => refineSupabaseDataProvider(supabase), []);
+  const refineProvider = useMemo(
+    () => createSchemaCompatibleDataProvider(refineSupabaseDataProvider(supabase)),
+    [],
+  );
   const moduleListLiveInvalidationEnabled = useMemo(
     () => isModuleListLiveInvalidationEnabled(resolvedModuleId),
     [resolvedModuleId]

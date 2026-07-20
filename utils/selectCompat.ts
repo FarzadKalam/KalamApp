@@ -193,7 +193,11 @@ const normalizeMissingColumnName = (value: string) =>
     .toLowerCase() || '';
 
 const extractMissingColumnNames = (error: any): string[] => {
-  const text = String(error?.message || error?.details || error?.hint || '').toLowerCase();
+  const text = [error?.message, error?.details, error?.hint]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
   if (!text) return [];
 
   return Array.from(
@@ -283,10 +287,16 @@ export const runSelectWithCompatibleColumns = async <T>({
   cacheKey,
   columns,
   execute,
+  fallbackToWildcard = false,
 }: {
   cacheKey: string;
   columns: readonly string[];
   execute: (selectExpr: string) => PromiseLike<{ data: T | null; error: any }>;
+  /**
+   * برای دریافت یک رکورد: اگر خطای schema نام ستون را اعلام نکرد، `*` از
+   * schema واقعی می‌خواند تا یک ستون جدید/قدیمی کل صفحه را خالی نکند.
+   */
+  fallbackToWildcard?: boolean;
 }): Promise<CompatResult<T>> => {
   const normalizedColumns = applyCacheKeyColumnExclusions(cacheKey, normalizeColumns(columns));
   const cachedIncompatibleColumns = getCachedIncompatibleColumns(cacheKey);
@@ -328,6 +338,10 @@ export const runSelectWithCompatibleColumns = async <T>({
     }
 
     const missingColumns = extractMissingColumnNames(result.error);
+    if (missingColumns.length === 0 && fallbackToWildcard && !attempted.has('*')) {
+      candidateSets.unshift(['*']);
+      continue;
+    }
     const nextColumns = pruneColumns(activeColumns, result.error);
     if (!nextColumns || nextColumns.length === 0) {
       break;
@@ -345,6 +359,99 @@ export const runSelectWithCompatibleColumns = async <T>({
     selectedColumns: lastSelectedColumns,
   };
 };
+
+type RefineReadParams = {
+  resource?: string;
+  meta?: Record<string, any>;
+  [key: string]: any;
+};
+
+const SIMPLE_SELECT_COLUMN_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+const parseSimpleSelectColumns = (select: unknown) => {
+  const expression = String(select || '').trim();
+  if (!expression || expression === '*') return [];
+  const columns = expression.split(',').map((part) => part.trim()).filter(Boolean);
+  return columns.length > 0 && columns.every((column) => SIMPLE_SELECT_COLUMN_PATTERN.test(column))
+    ? normalizeColumns(columns)
+    : [];
+};
+
+const buildRefineReadParams = (params: RefineReadParams, select: string) => ({
+  ...params,
+  meta: {
+    ...(params.meta || {}),
+    select,
+  },
+});
+
+const runCompatibleRefineRead = async <T>(
+  operation: (params: RefineReadParams) => Promise<T>,
+  params: RefineReadParams,
+  operationName: string,
+) => {
+  const requestedColumns = parseSimpleSelectColumns(params?.meta?.select);
+  if (requestedColumns.length === 0) return operation(params);
+
+  const schema = String(params?.meta?.schema || 'public').trim() || 'public';
+  const resource = String(params?.resource || '').trim();
+  const cacheKey = `refine:${operationName}:${schema}:${resource}`;
+  const incompatibleColumns = getCachedIncompatibleColumns(cacheKey);
+  let activeColumns = requestedColumns.filter((column) => !incompatibleColumns.has(column.toLowerCase()));
+  if (activeColumns.length === 0) activeColumns = ['id'];
+  const attempted = new Set<string>();
+
+  while (activeColumns.length > 0) {
+    const select = activeColumns.join(',');
+    if (attempted.has(select)) break;
+    attempted.add(select);
+    try {
+      return await operation(buildRefineReadParams(params, select));
+    } catch (error: any) {
+      if (!isMissingColumnError(error)) throw error;
+
+      const missingColumns = extractMissingColumnNames(error);
+      if (missingColumns.length === 0) {
+        // فقط queryهای سبک فهرست با ستون‌های ساده به این مسیر می‌آیند؛
+        // fallback به شناسه مانع خالی‌شدن کامل فهرست می‌شود.
+        if (!attempted.has('id')) {
+          activeColumns = ['id'];
+          continue;
+        }
+        throw error;
+      }
+
+      const nextColumns = activeColumns.filter((column) => (
+        column === 'id' || !missingColumns.includes(column.toLowerCase())
+      ));
+      const removedColumns = activeColumns.filter((column) => !nextColumns.includes(column));
+      if (removedColumns.length === 0) throw error;
+      rememberIncompatibleColumns(cacheKey, removedColumns);
+      activeColumns = nextColumns.length > 0 ? nextColumns : ['id'];
+    }
+  }
+
+  return operation(params);
+};
+
+/**
+ * سازگارکنندهٔ مرکزی Refine برای readها. وجود یک ستون اختیاری در config که
+ * هنوز در schema یک سازمان ایجاد نشده، دیگر نباید فهرست یا صفحهٔ ماژول را
+ * خالی کند. فقط خطای صریح ستون/schema retry می‌شود؛ خطاهای دسترسی و داده
+ * بدون تغییر به caller برمی‌گردند.
+ */
+export const createSchemaCompatibleDataProvider = <T extends Record<string, any>>(provider: T): T => ({
+  ...provider,
+  getList: provider.getList
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getList.bind(provider), params, 'get-list')
+    : provider.getList,
+  getMany: provider.getMany
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getMany.bind(provider), params, 'get-many')
+    : provider.getMany,
+  getOne: provider.getOne
+    ? (params: RefineReadParams) => runCompatibleRefineRead(provider.getOne.bind(provider), params, 'get-one')
+    : provider.getOne,
+});
 
 export const selectByIdsWithCompatibleColumns = async <T>({
   cacheKey,

@@ -2,7 +2,6 @@
 import { App } from 'antd';
 import { supabase } from '../../supabaseClient';
 import { OPEN_TASK_PROCESS_MODAL_EVENT } from '../../utils/taskProcessModalEvents';
-import { runSelectWithCompatibleColumns } from '../../utils/selectCompat';
 import { resolveTaskSourceLink } from '../../utils/taskMeta';
 import { markModuleListChanged } from '../../utils/moduleListLive';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
@@ -11,8 +10,8 @@ import ProcessTaskModalV2 from '../processes/ProcessTaskModalV2';
 import type { ProcessV2CardData, ProcessV2Stage } from '../processes/ProcessCardsV2';
 import { mapTaskStatusToStageStatus } from '../processes/ProcessCardsV2';
 import {
+  loadProcessTaskModalContext,
   mergeProcessTaskModalContext,
-  processTaskModalContextNeedsStage,
 } from '../../utils/processTaskModalContext';
 
 type TaskProcessTarget = {
@@ -53,78 +52,7 @@ const resolveTaskProcessTarget = (task: any): TaskProcessTarget | null => {
   };
 };
 
-const TASK_MODAL_SELECT_COLUMNS = [
-  'id',
-  'name',
-  'status',
-  'task_type',
-  'description',
-  'task_report',
-  'tags',
-  'image_url',
-  'due_date',
-  'start_date',
-  'wage',
-  'weight',
-  'sort_order',
-  'related_to_module',
-  'source_module_id',
-  'source_record_id',
-  'related_product',
-  'related_production_order',
-  'project_id',
-  'marketing_lead_id',
-  'related_customer',
-  'related_supplier',
-  'related_invoice',
-  'purchase_invoice_id',
-  'production_line_id',
-  'assignee_id',
-  'assignee_role_id',
-  'assignee_type',
-  'source_template_id',
-  'process_group_id',
-  'process_run_id',
-  'process_run_stage_id',
-  'recurrence_info',
-  'metadata',
-  'org_id',
-] as const;
-
 const normalizeText = (value: unknown) => String(value || '').trim();
-
-const loadProcessTaskStageContext = async (task: any) => {
-  if (!processTaskModalContextNeedsStage(task)) return mergeProcessTaskModalContext(task);
-  const runStageId = normalizeText(task?.process_run_stage_id);
-  const taskId = normalizeText(task?.id);
-  let runStage: any = null;
-  try {
-    let query = supabase
-      .from('process_run_stages')
-      .select('id,process_run_id,template_stage_id,stage_name,sort_order,status,task_id,metadata');
-    query = runStageId ? query.eq('id', runStageId) : query.eq('task_id', taskId);
-    const result = await query.maybeSingle();
-    if (!result.error) runStage = result.data || null;
-  } catch {
-    runStage = null;
-  }
-
-  const templateStageId = normalizeText(runStage?.template_stage_id);
-  let templateStage: any = null;
-  if (templateStageId) {
-    try {
-      const result = await supabase
-        .from('process_template_stages')
-        .select('id,template_id,stage_name,sort_order,metadata')
-        .eq('id', templateStageId)
-        .maybeSingle();
-      if (!result.error) templateStage = result.data || null;
-    } catch {
-      templateStage = null;
-    }
-  }
-  return mergeProcessTaskModalContext(task, runStage, templateStage);
-};
 
 const parseObject = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -243,31 +171,10 @@ const GlobalTaskProcessModalHost: React.FC = () => {
       }
       setLoading(true);
       try {
-        const result = await runSelectWithCompatibleColumns<any>({
-          cacheKey: 'tasks:modal',
-          columns: TASK_MODAL_SELECT_COLUMNS,
-          execute: (selectExpr) =>
-            supabase
-              .from('tasks')
-              .select(selectExpr)
-              .eq('id', resolvedTaskId)
-              .maybeSingle(),
+        const nextTask = await loadProcessTaskModalContext(supabase, providedTask, {
+          taskId: resolvedTaskId,
+          processRunStageId: providedTask?.process_run_stage_id || null,
         });
-        if (result?.error) throw result.error;
-        const data = result?.data;
-        const nextTaskBase = data || providedTask;
-        const nextTask = nextTaskBase ? await loadProcessTaskStageContext({
-          ...(providedTask || {}),
-          ...(data || {}),
-          recurrence_info: {
-            ...parseObject(providedTask?.recurrence_info),
-            ...parseObject(data?.recurrence_info),
-          },
-          metadata: {
-            ...parseObject(providedTask?.metadata),
-            ...parseObject(data?.metadata),
-          },
-        }) : null;
         if (!nextTask) {
           message.warning('فعالیت موردنظر پیدا نشد.');
           return;

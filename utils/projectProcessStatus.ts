@@ -17,6 +17,10 @@ const PROJECTS_MODULE_ID = 'projects';
 
 type ProcessRuntimeCarrier = Record<string, any>;
 type ProjectProcessRun = { id: string; status?: string | null };
+type ProjectProcessRuntimeSummary = {
+  processRuns: ProjectProcessRun[];
+  runStages: ProcessRuntimeCarrier[];
+};
 
 type ProcessStatusSyncContext = {
   moduleId?: string | null;
@@ -51,6 +55,21 @@ const parseObject = (value: any): Record<string, any> => {
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 
+const getCarrierProcessRunId = (carrier: ProcessRuntimeCarrier | null | undefined) => {
+  const recurrence = parseObject(carrier?.recurrence_info);
+  return normalizeText(carrier?.process_run_id || recurrence?.process_run_id);
+};
+
+const getCarrierProcessRunStageId = (carrier: ProcessRuntimeCarrier | null | undefined) => {
+  const recurrence = parseObject(carrier?.recurrence_info);
+  return normalizeText(carrier?.process_run_stage_id || recurrence?.process_run_stage_id);
+};
+
+const isProcessV2DeletedCarrier = (carrier: ProcessRuntimeCarrier | null | undefined) => {
+  const metadata = parseObject(carrier?.metadata);
+  return metadata?.process_v2_deleted === true || metadata?.deleted_from_process_v2 === true;
+};
+
 const isMissingColumnLikeError = (error: any) => {
   const code = normalizeText(error?.code).toUpperCase();
   if (['42703', 'PGRST200', 'PGRST204'].includes(code)) return true;
@@ -82,6 +101,7 @@ const extractProcessLinks = (value: ProcessRuntimeCarrier | null | undefined) =>
 };
 
 const isActualDraftStage = (stage: ProcessRuntimeCarrier) => {
+  if (isProcessV2DeletedCarrier(stage)) return false;
   const status = normalizeTaskStatus(stage?.status);
   if (stage?.is_draft === true || status === 'draft') return true;
   if (
@@ -161,16 +181,23 @@ export const deriveProjectStatusFromProcessState = (
     .filter(isActualDraftStage);
   const hasDraftStages = normalizedDraftStages.length > 0;
 
+  // فعالیت یا مرحله‌ای که V2 حذف کرده، حتی اگر دادهٔ قدیمی آن در یک query
+  // باقی مانده باشد، نباید وضعیت پروژه را دوباره باز کند.
+  const visibleTasks = (Array.isArray(tasks) ? tasks : [])
+    .filter((task) => !isProcessV2DeletedCarrier(task));
+  const visibleRunStages = (Array.isArray(runStages) ? runStages : [])
+    .filter((stage) => !isProcessV2DeletedCarrier(stage));
+
   const completedRunIds = new Set((Array.isArray(processRuns) ? processRuns : [])
     .filter((run) => isTaskDoneStatus(run?.status))
     .map((run) => normalizeText(run?.id))
     .filter(Boolean));
-  const activeTasks = (Array.isArray(tasks) ? tasks : []).filter((task) => {
-    const runId = normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id);
+  const activeTasks = visibleTasks.filter((task) => {
+    const runId = getCarrierProcessRunId(task);
     return !runId || !completedRunIds.has(runId);
   });
-  const activeRunStages = (Array.isArray(runStages) ? runStages : []).filter((stage) => (
-    !completedRunIds.has(normalizeText(stage?.process_run_id))
+  const activeRunStages = visibleRunStages.filter((stage) => (
+    !completedRunIds.has(getCarrierProcessRunId(stage))
   ));
   const completedRunCarriers = Array.from(completedRunIds).map((id) => ({
     id: `completed-process-run:${id}`,
@@ -199,33 +226,43 @@ export const deriveProjectStatusFromProcessState = (
 
 export const fetchProjectProcessTasks = async (
   projectId: string,
-  options?: { runIds?: string[] },
+  options?: { runIds?: string[]; includeRunTasks?: boolean },
 ) => {
   const normalizedProjectId = String(projectId || '').trim();
   if (!normalizedProjectId) return [] as Array<Record<string, any>>;
 
   let rows: Array<Record<string, any>> = [];
 
-  let query = supabase
-    .from('tasks')
-    .select('id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info');
-  query = applyTaskSourceRecordFilter(query, 'projects', normalizedProjectId);
-  const { data, error } = await query.limit(5000);
+  const taskColumns = 'id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info,metadata';
+  const legacyTaskColumns = 'id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info';
+  const fetchSourceTasks = async (columns: string) => {
+    let query = supabase.from('tasks').select(columns);
+    query = applyTaskSourceRecordFilter(query, 'projects', normalizedProjectId);
+    return query.limit(5000);
+  };
+  let { data, error } = await fetchSourceTasks(taskColumns);
+  if (error && isMissingColumnLikeError(error)) {
+    ({ data, error } = await fetchSourceTasks(legacyTaskColumns));
+  }
   if (error) throw error;
   if (Array.isArray(data)) rows.push(...data);
 
   const runIds = options?.runIds || await fetchProjectProcessRunIds(normalizedProjectId);
   const validRunIds = new Set(runIds);
   rows = rows.filter((task) => {
-    const runId = normalizeText(task?.process_run_id || parseObject(task?.recurrence_info)?.process_run_id);
+    const runId = getCarrierProcessRunId(task);
     return !runId || validRunIds.has(runId);
   });
-  if (runIds.length > 0) {
-    const { data: processTasks, error: processTasksError } = await supabase
+  if (options?.includeRunTasks !== false && runIds.length > 0) {
+    const fetchRunTasks = (columns: string) => supabase
       .from('tasks')
-      .select('id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info')
+      .select(columns)
       .in('process_run_id', runIds)
       .limit(5000);
+    let { data: processTasks, error: processTasksError } = await fetchRunTasks(taskColumns);
+    if (processTasksError && isMissingColumnLikeError(processTasksError)) {
+      ({ data: processTasks, error: processTasksError } = await fetchRunTasks(legacyTaskColumns));
+    }
     if (processTasksError) {
       if (!isMissingColumnLikeError(processTasksError)) throw processTasksError;
     } else if (Array.isArray(processTasks)) {
@@ -233,7 +270,74 @@ export const fetchProjectProcessTasks = async (
     }
   }
 
-  return dedupeRowsById(rows);
+  const visibleRows = dedupeRowsById(rows).filter((task) => !isProcessV2DeletedCarrier(task));
+  const taskStages = visibleRows
+    .map((task) => {
+      const stageId = getCarrierProcessRunStageId(task);
+      return stageId ? { id: stageId } : null;
+    })
+    .filter(Boolean) as Array<{ id: string }>;
+  if (taskStages.length === 0) return visibleRows;
+
+  // حذف V2 ممکن است روی stage tombstone ثبت شده باشد، اما یک task قدیمی
+  // هنوز در جدول باقی مانده باشد. آن task دیگر بخشی از وضعیت پروژه نیست.
+  const visibleStages = await filterDeletedProcessRunStageMarks(supabase, taskStages);
+  const visibleStageIds = new Set(visibleStages.map((stage) => normalizeText(stage?.id)).filter(Boolean));
+  return visibleRows.filter((task) => {
+    const stageId = getCarrierProcessRunStageId(task);
+    return !stageId || visibleStageIds.has(stageId);
+  });
+};
+
+export const fetchProjectProcessRuntimeSummary = async (
+  projectId: string,
+): Promise<ProjectProcessRuntimeSummary | null> => {
+  const normalizedProjectId = normalizeText(projectId);
+  if (!normalizedProjectId) return null;
+
+  const { data, error } = await supabase.rpc('get_process_runtime_summary_batch_for_records', {
+    p_module_id: PROJECTS_MODULE_ID,
+    p_record_ids: [normalizedProjectId],
+  });
+  if (error) {
+    const code = normalizeText(error?.code).toUpperCase();
+    const text = normalizeText(error?.message || error?.details || error?.hint).toLowerCase();
+    // نصب‌های قدیمی که هنوز phase 354 را ندارند، از مسیر سازگار قبلی استفاده می‌کنند.
+    if (code === 'PGRST202' || text.includes('get_process_runtime_summary_batch_for_records')) return null;
+    throw error;
+  }
+
+  const row = (Array.isArray(data) ? data : []).find((item: any) => (
+    normalizeText(item?.record_id) === normalizedProjectId
+  ));
+  if (!row) return { processRuns: [], runStages: [] };
+  return {
+    processRuns: (Array.isArray(row?.runs) ? row.runs : [])
+      .map((run: any) => ({ id: normalizeText(run?.id), status: run?.status }))
+      .filter((run: ProjectProcessRun) => Boolean(run.id)),
+    runStages: Array.isArray(row?.stages) ? row.stages : [],
+  };
+};
+
+export const filterProjectDraftStagesForRuntimeSummary = (
+  draftStages: any,
+  runtimeSummary: ProjectProcessRuntimeSummary | null | undefined,
+) => {
+  const stages = parseDraftStages(draftStages).filter(isActualDraftStage);
+  const processRuns = runtimeSummary?.processRuns || [];
+  if (processRuns.length === 0) return stages;
+
+  const runIds = new Set(processRuns.map((run) => normalizeText(run.id)).filter(Boolean));
+  const stageIds = new Set((runtimeSummary?.runStages || [])
+    .map((stage) => normalizeText(stage?.id || stage?.process_run_stage_id))
+    .filter(Boolean));
+  return stages.filter((stage) => {
+    const runId = getCarrierProcessRunId(stage);
+    const stageId = getCarrierProcessRunStageId(stage);
+    if (runId && !runIds.has(runId)) return false;
+    if (stageId && !stageIds.has(stageId)) return false;
+    return true;
+  });
 };
 
 export const fetchProjectProcessRuns = async (projectId: string): Promise<ProjectProcessRun[]> => {
@@ -334,14 +438,31 @@ export const syncProjectStatusWithProcessState = async (
     projectDraftStages = parseDraftStages(projectRow.execution_process_draft);
   }
 
-  const processRuns = await fetchProjectProcessRuns(normalizedProjectId);
+  const runtimeSummary = await fetchProjectProcessRuntimeSummary(normalizedProjectId);
+  const hasRuntimeSummary = Boolean(runtimeSummary && runtimeSummary.processRuns.length > 0);
+  const processRuns = hasRuntimeSummary
+    ? runtimeSummary!.processRuns
+    : await fetchProjectProcessRuns(normalizedProjectId);
   const runIds = processRuns.map((run) => run.id);
-  const [projectTasks, projectRunStages] = await Promise.all([
-    options?.tasks || fetchProjectProcessTasks(normalizedProjectId, { runIds }),
-    fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
+  const [fetchedTasks, projectRunStages] = await Promise.all([
+    options?.tasks || fetchProjectProcessTasks(normalizedProjectId, {
+      runIds,
+      // خلاصهٔ runtime، taskهای وابسته به اجرای فرآیند را با stageهای واقعی و
+      // tombstoneهای حذف‌شده برمی‌گرداند؛ این query فقط فعالیت مستقل پروژه را نگه می‌دارد.
+      includeRunTasks: !hasRuntimeSummary,
+    }),
+    hasRuntimeSummary
+      ? Promise.resolve(runtimeSummary!.runStages)
+      : fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
   ]);
+  const projectTasks = hasRuntimeSummary
+    ? fetchedTasks.filter((task) => !getCarrierProcessRunId(task) && !getCarrierProcessRunStageId(task))
+    : fetchedTasks;
+  const statusDraftStages = hasRuntimeSummary
+    ? filterProjectDraftStagesForRuntimeSummary(projectDraftStages, runtimeSummary)
+    : projectDraftStages;
   const nextStatus = deriveProjectStatusFromProcessState(
-    projectDraftStages,
+    statusDraftStages,
     projectTasks,
     projectRunStages,
     processRuns,

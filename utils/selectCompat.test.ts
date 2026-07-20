@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { runSelectWithCompatibleColumns } from './selectCompat';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createSchemaCompatibleDataProvider,
+  runSelectWithCompatibleColumns,
+} from './selectCompat';
 
 describe('runSelectWithCompatibleColumns', () => {
   it('drops known incompatible purchase invoice columns before executing lightweight selects', async () => {
@@ -91,5 +94,48 @@ describe('runSelectWithCompatibleColumns', () => {
     });
 
     expect(secondAttempts).toEqual(['id,name,amount,description']);
+  });
+
+  it('uses the actual record schema only when a show-query does not name its unavailable field', async () => {
+    const execute = vi.fn()
+      .mockResolvedValueOnce({
+        data: null,
+        error: { code: 'PGRST204', message: 'schema cache is stale' },
+      })
+      .mockResolvedValueOnce({ data: { id: 'invoice-1', name: 'فاکتور فروش' }, error: null });
+
+    const result = await runSelectWithCompatibleColumns({
+      cacheKey: 'select-compat-test:show-fallback',
+      columns: ['id', 'name', 'total_invoice_amount'],
+      fallbackToWildcard: true,
+      execute,
+    });
+
+    expect(result.data).toEqual({ id: 'invoice-1', name: 'فاکتور فروش' });
+    expect(execute.mock.calls.map(([select]) => select)).toEqual([
+      'id,name,total_invoice_amount',
+      '*',
+    ]);
+  });
+});
+
+describe('createSchemaCompatibleDataProvider', () => {
+  it('removes only the unavailable field before retrying a generic module list', async () => {
+    const getList = vi.fn()
+      .mockRejectedValueOnce({
+        code: 'PGRST204',
+        message: "Could not find the 'total_invoice_amount' column of 'invoices' in the schema cache",
+      })
+      .mockResolvedValueOnce({ data: [{ id: 'invoice-1', name: 'فاکتور فروش' }], total: 1 });
+    const provider = createSchemaCompatibleDataProvider({ getList });
+
+    const result = await provider.getList({
+      resource: 'invoices',
+      meta: { select: 'id,name,total_invoice_amount' },
+    });
+
+    expect(result.data).toHaveLength(1);
+    expect(getList).toHaveBeenCalledTimes(2);
+    expect(getList.mock.calls[1][0].meta.select).toBe('id,name');
   });
 });

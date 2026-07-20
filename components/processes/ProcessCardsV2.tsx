@@ -107,7 +107,11 @@ type ProcessCardsV2Props = {
   onDeleteStage?: (stage: ProcessV2Stage, lane: ProcessV2Lane, process: ProcessV2CardData) => boolean | void | Promise<boolean | void>;
   onCopy?: (id: string) => void;
   onAddRun?: () => void;
-  onOpenStageDetails?: (stage: ProcessV2Stage, laneTitle: string, process: ProcessV2CardData) => boolean | void;
+  onOpenStageDetails?: (
+    stage: ProcessV2Stage,
+    laneTitle: string,
+    process: ProcessV2CardData,
+  ) => boolean | ProcessV2Stage | void | Promise<boolean | ProcessV2Stage | void>;
   onStageStatusChange?: (process: ProcessV2CardData, stageId: string, status: string, sourcePatch?: Record<string, any>) => void;
   onShowInfo?: (item: ProcessV2CardData) => void;
   onShowHistory?: (item: ProcessV2CardData) => void;
@@ -2873,8 +2877,18 @@ const ProcessCardsV2: React.FC<ProcessCardsV2Props> = ({
                 onStageTouchDragMove={handleStageTouchDragMove}
                 onStageTouchDragEnd={handleStageTouchDragEnd}
                 onOpenStageDetails={(stage, laneTitle) => {
-                  const handled = onOpenStageDetails?.(stage, laneTitle, item);
-                  if (!handled) setActiveStageModal({ stage, laneTitle });
+                  void Promise.resolve(onOpenStageDetails?.(stage, laneTitle, item))
+                    .then((result) => {
+                      if (result === true) return;
+                      const resolvedStage = result && typeof result === 'object' && 'id' in result
+                        ? result as ProcessV2Stage
+                        : stage;
+                      setActiveStageModal({ stage: resolvedStage, laneTitle });
+                    })
+                    .catch(() => {
+                      // خطای تکمیل context نباید کاربر را از بازکردن فعالیت محروم کند.
+                      setActiveStageModal({ stage, laneTitle });
+                    });
                 }}
                 onCopyStage={(stageId) => updateLane(lane.id, (currentLane) => {
                     const stage = currentLane.stages.find((candidate) => candidate.id === stageId);

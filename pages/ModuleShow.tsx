@@ -1492,6 +1492,7 @@ const ModuleShow: React.FC = () => {
         const recordResult = await runSelectWithCompatibleColumns<any | null>({
           cacheKey: `module-show:${moduleId}`,
           columns: recordProjection.initialColumns,
+          fallbackToWildcard: true,
           execute: (selectExpr) => supabase
             .from(moduleTable)
             .select(selectExpr)

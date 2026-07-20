@@ -5,6 +5,7 @@ import { focusManager } from "@tanstack/react-query";
 import { Refine, Authenticated } from "@refinedev/core";
 import { ErrorComponent, useNotificationProvider } from "@refinedev/antd";
 import { dataProvider } from "@refinedev/supabase";
+import { createSchemaCompatibleDataProvider } from './utils/selectCompat';
 import { authProvider } from "./authProvider";
 import routerBindings, { UnsavedChangesNotifier, DocumentTitleHandler, CatchAllNavigate } from "@refinedev/react-router-v6";
 import { BrowserRouter, Navigate, Route, Routes, Outlet, useParams, useLocation } from "react-router-dom";
@@ -700,7 +701,7 @@ function App() {
 
     return (
       <Refine
-        dataProvider={dataProvider(supabase)}
+        dataProvider={createSchemaCompatibleDataProvider(dataProvider(supabase))}
         authProvider={authProvider}
         notificationProvider={notificationProvider}
         routerProvider={routerBindings}

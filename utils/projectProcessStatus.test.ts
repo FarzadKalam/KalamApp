@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   deriveProjectStatusFromProcessState,
+  filterProjectDraftStagesForRuntimeSummary,
   reconcileProjectProcessStatusCarriers,
 } from './projectProcessStatus';
 
@@ -114,5 +115,27 @@ describe('deriveProjectStatusFromProcessState', () => {
         { id: 'stage-2', status: 'todo' },
       ],
     ).map((row) => row.id)).toEqual(['task-1', 'stage-2']);
+  });
+
+  it('does not let a V2-deleted activity or draft reopen a completed project', () => {
+    expect(deriveProjectStatusFromProcessState([
+      { id: 'stale-draft', is_draft: true, status: 'draft', metadata: { process_v2_deleted: true } },
+    ], [
+      { id: 'stale-task', status: 'in_progress', metadata: { deleted_from_process_v2: true } },
+    ], [], [
+      { id: 'run-1', status: 'completed' },
+    ])).toBe('completed');
+  });
+
+  it('excludes persisted runtime drafts whose stage was deleted from the current process run', () => {
+    expect(filterProjectDraftStagesForRuntimeSummary([
+      { id: 'stale-draft', is_draft: true, process_run_id: 'run-1', process_run_stage_id: 'stage-deleted' },
+      { id: 'current-draft', is_draft: true, process_run_id: 'run-1', process_run_stage_id: 'stage-current' },
+    ], {
+      processRuns: [{ id: 'run-1', status: 'completed' }],
+      runStages: [{ id: 'stage-current', process_run_id: 'run-1', status: 'todo' }],
+    })).toEqual([
+      { id: 'current-draft', is_draft: true, process_run_id: 'run-1', process_run_stage_id: 'stage-current' },
+    ]);
   });
 });

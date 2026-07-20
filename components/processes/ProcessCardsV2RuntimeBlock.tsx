@@ -79,6 +79,7 @@ import {
   PROCESS_TASK_CUSTOM_FIELDS_KEY,
   PROCESS_TASK_CUSTOM_FIELD_VALUES_KEY,
 } from '../../utils/processTaskCustomFields';
+import { loadProcessTaskModalContext } from '../../utils/processTaskModalContext';
 import { markModuleListChanged, subscribeToLocalModuleListInvalidation } from '../../utils/moduleListLive';
 import {
   syncProjectStatusesForProcessContext,
@@ -4554,7 +4555,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     });
   }, [effectiveDraftStages, normalizedRecordId, processTemplateTargetModuleIds, templateStages]);
 
-  const handleOpenStageDetails = useCallback((stage: ProcessV2Stage) => {
+  const handleOpenStageDetails = useCallback(async (stage: ProcessV2Stage) => {
     if (
       isProcessTemplateModule(normalizedModuleId)
       && stage.kind === 'draft'
@@ -4571,7 +4572,36 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       }));
       return true;
     }
-    return false;
+    const source = stage.source && typeof stage.source === 'object' ? stage.source : {};
+    const sourceMetadata = parseObject(source?.metadata);
+    const taskId = normalizeDbUuid(
+      source?.task_id
+      || source?.process_task_id
+      || (stage.kind === 'activity' ? source?.id : '')
+      || sourceMetadata?.task_id,
+    );
+    const runStageId = normalizeDbUuid(
+      source?.process_run_stage_id
+      || source?.run_stage_id
+      || (stage.kind === 'draft' ? source?.id : '')
+      || stage.id,
+    );
+    if (!taskId && !runStageId) return stage;
+
+    const context = await loadProcessTaskModalContext(supabase, source, {
+      taskId: taskId || null,
+      processRunStageId: runStageId || null,
+    });
+    return {
+      ...stage,
+      title: normalizeText(context?.name || context?.stage_name) || stage.title,
+      activityTypeLabel: normalizeText(context?.task_type) || stage.activityTypeLabel,
+      source: {
+        ...source,
+        ...context,
+        process_run_stage_id: context?.process_run_stage_id || runStageId || source?.process_run_stage_id,
+      },
+    } as ProcessV2Stage;
   }, [normalizedModuleId, normalizedRecordId]);
 
   const hasValidRuntimeRecord = Boolean(enabled && normalizedModuleId && normalizedRecordId);
