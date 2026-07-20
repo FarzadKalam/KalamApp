@@ -5,7 +5,7 @@ import { dataProvider as refineSupabaseDataProvider } from "@refinedev/supabase"
 import { useNavigate, useParams } from "react-router-dom";
 import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
-import { BlockType, FieldType, ModuleDefinition, ModuleField, SavedView, ViewMode } from "../types";
+import { BlockType, FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
 import { supportsModuleAssignee } from "../utils/assigneeSupport";
 import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";

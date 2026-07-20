@@ -8,7 +8,11 @@ describe('process runtime summary batching', () => {
   it('uses one compact summary RPC for multiple column records', async () => {
     const rpc = vi.fn().mockResolvedValue({
       data: [
-        { record_id: RECORD_A, runs: [{ id: 'run-a' }], stages: [{ id: 'stage-a' }] },
+        {
+          record_id: RECORD_A,
+          runs: [{ id: 'run-a' }],
+          stages: [{ id: 'stage-a', process_lane_key: 'lane_design', process_node_key: 'design' }],
+        },
         { record_id: RECORD_B, runs: [{ id: 'run-b' }], stages: [{ id: 'stage-b' }] },
       ],
       error: null,
@@ -24,7 +28,11 @@ describe('process runtime summary batching', () => {
       p_module_id: 'projects',
       p_record_ids: [RECORD_A, RECORD_B],
     });
-    expect(first).toMatchObject({ isSummary: true, runs: [{ id: 'run-a' }] });
+    expect(first).toMatchObject({
+      isSummary: true,
+      runs: [{ id: 'run-a' }],
+      stages: [{ id: 'stage-a', process_lane_key: 'lane_design', process_node_key: 'design' }],
+    });
     expect(second).toMatchObject({ isSummary: true, stages: [{ id: 'stage-b' }] });
   });
 

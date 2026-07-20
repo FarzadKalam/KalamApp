@@ -380,7 +380,7 @@ const normalizePostgrestNotInFilter = (filter: any): any => {
 
   if ((filter.operator === 'or' || filter.operator === 'and') && Array.isArray(filter.value)) {
     const value = filter.value.map(normalizePostgrestNotInFilter);
-    return value.every((entry, index) => entry === filter.value[index]) ? filter : { ...filter, value };
+    return value.every((entry: any, index: number) => entry === filter.value[index]) ? filter : { ...filter, value };
   }
 
   // نسخهٔ فعلی providerِ Refine برای nin، فهرست مقادیر را بدون پرانتز به
