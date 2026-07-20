@@ -18,6 +18,7 @@ import {
   fetchProcessWorkItems,
   getPreferredProcessRecordRef,
   getProcessWorkItemIdentity,
+  normalizeProcessWorkItemLinks,
   type ProcessWorkItem,
 } from '../../utils/processWorkItems';
 
@@ -400,7 +401,7 @@ const OurProcessesWidget: React.FC = () => {
           updatedAt: normalizeId(task?.updated_at || task?.created_at) || null,
           reason,
           processLinks: {
-            ...parseProcessLinkMap(parseJsonObject(task?.recurrence_info)?.process_links),
+            ...normalizeProcessWorkItemLinks(parseProcessLinkMap(parseJsonObject(task?.recurrence_info)?.process_links)),
             [moduleId]: recordId,
           },
           displayModuleId: moduleId,
@@ -526,7 +527,7 @@ const OurProcessesWidget: React.FC = () => {
               processLinks: {
                 ...candidateStages.reduce<Record<string, string>>((links, stage) => ({
                   ...links,
-                  ...parseProcessLinkMap(stage?.process_link_map || stage?.process_links),
+                  ...normalizeProcessWorkItemLinks(parseProcessLinkMap(stage?.process_link_map || stage?.process_links)),
                 }), {}),
                 [moduleId]: recordId,
               },

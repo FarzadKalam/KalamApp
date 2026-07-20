@@ -3,6 +3,10 @@ import { applyTaskSourceRecordFilter } from './taskMeta';
 import { isTaskDoneStatus, normalizeTaskStatus } from './taskCompletion';
 import { parseProcessLinkMap } from './processTargets';
 import { filterDeletedProcessRunStageMarks } from './processDeletedStageMarks';
+import {
+  buildMaterializedProcessIdentityIndex,
+  isDraftProcessInstanceMaterialized,
+} from './processInstanceIdentity';
 
 export type ProjectProcessStatus =
   | 'draft'
@@ -16,7 +20,12 @@ const CANCELED_TASK_STATUS = 'canceled';
 const PROJECTS_MODULE_ID = 'projects';
 
 type ProcessRuntimeCarrier = Record<string, any>;
-type ProjectProcessRun = { id: string; status?: string | null };
+type ProjectProcessRun = {
+  id: string;
+  status?: string | null;
+  template_id?: string | null;
+  process_group_id?: string | null;
+};
 type ProjectProcessRuntimeSummary = {
   processRuns: ProjectProcessRun[];
   runStages: ProcessRuntimeCarrier[];
@@ -69,6 +78,22 @@ const isProcessV2DeletedCarrier = (carrier: ProcessRuntimeCarrier | null | undef
   const metadata = parseObject(carrier?.metadata);
   return metadata?.process_v2_deleted === true || metadata?.deleted_from_process_v2 === true;
 };
+
+const hasProcessRuntimeIdentity = (carrier: ProcessRuntimeCarrier | null | undefined) => {
+  const recurrence = parseObject(carrier?.recurrence_info);
+  const metadata = parseObject(carrier?.metadata);
+  const processGroup = parseObject(carrier?.process_group || metadata?.process_group || recurrence?.process_group);
+  return Boolean(
+    getCarrierProcessRunId(carrier)
+    || getCarrierProcessRunStageId(carrier)
+    || normalizeText(carrier?.process_group_id || metadata?.process_group_id || recurrence?.process_group_id || processGroup?.id)
+    || normalizeText(carrier?.source_template_id || metadata?.source_template_id || recurrence?.source_template_id || processGroup?.template_id)
+  );
+};
+
+export const filterProjectStandaloneTasksForRuntimeSummary = (
+  tasks: ProcessRuntimeCarrier[] | null | undefined,
+) => (Array.isArray(tasks) ? tasks : []).filter((task) => !hasProcessRuntimeIdentity(task));
 
 const isMissingColumnLikeError = (error: any) => {
   const code = normalizeText(error?.code).toUpperCase();
@@ -233,7 +258,7 @@ export const fetchProjectProcessTasks = async (
 
   let rows: Array<Record<string, any>> = [];
 
-  const taskColumns = 'id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info,metadata';
+  const taskColumns = 'id,status,project_id,source_module_id,source_record_id,source_template_id,process_group_id,process_run_id,process_run_stage_id,recurrence_info,metadata';
   const legacyTaskColumns = 'id,status,project_id,source_module_id,source_record_id,process_run_id,process_run_stage_id,recurrence_info';
   const fetchSourceTasks = async (columns: string) => {
     let query = supabase.from('tasks').select(columns);
@@ -313,7 +338,12 @@ export const fetchProjectProcessRuntimeSummary = async (
   if (!row) return { processRuns: [], runStages: [] };
   return {
     processRuns: (Array.isArray(row?.runs) ? row.runs : [])
-      .map((run: any) => ({ id: normalizeText(run?.id), status: run?.status }))
+      .map((run: any) => ({
+        id: normalizeText(run?.id),
+        status: run?.status,
+        template_id: run?.template_id || null,
+        process_group_id: run?.process_group_id || null,
+      }))
       .filter((run: ProjectProcessRun) => Boolean(run.id)),
     runStages: Array.isArray(row?.stages) ? row.stages : [],
   };
@@ -331,7 +361,14 @@ export const filterProjectDraftStagesForRuntimeSummary = (
   const stageIds = new Set((runtimeSummary?.runStages || [])
     .map((stage) => normalizeText(stage?.id || stage?.process_run_stage_id))
     .filter(Boolean));
+  const materializedRuntimeIndex = buildMaterializedProcessIdentityIndex([
+    ...processRuns,
+    ...(runtimeSummary?.runStages || []),
+  ]);
   return stages.filter((stage) => {
+    // snapshot قدیمیِ پیش‌نویس پس از ایجاد اجرای واقعی باید از محاسبهٔ وضعیت
+    // کنار برود، حتی اگر نسخهٔ قدیمی آن شناسهٔ run/stage را ذخیره نکرده باشد.
+    if (isDraftProcessInstanceMaterialized(stage, materializedRuntimeIndex)) return false;
     const runId = getCarrierProcessRunId(stage);
     const stageId = getCarrierProcessRunStageId(stage);
     if (runId && !runIds.has(runId)) return false;
@@ -456,7 +493,7 @@ export const syncProjectStatusWithProcessState = async (
       : fetchProjectProcessRunStages(normalizedProjectId, { runIds }),
   ]);
   const projectTasks = hasRuntimeSummary
-    ? fetchedTasks.filter((task) => !getCarrierProcessRunId(task) && !getCarrierProcessRunStageId(task))
+    ? filterProjectStandaloneTasksForRuntimeSummary(fetchedTasks)
     : fetchedTasks;
   const statusDraftStages = hasRuntimeSummary
     ? filterProjectDraftStagesForRuntimeSummary(projectDraftStages, runtimeSummary)

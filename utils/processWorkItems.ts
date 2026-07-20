@@ -48,7 +48,7 @@ const PROCESS_RECORD_MODULE_PRIORITY = [
   'employees',
 ] as const;
 
-const normalizeProcessLinks = (value: unknown): Record<string, string> => {
+export const normalizeProcessWorkItemLinks = (value: unknown): Record<string, string> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.entries(value as Record<string, unknown>).reduce<Record<string, string>>((links, [moduleId, recordId]) => {
     const normalizedModuleId = normalizeText(moduleId);
@@ -174,7 +174,7 @@ const normalizeProcessWorkItem = (row: any): ProcessWorkItem | null => {
     templateName: normalizeText(row?.templateName) || null,
     updatedAt: normalizeText(row?.updatedAt) || null,
     reason: ['task', 'draft_stage', 'record', 'linked_record'].includes(reason) ? reason : 'record',
-    processLinks: normalizeProcessLinks(row?.processLinks),
+    processLinks: normalizeProcessWorkItemLinks(row?.processLinks),
   };
 };
 

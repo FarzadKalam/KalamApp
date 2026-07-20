@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveProjectStatusFromProcessState,
   filterProjectDraftStagesForRuntimeSummary,
+  filterProjectStandaloneTasksForRuntimeSummary,
   reconcileProjectProcessStatusCarriers,
 } from './projectProcessStatus';
 
@@ -136,6 +137,34 @@ describe('deriveProjectStatusFromProcessState', () => {
       runStages: [{ id: 'stage-current', process_run_id: 'run-1', status: 'todo' }],
     })).toEqual([
       { id: 'current-draft', is_draft: true, process_run_id: 'run-1', process_run_stage_id: 'stage-current' },
+    ]);
+  });
+
+  it('does not let a legacy draft without run identifiers reopen its materialized completed process', () => {
+    expect(filterProjectDraftStagesForRuntimeSummary([
+      {
+        id: 'legacy-draft',
+        is_draft: true,
+        source_template_id: 'template-1',
+        metadata: { process_group_id: 'group-1' },
+      },
+    ], {
+      processRuns: [{
+        id: 'run-1',
+        status: 'completed',
+        template_id: 'template-1',
+        process_group_id: 'group-1',
+      }],
+      runStages: [{ id: 'stage-1', process_run_id: 'run-1', status: 'completed' }],
+    })).toEqual([]);
+  });
+
+  it('does not treat a legacy process task without run identifiers as a standalone project activity', () => {
+    expect(filterProjectStandaloneTasksForRuntimeSummary([
+      { id: 'legacy-process-task', status: 'in_progress', source_template_id: 'template-1' },
+      { id: 'manual-project-task', status: 'in_progress' },
+    ])).toEqual([
+      { id: 'manual-project-task', status: 'in_progress' },
     ]);
   });
 });
