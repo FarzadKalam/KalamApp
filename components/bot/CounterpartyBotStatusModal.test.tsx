@@ -69,7 +69,7 @@ describe('CounterpartyBotStatusModal', () => {
       return matched as HTMLElement;
     });
     const userDropdown = userOption.closest('.ant-select-dropdown');
-    expect(userDropdown?.closest('.ant-modal-root')).toBeFalsy();
+    expect(userDropdown?.closest('.ant-modal')).toBeTruthy();
     fireEvent.click(userOption);
 
     await waitFor(() => expect(onChangePlatform).toHaveBeenCalledWith('rubika', 'allowedUserIds', ['user-1']));
@@ -82,7 +82,7 @@ describe('CounterpartyBotStatusModal', () => {
       return matched as HTMLElement;
     });
     const roleDropdown = roleOption.closest('.ant-select-dropdown');
-    expect(roleDropdown?.closest('.ant-modal-root')).toBeFalsy();
+    expect(roleDropdown?.closest('.ant-modal')).toBeTruthy();
     fireEvent.click(roleOption);
 
     await waitFor(() => expect(onChangePlatform).toHaveBeenCalledWith('rubika', 'allowedRoleIds', ['role-1']));

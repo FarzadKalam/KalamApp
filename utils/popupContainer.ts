@@ -71,6 +71,19 @@ export const resolveOverlayPopupContainer = (triggerNode?: HTMLElement | null) =
   return stableOverlayHost || getKalamPopupRoot();
 };
 
+/**
+ * برای کنترل‌های داخل Modal/Drawer، popup را در همان overlay نگه می‌دارد تا
+ * زیر لایهٔ مودال دیگری قرار نگیرد و موقعیت آن با اسکرول محتوا هماهنگ بماند.
+ */
+export const resolveModalPopupContainer = (triggerNode?: HTMLElement | null) => {
+  if (typeof document === 'undefined') {
+    return (triggerNode || {}) as HTMLElement;
+  }
+
+  const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal, .ant-drawer-body, .ant-drawer-content') as HTMLElement | null;
+  return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
+};
+
 export const resolveStableOverlayRoot = (hostNode?: HTMLElement | null) => {
   if (typeof document === 'undefined') {
     return (hostNode || {}) as HTMLElement;

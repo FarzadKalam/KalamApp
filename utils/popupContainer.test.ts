@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveOverlayPopupContainer } from './popupContainer';
+import { resolveModalPopupContainer, resolveOverlayPopupContainer } from './popupContainer';
 
 describe('resolveOverlayPopupContainer', () => {
   it('uses the dedicated popup root for triggers inside modal overlays', () => {
@@ -26,5 +26,22 @@ describe('resolveOverlayPopupContainer', () => {
 
     expect(container.id).toBe('kalam-popup-root');
     expect(container.parentElement).toBe(document.body);
+  });
+
+  it('keeps select popups inside the current modal body when requested', () => {
+    document.body.innerHTML = `
+      <div class="ant-modal-root">
+        <div class="ant-modal-wrap">
+          <div class="ant-modal">
+            <div class="ant-modal-content">
+              <div class="ant-modal-body"><button id="modal-trigger" type="button">select</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const trigger = document.getElementById('modal-trigger') as HTMLElement;
+    expect(resolveModalPopupContainer(trigger)).toBe(trigger.closest('.ant-modal-body'));
   });
 });

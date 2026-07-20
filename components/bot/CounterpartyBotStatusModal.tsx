@@ -6,7 +6,7 @@ import {
   buildStandardSelectPopupRootStyle,
   KALAM_SELECT_FIELD_CLASSNAME,
   mergeClassNames,
-  resolveSelectPopupContainer,
+  resolveModalPopupContainer,
 } from '../../utils/popupContainer';
 import { getBotPlatformAvatarSrc } from '../../utils/botPlatform';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
@@ -76,6 +76,8 @@ const STATUS_COLOR: Record<string, string> = {
   error: 'text-red-500',
   disabled: 'text-gray-400',
 };
+const BOT_STATUS_MODAL_Z_INDEX = 15220;
+const BOT_STATUS_SELECT_Z_INDEX = BOT_STATUS_MODAL_Z_INDEX + 100;
 
 const toIdentityOptions = (options: Array<{ label: string; value: string }>, kind: IdentityKind): IdentityOption[] =>
   (options || []).map((option) => ({
@@ -131,6 +133,8 @@ const PlatformTabContent: React.FC<{
   saving: boolean;
   userOptions: Array<{ label: string; value: string }>;
   roleOptions: Array<{ label: string; value: string }>;
+  popupContainer: (trigger?: HTMLElement | null) => HTMLElement;
+  overlayZIndexBase: number;
   onChangePlatform: (key: keyof BotPlatformState, value: any) => void;
   onStartBindWatch: () => void;
   onCopyActivationCode: () => void;
@@ -142,6 +146,8 @@ const PlatformTabContent: React.FC<{
   saving,
   userOptions,
   roleOptions,
+  popupContainer,
+  overlayZIndexBase,
   onChangePlatform,
   onStartBindWatch,
   onCopyActivationCode,
@@ -234,6 +240,10 @@ const PlatformTabContent: React.FC<{
           onChange={(value) => onChangePlatform('allowedUserIds', (Array.isArray(value) ? value : []).map(String))}
           className="w-full"
           placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
+          getPopupContainer={popupContainer}
+          modalContainer={popupContainer}
+          preferLocalPopupContainer
+          overlayZIndexBase={overlayZIndexBase}
         />
       </div>
       <div>
@@ -248,6 +258,10 @@ const PlatformTabContent: React.FC<{
           onChange={(value) => onChangePlatform('allowedRoleIds', (Array.isArray(value) ? value : []).map(String))}
           className="w-full"
           placeholder="اگر خالی باشد، فقط ایجادکننده دسترسی دارد"
+          getPopupContainer={popupContainer}
+          modalContainer={popupContainer}
+          preferLocalPopupContainer
+          overlayZIndexBase={overlayZIndexBase}
         />
       </div>
       <div className="flex justify-end pt-1">
@@ -330,6 +344,10 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
     if (key === 'aiAutoReplyEnabled') onChangeAiAutoReplyEnabled?.(Boolean(value));
     if (key === 'aiCounterpartyGuide') onChangeAiCounterpartyGuide?.(String(value || ''));
   };
+  const popupContainer = React.useCallback(
+    (trigger?: HTMLElement | null) => resolveModalPopupContainer(trigger),
+    [],
+  );
 
   const tabItems = CHANNEL_OPTIONS.map(({ label, value: channel }) => ({
     key: channel,
@@ -343,6 +361,8 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
         saving={saving}
         userOptions={userOptions}
         roleOptions={roleOptions}
+        popupContainer={popupContainer}
+        overlayZIndexBase={BOT_STATUS_SELECT_Z_INDEX}
         onChangePlatform={(key, val) => handlePlatformChange(channel, key, val)}
         onStartBindWatch={() => onStartBindWatch(channel)}
         onCopyActivationCode={() => onCopyActivationCode(channel)}
@@ -357,6 +377,7 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
       onCancel={onClose}
       destroyOnHidden
       width={720}
+      zIndex={BOT_STATUS_MODAL_Z_INDEX}
       footer={[
         <Button key="cancel" onClick={onClose}>
           بستن
@@ -386,8 +407,8 @@ const CounterpartyBotStatusModal: React.FC<CounterpartyBotStatusModalProps> = ({
                   onChange={(value) => onChangeDefaultChannel?.(value as BotChannel)}
                   className={mergeClassNames(KALAM_SELECT_FIELD_CLASSNAME, 'w-full')}
                   optionLabelProp="label"
-                  getPopupContainer={resolveSelectPopupContainer}
-                  styles={{ popup: { root: buildStandardSelectPopupRootStyle() } }}
+                  getPopupContainer={popupContainer}
+                  styles={{ popup: { root: buildStandardSelectPopupRootStyle({ zIndex: BOT_STATUS_SELECT_Z_INDEX }) } }}
                 />
               </div>
               <div className="flex items-center pt-5">

@@ -4,7 +4,7 @@ import type { BotTargetModuleId } from '../../utils/botPlatform';
 import { FieldType } from '../../types';
 import AdaptiveIdentityPicker from '../AdaptiveIdentityPicker';
 import SmartFieldRenderer from '../SmartFieldRenderer';
-import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import { resolveModalPopupContainer } from '../../utils/popupContainer';
 import type { IdentityKind, IdentityOption } from '../../utils/identityDirectory';
 
 type TargetOption = {
@@ -100,10 +100,6 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
 }) => {
   const additionalUserOptions = React.useMemo(() => toIdentityOptions(userOptions, 'user'), [userOptions]);
   const additionalRoleOptions = React.useMemo(() => toIdentityOptions(roleOptions, 'role'), [roleOptions]);
-  const resolveModalPopupContainer = React.useCallback((trigger?: HTMLElement | null) => {
-    const modalBodyHost = trigger?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
-    return modalBodyHost || resolveOverlayPopupContainer(trigger);
-  }, []);
   const targetRelationField = React.useMemo(() => ({
     key: 'bot_identity_target_record_id',
     type: FieldType.RELATION,
@@ -197,6 +193,9 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                       onChange={(value) => onChangeAllowedUserIds((Array.isArray(value) ? value : []).map(String))}
                       placeholder="اگر خالی باشد، محدودیت اختصاصی ندارد"
                       overlayZIndexBase={BOT_IDENTITY_SELECT_Z_INDEX}
+                      getPopupContainer={resolveModalPopupContainer}
+                      modalContainer={resolveModalPopupContainer}
+                      preferLocalPopupContainer
                       className="w-full"
                     />
                   </div>
@@ -212,6 +211,9 @@ const BotChatIdentityBindModal: React.FC<BotChatIdentityBindModalProps> = ({
                       onChange={(value) => onChangeAllowedRoleIds((Array.isArray(value) ? value : []).map(String))}
                       placeholder="اگر خالی باشد، محدودیت اختصاصی ندارد"
                       overlayZIndexBase={BOT_IDENTITY_SELECT_Z_INDEX}
+                      getPopupContainer={resolveModalPopupContainer}
+                      modalContainer={resolveModalPopupContainer}
+                      preferLocalPopupContainer
                       className="w-full"
                     />
                   </div>
