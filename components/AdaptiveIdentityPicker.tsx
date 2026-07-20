@@ -42,6 +42,7 @@ const SCOPE_LABELS: Record<IdentityKind, string> = {
 
 const PAGE_SIZE = 50;
 const DEFAULT_SCOPES: IdentityKind[] = ['user', 'role'];
+const EMPTY_IDENTITY_OPTIONS: IdentityOption[] = [];
 
 const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
   value,
@@ -55,11 +56,17 @@ const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
   placeholder = 'انتخاب کاربر یا نقش',
   pickerTitle = 'انتخاب از فهرست سازمان',
   excludeIds = [],
-  additionalOptions = [],
+  additionalOptions = EMPTY_IDENTITY_OPTIONS,
   onLoadError,
   ...restProps
 }) => {
-  const normalizedScopes = useMemo(() => Array.from(new Set(scopes)), [scopes]);
+  // بسیاری از فرم‌ها scopes را به‌شکل literal می‌فرستند. وابستگی مستقیم به
+  // آرایه، هنگام هر render یک واکشی تازه و لغو پاسخ قبلی ایجاد می‌کرد.
+  const scopesKey = (Array.isArray(scopes) ? scopes : DEFAULT_SCOPES).join('|');
+  const normalizedScopes = useMemo(
+    () => Array.from(new Set((Array.isArray(scopes) ? scopes : DEFAULT_SCOPES))),
+    [scopesKey],
+  );
   const fallbackKind = normalizedScopes.length === 1 ? normalizedScopes[0] : null;
   const [legacyTokenByRaw, setLegacyTokenByRaw] = useState<Record<string, IdentityToken>>({});
   const rawInputValues = useMemo(

@@ -50,6 +50,7 @@ vi.mock('../utils/identityDirectory', async (importOriginal) => {
 });
 
 import AdaptiveIdentityPicker from './AdaptiveIdentityPicker';
+import { searchIdentityOptions } from '../utils/identityDirectory';
 
 describe('AdaptiveIdentityPicker', () => {
   afterEach(cleanup);
@@ -86,5 +87,31 @@ describe('AdaptiveIdentityPicker', () => {
     expect(screen.getByText('گروه‌های داخلی')).toBeInTheDocument();
     expect(screen.getByText('مدیریت محصول')).toBeInTheDocument();
     expect(screen.getByText('گروه عملیات')).toBeInTheDocument();
+  });
+
+  it('keeps the central directory request stable when a form recreates its scopes array', async () => {
+    const search = vi.mocked(searchIdentityOptions);
+    search.mockClear();
+    const { rerender } = render(
+      <AdaptiveIdentityPicker
+        adaptiveMode="mobile-sheet"
+        scopes={['user', 'role']}
+        pickerTitle="انتخاب مسئول پیش‌فرض"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'انتخاب مسئول پیش‌فرض' }));
+    await waitFor(() => expect(screen.getByText('مدیریت محصول')).toBeInTheDocument());
+
+    rerender(
+      <AdaptiveIdentityPicker
+        adaptiveMode="mobile-sheet"
+        scopes={['user', 'role']}
+        pickerTitle="انتخاب مسئول پیش‌فرض"
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('الهام رضایی')).toBeInTheDocument());
+    expect(search).toHaveBeenCalledTimes(1);
   });
 });
