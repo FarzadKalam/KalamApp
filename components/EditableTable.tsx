@@ -3694,6 +3694,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             paymentRow: {
               ...(syncedRowsByKey.get(segment.sourceRowKey) || segment.paymentRow),
               amount: segment.amount,
+              description: segment.paymentRow.description,
               _cash_bank_operation_id: null,
               allocation_group_key: pendingInvoicePaymentAllocation.allocationGroupKey,
             },

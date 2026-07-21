@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   autoAllocateInvoiceExcess,
+  buildInvoicePaymentAllocationDescription,
   buildInvoicePaymentOverflowPlan,
   getInvoicePaymentAmount,
 } from './invoicePaymentAllocation';
@@ -25,6 +26,15 @@ describe('invoice payment allocation', () => {
     expect(plan?.excessAmount).toBe(300);
     expect(plan?.sourcePayments[1].amount).toBe(400);
     expect(plan?.segments[0].paymentRow.payment_type).toBe('cash');
+    expect(plan?.segments[0].paymentRow.description).toContain('واریز مبلغ ۷۰۰');
+  });
+
+  it('describes allocated payments using the source payment details', () => {
+    expect(buildInvoicePaymentAllocationDescription({
+      date: '2026-07-21',
+      payment_type: 'transfer',
+      ref_id: 'TR-123',
+    }, 700)).toBe('لحاظ شده بابت واریز مبلغ ۷۰۰ در تاریخ ۱۴۰۵/۰۴/۳۰ بصورت انتقال شبا با شماره رهگیری/پیگیری TR-123');
   });
 
   it('does not allocate when the total is not exceeded', () => {
@@ -46,4 +56,3 @@ describe('invoice payment allocation', () => {
     ]);
   });
 });
-

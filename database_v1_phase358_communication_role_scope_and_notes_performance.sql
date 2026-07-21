@@ -51,7 +51,11 @@ begin
   end if;
 
   v_module_perm := coalesce(v_permissions -> 'voip_call_reports', '{}'::jsonb);
-  if lower(coalesce(v_module_perm ->> 'view', 'true')) = 'false' then
+  if (
+    not (v_permissions ? 'voip_call_reports')
+    and lower(coalesce(v_permissions -> '__voip' ->> 'view', 'true')) = 'false'
+  )
+  or lower(coalesce(v_module_perm ->> 'view', 'true')) = 'false' then
     return false;
   end if;
 

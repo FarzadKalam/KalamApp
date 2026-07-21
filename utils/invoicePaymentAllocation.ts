@@ -1,3 +1,6 @@
+import { localizeFinancialPaymentType } from './financialValueLabels';
+import { safeJalaliFormat } from './persianNumberFormatter';
+
 export const INVOICE_PAYMENT_FINAL_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 
 export type InvoicePaymentAllocationModule = 'invoices' | 'purchase_invoices';
@@ -43,6 +46,55 @@ export const getInvoicePaymentAmount = (row: Record<string, any> | null | undefi
 const getRowKey = (row: Record<string, any>, index: number) =>
   String(row?.row_key || row?.id || row?.key || `legacy_${index}`).trim();
 
+const getFirstPaymentValue = (row: Record<string, any>, keys: string[]) => {
+  for (const key of keys) {
+    const value = String(row?.[key] ?? '').trim();
+    if (value) return value;
+  }
+  return '';
+};
+
+const getAllocationTrackingNumber = (row: Record<string, any>) => {
+  const trackingKeys = [
+    'tracking_number',
+    'tracking_no',
+    'tracking_code',
+    'reference_number',
+    'reference_no',
+    'reference_id',
+    'transaction_reference',
+    'transaction_no',
+    'receipt_number',
+    'receipt_no',
+    'ref_id',
+  ];
+  const directValue = getFirstPaymentValue(row, trackingKeys);
+  if (directValue) return directValue;
+  return getFirstPaymentValue(row?.metadata && typeof row.metadata === 'object' ? row.metadata : {}, trackingKeys);
+};
+
+const formatAllocationAmount = (value: number) => {
+  const normalized = Math.round((Number(value) || 0) * 100) / 100;
+  return normalized.toLocaleString('fa-IR', { maximumFractionDigits: 2 });
+};
+
+export const buildInvoicePaymentAllocationDescription = (
+  paymentRow: Record<string, any>,
+  sourceAmount: number,
+) => {
+  const paymentDateRaw = getFirstPaymentValue(paymentRow, ['date', 'operation_date', 'receipt_date', 'payment_date']);
+  const paymentDate = paymentDateRaw
+    ? (safeJalaliFormat(paymentDateRaw, 'YYYY/MM/DD') || paymentDateRaw)
+    : 'ثبت نشده';
+  const paymentTypeRaw = getFirstPaymentValue(paymentRow, ['payment_type', 'payment_method', 'method', 'receipt_type', 'transaction_type', 'type'])
+    || (paymentRow?.cheque_id || paymentRow?.cheque_serial_no ? 'cheque' : '')
+    || (paymentRow?.barter_id || paymentRow?._barter_allocation_key ? 'barter' : '');
+  const paymentType = localizeFinancialPaymentType(paymentTypeRaw) || paymentTypeRaw || 'ثبت نشده';
+  const trackingNumber = getAllocationTrackingNumber(paymentRow) || 'ثبت نشده';
+
+  return `لحاظ شده بابت واریز مبلغ ${formatAllocationAmount(sourceAmount)} در تاریخ ${paymentDate} بصورت ${paymentType} با شماره رهگیری/پیگیری ${trackingNumber}`;
+};
+
 export const buildInvoicePaymentOverflowPlan = (args: {
   totalAmount: number;
   previousPayments?: Record<string, any>[];
@@ -86,7 +138,8 @@ export const buildInvoicePaymentOverflowPlan = (args: {
     availableAmount = roundMoney(availableAmount - acceptedIncrease);
     if (overflow <= 0) return;
 
-    const sourceAmount = Math.max(0, roundMoney((Number(row.amount) || 0) - overflow));
+    const originalPaymentAmount = roundMoney(Number(row.amount) || 0);
+    const sourceAmount = Math.max(0, roundMoney(originalPaymentAmount - overflow));
     row.amount = sourceAmount;
     row.allocation_group_key = args.allocationGroupKey;
     row.row_key = sourceRowKey;
@@ -96,6 +149,7 @@ export const buildInvoicePaymentOverflowPlan = (args: {
       paymentRow: {
         ...row,
         amount: overflow,
+        description: buildInvoicePaymentAllocationDescription(row, originalPaymentAmount),
         _cash_bank_operation_id: null,
         allocation_group_key: args.allocationGroupKey,
       },
