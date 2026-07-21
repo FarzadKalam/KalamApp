@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Button, Card, Empty, Form, Input, InputNumber, Select, Spin, Table, Tag } from 'antd';
+import { Alert, App, Button, Card, Empty, Form, Input, InputNumber, Modal, Select, Spin, Table, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   ClockCircleOutlined,
@@ -49,6 +49,7 @@ type Entry = {
   posted_at: string | null;
   posted_by: string | null;
   updated_at: string | null;
+  metadata?: Record<string, any> | null;
 };
 
 type Line = {
@@ -126,7 +127,7 @@ type AccountSelectOption = {
 };
 
 const ENTRY_SELECT =
-  'id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,source_record_title,created_at,created_by,updated_by,posted_at,posted_by,updated_at';
+  'id,entry_no,entry_date,description,fiscal_year_id,status,total_debit,total_credit,source_table,source_record_id,source_record_title,created_at,created_by,updated_by,posted_at,posted_by,updated_at,metadata';
 const LINE_SELECT =
   'id,line_no,account_id,description,debit,credit,cost_center_id,party_type,party_id,metadata,chart_of_accounts:account_id(code,name),cost_centers:cost_center_id(code,name)';
 
@@ -219,6 +220,8 @@ const JournalEntryShowPage: React.FC = () => {
   const [saveRowId, setSaveRowId] = useState<string | null>(null);
   const [isPrintOpen, setIsPrintOpen] = useState(false);
   const [printMode, setPrintMode] = useState(false);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionReason, setCorrectionReason] = useState('');
   const [userNames, setUserNames] = useState<Record<string, string>>({});
   const journalPrintOutputName = useMemo(
     () =>
@@ -876,25 +879,32 @@ const JournalEntryShowPage: React.FC = () => {
 
   const reverseEntry = async () => {
     if (!entry?.id || entry.status !== 'posted' || !canEdit) return;
-    modal.confirm({
-      title: 'برگشتی کردن سند',
-      content: 'سند برگشتی شود؟',
-      okText: 'بله',
-      cancelText: 'انصراف',
-      onOk: async () => {
-        setStatusLoading(true);
-        try {
-          const { error } = await supabase.from('journal_entries').update({ status: 'reversed' }).eq('id', entry.id);
-          if (error) throw error;
-          message.success('سند برگشتی شد');
-          load();
-        } catch (err: any) {
-          message.error(toFaErrorMessage(err, 'خطا در برگشتی کردن سند'));
-        } finally {
-          setStatusLoading(false);
-        }
-      },
-    });
+    setCorrectionReason('');
+    setCorrectionOpen(true);
+  };
+
+  const submitCorrection = async () => {
+    if (!entry?.id || !correctionReason.trim()) {
+      message.warning('دلیل اصلاح سند را وارد کنید.');
+      return;
+    }
+    setStatusLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('create_journal_entry_correction', {
+        p_entry_id: entry.id,
+        p_reason: correctionReason.trim(),
+      });
+      if (error) throw error;
+      const correctionId = String(data || '').trim();
+      if (!correctionId) throw new Error('شناسه سند اصلاحی دریافت نشد.');
+      message.success('سند اصلاحی به‌صورت پیش‌نویس ایجاد شد.');
+      setCorrectionOpen(false);
+      navigate(`/journal_entries/${correctionId}`);
+    } catch (err: any) {
+      message.error(toFaErrorMessage(err, 'ایجاد سند اصلاحی ناموفق بود. ابتدا migration مربوط به اصلاح کنترل‌شده را اجرا کنید.'));
+    } finally {
+      setStatusLoading(false);
+    }
   };
 
   const removeEntry = async () => {
@@ -1518,7 +1528,7 @@ const JournalEntryShowPage: React.FC = () => {
         extraActions={[
           { id: 'post', label: statusLoading ? 'در حال ثبت...' : 'ثبت نهایی', variant: 'primary', onClick: postEntry },
           ...(entry.status === 'posted'
-            ? [{ id: 'reverse', label: statusLoading ? 'در حال انجام...' : 'برگشتی', variant: 'default' as const, onClick: reverseEntry }]
+            ? [{ id: 'reverse', label: statusLoading ? 'در حال انجام...' : 'اصلاح / معکوس‌سازی', variant: 'default' as const, onClick: reverseEntry }]
             : []),
         ]}
       />
@@ -1537,6 +1547,16 @@ const JournalEntryShowPage: React.FC = () => {
             )}
           </div>
         </div>
+
+        {Array.isArray(entry.metadata?.posting_warnings) && entry.metadata.posting_warnings.length > 0 && (
+          <Alert
+            className="mb-4"
+            type="warning"
+            showIcon
+            message="این پیش‌نویس برای تکمیل حساب‌ها هشدار دارد"
+            description={entry.metadata.posting_warnings.join(' ')}
+          />
+        )}
 
         <Form form={form} layout="vertical">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1754,6 +1774,24 @@ const JournalEntryShowPage: React.FC = () => {
         )}
         printMode={printMode}
       />
+
+      <Modal
+        title="اصلاح کنترل‌شده سند ثبت‌شده"
+        open={correctionOpen}
+        onCancel={() => setCorrectionOpen(false)}
+        onOk={submitCorrection}
+        okText="ایجاد سند اصلاحی"
+        cancelText="انصراف"
+        confirmLoading={statusLoading}
+      >
+        <p className="text-gray-600 mb-2">سند اصلی حفظ می‌شود و یک سند معکوسِ پیش‌نویس برای اصلاح ساخته خواهد شد.</p>
+        <Input.TextArea
+          rows={4}
+          value={correctionReason}
+          onChange={(event) => setCorrectionReason(event.target.value)}
+          placeholder="دلیل اصلاح را بنویسید..."
+        />
+      </Modal>
     </div>
   );
 };

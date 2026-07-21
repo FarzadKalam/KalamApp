@@ -34,6 +34,18 @@ const DEFAULT_ACCOUNT_CODE_PRIORITY: Record<string, string[]> = {
   default_cogs_id: ['5101'],
   default_inventory_asset_id: ['1301'],
   default_sales_tax_id: ['2111'],
+  default_purchase_tax_id: ['5301'],
+  default_expense_account_id: ['5202', '5204'],
+  default_expense_payable_id: ['2101'],
+  default_employee_advance_id: ['1122'],
+  default_payroll_expense_id: ['5201'],
+  default_payroll_payable_id: ['2121'],
+  default_payroll_tax_id: ['2122'],
+  default_employee_insurance_payable_id: ['2123'],
+  default_employer_insurance_expense_id: ['5203'],
+  default_cheques_payable_id: ['2102'],
+  default_cheques_receivable_id: ['1112'],
+  default_barter_clearing_id: ['2124'],
 };
 
 const resolveDefaultAccountsByCode = (accounts: AccountOption[]) => {
@@ -305,6 +317,42 @@ const DefaultAccountsModal: React.FC<{
             <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
           </Form.Item>
           <Form.Item name="default_sales_tax_id" label="حساب مالیات بر ارزش افزوده فروش پیش‌فرض">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_purchase_tax_id" label="حساب اعتبار مالیاتی خرید پیش‌فرض">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_expense_account_id" label="حساب هزینه پیش‌فرض">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_expense_payable_id" label="حساب پرداختنی هزینه">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_employee_advance_id" label="حساب مساعده کارکنان">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_payroll_expense_id" label="حساب هزینه حقوق">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_payroll_payable_id" label="حساب حقوق پرداختنی">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_payroll_tax_id" label="حساب مالیات حقوق">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_employee_insurance_payable_id" label="حساب بیمه سهم کارمند">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_employer_insurance_expense_id" label="حساب هزینه بیمه سهم کارفرما">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_cheques_payable_id" label="حساب اسناد پرداختنی">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_cheques_receivable_id" label="حساب اسناد دریافتنی">
+            <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
+          </Form.Item>
+          <Form.Item name="default_barter_clearing_id" label="حساب واسط تهاتر">
             <Select showSearch allowClear options={accounts} placeholder="انتخاب کنید..." />
           </Form.Item>
         </Form>

@@ -323,10 +323,20 @@ const FormulaEditorModal: React.FC<FormulaEditorModalProps> = ({
               name="expression_text"
               label="متن فرمول"
               rules={[{ required: true, message: 'فرمول را وارد کنید.' }]}
-              extra="برای متغیرها از همین دکمه‌ها استفاده کنید. نمونه: {{task.weight}} * 2500"
+              extra="فاصله اختیاری است. عدد فارسی و انگلیسی و عملگرهای × و ÷ پشتیبانی می‌شوند؛ نمونه: {{task.weight}} * ۲۵۰۰"
             >
-              <Input.TextArea rows={8} placeholder="{{task.weight}} * 2500" />
+              <Input.TextArea
+                rows={8}
+                dir="ltr"
+                spellCheck={false}
+                className="font-mono text-left"
+                placeholder="{{task.weight}} * 2500"
+              />
             </Form.Item>
+
+            <div className="mb-3 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs leading-6 text-blue-900 dark:border-blue-900/70 dark:bg-blue-950/20 dark:text-blue-100">
+              متن فرمول از چپ به راست نوشته می‌شود؛ نام متغیرها را داخل دو آکولاد نگه دارید و برای اولویت محاسبه از پرانتز استفاده کنید.
+            </div>
 
             <Form.Item name="description" label="توضیح برای همکاران">
               <Input.TextArea rows={3} placeholder="مثلا: این فرمول وزن فعالیت را در مبلغ ثابت ضرب می‌کند." />

@@ -104,6 +104,7 @@ import { getActiveChannelSettings } from '../utils/channelSettings';
 import { insertNotesWithFallback } from '../utils/noteDispatch';
 import { sendSmsViaGateway } from '../utils/smsGateway';
 import { isOperationalAccountingModule, syncOperationalAccountingEntry } from '../utils/operationalAccounting';
+import { isTreasuryAccountingModule, syncTreasuryAccountingEntry } from '../utils/treasuryAccounting';
 import { normalizeOperationalDocumentTotals } from '../utils/operationalDocumentTotals';
 import { shortenAttachmentsForExternalShare } from '../utils/fileShortLinks';
 import { createFileManagerOriginForUpload, detectFileManagerTables } from '../utils/fileManagerService';
@@ -3487,11 +3488,43 @@ const ModuleShow: React.FC = () => {
         await createJournalFromInvoice(supabase, id, navigate, msg);
         return;
       }
+      if (moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices' || moduleId === 'purchase_return_invoices') {
+        const result = await syncInvoiceAccountingEntries({
+          supabase: supabase as any,
+          moduleId: moduleId as 'purchase_invoices' | 'sales_return_invoices' | 'purchase_return_invoices',
+          recordId: id,
+          includePayments: true,
+        });
+        const lastEntry = result.resolvedJournalEntries[result.resolvedJournalEntries.length - 1];
+        if (lastEntry?.journalEntryId) {
+          if (result.createdEventKeys.length > 0) msg.success('پیش‌نویس سند دستی ایجاد شد.');
+          else msg.info('سند حسابداری موجود باز شد.');
+          if (result.errors.length > 0) msg.warning(`صدور سند با هشدار: ${result.errors[0]}`);
+          navigate(`/journal_entries/${lastEntry.journalEntryId}`);
+        } else if (result.errors.length > 0) {
+          msg.warning(result.errors[0]);
+        }
+        return;
+      }
       if (isOperationalAccountingModule(moduleId)) {
         const result = await syncOperationalAccountingEntry(supabase as any, moduleId, id);
         if (result.journalEntryId) {
           if (result.created) msg.success('پیش‌نویس سند حسابداری ایجاد شد.');
           else msg.info('سند حسابداری موجود باز شد.');
+          if (result.warnings.length > 0) {
+            msg.warning(`پیش‌نویس با هشدار باز شد: ${result.warnings[0]}`);
+          }
+          navigate(`/journal_entries/${result.journalEntryId}`);
+          return;
+        }
+        if (result.warnings.length > 0) msg.warning(result.warnings[0]);
+      }
+      if (isTreasuryAccountingModule(moduleId)) {
+        const result = await syncTreasuryAccountingEntry(supabase as any, moduleId, id);
+        if (result.journalEntryId) {
+          if (result.created) msg.success('پیش‌نویس سند دستی خزانه ایجاد شد.');
+          else msg.info('سند خزانه موجود باز شد.');
+          if (result.warnings.length > 0) msg.warning(`پیش‌نویس با هشدار باز شد: ${result.warnings[0]}`);
           navigate(`/journal_entries/${result.journalEntryId}`);
           return;
         }
@@ -4786,7 +4819,7 @@ const ModuleShow: React.FC = () => {
   const handleIssueAccountingEntry = useCallback(async () => {
     if (issueAccountingLoading) return;
     if (!id) return;
-    if (moduleId !== 'invoices' && moduleId !== 'purchase_invoices') return;
+    if (moduleId !== 'invoices' && moduleId !== 'purchase_invoices' && moduleId !== 'sales_return_invoices' && moduleId !== 'purchase_return_invoices') return;
     if (!canIssueAccountingEntry) {
       msg.error('دسترسی صدور سند حسابداری ندارید.');
       return;
@@ -4802,7 +4835,7 @@ const ModuleShow: React.FC = () => {
     try {
       const accountingSync = await syncInvoiceAccountingEntries({
         supabase: supabase as any,
-        moduleId,
+        moduleId: moduleId as 'invoices' | 'purchase_invoices' | 'sales_return_invoices' | 'purchase_return_invoices',
         recordId: id,
         includePayments: true,
       });
@@ -6152,7 +6185,7 @@ const ModuleShow: React.FC = () => {
       onClick: () => handleHeaderAction('quick_stock_movement')
     });
   }
-  if ((moduleId === 'invoices' || moduleId === 'purchase_invoices') && canIssueAccountingEntry) {
+  if ((moduleId === 'invoices' || moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices' || moduleId === 'purchase_return_invoices') && canIssueAccountingEntry) {
     headerActions.push({
       id: 'issue_accounting_entry',
       label: issueAccountingLoading ? 'در حال صدور...' : 'صدور سند',

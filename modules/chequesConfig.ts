@@ -32,6 +32,7 @@ export const chequesConfig: ModuleDefinition = {
       options: [
         { label: 'جدید', value: 'new', color: 'blue' },
         { label: 'در بانک', value: 'in_bank', color: 'orange' },
+        { label: 'خرج شده', value: 'paid', color: 'yellow' },
         { label: 'وصول شده', value: 'cleared', color: 'green' },
         { label: 'برگشتی', value: 'bounced', color: 'red' },
         { label: 'عودت شده', value: 'returned', color: 'purple' },
@@ -178,4 +179,5 @@ export const chequesConfig: ModuleDefinition = {
     },
   ],
   relatedTabs: [],
+  actionButtons: [{ id: 'create_journal_entry', label: 'صدور سند دستی', placement: 'header', variant: 'primary' }],
 };

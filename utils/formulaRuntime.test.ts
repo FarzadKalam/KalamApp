@@ -71,4 +71,9 @@ describe('formulaRuntime', () => {
     });
     expect(result.value).toBe(10020);
   });
+
+  it('accepts spaces, Persian digits, and familiar multiplication symbols', () => {
+    const expression = parseSimpleFormulaExpression(' {{task.weight}}  ×  ۲,۵۰۰ ');
+    expect(evaluateFormulaExpression(expression, { task: { weight: 4 } }).value).toBe(10000);
+  });
 });

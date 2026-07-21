@@ -63,6 +63,7 @@ export const marketingLeadsModule: ModuleDefinition = {
       order: 3,
       defaultValue: 'new',
       options: [
+        { label: 'پیش‌نویس', value: 'draft', color: 'default' },
         { label: 'جدید', value: 'new', color: 'blue' },
         { label: 'در حال پیگیری', value: 'in_follow_up', color: 'orange' },
         { label: 'پیگیری معوق', value: 'overdue_follow_up', color: 'red' },

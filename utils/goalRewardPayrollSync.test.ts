@@ -8,6 +8,12 @@ const { executeGoalProgressMock } = vi.hoisted(() => ({
 vi.mock('./goals', () => ({
   executeGoalProgress: executeGoalProgressMock,
   normalizeGoalRecord: (goal: any) => goal,
+  isGoalVisibleToUser: (goal: any, userId: string | null, roleId: string | null) => {
+    const userIds = Array.isArray(goal?.assignee_user_ids) ? goal.assignee_user_ids : [];
+    const roleIds = Array.isArray(goal?.assignee_role_ids) ? goal.assignee_role_ids : [];
+    if (userIds.length === 0 && roleIds.length === 0) return true;
+    return (!!userId && userIds.includes(userId)) || (!!roleId && roleIds.includes(roleId));
+  },
 }));
 
 import { collectGoalRewardLedgerDrafts } from './goalRewardPayrollSync';
@@ -88,5 +94,32 @@ describe('goalRewardPayrollSync', () => {
       title: 'پاداش تحقق',
       status: 'proposed',
     });
+  });
+
+  it('does not build a reward for a goal assigned to another employee', async () => {
+    const drafts = await collectGoalRewardLedgerDrafts({
+      profiles: [{ employeeId: 'employee-1', profileUserId: 'profile-1', profileName: 'کارمند اول' }],
+      goals: [{
+        id: 'goal-for-someone-else',
+        module_id: 'tasks',
+        name: 'هدف خصوصی',
+        goal_scope: 'personal',
+        period_unit: 'month',
+        subperiod_unit: 'month',
+        metric_type: 'count',
+        target_value: 1,
+        assignee_user_ids: ['profile-2'],
+        config: { goal_reward_rules: [{ formula_id: 'goal-formula', trigger_type: 'touch', output_type: 'bonus' }] },
+      }],
+      formulas: [{
+        id: 'goal-formula',
+        name: 'پاداش',
+        expression_config: { type: 'constant', value: 1000 },
+      }],
+      periodStart: '2026-07-01',
+      periodEnd: '2026-07-31',
+    });
+
+    expect(drafts).toEqual([]);
   });
 });

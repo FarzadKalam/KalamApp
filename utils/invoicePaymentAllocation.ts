@@ -1,5 +1,5 @@
 import { localizeFinancialPaymentType } from './financialValueLabels';
-import { safeJalaliFormat } from './persianNumberFormatter';
+import { formatPersianNumberWithGrouping, safeJalaliFormat } from './persianNumberFormatter';
 
 export const INVOICE_PAYMENT_FINAL_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
 
@@ -73,11 +73,6 @@ const getAllocationTrackingNumber = (row: Record<string, any>) => {
   return getFirstPaymentValue(row?.metadata && typeof row.metadata === 'object' ? row.metadata : {}, trackingKeys);
 };
 
-const formatAllocationAmount = (value: number) => {
-  const normalized = Math.round((Number(value) || 0) * 100) / 100;
-  return normalized.toLocaleString('fa-IR', { maximumFractionDigits: 2 });
-};
-
 export const buildInvoicePaymentAllocationDescription = (
   paymentRow: Record<string, any>,
   sourceAmount: number,
@@ -92,7 +87,7 @@ export const buildInvoicePaymentAllocationDescription = (
   const paymentType = localizeFinancialPaymentType(paymentTypeRaw) || paymentTypeRaw || 'ثبت نشده';
   const trackingNumber = getAllocationTrackingNumber(paymentRow) || 'ثبت نشده';
 
-  return `لحاظ شده بابت واریز مبلغ ${formatAllocationAmount(sourceAmount)} در تاریخ ${paymentDate} بصورت ${paymentType} با شماره رهگیری/پیگیری ${trackingNumber}`;
+  return `لحاظ شده بابت واریز مبلغ ${formatPersianNumberWithGrouping(sourceAmount)} در تاریخ ${paymentDate} بصورت ${paymentType} با شماره رهگیری/پیگیری ${trackingNumber}`;
 };
 
 export const buildInvoicePaymentOverflowPlan = (args: {
@@ -140,7 +135,9 @@ export const buildInvoicePaymentOverflowPlan = (args: {
 
     const originalPaymentAmount = roundMoney(Number(row.amount) || 0);
     const sourceAmount = Math.max(0, roundMoney(originalPaymentAmount - overflow));
+    const allocationDescription = buildInvoicePaymentAllocationDescription(row, originalPaymentAmount);
     row.amount = sourceAmount;
+    row.description = allocationDescription;
     row.allocation_group_key = args.allocationGroupKey;
     row.row_key = sourceRowKey;
     segments.push({
@@ -149,7 +146,7 @@ export const buildInvoicePaymentOverflowPlan = (args: {
       paymentRow: {
         ...row,
         amount: overflow,
-        description: buildInvoicePaymentAllocationDescription(row, originalPaymentAmount),
+        description: allocationDescription,
         _cash_bank_operation_id: null,
         allocation_group_key: args.allocationGroupKey,
       },

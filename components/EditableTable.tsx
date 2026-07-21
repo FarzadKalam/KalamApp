@@ -22,6 +22,7 @@ import { hasIssuedInvoiceAccountingEntries, shouldAutoSyncInvoiceAccounting } fr
 import { useCurrencyConfig } from '../utils/currency';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { normalizeCashBankPaymentType } from '../utils/cashBankPaymentType';
+import { resolveChequeStatusForPayment } from '../utils/chequePaymentStatus';
 import { fetchDynamicOptionsByCategory } from '../utils/referenceData';
 import { runWorkflowsForEvent } from '../utils/workflowRuntime';
 import { syncDefaultPriceListItemsToProducts } from '../utils/priceListDefaults';
@@ -135,6 +136,7 @@ const calculateProfitPercentage = (buyPrice: any, sellPrice: any) => {
 const CHEQUE_STATUS_LABELS: Record<string, string> = {
   new: 'جدید',
   in_bank: 'در بانک',
+  paid: 'خرج شده',
   cleared: 'وصول شده',
   bounced: 'برگشتی',
   returned: 'عودت شده',
@@ -216,6 +218,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
   const isAnyDocumentPayments = isAnyInvoicePayments || isExpensePayments;
   const isOperationalPayments = isAnyDocumentPayments || isEmployeeAdvancePayments || isPayrollPayments;
+  const supportsReceivedChequeSpending = isPurchaseInvoicePayments || isExpensePayments || isEmployeeAdvancePayments || isPayrollPayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
   const isPriceListItems = moduleId === 'price_lists' && block?.id === 'items';
@@ -904,7 +907,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   }, [isInvoiceItems, isEditing, tempData, data]);
 
   useEffect(() => {
-    if (!isPurchaseInvoicePayments) return;
+    if (!supportsReceivedChequeSpending) return;
     let active = true;
     const loadEligibleCheques = async () => {
       try {
@@ -948,7 +951,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     return () => {
       active = false;
     };
-  }, [isPurchaseInvoicePayments, isEditing, saving]);
+  }, [supportsReceivedChequeSpending, isEditing, saving]);
 
   useEffect(() => {
     if (!isInvoiceItems) return;
@@ -1052,7 +1055,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
       if (['length', 'width'].includes(key) && !hasDimensionValues(row)) return false;
     }
-    if (isAnyInvoicePayments) {
+    if (isOperationalPayments) {
       const paymentType = normalizeCashBankPaymentType(row?.payment_type) || '';
       if (key === 'spent_cheque_id' && (paymentType !== 'cheque' || !row?.use_existing_received_cheque)) return false;
       if (key === 'use_existing_received_cheque' && paymentType !== 'cheque') return false;
@@ -1195,7 +1198,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       const paymentType = String(value || '').trim();
       const accountField = isInvoicePayments ? 'target_account' : 'source_account';
       newData[index][accountField] = null;
-      if (isAnyInvoicePayments && paymentType !== 'cheque') {
+      if (isOperationalPayments && paymentType !== 'cheque') {
         newData[index]['use_existing_received_cheque'] = false;
         newData[index]['spent_cheque_id'] = null;
         newData[index]['cheque_id'] = null;
@@ -1215,11 +1218,11 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
     }
 
-    if (isPurchaseInvoicePayments && key === 'use_existing_received_cheque' && !value) {
+    if (supportsReceivedChequeSpending && key === 'use_existing_received_cheque' && !value) {
       newData[index]['spent_cheque_id'] = null;
     }
 
-    if (isAnyInvoicePayments && key === 'cheque_id') {
+    if (isOperationalPayments && key === 'cheque_id') {
       if (!value) {
         newData[index]['cheque_status'] = null;
         newData[index]['cheque_serial_no'] = null;
@@ -1228,7 +1231,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         newData[index]['cheque_account_holder_name'] = null;
         newData[index]['cheque_bank_name'] = null;
         newData[index]['cheque_image_url'] = null;
-      } else if (isPurchaseInvoicePayments) {
+      } else if (supportsReceivedChequeSpending) {
         newData[index]['use_existing_received_cheque'] = false;
         newData[index]['spent_cheque_id'] = null;
       }
@@ -1501,7 +1504,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             if (isBarterRelationSelection) {
               return;
             }
-            if (isAnyInvoicePayments && key === 'cheque_id' && col.key === 'status') {
+            if (isOperationalPayments && key === 'cheque_id' && col.key === 'status') {
               return;
             }
             if (record[col.key] !== undefined && col.key !== key) {
@@ -1665,7 +1668,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             syncInvoiceSubQuantity(currentRow);
           }
 
-          if (isAnyInvoicePayments && key === 'cheque_id') {
+          if (isOperationalPayments && key === 'cheque_id') {
             currentRow.cheque_status = record?.status || currentRow.cheque_status || null;
             currentRow.cheque_serial_no = record?.serial_no || null;
             currentRow.cheque_sayad_id = record?.sayad_id || null;
@@ -1768,7 +1771,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       numericDefaults.dimension_count = 1;
       numericDefaults.dimension_count_to_sub_quantity = false;
     }
-    if (isPurchaseInvoicePayments) {
+    if (supportsReceivedChequeSpending) {
       numericDefaults.use_existing_received_cheque = false;
     }
 
@@ -3020,23 +3023,6 @@ const EditableTable: React.FC<EditableTableProps> = ({
         continue;
       }
 
-      if (!isAnyInvoicePayments) {
-        await syncCashBankOperation({
-          row,
-          nextRow,
-          rowKey,
-          paymentType,
-          amount,
-          rowStatus,
-          accountId,
-          issueDate,
-          attachmentUrl: String(nextRow?.attachment || row?.attachment || '').trim() || null,
-          assigneeId: String(row?.responsible_id || defaultAssigneeId || '').trim() || null,
-        });
-        nextRows.push(nextRow);
-        continue;
-      }
-
       if (paymentType !== 'cheque') {
         nextRow.use_existing_received_cheque = false;
         nextRow.spent_cheque_id = null;
@@ -3071,20 +3057,40 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (!selectedCheque) {
           throw new Error('چک انتخاب‌شده یافت نشد.');
         }
-        if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque && String(selectedCheque?.cheque_type || '') !== 'received') {
+        if (supportsReceivedChequeSpending && !!row?.use_existing_received_cheque && String(selectedCheque?.cheque_type || '') !== 'received') {
           throw new Error('چک انتخاب شده برای خرج چک معتبر نیست.');
         }
 
-        const nextChequeStatus = String(row?.cheque_status || selectedCheque?.status || 'new').trim() || 'new';
+        const shouldMarkChequeSpent = operationType === 'payment' && rowStatus !== 'pending';
+        const selectedChequeMetadata =
+          selectedCheque?.metadata && typeof selectedCheque.metadata === 'object'
+            ? selectedCheque.metadata
+            : {};
+        const wasSpentByThisPayment =
+          selectedChequeMetadata?.spent_out === true
+          && String(selectedChequeMetadata?.spent_out_source_table || '') === String(moduleId)
+          && String(selectedChequeMetadata?.spent_out_source_record_id || '') === String(recordId);
+        const storedChequeStatus = String(row?.cheque_status || selectedCheque?.status || 'new').trim() || 'new';
+        const nextChequeStatus = resolveChequeStatusForPayment({
+          operationType,
+          paymentStatus: rowStatus,
+          currentChequeStatus: storedChequeStatus,
+          wasSpentByThisPayment,
+        });
         const nextMetadata =
           selectedCheque?.metadata && typeof selectedCheque.metadata === 'object'
             ? { ...selectedCheque.metadata }
             : {};
-        if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque) {
+        if (shouldMarkChequeSpent) {
           nextMetadata.spent_out = true;
           nextMetadata.spent_out_at = nowIso;
           nextMetadata.spent_out_source_table = moduleId;
           nextMetadata.spent_out_source_record_id = recordId;
+        } else if (wasSpentByThisPayment) {
+          delete nextMetadata.spent_out;
+          delete nextMetadata.spent_out_at;
+          delete nextMetadata.spent_out_source_table;
+          delete nextMetadata.spent_out_source_record_id;
         }
         nextMetadata.linked_invoice_table = moduleId;
         nextMetadata.linked_invoice_id = recordId;
@@ -3103,7 +3109,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (selectedChequeUpdateError) throw selectedChequeUpdateError;
 
         nextRow.cheque_id = selectedChequeId;
-        nextRow.spent_cheque_id = isPurchaseInvoicePayments && !!row?.use_existing_received_cheque ? selectedChequeId : null;
+        nextRow.spent_cheque_id = supportsReceivedChequeSpending && !!row?.use_existing_received_cheque ? selectedChequeId : null;
         nextRow.cheque_status = nextChequeStatus;
         nextRow.cheque_serial_no = selectedCheque?.serial_no || null;
         nextRow.cheque_sayad_id = selectedCheque?.sayad_id || null;
@@ -3135,7 +3141,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         continue;
       }
 
-      if (isPurchaseInvoicePayments && !!row?.use_existing_received_cheque) {
+      if (supportsReceivedChequeSpending && !!row?.use_existing_received_cheque) {
         const spendChequeId = String(row?.spent_cheque_id || '').trim();
         if (!spendChequeId) {
           throw new Error('برای خرج چک، انتخاب چک دریافتی الزامی است.');
@@ -3196,9 +3202,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
         continue;
       }
 
+      const shouldMarkChequeSpent = operationType === 'payment' && rowStatus !== 'pending';
       const chequePayload = {
         cheque_type: isInvoicePayments ? 'received' : 'issued',
-        status: String(row?.cheque_status || 'new'),
+        status: resolveChequeStatusForPayment({
+          operationType,
+          paymentStatus: rowStatus,
+          currentChequeStatus: String(row?.cheque_status || 'new'),
+        }),
         amount,
         issue_date: issueDate,
         due_date: dueDate,
@@ -3214,6 +3225,14 @@ const EditableTable: React.FC<EditableTableProps> = ({
             record_id: recordId,
             block: block?.id,
           },
+          ...(shouldMarkChequeSpent
+            ? {
+                spent_out: true,
+                spent_out_at: nowIso,
+                spent_out_source_table: moduleId,
+                spent_out_source_record_id: recordId,
+              }
+            : {}),
         },
       };
 
@@ -4328,7 +4347,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         } else if (isCatalogProductItems && col.key === 'product_id') {
           options = getCatalogProductRelationOptions(record);
         }
-        if (isPurchaseInvoicePayments && col.key === 'spent_cheque_id') {
+        if (supportsReceivedChequeSpending && col.key === 'spent_cheque_id') {
         const selectedId = String(record?.spent_cheque_id || '').trim();
         const selectedFallback = (relationOptions[specificKey] || relationOptions[col.key] || [])
           .find((opt: any) => String(opt?.value || '') === selectedId);
@@ -5030,7 +5049,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
 
   const renderChequeMetaCard = (row: any) => {
-    if (!isAnyInvoicePayments) return null;
+    if (!isOperationalPayments) return null;
     if (normalizeCashBankPaymentType(row?.payment_type) !== 'cheque') return null;
     if (!row?.cheque_id && !row?.spent_cheque_id) return null;
 

@@ -1,5 +1,6 @@
 import { supabase as sharedSupabase } from '../supabaseClient';
 import { localizeFinancialValue, FINANCIAL_PAYMENT_TYPE_LABELS_FA } from './financialValueLabels';
+import { formatPersianNumberWithGrouping } from './persianNumberFormatter';
 import {
   buildSourceOperationKey,
   getOperationalPaymentRowKeyCandidates,
@@ -207,27 +208,38 @@ const toNumber = (value: any) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const FINANCIAL_DESCRIPTION_AMOUNT_PATTERN = /((?:مبلغ|مانده|جمع(?: کل)?|بدهکار|بستانکار)\s*(?:[:：]\s*)?)([-+]?\s*[\d۰-۹٠-٩][\d۰-۹٠-٩٬,٫.]*)/g;
+
+export const formatOperationalFinancialDescription = (value: any) => String(value ?? '').replace(
+  FINANCIAL_DESCRIPTION_AMOUNT_PATTERN,
+  (_match, label: string, amount: string) => `${label}${formatPersianNumberWithGrouping(amount.replace(/\s+/g, ''))}`,
+);
+
 const normalizeStatus = (value: any) => String(value || '').trim().toLowerCase();
 const isSettledOperationStatus = (value: any) => SETTLED_OPERATION_STATUSES.has(normalizeStatus(value));
 const isFailedCheque = (value: any) => FAILED_CHEQUE_STATUSES.has(normalizeStatus(value));
 
-const buildBalanceRow = (row: Omit<OperationalFinancialRow, 'balance' | 'printableFields'>, balance: number): OperationalFinancialRow => ({
-  ...row,
-  balance,
-  printableFields: {
-    rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[row.rowType] || row.rowType,
-    sourceLabel: row.sourceLabel,
-    paymentTypeLabel: localizeFinancialValue(row.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || row.paymentType || '-',
-    statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || localizeFinancialValue(row.status, 'status') || row.status || '-',
-    date: row.date,
-    debit: row.debit,
-    credit: row.credit,
+const buildBalanceRow = (row: Omit<OperationalFinancialRow, 'balance' | 'printableFields'>, balance: number): OperationalFinancialRow => {
+  const description = formatOperationalFinancialDescription(row.description);
+  return {
+    ...row,
+    description,
     balance,
-    invoiceLabel: row.invoiceLabel,
-    bankLabel: row.bankLabel,
-    description: row.description,
-  },
-});
+    printableFields: {
+      rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[row.rowType] || row.rowType,
+      sourceLabel: row.sourceLabel,
+      paymentTypeLabel: localizeFinancialValue(row.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[row.paymentType] || row.paymentType || '-',
+      statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[row.status] || localizeFinancialValue(row.status, 'status') || row.status || '-',
+      date: row.date,
+      debit: row.debit,
+      credit: row.credit,
+      balance,
+      invoiceLabel: row.invoiceLabel,
+      bankLabel: row.bankLabel,
+      description,
+    },
+  };
+};
 
 const buildAccountLabelMap = (
   banks: any[],
@@ -475,7 +487,7 @@ const fetchSingleOperationalFinancialOverview = async ({
           balance: toNumber(row?.balance),
           invoiceLabel: String(row?.invoice_label || '-'),
           bankLabel: String(row?.bank_label || '-'),
-          description: String(row?.description || ''),
+          description: formatOperationalFinancialDescription(row?.description || ''),
           createdAt: row?.created_at || null,
           invoiceRelation: sourceRecordId && sourceModuleId && sourceModuleId !== 'customers'
             ? { moduleId: sourceModuleId, recordId: sourceRecordId }

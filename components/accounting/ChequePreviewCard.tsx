@@ -77,10 +77,10 @@ const formatSayadId = (sayadId: string) => {
 };
 
 const inputClassName =
-  '!h-9 !rounded-xl !border-slate-300 dark:!border-slate-500 !bg-white/95 dark:!bg-slate-900/70 !text-slate-800 dark:!text-slate-100';
+  '!h-9 !rounded-[18px] !border-transparent dark:!border-transparent !bg-white/75 dark:!bg-slate-900/55 !text-slate-800 dark:!text-slate-100 shadow-[inset_3px_3px_7px_rgba(148,163,184,0.28),inset_-3px_-3px_7px_rgba(255,255,255,0.8)] dark:shadow-[inset_3px_3px_7px_rgba(0,0,0,0.34),inset_-3px_-3px_7px_rgba(100,116,139,0.16)]';
 
 const tintCardClassName =
-  'rounded-2xl border border-[rgba(var(--brand-600-rgb),0.38)] bg-[rgba(var(--brand-50-rgb),0.78)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.88)] backdrop-blur-[1.5px]';
+  'rounded-[24px] border border-[rgba(var(--brand-600-rgb),0.2)] bg-[rgba(var(--brand-50-rgb),0.62)] dark:bg-[rgba(var(--app-dark-surface-rgb),0.72)] shadow-[7px_7px_15px_rgba(148,163,184,0.2),-7px_-7px_15px_rgba(255,255,255,0.72)] dark:shadow-[7px_7px_15px_rgba(0,0,0,0.3),-5px_-5px_12px_rgba(100,116,139,0.08)]';
 
 const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
   values,
@@ -131,24 +131,27 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
   return (
     <div
       dir="rtl"
-      className="relative overflow-hidden rounded-[30px] border p-4 md:p-6 shadow-[0_22px_60px_-32px_rgba(0,0,0,0.62)]"
+      className="relative overflow-hidden rounded-[34px] border p-4 md:p-6"
       style={{
-        borderColor: 'rgba(var(--brand-600-rgb),0.55)',
+        borderColor: 'rgba(var(--brand-600-rgb),0.22)',
         background:
-          'linear-gradient(140deg, rgba(var(--brand-50-rgb),0.95) 0%, rgba(var(--brand-100-rgb),0.92) 35%, rgba(var(--brand-300-rgb),0.55) 100%)',
+          'linear-gradient(145deg, rgba(var(--brand-100-rgb),0.9), rgba(var(--brand-50-rgb),0.76))',
+        boxShadow:
+          '18px 18px 38px rgba(148,163,184,0.24), -14px -14px 34px rgba(255,255,255,0.78), inset 0 0 0 1px rgba(255,255,255,0.3)',
       }}
     >
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 hidden dark:block"
+        className="pointer-events-none absolute inset-0 hidden dark:block rounded-[34px]"
         style={{
           background:
-            'linear-gradient(140deg, rgba(var(--app-dark-bg-rgb),0.9) 0%, rgba(var(--app-dark-surface-rgb),0.86) 45%, rgba(var(--brand-700-rgb),0.34) 100%)',
+            'linear-gradient(145deg, rgba(var(--app-dark-surface-rgb),0.96), rgba(var(--app-dark-bg-rgb),0.9))',
+          boxShadow: 'inset 0 0 0 1px rgba(148,163,184,0.08)',
         }}
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-80 dark:opacity-50"
+        className="pointer-events-none absolute inset-0 opacity-25 dark:opacity-15"
         style={{
           backgroundImage:
             'radial-gradient(circle at 10% 12%, rgba(var(--brand-600-rgb),0.34) 0, transparent 42%), radial-gradient(circle at 90% 80%, rgba(var(--brand-accent-pink-rgb),0.24) 0, transparent 44%)',
@@ -157,8 +160,11 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
 
       <div
         aria-hidden
-        className="pointer-events-none absolute right-0 left-0 top-0 h-[6px]"
-        style={{ background: 'linear-gradient(90deg, rgba(var(--brand-600-rgb),1), rgba(var(--brand-500-rgb),0.9))' }}
+        className="pointer-events-none absolute right-8 left-8 top-3 h-[5px] rounded-full"
+        style={{
+          background: 'rgba(var(--brand-600-rgb),0.42)',
+          boxShadow: 'inset 1px 1px 2px rgba(255,255,255,0.7), 2px 2px 5px rgba(148,163,184,0.22)',
+        }}
       />
 
       <div className="relative">

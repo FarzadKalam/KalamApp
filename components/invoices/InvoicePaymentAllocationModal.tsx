@@ -19,7 +19,7 @@ interface Props {
   partyId: string;
   excessAmount: number;
   onCancel: () => void;
-  onConfirm: (allocations: InvoiceAllocationAmount[]) => void;
+  onConfirm: (allocations: InvoiceAllocationAmount[]) => void | Promise<void>;
 }
 
 const InvoicePaymentAllocationModal: React.FC<Props> = ({
@@ -33,6 +33,7 @@ const InvoicePaymentAllocationModal: React.FC<Props> = ({
 }) => {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [candidates, setCandidates] = useState<InvoiceAllocationCandidate[]>([]);
   const [allocations, setAllocations] = useState<Record<string, number>>({});
   const partyField = moduleId === 'invoices' ? 'customer_id' : 'supplier_id';
@@ -80,21 +81,33 @@ const InvoicePaymentAllocationModal: React.FC<Props> = ({
     [allocations]
   );
   const unallocatedAmount = Math.max(0, Math.round((excessAmount - allocatedAmount) * 100) / 100);
+  const handleConfirm = async () => {
+    if (loading || submitting) return;
+    setSubmitting(true);
+    try {
+      await onConfirm(
+        Object.entries(allocations)
+          .filter(([, amount]) => Number(amount) > 0)
+          .map(([invoiceId, amount]) => ({ invoiceId, amount: Number(amount) }))
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <Modal
       open={open}
       width={920}
       title={`تخصیص اضافه‌${actionLabel}`}
-      okText="تایید و ثبت"
+      okText={submitting ? 'در حال ثبت...' : 'تایید و ثبت'}
       cancelText="بازگشت و اصلاح مبلغ"
-      onCancel={onCancel}
-      okButtonProps={{ disabled: loading || unallocatedAmount !== 0 || allocatedAmount <= 0 }}
-      onOk={() => onConfirm(
-        Object.entries(allocations)
-          .filter(([, amount]) => Number(amount) > 0)
-          .map(([invoiceId, amount]) => ({ invoiceId, amount: Number(amount) }))
-      )}
+      onCancel={() => { if (!submitting) onCancel(); }}
+      maskClosable={!submitting}
+      keyboard={!submitting}
+      confirmLoading={submitting}
+      okButtonProps={{ disabled: loading || submitting || unallocatedAmount !== 0 || allocatedAmount <= 0 }}
+      onOk={() => { void handleConfirm(); }}
       destroyOnHidden
     >
       <Alert

@@ -25,6 +25,7 @@ describe('invoice payment allocation', () => {
     });
     expect(plan?.excessAmount).toBe(300);
     expect(plan?.sourcePayments[1].amount).toBe(400);
+    expect(plan?.sourcePayments[1].description).toContain('واریز مبلغ ۷۰۰');
     expect(plan?.segments[0].paymentRow.payment_type).toBe('cash');
     expect(plan?.segments[0].paymentRow.description).toContain('واریز مبلغ ۷۰۰');
   });

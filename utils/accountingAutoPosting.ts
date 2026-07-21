@@ -5,7 +5,7 @@ import { SYSTEM_MODULE_SETTINGS_CONNECTION_TYPE } from '../pages/Settings/module
 import { fetchSessionBootstrap } from './sessionCache';
 import { generateNextJournalEntryNo } from './journalEntryNumbering';
 
-type SupportedInvoiceModule = 'invoices' | 'purchase_invoices';
+type SupportedInvoiceModule = 'invoices' | 'purchase_invoices' | 'sales_return_invoices' | 'purchase_return_invoices';
 
 interface DefaultAccounts {
   default_accounts_receivable_id?: string | null;
@@ -15,14 +15,8 @@ interface DefaultAccounts {
   default_payment_bank_id?: string | null;
   default_inventory_asset_id?: string | null;
   default_cogs_id?: string | null;
-}
-
-interface CoaRow {
-  id?: string | null;
-  code?: string | null;
-  name?: string | null;
-  account_type?: string | null;
-  nature?: string | null;
+  default_sales_tax_id?: string | null;
+  default_purchase_tax_id?: string | null;
 }
 
 type ValidAccountIdSet = Set<string>;
@@ -39,6 +33,13 @@ interface InvoiceItemRow {
   product_id?: string | null;
   cost_center_id?: string | null;
   total_price?: number | string | null;
+  quantity?: number | string | null;
+  unit_price?: number | string | null;
+  price?: number | string | null;
+  discount?: number | string | null;
+  discount_type?: string | null;
+  vat?: number | string | null;
+  vat_type?: string | null;
   products?: {
     id?: string | null;
     name?: string | null;
@@ -101,19 +102,11 @@ type Notifier = {
   info?: (content: string) => void;
 };
 
-const DEFAULT_ACCOUNT_CODE_PRIORITY: Record<keyof DefaultAccounts, string[]> = {
-  default_accounts_receivable_id: ['1111', '111'],
-  default_accounts_payable_id: ['2101', '210'],
-  default_sales_revenue_id: ['4101', '410'],
-  default_payment_cash_id: ['1101'],
-  default_payment_bank_id: ['1102'],
-  default_inventory_asset_id: ['1301'],
-  default_cogs_id: ['5101'],
-};
-
 const FINAL_STATUSES: Record<SupportedInvoiceModule, Set<string>> = {
   invoices: new Set(['final', 'settled', 'completed', 'confirmed']),
   purchase_invoices: new Set(['final', 'settled', 'completed']),
+  sales_return_invoices: new Set(['final', 'settled', 'completed', 'confirmed']),
+  purchase_return_invoices: new Set(['final', 'settled', 'completed']),
 };
 
 const PAYMENT_FINAL_STATUSES = new Set(['received', 'paid', 'approved', 'cleared']);
@@ -125,6 +118,10 @@ const EVENT_LABELS_FA: Record<string, string> = {
   purchase_invoice_finalized: 'نهایی‌سازی فاکتور خرید',
   sales_payment_received: 'دریافت وجه فاکتور فروش',
   purchase_payment_paid: 'پرداخت وجه فاکتور خرید',
+  sales_return_invoice_finalized: 'نهایی‌سازی برگشت از فروش',
+  purchase_return_invoice_finalized: 'نهایی‌سازی برگشت از خرید',
+  sales_return_payment_paid: 'بازپرداخت برگشت از فروش',
+  purchase_return_payment_received: 'دریافت وجه برگشت از خرید',
 };
 
 export const getAccountingEventLabelFa = (eventKey: string): string => {
@@ -275,86 +272,6 @@ const pickValidAccountId = (
   return null;
 };
 
-const fetchAutoDefaultAccountsFromCoa = async (supabase: SupabaseClient): Promise<DefaultAccounts> => {
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .select('id, code, name, account_type, nature')
-    .in('account_type', ['asset', 'liability', 'income', 'expense']);
-
-  if (error) throw error;
-
-  const idByCode = new Map<string, string>();
-  const rows = (data || []) as CoaRow[];
-  rows.forEach((row) => {
-    const code = String(row?.code || '').trim();
-    const id = String(row?.id || '').trim();
-    if (!code || !id) return;
-    if (!idByCode.has(code)) idByCode.set(code, id);
-  });
-
-  const resolved: DefaultAccounts = {};
-  (Object.keys(DEFAULT_ACCOUNT_CODE_PRIORITY) as Array<keyof DefaultAccounts>).forEach((key) => {
-    const matched = DEFAULT_ACCOUNT_CODE_PRIORITY[key]
-      .map((code) => idByCode.get(code))
-      .find(Boolean);
-    if (matched) resolved[key] = matched;
-  });
-
-  const findByTypeAndName = (accountType: string, keywords: string[]): string | null => {
-    const matched = rows.find((row) => {
-      const type = String(row?.account_type || '').trim().toLowerCase();
-      if (type !== accountType) return false;
-      const haystack = `${String(row?.name || '')} ${String(row?.code || '')}`.toLowerCase();
-      return keywords.some((kw) => haystack.includes(kw.toLowerCase()));
-    });
-    return matched?.id ? String(matched.id) : null;
-  };
-
-  const findFirstByType = (accountType: string): string | null => {
-    const matched = rows.find((row) => String(row?.account_type || '').trim().toLowerCase() === accountType);
-    return matched?.id ? String(matched.id) : null;
-  };
-
-  if (!resolved.default_accounts_receivable_id) {
-    resolved.default_accounts_receivable_id =
-      findByTypeAndName('asset', ['دریافتنی', 'receivable']) ||
-      findByTypeAndName('asset', ['تجاری']) ||
-      findFirstByType('asset');
-  }
-  if (!resolved.default_accounts_payable_id) {
-    resolved.default_accounts_payable_id =
-      findByTypeAndName('liability', ['پرداختنی', 'payable']) ||
-      findFirstByType('liability');
-  }
-  if (!resolved.default_sales_revenue_id) {
-    resolved.default_sales_revenue_id =
-      findByTypeAndName('income', ['فروش', 'درآمد', 'revenue']) ||
-      findFirstByType('income');
-  }
-  if (!resolved.default_payment_cash_id) {
-    resolved.default_payment_cash_id =
-      findByTypeAndName('asset', ['صندوق', 'cash']) ||
-      null;
-  }
-  if (!resolved.default_payment_bank_id) {
-    resolved.default_payment_bank_id =
-      findByTypeAndName('asset', ['بانک', 'bank']) ||
-      null;
-  }
-  if (!resolved.default_inventory_asset_id) {
-    resolved.default_inventory_asset_id =
-      findByTypeAndName('asset', ['موجودی', 'inventory']) ||
-      null;
-  }
-  if (!resolved.default_cogs_id) {
-    resolved.default_cogs_id =
-      findByTypeAndName('expense', ['بهای تمام شده', 'cost', 'cogs']) ||
-      null;
-  }
-
-  return resolved;
-};
-
 const fetchDefaultAccounts = async (supabase: SupabaseClient): Promise<DefaultAccounts> => {
   const session = await fetchSessionBootstrap(supabase);
   const currentOrgId = String(session?.orgId || '').trim() || null;
@@ -375,24 +292,27 @@ const fetchDefaultAccounts = async (supabase: SupabaseClient): Promise<DefaultAc
   }
 
   const configured = (get(data?.settings || {}, 'modules.accounting.defaults', {}) || {}) as DefaultAccounts;
-  const inferred = await fetchAutoDefaultAccountsFromCoa(supabase);
   const validAccountIds = await fetchValidChartAccountIdSet(supabase);
 
   return {
     default_accounts_receivable_id:
-      pickValidAccountId(configured.default_accounts_receivable_id, inferred.default_accounts_receivable_id, validAccountIds),
+      pickValidAccountId(configured.default_accounts_receivable_id, null, validAccountIds),
     default_accounts_payable_id:
-      pickValidAccountId(configured.default_accounts_payable_id, inferred.default_accounts_payable_id, validAccountIds),
+      pickValidAccountId(configured.default_accounts_payable_id, null, validAccountIds),
     default_sales_revenue_id:
-      pickValidAccountId(configured.default_sales_revenue_id, inferred.default_sales_revenue_id, validAccountIds),
+      pickValidAccountId(configured.default_sales_revenue_id, null, validAccountIds),
     default_payment_cash_id:
-      pickValidAccountId(configured.default_payment_cash_id, inferred.default_payment_cash_id, validAccountIds),
+      pickValidAccountId(configured.default_payment_cash_id, null, validAccountIds),
     default_payment_bank_id:
-      pickValidAccountId(configured.default_payment_bank_id, inferred.default_payment_bank_id, validAccountIds),
+      pickValidAccountId(configured.default_payment_bank_id, null, validAccountIds),
     default_inventory_asset_id:
-      pickValidAccountId(configured.default_inventory_asset_id, inferred.default_inventory_asset_id, validAccountIds),
+      pickValidAccountId(configured.default_inventory_asset_id, null, validAccountIds),
     default_cogs_id:
-      pickValidAccountId(configured.default_cogs_id, inferred.default_cogs_id, validAccountIds),
+      pickValidAccountId(configured.default_cogs_id, null, validAccountIds),
+    default_sales_tax_id:
+      pickValidAccountId(configured.default_sales_tax_id, null, validAccountIds),
+    default_purchase_tax_id:
+      pickValidAccountId(configured.default_purchase_tax_id, null, validAccountIds),
   };
 };
 
@@ -422,6 +342,28 @@ const readInvoicePayments = (invoice: InvoiceRow): PaymentRow[] => {
   if (Array.isArray(invoice.payments_json)) return invoice.payments_json;
   return [];
 };
+
+const getInvoiceItemBreakdown = (item: InvoiceItemRow) => {
+  const quantity = toNumber(item?.quantity);
+  const unitPrice = toNumber(item?.unit_price || item?.price);
+  const rawBase = quantity > 0 && unitPrice > 0 ? quantity * unitPrice : toNumber(item?.total_price);
+  const discountValue = Math.max(0, toNumber(item?.discount));
+  const discount = String(item?.discount_type || 'amount').toLowerCase() === 'percent'
+    ? rawBase * Math.min(100, discountValue) / 100
+    : discountValue;
+  const net = Math.max(0, rawBase - Math.min(rawBase, discount));
+  const vatValue = Math.max(0, toNumber(item?.vat));
+  const vat = String(item?.vat_type || 'percent').toLowerCase() === 'amount'
+    ? vatValue
+    : net * vatValue / 100;
+  return { net, vat, total: net + vat };
+};
+
+const getInvoiceTaxBreakdown = (items: InvoiceItemRow[]) =>
+  (items || []).reduce<{ net: number; vat: number; total: number }>((sum, item) => {
+    const row = getInvoiceItemBreakdown(item);
+    return { net: sum.net + row.net, vat: sum.vat + row.vat, total: sum.total + row.total };
+  }, { net: 0, vat: 0, total: 0 });
 
 const calcInvoiceItemsGrandTotal = (items: InvoiceItemRow[]): number => {
   return (Array.isArray(items) ? items : []).reduce((sum, item) => {
@@ -507,8 +449,8 @@ const fetchCostCentersByProduct = async (
   return map;
 };
 
-const getInvoiceLabel = (invoice: InvoiceRow, recordId: string) => {
-  return String(invoice.system_code || invoice.name || recordId);
+const getInvoiceLabel = (invoice: InvoiceRow, _recordId: string) => {
+  return String(invoice.system_code || invoice.name || 'بدون عنوان');
 };
 
 const resolvePaymentAccountId = (
@@ -550,16 +492,23 @@ const buildSalesFinalizedLines = (
   invoiceItems: InvoiceItemRow[],
   costCenterByProductId: Record<string, string | null>,
   defaults: DefaultAccounts,
-  result: SyncResult
+  result: SyncResult,
+  isReturn = false,
 ): JournalLine[] => {
   const receivableAccount = defaults.default_accounts_receivable_id;
   const revenueAccount = defaults.default_sales_revenue_id;
+  const taxAccount = defaults.default_sales_tax_id;
   const totalInvoiceAmountRaw = toNumber(invoice.total_invoice_amount);
   const computedInvoiceAmount = calcInvoiceItemsGrandTotal(invoiceItems);
   const totalInvoiceAmount = totalInvoiceAmountRaw > 0 ? totalInvoiceAmountRaw : computedInvoiceAmount;
 
+  const taxBreakdown = getInvoiceTaxBreakdown(invoiceItems);
   if (!receivableAccount || !revenueAccount) {
     pushSyncError(result, 'حساب‌های پیش‌فرض دریافتنی/درآمد فروش تعریف نشده‌اند.');
+    return [];
+  }
+  if (taxBreakdown.vat > 0 && !taxAccount) {
+    pushSyncError(result, 'حساب مالیات ارزش افزوده فروش تعریف نشده است.');
     return [];
   }
 
@@ -575,7 +524,7 @@ const buildSalesFinalizedLines = (
       : (item.products?.cost_center_id ? String(item.products.cost_center_id) : null);
     const costCenterFromProduct = productId ? (costCenterByProductId[productId] || null) : null;
     const costCenterId = directCostCenter || costCenterFromProduct || '__no_cost_center__';
-    const itemTotal = toNumber(item.total_price);
+    const itemTotal = getInvoiceItemBreakdown(item).net;
     acc[costCenterId] = (acc[costCenterId] || 0) + itemTotal;
     return acc;
   }, {} as Record<string, number>);
@@ -583,33 +532,45 @@ const buildSalesFinalizedLines = (
   const lines: JournalLine[] = [
     {
       account_id: String(receivableAccount),
-      debit: totalInvoiceAmount,
-      credit: 0,
-      description: `ثبت دریافتنی فاکتور فروش - ${getInvoiceLabel(invoice, '')}`,
+      debit: isReturn ? 0 : totalInvoiceAmount,
+      credit: isReturn ? totalInvoiceAmount : 0,
+      description: `${isReturn ? 'ثبت برگشت دریافتنی' : 'ثبت دریافتنی فاکتور فروش'} - ${getInvoiceLabel(invoice, '')}`,
     },
   ];
 
   const groupedEntries = Object.entries(salesByCostCenter).filter(([, amount]) => toNumber(amount) > 0);
+  const revenueTotal = Math.max(0, totalInvoiceAmount - taxBreakdown.vat);
   if (groupedEntries.length === 0) {
     lines.push({
       account_id: String(revenueAccount),
-      debit: 0,
-      credit: totalInvoiceAmount,
+      debit: isReturn ? revenueTotal : 0,
+      credit: isReturn ? 0 : revenueTotal,
       description: `ثبت درآمد فروش - ${getInvoiceLabel(invoice, '')}`,
       cost_center_id: null,
     });
+    if (taxBreakdown.vat > 0 && taxAccount) lines.push({ account_id: taxAccount, debit: isReturn ? taxBreakdown.vat : 0, credit: isReturn ? 0 : taxBreakdown.vat, description: `${isReturn ? 'برگشت مالیات ارزش افزوده فروش' : 'مالیات ارزش افزوده فروش'} - ${getInvoiceLabel(invoice, '')}` });
     return lines;
   }
 
+  let groupedRevenue = 0;
   groupedEntries.forEach(([costCenterId, amountRaw]) => {
+    groupedRevenue += toNumber(amountRaw);
     lines.push({
       account_id: String(revenueAccount),
-      debit: 0,
-      credit: toNumber(amountRaw),
+      debit: isReturn ? toNumber(amountRaw) : 0,
+      credit: isReturn ? 0 : toNumber(amountRaw),
       description: `ثبت درآمد فروش - ${getInvoiceLabel(invoice, '')}`,
       cost_center_id: costCenterId === '__no_cost_center__' ? null : costCenterId,
     });
   });
+
+  const revenueRemainder = revenueTotal - groupedRevenue;
+  if (revenueRemainder > 0.01) {
+    lines.push({ account_id: String(revenueAccount), debit: isReturn ? revenueRemainder : 0, credit: isReturn ? 0 : revenueRemainder, description: `${isReturn ? 'تعدیل برگشت فروش' : 'تعدیل درآمد پس از تخفیف'} - ${getInvoiceLabel(invoice, '')}`, cost_center_id: null });
+  }
+  if (taxBreakdown.vat > 0 && taxAccount) {
+    lines.push({ account_id: taxAccount, debit: isReturn ? taxBreakdown.vat : 0, credit: isReturn ? 0 : taxBreakdown.vat, description: `${isReturn ? 'برگشت مالیات ارزش افزوده فروش' : 'مالیات ارزش افزوده فروش'} - ${getInvoiceLabel(invoice, '')}` });
+  }
 
   return lines;
 };
@@ -617,10 +578,14 @@ const buildSalesFinalizedLines = (
 const buildPurchaseFinalizedLines = (
   invoice: InvoiceRow,
   defaults: DefaultAccounts,
-  result: SyncResult
+  result: SyncResult,
+  isReturn = false,
 ): JournalLine[] => {
   const purchaseDebitAccount = defaults.default_inventory_asset_id || defaults.default_cogs_id;
   const payableAccount = defaults.default_accounts_payable_id;
+  const purchaseTaxAccount = defaults.default_purchase_tax_id;
+  const items = readInvoiceItems(invoice);
+  const taxBreakdown = getInvoiceTaxBreakdown(items);
   const totalInvoiceAmountRaw = toNumber(invoice.total_invoice_amount);
   const totalInvoiceAmount = totalInvoiceAmountRaw > 0
     ? totalInvoiceAmountRaw
@@ -630,26 +595,34 @@ const buildPurchaseFinalizedLines = (
     pushSyncError(result, 'حساب‌های پیش‌فرض خرید/موجودی یا پرداختنی تعریف نشده‌اند.');
     return [];
   }
+  if (taxBreakdown.vat > 0 && !purchaseTaxAccount) {
+    pushSyncError(result, 'حساب اعتبار مالیاتی خرید تعریف نشده است.');
+    return [];
+  }
 
   if (totalInvoiceAmount <= 0) {
     pushSyncError(result, 'مبلغ فاکتور خرید معتبر نیست.');
     return [];
   }
 
-  return [
+  const lines: JournalLine[] = [
     {
       account_id: String(purchaseDebitAccount),
-      debit: totalInvoiceAmount,
-      credit: 0,
+      debit: isReturn ? 0 : Math.max(0, totalInvoiceAmount - taxBreakdown.vat),
+      credit: isReturn ? Math.max(0, totalInvoiceAmount - taxBreakdown.vat) : 0,
       description: `ثبت خرید/موجودی - ${getInvoiceLabel(invoice, '')}`,
     },
     {
       account_id: String(payableAccount),
-      debit: 0,
-      credit: totalInvoiceAmount,
+      debit: isReturn ? totalInvoiceAmount : 0,
+      credit: isReturn ? 0 : totalInvoiceAmount,
       description: `ثبت حساب پرداختنی - ${getInvoiceLabel(invoice, '')}`,
     },
   ];
+  if (taxBreakdown.vat > 0 && purchaseTaxAccount) {
+    lines.push({ account_id: purchaseTaxAccount, debit: isReturn ? 0 : taxBreakdown.vat, credit: isReturn ? taxBreakdown.vat : 0, description: `${isReturn ? 'برگشت اعتبار مالیاتی خرید' : 'اعتبار مالیاتی خرید'} - ${getInvoiceLabel(invoice, '')}` });
+  }
+  return lines;
 };
 
 const buildPaymentLines = async (
@@ -705,7 +678,8 @@ const buildPaymentLines = async (
       continue;
     }
 
-    if (moduleId === 'invoices') {
+    const isSales = moduleId === 'invoices' || moduleId === 'sales_return_invoices';
+    if (isSales) {
       const receivableAccount = defaults.default_accounts_receivable_id;
       if (!receivableAccount) {
         pushSyncError(result, 'حساب دریافتنی پیش‌فرض تعریف نشده است.');
@@ -714,15 +688,15 @@ const buildPaymentLines = async (
 
       lines.push({
         account_id: String(paymentAccountId),
-        debit: paymentAmount,
-        credit: 0,
-        description: `ثبت دریافت وجه - ${getInvoiceLabel(invoice, '')}`,
+        debit: moduleId === 'sales_return_invoices' ? 0 : paymentAmount,
+        credit: moduleId === 'sales_return_invoices' ? paymentAmount : 0,
+        description: `${moduleId === 'sales_return_invoices' ? 'بازپرداخت وجه' : 'ثبت دریافت وجه'} - ${getInvoiceLabel(invoice, '')}`,
       });
       lines.push({
         account_id: String(receivableAccount),
-        debit: 0,
-        credit: paymentAmount,
-        description: `تسویه حساب دریافتنی - ${getInvoiceLabel(invoice, '')}`,
+        debit: moduleId === 'sales_return_invoices' ? paymentAmount : 0,
+        credit: moduleId === 'sales_return_invoices' ? 0 : paymentAmount,
+        description: `${moduleId === 'sales_return_invoices' ? 'ایجاد طلب بابت برگشت' : 'تسویه حساب دریافتنی'} - ${getInvoiceLabel(invoice, '')}`,
       });
       continue;
     }
@@ -733,17 +707,18 @@ const buildPaymentLines = async (
       break;
     }
 
+    const isPurchaseReturn = moduleId === 'purchase_return_invoices';
     lines.push({
       account_id: String(payableAccount),
-      debit: paymentAmount,
-      credit: 0,
-      description: `تسویه حساب پرداختنی - ${getInvoiceLabel(invoice, '')}`,
+      debit: isPurchaseReturn ? 0 : paymentAmount,
+      credit: isPurchaseReturn ? paymentAmount : 0,
+      description: `${isPurchaseReturn ? 'دریافت وجه برگشت خرید' : 'تسویه حساب پرداختنی'} - ${getInvoiceLabel(invoice, '')}`,
     });
     lines.push({
       account_id: String(paymentAccountId),
-      debit: 0,
-      credit: paymentAmount,
-      description: `ثبت پرداخت وجه - ${getInvoiceLabel(invoice, '')}`,
+      debit: isPurchaseReturn ? paymentAmount : 0,
+      credit: isPurchaseReturn ? 0 : paymentAmount,
+      description: `${isPurchaseReturn ? 'ثبت دریافت وجه از تامین‌کننده' : 'ثبت پرداخت وجه'} - ${getInvoiceLabel(invoice, '')}`,
     });
   }
 
@@ -789,10 +764,9 @@ const createJournalEntry = async ({
 }): Promise<ResolvedJournalEntry | null> => {
   const normalizedEventKey = String(eventKey || '').trim();
   const normalizedEventKeys = normalizedEventKey ? [normalizedEventKey] : [];
-  if (lines.length === 0) return null;
   if (!normalizedEventKey) return null;
 
-  if (!isBalanced(lines)) {
+  if (lines.length > 0 && !isBalanced(lines)) {
     const eventLabel = normalizedEventKeys.map((key) => EVENT_LABELS_FA[key] || key).join('، ');
     pushSyncError(result, `سند حسابداری برای رویداد «${eventLabel}» متوازن نیست.`);
     return null;
@@ -839,6 +813,12 @@ const createJournalEntry = async ({
       source_record_title: sourceRecordTitle,
       source_table: moduleId,
       source_module: moduleId,
+      metadata: {
+        posting_mode: 'manual',
+        posting_warnings: result.errors,
+        incomplete: lines.length === 0 || result.errors.length > 0,
+        source_event_key: normalizedEventKey,
+      },
     })
     .select('id')
     .single();
@@ -924,24 +904,39 @@ export const syncInvoiceAccountingEntries = async (
     const defaultAccounts = await fetchDefaultAccounts(supabase);
     const invoiceLabel = getInvoiceLabel(resolvedInvoice, recordId);
 
-    const finalizedEventKey = moduleId === 'invoices' ? 'sales_invoice_finalized' : 'purchase_invoice_finalized';
-    const paymentEventKey = moduleId === 'invoices' ? 'sales_payment_received' : 'purchase_payment_paid';
+    const isSalesModule = moduleId === 'invoices' || moduleId === 'sales_return_invoices';
+    const isReturnModule = moduleId === 'sales_return_invoices' || moduleId === 'purchase_return_invoices';
+    const finalizedEventKey = moduleId === 'invoices'
+      ? 'sales_invoice_finalized'
+      : moduleId === 'purchase_invoices'
+        ? 'purchase_invoice_finalized'
+        : moduleId === 'sales_return_invoices'
+          ? 'sales_return_invoice_finalized'
+          : 'purchase_return_invoice_finalized';
+    const paymentEventKey = moduleId === 'invoices'
+      ? 'sales_payment_received'
+      : moduleId === 'purchase_invoices'
+        ? 'purchase_payment_paid'
+        : moduleId === 'sales_return_invoices'
+          ? 'sales_return_payment_paid'
+          : 'purchase_return_payment_received';
 
-    const invoiceItems = moduleId === 'invoices' ? readInvoiceItems(resolvedInvoice) : [];
-    const costCenterByProductId = moduleId === 'invoices'
+    const invoiceItems = readInvoiceItems(resolvedInvoice);
+    const costCenterByProductId = isSalesModule
       ? await fetchCostCentersByProduct(supabase, invoiceItems)
       : {};
 
     const finalizedLines =
-      moduleId === 'invoices'
+      isSalesModule
         ? buildSalesFinalizedLines(
             resolvedInvoice,
             invoiceItems,
             costCenterByProductId,
             defaultAccounts,
-            result
+            result,
+            moduleId === 'sales_return_invoices'
           )
-        : buildPurchaseFinalizedLines(resolvedInvoice, defaultAccounts, result);
+        : buildPurchaseFinalizedLines(resolvedInvoice, defaultAccounts, result, moduleId === 'purchase_return_invoices');
 
     const paymentLines = includePayments
       ? await buildPaymentLines(supabase, moduleId, resolvedInvoice, defaultAccounts, result)
@@ -974,23 +969,19 @@ export const syncInvoiceAccountingEntries = async (
         recordId,
         invoice: resolvedInvoice,
         eventKey: finalizedEventKey,
-        description: moduleId === 'invoices'
-          ? `صدور خودکار سند فروش و دریافت وجه - ${invoiceLabel}`
-          : `صدور خودکار سند خرید و پرداخت وجه - ${invoiceLabel}`,
+        description: isReturnModule ? `صدور دستی سند برگشت و تسویه - ${invoiceLabel}` : (isSalesModule ? `صدور دستی سند فروش و دریافت وجه - ${invoiceLabel}` : `صدور دستی سند خرید و پرداخت وجه - ${invoiceLabel}`),
         lines: [...finalizedLines, ...paymentLines],
         result,
       });
     } else {
-      if (finalizedLines.length > 0 && !existingFinalizedEntryId) {
+      if (!existingFinalizedEntryId && (finalizedLines.length > 0 || result.errors.length > 0)) {
         await createJournalEntry({
           supabase,
           moduleId,
           recordId,
           invoice: resolvedInvoice,
           eventKey: finalizedEventKey,
-          description: moduleId === 'invoices'
-            ? `صدور خودکار سند فروش - ${invoiceLabel}`
-            : `صدور خودکار سند خرید - ${invoiceLabel}`,
+          description: isReturnModule ? `صدور دستی سند برگشت - ${invoiceLabel}` : (isSalesModule ? `صدور دستی سند فروش - ${invoiceLabel}` : `صدور دستی سند خرید - ${invoiceLabel}`),
           lines: finalizedLines,
           result,
         });
@@ -1003,9 +994,7 @@ export const syncInvoiceAccountingEntries = async (
           recordId,
           invoice: resolvedInvoice,
           eventKey: paymentEventKey,
-          description: moduleId === 'invoices'
-            ? `صدور خودکار سند دریافت وجه - ${invoiceLabel}`
-            : `صدور خودکار سند پرداخت وجه - ${invoiceLabel}`,
+          description: isReturnModule ? `صدور دستی سند تسویه برگشت - ${invoiceLabel}` : (isSalesModule ? `صدور دستی سند دریافت وجه - ${invoiceLabel}` : `صدور دستی سند پرداخت وجه - ${invoiceLabel}`),
           lines: paymentLines,
           result,
         });

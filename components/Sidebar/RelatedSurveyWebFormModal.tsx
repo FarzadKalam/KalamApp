@@ -61,7 +61,7 @@ const RelatedSurveyWebFormModal: React.FC<RelatedSurveyWebFormModalProps> = ({
       onClose();
       navigate(path);
     } catch (error) {
-      message.error(toFaErrorMessage(error, 'باز کردن وب‌فرم نظرسنجی ناموفق بود.'));
+      message.error(toFaErrorMessage(error as any, 'باز کردن وب‌فرم نظرسنجی ناموفق بود.'));
     } finally {
       setStartingFormId(null);
     }

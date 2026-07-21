@@ -6,6 +6,7 @@ import {
   isEmployeeFinancialOverviewOperation,
   OPERATIONAL_FINANCIAL_PRINT_SUMMARY_FIELDS,
   computeOperationalFinancialTotals,
+  formatOperationalFinancialDescription,
 } from './operationalFinancialOverview';
 import { buildListSummaryTableHtml } from './listPrintExport';
 
@@ -27,6 +28,12 @@ describe('operationalFinancialOverview', () => {
     expect(totals.totalDebit).toBe(800000);
     expect(totals.totalCredit).toBe(400000);
     expect(totals.finalBalance).toBe(400000);
+  });
+
+  it('formats financial amounts inside receipt descriptions with Persian grouping and decimals', () => {
+    expect(formatOperationalFinancialDescription('لحاظ شده بابت واریز مبلغ 1250000.5؛ مانده: 2500000')).toBe(
+      'لحاظ شده بابت واریز مبلغ ۱٬۲۵۰٬۰۰۰٫۵؛ مانده: ۲٬۵۰۰٬۰۰۰',
+    );
   });
 
   it('keeps only payroll and advance cash-bank operations in employee financial overview', () => {

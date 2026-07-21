@@ -145,8 +145,19 @@ const SIMPLE_OPERATOR_TO_NODE: Record<'+' | '-' | '*' | '/', 'add' | 'subtract' 
   '/': 'divide',
 };
 
+const normalizeSimpleFormulaSource = (value: string) => {
+  const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+  const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+  return String(value || '')
+    .replace(/[۰-۹]/g, (digit) => String(persianDigits.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String(arabicDigits.indexOf(digit)))
+    .replace(/[×xX]/g, '*')
+    .replace(/÷/g, '/')
+    .replace(/[٬,]/g, '');
+};
+
 const tokenizeSimpleFormula = (source: string): SimpleFormulaToken[] => {
-  const text = String(source || '').trim();
+  const text = normalizeSimpleFormulaSource(source).trim();
   const tokens: SimpleFormulaToken[] = [];
   let index = 0;
 

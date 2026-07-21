@@ -275,6 +275,8 @@ export interface BlockDefinition {
           requireLeaf?: boolean;
           requireDetail?: boolean;
         }>;
+        quickCreateFieldKeys?: string[];
+        quickCreateDefaults?: Record<string, any>;
       };
   }[];
   rowCalculationType?: RowCalculationType;

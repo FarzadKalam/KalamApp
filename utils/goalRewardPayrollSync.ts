@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { GoalRecord } from './goalTypes';
-import { executeGoalProgress, normalizeGoalRecord } from './goals';
+import { executeGoalProgress, isGoalVisibleToUser, normalizeGoalRecord } from './goals';
 import { evaluateGoalRewardRules, type GoalRewardFormula } from './goalRewardRuntime';
 import { isMissingPayrollLedgerError } from './payrollLedger';
 
 export type GoalRewardSyncProfile = {
   employeeId: string;
   profileUserId: string;
+  profileRoleId?: string | null;
   profileName?: string | null;
 };
 
@@ -91,11 +92,15 @@ export const collectGoalRewardLedgerDrafts = async ({
     for (const rawGoal of goals) {
       try {
         const goal = normalizeGoalRecord(rawGoal);
+        // اجرای progress با subject صریح، کنترل دسترسی را دور می‌زند؛ پس باید پیش از آن
+        // عضویت همین کارمند در هدف کنترل شود تا پاداش هدفِ فرد دیگری وارد فیش نشود.
+        if (!isGoalVisibleToUser(goal, profile.profileUserId, profile.profileRoleId || null)) continue;
         const snapshot = await executeGoalProgress(goal, {
           userId: profile.profileUserId,
-          roleId: null,
+          roleId: profile.profileRoleId || null,
           permissions: null,
           subjectUserId: profile.profileUserId,
+          subjectRoleId: profile.profileRoleId || null,
           overridePeriodRange: {
             startIso: `${periodStart}T00:00:00.000Z`,
             endIso: `${periodEnd}T23:59:59.999Z`,

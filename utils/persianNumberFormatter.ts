@@ -36,6 +36,23 @@ export const formatPersianPrice = (num: any, withComma = true): string => {
   return toPersianNumber(str).replace(/,/g, '٬');
 };
 
+/** نمایش عدد مالی با رقم فارسی، جداکننده سه‌رقمی و حفظ اعشار تا دو رقم. */
+export const formatPersianNumberWithGrouping = (value: any, maximumFractionDigits = 2): string => {
+  if (value === null || value === undefined || value === '') return '';
+  const normalized = String(value)
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[٬,]/g, '')
+    .replace(/٫/g, '.')
+    .trim();
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return toPersianNumber(String(value));
+  return number.toLocaleString('fa-IR', {
+    useGrouping: true,
+    maximumFractionDigits,
+  });
+};
+
 // --- توابع تاریخ و زمان ---
 
 const pad2 = (val: number | string) => String(val).padStart(2, '0');

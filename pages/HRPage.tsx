@@ -54,11 +54,9 @@ import SmartFieldRenderer from '../components/SmartFieldRenderer';
 import { evaluateGoalRewardRules, type GoalRewardEntry, type GoalRewardFormula } from '../utils/goalRewardRuntime';
 import { buildGoalRewardSourceKey, syncGoalRewardEntriesForPayroll } from '../utils/goalRewardPayrollSync';
 import { syncEmployeeCompensationEntriesForPayroll } from '../utils/employeeCompensationPayrollSync';
-import { calculatePayrollSlipTotals } from '../utils/payrollSlipTotals';
+import { buildPayrollSlipDraft } from '../utils/payrollSlipDraft';
 import { syncSeniorityPayrollEntry, calcYearsOfService } from '../utils/seniorityRuntime';
 import {
-  fetchPayrollLedgerEntries,
-  groupPayrollLedgerEntriesToSlipLines,
   isMissingPayrollLedgerError,
   markPayrollLedgerEntriesIncluded,
   type PayrollLedgerEntry,
@@ -292,6 +290,7 @@ type EmployeeGoalTouchRow = {
   key: string;
   employeeId: string;
   employeeName: string;
+  profileRoleId?: string | null;
   goalId: string;
   goalName: string;
   achievedValue: number;
@@ -1475,6 +1474,7 @@ const HRPage: React.FC = () => {
   const [employeeAdvancesLoading, setEmployeeAdvancesLoading] = useState(false);
   const [payrollStatusLoading, setPayrollStatusLoading] = useState(false);
   const [payrollWizardOpen, setPayrollWizardOpen] = useState(false);
+  const [payrollWizardPreparing, setPayrollWizardPreparing] = useState(false);
   const [payrollWizardEmployeeId, setPayrollWizardEmployeeId] = useState<string | null>(null);
   const [payrollWizardStep, setPayrollWizardStep] = useState(0);
   const [employeeModulePermissions, setEmployeeModulePermissions] = useState<ModulePermissionConfig>({});
@@ -2575,6 +2575,7 @@ const HRPage: React.FC = () => {
                 key: `${member.employeeId}_${goal.id}`,
                 employeeId: member.employeeId,
                 employeeName: member.employeeName,
+                profileRoleId: member.roleId,
                 goalId: goal.id,
                 goalName: goal.name,
                 achievedValue: snapshot.achievedValue,
@@ -3940,30 +3941,6 @@ const HRPage: React.FC = () => {
     [payrollWizardDeductibleAdvances],
   );
 
-  const payrollWizardBaseNetPayable = useMemo(() => {
-    const row = payrollWizardSummary;
-    if (!row) return 0;
-    return payrollWizardBaseCompensation.amount
-      + row.taskWageTotal
-      + row.activityWageTotal
-      + row.bonusTotal
-      - row.penaltyTotal;
-  }, [payrollWizardBaseCompensation.amount, payrollWizardSummary]);
-
-  const payrollWizardInsurance = useMemo(() => {
-    const row = payrollWizardSummary;
-    if (!row || row.profile.insurance_subject === false) return { employee: 0, employer: 0 };
-    return {
-      employee: (payrollWizardBaseNetPayable * toNumber(row.profile.employee_insurance_rate)) / 100,
-      employer: (payrollWizardBaseNetPayable * toNumber(row.profile.employer_insurance_rate)) / 100,
-    };
-  }, [payrollWizardBaseNetPayable, payrollWizardSummary]);
-
-  const payrollWizardFinalNet = useMemo(
-    () => payrollWizardBaseNetPayable + payrollWizardLedgerNet - payrollWizardInsurance.employee - payrollWizardAdvanceDeductionTotal,
-    [payrollWizardAdvanceDeductionTotal, payrollWizardBaseNetPayable, payrollWizardInsurance.employee, payrollWizardLedgerNet],
-  );
-
   const buildAdvancePayrollSlipLines = useCallback((advances: EmployeeAdvanceDashboardRow[]): PayrollSlipLine[] => (
     advances
       .map((advance): PayrollSlipLine | null => {
@@ -3985,46 +3962,25 @@ const HRPage: React.FC = () => {
       .filter((item): item is PayrollSlipLine => Boolean(item))
   ), []);
 
-  const payrollWizardGroupedLedgerLines = useMemo(
-    () => groupPayrollLedgerEntriesToSlipLines(payrollWizardOpenLedger as PayrollLedgerEntry[], currencyLabel),
-    [currencyLabel, payrollWizardOpenLedger],
-  );
-
-  const payrollWizardPreviewLines = useMemo(() => {
+  const payrollWizardDraft = useMemo(() => {
     const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
     const presenceHours = presenceMinutesValue / 60;
-    const effectiveBaseSalary = payrollWizardBaseCompensation.amount;
-    const baseLines: PayrollSlipLine[] = [
-      ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{
-        line_type: 'earning' as const,
-        title: payrollWizardBaseCompensation.displayTitle,
-        amount: effectiveBaseSalary,
-        description: `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت`,
-      }] : []),
-      ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{
-        line_type: 'earning' as const,
-        title: payrollWizardBaseCompensation.displayTitle,
-        amount: effectiveBaseSalary,
-        description: `بازه ${toNativeGregorianDateString(monthStart) || ''} تا ${toNativeGregorianDateString(monthEnd) || ''}`,
-      }] : []),
-      ...(payrollWizardSummary && payrollWizardSummary.taskWageTotal > 0 ? [{
-        line_type: 'earning' as const,
-        title: 'حقوق عملکردی فعالیت‌ها',
-        amount: payrollWizardSummary.taskWageTotal,
-        description: `${payrollWizardSummary.payrollDetailRows.length} فعالیت`,
-      }] : []),
-    ];
-    return [
-      ...baseLines,
-      ...payrollWizardGroupedLedgerLines,
-      ...buildAdvancePayrollSlipLines(payrollWizardDeductibleAdvances),
-      ...(payrollWizardInsurance.employee > 0 ? [{
-        line_type: 'deduction' as const,
-        title: 'بیمه سهم کارمند',
-        amount: payrollWizardInsurance.employee,
-        description: 'برآورد از تنظیمات پرسنل',
-      }] : []),
-    ];
+    const baseSalaryDescription = payrollWizardBaseCompensation.isHourly
+      ? `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت`
+      : `بازه ${toNativeGregorianDateString(monthStart) || ''} تا ${toNativeGregorianDateString(monthEnd) || ''}`;
+    return buildPayrollSlipDraft({
+      baseSalary: payrollWizardBaseCompensation.amount,
+      baseSalaryTitle: payrollWizardBaseCompensation.displayTitle,
+      baseSalaryDescription,
+      taskWageTotal: payrollWizardSummary?.taskWageTotal || 0,
+      taskWageDescription: `${payrollWizardSummary?.payrollDetailRows.length || 0} فعالیت`,
+      ledgerEntries: payrollWizardOpenLedger as PayrollLedgerEntry[],
+      advanceLines: buildAdvancePayrollSlipLines(payrollWizardDeductibleAdvances),
+      insuranceSubject: payrollWizardSummary?.profile?.insurance_subject,
+      employeeInsuranceRate: payrollWizardSummary?.profile?.employee_insurance_rate,
+      employerInsuranceRate: payrollWizardSummary?.profile?.employer_insurance_rate,
+      currencyLabel,
+    });
   }, [
     buildAdvancePayrollSlipLines,
     currencyLabel,
@@ -4035,11 +3991,17 @@ const HRPage: React.FC = () => {
     payrollWizardBaseCompensation.displayTitle,
     payrollWizardBaseCompensation.isHourly,
     payrollWizardDeductibleAdvances,
-    payrollWizardGroupedLedgerLines,
     payrollWizardHourlyRate,
-    payrollWizardInsurance.employee,
+    payrollWizardOpenLedger,
     payrollWizardSummary,
   ]);
+
+  const payrollWizardPreviewLines = payrollWizardDraft.lines;
+  const payrollWizardInsurance = useMemo(() => ({
+    employee: payrollWizardDraft.employeeInsuranceAmount,
+    employer: payrollWizardDraft.employerInsuranceAmount,
+  }), [payrollWizardDraft.employeeInsuranceAmount, payrollWizardDraft.employerInsuranceAmount]);
+  const payrollWizardFinalNet = payrollWizardDraft.netAmount;
 
   const payrollWizardSeniorityAmount = useMemo(
     () => payrollWizardOpenLedger
@@ -4061,12 +4023,14 @@ const HRPage: React.FC = () => {
     setPayrollWizardStep(0);
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
+    setPayrollWizardPreparing(true);
     setPayrollWizardOpen(true);
     void fetchEmployeeAdvancesForDashboard();
   }, [fetchEmployeeAdvancesForDashboard]);
 
   const closePayrollWizard = useCallback(() => {
     setPayrollWizardOpen(false);
+    setPayrollWizardPreparing(false);
     setPayrollWizardEmployeeId(null);
     setPayrollWizardStep(0);
     setEditingPayrollWizardFieldKey(null);
@@ -5064,6 +5028,7 @@ const HRPage: React.FC = () => {
         return profile ? {
           employeeId: String(profile.source_id || profile.id),
           profileUserId: String(profile.related_profile_id || profile.id),
+          profileRoleId: row.profileRoleId || null,
           profileName: profile.full_name || row.employeeName || null,
         } : null;
       })
@@ -5632,15 +5597,32 @@ const HRPage: React.FC = () => {
     if (!periodStart || !periodEnd) return;
     let cancelled = false;
     const run = async () => {
+      setPayrollWizardPreparing(true);
       try {
         await ensureActivityPerformanceLedgerForSummary(payrollWizardSummary, periodStart, periodEnd);
         const profile = payrollWizardSummary.profile;
         if (profile?.source_id) {
-          await syncEmployeeCompensationEntriesForPayroll(supabase as any, {
-            employeeIds: [String(profile.source_id)],
-            periodStart,
-            periodEnd,
-          });
+          const directory = await fetchAssigneeDirectory(supabase);
+          const profileUserId = String(profile.related_profile_id || profile.id || '').trim();
+          const directoryUser = (directory.users || []).find((user) => String(user.id || '').trim() === profileUserId);
+          await Promise.all([
+            syncEmployeeCompensationEntriesForPayroll(supabase as any, {
+              employeeIds: [String(profile.source_id)],
+              periodStart,
+              periodEnd,
+            }),
+            syncGoalRewardEntriesForPayroll(supabase as any, {
+              profiles: [{
+                employeeId: String(profile.source_id),
+                profileUserId,
+                profileRoleId: directoryUser?.role_id ? String(directoryUser.role_id) : null,
+                profileName: payrollWizardSummary.name,
+              }],
+              periodStart,
+              periodEnd,
+            }),
+          ]);
+          await prepareAttendancePayrollLedgerEntriesForRows(payrollWizardAttendanceRows);
         }
         if (profile?.seniority_mode === 'labor_law' && profile?.hire_date && profile?.source_id) {
           await syncSeniorityPayrollEntry(supabase as any, {
@@ -5653,13 +5635,24 @@ const HRPage: React.FC = () => {
         if (!cancelled) await refreshPayrollPeriodState();
       } catch (error) {
         console.warn('Could not prepare payroll wizard.', error);
+      } finally {
+        if (!cancelled) setPayrollWizardPreparing(false);
       }
     };
     void run();
     return () => {
       cancelled = true;
     };
-  }, [ensureActivityPerformanceLedgerForSummary, monthEnd, monthStart, payrollWizardOpen, payrollWizardSummary, refreshPayrollPeriodState]);
+  }, [
+    ensureActivityPerformanceLedgerForSummary,
+    monthEnd,
+    monthStart,
+    payrollWizardAttendanceRows,
+    payrollWizardOpen,
+    payrollWizardSummary,
+    prepareAttendancePayrollLedgerEntriesForRows,
+    refreshPayrollPeriodState,
+  ]);
 
   const handleCreatePayrollSlipFromWizard = useCallback(async () => {
     const row = payrollWizardSummary;
@@ -5679,56 +5672,19 @@ const HRPage: React.FC = () => {
       navigate(`/payroll_slips/${existingSlip.id}`);
       return;
     }
+    if (payrollWizardPreparing) {
+      message.info('اقلام فیش هنوز در حال آماده‌سازی هستند؛ چند لحظه دیگر دوباره تلاش کنید.');
+      return;
+    }
 
     setCreatingPayrollSlip(true);
     try {
-      await ensureActivityPerformanceLedgerForSummary(row, periodStart, periodEnd);
-      await syncEmployeeCompensationEntriesForPayroll(supabase as any, {
-        employeeIds: [employeeIdValue],
-        periodStart,
-        periodEnd,
-      });
-      await syncGoalRewardEntriesForPayroll(supabase as any, {
-        profiles: [{
-          employeeId: employeeIdValue,
-          profileUserId: String(row.profile.related_profile_id || row.profile.id),
-          profileName: row.name,
-        }],
-        periodStart,
-        periodEnd,
-      });
-      await prepareAttendancePayrollLedgerEntriesForRows(payrollWizardAttendanceRows);
-
-      const ledgerEntries = await fetchPayrollLedgerEntries(supabase as any, [employeeIdValue], periodStart, periodEnd);
-      const ledgerLines = groupPayrollLedgerEntriesToSlipLines(ledgerEntries, currencyLabel);
-      const advanceLines = buildAdvancePayrollSlipLines(payrollWizardDeductibleAdvances);
+      // ثبت دقیقاً از همان snapshotی انجام می‌شود که مرحلهٔ آخر ویزارد نمایش داده است.
+      const ledgerEntries = payrollWizardOpenLedger as PayrollLedgerEntry[];
       const advanceDeductionTotal = payrollWizardDeductibleAdvances.reduce(
         (sum, advance) => sum + (advance.paid_amount > 0 ? advance.paid_amount : advance.amount),
         0,
       );
-      const ledgerBonusTotal = ledgerEntries.reduce((sum, entry) => sum + Math.max(0, Number(entry.amount || 0)), 0);
-      const ledgerDeductionTotal = ledgerEntries.reduce((sum, entry) => sum + Math.abs(Math.min(0, Number(entry.amount || 0))), 0);
-
-      const presenceMinutesValue = calculatePresenceMinutes(payrollWizardAttendanceRows);
-      const presenceHours = presenceMinutesValue / 60;
-      const effectiveBaseSalary = payrollWizardBaseCompensation.amount;
-      const totalEarnings = effectiveBaseSalary + row.taskWageTotal + ledgerBonusTotal;
-
-      const employeeInsuranceAmount = row.profile?.insurance_subject === false
-        ? 0
-        : (totalEarnings * toNumber(row.profile?.employee_insurance_rate)) / 100;
-      const employerInsuranceAmount = row.profile?.insurance_subject === false
-        ? 0
-        : (totalEarnings * toNumber(row.profile?.employer_insurance_rate)) / 100;
-      const previewLines = [
-        ...(payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `${presenceHours.toFixed(1)} ساعت × ${formatPersianPrice(payrollWizardHourlyRate)} ${currencyLabel}/ساعت` }] : []),
-        ...(!payrollWizardBaseCompensation.isHourly && effectiveBaseSalary > 0 ? [{ line_type: 'earning', title: payrollWizardBaseCompensation.displayTitle, amount: effectiveBaseSalary, description: `بازه ${periodStart} تا ${periodEnd}` }] : []),
-        ...(row.taskWageTotal > 0 ? [{ line_type: 'earning', title: 'حقوق عملکردی فعالیت‌ها', amount: row.taskWageTotal, description: `${row.payrollDetailRows.length} فعالیت` }] : []),
-        ...ledgerLines,
-        ...advanceLines,
-        ...(employeeInsuranceAmount > 0 ? [{ line_type: 'deduction', title: 'بیمه سهم کارمند', amount: employeeInsuranceAmount, description: 'برآورد از تنظیمات پرسنل' }] : []),
-      ];
-      const slipTotals = calculatePayrollSlipTotals({ lines: previewLines, payments: [] });
       const systemCode = await buildClientFallbackSystemCode(supabase, 'payroll_slips', 'payroll_slips');
       const payload = {
         name: `فیش حقوق ${row.name} ${toPersianNumber(safeJalaliFormat(monthStart.toISOString(), 'YYYY/MM'))}`,
@@ -5738,15 +5694,15 @@ const HRPage: React.FC = () => {
         period_end: periodEnd,
         status: 'draft',
         assignee_id: row.profile.related_profile_id || null,
-        base_salary: effectiveBaseSalary,
+        base_salary: payrollWizardBaseCompensation.amount,
         task_wage_total: row.taskWageTotal,
-        bonus_total: ledgerBonusTotal,
-        deduction_total: ledgerDeductionTotal + advanceDeductionTotal + employeeInsuranceAmount,
-        insurance_employee_amount: employeeInsuranceAmount,
-        insurance_employer_amount: employerInsuranceAmount,
-        gross_amount: slipTotals.grossAmount,
-        net_amount: slipTotals.netPayable,
-        lines: previewLines,
+        bonus_total: payrollWizardDraft.ledgerBonusTotal,
+        deduction_total: payrollWizardDraft.ledgerDeductionTotal + advanceDeductionTotal + payrollWizardDraft.employeeInsuranceAmount,
+        insurance_employee_amount: payrollWizardDraft.employeeInsuranceAmount,
+        insurance_employer_amount: payrollWizardDraft.employerInsuranceAmount,
+        gross_amount: payrollWizardDraft.grossAmount,
+        net_amount: payrollWizardDraft.netAmount,
+        lines: payrollWizardDraft.lines,
         payments: [],
         performance_snapshot: {
           total_tasks: row.totalTasks,
@@ -5815,23 +5771,20 @@ const HRPage: React.FC = () => {
     }
   }, [
     closePayrollWizard,
-    ensureActivityPerformanceLedgerForSummary,
-    buildAdvancePayrollSlipLines,
     fetchEmployeeAdvancesForDashboard,
     message,
     monthEnd,
     monthStart,
     navigate,
     payrollSlipByEmployeeId,
-    prepareAttendancePayrollLedgerEntriesForRows,
-    currencyLabel,
     payrollWizardAttendanceRows,
     payrollWizardBaseCompensation.amount,
-    payrollWizardBaseCompensation.displayTitle,
-    payrollWizardBaseCompensation.isHourly,
     payrollWizardHourlyRate,
     payrollWizardRequiredMinutes,
     payrollWizardDeductibleAdvances,
+    payrollWizardDraft,
+    payrollWizardOpenLedger,
+    payrollWizardPreparing,
     payrollWizardSummary,
     refreshPayrollPeriodState,
   ]);
@@ -8116,6 +8069,11 @@ const HRPage: React.FC = () => {
 
             {payrollWizardStep === 3 ? (
               <div className="space-y-4">
+                {payrollWizardPreparing ? (
+                  <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-100">
+                    <Spin size="small" /> اقلام فیش در حال بررسی و آماده‌سازی هستند.
+                  </div>
+                ) : null}
                 <Row gutter={[12, 12]}>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">{payrollWizardBaseCompensation.displayTitle}</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardBaseCompensation.amount)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">کارکرد فعالیت‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.taskWageTotal)}</div></Card></Col>
@@ -8153,9 +8111,9 @@ const HRPage: React.FC = () => {
               <Space>
                 {payrollWizardStep > 0 ? <Button onClick={() => setPayrollWizardStep((current) => Math.max(0, current - 1))}>مرحله قبل</Button> : null}
                 {payrollWizardStep < 3 ? (
-                  <Button type="primary" onClick={() => setPayrollWizardStep((current) => Math.min(3, current + 1))}>مرحله بعد</Button>
+                  <Button type="primary" loading={payrollWizardPreparing} disabled={payrollWizardPreparing} onClick={() => setPayrollWizardStep((current) => Math.min(3, current + 1))}>مرحله بعد</Button>
                 ) : (
-                  <Button type="primary" loading={creatingPayrollSlip} onClick={handleCreatePayrollSlipFromWizard}>ایجاد فیش پیش‌نویس</Button>
+                  <Button type="primary" loading={creatingPayrollSlip || payrollWizardPreparing} disabled={payrollWizardPreparing} onClick={handleCreatePayrollSlipFromWizard}>ایجاد فیش پیش‌نویس</Button>
                 )}
               </Space>
             </div>

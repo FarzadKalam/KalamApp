@@ -340,4 +340,5 @@ export const cashBankOperationsConfig: ModuleDefinition = {
     },
   ],
   relatedTabs: [],
+  actionButtons: [{ id: 'create_journal_entry', label: 'صدور سند دستی', placement: 'header', variant: 'primary' }],
 };
