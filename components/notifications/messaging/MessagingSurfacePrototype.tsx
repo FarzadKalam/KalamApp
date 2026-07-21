@@ -2439,18 +2439,21 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
   const loadInternalConversationFallback = useMemo(() => {
     const currentUserId = String(liveData.profile.id || '').trim();
     const currentRoleId = String(liveData.profile.roleId || '').trim();
-    if (!currentUserId) return undefined;
+    const currentOrgId = String(liveData.profile.orgId || '').trim();
+    if (!currentUserId || !currentOrgId) return undefined;
     return async () => {
       const [authoredResult, mentionedResult, mentionedRoleResult] = await Promise.all([
         supabase
           .from('notes')
           .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+          .eq('org_id', currentOrgId)
           .eq('author_id', currentUserId)
           .order('created_at', { ascending: false })
           .limit(180),
         supabase
           .from('notes')
           .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+          .eq('org_id', currentOrgId)
           .contains('mention_user_ids', [currentUserId])
           .order('created_at', { ascending: false })
           .limit(180),
@@ -2458,6 +2461,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
           ? supabase
               .from('notes')
               .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
+              .eq('org_id', currentOrgId)
               .contains('mention_role_ids', [currentRoleId])
               .order('created_at', { ascending: false })
               .limit(180)
@@ -2481,7 +2485,7 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
         currentRoleId,
       );
     };
-  }, [liveData.profile.id, liveData.profile.roleId]);
+  }, [liveData.profile.id, liveData.profile.orgId, liveData.profile.roleId]);
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',

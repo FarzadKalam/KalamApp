@@ -43,7 +43,6 @@ import {
   REPORTS_PERMISSION_KEY,
   REPORTS_PERMISSION_FIELDS,
   VOIP_PERMISSION_KEY,
-  VOIP_PERMISSION_FIELDS,
   COMMUNICATIONS_PERMISSION_KEY,
   COMMUNICATIONS_PERMISSION_FIELDS,
   CUSTOMER_CLUB_PERMISSION_KEY,
@@ -682,6 +681,81 @@ const RolesTab: React.FC = () => {
     );
   };
 
+  const renderRecordVisibilityControls = (
+    moduleId: string,
+    modPerms: any,
+    disabled: boolean,
+  ) => {
+    const condOpen = conditionEditorOpen[moduleId] || false;
+    const condOpts = moduleConditionOptions[moduleId];
+    const existingConditions = normalizeViewConditionGroup(modPerms.view_conditions);
+    const conditionsAll = existingConditions.conditions_all || [];
+    const conditionsAny = existingConditions.conditions_any || [];
+    const condCount = conditionsAll.length + conditionsAny.length;
+    const condFields = getWorkflowConditionFields(moduleId);
+
+    return (
+      <>
+        <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">نمایش رکوردها</Divider>
+        <Radio.Group value={modPerms.record_scope || 'all'} onChange={(e) => handlePermissionChange(moduleId, 'scope', undefined, e.target.value)} className="mb-4 flex flex-col gap-2">
+          <Radio value="all">مشاهده تماس‌های کاربران (همه تماس‌های ورودی و خروجی)</Radio>
+          <Radio value="own">مشاهده تماس‌های مربوط به کاربر</Radio>
+          <Radio value="team">مشاهده تماس‌های مربوط به نقش (جایگاه)</Radio>
+        </Radio.Group>
+
+        <div className="mb-5">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-xl border border-dashed border-[rgba(var(--brand-300-rgb),0.6)] bg-[rgba(var(--brand-50-rgb),0.4)] px-3 py-2 text-sm text-[rgba(var(--brand-700-rgb),1)] transition hover:border-[rgba(var(--brand-500-rgb),0.7)] hover:bg-[rgba(var(--brand-50-rgb),0.7)] dark:border-[rgba(var(--brand-300-rgb),0.2)] dark:bg-white/5 dark:text-[rgba(var(--brand-200-rgb),1)] dark:hover:bg-white/10"
+            onClick={() => toggleConditionEditor(moduleId)}
+            disabled={disabled}
+          >
+            <FilterOutlined className="text-xs" />
+            <span className="flex-1 text-right text-xs font-medium">شرط‌های پیشرفته</span>
+            {condCount > 0 && !condOpen && <Badge count={condCount} size="small" color="rgb(var(--brand-500-rgb))" />}
+            <CaretDownOutlined className={`text-xs transition-transform ${condOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {condOpen && (
+            <div className="mt-2 rounded-xl border border-[rgba(var(--brand-200-rgb),0.5)] bg-white/60 p-3 dark:border-[rgba(var(--brand-300-rgb),0.15)] dark:bg-white/5">
+              <div className="mb-3"><span className="text-xs font-medium text-gray-500 dark:text-gray-400">رکوردهایی که این شرط‌ها را دارند قابل مشاهده می‌شوند</span></div>
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">حتماً همه این شرط‌ها برقرار باشند</div>
+                  <WorkflowConditionsGroup
+                    value={conditionsAll as any}
+                    onChange={(next) => handleViewConditionsChange(moduleId, { ...existingConditions, conditions_all: next as any })}
+                    fields={condFields}
+                    dynamicOptions={condOpts?.dynamicOptions || {}}
+                    relationOptions={condOpts?.relationOptions || {}}
+                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                    getDefaultOperator={getDefaultWorkflowOperator}
+                    overlayZIndexBase={2000}
+                    disabled={disabled}
+                  />
+                </div>
+                <div>
+                  <div className="mb-2 text-xs font-semibold text-gray-500 dark:text-gray-400">کافی است یکی از این شرط‌ها برقرار باشد</div>
+                  <WorkflowConditionsGroup
+                    value={conditionsAny as any}
+                    onChange={(next) => handleViewConditionsChange(moduleId, { ...existingConditions, conditions_any: next as any })}
+                    fields={condFields}
+                    dynamicOptions={condOpts?.dynamicOptions || {}}
+                    relationOptions={condOpts?.relationOptions || {}}
+                    getOperatorOptions={(field) => getWorkflowOperatorOptions(field).filter((opt) => ['eq','neq','contains','not_contains','in','not_in','is_null','not_null','is_true','is_false','gt','gte','lt','lte'].includes(String(opt.value || '')))}
+                    getDefaultOperator={getDefaultWorkflowOperator}
+                    overlayZIndexBase={2000}
+                    disabled={disabled}
+                  />
+                </div>
+              </div>
+              {condCount === 0 && <div className="mt-2 text-xs text-gray-400 dark:text-gray-500">بدون شرط — همه رکوردها (با توجه به محدوده بالا) نمایش داده می‌شوند</div>}
+            </div>
+          )}
+        </div>
+      </>
+    );
+  };
+
   // ─── Drag-drop ─────────────────────────────────────────────────────────────
   const { activeId, overId, handleDragStart, handleDragOver, handleDragEnd, handleDragCancel } =
     useRoleDragDrop({
@@ -798,7 +872,7 @@ const RolesTab: React.FC = () => {
 
               {/* Module permissions */}
               <Collapse defaultActiveKey={[Object.values(MODULES)[0]?.id || 'products']} className="dark:bg-transparent dark:border-gray-800">
-                {Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id)).map((module) => {
+                {Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id) && module.id !== 'voip_call_reports').map((module) => {
                   const modPerms = getModulePerms(module.id);
                   const fields = collectModulePermissionFields(module);
                   const disabled = modPerms.view === false;
@@ -1003,10 +1077,20 @@ const RolesTab: React.FC = () => {
                   </div>
                 </Panel>
 
-                <Panel key={VOIP_PERMISSION_KEY} className="dark:border-gray-800" header={<div className="flex items-center justify-between w-full dark:text-gray-200"><span className="font-bold">تلفن و VOIP</span></div>}>
+                <Panel key={VOIP_PERMISSION_KEY} className="dark:border-gray-800" header={
+                  <div className="flex items-center justify-between w-full dark:text-gray-200">
+                    <span className="font-bold">تلفن و VOIP</span>
+                    <div className="flex gap-4 text-xs" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms('voip_call_reports').view !== false} onChange={(e) => handlePermissionChange('voip_call_reports', 'view', undefined, e.target.checked)}>مشاهده</Checkbox>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms('voip_call_reports').edit !== false} disabled={getModulePerms('voip_call_reports').view === false} onChange={(e) => handlePermissionChange('voip_call_reports', 'edit', undefined, e.target.checked)}>ویرایش/ایجاد</Checkbox>
+                      <Checkbox className="dark:text-gray-400" checked={getModulePerms('voip_call_reports').delete !== false} disabled={getModulePerms('voip_call_reports').view === false} onChange={(e) => handlePermissionChange('voip_call_reports', 'delete', undefined, e.target.checked)}>حذف</Checkbox>
+                    </div>
+                  </div>
+                }>
                   <div className="pl-6 pt-2">
-                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های VOIP</Divider>
-                    {renderFieldSwitches(VOIP_PERMISSION_KEY, VOIP_PERMISSION_FIELDS, getModulePerms(VOIP_PERMISSION_KEY).view === false)}
+                    {renderRecordVisibilityControls('voip_call_reports', getModulePerms('voip_call_reports'), getModulePerms('voip_call_reports').view === false)}
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی به فیلدهای گزارش تماس</Divider>
+                    {renderFieldSwitches('voip_call_reports', collectModulePermissionFields(MODULES.voip_call_reports), getModulePerms('voip_call_reports').view === false)}
                   </div>
                 </Panel>
 

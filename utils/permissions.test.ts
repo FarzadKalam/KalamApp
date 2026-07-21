@@ -6,6 +6,7 @@ import {
   normalizeViewConditionGroup,
   resolveCommunicationsPermissions,
   resolvePreferredRoleModuleIds,
+  resolveVoipAccessPermissions,
   SAAS_ADMIN_PERMISSION_KEY,
 } from './permissions';
 
@@ -74,6 +75,26 @@ describe('permissions', () => {
     });
 
     expect(resolved.canAuditAllConversations).toBe(true);
+  });
+
+  it('uses the standard module scope for both user and role call visibility', () => {
+    expect(resolveVoipAccessPermissions({
+      voip_call_reports: { view: true, record_scope: 'own' },
+    })).toMatchObject({
+      canViewAllCallNotifications: false,
+      canViewUserCalls: true,
+      canViewRoleCalls: false,
+      recordScope: 'own',
+    });
+
+    expect(resolveVoipAccessPermissions({
+      voip_call_reports: { view: true, record_scope: 'team' },
+    })).toMatchObject({
+      canViewAllCallNotifications: false,
+      canViewUserCalls: true,
+      canViewRoleCalls: true,
+      recordScope: 'team',
+    });
   });
 
   it('preserves advanced view conditions while merging defaults', () => {

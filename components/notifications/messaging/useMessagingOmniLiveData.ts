@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../supabaseClient';
 import { MODULES } from '../../../moduleRegistry';
 import { fetchSessionBootstrap } from '../../../utils/sessionCache';
-import { resolveVoipAccessPermissions } from '../../../utils/permissions';
+import { normalizeViewConditionGroup, resolveVoipAccessPermissions, type ViewConditionGroup } from '../../../utils/permissions';
 import { isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { isMissingRpcError } from '../../../utils/notificationConversationRpc';
 import {
@@ -17,6 +17,7 @@ import { BOT_CHANNEL_LABELS_FA, isBotChannel, type BotChannel, type BotTargetMod
 import { collectBotMessageMediaFileRefs, extractBotMessageAttachments } from '../../../utils/messageAttachments';
 import { getActiveChannelSettings } from '../../../utils/channelSettings';
 import { isAbortLikeError } from '../../../utils/requestErrors';
+import { createWorkflowEvaluationContext, evaluateWorkflowConditions } from '../../../utils/workflowRuntime';
 
 type ChannelKind = 'internal' | 'bot_group' | 'bot_direct' | 'sms' | 'call';
 type AttachmentKind = 'image' | 'file' | 'video' | 'audio' | 'voice';
@@ -96,6 +97,8 @@ type LiveProfile = {
   roleId: string | null;
   voipExtension: string | null;
   canViewAllCalls: boolean;
+  voipRecordScope: 'all' | 'own' | 'team' | 'subtree';
+  voipViewConditions: ViewConditionGroup;
   canViewAllSms: boolean;
 };
 
@@ -189,6 +192,7 @@ const buildMessagingOmniCacheKey = (profile: LiveProfile) => [
   String(profile.id || '').trim() || 'no-user',
   String(profile.roleId || '').trim() || 'no-role',
   profile.canViewAllCalls ? 'calls-all' : `calls-${String(profile.voipExtension || '').trim() || 'own'}`,
+  JSON.stringify(profile.voipViewConditions || {}),
   profile.canViewAllSms ? 'sms-all' : 'sms-own',
 ].join(':');
 
@@ -622,6 +626,38 @@ const resolveCanViewAllSms = (permissions: any) => {
   return recordScope === 'all';
 };
 
+const filterVoipCallsByPermissionConditions = async (rows: any[], profile: LiveProfile) => {
+  const normalized = normalizeViewConditionGroup(profile.voipViewConditions);
+  const conditionsAll = normalized.conditions_all || [];
+  const conditionsAny = normalized.conditions_any || [];
+  if (conditionsAll.length === 0 && conditionsAny.length === 0) return rows;
+
+  const context = createWorkflowEvaluationContext('voip_call_reports');
+  const allowedRows = await Promise.all((rows || []).map(async (row) => {
+    const resolveAssigneeValue = (value: any): any => {
+      if (Array.isArray(value)) return value.map(resolveAssigneeValue);
+      const normalizedValue = String(value || '').trim();
+      if (normalizedValue === '__current_user__') return profile.id || normalizedValue;
+      if (normalizedValue === '__current_role__') return profile.roleId || normalizedValue;
+      return value;
+    };
+    const normalizedAll = conditionsAll.map((condition: any) => ({ ...condition, value: resolveAssigneeValue(condition?.value) }));
+    const normalizedAny = conditionsAny.map((condition: any) => ({ ...condition, value: resolveAssigneeValue(condition?.value) }));
+    try {
+      return await evaluateWorkflowConditions({
+        conditionsAll: normalizedAll as any,
+        conditionsAny: normalizedAny as any,
+        currentRecord: row,
+        moduleId: 'voip_call_reports',
+        context,
+      }) ? row : null;
+    } catch {
+      return null;
+    }
+  }));
+  return allowedRows.filter(Boolean);
+};
+
 const safeLiveFetch = async <T,>(label: string, loader: () => Promise<T>, fallback: T): Promise<T> => {
   try {
     return await loader();
@@ -809,19 +845,12 @@ const fetchVoipCalls = async (profile: LiveProfile) => {
   if (!rpcResult.error) return rpcResult.data || [];
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
 
-  const extension = String(profile.voipExtension || '').trim();
-  if (!profile.canViewAllCalls && !extension) return [];
-
   let query = supabase
     .from('voip_call_logs')
     .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
     .order('started_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
     .limit(80);
-
-  if (!profile.canViewAllCalls) {
-    query = query.eq('extension', extension);
-  }
 
   const { data, error } = await query;
   if (error) {
@@ -1268,6 +1297,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     roleId: null,
     voipExtension: null,
     canViewAllCalls: false,
+    voipRecordScope: 'own',
+    voipViewConditions: { conditions_all: [], conditions_any: [] },
     canViewAllSms: false,
   });
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
@@ -1304,6 +1335,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         roleId: snapshot.roleId ? String(snapshot.roleId) : null,
         voipExtension: snapshot.profile?.voip_extension ? String(snapshot.profile.voip_extension) : null,
         canViewAllCalls: voipAccess.canViewAllCallNotifications,
+        voipRecordScope: voipAccess.recordScope,
+        voipViewConditions: voipAccess.viewConditions,
         canViewAllSms,
       });
     }).catch(() => {
@@ -1346,6 +1379,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           return rows || [];
         });
       const callPromise = safeLiveFetch('voip', () => fetchVoipCalls(profile), [] as any[])
+        .then((rows) => filterVoipCallsByPermissionConditions(rows || [], profile))
         .then((rows) => {
           setVoipCalls(rows || []);
           return rows || [];
@@ -1674,11 +1708,8 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         const row = payload?.new || payload?.old || {};
         if (String(row?.channel_type || '').trim() === 'sms') void refresh();
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'voip_call_logs', filter }, (payload: any) => {
-        const row = payload?.new || payload?.old || {};
-        if (profile.canViewAllCalls || !profile.voipExtension || String(row?.extension || '').trim() === profile.voipExtension) {
-          void refresh();
-        }
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voip_call_logs', filter }, () => {
+        void refresh();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'counterparty_bot_groups', filter }, () => {
         void refresh();
@@ -1707,7 +1738,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         channel = null;
       }
     };
-  }, [profile.canViewAllCalls, profile.id, profile.orgId, profile.voipExtension, realtimeEnabled, refresh]);
+  }, [profile.id, profile.orgId, profile.voipExtension, realtimeEnabled, refresh]);
 
   return useMemo(() => {
     const smsModels = buildSmsLiveModels(smsMessages, recordTitleMap, readStateKeys);

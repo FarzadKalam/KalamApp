@@ -2684,19 +2684,23 @@ useEffect(() => {
     if (notesPollingPausedRef.current) return [];
     const userId = profile.id;
     const roleId = profile.role_id;
+    const orgId = String(profile.org_id || '').trim();
+    if (!orgId) return [];
 
     const [{ data: mentionedUser, error: mentionedUserError }, { data: mentionedRole, error: mentionedRoleError }] = await Promise.all([
       supabase
         .from('notes')
         .select(NOTE_SELECT_FIELDS)
+        .eq('org_id', orgId)
         .contains('mention_user_ids', [userId])
         .order('created_at', { ascending: false })
         .limit(40),
       roleId
         ? supabase
-            .from('notes')
-            .select(NOTE_SELECT_FIELDS)
-            .contains('mention_role_ids', [roleId])
+        .from('notes')
+        .select(NOTE_SELECT_FIELDS)
+        .eq('org_id', orgId)
+        .contains('mention_role_ids', [roleId])
             .order('created_at', { ascending: false })
             .limit(40)
         : Promise.resolve({ data: [] as any[], error: null }),
@@ -2714,6 +2718,7 @@ useEffect(() => {
     const { data: myNotes, error: myNotesError } = await supabase
       .from('notes')
       .select(NOTE_SELECT_FIELDS)
+      .eq('org_id', orgId)
       .eq('author_id', userId)
       .order('created_at', { ascending: false })
       .limit(40);
@@ -3458,21 +3463,12 @@ useEffect(() => {
     if (!rpcResult.error) return rpcResult.data || [];
     if (!isMissingRpcError(rpcResult.error)) throw rpcResult.error;
 
-    const extension = String(profile.voip_extension || '').trim();
-    if (!profile.can_view_all_calls && !extension) {
-      return [];
-    }
-
     let query = supabase
       .from('voip_call_logs')
       .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
       .order('started_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(80);
-
-    if (!profile.can_view_all_calls) {
-      query = query.eq('extension', extension);
-    }
 
     const { data, error } = await query;
     if (error) {

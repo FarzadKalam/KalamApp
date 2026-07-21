@@ -153,7 +153,6 @@ export const REPORTS_PERMISSION_FIELDS = [
 ];
 
 export const VOIP_PERMISSION_FIELDS = [
-  { key: 'all_call_notifications', label: 'مشاهده اعلان همه تماس‌ها' },
 ];
 
 export const COMMUNICATIONS_PERMISSION_FIELDS = [
@@ -855,12 +854,23 @@ export const resolveModuleGoalAccessPermissions = (
 };
 
 export const resolveVoipAccessPermissions = (permissions: PermissionMap | null | undefined) => {
-  const perm = permissions?.[VOIP_PERMISSION_KEY] || {};
-  const fields = perm.fields || {};
-  const canViewRoot = perm.view !== false;
+  const voipPerm = permissions?.[VOIP_PERMISSION_KEY] || {};
+  const modulePerm = permissions?.voip_call_reports || {};
+  const legacyFields = voipPerm.fields || {};
+  const hasModulePermission = Object.prototype.hasOwnProperty.call(permissions || {}, 'voip_call_reports');
+  const canViewRoot = hasModulePermission ? modulePerm.view !== false : voipPerm.view !== false;
+  const configuredScope = String(modulePerm.record_scope || '').trim().toLowerCase();
+  const recordScope: RecordScope = configuredScope === 'own' || configuredScope === 'team' || configuredScope === 'subtree'
+    ? configuredScope
+    : (legacyFields.all_call_notifications === false ? 'own' : 'all');
 
   return {
-    canViewAllCallNotifications: canViewRoot && fields.all_call_notifications !== false,
+    canViewAllCallNotifications: canViewRoot && recordScope === 'all',
+    canViewUserCalls: canViewRoot && recordScope !== 'all',
+    canViewRoleCalls: canViewRoot && (recordScope === 'team' || recordScope === 'subtree'),
+    canViewVoipReports: canViewRoot,
+    recordScope,
+    viewConditions: normalizeViewConditionGroup(modulePerm.view_conditions),
   };
 };
 

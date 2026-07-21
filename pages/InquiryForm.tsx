@@ -830,7 +830,14 @@ const InquiryForm = () => {
 
   useEffect(() => {
     setCurrentSlideIndex(0);
-  }, [publicForm?.slug, visibleFields.length]);
+  }, [publicForm?.slug]);
+
+  useEffect(() => {
+    setCurrentSlideIndex((previousIndex) => {
+      if (visibleFields.length === 0) return 0;
+      return Math.min(Math.max(previousIndex, 0), visibleFields.length - 1);
+    });
+  }, [visibleFields.length]);
 
   const surfaceStyle = isDarkMode
     ? {
