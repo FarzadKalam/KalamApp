@@ -31,6 +31,7 @@ import { buildTaskSourceInitialValues } from '../../utils/taskMeta';
 import { getPrimaryRecordPhone } from '../../utils/recordMessaging';
 import { buildVoipFallbackUrl, requestVoipSmartCall } from '../../utils/voipGateway';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import RelatedSurveyWebFormModal from './RelatedSurveyWebFormModal';
 
 interface RelatedRecordsPanelProps {
   tab: RelatedTabConfig;
@@ -165,6 +166,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
   const [paymentRelationValueMap, setPaymentRelationValueMap] = useState<RelationValueMap>({});
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
   const [smsComposerOpen, setSmsComposerOpen] = useState(false);
+  const [surveyWebFormModalOpen, setSurveyWebFormModalOpen] = useState(false);
   const [callStarting, setCallStarting] = useState(false);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const targetConfig = tab.targetModule ? MODULES[tab.targetModule] : undefined;
@@ -700,13 +702,17 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
 
   const isSmsRelatedTab = tab.relationType === 'phone_directory' && tab.targetModule === 'sms_delivery_reports';
   const isVoipRelatedTab = tab.relationType === 'phone_directory' && tab.targetModule === 'voip_call_reports';
+  const isSurveyRelatedTab = tab.targetModule === 'surveys'
+    && tab.relationType === 'fk'
+    && tab.foreignKey === 'related_record_id';
   const isOperationalOverviewTab = OPERATIONAL_FINANCIAL_RELATION_TYPES.has(String(tab.relationType || ''));
   const canQuickCreateRelated = Boolean(tab.targetModule)
     && !PAYMENT_RELATION_TYPES.has(String(tab.relationType || ''))
     && !isOperationalOverviewTab
+    && !isSurveyRelatedTab
     && tab.disableCreate !== true;
-  const canCreate = isSmsRelatedTab || isVoipRelatedTab || canQuickCreateRelated;
-  const addButtonLabel = isSmsRelatedTab ? 'ارسال پیامک' : isVoipRelatedTab ? 'تماس' : 'افزودن';
+  const canCreate = isSmsRelatedTab || isVoipRelatedTab || isSurveyRelatedTab || canQuickCreateRelated;
+  const addButtonLabel = isSmsRelatedTab ? 'ارسال پیامک' : isVoipRelatedTab ? 'تماس' : isSurveyRelatedTab ? 'افزودن نظرسنجی' : 'افزودن';
   const addButtonIcon = isSmsRelatedTab ? <MessageOutlined /> : isVoipRelatedTab ? <PhoneOutlined /> : <PlusOutlined />;
   const primaryPhone = getPrimaryRecordPhone(currentModuleId, currentRecord);
 
@@ -752,6 +758,10 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
     }
     if (isVoipRelatedTab) {
       void handleStartCall();
+      return;
+    }
+    if (isSurveyRelatedTab) {
+      setSurveyWebFormModalOpen(true);
       return;
     }
     setQuickCreateOpen(true);
@@ -972,7 +982,7 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
           )}
         />
       )}
-      {tab.targetModule ? (
+      {tab.targetModule && !isSurveyRelatedTab ? (
         <RelationQuickCreateHost
           open={quickCreateOpen}
           targetModuleId={tab.targetModule}
@@ -985,6 +995,14 @@ const RelatedRecordsPanel: React.FC<RelatedRecordsPanelProps> = ({ tab, currentR
             setRefreshSignal((prev) => prev + 1);
           }}
           overlayZIndexBase={12600}
+        />
+      ) : null}
+      {isSurveyRelatedTab ? (
+        <RelatedSurveyWebFormModal
+          open={surveyWebFormModalOpen}
+          relatedModuleId={currentModuleId}
+          relatedRecordId={currentRecordId}
+          onClose={() => setSurveyWebFormModalOpen(false)}
         />
       ) : null}
       {isSmsRelatedTab ? (

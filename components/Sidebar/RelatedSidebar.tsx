@@ -20,6 +20,7 @@ import { AI_CONTEXT_EVENT, type AssistantContext } from '../../utils/aiAssistant
 import { buildProcessGuideContext, type ProcessGuideContext } from '../../utils/processGuideContext';
 import type { ProcessRuntimeSnapshot } from '../../utils/processRuntimeSnapshot';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
+import { isSaasAdminModuleId } from '../../utils/permissions';
 
 // نقشه آیکون‌ها: نام متنی را به کامپوننت واقعی وصل می‌کند
 const iconMap: Record<string, React.ReactNode> = {
@@ -203,13 +204,34 @@ const RelatedSidebar: React.FC<RelatedSidebarProps> = ({
   fixedTabs.splice(2, 0, { key: 'processes', icon: <NodeIndexOutlined />, label: 'فرآیندها', color: 'text-violet-500' });
 
     const relatedTabs = (moduleConfig.relatedTabs || [])
-      .filter((tab) => String(tab?.targetModule || '').trim() !== 'tasks')
+      .filter((tab) => (
+        String(tab?.targetModule || '').trim() !== 'tasks'
+        && String(tab?.targetModule || '').trim() !== 'surveys'
+      ))
       .map((tab) => ({
         ...tab,
         key: tab.id || `related_${tab.targetModule}`,
         icon: iconMap[tab.icon || 'default'] || iconMap['default'],
         label: tab.title,
     }));
+
+    if (
+        moduleConfig.id !== 'surveys'
+        && !isSaasAdminModuleId(moduleConfig.id)
+        && MODULES.surveys
+    ) {
+        relatedTabs.push({
+            id: 'record_surveys',
+            key: 'record_surveys',
+            title: 'نظرسنجی‌ها',
+            label: 'نظرسنجی‌ها',
+            icon: <MessageOutlined />,
+            relationType: 'fk',
+            targetModule: 'surveys',
+            foreignKey: 'related_record_id',
+            filters: [{ field: 'related_module_id', value: moduleConfig.id }],
+        });
+    }
 
     const allTabs = [...fixedTabs, ...relatedTabs].filter((tab) => String(tab?.key || '') !== 'processes');
 

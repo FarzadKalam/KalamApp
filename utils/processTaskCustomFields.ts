@@ -47,6 +47,40 @@ const copyPlainObject = (value: any): Record<string, any> | undefined => (
     : undefined
 );
 
+const normalizeRelationConfig = (value: any): ModuleField['relationConfig'] | undefined => {
+  const rawConfig = copyPlainObject(value);
+  if (!rawConfig) return undefined;
+
+  const targetModule = String(rawConfig.targetModule || '').trim();
+  const dependsOn = String(rawConfig.dependsOn || '').trim();
+  if (!targetModule && !dependsOn) return undefined;
+
+  const targetField = String(rawConfig.targetField || '').trim();
+  const sourceModules = Array.isArray(rawConfig.sourceModules)
+    ? rawConfig.sourceModules
+      .map((source: any) => {
+        const normalizedSource = copyPlainObject(source);
+        const sourceTargetModule = String(normalizedSource?.targetModule || '').trim();
+        if (!normalizedSource || !sourceTargetModule) return null;
+        const sourceTargetField = String(normalizedSource.targetField || '').trim();
+        return {
+          ...normalizedSource,
+          targetModule: sourceTargetModule,
+          ...(sourceTargetField ? { targetField: sourceTargetField } : {}),
+        };
+      })
+      .filter(Boolean)
+    : undefined;
+
+  return {
+    ...rawConfig,
+    targetModule,
+    ...(targetField ? { targetField } : {}),
+    ...(dependsOn ? { dependsOn } : {}),
+    ...(sourceModules ? { sourceModules } : {}),
+  } as ModuleField['relationConfig'];
+};
+
 const hasTruthyFlag = (containers: any[], keys: string[]) => (
   containers.some((container) => {
     if (!container || typeof container !== 'object' || Array.isArray(container)) return false;
@@ -83,8 +117,8 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
   const type = normalizeFieldType(value?.type);
   if (!isSupportedProcessTaskCustomFieldType(type)) return null;
 
-  const relationTargetModule = String(value?.relationConfig?.targetModule || '').trim();
-  const relationTargetField = String(value?.relationConfig?.targetField || '').trim();
+  const relationConfig = normalizeRelationConfig(value?.relationConfig);
+  const multiRelationConfig = normalizeRelationConfig(value?.multiRelationConfig || value?.relationConfig);
   const dynamicOptionsCategory = String(value?.dynamicOptionsCategory || '').trim();
   const order = normalizeFieldOrder(value?.order);
   const rawMetadata = copyPlainObject(value?.metadata);
@@ -122,12 +156,12 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
     },
     options: normalizeSelectOptions(value?.options) as any,
     dynamicOptionsCategory: dynamicOptionsCategory || undefined,
-    relationConfig: type === FieldType.RELATION && relationTargetModule
-      ? {
-          targetModule: relationTargetModule,
-          targetField: relationTargetField || undefined,
-        }
-      : undefined,
+    relationConfig: type === FieldType.RELATION
+      ? relationConfig
+      : type === FieldType.USER
+        ? (relationConfig || { targetModule: 'profiles', targetField: 'full_name' })
+        : undefined,
+    multiRelationConfig: type === FieldType.MULTI_RELATION ? multiRelationConfig : undefined,
     mode: type === FieldType.MULTI_SELECT ? 'multiple' : (type === FieldType.TAGS ? 'tags' : undefined),
     defaultValue: value?.defaultValue,
     order,
@@ -146,6 +180,7 @@ export const normalizeProcessTaskCustomField = (value: any): ModuleField | null 
 
   if (!normalized.options?.length) delete normalized.options;
   if (!normalized.relationConfig) delete normalized.relationConfig;
+  if (!normalized.multiRelationConfig) delete normalized.multiRelationConfig;
   if (!normalized.dynamicOptionsCategory) delete normalized.dynamicOptionsCategory;
   if (normalized.order === undefined) delete normalized.order;
 

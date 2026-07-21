@@ -31,6 +31,7 @@ import {
   formatWebFormTargetFieldLabel,
   formatWebFormOptionsText,
   getWebFormFieldBindingType,
+  getWebFormRecordBoundFieldEntries,
   getMissingWebFormRequiredFields,
   getSuggestedWebFormTargetFields,
   getWebFormTargetFields,
@@ -265,10 +266,7 @@ const mergeManagedFields = (
     return !isWebFormManagedDefaultOnlyField(targetModuleId, String(field?.target_field_key || "").trim());
   }));
   const currentByTargetFieldKey = new Map(
-    currentFields
-      .filter((field) => String(field?.binding_type || "record_field").trim() !== "template_field")
-      .map((field, index) => ({ field, index, targetFieldKey: String(field?.target_field_key || "").trim() }))
-      .filter((item) => item.targetFieldKey)
+    getWebFormRecordBoundFieldEntries(currentFields)
       .map((item) => [item.targetFieldKey, item]),
   );
   const duplicateTargetKey = String(duplicateMatchField || "").trim();

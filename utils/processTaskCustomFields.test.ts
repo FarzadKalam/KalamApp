@@ -80,6 +80,35 @@ describe('getMissingRequiredProcessTaskCustomFields', () => {
     expect(creationField?.requiredForCreation).toBe(true);
   });
 
+  it('preserves central relation configuration for process task fields', () => {
+    const relationField = normalizeProcessTaskCustomField({
+      key: 'project_contact',
+      type: FieldType.RELATION,
+      labels: { fa: 'مخاطب پروژه' },
+      relationConfig: {
+        targetModule: 'customers',
+        targetField: 'full_name',
+        filter: { status: 'active' },
+        disableQuickCreate: true,
+        sourceModules: [{ targetModule: 'suppliers', targetField: 'business_name', tagLabel: 'تأمین‌کننده' }],
+      },
+    }) as any;
+    const userField = normalizeProcessTaskCustomField({
+      key: 'reviewer',
+      type: FieldType.USER,
+      labels: { fa: 'بازبین' },
+    }) as any;
+
+    expect(relationField.relationConfig).toMatchObject({
+      targetModule: 'customers',
+      targetField: 'full_name',
+      filter: { status: 'active' },
+      disableQuickCreate: true,
+      sourceModules: [{ targetModule: 'suppliers', targetField: 'business_name', tagLabel: 'تأمین‌کننده' }],
+    });
+    expect(userField.relationConfig).toEqual({ targetModule: 'profiles', targetField: 'full_name' });
+  });
+
   it('requires checked checkbox custom fields when completion is required', () => {
     const baseTask = {
       recurrence_info: {

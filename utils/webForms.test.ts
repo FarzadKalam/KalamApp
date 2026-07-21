@@ -5,6 +5,7 @@ import {
   formatWebFormOptionsText,
   formatWebFormTargetFieldLabel,
   getWebFormDuplicateFieldOptions,
+  getWebFormRecordBoundFieldEntries,
   getWebFormModuleDefaultValues,
   getMissingWebFormRequiredFields,
   getSuggestedWebFormTargetFields,
@@ -269,5 +270,18 @@ describe('web form utilities', () => {
       { target_field_key: 'system_code' },
       { target_field_key: 'system_code' },
     ])).toEqual(['mobile_1', 'system_code']);
+  });
+
+  it('keeps original indexes when record fields are separated by survey template fields', () => {
+    const fields = [
+      { target_field_key: 'overall_experience', config: { binding_type: 'record_field' } },
+      { field_key: 'experience_reason', target_field_key: null, config: { binding_type: 'template_field' } },
+      { target_field_key: 'follow_up_consent', config: { binding_type: 'record_field' } },
+    ];
+
+    expect(getWebFormRecordBoundFieldEntries(fields)).toEqual([
+      expect.objectContaining({ index: 0, targetFieldKey: 'overall_experience' }),
+      expect.objectContaining({ index: 2, targetFieldKey: 'follow_up_consent' }),
+    ]);
   });
 });

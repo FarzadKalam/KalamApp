@@ -302,7 +302,8 @@ const pickFirstMeaningful = (...values: any[]) => {
 const mapFieldType = (type: any): MockCustomField['type'] => {
   if (type === FieldType.RELATION) return FieldType.RELATION;
   if (type === FieldType.MULTI_RELATION) return FieldType.MULTI_RELATION;
-  if (type === FieldType.SELECT || type === FieldType.STATUS || type === FieldType.USER) return FieldType.SELECT;
+  if (type === FieldType.USER) return FieldType.RELATION;
+  if (type === FieldType.SELECT || type === FieldType.STATUS) return FieldType.SELECT;
   if (type === FieldType.MULTI_SELECT || type === FieldType.TAGS) return FieldType.MULTI_SELECT;
   if (type === FieldType.NUMBER || type === FieldType.PRICE || type === FieldType.PERCENTAGE || type === FieldType.STOCK || type === FieldType.PERCENTAGE_OR_AMOUNT) return FieldType.NUMBER;
   if (type === FieldType.DATE) return FieldType.DATE;
@@ -457,6 +458,11 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
         color: option?.color ? String(option.color) : undefined,
       })).filter((option: any) => option.value && option.label)
       : undefined;
+    const relationConfig = type === FieldType.RELATION
+      ? (field?.relationConfig || (field?.type === FieldType.USER
+        ? { targetModule: 'profiles', targetField: 'full_name' }
+        : undefined))
+      : field?.relationConfig;
     return {
       key,
       label,
@@ -472,6 +478,8 @@ const buildCustomFields = (stage: ProcessV2Stage | null): MockCustomField[] => {
           en: field?.labels?.en || key,
         },
         options,
+        relationConfig,
+        multiRelationConfig: field?.multiRelationConfig,
         nature: field?.nature || FieldNature.STANDARD,
       } as ModuleField,
       requiredForCompletion: isFieldRequiredForCompletion(field),
@@ -654,6 +662,7 @@ type InlineEditableFieldProps = {
   forceEditMode?: boolean;
   requiredForCompletion?: boolean;
   requiredForCreation?: boolean;
+  allValues?: Record<string, any>;
   moduleId?: string;
   recordId?: string | null;
   overlayZIndexBase?: number;
@@ -674,6 +683,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
   forceEditMode = false,
   requiredForCompletion = false,
   requiredForCreation = false,
+  allValues,
   moduleId,
   recordId,
   overlayZIndexBase = 16020,
@@ -774,6 +784,7 @@ const InlineEditableField: React.FC<InlineEditableFieldProps> = ({
       value={rendererValue}
       onChange={handleChange}
       forceEditMode={forceEditMode || editing}
+      allValues={allValues}
       moduleId={moduleId || 'tasks'}
       recordId={recordId || undefined}
       compactMode={!useExpandedTextEditor}
@@ -1444,6 +1455,13 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
     }
   }, [customFields, persistTaskFieldPatch, source?.recurrence_info, stage?.title, taskNameValue, taskRecordId]);
   const hasFiles = modalFiles.length > 0;
+  const customFieldAllValues = useMemo(
+    () => customFields.reduce<Record<string, any>>((values, field) => {
+      if (field.key) values[field.key] = field.value;
+      return values;
+    }, {}),
+    [customFields],
+  );
   const mainImageFile = useMemo(
     () => modalFiles.find((file) => file.fileType === 'image' && starredFileIds.has(file.id))
       || modalFiles.find((file) => file.fileType === 'image' && file.starred)
@@ -3333,6 +3351,7 @@ const ProcessTaskModalV2: React.FC<ProcessTaskModalV2Props> = ({
                           field={field.field}
                           fieldType={field.type}
                           options={field.options}
+                          allValues={customFieldAllValues}
                           forceEditMode={isDraftActivityCreationMode}
                           requiredForCompletion={field.requiredForCompletion}
                           requiredForCreation={field.requiredForCreation}

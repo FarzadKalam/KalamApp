@@ -391,6 +391,19 @@ export const findDuplicateWebFormTargetKeys = (fields: Array<Partial<WebFormFiel
     .map(([key]) => key);
 };
 
+export const getWebFormRecordBoundFieldEntries = <T extends Partial<WebFormFieldRecord>>(
+  fields: T[] | undefined,
+) => (
+  (fields || [])
+    .map((field, index) => ({
+      field,
+      index,
+      targetFieldKey: String(field?.target_field_key || '').trim(),
+      bindingType: getWebFormFieldBindingType(field),
+    }))
+    .filter((item) => item.bindingType === 'record_field' && item.targetFieldKey)
+);
+
 export const getMissingWebFormRequiredFields = (
   moduleId: string | undefined,
   fields: Array<Partial<WebFormFieldRecord>> | undefined,

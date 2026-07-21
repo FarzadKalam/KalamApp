@@ -50,6 +50,15 @@ describe('print template store grouping', () => {
     expect(variableOptions.find((item) => item.value === 'summary.finalBalanceSide')?.scopes).toContain('list');
   });
 
+  it('exposes both counterparty identity fields and the combined invoice identity variable', () => {
+    const variableOptions = getPrintTemplateVariables('invoices');
+
+    expect(variableOptions.find((item) => item.value === 'customer.national_code')?.label).toBe('کد ملی مشتری');
+    expect(variableOptions.find((item) => item.value === 'customer.national_id')?.label).toBe('شناسه ملی مشتری');
+    expect(variableOptions.find((item) => item.value === 'customer.national_identifier')?.label)
+      .toBe('شناسه ملی / کد ملی مشتری');
+  });
+
   it('keeps full-page catalog defaults only for products and billboards', () => {
     const productDefaults = buildDefaultTemplatesForModule('products');
     const billboardDefaults = buildDefaultTemplatesForModule('billboards');

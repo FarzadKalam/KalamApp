@@ -44,6 +44,8 @@ const buildInvoiceComputedVariables = (
   ...(relationKey === 'customer'
     ? [counterpartyField('نوع شخص مشتری', 'customer.person_type')]
     : []),
+  counterpartyField(`کد ملی ${relationTitle}`, `${relationKey}.national_code`),
+  counterpartyField(`شناسه ملی ${relationTitle}`, `${relationKey}.national_id`),
   counterpartyField(`شناسه ملی / کد ملی ${relationTitle}`, `${relationKey}.national_identifier`),
   counterpartyField(`شماره ثبت ${relationTitle}`, `${relationKey}.registration_number`),
   counterpartyField(`کد اقتصادی ${relationTitle}`, `${relationKey}.economic_code`),

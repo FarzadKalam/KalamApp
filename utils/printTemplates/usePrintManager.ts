@@ -84,6 +84,11 @@ import {
   getPrintLetterheadEffectiveBodyItem,
   getPrintLetterheadSignaturesItem,
 } from './letterheadRender';
+import {
+  resolveCounterpartyNationalCode,
+  resolveCounterpartyNationalId,
+  resolveCounterpartyNationalIdentifier,
+} from './counterpartyIdentity';
 
 interface UsePrintManagerProps {
   moduleId: string;
@@ -2684,16 +2689,16 @@ export const usePrintManager = ({
       if (root === 'customer' && nestedPath === 'person_type') {
         return String(raw) === 'حقوقی' || String(raw) === 'legal' ? 'حقوقی' : 'حقیقی';
       }
-      if (root === 'supplier' && nestedPath === 'national_identifier') {
-        return localizePlainText(
-          String(source?.national_id || source?.company_national_id || source?.national_code || raw || '')
-        );
-      }
-      if (root === 'customer' && nestedPath === 'national_identifier') {
-        const identifier = String(source?.person_type || '').includes('حقوق')
-          ? String(source?.national_id || source?.company_national_id || raw || '')
-          : String(source?.national_code || raw || '');
-        return localizePlainText(identifier);
+      if (root === 'customer' || root === 'supplier') {
+        if (nestedPath === 'national_code') {
+          return localizePlainText(resolveCounterpartyNationalCode(source));
+        }
+        if (nestedPath === 'national_id') {
+          return localizePlainText(resolveCounterpartyNationalId(source));
+        }
+        if (nestedPath === 'national_identifier') {
+          return localizePlainText(resolveCounterpartyNationalIdentifier(source));
+        }
       }
 
       if (path === 'record.invoice_date' || path === 'record.updated_at' || path === 'record.created_at') {
