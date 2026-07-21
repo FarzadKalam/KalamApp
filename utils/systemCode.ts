@@ -9,6 +9,7 @@ const MODULES_WITH_SYSTEM_CODE = new Set([
   'employee_advances',
   'employee_contracts',
   'expense_documents',
+  'assets',
   'instructions',
   'invoices',
   'job_descriptions',

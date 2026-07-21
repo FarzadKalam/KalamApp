@@ -55,6 +55,7 @@ const MODULE_GROUPS: { label: string; modules: { id: string; label: string }[] }
       { id: 'suppliers', label: 'تامین‌کنندگان' },
       { id: 'purchase_invoices', label: 'فاکتور خرید' },
       { id: 'expense_documents', label: 'هزینه‌ها' },
+      { id: 'assets', label: 'اموال' },
     ],
   },
   {

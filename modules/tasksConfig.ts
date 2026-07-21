@@ -67,6 +67,7 @@ export const tasksModule: ModuleDefinition = {
         { label: 'فرم‌های تحویل', value: 'delivery_forms' },
         { label: 'تردد کالاها و حواله‌ها', value: 'stock_transfers' },
         { label: 'هزینه‌ها', value: 'expense_documents' },
+        { label: 'اموال', value: 'assets' },
         { label: 'مساعده‌ها', value: 'employee_advances' },
         { label: 'فیش‌های حقوقی', value: 'payroll_slips' },
         { label: 'قراردادهای کارکنان', value: 'employee_contracts' },

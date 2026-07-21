@@ -363,8 +363,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
   };
   const normalizePaymentRows = (rows: any[]) => (
     (Array.isArray(rows) ? rows : []).map((row: any) => {
-      if (!row || typeof row !== 'object' || !isOperationalPayments) return row;
-      const normalizedRow = sanitizeOperationalPaymentRow(row);
+      if (!row || typeof row !== 'object' || (!isOperationalPayments && !isExpenseItems)) return row;
+      const normalizedRow = isOperationalPayments ? sanitizeOperationalPaymentRow(row) : { ...row };
       const rowKey = ensurePaymentRowKey(normalizedRow);
       if (String(normalizedRow?.row_key || '').trim() === rowKey) return normalizedRow;
       return {
@@ -1737,6 +1737,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (!nextRow.main_unit) nextRow.main_unit = currentProductUnits.mainUnit || null;
         if (!nextRow.sub_unit) nextRow.sub_unit = currentProductUnits.subUnit || null;
       }
+      if (isExpenseItems && !String(nextRow.row_key || '').trim()) {
+        nextRow.row_key = createLocalRowKey();
+      }
       return nextRow;
     });
     return JSON.parse(JSON.stringify(withDefaults));
@@ -1837,6 +1840,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
       newRow.row_key = ensurePaymentRowKey(newRow);
     }
+    if (isExpenseItems) {
+      newRow.row_key = createLocalRowKey();
+    }
 
     const newData = normalizePaymentRows([...editingRows, newRow]);
     setTempData(newData);
@@ -1900,6 +1906,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       copiedRow.row_key = createLocalRowKey();
       copiedRow._cash_bank_operation_id = null;
       copiedRow._barter_allocation_key = null;
+    }
+    if (isExpenseItems) {
+      copiedRow.row_key = createLocalRowKey();
     }
     const newData = [...source];
     newData.splice(index + 1, 0, copiedRow);

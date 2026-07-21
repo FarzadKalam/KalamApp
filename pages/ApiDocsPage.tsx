@@ -68,7 +68,7 @@ const MODULE_CATEGORIES = [
       'fiscal_years', 'chart_of_accounts', 'journal_entries',
       'accounting_event_rules', 'cost_centers', 'cash_boxes',
       'bank_accounts', 'petty_funds', 'cheques', 'cash_bank_operations',
-      'expense_documents',
+      'expense_documents', 'assets',
     ],
   },
   {

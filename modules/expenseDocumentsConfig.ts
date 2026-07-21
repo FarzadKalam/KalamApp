@@ -83,6 +83,7 @@ export const expenseDocumentsConfig: ModuleDefinition = {
       rowCalculationType: RowCalculationType.SIMPLE_MULTIPLY,
       tableColumns: [
         { key: 'description', title: 'شرح', type: FieldType.LONG_TEXT, width: 260 },
+        { key: 'is_asset', title: 'ثبت به‌عنوان مال', type: FieldType.CHECKBOX, width: 130 },
         { key: 'quantity', title: 'تعداد/مقدار', type: FieldType.NUMBER, width: 120 },
         { key: 'unit_price', title: 'مبلغ واحد', type: FieldType.PRICE, width: 150 },
         { key: 'total_price', title: 'جمع', type: FieldType.PRICE, width: 160, showTotal: true, readonly: true },

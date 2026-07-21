@@ -49,6 +49,7 @@ import { smsDeliveryReportsConfig } from './modules/smsDeliveryReportsConfig';
 import { voipCallReportsConfig } from './modules/voipCallReportsConfig';
 import { counterpartyBotGroupsConfig } from './modules/counterpartyBotGroupsConfig';
 import { expenseDocumentsConfig } from './modules/expenseDocumentsConfig';
+import { assetsConfig } from './modules/assetsConfig';
 import { employeeAdvancesConfig } from './modules/employeeAdvancesConfig';
 import { employeeBonusRequestsModule } from './modules/employeeBonusRequestsConfig';
 import { payrollSlipsConfig } from './modules/payrollSlipsConfig';
@@ -204,6 +205,7 @@ export const BASE_MODULES: Record<string, ModuleDefinition> = {
   voip_call_reports: voipCallReportsConfig,
   counterparty_bot_groups: counterpartyBotGroupsConfig,
   expense_documents: expenseDocumentsConfig,
+  assets: assetsConfig,
   employee_advances: employeeAdvancesConfig,
   employee_bonus_requests: employeeBonusRequestsModule,
   employee_penalty_requests: employeePenaltyRequestsModule,

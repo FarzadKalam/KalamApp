@@ -8,6 +8,7 @@ const RELATED_MODULE_OPTIONS = [
   { label: 'پروژه‌ها', value: 'projects' },
   { label: 'فعالیت ها', value: 'tasks' },
   { label: 'کارکنان', value: 'employees' },
+  { label: 'اموال', value: 'assets' },
 ];
 
 export const deliveryFormsConfig: ModuleDefinition = {
@@ -110,6 +111,7 @@ export const deliveryFormsConfig: ModuleDefinition = {
     { key: 'delivered_by_id', labels: { fa: 'تحویل‌دهنده داخلی قدیمی', en: 'Legacy Delivered By' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 0.1, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, hideInCreateForm: true },
     { key: 'received_by_id', labels: { fa: 'تحویل‌گیرنده داخلی قدیمی', en: 'Legacy Received By' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 0.2, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, hideInCreateForm: true },
     { key: 'location_text', labels: { fa: 'محل تحویل', en: 'Location' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'details', order: 3, nature: FieldNature.STANDARD, isTableColumn: true },
+    { key: 'storage_location', labels: { fa: 'محل نگهداری', en: 'Storage Location' }, type: FieldType.SELECT, dynamicOptionsCategory: 'asset_storage_location', location: FieldLocation.BLOCK, blockId: 'details', order: 3.1, nature: FieldNature.STANDARD, logic: { visibleIf: { field: 'form_type', operator: LogicOperator.EQUALS, value: 'asset_delivery' } } },
     { key: 'related_module_id', labels: { fa: 'مرتبط با بخش', en: 'Related Module' }, type: FieldType.SELECT, location: FieldLocation.BLOCK, blockId: 'details', order: 4, options: RELATED_MODULE_OPTIONS, nature: FieldNature.STANDARD },
     { key: 'related_record_id', labels: { fa: 'رکورد مرتبط', en: 'Related Record' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'details', order: 5, relationConfig: { targetModule: '', dependsOn: 'related_module_id' }, nature: FieldNature.STANDARD },
     { key: 'notes', labels: { fa: 'یادداشت‌ها و شرایط تحویل', en: 'Notes' }, type: FieldType.LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'notes', order: 1, nature: FieldNature.STANDARD },
@@ -130,6 +132,7 @@ export const deliveryFormsConfig: ModuleDefinition = {
       order: 2,
       icon: 'AppstoreOutlined',
       tableColumns: [
+        { key: 'asset_id', title: 'مال', type: FieldType.RELATION, width: 220, relationConfig: { targetModule: 'assets', targetField: 'name' } },
         { key: 'product_id', title: 'کالا/خدمت', type: FieldType.RELATION, width: 220, relationConfig: { targetModule: 'products', targetField: 'name' } },
         { key: 'title', title: 'شرح قلم', type: FieldType.TEXT, width: 220 },
         { key: 'quantity', title: 'تعداد/مقدار', type: FieldType.NUMBER, width: 120 },

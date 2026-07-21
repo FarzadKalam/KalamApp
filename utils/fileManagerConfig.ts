@@ -18,6 +18,7 @@ const MODULE_ROOT_COLOR_TOKENS: Record<string, string> = {
   invoices: 'system-sales',
   purchase_invoices: 'system-purchase',
   expense_documents: 'system-expense',
+  assets: 'system-finance',
   employee_advances: 'system-finance',
   payroll_slips: 'system-finance',
   tasks: 'system-task',
@@ -78,6 +79,11 @@ export const FILE_SYSTEM_MODULE_DEFINITIONS: Record<string, FileSystemModuleDefi
         attachmentFieldKeys: ['attachment_url'],
       },
     ],
+  },
+  assets: {
+    moduleId: 'assets',
+    rootTitle: 'اموال',
+    rootColorToken: 'system-finance',
   },
   employee_advances: {
     moduleId: 'employee_advances',

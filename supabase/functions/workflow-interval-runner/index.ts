@@ -2395,6 +2395,7 @@ function getModuleTable(moduleId: string): string {
     costCenters: 'cost_centers', cashBoxes: 'cash_boxes', bankAccounts: 'bank_accounts',
     pettyFunds: 'petty_funds', cashBankOperations: 'cash_bank_operations',
     expenseDocuments: 'expense_documents', attendanceLogs: 'attendance_logs',
+    assets: 'assets',
     workSchedules: 'work_schedules', leaveRequests: 'leave_requests',
     overtimeRequests: 'overtime_requests', missionRequests: 'mission_requests',
     employeeAdvances: 'employee_advances', employeeBonusRequests: 'employee_bonus_requests',

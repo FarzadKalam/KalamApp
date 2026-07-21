@@ -667,6 +667,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/invoices', label: 'فاکتورهای فروش' },
           { key: '/purchase_invoices', label: 'فاکتورهای خرید' },
           { key: '/expense_documents', label: 'هزینه‌ها', disabled: !canViewModule('expense_documents') },
+          { key: '/assets', label: 'اموال', disabled: !canViewModule('assets') },
           { key: '/sales_return_invoices', label: 'فاکتورهای برگشت از فروش', disabled: !canViewModule('sales_return_invoices') },
           { key: '/purchase_return_invoices', label: 'فاکتورهای برگشت از خرید', disabled: !canViewModule('purchase_return_invoices') },
         ]
@@ -1038,6 +1039,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       secretariat_documents: 'دبیرخانه',
       delivery_forms: 'تحویل',
       expense_documents: 'هزینه',
+      assets: 'اموال',
       employee_advances: 'مساعده',
       payroll_slips: 'حقوق',
       employee_contracts: 'قرارداد',
@@ -1068,6 +1070,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
       secretariat_documents: <FileTextOutlined />,
       delivery_forms: <FileTextOutlined />,
       expense_documents: <BankOutlined />,
+      assets: <BankOutlined />,
       employee_advances: <BankOutlined />,
       payroll_slips: <FileTextOutlined />,
       employee_contracts: <FileTextOutlined />,

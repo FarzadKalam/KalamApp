@@ -253,6 +253,7 @@ const ALLOWED_MODULES = new Set([
   'bank_accounts',
   'fiscal_years',
   'expense_documents',
+  'assets',
   'employee_advances',
 ]);
 
@@ -277,6 +278,7 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   pettyFunds: 'petty_funds',
   cashBankOperations: 'cash_bank_operations',
   expenseDocuments: 'expense_documents',
+  assets: 'assets',
   attendanceLogs: 'attendance_logs',
   workSchedules: 'work_schedules',
   leaveRequests: 'leave_requests',
@@ -299,6 +301,7 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   marketing_leads: 'marketing_leads',
   cash_bank_operations: 'cash_bank_operations',
   expense_documents: 'expense_documents',
+  assets: 'assets',
   employee_advances: 'employee_advances',
   job_descriptions: 'job_descriptions',
   leave_requests: 'leave_requests',
@@ -354,6 +357,7 @@ const MODULE_ALIASES: Record<string, string[]> = {
   mission_requests: ['مأموریت', 'ماموریت', 'mission', 'مأموریت‌ها'],
   // Recruitment
   recruitmentApplicants: ['متقاضی', 'استخدام', 'recruit', 'applicant', 'جذب نیرو', 'کاریابی'],
+  assets: ['مال', 'اموال', 'دارایی', 'دارایی‌ها', 'asset', 'assets', 'کد برچسب'],
 };
 
 const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
@@ -384,6 +388,7 @@ const MODULE_SEARCH_FIELDS: Record<string, string[]> = {
   work_schedules: ['name', 'title', 'system_code'],
   overtime_requests: ['name', 'system_code', 'description'],
   mission_requests: ['name', 'system_code', 'description'],
+  assets: ['name', 'system_code', 'asset_tag_code', 'storage_location', 'notes'],
 };
 
 const QUERY_STOP_WORDS = new Set([

@@ -36,7 +36,7 @@ const PLAN_MODULES: Record<string, string[]> = {
     // حسابداری
     'fiscal_years', 'chart_of_accounts', 'journal_entries', 'accounting_event_rules',
     'cost_centers', 'cash_boxes', 'bank_accounts', 'petty_funds', 'cheques',
-    'cash_bank_operations', 'barters', 'expense_documents',
+    'cash_bank_operations', 'barters', 'expense_documents', 'assets',
     // HR
     'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
     'overtime_requests', 'mission_requests', 'employee_advances',
@@ -51,7 +51,7 @@ const PLAN_MODULES: Record<string, string[]> = {
     'marketing_leads', 'personas', 'tasks', 'instructions',
     'fiscal_years', 'chart_of_accounts', 'journal_entries', 'accounting_event_rules',
     'cost_centers', 'cash_boxes', 'bank_accounts', 'petty_funds', 'cheques',
-    'cash_bank_operations', 'barters', 'expense_documents',
+    'cash_bank_operations', 'barters', 'expense_documents', 'assets',
     'employees', 'attendance_logs', 'work_schedules', 'leave_requests',
     'overtime_requests', 'mission_requests', 'employee_advances',
     'employee_bonus_requests', 'employee_penalty_requests',
