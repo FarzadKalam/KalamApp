@@ -153,6 +153,31 @@ describe('commissionRuntime', () => {
     expect(buildCommissionDraftRows(args)[0]?.event_pool_amount).toBe(400000);
   });
 
+  it('uses recorded received total for legacy invoices without payment rows', () => {
+    const [row] = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-legacy',
+        invoice_date: '2026-04-10',
+        updated_at: '2026-05-25T14:00:00.000Z',
+        total_invoice_amount: 1000000,
+        total_received_amount: 1000000,
+        remaining_balance: 0,
+        assignee_id: 'profile-1',
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+        payments: [],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_settled_invoices',
+      percentMode: 'product_default',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+
+    expect(row.event_pool_amount).toBe(1000000);
+    expect(row.selected_amount).toBe(100000);
+  });
+
   it('allows manual include to restore a zero-pool excluded invoice row', () => {
     const [row] = buildCommissionDraftRows({
       invoices: [{

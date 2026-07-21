@@ -101,14 +101,53 @@ describe('messageTemplateRenderer option values', () => {
     expect(text).toBe('نوع فعالیت: تماس خروجی');
   });
 
-  it('does not expose an unresolved technical option code', () => {
+  it('leaves an unresolved technical option value blank', () => {
     const text = renderTemplateText(
       'اولویت: {{priority}}',
       { priority: 'unknown_internal_code' },
       { moduleId: 'tasks' }
     );
-    expect(text).toBe('اولویت: مقدار ثبت‌شده');
+    expect(text).toBe('اولویت: ');
     expect(text).not.toContain('unknown_internal_code');
+  });
+
+  it('renders process-specific activity status labels before the default task status labels', () => {
+    const text = renderTemplateText(
+      'وضعیت: {{task_status}}',
+      {
+        task_status: 'manager_review',
+        task_status_label: 'منتظر تایید مدیر',
+        recurrence_info: {
+          process_task_status_options: [
+            { value: 'manager_review', label: 'منتظر تایید مدیر' },
+          ],
+        },
+      },
+      { moduleId: 'projects' }
+    );
+
+    expect(text).toBe('وضعیت: منتظر تایید مدیر');
+  });
+
+  it('renders a process activity custom select field using its own Persian option label', () => {
+    const text = renderTemplateText(
+      'نتیجه: {{call_result}}',
+      {
+        call_result: 'answered',
+        recurrence_info: {
+          process_task_custom_fields: [
+            {
+              key: 'call_result',
+              type: 'select',
+              options: [{ value: 'answered', label: 'پاسخ داده شد' }],
+            },
+          ],
+        },
+      },
+      { moduleId: 'projects' }
+    );
+
+    expect(text).toBe('نتیجه: پاسخ داده شد');
   });
 
   it('renders relation uid values from runtime option maps', () => {

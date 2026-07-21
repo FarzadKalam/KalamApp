@@ -312,6 +312,55 @@ const resolveOptionLabel = (
   return resolveModuleLabel(fieldContext, value);
 };
 
+const parseTemplateObject = (value: unknown): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const resolveRuntimeTaskCustomFieldContext = (
+  fieldContext: TemplateFieldContext,
+  sourceRecord?: Record<string, any> | null,
+): TemplateFieldContext => {
+  const recurrence = parseTemplateObject(sourceRecord?.recurrence_info);
+  const customFields = Array.isArray(recurrence?.process_task_custom_fields)
+    ? recurrence.process_task_custom_fields
+    : [];
+  const customField = customFields.find((field: any) => (
+    String(field?.key || '').trim() === fieldContext.key
+  ));
+  if (!customField) return fieldContext;
+  return createFieldContext('tasks', fieldContext.key, customField, fieldContext.tokenKey);
+};
+
+const resolveTaskRuntimeStatusLabel = (
+  fieldContext: TemplateFieldContext,
+  value: unknown,
+  sourceRecord?: Record<string, any> | null,
+): string | null => {
+  if (fieldContext.moduleId !== 'tasks' || fieldContext.key !== 'status') return null;
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) return null;
+
+  const storedLabel = String(
+    sourceRecord?.status === value
+      ? sourceRecord?.status_label || sourceRecord?.task_status_label || ''
+      : ''
+  ).trim();
+  if (storedLabel) return storedLabel;
+
+  const recurrence = parseTemplateObject(sourceRecord?.recurrence_info);
+  const customOptions = Array.isArray(recurrence?.process_task_status_options)
+    ? recurrence.process_task_status_options
+    : [];
+  return findOptionLabel(customOptions, value);
+};
+
 const parseListLikeValue = (value: unknown): unknown[] | null => {
   if (Array.isArray(value)) return value;
   if (typeof value !== 'string') return null;
@@ -370,7 +419,10 @@ export const formatTemplateValueByField = ({
   assigneeDirectory,
   optionLabelMaps,
 }: FormatTemplateValueOptions): string => {
-  const fieldContext = resolveFieldContext(moduleId, fieldKey);
+  const fieldContext = resolveRuntimeTaskCustomFieldContext(
+    resolveFieldContext(moduleId, fieldKey),
+    sourceRecord,
+  );
   const fieldType = normalizeFieldType(fieldContext.fieldType);
 
   const assigneeLabel = resolveAssigneeLabel(value, fieldContext.key || fieldKey, sourceRecord, assigneeDirectory);
@@ -418,6 +470,9 @@ export const formatTemplateValueByField = ({
     }
   }
 
+  const taskRuntimeStatusLabel = resolveTaskRuntimeStatusLabel(fieldContext, value, sourceRecord);
+  if (taskRuntimeStatusLabel) return taskRuntimeStatusLabel;
+
   const optionLabel = resolveOptionLabel(fieldContext, value, optionLabelMaps);
   if (optionLabel) return optionLabel;
 
@@ -432,7 +487,7 @@ export const formatTemplateValueByField = ({
     && typeof value === 'string'
     && /^[a-z][a-z0-9_-]*$/i.test(value.trim())
   ) {
-    return 'مقدار ثبت‌شده';
+    return '';
   }
 
   if (fieldType === FieldType.CHECKBOX || typeof value === 'boolean') {
@@ -525,14 +580,18 @@ export const renderTemplateText = (
 
 export const collectTemplateDynamicOptionCategories = (
   template: string,
-  moduleId?: string | null
+  moduleId?: string | null,
+  record?: Record<string, any> | null,
 ): string[] => {
   const categories = new Set<string>();
   const rawTemplate = String(template || '');
   Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g)).forEach((match) => {
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) return;
-    const fieldContext = resolveFieldContext(moduleId, fieldKey);
+    const fieldContext = resolveRuntimeTaskCustomFieldContext(
+      resolveFieldContext(moduleId, fieldKey),
+      record,
+    );
     const category = String(fieldContext.fieldConfig?.dynamicOptionsCategory || '').trim();
     if (category) categories.add(category);
   });
@@ -541,7 +600,8 @@ export const collectTemplateDynamicOptionCategories = (
 
 export const collectTemplateRelationFields = (
   template: string,
-  moduleId?: string | null
+  moduleId?: string | null,
+  record?: Record<string, any> | null,
 ): Array<{
   tokenKey: string;
   moduleId: string | null;
@@ -559,7 +619,10 @@ export const collectTemplateRelationFields = (
   Array.from(rawTemplate.matchAll(/\{\{\s*([^}]+)\s*\}\}/g)).forEach((match) => {
     const fieldKey = String(match[1] || '').trim();
     if (!fieldKey) return;
-    const fieldContext = resolveFieldContext(moduleId, fieldKey);
+    const fieldContext = resolveRuntimeTaskCustomFieldContext(
+      resolveFieldContext(moduleId, fieldKey),
+      record,
+    );
     const normalizedFieldType = normalizeFieldType(fieldContext.fieldType);
     if (normalizedFieldType !== FieldType.RELATION && normalizedFieldType !== FieldType.MULTI_RELATION) return;
     if (!fieldContext.fieldConfig?.relationConfig && !fieldContext.fieldConfig?.multiRelationConfig) return;
@@ -626,12 +689,12 @@ export const resolveTemplateOptionLabelMaps = async (
   record?: Record<string, any> | null
 ): Promise<TemplateOptionLabelMaps> => {
   const normalizedModuleId = String(moduleId || '').trim();
-  const dynamicCategories = collectTemplateDynamicOptionCategories(template, normalizedModuleId);
+  const dynamicCategories = collectTemplateDynamicOptionCategories(template, normalizedModuleId, record);
   const maps: TemplateOptionLabelMaps = dynamicCategories.length > 0
     ? await fetchDynamicOptionsMap(supabaseClient, dynamicCategories).catch(() => ({}))
     : {};
 
-  const relationFields = collectTemplateRelationFields(template, normalizedModuleId);
+  const relationFields = collectTemplateRelationFields(template, normalizedModuleId, record);
   await Promise.allSettled(
     relationFields.map(async (fieldRef) => {
       const normalizedFieldType = normalizeFieldType(fieldRef.fieldConfig?.type);

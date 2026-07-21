@@ -13,6 +13,12 @@ describe('server workflow value labels', () => {
     expect(getWorkflowStaticValueLabel('attendance.log_type', 'check_out')).toBe('خروج');
   });
 
+  it('translates built-in activity priority and status values to Persian labels', () => {
+    expect(getWorkflowStaticValueLabel('priority', 'urgent')).toBe('بسیار بالا');
+    expect(getWorkflowStaticValueLabel('task_status', 'in_progress')).toBe('در حال انجام');
+    expect(getWorkflowStaticValueLabel('status', 'done', 'tasks')).toBe('تکمیل شده');
+  });
+
   it('extracts user and role references without exposing their raw identifiers', () => {
     const userId = '9ef7b957-d2b8-4852-bd61-1b0cdd252f9c';
     const roleId = '55555555-5555-4555-8555-555555555555';

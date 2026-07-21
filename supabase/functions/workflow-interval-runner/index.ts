@@ -556,6 +556,8 @@ const orgPublicBaseUrlCache = new Map<string, Promise<string>>();
 const orgSaasAdminAccessCache = new Map<string, Promise<boolean>>();
 const orgCurrencyLabelCache = new Map<string, Promise<string>>();
 const orgModulePriceFieldCache = new Map<string, Promise<Set<string>>>();
+const orgModuleFieldConfigCache = new Map<string, Promise<Map<string, any>>>();
+const orgDynamicOptionLabelCache = new Map<string, Promise<string | null>>();
 
 function getOrgCurrencyLabel(url: string, key: string, orgId: string): Promise<string> {
   const normalizedOrgId = String(orgId || '').trim();
@@ -593,7 +595,142 @@ function getOrgModulePriceFields(url: string, key: string, orgId: string, module
   return orgModulePriceFieldCache.get(cacheKey)!;
 }
 
+function getOrgModuleFieldConfigs(url: string, key: string, orgId: string, moduleId: string): Promise<Map<string, any>> {
+  const normalizedOrgId = String(orgId || '').trim();
+  const normalizedModuleId = String(moduleId || '').trim();
+  const cacheKey = `${normalizedOrgId}:${normalizedModuleId}`;
+  if (!normalizedOrgId || !normalizedModuleId) return Promise.resolve(new Map());
+  if (!orgModuleFieldConfigCache.has(cacheKey)) {
+    orgModuleFieldConfigCache.set(cacheKey, (async () => {
+      const rows = await dbGet(url, key,
+        `integration_settings?org_id=eq.${encodeURIComponent(normalizedOrgId)}&connection_type=eq.module_settings&is_active=eq.true&select=settings&order=updated_at.desc&limit=1`
+      ).catch(() => []);
+      const schema = rows?.[0]?.settings?.modules?.[normalizedModuleId]?.schema;
+      const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+      const blockColumns = (Array.isArray(schema?.blocks) ? schema.blocks : [])
+        .flatMap((block: any) => Array.isArray(block?.tableColumns) ? block.tableColumns : []);
+      return new Map(
+        [...fields, ...blockColumns]
+          .map((field: any) => [String(field?.key || '').trim(), field] as const)
+          .filter(([fieldKey]) => Boolean(fieldKey))
+      );
+    })());
+  }
+  return orgModuleFieldConfigCache.get(cacheKey)!;
+}
+
+function findWorkflowOptionLabel(options: any, value: any): string | null {
+  if (!Array.isArray(options) || value === null || value === undefined) return null;
+  const normalizedValue = String(value).trim();
+  if (!normalizedValue) return null;
+  const option = options.find((item: any) => String(item?.value ?? '').trim() === normalizedValue);
+  const label = String(option?.label ?? '').trim();
+  return label || null;
+}
+
+function getTaskRuntimeOptionLabel(record: Record<string, any>, fieldKey: string, value: any): string | null {
+  if (fieldKey !== 'status') return null;
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedValue) return null;
+  const statusValue = String(record?.task_status ?? record?.status ?? '').trim();
+  const storedLabel = statusValue === normalizedValue
+    ? String(record?.status_label || record?.task_status_label || '').trim()
+    : '';
+  if (storedLabel) return storedLabel;
+  const recurrence = parseObjectValue(record?.recurrence_info);
+  return findWorkflowOptionLabel(recurrence?.process_task_status_options, value);
+}
+
+function getTaskRuntimeCustomFieldConfig(record: Record<string, any>, fieldKey: string): any | null {
+  const recurrence = parseObjectValue(record?.recurrence_info);
+  const fields = Array.isArray(recurrence?.process_task_custom_fields)
+    ? recurrence.process_task_custom_fields
+    : [];
+  return fields.find((field: any) => String(field?.key || '').trim() === fieldKey) || null;
+}
+
+function getPreviousTaskRuntimeCustomFieldConfig(record: Record<string, any>, fieldKey: string): any | null {
+  const recurrence = parseObjectValue(record?.previous_stage__recurrence_info);
+  const fields = Array.isArray(recurrence?.process_task_custom_fields)
+    ? recurrence.process_task_custom_fields
+    : [];
+  return fields.find((field: any) => String(field?.key || '').trim() === fieldKey) || null;
+}
+
+async function getOrgDynamicOptionLabel(
+  url: string,
+  key: string,
+  orgId: string,
+  category: string,
+  value: any,
+): Promise<string | null> {
+  const normalizedOrgId = String(orgId || '').trim();
+  const normalizedCategory = String(category || '').trim();
+  const normalizedValue = String(value ?? '').trim();
+  if (!normalizedOrgId || !normalizedCategory || !normalizedValue) return null;
+  const cacheKey = `${normalizedOrgId}:${normalizedCategory}:${normalizedValue}`;
+  if (!orgDynamicOptionLabelCache.has(cacheKey)) {
+    orgDynamicOptionLabelCache.set(cacheKey, (async () => {
+      const rows = await dbGet(url, key,
+        `dynamic_options?org_id=eq.${encodeURIComponent(normalizedOrgId)}&category=eq.${encodeURIComponent(normalizedCategory)}&value=eq.${encodeURIComponent(normalizedValue)}&is_active=eq.true&select=label&limit=1`
+      ).catch(() => []);
+      return String(rows?.[0]?.label || '').trim() || null;
+    })());
+  }
+  return orgDynamicOptionLabelCache.get(cacheKey)!;
+}
+
+async function resolveServerOptionLabel(
+  value: any,
+  fieldKey: string,
+  record: Record<string, any>,
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId: string,
+  templateFieldKey = fieldKey,
+): Promise<{ label: string | null; isOptionField: boolean }> {
+  const taskStatusLabel = moduleId === 'tasks' ? getTaskRuntimeOptionLabel(record, fieldKey, value) : null;
+  if (taskStatusLabel) return { label: taskStatusLabel, isOptionField: true };
+
+  const runtimeCustomField = String(templateFieldKey || '').startsWith('previous_stage__')
+    ? getPreviousTaskRuntimeCustomFieldConfig(record, fieldKey)
+    : getTaskRuntimeCustomFieldConfig(record, fieldKey);
+  const fields = runtimeCustomField ? null : await getOrgModuleFieldConfigs(url, key, orgId, moduleId);
+  const field = runtimeCustomField || fields?.get(fieldKey);
+  const type = String(field?.type || '').trim().toLowerCase();
+  const isOptionField = ['select', 'multi_select', 'status', 'checklist', 'tags'].includes(type);
+  const staticLabel = findWorkflowOptionLabel(field?.options, value);
+  if (staticLabel) return { label: staticLabel, isOptionField };
+
+  const dynamicCategory = String(field?.dynamicOptionsCategory || '').trim();
+  const dynamicLabel = dynamicCategory
+    ? await getOrgDynamicOptionLabel(url, key, orgId, dynamicCategory, value)
+    : null;
+  return { label: dynamicLabel, isOptionField };
+}
+
 function resolveTemplateFieldModule(moduleId: string, fieldKey: string): { moduleId: string; fieldKey: string } {
+  const normalizedFieldKey = String(fieldKey || '').trim();
+  const taskAliases: Record<string, string> = {
+    task_name: 'name',
+    task_type: 'task_type',
+    task_status: 'status',
+    task_priority: 'priority',
+    task_due_date: 'due_date',
+    task_image_url: 'image_url',
+  };
+  if (normalizedFieldKey.startsWith('__task__')) {
+    const taskFieldKey = normalizedFieldKey.slice('__task__'.length);
+    return { moduleId: 'tasks', fieldKey: taskAliases[taskFieldKey] || taskFieldKey };
+  }
+  if (normalizedFieldKey.startsWith('previous_stage__')) {
+    const taskFieldKey = normalizedFieldKey.slice('previous_stage__'.length);
+    return { moduleId: 'tasks', fieldKey: taskAliases[taskFieldKey] || taskFieldKey };
+  }
+  if (taskAliases[normalizedFieldKey]) {
+    return { moduleId: 'tasks', fieldKey: taskAliases[normalizedFieldKey] };
+  }
   const related = parseWorkflowRelatedFieldKey(fieldKey);
   if (related) return { moduleId: related.targetModuleId, fieldKey: related.targetFieldKey };
   const multiRelated = parseWorkflowMultiRelationFieldKey(fieldKey);
@@ -767,13 +904,25 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
     const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId, moduleId)));
     return rendered.filter(Boolean).join('، ');
   }
-  const staticLabel = getWorkflowStaticValueLabel(fieldKey, value);
+  const optionLabel = await resolveServerOptionLabel(
+    value,
+    fieldContext.fieldKey,
+    record,
+    url,
+    key,
+    orgId,
+    fieldContext.moduleId,
+    fieldKey,
+  );
+  if (optionLabel.label) return optionLabel.label;
+  const staticLabel = getWorkflowStaticValueLabel(fieldContext.fieldKey, value, fieldContext.moduleId);
   if (staticLabel) return staticLabel;
+  if (optionLabel.isOptionField) return '';
   if (
     /(^|_)(status|type|kind|category|method|direction|priority)$/i.test(String(fieldKey || '').trim())
     && /^[a-z][a-z0-9_-]*$/i.test(str.trim())
   ) {
-    return 'مقدار ثبت‌شده';
+    return '';
   }
   if (UUID_LIKE_REGEX.test(str)) {
     const normalizedField = String(fieldKey || '').toLowerCase();
@@ -5230,6 +5379,7 @@ function buildProcessAutomationTaskRecord(
   const previousRecurrence = parseObjectValue(previousTask?.recurrence_info);
   const previousCustomValues = parseObjectValue(previousRecurrence?.process_task_custom_field_values);
   Object.entries(previousCustomValues).forEach(([field, value]) => { record[`previous_stage__${field}`] = value; });
+  record.previous_stage__recurrence_info = previousRecurrence;
   record.previous_stage__image_url = previousTask?.image_url || null;
   record.__comm_recipient__current_task_assignee = taskRecipientTokenCore(task);
   record.__comm_recipient__previous_stage_assignee = taskRecipientTokenCore(previousTask);

@@ -1,6 +1,26 @@
 const normalizeText = (value: unknown) => String(value ?? '').trim();
 
 const FIELD_VALUE_LABELS: Record<string, Record<string, string>> = {
+  priority: {
+    urgent: 'بسیار بالا',
+    high: 'بالا',
+    medium: 'متوسط',
+    low: 'پایین',
+  },
+  task_status: {
+    pending: 'در انتظار',
+    completed: 'تکمیل شده',
+    done: 'تکمیل شده',
+    in_progress: 'در حال انجام',
+    active: 'در حال انجام',
+    review: 'بازبینی',
+    todo: 'انجام نشده',
+    waiting: 'شروع نشده',
+    planned: 'برنامه‌ریزی شده',
+    canceled: 'لغو شده',
+    blocked: 'متوقف',
+    draft: 'پیش‌نویس',
+  },
   log_type: {
     check_in: 'ورود',
     check_out: 'خروج',
@@ -13,10 +33,17 @@ const FIELD_VALUE_LABELS: Record<string, Record<string, string>> = {
   },
 };
 
-export const getWorkflowStaticValueLabel = (fieldKey: unknown, value: unknown): string | null => {
+export const getWorkflowStaticValueLabel = (
+  fieldKey: unknown,
+  value: unknown,
+  moduleId?: unknown,
+): string | null => {
   const normalizedFieldKey = normalizeText(fieldKey).split('.').pop()?.toLowerCase() || '';
   const normalizedValue = normalizeText(value);
   if (!normalizedFieldKey || !normalizedValue) return null;
+  if (normalizedFieldKey === 'status' && normalizeText(moduleId) === 'tasks') {
+    return FIELD_VALUE_LABELS.task_status?.[normalizedValue] || null;
+  }
   return FIELD_VALUE_LABELS[normalizedFieldKey]?.[normalizedValue] || null;
 };
 

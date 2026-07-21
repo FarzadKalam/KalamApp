@@ -2590,7 +2590,9 @@ const HRPage: React.FC = () => {
                 rewardEntries,
                 sourceKeys,
                 payrollStatus: matchingLedger
-                  ? (String(matchingLedger.status || '') === 'included_in_payroll' ? 'included_in_payroll' : 'proposed')
+                  ? (String(matchingLedger.status || '') === 'included_in_payroll'
+                    ? 'included_in_payroll'
+                    : String(matchingLedger.status || '') === 'proposed' ? 'proposed' : 'not_registered')
                   : 'not_registered',
                 payrollSlipId: matchingLedger?.payroll_slip_id || null,
                 payrollSlipName: relatedSlip?.name || null,
@@ -4175,7 +4177,7 @@ const HRPage: React.FC = () => {
       const [invoicesResult, existingResult, draftsResult] = await Promise.all([
         supabase
           .from('invoices')
-          .select('id, name, status, invoice_date, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags')
+          .select('id, name, status, invoice_date, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags')
           .eq('assignee_id', assigneeId)
           .lte('invoice_date', periodEnd)
           .order('invoice_date', { ascending: false })
@@ -4205,6 +4207,38 @@ const HRPage: React.FC = () => {
         invoiceItems: Array.isArray(invoice?.invoiceItems) ? invoice.invoiceItems : [],
         payments: Array.isArray(invoice?.payments) ? invoice.payments : [],
       }));
+      const invoiceIds = invoices.map((invoice) => String(invoice.id || '').trim()).filter(Boolean);
+      const operationPaymentsByInvoiceId = new Map<string, any[]>();
+      const invoicePaymentOperationIds = new Set(
+        invoices.flatMap((invoice) => invoice.payments || [])
+          .map((payment: any) => String(payment?._cash_bank_operation_id || '').trim())
+          .filter(Boolean),
+      );
+      if (invoiceIds.length > 0) {
+        const { data: operationRows, error: operationError } = await supabase
+          .from('cash_bank_operations')
+          .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_status, amount, created_at')
+          .in('sales_invoice_id', invoiceIds)
+          .neq('operation_type', 'transfer')
+          .in('status', ['received', 'approved', 'paid', 'posted', 'settled', 'completed', 'cleared', 'done']);
+        if (operationError) throw operationError;
+        (operationRows || []).forEach((operation: any) => {
+          if (String(operation?.operation_type || '').trim().toLowerCase() === 'payment') return;
+          if (invoicePaymentOperationIds.has(String(operation?.id || '').trim())) return;
+          const invoiceId = String(operation?.sales_invoice_id || '').trim();
+          if (!invoiceId) return;
+          const rows = operationPaymentsByInvoiceId.get(invoiceId) || [];
+          rows.push({
+            _cash_bank_operation_id: operation.id,
+            amount: operation.amount,
+            status: operation.status,
+            payment_type: operation.payment_type,
+            cheque_status: operation.cheque_status,
+            date: operation.operation_date || operation.created_at || null,
+          });
+          operationPaymentsByInvoiceId.set(invoiceId, rows);
+        });
+      }
       const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       const productIds = Array.from(new Set(
         invoices
@@ -4233,6 +4267,10 @@ const HRPage: React.FC = () => {
 
       const enrichedInvoices = invoices.map((invoice) => ({
         ...invoice,
+        payments: [
+          ...(invoice.payments || []),
+          ...(operationPaymentsByInvoiceId.get(String(invoice.id || '')) || []),
+        ],
         invoiceItems: (invoice.invoiceItems || []).map((item: any) => {
           const product = productById.get(String(item?.product_id || ''));
           const billboard = billboardById.get(String(item?.product_id || ''));

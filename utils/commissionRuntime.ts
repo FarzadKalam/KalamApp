@@ -228,6 +228,30 @@ const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
   return datedValidReceipts > 0 ? datedValidReceipts : toNumber(invoice.total_received_amount);
 };
 
+const resolveLegacyRecordedCollection = (
+  invoice: CommissionInvoiceRecord,
+  invoiceTotal: number,
+  periodStart: string,
+  periodEnd: string,
+) => {
+  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+  const hasDatedValidReceipt = payments.some((payment) =>
+    isValidReceiptPayment(payment)
+    && resolvePaymentAmount(payment) > 0
+    && parseDateTime(paymentDate(payment)) !== null,
+  );
+  if (hasDatedValidReceipt) return null;
+
+  const recordedReceived = clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal);
+  const hasZeroRemainingBalance = normalizeText(invoice.remaining_balance) !== ''
+    && toNumber(invoice.remaining_balance) <= 0;
+  const amount = recordedReceived > 0 ? recordedReceived : hasZeroRemainingBalance ? invoiceTotal : 0;
+  const recordedAt = normalizeText(invoice.settled_at || invoice.completed_at || invoice.updated_at || invoice.invoice_date) || null;
+  if (amount <= 0 || !recordedAt || !isInPeriod(recordedAt, periodStart, periodEnd)) return null;
+
+  return { amount, recordedAt };
+};
+
 const buildInvoiceItemKey = (invoiceId: string, item: any, index: number) => {
   const directId = normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid);
   if (directId) return `${invoiceId}:${directId}`;
@@ -379,6 +403,17 @@ const getInvoiceEvent = (
         eventType: 'payment_collection',
         eventAt: findLatestPaymentDate(payments, (payment) => isValidReceiptPayment(payment) && isInPeriod(paymentDate(payment), periodStart, periodEnd)),
         poolAmount: clamp(paidAmount, 0, invoiceTotal),
+        exclusionReason: null,
+      };
+    }
+    // داده‌های قدیمی ممکن است فقط جمع دریافتی و مانده را داشته باشند و برای
+    // آن‌ها هنوز ردیف پرداخت ثبت نشده باشد. این fallback به وضعیت فاکتور وابسته نیست.
+    const legacyCollection = resolveLegacyRecordedCollection(invoice, invoiceTotal, periodStart, periodEnd);
+    if (legacyCollection) {
+      return {
+        eventType: 'recorded_collection',
+        eventAt: legacyCollection.recordedAt,
+        poolAmount: legacyCollection.amount,
         exclusionReason: null,
       };
     }
