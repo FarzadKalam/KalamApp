@@ -177,6 +177,11 @@ export const supplierModule: ModuleDefinition = {
     { key: 'first_supply_date', labels: { fa: 'تاریخ شروع همکاری', en: 'Start Date' }, type: FieldType.DATE, blockId: 'financial_info' },
     { key: 'supply_count', labels: { fa: 'تعداد فاکتور خرید', en: 'Supply Count' }, type: FieldType.NUMBER, blockId: 'financial_info', readonly: true },
     { key: 'total_paid', labels: { fa: 'جمع پرداختی‌ها', en: 'Total Paid' }, type: FieldType.PRICE, blockId: 'financial_info', readonly: true },
+
+    { key: 'previous_system_first_purchase_date', labels: { fa: 'تاریخ شروع سوابق سیستم قبلی', en: 'Previous System Start Date' }, type: FieldType.DATE, blockId: 'previous_system_info' },
+    { key: 'previous_system_invoice_total', labels: { fa: 'جمع فاکتورهای خرید سیستم قبلی', en: 'Previous System Purchase Invoice Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+    { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداختی‌های سیستم قبلی', en: 'Previous System Payment Total' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
+    { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info' },
   
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.15, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.2, nature: FieldNature.STANDARD, isTableColumn: true },
@@ -196,6 +201,10 @@ export const supplierModule: ModuleDefinition = {
     },
     {
       id: 'financial_info', titles: { fa: 'اطلاعات مالی و بانکی', en: 'Financial Info' }, type: BlockType.FIELD_GROUP,
+      order: 0
+    },
+    {
+      id: 'previous_system_info', titles: { fa: 'اطلاعات سیستم قبلی', en: 'Previous System Info' }, type: BlockType.FIELD_GROUP,
       order: 0
     },
   ],

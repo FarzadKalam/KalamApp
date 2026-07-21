@@ -58,7 +58,6 @@ import { buildPayrollSlipDraft } from '../utils/payrollSlipDraft';
 import { syncSeniorityPayrollEntry, calcYearsOfService } from '../utils/seniorityRuntime';
 import {
   isMissingPayrollLedgerError,
-  markPayrollLedgerEntriesIncluded,
   type PayrollLedgerEntry,
   type PayrollSlipLine,
 } from '../utils/payrollLedger';
@@ -553,7 +552,7 @@ const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis }>
   { label: 'بر اساس فاکتورهای تایید شده', value: 'approved_invoices' },
   { label: 'بر اساس فاکتورهای تسویه شده', value: 'settled_invoices' },
   { label: 'بر اساس تسویه کامل و وصول آخرین بخش', value: 'full_settlement_only' },
-  { label: 'بر اساس فاکتورهای پیش پرداخت و تسویه شده', value: 'prepaid_and_settled_invoices' },
+  { label: 'بر اساس دریافتی‌های واقعی معتبر', value: 'prepaid_and_settled_invoices' },
   { label: 'بر اساس فاکتورهای پیش پرداخت و چک های وصول شده', value: 'prepaid_and_collected_cheques' },
   { label: 'بر اساس فاکتورهای تسویه شده و چک های وصول شده', value: 'settled_and_collected_cheques' },
 ];
@@ -5722,13 +5721,6 @@ const HRPage: React.FC = () => {
         notes: `ایجاد شده از ویزارد منابع انسانی برای بازه ${periodStart} تا ${periodEnd}`,
       };
 
-      const { data: inserted, error: insertError } = await supabase
-        .from('payroll_slips')
-        .insert(payload)
-        .select('id, employee_id')
-        .single();
-      if (insertError) throw insertError;
-      await markPayrollLedgerEntriesIncluded(supabase as any, ledgerEntries.map((entry) => entry.id), String(inserted?.id || ''));
       const bonusRequestIds = ledgerEntries
         .filter((entry) => String(entry.source_type || '') === 'employee_bonus')
         .map((entry) => String(entry.source_record_id || '').trim())
@@ -5737,33 +5729,22 @@ const HRPage: React.FC = () => {
         .filter((entry) => String(entry.source_type || '') === 'employee_penalty')
         .map((entry) => String(entry.source_record_id || '').trim())
         .filter(Boolean);
-      if (bonusRequestIds.length > 0) {
-        const { error } = await supabase
-          .from('employee_bonus_requests')
-          .update({ related_payroll_slip_id: inserted.id, updated_at: new Date().toISOString() })
-          .in('id', bonusRequestIds);
-        if (error) throw error;
-      }
-      if (penaltyRequestIds.length > 0) {
-        const { error } = await supabase
-          .from('employee_penalty_requests')
-          .update({ related_payroll_slip_id: inserted.id, updated_at: new Date().toISOString() })
-          .in('id', penaltyRequestIds);
-        if (error) throw error;
-      }
       const advanceIds = payrollWizardDeductibleAdvances.map((advance) => String(advance.id || '').trim()).filter(Boolean);
-      if (advanceIds.length > 0) {
-        const { error } = await supabase
-          .from('employee_advances')
-          .update({ related_payroll_slip_id: inserted.id, updated_at: new Date().toISOString() })
-          .in('id', advanceIds);
-        if (error) throw error;
-      }
+      const { data: insertedSlipId, error: insertError } = await supabase.rpc('create_payroll_slip_from_wizard', {
+        p_payload: payload,
+        p_ledger_entry_ids: ledgerEntries.map((entry) => entry.id),
+        p_bonus_request_ids: bonusRequestIds,
+        p_penalty_request_ids: penaltyRequestIds,
+        p_advance_ids: advanceIds,
+      });
+      if (insertError) throw insertError;
+      const insertedId = String(insertedSlipId || '').trim();
+      if (!insertedId) throw new Error('شناسه فیش ایجادشده دریافت نشد.');
       message.success('فیش حقوقی پیش‌نویس ایجاد شد.');
       closePayrollWizard();
       await refreshPayrollPeriodState();
       await fetchEmployeeAdvancesForDashboard();
-      navigate(`/payroll_slips/${inserted.id}`);
+      navigate(`/payroll_slips/${insertedId}`);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'ایجاد فیش حقوقی ناموفق بود.'));
     } finally {
@@ -6630,7 +6611,7 @@ const HRPage: React.FC = () => {
     approved_invoices: 'فاکتور تاییدشده',
     settled_invoices: 'فاکتور تسویه‌شده',
     full_settlement_only: 'تسویه کامل',
-    prepaid_and_settled_invoices: 'پیش‌پرداخت و تسویه‌شده',
+    prepaid_and_settled_invoices: 'دریافتی واقعی معتبر',
     prepaid_and_collected_cheques: 'پیش‌پرداخت و چک وصول‌شده',
     settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
   };
@@ -7332,7 +7313,7 @@ const HRPage: React.FC = () => {
         </Col>
         <Col xs={24} md={8} lg={4}>
           <Card>
-            <div className="text-xs text-gray-500 mb-1">پیش‌پرداخت و تسویه</div>
+            <div className="text-xs text-gray-500 mb-1">دریافتی واقعی معتبر</div>
             <div className="text-2xl font-black">{formatMoney(commissionTotals.prepaid)}</div>
           </Card>
         </Col>

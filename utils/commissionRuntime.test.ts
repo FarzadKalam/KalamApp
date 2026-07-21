@@ -58,7 +58,7 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.exclusion_reason).toContain('تسویه کامل');
   });
 
-  it('uses the period payment amount for prepaid_and_settled_invoices', () => {
+  it('uses every valid real receipt in the period for prepaid_and_settled_invoices', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{
         id: 'inv-1',
@@ -80,7 +80,7 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.selected_amount).toBe(25000);
   });
 
-  it('includes period invoices that were fully received after their invoice month', () => {
+  it('recognizes full settlement in the month the final real receipt was recorded', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{
         id: 'inv-1',
@@ -94,13 +94,63 @@ describe('commissionRuntime', () => {
       employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
       employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
       basis: 'settled_invoices',
-      periodStart: '2026-04-01',
-      periodEnd: '2026-04-30',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
       includeNotCalculated: true,
     });
 
     expect(rows[0]?.selected_amount).toBe(100000);
     expect(getCommissionLineReviewBucket(rows[0], rows[0].lines[0])).toBe('current_period');
+  });
+
+  it('counts only the second real receipt when an earlier invoice becomes settled this month', () => {
+    const invoice = {
+      id: 'inv-1',
+      status: 'final',
+      invoice_date: '2026-04-10',
+      total_invoice_amount: 1000000,
+      assignee_id: 'profile-1',
+      payments: [
+        { amount: 500000, status: 'received', payment_type: 'online', date: '2026-04-20' },
+        { amount: 500000, status: 'settled', payment_type: 'credit', date: '2026-05-15' },
+      ],
+      invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+    };
+    const baseArgs = {
+      invoices: [invoice],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    };
+
+    expect(buildCommissionDraftRows({ ...baseArgs, basis: 'prepaid_and_settled_invoices', percentMode: 'product_default' })[0]?.event_pool_amount).toBe(500000);
+    expect(buildCommissionDraftRows({ ...baseArgs, basis: 'settled_invoices', percentMode: 'product_default' })[0]?.event_pool_amount).toBe(1000000);
+  });
+
+  it('accepts a received cheque only after it is cleared or spent', () => {
+    const args = {
+      invoices: [{
+        id: 'inv-cheque',
+        status: 'final',
+        invoice_date: '2026-05-10',
+        total_invoice_amount: 700000,
+        assignee_id: 'profile-1',
+        payments: [
+          { amount: 300000, status: 'received', payment_type: 'cheque', cheque_status: 'in_bank', date: '2026-05-12' },
+          { amount: 400000, status: 'received', payment_type: 'cheque', cheque_status: 'paid', date: '2026-05-18' },
+        ],
+        invoiceItems: [{ line_total: 700000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_settled_invoices' as const,
+      percentMode: 'product_default' as const,
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    };
+
+    expect(buildCommissionDraftRows(args)[0]?.event_pool_amount).toBe(400000);
   });
 
   it('allows manual include to restore a zero-pool excluded invoice row', () => {

@@ -392,6 +392,11 @@ export const employeesModule: ModuleDefinition = {
     { key: 'bank_card_number', labels: { fa: 'شماره کارت', en: 'Card Number' }, type: FieldType.TEXT, blockId: 'banking_info', order: 9.2 },
     { key: 'iban', labels: { fa: 'شماره شبا', en: 'IBAN' }, type: FieldType.TEXT, blockId: 'banking_info', order: 9.3 },
 
+    { key: 'previous_system_first_purchase_date', labels: { fa: 'تاریخ شروع سوابق سیستم قبلی', en: 'Previous System Start Date' }, type: FieldType.DATE, blockId: 'previous_system_info', order: 9.4 },
+    { key: 'previous_system_invoice_total', labels: { fa: 'جمع تعهدهای پرداخت سیستم قبلی', en: 'Previous System Payable Total' }, type: FieldType.PRICE, blockId: 'previous_system_info', order: 9.5 },
+    { key: 'previous_system_paid_total', labels: { fa: 'جمع پرداختی‌های سیستم قبلی', en: 'Previous System Paid Total' }, type: FieldType.PRICE, blockId: 'previous_system_info', order: 9.6 },
+    { key: 'previous_system_balance_total', labels: { fa: 'مانده اول دوره سیستم قبلی', en: 'Previous System Opening Balance' }, type: FieldType.PRICE, blockId: 'previous_system_info', order: 9.7 },
+
     {
       key: 'job_description_id',
       labels: { fa: 'شرح شغل', en: 'Job Description' },
@@ -454,6 +459,7 @@ export const employeesModule: ModuleDefinition = {
     { id: 'payroll_info', titles: { fa: 'تنظیمات حقوق و دستمزد' }, type: BlockType.FIELD_GROUP, order: 5 },
     { id: 'insurance_info', titles: { fa: 'بیمه' }, type: BlockType.FIELD_GROUP, order: 6 },
     { id: 'banking_info', titles: { fa: 'اطلاعات بانکی' }, type: BlockType.FIELD_GROUP, order: 7 },
+    { id: 'previous_system_info', titles: { fa: 'اطلاعات سیستم قبلی' }, type: BlockType.FIELD_GROUP, order: 7.5 },
     { id: 'job_description_info', titles: { fa: 'شرح شغل' }, type: BlockType.FIELD_GROUP, order: 8 },
     { id: 'process', titles: { fa: 'فرآیند جذب و همکاری' }, type: BlockType.FIELD_GROUP, order: 8.5 },
     { id: 'notes_info', titles: { fa: 'یادداشت' }, type: BlockType.FIELD_GROUP, order: 9 },

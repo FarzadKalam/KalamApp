@@ -20,6 +20,7 @@ export type OperationalFinancialRowType =
   | 'receipt'
   | 'payment'
   | 'barter'
+  | 'expense'
   | 'payroll_slip'
   | 'advance';
 
@@ -155,6 +156,7 @@ export const OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL: Record<OperationalFinancialRo
   receipt: 'دریافت',
   payment: 'پرداخت',
   barter: 'تهاتر',
+  expense: 'هزینه',
   payroll_slip: 'فیش حقوقی',
   advance: 'مساعده',
 };
@@ -345,10 +347,9 @@ const resolveOperationSourceModuleId = (operation: any) => {
   return 'cash_bank_operations';
 };
 
-export const isEmployeeFinancialOverviewOperation = (operation: any) => {
-  const sourceModuleId = resolveOperationSourceModuleId(operation);
-  return sourceModuleId === 'employee_advances' || sourceModuleId === 'payroll_slips';
-};
+// عملیات مالی متصل به کارمند، از جمله هزینه یا تهاتر، بخشی از سوابق همان شخص است.
+// نگه‌داشتن فیلتر محدود اینجا باعث می‌شد یک شخص با چند نقش، بخشی از گردش خود را نبیند.
+export const isEmployeeFinancialOverviewOperation = (_operation: any) => true;
 
 const buildExistingSourceOperationKeys = (operations: any[]) => {
   const keys = new Set<string>();
@@ -365,7 +366,7 @@ const buildExistingSourceOperationKeys = (operations: any[]) => {
 };
 
 const buildLegacyPaymentRows = (args: {
-  sourceTable: 'invoices' | 'purchase_invoices' | 'employee_advances' | 'payroll_slips';
+  sourceTable: 'invoices' | 'purchase_invoices' | 'expense_documents' | 'employee_advances' | 'payroll_slips';
   sourceRecord: any;
   operationType: 'receipt' | 'payment';
   existingOperationKeys: Set<string>;
@@ -399,6 +400,8 @@ const buildLegacyPaymentRows = (args: {
           ? 'دریافت فاکتور فروش'
           : sourceTable === 'purchase_invoices'
             ? 'پرداخت فاکتور خرید'
+            : sourceTable === 'expense_documents'
+              ? 'پرداخت هزینه'
             : sourceTable === 'employee_advances'
               ? 'پرداخت مساعده'
               : 'پرداخت فیش حقوقی',
@@ -407,7 +410,7 @@ const buildLegacyPaymentRows = (args: {
         paymentType,
         status: normalizePaymentRowStatus(paymentRow?.status),
         chequeStatus: String(paymentRow?.cheque_status || ''),
-        date: resolvePaymentRowDate(paymentRow, sourceRecord, sourceTable === 'employee_advances' ? 'request_date' : sourceTable === 'payroll_slips' ? 'period_end' : 'invoice_date'),
+        date: resolvePaymentRowDate(paymentRow, sourceRecord, sourceTable === 'employee_advances' ? 'request_date' : sourceTable === 'payroll_slips' ? 'period_end' : sourceTable === 'expense_documents' ? 'expense_date' : 'invoice_date'),
         debit,
         credit,
         invoiceLabel: String(sourceRecord?.name || sourceRecord?.system_code || sourceRecord?.id || '-'),
@@ -446,6 +449,45 @@ export const computeOperationalFinancialTotals = (rows: Array<Pick<OperationalFi
   };
 };
 
+const buildPreviousSystemOpeningRow = (
+  entityType: OperationalFinancialEntityType,
+  entity: any,
+): Omit<OperationalFinancialRow, 'balance' | 'printableFields'> | null => {
+  const balance = toNumber(entity?.previous_system_balance_total);
+  const invoiceTotal = toNumber(entity?.previous_system_invoice_total);
+  const paidTotal = toNumber(entity?.previous_system_paid_total);
+  if (balance === 0 && invoiceTotal === 0 && paidTotal === 0) return null;
+
+  const openingAmount = Math.abs(balance);
+  const balanceIsDebit = entityType === 'customer' ? balance >= 0 : balance < 0;
+  const hasBalance = openingAmount > 0;
+  const amountDescription = [
+    invoiceTotal !== 0 ? `جمع فاکتورهای سیستم قبلی: ${invoiceTotal}` : '',
+    paidTotal !== 0 ? `جمع پرداخت‌های سیستم قبلی: ${paidTotal}` : '',
+    `مانده اول دوره: ${balance}`,
+  ].filter(Boolean).join(' | ');
+
+  return {
+    key: `previous_system_opening_${String(entity?.id || '')}`,
+    rowType: 'opening',
+    sourceLabel: 'مانده اول دوره (سیستم قبلی)',
+    sourceModuleId: entityType === 'customer' ? 'customers' : entityType === 'supplier' ? 'suppliers' : 'employees',
+    sourceRecordId: String(entity?.id || '') || null,
+    paymentType: '',
+    status: 'opening',
+    chequeStatus: '',
+    date: entity?.previous_system_first_purchase_date || '1900-01-01',
+    debit: hasBalance && balanceIsDebit ? openingAmount : 0,
+    credit: hasBalance && !balanceIsDebit ? openingAmount : 0,
+    invoiceLabel: 'سیستم قبلی',
+    bankLabel: '-',
+    description: amountDescription,
+    createdAt: entity?.created_at || null,
+    invoiceRelation: null,
+    bankRelation: null,
+  };
+};
+
 const fetchSingleOperationalFinancialOverview = async ({
   entityType,
   entityId,
@@ -460,74 +502,6 @@ const fetchSingleOperationalFinancialOverview = async ({
       totals: { totalDebit: 0, totalCredit: 0, finalBalance: 0 },
       printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
     };
-  }
-
-  if (entityType === 'customer') {
-    try {
-      const { data, error } = await supabase.rpc('get_customer_operational_financial_overview', {
-        p_customer_id: normalizedEntityId,
-      });
-      if (error) throw error;
-      const rows = ((data || []) as any[]).map((row: any): OperationalFinancialRow => {
-        const rowType = String(row?.row_type || 'invoice') as OperationalFinancialRowType;
-        const sourceModuleId = String(row?.source_module_id || '');
-        const sourceRecordId = normalizeOperationalText(row?.source_record_id) || null;
-        const base = {
-          key: String(row?.key || `${sourceModuleId}_${sourceRecordId || Math.random()}`),
-          rowType,
-          sourceLabel: String(row?.source_label || ''),
-          sourceModuleId,
-          sourceRecordId,
-          paymentType: String(row?.payment_type || ''),
-          status: String(row?.status || ''),
-          chequeStatus: String(row?.cheque_status || ''),
-          date: row?.row_date || null,
-          debit: toNumber(row?.debit),
-          credit: toNumber(row?.credit),
-          balance: toNumber(row?.balance),
-          invoiceLabel: String(row?.invoice_label || '-'),
-          bankLabel: String(row?.bank_label || '-'),
-          description: formatOperationalFinancialDescription(row?.description || ''),
-          createdAt: row?.created_at || null,
-          invoiceRelation: sourceRecordId && sourceModuleId && sourceModuleId !== 'customers'
-            ? { moduleId: sourceModuleId, recordId: sourceRecordId }
-            : null,
-          bankRelation: null,
-        };
-        return {
-          ...base,
-          printableFields: {
-            rowTypeLabel: OPERATIONAL_FINANCIAL_ROW_TYPE_LABEL[rowType] || rowType,
-            sourceLabel: base.sourceLabel,
-            paymentTypeLabel: localizeFinancialValue(base.paymentType, 'payment_type') || OPERATIONAL_FINANCIAL_PAYMENT_TYPE_LABEL[base.paymentType] || base.paymentType || '-',
-            statusLabel: OPERATIONAL_FINANCIAL_STATUS_LABEL[base.status] || localizeFinancialValue(base.status, 'status') || base.status || '-',
-            date: base.date,
-            debit: base.debit,
-            credit: base.credit,
-            balance: base.balance,
-            invoiceLabel: base.invoiceLabel,
-            bankLabel: base.bankLabel,
-            description: base.description,
-          },
-        };
-      });
-      const totals = computeOperationalFinancialTotals(rows);
-      return {
-        rows,
-        recentItems: [...rows].sort((a, b) => {
-          const aDate = new Date(a.date || a.createdAt || 0).getTime();
-          const bDate = new Date(b.date || b.createdAt || 0).getTime();
-          return bDate - aDate;
-        }).slice(0, 6),
-        summary: totals,
-        totals,
-        printFields: OPERATIONAL_FINANCIAL_PRINT_FIELDS,
-      };
-    } catch (error: any) {
-      const raw = String(error?.message || error?.details || '').toLowerCase();
-      const missingRpc = raw.includes('get_customer_operational_financial_overview') || raw.includes('function');
-      if (!missingRpc) throw error;
-    }
   }
 
   const employeeScope = await resolveEntityScope(supabase, entityType, normalizedEntityId);
@@ -565,50 +539,68 @@ const fetchSingleOperationalFinancialOverview = async ({
       : entityBartersQuery.eq('employee_id', employeeIds[0]);
   }
 
-  const requests: any[] = [
-    entityOperationsQuery,
-    entityBartersQuery,
-  ];
+  const entityTable = entityType === 'customer' ? 'customers' : entityType === 'supplier' ? 'suppliers' : 'employees';
+  const entityRecordQuery = supabase
+    .from(entityTable)
+    .select('id, created_at, previous_system_first_purchase_date, previous_system_invoice_total, previous_system_paid_total, previous_system_balance_total')
+    .eq('id', normalizedEntityId)
+    .maybeSingle();
 
-  if (entityType === 'customer') {
-    requests.push(
-      supabase.from('invoices')
-        .select('id, name, system_code, invoice_date, status, total_invoice_amount, total_received_amount, remaining_balance, payments, created_at')
-        .eq('customer_id', normalizedEntityId)
-        .limit(3000),
-    );
-  } else if (entityType === 'supplier') {
-    requests.push(
-      supabase.from('purchase_invoices')
+  const primarySourceQuery = entityType === 'customer'
+    ? supabase.from('invoices')
+      .select('id, name, system_code, invoice_date, status, total_invoice_amount, total_received_amount, remaining_balance, payments, created_at')
+      .eq('customer_id', normalizedEntityId)
+      .limit(3000)
+    : entityType === 'supplier'
+      ? supabase.from('purchase_invoices')
         .select('id, name, system_code, invoice_date, status, total_invoice_amount, total_received_amount, remaining_balance, payments, created_at')
         .eq('supplier_id', normalizedEntityId)
-        .limit(3000),
-    );
-  } else {
-    const employeeId = employeeScope?.employeeId || normalizedEntityId;
-    requests.push(
-      supabase.from('payroll_slips')
+        .limit(3000)
+      : supabase.from('payroll_slips')
         .select('id, name, system_code, period_end, status, net_amount, payments, created_at')
-        .eq('employee_id', employeeId)
-        .limit(3000),
-      supabase.from('employee_advances')
-        .select('id, name, system_code, request_date, status, amount, paid_amount, remaining_amount, payments, created_at')
-        .eq('employee_id', employeeId)
-        .limit(3000),
-    );
+        .eq('employee_id', employeeScope?.employeeId || normalizedEntityId)
+        .limit(3000);
+
+  const secondarySourceQuery: PromiseLike<any> = entityType === 'employee'
+    ? supabase.from('employee_advances')
+      .select('id, name, system_code, request_date, status, amount, paid_amount, remaining_amount, payments, created_at')
+      .eq('employee_id', employeeScope?.employeeId || normalizedEntityId)
+      .limit(3000)
+    : Promise.resolve({ data: [], error: null });
+
+  let expenseDocumentsQuery = supabase.from('expense_documents')
+    .select('id, name, system_code, expense_date, status, total_amount, paid_amount, remaining_amount, payments, created_at')
+    .limit(3000);
+  if (entityType === 'customer') {
+    expenseDocumentsQuery = expenseDocumentsQuery.eq('customer_id', normalizedEntityId);
+  } else if (entityType === 'supplier') {
+    expenseDocumentsQuery = expenseDocumentsQuery.eq('supplier_id', normalizedEntityId);
+  } else {
+    const employeeIds = employeeScope?.profileIds || [normalizedEntityId];
+    expenseDocumentsQuery = employeeIds.length > 1
+      ? expenseDocumentsQuery.in('employee_id', employeeIds)
+      : expenseDocumentsQuery.eq('employee_id', employeeIds[0]);
   }
 
-  const responses = await Promise.all(requests);
-  const [opsRes, barterRes, primaryRes, secondaryRes] = responses as any[];
-  const sourceError = opsRes?.error || barterRes?.error || primaryRes?.error || secondaryRes?.error;
+  const [entityRes, opsRes, barterRes, primaryRes, secondaryRes, expensesRes] = await Promise.all([
+    entityRecordQuery,
+    entityOperationsQuery,
+    entityBartersQuery,
+    primarySourceQuery,
+    secondarySourceQuery,
+    expenseDocumentsQuery,
+  ]);
+  const sourceError = entityRes?.error || opsRes?.error || barterRes?.error || primaryRes?.error || secondaryRes?.error || expensesRes?.error;
   if (sourceError) throw sourceError;
 
+  const entityRecord = entityRes?.data || null;
   const operations = (opsRes?.data || []) as any[];
   const barters = (barterRes?.data || []) as any[];
   const primaryRows = (primaryRes?.data || []) as any[];
   const secondaryRows = (secondaryRes?.data || []) as any[];
+  const expenseRows = (expensesRes?.data || []) as any[];
   const sourceRecordLabelByKey = new Map<string, string>();
-  [...primaryRows, ...secondaryRows].forEach((row: any) => {
+  [...primaryRows, ...secondaryRows, ...expenseRows].forEach((row: any) => {
     const rowId = normalizeOperationalText(row?.id);
     if (!rowId) return;
     const label = String(row?.name || row?.system_code || rowId || '-');
@@ -623,10 +615,15 @@ const fetchSingleOperationalFinancialOverview = async ({
       if (row?.request_date !== undefined) {
         sourceRecordLabelByKey.set(`employee_advances:${rowId}`, label);
       }
+      if (row?.expense_date !== undefined) {
+        sourceRecordLabelByKey.set(`expense_documents:${rowId}`, label);
+      }
     }
   });
   const sourceBackedOperationKeys = buildExistingSourceOperationKeys(operations);
   const rows: Array<Omit<OperationalFinancialRow, 'balance' | 'printableFields'>> = [];
+  const openingRow = buildPreviousSystemOpeningRow(entityType, entityRecord);
+  if (openingRow) rows.push(openingRow);
 
   if (entityType === 'customer') {
     const invoices = ((primaryRes?.data || []) as any[])
@@ -764,12 +761,44 @@ const fetchSingleOperationalFinancialOverview = async ({
     })));
   }
 
+  const expenses = expenseRows
+    .filter((expense) => ['approved', 'paid', 'posted', 'settled', 'completed'].includes(normalizeStatus(expense?.status)));
+  expenses.forEach((expense) => {
+    const amount = toNumber(expense?.total_amount);
+    if (amount <= 0) return;
+    rows.push({
+      key: `expense_${expense.id}`,
+      rowType: 'expense',
+      sourceLabel: 'ثبت هزینه',
+      sourceModuleId: 'expense_documents',
+      sourceRecordId: String(expense.id),
+      paymentType: '',
+      status: String(expense?.status || ''),
+      chequeStatus: '',
+      date: expense?.expense_date || null,
+      debit: 0,
+      credit: amount,
+      invoiceLabel: String(expense?.name || expense?.system_code || expense?.id || '-'),
+      bankLabel: '-',
+      description: `هزینه${expense?.remaining_amount ? ` | مانده: ${String(expense.remaining_amount)}` : ''}`,
+      createdAt: expense?.created_at || null,
+      invoiceRelation: { moduleId: 'expense_documents', recordId: String(expense.id) },
+      bankRelation: null,
+    });
+  });
+  rows.push(...expenses.flatMap((expense) => buildLegacyPaymentRows({
+    sourceTable: 'expense_documents',
+    sourceRecord: expense,
+    operationType: 'payment',
+    existingOperationKeys: sourceBackedOperationKeys,
+    accountById,
+  })));
+
   operations
     .filter((operation) => {
       const operationType = normalizeOperationalText(operation?.operation_type);
       if (operationType === 'transfer') return false;
       if (String(operation?.payment_type || '').trim().toLowerCase() === 'cheque' && isFailedCheque(operation?.cheque_status)) return false;
-      if (entityType === 'employee' && !isEmployeeFinancialOverviewOperation(operation)) return false;
       return isSettledOperationStatus(operation?.status);
     })
     .forEach((operation) => {
@@ -784,6 +813,7 @@ const fetchSingleOperationalFinancialOverview = async ({
         || operation?.purchase_invoice_id
         || operation?.employee_advance_id
         || operation?.payroll_slip_id
+        || operation?.expense_document_id
         || operation?.id,
       ) || null;
       rows.push({
@@ -798,6 +828,8 @@ const fetchSingleOperationalFinancialOverview = async ({
                 ? 'پرداخت مساعده'
                 : sourceModuleId === 'payroll_slips'
                   ? 'پرداخت فیش حقوقی'
+                  : sourceModuleId === 'expense_documents'
+                    ? 'پرداخت هزینه'
                   : 'عملیات نقد و بانک'
           : 'ثبت مستقیم نقد و بانک',
         sourceModuleId,
@@ -822,7 +854,7 @@ const fetchSingleOperationalFinancialOverview = async ({
     });
 
   barters
-    .filter((barter) => entityType !== 'employee' && normalizeStatus(barter?.status) !== 'canceled')
+    .filter((barter) => normalizeStatus(barter?.status) !== 'canceled')
     .forEach((barter) => {
       const amount = Math.abs(toNumber(barter?.initial_amount));
       if (amount <= 0) return;
@@ -881,9 +913,6 @@ type LinkedFinancialEntity = {
 };
 
 type LinkedFinancialEntityRow = {
-  is_customer?: boolean | null;
-  is_supplier?: boolean | null;
-  is_employee?: boolean | null;
   linked_customer_id?: string | null;
   linked_supplier_id?: string | null;
   linked_employee_id?: string | null;
@@ -894,32 +923,66 @@ const resolveLinkedFinancialEntities = async (
   entityType: OperationalFinancialEntityType,
   entityId: string,
 ): Promise<LinkedFinancialEntity[]> => {
-  const table = entityType === 'customer' ? 'customers' : entityType === 'supplier' ? 'suppliers' : 'employees';
-  const fields = entityType === 'customer'
-    ? 'is_supplier, is_employee, linked_supplier_id, linked_employee_id'
-    : entityType === 'supplier'
-      ? 'is_customer, is_employee, linked_customer_id, linked_employee_id'
-      : 'is_customer, is_supplier, linked_customer_id, linked_supplier_id';
-  const { data, error } = await supabase
-    .from(table)
-    .select(fields)
-    .eq('id', entityId)
-    .maybeSingle();
-
-  // تا پیش از اجرای migration جدید، نمایش مالی نقش اصلی باید بدون اختلال ادامه پیدا کند.
-  if (error || !data) return [];
-  const linkedRow = data as unknown as LinkedFinancialEntityRow;
-
-  const linkedEntities: LinkedFinancialEntity[] = [];
-  const add = (type: OperationalFinancialEntityType, id: any, enabled: any) => {
+  const queue: LinkedFinancialEntity[] = [{ entityType, entityId }];
+  const seen = new Set<string>();
+  const linked = new Map<string, LinkedFinancialEntity>();
+  const add = (type: OperationalFinancialEntityType, id: any) => {
     const normalizedId = normalizeOperationalText(id);
-    if (enabled === true && normalizedId) linkedEntities.push({ entityType: type, entityId: normalizedId });
+    if (!normalizedId) return;
+    const key = `${type}:${normalizedId}`;
+    if (!seen.has(key)) queue.push({ entityType: type, entityId: normalizedId });
+    if (key !== `${entityType}:${entityId}`) linked.set(key, { entityType: type, entityId: normalizedId });
   };
 
-  if (entityType !== 'customer') add('customer', linkedRow.linked_customer_id, linkedRow.is_customer);
-  if (entityType !== 'supplier') add('supplier', linkedRow.linked_supplier_id, linkedRow.is_supplier);
-  if (entityType !== 'employee') add('employee', linkedRow.linked_employee_id, linkedRow.is_employee);
-  return linkedEntities;
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const currentKey = `${current.entityType}:${current.entityId}`;
+    if (seen.has(currentKey)) continue;
+    seen.add(currentKey);
+
+    const table = current.entityType === 'customer' ? 'customers' : current.entityType === 'supplier' ? 'suppliers' : 'employees';
+    const fields = current.entityType === 'customer'
+      ? 'linked_supplier_id, linked_employee_id'
+      : current.entityType === 'supplier'
+        ? 'linked_customer_id, linked_employee_id'
+        : 'linked_customer_id, linked_supplier_id';
+    const { data, error } = await supabase.from(table).select(fields).eq('id', current.entityId).maybeSingle();
+    // لینک ناقص یا migration اجرا نشده نباید نمایش نقش اصلی را از کار بیندازد.
+    if (error || !data) continue;
+    const row = data as unknown as LinkedFinancialEntityRow;
+
+    if (current.entityType !== 'customer') add('customer', row.linked_customer_id);
+    if (current.entityType !== 'supplier') add('supplier', row.linked_supplier_id);
+    if (current.entityType !== 'employee') add('employee', row.linked_employee_id);
+
+    const reverseRequests = current.entityType === 'customer'
+      ? [
+        supabase.from('suppliers').select('id').eq('linked_customer_id', current.entityId),
+        supabase.from('employees').select('id').eq('linked_customer_id', current.entityId),
+      ]
+      : current.entityType === 'supplier'
+        ? [
+          supabase.from('customers').select('id').eq('linked_supplier_id', current.entityId),
+          supabase.from('employees').select('id').eq('linked_supplier_id', current.entityId),
+        ]
+        : [
+          supabase.from('customers').select('id').eq('linked_employee_id', current.entityId),
+          supabase.from('suppliers').select('id').eq('linked_employee_id', current.entityId),
+        ];
+    const [firstReverse, secondReverse] = await Promise.all(reverseRequests);
+    if (current.entityType === 'customer') {
+      (firstReverse.data || []).forEach((item: any) => add('supplier', item?.id));
+      (secondReverse.data || []).forEach((item: any) => add('employee', item?.id));
+    } else if (current.entityType === 'supplier') {
+      (firstReverse.data || []).forEach((item: any) => add('customer', item?.id));
+      (secondReverse.data || []).forEach((item: any) => add('employee', item?.id));
+    } else {
+      (firstReverse.data || []).forEach((item: any) => add('customer', item?.id));
+      (secondReverse.data || []).forEach((item: any) => add('supplier', item?.id));
+    }
+  }
+
+  return Array.from(linked.values());
 };
 
 /**

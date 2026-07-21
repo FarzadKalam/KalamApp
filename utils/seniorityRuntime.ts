@@ -10,6 +10,16 @@ type SeniorityAnnualRate = {
 const TEHRAN_TZ = 'Asia/Tehran';
 const PERSIAN_CALENDAR_LOCALE = 'fa-IR-u-ca-persian';
 
+const parseLocaleInteger = (value: string | undefined) => {
+  const persianDigits = '۰۱۲۳۴۵۶۷۸۹';
+  const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
+  const normalized = String(value || '')
+    .replace(/[۰-۹]/g, (digit) => String(persianDigits.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String(arabicDigits.indexOf(digit)));
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 const getJalaliParts = (date: Date): { year: number; month: number; day: number } => {
   const formatter = new Intl.DateTimeFormat(PERSIAN_CALENDAR_LOCALE, {
     year: 'numeric',
@@ -19,9 +29,9 @@ const getJalaliParts = (date: Date): { year: number; month: number; day: number 
   });
   const parts = formatter.formatToParts(date);
   return {
-    year: parseInt(parts.find((p) => p.type === 'year')?.value || '0', 10),
-    month: parseInt(parts.find((p) => p.type === 'month')?.value || '0', 10),
-    day: parseInt(parts.find((p) => p.type === 'day')?.value || '0', 10),
+    year: parseLocaleInteger(parts.find((p) => p.type === 'year')?.value),
+    month: parseLocaleInteger(parts.find((p) => p.type === 'month')?.value),
+    day: parseLocaleInteger(parts.find((p) => p.type === 'day')?.value),
   };
 };
 
@@ -95,7 +105,8 @@ export const fetchSeniorityAnnualRate = async (
 
 /**
  * مبلغ پایه سنوات ماهانه را طبق قانون کار ایران محاسبه می‌کند:
- *   سنوات = (تعداد سال‌های کامل سابقه) × (نرخ ماهانه سال جاری)
+ *   سنوات = نرخ روزانه مصوب همان سال × تعداد روزهای ماه
+ * داشتن حداقل یک سال سابقه، شرط برخورداری است؛ مبلغ پایه سنوات به تعداد سال‌های سابقه ضرب نمی‌شود.
  *
  * نکته: نرخ ماهانه بستگی به تعداد روزهای ماه شمسی دارد (۳۰ یا ۳۱ روز).
  */
@@ -106,7 +117,7 @@ export const calcMonthlySeniorityPay = (
 ): number => {
   if (yearsOfService < 1) return 0;
   const monthlyRate = daysInMonth >= 31 ? rate.monthly_rate_31day_rials : rate.monthly_rate_30day_rials;
-  return yearsOfService * monthlyRate;
+  return monthlyRate;
 };
 
 /**

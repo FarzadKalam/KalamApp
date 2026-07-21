@@ -36,7 +36,7 @@ describe('operationalFinancialOverview', () => {
     );
   });
 
-  it('keeps only payroll and advance cash-bank operations in employee financial overview', () => {
+  it('keeps every operation linked to an employee in the shared financial overview', () => {
     expect(isEmployeeFinancialOverviewOperation({
       payroll_slip_id: 'pay-1',
       operation_type: 'payment',
@@ -50,7 +50,12 @@ describe('operationalFinancialOverview', () => {
     expect(isEmployeeFinancialOverviewOperation({
       employee_id: 'emp-1',
       operation_type: 'payment',
-    })).toBe(false);
+    })).toBe(true);
+
+    expect(isEmployeeFinancialOverviewOperation({
+      expense_document_id: 'expense-1',
+      operation_type: 'payment',
+    })).toBe(true);
 
     expect(isEmployeeFinancialOverviewOperation({
       metadata: { source_table: 'employee_advances' },

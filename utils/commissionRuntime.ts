@@ -134,10 +134,9 @@ export type CommissionDraftRow = {
 };
 
 const APPROVED_STATUSES = new Set(['confirmed', 'final', 'settled', 'completed']);
-const SETTLED_STATUSES = new Set(['settled', 'completed']);
-const PREPAYMENT_STATUSES = new Set(['prepayment', 'partially_paid', 'partial_paid']);
-const FINAL_PAYMENT_STATUSES = new Set(['approved', 'paid', 'posted', 'settled', 'completed', 'received', 'cleared']);
-const COLLECTED_CHEQUE_STATUSES = new Set(['cleared', 'collected', 'cashed', 'settled', 'completed', 'passed']);
+const FINAL_PAYMENT_STATUSES = new Set(['approved', 'paid', 'posted', 'settled', 'completed', 'received', 'cleared', 'done']);
+// «paid» در وضعیت خود چک، یعنی چک دریافت‌شده در یک پرداخت معتبر خرج شده است.
+const COLLECTED_CHEQUE_STATUSES = new Set(['cleared', 'collected', 'cashed', 'settled', 'completed', 'passed', 'paid']);
 const FAILED_CHEQUE_STATUSES = new Set(['bounced', 'returned', 'rejected', 'failed', 'canceled', 'cancelled']);
 
 const toNumber = (value: unknown) => {
@@ -197,19 +196,6 @@ const resolvePaymentAmount = (payment: any) => {
   return amount > 0 ? amount : 0;
 };
 
-const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
-  const directAmount = toNumber(invoice.total_received_amount);
-  if (directAmount > 0) return directAmount;
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  return payments.reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
-};
-
-const hasAnyFinalPayment = (invoice: CommissionInvoiceRecord) => {
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  if (payments.some((payment) => isFinalPayment(payment) && resolvePaymentAmount(payment) > 0)) return true;
-  return toNumber(invoice.total_received_amount) > 0;
-};
-
 const isFinalPayment = (payment: any) =>
   FINAL_PAYMENT_STATUSES.has(normalizeText(payment?.status).toLowerCase());
 
@@ -223,6 +209,24 @@ const isCollectedChequePayment = (payment: any) => {
 
 const isChequePayment = (payment: any) =>
   normalizeText(payment?.payment_type).toLowerCase() === 'cheque';
+
+/**
+ * تنها دریافتی‌های قطعی وارد محاسبه پورسانت می‌شوند. همه روش‌های غیرچکی
+ * (نقد، آنلاین، اعتباری، تهاتر و ...) در صورت نهایی بودن معتبرند؛ چک نیز
+ * باید علاوه بر نهایی بودن، وصول یا خرج‌شده باشد.
+ */
+const isValidReceiptPayment = (payment: any) =>
+  isFinalPayment(payment) && (!isChequePayment(payment) || isCollectedChequePayment(payment));
+
+const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
+  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+  const datedValidReceipts = payments
+    .filter((payment) => isValidReceiptPayment(payment))
+    .reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
+  // برای داده‌های قدیمی که هنوز سطر پرداخت ندارند، مقدار موجود فقط نمایشی است
+  // و هرگز مبنای ایجاد پورسانت نخواهد بود.
+  return datedValidReceipts > 0 ? datedValidReceipts : toNumber(invoice.total_received_amount);
+};
 
 const buildInvoiceItemKey = (invoiceId: string, item: any, index: number) => {
   const directId = normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid);
@@ -265,54 +269,30 @@ const findLatestPaymentDate = (payments: any[], filter: (payment: any) => boolea
   return latest ? new Date(latest).toISOString() : null;
 };
 
+const resolveFullSettlementAt = (
+  payments: any[],
+  invoiceTotal: number,
+  calculationEnd: string,
+) => {
+  const end = parseDateTime(`${calculationEnd}T23:59:59.999`);
+  if (end === null) return null;
+
+  const validPayments = payments
+    .filter((payment) => isValidReceiptPayment(payment) && resolvePaymentAmount(payment) > 0)
+    .map((payment) => ({ payment, at: parseDateTime(paymentDate(payment)) }))
+    .filter((entry): entry is { payment: any; at: number } => entry.at !== null && entry.at <= end)
+    .sort((left, right) => left.at - right.at);
+
+  let receivedAmount = 0;
+  for (const entry of validPayments) {
+    receivedAmount += resolvePaymentAmount(entry.payment);
+    if (receivedAmount >= invoiceTotal) return new Date(entry.at).toISOString();
+  }
+  return null;
+};
+
 const resolveInvoiceApprovalDate = (invoice: CommissionInvoiceRecord) =>
   normalizeText(invoice.approved_at || invoice.completed_at || invoice.updated_at || invoice.invoice_date) || null;
-
-const resolveInvoiceSettlementDate = (invoice: CommissionInvoiceRecord) => {
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  return normalizeText(
-    invoice.settled_at
-    || invoice.completed_at
-    || findLatestPaymentDate(payments, (payment) => isFinalPayment(payment))
-    || invoice.updated_at
-    || invoice.invoice_date,
-  ) || null;
-};
-
-const resolveInvoiceFullCollectionDate = (invoice: CommissionInvoiceRecord) => {
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  return normalizeText(
-    findLatestPaymentDate(
-      payments,
-      (payment) => isFinalPayment(payment) && (!isChequePayment(payment) || isCollectedChequePayment(payment)),
-    )
-    || invoice.completed_at
-    || invoice.settled_at
-    || invoice.updated_at
-    || invoice.invoice_date,
-  ) || null;
-};
-
-const hasOutstandingCheque = (invoice: CommissionInvoiceRecord) => {
-  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  return payments.some((payment) => isChequePayment(payment) && isFinalPayment(payment) && !isCollectedChequePayment(payment));
-};
-
-const isInvoiceFullySettled = (
-  invoice: CommissionInvoiceRecord,
-  invoiceTotal: number,
-  payments: any[],
-) => {
-  const status = normalizeText(invoice.status).toLowerCase();
-  const hasRemainingBalance = invoice.remaining_balance !== null
-    && invoice.remaining_balance !== undefined
-    && normalizeText(invoice.remaining_balance) !== '';
-  const receivedAmount = resolveInvoiceReceivedAmount(invoice);
-
-  if (hasRemainingBalance) return toNumber(invoice.remaining_balance) <= 0;
-  if (receivedAmount > 0) return receivedAmount >= invoiceTotal;
-  return SETTLED_STATUSES.has(status) && payments.length === 0;
-};
 
 const getInvoiceEvent = (
   invoice: CommissionInvoiceRecord,
@@ -332,7 +312,6 @@ const getInvoiceEvent = (
 
   const status = normalizeText(invoice.status).toLowerCase();
   const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
-  const fullySettled = isInvoiceFullySettled(invoice, invoiceTotal, payments);
 
   if (basis === 'approved_invoices') {
     const approvedAt = resolveInvoiceApprovalDate(invoice);
@@ -353,12 +332,8 @@ const getInvoiceEvent = (
   }
 
   if (basis === 'settled_invoices') {
-    const settledAt = resolveInvoiceSettlementDate(invoice);
-    const isRelevantPeriodInvoice = isInPeriod(invoice.invoice_date, periodStart, periodEnd);
-    const isSettledInPeriod = isInPeriod(settledAt, periodStart, periodEnd);
-    const isPeriodInvoiceSettledByCalculationEnd = isRelevantPeriodInvoice
-      && hasAnyFinalPayment(invoice);
-    if (!fullySettled || (!isSettledInPeriod && !isPeriodInvoiceSettledByCalculationEnd)) {
+    const settledAt = resolveFullSettlementAt(payments, invoiceTotal, periodEnd);
+    if (!settledAt || !isInPeriod(settledAt, periodStart, periodEnd)) {
       return {
         eventType: 'invoice_settlement',
         eventAt: settledAt,
@@ -375,8 +350,8 @@ const getInvoiceEvent = (
   }
 
   if (basis === 'full_settlement_only') {
-    const collectedAt = resolveInvoiceFullCollectionDate(invoice);
-    if (!fullySettled || hasOutstandingCheque(invoice) || !isInPeriod(collectedAt, periodStart, periodEnd)) {
+    const collectedAt = resolveFullSettlementAt(payments, invoiceTotal, periodEnd);
+    if (!collectedAt || !isInPeriod(collectedAt, periodStart, periodEnd)) {
       return {
         eventType: 'full_collection',
         eventAt: collectedAt,
@@ -397,21 +372,13 @@ const getInvoiceEvent = (
       payments,
       periodStart,
       periodEnd,
-      (payment) => isFinalPayment(payment),
+      isValidReceiptPayment,
     );
     if (paidAmount > 0) {
       return {
         eventType: 'payment_collection',
-        eventAt: findLatestPaymentDate(payments, (payment) => isFinalPayment(payment) && isInPeriod(paymentDate(payment), periodStart, periodEnd)),
+        eventAt: findLatestPaymentDate(payments, (payment) => isValidReceiptPayment(payment) && isInPeriod(paymentDate(payment), periodStart, periodEnd)),
         poolAmount: clamp(paidAmount, 0, invoiceTotal),
-        exclusionReason: null,
-      };
-    }
-    if (PREPAYMENT_STATUSES.has(status) && toNumber(invoice.total_received_amount) > 0 && isInPeriod(invoice.invoice_date, periodStart, periodEnd)) {
-      return {
-        eventType: 'prepayment',
-        eventAt: invoice.invoice_date || null,
-        poolAmount: clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal),
         exclusionReason: null,
       };
     }
@@ -419,7 +386,7 @@ const getInvoiceEvent = (
       eventType: 'payment_collection',
       eventAt: null,
       poolAmount: 0,
-      exclusionReason: 'دریافت یا پیش‌پرداخت موثری در این بازه ثبت نشده است',
+      exclusionReason: 'دریافت معتبر با تاریخ ثبت‌شده در این بازه وجود ندارد',
     };
   }
 
@@ -428,13 +395,13 @@ const getInvoiceEvent = (
       payments,
       periodStart,
       periodEnd,
-      (payment) => isFinalPayment(payment) && isChequePayment(payment) && isCollectedChequePayment(payment),
+      (payment) => isValidReceiptPayment(payment) && isChequePayment(payment),
     );
     const nonChequePaidAmount = sumPaymentsInPeriod(
       payments,
       periodStart,
       periodEnd,
-      (payment) => isFinalPayment(payment) && !isChequePayment(payment),
+      (payment) => isValidReceiptPayment(payment) && !isChequePayment(payment),
     );
     const poolAmount = clamp(collectedChequeAmount + nonChequePaidAmount, 0, invoiceTotal);
     if (poolAmount > 0) {
@@ -443,18 +410,9 @@ const getInvoiceEvent = (
         eventAt: findLatestPaymentDate(
           payments,
           (payment) => isInPeriod(paymentDate(payment), periodStart, periodEnd)
-            && isFinalPayment(payment)
-            && (!isChequePayment(payment) || isCollectedChequePayment(payment)),
+            && isValidReceiptPayment(payment),
         ),
         poolAmount,
-        exclusionReason: null,
-      };
-    }
-    if (PREPAYMENT_STATUSES.has(status) && toNumber(invoice.total_received_amount) > 0 && isInPeriod(invoice.invoice_date, periodStart, periodEnd)) {
-      return {
-        eventType: 'prepayment',
-        eventAt: invoice.invoice_date || null,
-        poolAmount: clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal),
         exclusionReason: null,
       };
     }
@@ -470,13 +428,13 @@ const getInvoiceEvent = (
     payments,
     periodStart,
     periodEnd,
-    (payment) => isFinalPayment(payment) && isChequePayment(payment) && isCollectedChequePayment(payment),
+    (payment) => isValidReceiptPayment(payment) && isChequePayment(payment),
   );
   const nonChequePaidAmount = sumPaymentsInPeriod(
     payments,
     periodStart,
     periodEnd,
-    (payment) => isFinalPayment(payment) && !isChequePayment(payment),
+    (payment) => isValidReceiptPayment(payment) && !isChequePayment(payment),
   );
   const poolAmount = clamp(clearedChequeAmount + nonChequePaidAmount, 0, invoiceTotal);
   if (poolAmount <= 0) {
@@ -492,8 +450,7 @@ const getInvoiceEvent = (
     eventAt: findLatestPaymentDate(
       payments,
       (payment) => isInPeriod(paymentDate(payment), periodStart, periodEnd)
-        && isFinalPayment(payment)
-        && (!isChequePayment(payment) || isCollectedChequePayment(payment)),
+        && isValidReceiptPayment(payment),
     ),
     poolAmount,
     exclusionReason: null,
