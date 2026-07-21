@@ -169,6 +169,49 @@ describe('conditionalFieldRules', () => {
     expect(settings.rules[0]?.conditions_all?.[0]?.operator).toBe('eq');
   });
 
+  it('applies both equals and not-equals visibility rules to a survey field', () => {
+    const fields: ModuleField[] = [
+      {
+        key: 'status',
+        type: FieldType.STATUS,
+        labels: { fa: 'وضعیت', en: 'Status' },
+        options: [{ label: 'بررسی شد', value: 'reviewed' }, { label: 'بسته شده', value: 'closed' }],
+      } as ModuleField,
+      {
+        key: 'comments',
+        type: FieldType.LONG_TEXT,
+        labels: { fa: 'نظر و توضیحات', en: 'Comments' },
+      } as ModuleField,
+    ];
+    const settings = normalizeConditionalFieldSettings({
+      rules: [
+        {
+          id: 'survey-comments-show-reviewed',
+          targetFieldKey: 'comments',
+          source: 'user',
+          enabled: true,
+          priority: 100,
+          conditions_all: [{ id: 'status-reviewed', field: 'status', operator: 'equals', value: 'reviewed' }],
+          conditions_any: [],
+          effect: { showField: true },
+        },
+        {
+          id: 'survey-comments-hide-not-reviewed',
+          targetFieldKey: 'comments',
+          source: 'user',
+          enabled: true,
+          priority: 90,
+          conditions_all: [{ id: 'status-not-reviewed', field: 'status', operator: 'not_equals', value: 'reviewed' }],
+          conditions_any: [],
+          effect: { showField: false },
+        },
+      ],
+    });
+
+    expect(resolveConditionalFieldState(fields[1], { status: 'reviewed' }, settings, fields).visible).toBe(true);
+    expect(resolveConditionalFieldState(fields[1], { status: 'closed' }, settings, fields).visible).toBe(false);
+  });
+
   it('keeps dataset columns only when a field is visible for at least one record', () => {
     const fields: ModuleField[] = [
       {
