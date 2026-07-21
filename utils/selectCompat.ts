@@ -13,6 +13,13 @@ type IncompatibleColumnCacheEntry = {
 
 const incompatibleColumnCache = new Map<string, IncompatibleColumnCacheEntry>();
 
+// بعضی lookupها (مانند نام رکوردهای مرتبط در جدول‌ها) صرفاً برای نمایش عنوان
+// هستند. اگر schema قدیمی یک ستون اختیاری نداشته باشد، PostgREST فقط همان
+// ستون اول را گزارش می‌کند و حذف یکی‌یکی ستون‌ها یک زنجیرهٔ بلند از 400ها
+// می‌سازد. این cache آخرین projection موفق را نگه می‌دارد؛ فقط نام ستون‌ها
+// ذخیره می‌شوند و هیچ داده‌ای میان سازمان‌ها به اشتراک گذاشته نمی‌شود.
+const compatibleProjectionCache = new Map<string, IncompatibleColumnCacheEntry>();
+
 const TEXTUAL_FIELD_TYPES = new Set<FieldType>([
   FieldType.TEXT,
   FieldType.LONG_TEXT,
@@ -173,6 +180,33 @@ const buildFallbackColumnSet = (columns: string[]) => {
   return next.length > 0 ? next : ['id'];
 };
 
+const buildCompactDisplayColumnSet = (columns: string[]) => {
+  const normalizedColumns = normalizeColumns(columns);
+  const titlePriority = [
+    'name',
+    'full_name',
+    'business_name',
+    'legal_name',
+    'title',
+    'first_name',
+    'last_name',
+    'subject',
+    'system_code',
+    'manual_code',
+    'code',
+    'bundle_number',
+    'shelf_number',
+    'order_number',
+    'invoice_number',
+    'entry_no',
+    'description',
+    'notes',
+  ];
+  const preferredTitleColumn = titlePriority.find((column) => normalizedColumns.includes(column));
+  const fallbackTitleColumn = normalizedColumns.find((column) => column !== 'id');
+  return normalizeColumns(['id', preferredTitleColumn || fallbackTitleColumn || 'id']);
+};
+
 const collectPatternMatches = (text: string, pattern: RegExp) => {
   const values: string[] = [];
   for (const match of text.matchAll(pattern)) {
@@ -261,6 +295,29 @@ const rememberIncompatibleColumns = (cacheKey: string, columns: string[]) => {
   });
 };
 
+const getCachedCompatibleProjection = (cacheKey: string, requestedColumns: string[]) => {
+  const cached = compatibleProjectionCache.get(cacheKey);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    compatibleProjectionCache.delete(cacheKey);
+    return null;
+  }
+
+  const requested = new Set(requestedColumns.map((column) => column.toLowerCase()));
+  const projection = Array.from(cached.columns)
+    .filter((column) => requested.has(column.toLowerCase()));
+  return projection.includes('id') ? projection : null;
+};
+
+const rememberCompatibleProjection = (cacheKey: string, columns: string[]) => {
+  const projection = normalizeColumns(columns);
+  if (!projection.includes('id')) return;
+  compatibleProjectionCache.set(cacheKey, {
+    columns: new Set(projection),
+    expiresAt: Date.now() + INCOMPATIBLE_COLUMN_CACHE_TTL_MS,
+  });
+};
+
 type CompatResult<T> = {
   data: T | null;
   error: any;
@@ -288,6 +345,7 @@ export const runSelectWithCompatibleColumns = async <T>({
   columns,
   execute,
   fallbackToWildcard = false,
+  preferCompactProjectionAfterMissingColumn = false,
 }: {
   cacheKey: string;
   columns: readonly string[];
@@ -297,12 +355,22 @@ export const runSelectWithCompatibleColumns = async <T>({
    * schema واقعی می‌خواند تا یک ستون جدید/قدیمی کل صفحه را خالی نکند.
    */
   fallbackToWildcard?: boolean;
+  /**
+   * برای lookupهای صرفاً نمایشی: بعد از اولین خطای ستون، به یک projection
+   * کوچک و عنوان‌محور برگرد تا پاسخ‌های 400 پشت سر هم، صفحه یا جدول را کند
+   * و ظاهراً خالی نکنند.
+   */
+  preferCompactProjectionAfterMissingColumn?: boolean;
 }): Promise<CompatResult<T>> => {
   const normalizedColumns = applyCacheKeyColumnExclusions(cacheKey, normalizeColumns(columns));
   const cachedIncompatibleColumns = getCachedIncompatibleColumns(cacheKey);
-  const initialColumns = normalizedColumns.filter(
+  const uncachedInitialColumns = normalizedColumns.filter(
     (column) => column === 'id' || !cachedIncompatibleColumns.has(column.toLowerCase())
   );
+  const cachedProjection = preferCompactProjectionAfterMissingColumn
+    ? getCachedCompatibleProjection(cacheKey, normalizedColumns)
+    : null;
+  const initialColumns = cachedProjection || uncachedInitialColumns;
   const candidateSets: string[][] = [initialColumns.length > 0 ? initialColumns : ['id']];
 
   let lastData: T | null = null;
@@ -326,6 +394,9 @@ export const runSelectWithCompatibleColumns = async <T>({
     lastError = result.error;
 
     if (!result.error) {
+      if (preferCompactProjectionAfterMissingColumn) {
+        rememberCompatibleProjection(cacheKey, activeColumns);
+      }
       return {
         data: result.data,
         error: null,
@@ -342,7 +413,10 @@ export const runSelectWithCompatibleColumns = async <T>({
       candidateSets.unshift(['*']);
       continue;
     }
-    const nextColumns = pruneColumns(activeColumns, result.error);
+    const prunedColumns = pruneColumns(activeColumns, result.error);
+    const nextColumns = preferCompactProjectionAfterMissingColumn && prunedColumns
+      ? buildCompactDisplayColumnSet(prunedColumns)
+      : prunedColumns;
     if (!nextColumns || nextColumns.length === 0) {
       break;
     }
@@ -502,12 +576,14 @@ export const selectByIdsWithCompatibleColumns = async <T>({
   ids,
   batchSize = 80,
   execute,
+  preferCompactProjectionAfterMissingColumn = false,
 }: {
   cacheKey: string;
   columns: readonly string[];
   ids: readonly string[];
   batchSize?: number;
   execute: (selectExpr: string, idBatch: string[]) => PromiseLike<{ data: T[] | null; error: any }>;
+  preferCompactProjectionAfterMissingColumn?: boolean;
 }): Promise<CompatBatchResult<T>> => {
   const normalizedIds = Array.from(
     new Set(
@@ -531,6 +607,7 @@ export const selectByIdsWithCompatibleColumns = async <T>({
     const result = await runSelectWithCompatibleColumns<T[]>({
       cacheKey,
       columns,
+      preferCompactProjectionAfterMissingColumn,
       execute: (selectExpr) => execute(selectExpr, idBatch),
     });
     lastSelectedColumns = result.selectedColumns;

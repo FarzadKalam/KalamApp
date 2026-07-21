@@ -1,4 +1,4 @@
-import { ModuleNature, type ModuleDefinition } from '../types';
+import { BlockType, ModuleNature, type ModuleDefinition } from '../types';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
 import { shouldSkipModuleListField } from './moduleListFieldSelection';
 
@@ -26,6 +26,12 @@ const PROCESS_DRAFT_FIELD_KEYS = new Set([
 const isSelectableColumnKey = (value: unknown) => {
   const key = String(value || '').trim();
   return Boolean(key && !key.startsWith('__') && !key.includes('.') && !key.includes('(') && !key.includes(')'));
+};
+
+const isStoredTableBlock = (block: any) => {
+  if (block?.externalDataConfig) return false;
+  const type = String(block?.type || '').trim();
+  return type === BlockType.TABLE || type === BlockType.GRID_TABLE;
 };
 
 export const isDeferredProcessDraftField = (field: any) => (
@@ -61,6 +67,18 @@ export const buildModuleRecordProjection = (moduleConfig?: ModuleDefinition | nu
       return;
     }
     initial.add(key);
+  });
+
+  // بعضی ماژول‌ها مانند لیست قیمت و پکیج، دادهٔ جدول داخلی را به‌صورت JSON
+  // با نام block نگه می‌دارند و برای آن field جداگانه‌ای ندارند. projection
+  // باید این ستون‌ها را هم بگیرد؛ در غیر این صورت خودِ رکورد باز می‌شود اما
+  // جدولش اشتباهاً خالی دیده می‌شود. blockهای external منبع مستقل دارند و
+  // عمداً از این query کنار گذاشته می‌شوند.
+  (moduleConfig.blocks || []).forEach((block: any) => {
+    const key = String(block?.id || '').trim();
+    if (isStoredTableBlock(block) && isSelectableColumnKey(key)) {
+      initial.add(key);
+    }
   });
 
   return {

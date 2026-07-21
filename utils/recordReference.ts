@@ -63,6 +63,10 @@ export const fetchRecordReferenceLabels = async (
         columns: buildRecordTitleSelectColumns(moduleId),
         ids,
         batchSize,
+        // عنوان رکوردِ مرتبط فقط برای نمایش است. در schemaهای قدیمی، به‌جای
+        // حذف‌کردن ستون‌ها یکی‌یکی و ایجاد ده‌ها درخواست 400، اولین projection
+        // سازگار و عنوان‌محور برای همان جدول cache می‌شود.
+        preferCompactProjectionAfterMissingColumn: true,
         execute: (selectExpr, idBatch) =>
           supabaseClient
             .from(table)

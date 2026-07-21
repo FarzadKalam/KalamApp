@@ -44,6 +44,11 @@ const isUuidLike = (value: string): boolean => UUID_REGEX.test(value);
 export const getRecordTitleCandidateKeys = (moduleConfig?: ModuleDefinition): string[] => {
   if (!moduleConfig?.fields?.length) return STATIC_TITLE_KEYS;
 
+  const configuredKeys = new Set(
+    moduleConfig.fields
+      .map((field) => String(field?.key || '').trim())
+      .filter(Boolean),
+  );
   const keyFields = moduleConfig.fields.filter((f) => f.isKey).map((f) => f.key);
   const textLikeFields = moduleConfig.fields
     .filter(
@@ -55,7 +60,14 @@ export const getRecordTitleCandidateKeys = (moduleConfig?: ModuleDefinition): st
     )
     .map((f) => f.key);
 
-  return unique([...keyFields, ...STATIC_TITLE_KEYS, ...textLikeFields]);
+  // برای ماژول شناخته‌شده، عنوان فقط از فیلدهای همان ماژول خوانده می‌شود.
+  // این قرارداد با resolverهای query همسو است و از فرض‌کردن ستون‌هایی مانند
+  // title یا business_name برای همهٔ جدول‌ها جلوگیری می‌کند.
+  return unique([
+    ...keyFields,
+    ...STATIC_TITLE_KEYS.filter((key) => configuredKeys.has(key)),
+    ...textLikeFields,
+  ]);
 };
 
 export const getRecordTitle = (

@@ -32,4 +32,19 @@ describe('module record projection', () => {
 
     expect(projection).toEqual({ initialColumns: ['*'], deferredProcessDraftColumns: [] });
   });
+
+  it('includes stored table blocks even when they have no matching field definition', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'price_lists',
+      table: 'price_lists',
+      fields: [{ key: 'name', type: FieldType.TEXT }],
+      blocks: [
+        { id: 'items', type: 'table' },
+        { id: 'warehouse_shelves', type: 'table', externalDataConfig: { targetModule: 'shelves' } },
+      ],
+    } as any);
+
+    expect(projection.initialColumns).toContain('items');
+    expect(projection.initialColumns).not.toContain('warehouse_shelves');
+  });
 });

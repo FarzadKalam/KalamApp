@@ -416,8 +416,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     let options = relationOptions[specificKey] || relationOptions.product_id || [];
     const selectedId = String(record?.product_id || '').trim();
     if (selectedId && !options.some((opt: any) => String(opt?.value || '').trim() === selectedId)) {
-      const fallbackLabel = String(record?.package_name || record?.selected_product_name || record?.product_name || selectedId).trim();
-      options = [...options, { value: selectedId, label: fallbackLabel || selectedId }];
+      const fallbackLabel = String(record?.package_name || record?.selected_product_name || record?.product_name || 'کالای مرتبط').trim();
+      options = [...options, { value: selectedId, label: fallbackLabel || 'کالای مرتبط' }];
     }
     return options;
   };
@@ -426,8 +426,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     let options = relationOptions[specificKey] || relationOptions.product_id || [];
     const selectedId = String(record?.product_id || '').trim();
     if (selectedId && !options.some((opt: any) => String(opt?.value || '').trim() === selectedId)) {
-      const fallbackLabel = String(record?.selected_product_name || record?.product_name || selectedId).trim();
-      options = [...options, { value: selectedId, label: fallbackLabel || selectedId }];
+      const fallbackLabel = String(record?.selected_product_name || record?.product_name || 'کالای مرتبط').trim();
+      options = [...options, { value: selectedId, label: fallbackLabel || 'کالای مرتبط' }];
     }
     return options;
   };

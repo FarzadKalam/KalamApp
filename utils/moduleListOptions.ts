@@ -449,14 +449,17 @@ export const hydrateModuleListRelationOptionsForRows = async (
     const merged = new Map<string, any>();
     entries.forEach((entry) => {
       const referenceKey = buildRecordReferenceKey(entry.moduleId, entry.recordId);
-      const label = String(labelMap[referenceKey] || entry.recordId).trim();
+      // اگر lookup عنوان به‌علت schema قدیمی هنوز پاسخ نداد، شناسهٔ فنی را
+      // هرگز وارد UI نکن. ردیف اصلی همچنان نمایش داده می‌شود و با دریافت
+      // عنوان در retry بعدی، گزینه نیز به‌روز خواهد شد.
+      const label = String(labelMap[referenceKey] || 'رکورد مرتبط').trim();
       const optionKey = `${entry.moduleId}:${entry.recordId}`;
       if (!merged.has(optionKey)) {
         merged.set(optionKey, {
           label,
           value: entry.recordId,
           module: entry.moduleId,
-          searchText: `${label} ${String(entry.recordId || '').toLowerCase()}`.trim(),
+          searchText: label.toLowerCase(),
         });
       }
     });

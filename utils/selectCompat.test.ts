@@ -117,6 +117,55 @@ describe('runSelectWithCompatibleColumns', () => {
       '*',
     ]);
   });
+
+  it('uses and remembers a compact display projection after the first missing title column', async () => {
+    const cacheKey = `record-reference:projects:${Date.now()}`;
+    const initialAttempts: string[] = [];
+    const columns = [
+      'id',
+      'name',
+      'title',
+      'business_name',
+      'full_name',
+      'system_code',
+      'description',
+    ];
+
+    const firstResult = await runSelectWithCompatibleColumns({
+      cacheKey,
+      columns,
+      preferCompactProjectionAfterMissingColumn: true,
+      execute: async (selectExpr) => {
+        initialAttempts.push(selectExpr);
+        if (selectExpr.includes('title')) {
+          return {
+            data: null,
+            error: { code: 'PGRST204', message: "Could not find the 'title' column" },
+          };
+        }
+        return { data: [{ id: 'project-1', name: 'پروژه نمونه' }], error: null };
+      },
+    });
+
+    expect(firstResult.error).toBeNull();
+    expect(initialAttempts).toEqual([
+      'id,name,title,business_name,full_name,system_code,description',
+      'id,name',
+    ]);
+
+    const cachedAttempts: string[] = [];
+    await runSelectWithCompatibleColumns({
+      cacheKey,
+      columns,
+      preferCompactProjectionAfterMissingColumn: true,
+      execute: async (selectExpr) => {
+        cachedAttempts.push(selectExpr);
+        return { data: [{ id: 'project-2', name: 'پروژه دوم' }], error: null };
+      },
+    });
+
+    expect(cachedAttempts).toEqual(['id,name']);
+  });
 });
 
 describe('createSchemaCompatibleDataProvider', () => {
