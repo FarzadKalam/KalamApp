@@ -43,7 +43,7 @@ import {
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
-import { buildImagePreviewUrl, buildPrintImageUrl, isPrintImageTransformEnabled } from '../imagePreview';
+import { buildImagePreviewUrl, buildPrintImageUrl, getImagePreviewCandidates, isPrintImageTransformEnabled } from '../imagePreview';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
@@ -935,7 +935,7 @@ export const usePrintManager = ({
     [data, recordImageField]
   );
   const recordCardImageUrl = useMemo(
-    () => buildImagePreviewUrl(recordImageUrl, 'card', { forceTransform: isPrintImageTransformEnabled() }),
+    () => getImagePreviewCandidates(recordImageUrl, 'card', { forceTransform: isPrintImageTransformEnabled() }).at(-1) || '',
     [recordImageUrl]
   );
   const recordHeroImageUrl = useMemo(
