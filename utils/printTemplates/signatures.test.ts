@@ -37,9 +37,9 @@ describe('print signatures', () => {
   it('materializes dynamic rows from current context', () => {
     const states = materializePrintSignatureStates({
       configs: [
-        { id: 'ceo', kind: 'ceo', automatic: true },
-        { id: 'current', kind: 'current_user', automatic: true, signerModule: 'profiles', signerId: 'user-current' },
-        { id: 'customer', kind: 'record_relation', automatic: true, signerModule: 'customers', sourceFieldKey: 'customer_id', sourceFieldLabel: 'خریدار' },
+        { id: 'ceo', kind: 'ceo', enabled: true, automatic: true },
+        { id: 'current', kind: 'current_user', enabled: true, automatic: true, signerModule: 'profiles', signerId: 'user-current' },
+        { id: 'customer', kind: 'record_relation', enabled: true, automatic: true, signerModule: 'customers', sourceFieldKey: 'customer_id', sourceFieldLabel: 'خریدار' },
       ],
       scope: 'record',
       moduleConfig: {
@@ -74,7 +74,7 @@ describe('print signatures', () => {
 
   it('hides ceo rows when the role permission is disabled', () => {
     const states = materializePrintSignatureStates({
-      configs: [{ id: 'ceo', kind: 'ceo', automatic: false, nameOverride: 'مدیر نمونه', subtitleOverride: 'امضای مدیرمسئول' }],
+      configs: [{ id: 'ceo', kind: 'ceo', enabled: true, automatic: false, nameOverride: 'مدیر نمونه', subtitleOverride: 'امضای مدیرمسئول' }],
       scope: 'record',
       moduleConfig: { fields: [] },
       companyInfo: { ceo_name: 'مدیر نمونه', manager_title: 'مدیرمسئول', signature_image_url: 'https://cdn.example.com/signature.png' },
@@ -102,6 +102,7 @@ describe('print signatures', () => {
       {
         id: '1',
         kind: 'manual',
+        enabled: true,
         automatic: false,
         signerModule: null,
         signerId: null,
@@ -120,6 +121,7 @@ describe('print signatures', () => {
       {
         id: '2',
         kind: 'manual',
+        enabled: true,
         automatic: false,
         signerModule: null,
         signerId: null,
@@ -141,5 +143,25 @@ describe('print signatures', () => {
     expect(html).toContain('نام دوم');
     expect(html).toContain('signature.png');
     expect(html).toContain('stamp.png');
+  });
+
+  it('does not render the signature band when every signature is disabled', () => {
+    const states = materializePrintSignatureStates({
+      configs: [
+        {
+          id: 'manual-disabled',
+          kind: 'manual',
+          enabled: false,
+          automatic: false,
+          nameOverride: 'نام پنهان',
+          subtitleOverride: 'امضای پنهان',
+        },
+      ],
+      scope: 'record',
+      moduleConfig: { fields: [] },
+    });
+
+    expect(states[0].enabled).toBe(false);
+    expect(buildPrintSignatureBandHtml(states)).toBe('');
   });
 });

@@ -17,6 +17,7 @@ type PrintSignatureConfiguratorProps = {
   onAddRow: (kind: PrintSignatureKind) => void;
   onRemoveRow: (rowId: string) => void;
   onMoveRow: (rowId: string, direction: 'up' | 'down') => void;
+  onToggleEnabled: (rowId: string, enabled: boolean) => void;
   onToggleAutomatic: (rowId: string, automatic: boolean) => void;
   onChangeName: (rowId: string, value: string) => void;
   onChangeSubtitle: (rowId: string, value: string) => void;
@@ -61,6 +62,7 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
   onAddRow,
   onRemoveRow,
   onMoveRow,
+  onToggleEnabled,
   onToggleAutomatic,
   onChangeName,
   onChangeSubtitle,
@@ -100,7 +102,8 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
                   <span className="print-signature-card-index">{index + 1}</span>
                   <Tag color={row.automatic ? 'blue' : 'default'}>{getSourceTag(row)}</Tag>
                   {row.sourceDescription ? <span className="print-signature-card-source">{row.sourceDescription}</span> : null}
-                  {row.unresolved ? <Tag color="orange">بدون مقدار</Tag> : null}
+                  {!row.enabled ? <Tag>غیرفعال</Tag> : null}
+                  {row.enabled && row.unresolved ? <Tag color="orange">بدون مقدار</Tag> : null}
                 </div>
                 <div className="print-signature-card-actions">
                   <Button size="small" icon={<UpOutlined />} disabled={index === 0} onClick={() => onMoveRow(row.id, 'up')} />
@@ -111,12 +114,19 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
 
               <div className="print-signature-card-body">
                 <div className="print-signature-auto-row">
-                  <Checkbox checked={row.automatic} onChange={(event) => onToggleAutomatic(row.id, event.target.checked)}>
+                  <Checkbox checked={row.enabled} onChange={(event) => onToggleEnabled(row.id, event.target.checked)}>
+                    نمایش امضا
+                  </Checkbox>
+                  <Checkbox
+                    checked={row.automatic}
+                    disabled={!row.enabled}
+                    onChange={(event) => onToggleAutomatic(row.id, event.target.checked)}
+                  >
                     خودکار
                   </Checkbox>
                 </div>
 
-                {row.automatic && row.kind === 'selected_signer' ? (
+                {row.enabled && row.automatic && row.kind === 'selected_signer' ? (
                   <div className="print-signature-grid">
                     <div>
                       <div className="print-signature-label">نوع امضاکننده</div>
@@ -168,6 +178,7 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
                     <div className="print-signature-label">زیرنویس نام امضا کننده</div>
                     <Input
                       value={row.subtitleValue}
+                      disabled={!row.enabled}
                       onChange={(event) => onChangeSubtitle(row.id, event.target.value)}
                       placeholder="مثلاً: امضای مدیر سازمان"
                     />
@@ -176,6 +187,7 @@ const PrintSignatureConfigurator: React.FC<PrintSignatureConfiguratorProps> = ({
                     <div className="print-signature-label">نام امضا کننده</div>
                     <Input
                       value={row.nameValue}
+                      disabled={!row.enabled}
                       onChange={(event) => onChangeName(row.id, event.target.value)}
                       placeholder="نام و نام خانوادگی"
                     />

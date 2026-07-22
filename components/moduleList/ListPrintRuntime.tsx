@@ -75,6 +75,7 @@ const ListPrintRuntime: React.FC<ListPrintRuntimeProps> = ({
       onAddPrintSignatureRow={printManager.handleAddPrintSignatureRow}
       onRemovePrintSignatureRow={printManager.handleRemovePrintSignatureRow}
       onMovePrintSignatureRow={printManager.handleMovePrintSignatureRow}
+      onTogglePrintSignatureEnabled={printManager.handleTogglePrintSignatureEnabled}
       onTogglePrintSignatureAutomatic={printManager.handleTogglePrintSignatureAutomatic}
       onChangePrintSignatureName={printManager.handleChangePrintSignatureName}
       onChangePrintSignatureSubtitle={printManager.handleChangePrintSignatureSubtitle}

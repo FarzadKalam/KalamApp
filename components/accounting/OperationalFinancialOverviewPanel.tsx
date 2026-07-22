@@ -448,6 +448,7 @@ const OperationalFinancialOverviewPanel: React.FC<OperationalFinancialOverviewPa
         onAddPrintSignatureRow={listPrintManager.handleAddPrintSignatureRow}
         onRemovePrintSignatureRow={listPrintManager.handleRemovePrintSignatureRow}
         onMovePrintSignatureRow={listPrintManager.handleMovePrintSignatureRow}
+        onTogglePrintSignatureEnabled={listPrintManager.handleTogglePrintSignatureEnabled}
         onTogglePrintSignatureAutomatic={listPrintManager.handleTogglePrintSignatureAutomatic}
         onChangePrintSignatureName={listPrintManager.handleChangePrintSignatureName}
         onChangePrintSignatureSubtitle={listPrintManager.handleChangePrintSignatureSubtitle}

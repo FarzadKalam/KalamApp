@@ -489,17 +489,18 @@ export const useListPrintManager = ({
       const current = sanitizePrintSignatureConfigs(prev[selectedTemplateId] || []);
       const nextRow: PrintSignatureConfig =
         kind === 'manual'
-          ? { id: createPrintSignatureRowId(), kind: 'manual', automatic: false, nameOverride: '', subtitleOverride: '' }
+          ? { id: createPrintSignatureRowId(), kind: 'manual', enabled: true, automatic: false, nameOverride: '', subtitleOverride: '' }
           : kind === 'selected_signer'
             ? {
                 id: createPrintSignatureRowId(),
                 kind: 'selected_signer',
+                enabled: true,
                 automatic: true,
                 signerModule: 'customers',
                 signerId: null,
                 sourceFieldLabel: 'مشتری',
               }
-            : { id: createPrintSignatureRowId(), kind, automatic: true };
+            : { id: createPrintSignatureRowId(), kind, enabled: true, automatic: true };
       return {
         ...prev,
         [selectedTemplateId]: [...current, nextRow],
@@ -534,6 +535,10 @@ export const useListPrintManager = ({
 
   const handleTogglePrintSignatureAutomatic = useCallback((rowId: string, automatic: boolean) => {
     updatePrintSignatureConfig(rowId, (row) => ({ ...row, automatic }));
+  }, [updatePrintSignatureConfig]);
+
+  const handleTogglePrintSignatureEnabled = useCallback((rowId: string, enabled: boolean) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, enabled }));
   }, [updatePrintSignatureConfig]);
 
   const handleChangePrintSignatureName = useCallback((rowId: string, value: string) => {
@@ -1089,6 +1094,7 @@ export const useListPrintManager = ({
     handleAddPrintSignatureRow,
     handleRemovePrintSignatureRow,
     handleMovePrintSignatureRow,
+    handleTogglePrintSignatureEnabled,
     handleTogglePrintSignatureAutomatic,
     handleChangePrintSignatureName,
     handleChangePrintSignatureSubtitle,

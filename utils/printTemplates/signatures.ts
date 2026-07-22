@@ -15,6 +15,7 @@ export type PrintSignatureKind =
 export interface PrintSignatureConfig {
   id: string;
   kind: PrintSignatureKind;
+  enabled: boolean;
   automatic: boolean;
   signerModule?: PrintSignatureSignerModule | null;
   signerId?: string | null;
@@ -33,6 +34,7 @@ export interface PrintSignatureQuickAddOption {
 export interface PrintSignatureDerivedState {
   id: string;
   kind: PrintSignatureKind;
+  enabled: boolean;
   automatic: boolean;
   signerModule: PrintSignatureSignerModule | null;
   signerId: string | null;
@@ -242,6 +244,7 @@ const buildRelationDefaultConfigs = ({
     next.push({
       id: createPrintSignatureRowId(),
       kind: 'record_relation',
+      enabled: true,
       automatic: true,
       signerModule,
       sourceFieldKey: fieldKey,
@@ -286,6 +289,7 @@ export const sanitizePrintSignatureConfigs = (value: unknown): PrintSignatureCon
       return {
         id: normalizeText(item?.id) || createPrintSignatureRowId(),
         kind,
+        enabled: item?.enabled !== false,
         automatic,
         signerModule,
         signerId: normalizeNullableText(item?.signerId),
@@ -326,6 +330,7 @@ export const buildDefaultPrintSignatureConfigs = ({
     next.push({
       id: createPrintSignatureRowId(),
       kind: 'ceo',
+      enabled: true,
       automatic: true,
     });
   }
@@ -334,6 +339,7 @@ export const buildDefaultPrintSignatureConfigs = ({
     next.push({
       id: createPrintSignatureRowId(),
       kind: 'current_user',
+      enabled: true,
       automatic: true,
       signerModule: 'profiles',
       signerId: normalizeText(currentUserId),
@@ -344,6 +350,7 @@ export const buildDefaultPrintSignatureConfigs = ({
     next.push({
       id: createPrintSignatureRowId(),
       kind: 'record_assignee',
+      enabled: true,
       automatic: true,
       signerModule: 'profiles',
       sourceFieldKey: 'assignee_id',
@@ -401,7 +408,7 @@ export const materializePrintSignatureStates = ({
     let sourceDescription = '';
     const canRenderCeoSignature = config.kind !== 'ceo' || canUseCeoSignature;
 
-    if (config.automatic && canRenderCeoSignature) {
+    if (config.enabled && config.automatic && canRenderCeoSignature) {
       switch (config.kind) {
         case 'ceo': {
           const managerTitle = resolveManagerTitle(companyInfo);
@@ -472,20 +479,20 @@ export const materializePrintSignatureStates = ({
       }
     }
 
-    const signatureImageUrl = canRenderCeoSignature && config.kind === 'ceo'
+    const signatureImageUrl = config.enabled && canRenderCeoSignature && config.kind === 'ceo'
       ? normalizeNullableText(companyInfo?.signature_image_url)
       : null;
-    const stampImageUrl = canRenderCeoSignature && config.kind === 'ceo'
+    const stampImageUrl = config.enabled && canRenderCeoSignature && config.kind === 'ceo'
       ? normalizeNullableText(companyInfo?.stamp_image_url)
       : null;
     const showCompanyAssets = Boolean(signatureImageUrl || stampImageUrl);
 
-    const nameValue = !canRenderCeoSignature && config.kind === 'ceo'
+    const nameValue = !config.enabled || (!canRenderCeoSignature && config.kind === 'ceo')
       ? ''
       : config.automatic
         ? applyOverride(derivedName, config.nameOverride)
         : String(config.nameOverride ?? '');
-    const subtitleValue = !canRenderCeoSignature && config.kind === 'ceo'
+    const subtitleValue = !config.enabled || (!canRenderCeoSignature && config.kind === 'ceo')
       ? ''
       : config.automatic
         ? applyOverride(derivedSubtitle, config.subtitleOverride)
@@ -494,6 +501,7 @@ export const materializePrintSignatureStates = ({
     return {
       id: config.id,
       kind: config.kind,
+      enabled: config.enabled,
       automatic: config.automatic,
       signerModule: config.signerModule || null,
       signerId: resolvedSignerId,
@@ -508,7 +516,7 @@ export const materializePrintSignatureStates = ({
       showCompanyAssets,
       sourceDescription,
       unresolved:
-        (config.automatic && !normalizeText(derivedName) && !normalizeText(config.nameOverride)) ||
+        (config.enabled && config.automatic && !normalizeText(derivedName) && !normalizeText(config.nameOverride)) ||
         !canRenderCeoSignature,
     } satisfies PrintSignatureDerivedState;
   });
@@ -516,7 +524,7 @@ export const materializePrintSignatureStates = ({
 
 export const getPrintSignatureSectionHeightPx = (rows: PrintSignatureDerivedState[]) => {
   const resolvedRows = (rows || []).filter(
-    (row) => normalizeText(row?.nameValue) || normalizeText(row?.subtitleValue)
+    (row) => row?.enabled !== false && (normalizeText(row?.nameValue) || normalizeText(row?.subtitleValue))
   );
   if (resolvedRows.some((row) => row.showCompanyAssets)) {
     return PRINT_SIGNATURE_SECTION_WITH_COMPANY_ASSETS_HEIGHT_PX;
@@ -526,7 +534,7 @@ export const getPrintSignatureSectionHeightPx = (rows: PrintSignatureDerivedStat
 
 export const buildPrintSignatureBandHtml = (rows: PrintSignatureDerivedState[]) => {
   const resolvedRows = (rows || []).filter(
-    (row) => normalizeText(row?.nameValue) || normalizeText(row?.subtitleValue)
+    (row) => row?.enabled !== false && (normalizeText(row?.nameValue) || normalizeText(row?.subtitleValue))
   );
   if (resolvedRows.length === 0) return '';
   const widthPercent = Math.max(22, Math.floor(100 / Math.max(1, resolvedRows.length)));

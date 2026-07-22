@@ -999,10 +999,9 @@ export const usePrintManager = ({
           const showHeader = selectedStoredTemplate.showHeader !== false;
           const rawFooterHtml = String(renderedCustomTemplateRef.current?.footerHtml || '').trim();
           const showFooter =
-            selectedStoredTemplate.showFooter !== false &&
-            (hasRenderablePrintFooterHtml(rawFooterHtml) ||
-              printSignatureSectionHeightPxRef.current > 0 ||
-              PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+            printSignatureSectionHeightPxRef.current > 0 ||
+            (selectedStoredTemplate.showFooter !== false &&
+              (hasRenderablePrintFooterHtml(rawFooterHtml) || PRINT_PAGE_COUNTER_HEIGHT_PX > 0));
           const configuredHeaderHeight = Number(selectedStoredTemplate.headerHeight || 84);
           const configuredFooterHeight = Number(selectedStoredTemplate.footerHeight || 62);
           const headerHeight = getEffectiveMeasuredSectionHeightPx({
@@ -1430,17 +1429,18 @@ export const usePrintManager = ({
       const current = sanitizePrintSignatureConfigs(prev[selectedTemplateId] || []);
       const nextRow: PrintSignatureConfig =
         kind === 'manual'
-          ? { id: createPrintSignatureRowId(), kind: 'manual', automatic: false, nameOverride: '', subtitleOverride: '' }
+          ? { id: createPrintSignatureRowId(), kind: 'manual', enabled: true, automatic: false, nameOverride: '', subtitleOverride: '' }
           : kind === 'selected_signer'
             ? {
                 id: createPrintSignatureRowId(),
                 kind: 'selected_signer',
+                enabled: true,
                 automatic: true,
                 signerModule: 'customers',
                 signerId: null,
                 sourceFieldLabel: 'مشتری',
               }
-            : { id: createPrintSignatureRowId(), kind, automatic: true };
+            : { id: createPrintSignatureRowId(), kind, enabled: true, automatic: true };
       return {
         ...prev,
         [selectedTemplateId]: [...current, nextRow],
@@ -1475,6 +1475,10 @@ export const usePrintManager = ({
 
   const handleTogglePrintSignatureAutomatic = useCallback((rowId: string, automatic: boolean) => {
     updatePrintSignatureConfig(rowId, (row) => ({ ...row, automatic }));
+  }, [updatePrintSignatureConfig]);
+
+  const handleTogglePrintSignatureEnabled = useCallback((rowId: string, enabled: boolean) => {
+    updatePrintSignatureConfig(rowId, (row) => ({ ...row, enabled }));
   }, [updatePrintSignatureConfig]);
 
   const handleChangePrintSignatureName = useCallback((rowId: string, value: string) => {
@@ -2870,10 +2874,9 @@ export const usePrintManager = ({
             const showHeader = selectedStoredTemplate.showHeader !== false;
             const rawFooterHtml = String(renderedCustomTemplate?.footerHtml || '').trim();
             const showFooter =
-              selectedStoredTemplate.showFooter !== false &&
-              (hasRenderablePrintFooterHtml(rawFooterHtml) ||
-                printSignatureSectionHeightPx > 0 ||
-                PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+              printSignatureSectionHeightPx > 0 ||
+              (selectedStoredTemplate.showFooter !== false &&
+                (hasRenderablePrintFooterHtml(rawFooterHtml) || PRINT_PAGE_COUNTER_HEIGHT_PX > 0));
             const configuredHeaderHeight = Number(selectedStoredTemplate.headerHeight || 84);
             const configuredFooterHeight = Number(selectedStoredTemplate.footerHeight || 62);
             const headerHeight = getEffectiveMeasuredSectionHeightPx({
@@ -3228,8 +3231,9 @@ export const usePrintManager = ({
       const rawFooterHtml = String(renderedCustomTemplate?.footerHtml || '').trim();
       const hasFooterHtml = hasRenderablePrintFooterHtml(rawFooterHtml);
       const showFooter =
-        selectedStoredTemplate?.showFooter !== false &&
-        (hasFooterHtml || hasSignatureBand || PRINT_PAGE_COUNTER_HEIGHT_PX > 0);
+        hasSignatureBand ||
+        (selectedStoredTemplate?.showFooter !== false &&
+          (hasFooterHtml || PRINT_PAGE_COUNTER_HEIGHT_PX > 0));
       const configuredHeaderHeight = Number(selectedStoredTemplate?.headerHeight || 84);
       const configuredFooterHeight = Number(selectedStoredTemplate?.footerHeight || 62);
       const signatureHeightPx = hasSignatureBand ? printSignatureSectionHeightPx : 0;
@@ -3830,6 +3834,7 @@ export const usePrintManager = ({
     handleAddPrintSignatureRow,
     handleRemovePrintSignatureRow,
     handleMovePrintSignatureRow,
+    handleTogglePrintSignatureEnabled,
     handleTogglePrintSignatureAutomatic,
     handleChangePrintSignatureName,
     handleChangePrintSignatureSubtitle,

@@ -42,6 +42,7 @@ interface PrintSectionProps {
   onAddPrintSignatureRow?: (kind: PrintSignatureKind) => void;
   onRemovePrintSignatureRow?: (rowId: string) => void;
   onMovePrintSignatureRow?: (rowId: string, direction: 'up' | 'down') => void;
+  onTogglePrintSignatureEnabled?: (rowId: string, enabled: boolean) => void;
   onTogglePrintSignatureAutomatic?: (rowId: string, automatic: boolean) => void;
   onChangePrintSignatureName?: (rowId: string, value: string) => void;
   onChangePrintSignatureSubtitle?: (rowId: string, value: string) => void;
@@ -105,6 +106,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onAddPrintSignatureRow = () => {},
   onRemovePrintSignatureRow = () => {},
   onMovePrintSignatureRow = () => {},
+  onTogglePrintSignatureEnabled = () => {},
   onTogglePrintSignatureAutomatic = () => {},
   onChangePrintSignatureName = () => {},
   onChangePrintSignatureSubtitle = () => {},
@@ -691,6 +693,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
                                 onAddRow={onAddPrintSignatureRow}
                                 onRemoveRow={onRemovePrintSignatureRow}
                                 onMoveRow={onMovePrintSignatureRow}
+                                onToggleEnabled={onTogglePrintSignatureEnabled}
                                 onToggleAutomatic={onTogglePrintSignatureAutomatic}
                                 onChangeName={onChangePrintSignatureName}
                                 onChangeSubtitle={onChangePrintSignatureSubtitle}
