@@ -43,7 +43,7 @@ import {
 import { detectRecordFilesTable } from '../recordFilesAvailability';
 import { fetchSessionBootstrap } from '../sessionCache';
 import { loadScopedCompanySettings } from '../companySettings';
-import { buildImagePreviewUrl, buildPrintImageUrl, getImagePreviewCandidates, isPrintImageTransformEnabled } from '../imagePreview';
+import { buildImagePreviewUrl, buildPrintImageUrl, isPrintImageTransformEnabled } from '../imagePreview';
 import {
   canViewPrintTemplateFieldPath,
   filterSystemTemplateFieldOptions,
@@ -51,7 +51,7 @@ import {
 } from './fieldAccess';
 import { loadPrintFieldPreference, savePrintFieldPreference } from './fieldPreferences';
 import { hasRenderablePrintFooterHtml } from './footerLayout';
-import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, getPrintFramedImageStyle, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
+import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, sanitizePrintImageDisplayMode, type PrintImageDisplayMode } from './imageDisplay';
 import { loadPrintRenderPreference, savePrintRenderPreference } from './renderPreferences';
 import { parseLocationValue } from '../location';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
@@ -935,7 +935,7 @@ export const usePrintManager = ({
     [data, recordImageField]
   );
   const recordCardImageUrl = useMemo(
-    () => getImagePreviewCandidates(recordImageUrl, 'card', { forceTransform: isPrintImageTransformEnabled() }).at(-1) || '',
+    () => buildImagePreviewUrl(recordImageUrl, 'card', { forceTransform: isPrintImageTransformEnabled() }),
     [recordImageUrl]
   );
   const recordHeroImageUrl = useMemo(
@@ -2498,7 +2498,7 @@ export const usePrintManager = ({
       if (path === 'system.package_summary_table') return buildPackageSummaryTableHtml();
       if (path === 'system.record_image') {
         if (!isSystemFieldVisible('system.record_image') || !recordCardImageUrl) return '';
-        return `<div style="display:inline-flex;align-items:center;justify-content:center;width:104px;height:104px;overflow:hidden;border:1px solid var(--table-border-color, #d1d5db);border-radius:12px;padding:6px;background:#fff;box-sizing:border-box;"><img src="${recordCardImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="${getPrintFramedImageStyle(imageDisplayMode)}border-radius:8px;" /></div>`;
+        return `<div style="display:inline-block;border:1px solid var(--table-border-color, #d1d5db);border-radius:10px;padding:3px;background:#fff;line-height:0;"><img src="${recordCardImageUrl}" alt="\u062A\u0635\u0648\u06CC\u0631 \u0631\u06A9\u0648\u0631\u062F" style="display:block;width:320px;height:auto;object-fit:contain;border-radius:7px;" /></div>`;
       }
       if (path === 'system.record_qr') {
         if (!isSystemFieldVisible('system.record_qr') || !recordQrSvgMarkup) return '';
@@ -2789,7 +2789,8 @@ export const usePrintManager = ({
       if (!templateHtml) return '';
       const filled = templateHtml.replace(/{{\s*([a-zA-Z0-9_.]+)\s*}}/g, (match: string, key: string) => {
         if (key.startsWith('row.') || key.startsWith('summary.')) return match;
-        return sanitizeOutboundDisplay(resolveVariableValue(key));
+        const value = resolveVariableValue(key);
+        return key === 'system.record_image' ? value : sanitizeOutboundDisplay(value);
       });
       return DOMPurify.sanitize(filled, {
         ADD_TAGS: ['colgroup', 'col'],
