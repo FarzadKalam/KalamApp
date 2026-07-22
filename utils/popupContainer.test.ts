@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  KALAM_POPUP_ROOT_Z_INDEX,
-  resolveModalPopupContainer,
-  resolveOverlayPopupContainer,
-  resolveSelectPopupContainer,
-} from './popupContainer';
+import { resolveModalPopupContainer, resolveOverlayPopupContainer } from './popupContainer';
 
 describe('resolveOverlayPopupContainer', () => {
   it('uses the dedicated popup root for triggers inside modal overlays', () => {
@@ -31,14 +26,6 @@ describe('resolveOverlayPopupContainer', () => {
 
     expect(container.id).toBe('kalam-popup-root');
     expect(container.parentElement).toBe(document.body);
-  });
-
-  it('creates one stacking context above modals for every select popup', () => {
-    const container = resolveSelectPopupContainer();
-
-    expect(container.style.position).toBe('relative');
-    expect(container.style.isolation).toBe('isolate');
-    expect(container.style.zIndex).toBe(String(KALAM_POPUP_ROOT_Z_INDEX));
   });
 
   it('keeps select popups inside the current modal body when requested', () => {

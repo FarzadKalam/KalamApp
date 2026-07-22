@@ -856,7 +856,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
   const getFieldSelectOptions = (field: ModuleField | undefined) => {
     if (!field) return [];
     const includeRoleAssigneeOptions = isAssigneeValueField(field);
-    if (field.dynamicOptionsCategory) {
+    // مسئول‌های گردش کار از فهرست مرکزی کاربر/نقش می‌آیند؛ آن‌ها را با
+    // AdaptiveSelectField رندر می‌کنیم تا رفتار popup و انتخاب چندتایی با
+    // سایر فیلدهای تطبیقی یکسان بماند.
+    if (field.dynamicOptionsCategory && !includeRoleAssigneeOptions) {
       return includeRoleAssigneeOptions
         ? mergeBasicOptions(dynamicOptions[field.dynamicOptionsCategory], assigneeRoleOptions)
         : dynamicOptions[field.dynamicOptionsCategory] || [];
