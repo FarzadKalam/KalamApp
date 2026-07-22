@@ -31,6 +31,7 @@ type AssistantAction =
   | 'get_ai_overview'
   | 'get_ai_credit_summary'
   | 'get_ai_usage_summary'
+  | 'get_compose_models'
   | 'test_provider'
   | 'list_models'
   | 'get_credit'
@@ -44,6 +45,9 @@ type AssistantAction =
   | 'generate_voice_output'
   | 'generate_image'
   | 'get_image_status'
+  | 'generate_video'
+  | 'get_video_status'
+  | 'generate_document'
   | 'run_task_bundle'
   | 'embed_document_chunks'
   | 'rebuild_instruction_ai_context'
@@ -130,6 +134,8 @@ const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   voice_output: 'ai_voice_output',
   video_generation: 'ai_video_generation',
   document_generation: 'ai_document_analysis',
+  record_creation: 'ai_chat',
+  process_operation: 'ai_chat',
   voip_auto_reply: 'ai_voip_auto_reply',
   auto_decision: 'ai_deep_reasoning',
   customer_auto_reply: 'ai_chat',
@@ -151,6 +157,8 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'image_edit',
   'video_generation',
   'document_generation',
+  'record_creation',
+  'process_operation',
   'auto_decision',
   'customer_auto_reply',
 ]);
@@ -201,6 +209,7 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   pettyFunds: 'petty_funds',
   cashBankOperations: 'cash_bank_operations',
   expenseDocuments: 'expense_documents',
+  expense_documents: 'expense_documents',
   assets: 'assets',
   attendanceLogs: 'attendance_logs',
   workSchedules: 'work_schedules',
@@ -262,6 +271,7 @@ const MODULE_ALIASES: Record<string, string[]> = {
     'پرداخت', 'پرداختی', 'دریافت', 'دریافتی', 'نقد', 'بانک', 'cash', 'bank', 'payment', 'receipt',
     'موجودی', 'حساب بانکی', 'تراکنش', 'واریز', 'برداشت',
   ],
+  expense_documents: ['هزینه', 'هزینه‌ها', 'ثبت هزینه', 'قبض', 'حق بیمه', 'مخارج', 'expense', 'expenses', 'cost'],
   petty_funds: ['تنخواه', 'تنخواه گردان', 'petty', 'petty fund'],
   products: ['محصول', 'محصولات', 'کالا', 'product', 'products', 'اقلام', 'کالاها', 'جنس', 'موجودی کالا'],
   projects: ['پروژه', 'پروژه‌ها', 'project', 'projects', 'پروژه‌ام', 'پروژه‌هام'],
@@ -1027,10 +1037,21 @@ const buildAiCapabilityAvailability = (planContext: any, settings: any, catalogR
     });
   });
   const result: Record<string, any> = {};
+  const hasPrimaryAgentModel = (catalogRows || []).some((model: any) => {
+    const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+    return model?.is_active !== false
+      && model?.is_coming_soon !== true
+      && (tags.includes('dashboard_chat') || tags.includes('record_chat') || tags.includes('workflow_ai_prompt'));
+  });
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     const planAvailable = isAiCapabilityPlanAvailable(planContext, capability);
-    const hasReadyModel = capability === 'embedding' || (catalogByCapability.get(capability) || [])
-      .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
+    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation';
+    const hasReadyModel = capability === 'embedding'
+      ? true
+      : isPrimaryAgentCapability
+        ? hasPrimaryAgentModel
+        : (catalogByCapability.get(capability) || [])
+          .some((model: any) => model?.is_active !== false && model?.is_coming_soon !== true);
     const tenantReady = TENANT_READY_AI_CAPABILITIES.has(capability);
     const orgEnabled = selected?.[capability] !== false;
     result[capability] = {
@@ -1232,12 +1253,16 @@ const resolveProviderConfig = async (
     capability,
     options?.modelOverride,
   );
+  const catalogRows = await listActiveAiModels(supabaseUrl, serviceRoleKey);
+  const modelCatalog = catalogRows.find((row: any) => String(row?.id || '').trim() === model) || null;
   return {
     ...centralConfig,
     model,
     capability,
     serviceTier: String(settings?.metadata?.service_tier || centralConfig.serviceTier || 'default').trim() || 'default',
     orgAiSettings: settings,
+    modelMetadata: modelCatalog?.metadata && typeof modelCatalog.metadata === 'object' ? modelCatalog.metadata : {},
+    modelProvider: String(modelCatalog?.provider || '').trim() || null,
   };
 };
 
@@ -4409,17 +4434,32 @@ const callDecisionEngineAudioTranscription = async (
   return { ...result, transcript, source: 'decision_engine' };
 };
 
-// Valid OpenAI/ElevenLabs voices on /v1/audio/speech (per AvalAI docs).
-const AUDIO_SPEECH_VOICES = new Set([
-  'alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse',
-]);
+// Voice lists are model-specific. Catalog metadata.voice_options is the source
+// of truth and these lists keep existing deployments usable before its migration.
+const AUDIO_SPEECH_VOICES_BY_PROVIDER: Record<string, string[]> = {
+  openai: ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse'],
+  gemini: ['Aoede', 'Charon', 'Fenrir', 'Kore', 'Puck', 'Zephyr'],
+  elevenlabs: ['Rachel', 'Domi', 'Bella', 'Antoni', 'Elli', 'Josh', 'Arnold', 'Adam', 'Sam'],
+};
 const AUDIO_SPEECH_FORMATS = new Set(['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm']);
 const AUDIO_SPEECH_LANGUAGES = new Set(['fa-IR', 'en-US', 'ar', 'tr', 'auto']);
 const AUDIO_SPEECH_STYLES = new Set(['neutral', 'formal', 'warm', 'energetic', 'calm']);
 const AUDIO_SPEECH_MUSIC_MODES = new Set(['off', 'instrumental', 'song']);
 
-const sanitizeVoiceOutputSettings = (options: any = {}) => {
-  const requestedVoice = String(options?.voice || '').trim().toLowerCase();
+const getVoiceOptionsForModel = (providerConfig: any) => {
+  const configured = Array.isArray(providerConfig?.modelMetadata?.voice_options)
+    ? providerConfig.modelMetadata.voice_options
+      .map((item: any) => typeof item === 'string' ? item : item?.value)
+      .map((item: any) => String(item || '').trim())
+      .filter(Boolean)
+    : [];
+  if (configured.length) return Array.from(new Set(configured));
+  const provider = String(providerConfig?.modelProvider || providerConfig?.provider || '').trim().toLowerCase();
+  return AUDIO_SPEECH_VOICES_BY_PROVIDER[provider] || AUDIO_SPEECH_VOICES_BY_PROVIDER.openai;
+};
+
+const sanitizeVoiceOutputSettings = (options: any = {}, providerConfig: any = null) => {
+  const requestedVoice = String(options?.voice || '').trim();
   const requestedFormat = String(options?.responseFormat || options?.format || '').trim().toLowerCase();
   const requestedLanguage = String(options?.language || '').trim();
   const requestedStyle = String(options?.voiceStyle || '').trim();
@@ -4427,8 +4467,10 @@ const sanitizeVoiceOutputSettings = (options: any = {}) => {
   const speed = Number.isFinite(Number(options?.speed))
     ? Math.min(4, Math.max(0.25, Number(options.speed)))
     : undefined;
+  const voices = getVoiceOptionsForModel(providerConfig);
+  const voice = voices.find((item) => item.toLowerCase() === requestedVoice.toLowerCase()) || voices[0] || 'alloy';
   return {
-    voice: AUDIO_SPEECH_VOICES.has(requestedVoice) ? requestedVoice : 'alloy',
+    voice,
     responseFormat: AUDIO_SPEECH_FORMATS.has(requestedFormat) ? requestedFormat : 'mp3',
     ...(speed !== undefined ? { speed } : {}),
     language: AUDIO_SPEECH_LANGUAGES.has(requestedLanguage) ? requestedLanguage : 'fa-IR',
@@ -4451,7 +4493,7 @@ const callAudioSpeech = async (
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای تولید صدا، مدل فعال در تنظیمات سازمان پیدا نشد.');
-  const normalized = sanitizeVoiceOutputSettings(options);
+  const normalized = sanitizeVoiceOutputSettings(options, providerConfig);
   const voice = normalized.voice;
   const responseFormat = normalized.responseFormat;
   const speed = normalized.speed;
@@ -4517,7 +4559,7 @@ const callImageGeneration = async (
     ? options.sourceImages.filter((src) => String(src?.data || '').trim())
     : [];
 
-  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', 'auto']);
+  const allowedSizes = new Set(['1024x1024', '1024x1536', '1536x1024', '1024x1792', '1792x1024', '1080x1920', '1920x1080', 'auto']);
   const size = allowedSizes.has(String(options.size || '').trim()) ? String(options.size).trim() : '1024x1024';
   const allowedOutputFormats = new Set(['png', 'jpeg', 'webp']);
   const outputFormat = allowedOutputFormats.has(String(options.outputFormat || '').trim().toLowerCase())
@@ -4679,13 +4721,18 @@ const callImageGeneration = async (
 const callVideoCreate = async (
   providerConfig: any,
   prompt: string,
-  options: { seconds?: number; size?: string; inputReference?: { data: string; mimeType?: string } } = {},
+  options: { seconds?: number; size?: string; quality?: string; inputReference?: { data: string; mimeType?: string } } = {},
 ) => {
   if (!providerConfig.apiKey) throw new Error('کلید مرکزی AI تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
   if (!model) throw new Error('برای تولید ویدیو، مدل فعال در تنظیمات سازمان پیدا نشد.');
   const seconds = String(Math.min(20, Math.max(1, Number(options.seconds) || 4)));
-  const size = String(options.size || '720x1280').trim();
+  const requestedSize = String(options.size || '1080x1920').trim();
+  const size = new Set(['720x1280', '1280x720', '1080x1920', '1920x1080', '1024x1024']).has(requestedSize)
+    ? requestedSize
+    : '1080x1920';
+  const quality = String(options.quality || '').trim().toLowerCase();
+  const supportsQuality = providerConfig?.modelMetadata?.supports_quality === true;
   const safetyIdentifier = `org_${providerConfig.orgId || ''}_video`.slice(0, 256);
 
   let init: RequestInit;
@@ -4695,6 +4742,7 @@ const callVideoCreate = async (
     formData.append('prompt', prompt.slice(0, 1000));
     formData.append('seconds', seconds);
     formData.append('size', size);
+    if (supportsQuality && (quality === 'standard' || quality === 'high')) formData.append('quality', quality);
     formData.append('safety_identifier', safetyIdentifier);
     const mime = options.inputReference.mimeType || 'image/png';
     const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
@@ -4704,7 +4752,7 @@ const callVideoCreate = async (
     init = {
       method: 'POST',
       headers: { Authorization: `Bearer ${providerConfig.apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, safety_identifier: safetyIdentifier }),
+      body: JSON.stringify({ model, prompt: prompt.slice(0, 1000), seconds, size, ...(supportsQuality && (quality === 'standard' || quality === 'high') ? { quality } : {}), safety_identifier: safetyIdentifier }),
       signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS),
     };
   }
@@ -5220,7 +5268,7 @@ const ensureOrgAiSettings = async (supabaseUrl: string, serviceRoleKey: string, 
       voice_input: false,
       voice_output: false,
       image_generation: false,
-      video_generation: false,
+      video_generation: true,
       voip_auto_reply: false,
     },
     require_human_approval: true,
@@ -5450,7 +5498,7 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
     loadOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     safeRestSelect(supabaseUrl, serviceRoleKey, 'ai_model_catalog', {
       is_active: 'eq.true',
-      select: 'id,display_name_fa,capability_tags,is_coming_soon',
+      select: 'id,provider,display_name_fa,capability_tags,is_coming_soon,metadata',
       order: 'id.asc',
       limit: 200,
     }),
@@ -5465,14 +5513,21 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
   const capabilities: Record<string, any> = {};
   Object.keys(AI_CAPABILITY_FEATURE_KEYS).forEach((capability) => {
     if (capability === 'embedding') return;
-    const selectable = models
-      .filter((m: any) => {
-        const tags = Array.isArray(m?.capability_tags) ? m.capability_tags : [];
-        return tags.includes(capability);
+    const isPrimaryAgentCapability = capability === 'record_creation' || capability === 'process_operation';
+    const sourceModels = isPrimaryAgentCapability
+      ? models.filter((model: any) => {
+        const tags = Array.isArray(model?.capability_tags) ? model.capability_tags : [];
+        return tags.includes('dashboard_chat') || tags.includes('record_chat') || tags.includes('workflow_ai_prompt');
       })
+      : filterSelectableAiModels(models, capability);
+    const selectable = sourceModels
       .map((m: any) => ({ value: String(m?.id || ''), label: labelOf(String(m?.id || '')) }))
       .filter((opt: any) => opt.value);
-    const resolved = pickCapabilityModelFromCatalog(settings, capability, models);
+    const resolved = isPrimaryAgentCapability
+      ? (pickCapabilityModelFromCatalog(settings, 'record_chat', models)
+        || pickCapabilityModelFromCatalog(settings, 'dashboard_chat', models)
+        || pickCapabilityModelFromCatalog(settings, 'workflow_ai_prompt', models))
+      : pickCapabilityModelFromCatalog(settings, capability, models);
     capabilities[capability] = {
       model: resolved,
       modelLabel: resolved ? labelOf(resolved) : 'مدل فعال ندارد',
@@ -5481,6 +5536,24 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
         && availability[capability].tenantReady !== false
         && availability[capability].hasReadyModel !== false : true,
     };
+    if (capability === 'voice_output') {
+      capabilities[capability].voiceOptionsByModel = Object.fromEntries(
+        filterSelectableAiModels(models, capability)
+          .map((model: any) => {
+            const configured = Array.isArray(model?.metadata?.voice_options)
+              ? model.metadata.voice_options
+              : getVoiceOptionsForModel({ modelMetadata: model?.metadata || {}, modelProvider: model?.provider, provider: model?.provider });
+            const options = configured
+              .map((item: any) => typeof item === 'string' ? { value: item, label: item } : {
+                value: String(item?.value || '').trim(),
+                label: String(item?.label || item?.value || '').trim(),
+              })
+              .filter((item: any) => item.value && item.label);
+            return [String(model?.id || '').trim(), options];
+          })
+          .filter(([id]) => id),
+      );
+    }
   });
   const voiceConversationSelectable = models
     .filter((m: any) => {
@@ -7457,11 +7530,14 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
     'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. ابتدا ابزارهای خواندنی و context مجاز را برای بررسی انتخاب کن؛ اگر پس از آن داده کافی نیست، capabilities را خالی بگذار و حداکثر سه پرسش دقیق را در clarification_questions برگردان.',
     'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، document_analysis و در صورت وجود صوت voice_input را انتخاب کن.',
-    'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده.',
+    'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده. این شامل ثبت هزینه، پرداخت، دریافت، فاکتور خرید/فروش، مساعده و تهاتر در وضعیت پیش‌نویس یا ایجادشده است.',
+    'برای درخواست ایجاد یا ویرایش رکورد مجاز، هرگز نگویید دستیار دسترسی مستقیم ندارد یا کاربر باید خودش در CRM ثبت کند. وظیفه شما ساخت پیش‌نویس قابل‌ویرایش و ارسال آن به مودال تایید کاربر است؛ اجرای نهایی فقط پس از تایید کاربر انجام می‌شود.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
     'اگر کاربر خواسته مرحله، فعالیت یا فرآیند اجرا/تغییر/ارجاع شود، process_operation را انتخاب کن.',
     'اگر کاربر ساخت یا اصلاح تصویر می‌خواهد، image_generation را انتخاب کن؛ مخصوصاً وقتی تصویر مبنا هم فرستاده شده است.',
     'اگر کاربر فقط پرامپت، متن، توضیح یا دستور برای تولید تصویر می‌خواهد، image_generation را انتخاب نکن؛ این یک گفتگوی متنی عادی است مگر اینکه صریحاً بخواهد خود تصویر همین حالا ساخته شود.',
+    'اگر کاربر صریحاً ساخت، تولید یا تبدیل یک متن یا تصویر به ویدیو می‌خواهد، video_generation را انتخاب کن. اگر تصویر مبنا دارد، آن را در برنامه به‌عنوان ورودی ویدیو در نظر بگیر.',
+    'اگر کاربر فقط سناریو، ایده یا پرامپت ویدیو می‌خواهد اما نمی‌خواهد خود ویدیو همین حالا ساخته شود، video_generation را انتخاب نکن.',
     'اگر کاربر ساخت فایل Word/Excel/PDF/CSV یا گزارش خروجی می‌خواهد، document_generation را انتخاب کن.',
     'اگر کاربر تبدیل متن به ویس می‌خواهد، voice_output را انتخاب کن.',
     'اگر سوال نیازمند اطلاعات جاری وب است، web_search را انتخاب کن.',
@@ -9886,6 +9962,15 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'video_generation');
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const settings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const videoStyle = String(settings?.videoStyle || '').trim();
+  const videoMotion = String(settings?.videoMotion || '').trim();
+  const videoCamera = String(settings?.videoCamera || '').trim();
+  const videoPrompt = [
+    prompt,
+    videoStyle ? `سبک تصویری: ${videoStyle}.` : '',
+    videoMotion ? `نوع حرکت: ${videoMotion}.` : '',
+    videoCamera && videoCamera !== 'auto' ? `نمای دوربین: ${videoCamera}.` : '',
+  ].filter(Boolean).join('\n');
   const sources = Array.isArray(body?.sourceImages) ? body.sourceImages : (Array.isArray(settings.sourceImages) ? settings.sourceImages : []);
   const firstSource = sources.map((src: any) => ({
     data: String(src?.data || src?.base64 || '').trim(),
@@ -9909,9 +9994,10 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
     model: providerConfig.model,
     metadata: { context: pageContext.context, context_key: contextKey, input_kind: 'video_prompt', capability: 'video_generation' },
   });
-  const created = await callVideoCreate({ ...providerConfig, orgId: authContext.orgId }, prompt, {
+  const created = await callVideoCreate({ ...providerConfig, orgId: authContext.orgId }, videoPrompt, {
     seconds: settings.seconds || body?.seconds,
     size: settings.size || body?.size,
+    quality: settings.videoQuality || body?.videoQuality,
     inputReference: firstSource,
   });
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
@@ -9925,6 +10011,7 @@ const handleGenerateVideo = async (supabaseUrl: string, serviceRoleKey: string, 
       status: 'processing',
       video_id: created.videoId,
       prompt,
+      settings: { size: settings.size || null, seconds: settings.seconds || null, videoStyle: videoStyle || null, videoMotion: videoMotion || null, videoCamera: videoCamera || null },
       seconds: created.seconds,
       avalai_request_id: created.requestId || null,
     },

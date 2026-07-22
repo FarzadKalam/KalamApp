@@ -34,6 +34,12 @@ import PersianDatePicker from '../components/PersianDatePicker';
 import { parseDateValue, safeJalaliFormat, toPersianNumber } from '../utils/persianNumberFormatter';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
 import { getHolidaySummaryForDate, type HolidayDaySummary } from '../utils/holidayCalendar';
+import {
+  normalizeWorkScheduleMonthlyPlan,
+  resolveWorkScheduleDayPlan,
+  type WorkScheduleDayPlan,
+  type WorkScheduleMonthlyPlan,
+} from '../utils/workSchedulePlan';
 
 const { Title, Text } = Typography;
 
@@ -86,6 +92,7 @@ type WorkScheduleRecord = {
 type SerializedColumn = {
   employeeId: string | null;
   weeklyPlan: WeeklyPlan;
+  monthlyPlan?: WorkScheduleMonthlyPlan;
   createdAt: string | null;
   updatedAt: string | null;
   createdBy: string | null;
@@ -124,6 +131,7 @@ const makeColumn = (seed?: Partial<ColumnState>): ColumnState => ({
   key: seed?.key || `col_${Math.random().toString(36).slice(2, 10)}`,
   employeeId: seed?.employeeId || null,
   weeklyPlan: seed?.weeklyPlan || emptyPlan(),
+  monthlyPlan: seed?.monthlyPlan || {},
   createdAt: seed?.createdAt || null,
   updatedAt: seed?.updatedAt || null,
   createdBy: seed?.createdBy || null,
@@ -140,6 +148,7 @@ const columnsFromRecord = (record: WorkScheduleRecord | null): ColumnState[] => 
         key: `col_${index}_${String(item?.employeeId || '')}`,
         employeeId: item?.employeeId || null,
         weeklyPlan: normalizePlan(item?.weeklyPlan),
+        monthlyPlan: normalizeWorkScheduleMonthlyPlan(item?.monthlyPlan),
         createdAt: item?.createdAt || null,
         updatedAt: item?.updatedAt || null,
         createdBy: item?.createdBy || null,
@@ -211,6 +220,20 @@ const buildDateRange = (from?: string | null, to?: string | null) => {
   return days;
 };
 
+const dateKeyFromDate = (date: Date) => {
+  const local = new Date(date);
+  local.setHours(12, 0, 0, 0);
+  return `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`;
+};
+
+const startOfSaturdayWeek = (date: Date) => {
+  const next = new Date(date);
+  next.setHours(12, 0, 0, 0);
+  const daysSinceSaturday = (next.getDay() + 1) % 7;
+  next.setDate(next.getDate() - daysSinceSaturday);
+  return next;
+};
+
 const WorkSchedulesPage: React.FC = () => {
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -235,8 +258,8 @@ const WorkSchedulesPage: React.FC = () => {
   const [nameFilter, setNameFilter] = useState('');
   const [teamFilter, setTeamFilter] = useState<string | undefined>();
   const [departmentFilter, setDepartmentFilter] = useState<string | undefined>();
-  const [copyPopover, setCopyPopover] = useState<{ columnKey: string; dayKey: DayKey } | null>(null);
-  const [copyTargets, setCopyTargets] = useState<DayKey[]>([]);
+  const [copyPopover, setCopyPopover] = useState<{ columnKey: string; weekKey: string } | null>(null);
+  const [copyTargets, setCopyTargets] = useState<string[]>([]);
   const [officialHolidaySummaries, setOfficialHolidaySummaries] = useState<HolidayDaySummary[]>([]);
   const [officialHolidaysLoading, setOfficialHolidaysLoading] = useState(false);
 
@@ -377,6 +400,16 @@ const WorkSchedulesPage: React.FC = () => {
     }, { sat: 0, sun: 0, mon: 0, tue: 0, wed: 0, thu: 0, fri: 0 });
   }, [officialHolidaySummaries]);
 
+  const calendarDates = useMemo(() => buildDateRange(effectiveFrom, effectiveTo), [effectiveFrom, effectiveTo]);
+  const calendarWeeks = useMemo(() => {
+    const byWeek = new Map<string, Date[]>();
+    calendarDates.forEach((date) => {
+      const weekKey = dateKeyFromDate(startOfSaturdayWeek(date));
+      byWeek.set(weekKey, [...(byWeek.get(weekKey) || []), date]);
+    });
+    return Array.from(byWeek.entries()).map(([key, dates]) => ({ key, dates }));
+  }, [calendarDates]);
+
   const getEmployeeOptions = useCallback(
     (currentEmployeeId: string | null) => {
       const current = currentEmployeeId ? employeeMap[currentEmployeeId] : undefined;
@@ -399,41 +432,61 @@ const WorkSchedulesPage: React.FC = () => {
     updateColumn(columnKey, (column) => ({ ...column, employeeId, dirty: true }));
   };
 
-  const updateCell = (columnKey: string, dayKey: DayKey, shiftKey: ShiftKey, part: 'start' | 'end', value: string | null) => {
+  const getDatePlan = (column: ColumnState, date: Date): WorkScheduleDayPlan => {
+    const dateKey = dateKeyFromDate(date);
+    return resolveWorkScheduleDayPlan({
+      monthlyPlan: column.monthlyPlan,
+      weeklyPlan: column.weeklyPlan,
+      dateKey,
+      weekdayKey: dayKeyFromDate(date),
+    });
+  };
+
+  const updateCell = (columnKey: string, date: Date, shiftKey: ShiftKey, part: 'start' | 'end', value: string | null) => {
+    const dateKey = dateKeyFromDate(date);
     updateColumn(columnKey, (column) => ({
       ...column,
       dirty: true,
-      weeklyPlan: {
-        ...column.weeklyPlan,
-        [dayKey]: {
-          ...column.weeklyPlan[dayKey],
-          [shiftKey]: { ...column.weeklyPlan[dayKey][shiftKey], [part]: value },
+      monthlyPlan: {
+        ...(column.monthlyPlan || {}),
+        [dateKey]: {
+          ...getDatePlan(column, date),
+          [shiftKey]: { ...getDatePlan(column, date)[shiftKey], [part]: value },
         },
       },
     }));
   };
 
-  const applyCopyDay = (columnKey: string, sourceDay: DayKey) => {
+  const applyCopyWeek = (columnKey: string, sourceWeekKey: string) => {
     if (!copyTargets.length) {
       message.info('حداقل یک روز را انتخاب کن.');
       return;
     }
 
+    const sourceWeek = calendarWeeks.find((week) => week.key === sourceWeekKey);
+    if (!sourceWeek) return;
     updateColumn(columnKey, (column) => {
-      const source = column.weeklyPlan[sourceDay];
-      const nextPlan = { ...column.weeklyPlan };
-      copyTargets.forEach((dayKey) => {
-        nextPlan[dayKey] = {
-          shift1: { ...source.shift1 },
-          shift2: { ...source.shift2 },
-        };
+      const nextMonthlyPlan = { ...(column.monthlyPlan || {}) };
+      copyTargets.forEach((targetWeekKey) => {
+        const targetWeek = calendarWeeks.find((week) => week.key === targetWeekKey);
+        if (!targetWeek) return;
+        sourceWeek.dates.forEach((sourceDate) => {
+          const sourceOffset = (sourceDate.getDay() + 1) % 7;
+          const targetDate = targetWeek.dates.find((date) => ((date.getDay() + 1) % 7) === sourceOffset);
+          if (!targetDate) return;
+          const source = getDatePlan(column, sourceDate);
+          nextMonthlyPlan[dateKeyFromDate(targetDate)] = {
+            shift1: { ...source.shift1 },
+            shift2: { ...source.shift2 },
+          };
+        });
       });
-      return { ...column, weeklyPlan: nextPlan, dirty: true };
+      return { ...column, monthlyPlan: nextMonthlyPlan, dirty: true };
     });
 
     setCopyPopover(null);
     setCopyTargets([]);
-    message.success('کپی انجام شد.');
+    message.success('ساعت‌های هفته در هفته‌های انتخاب‌شده کپی شد.');
   };
 
   const ensureProfileNames = useCallback(
@@ -464,6 +517,11 @@ const WorkSchedulesPage: React.FC = () => {
 
       if (!effectiveFrom || !effectiveTo) {
         message.warning('بازه زمانی برنامه حضور باید کامل باشد.');
+        return;
+      }
+
+      if (safeJalaliFormat(effectiveFrom, 'YYYY/MM') !== safeJalaliFormat(effectiveTo, 'YYYY/MM')) {
+        message.warning('برنامه ماهانه باید کامل و محدود به یک ماه شمسی باشد.');
         return;
       }
 
@@ -511,10 +569,11 @@ const WorkSchedulesPage: React.FC = () => {
           start_time: first.start,
           end_time: first.end,
           weekly_plan: {
-            version: 2,
+            version: 3,
             columns: nextColumns.map((column) => ({
               employeeId: column.employeeId,
               weeklyPlan: column.weeklyPlan,
+              monthlyPlan: column.monthlyPlan,
               createdAt: column.createdAt,
               updatedAt: column.updatedAt,
               createdBy: column.createdBy,
@@ -611,24 +670,28 @@ const WorkSchedulesPage: React.FC = () => {
         </div>
 
         <div className="divide-y divide-gray-100 dark:divide-white/5">
-          {DAYS.map((day) => {
-            const holidayCount = officialHolidayCountsByDay[day.key] || 0;
+          {calendarDates.map((date) => {
+            const dayKey = dayKeyFromDate(date);
+            const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
+            const dateKey = dateKeyFromDate(date);
+            const holidaySummary = officialHolidaySummaries.find((item) => item.dateKey === dateKey);
+            const plan = getDatePlan(column, date);
             return (
-            <div key={`${column.key}_${day.key}`} className="px-5 py-4">
+            <div key={`${column.key}_${dateKey}`} className="px-5 py-4">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <div className="font-bold text-gray-800 dark:text-white">{day.label}</div>
+                <div className="font-bold text-gray-800 dark:text-white">{day.label} <span className="text-xs text-gray-500 persian-number">{toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')}</span></div>
                 <div className="flex flex-wrap justify-end gap-1">
                   {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
-                  {holidayCount > 0 && <Tag color="red">{toPersianNumber(holidayCount)} تعطیلی در بازه</Tag>}
+                  {holidaySummary && <Tag color="red">تعطیل رسمی</Tag>}
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {SHIFTS.map((shift) => {
-                  const item = column.weeklyPlan[day.key][shift.key];
+                  const item = plan[shift.key];
                   const hasTime = item.start || item.end;
                   return (
                     <div
-                      key={`${column.key}_${day.key}_${shift.key}_view`}
+                      key={`${column.key}_${dateKey}_${shift.key}_view`}
                       className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-white/5 px-3 py-3"
                     >
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">{shift.label}</div>
@@ -683,7 +746,7 @@ const WorkSchedulesPage: React.FC = () => {
                 {isCreate ? 'ایجاد برنامه حضور' : 'برنامه حضور'}
               </Title>
               <Text className="text-gray-500 dark:text-gray-400">
-                مدیریت برنامه حضور ماهانه یا بازه‌ای کارکنان در قالب جدول هفتگی
+              مدیریت برنامه حضور ماهانه کارکنان؛ ساعت هر تاریخ به‌صورت مستقل ثبت می‌شود.
               </Text>
             </div>
             <Space wrap>
@@ -883,10 +946,14 @@ const WorkSchedulesPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {DAYS.map((day) => {
-                  const holidayCount = officialHolidayCountsByDay[day.key] || 0;
+                {calendarDates.map((date) => {
+                  const dayKey = dayKeyFromDate(date);
+                  const day = DAYS.find((item) => item.key === dayKey) || DAYS[0];
+                  const dateKey = dateKeyFromDate(date);
+                  const weekKey = dateKeyFromDate(startOfSaturdayWeek(date));
+                  const holidaySummary = officialHolidaySummaries.find((item) => item.dateKey === dateKey);
                   return SHIFTS.map((shift, shiftIndex) => (
-                    <tr key={`${day.key}_${shift.key}`} className={day.accent}>
+                    <tr key={`${dateKey}_${shift.key}`} className={day.accent}>
                       {shiftIndex === 0 && (
                         <td
                           rowSpan={2}
@@ -895,8 +962,9 @@ const WorkSchedulesPage: React.FC = () => {
                         >
                           <div className="flex flex-col gap-1">
                             <span>{day.label}</span>
+                            <span className="text-xs text-gray-500 persian-number">{toPersianNumber(safeJalaliFormat(dateKey, 'YYYY/MM/DD') || '')}</span>
                             {day.key === 'fri' && <Tag color="red">تعطیل هفتگی</Tag>}
-                            {holidayCount > 0 && <Tag color="red">{toPersianNumber(holidayCount)} تعطیلی در بازه</Tag>}
+                            {holidaySummary && <Tag color="red">تعطیل رسمی</Tag>}
                           </div>
                         </td>
                       )}
@@ -907,11 +975,11 @@ const WorkSchedulesPage: React.FC = () => {
                         {shift.label}
                       </td>
                       {visibleColumns.map((column) => {
-                        const item = column.weeklyPlan[day.key][shift.key];
+                        const item = getDatePlan(column, date)[shift.key];
                         const disabled = !column.employeeId || column.saving || savingAll;
                         return (
                           <td
-                            key={`${column.key}_${day.key}_${shift.key}`}
+                            key={`${column.key}_${dateKey}_${shift.key}`}
                             className="border-b border-l border-gray-200 dark:border-gray-800 px-4 py-3 min-w-[330px] bg-white dark:bg-[#121212]"
                           >
                             {column.employeeId ? (
@@ -920,27 +988,27 @@ const WorkSchedulesPage: React.FC = () => {
                                   <div className="absolute left-0 -top-1">
                                     <Popover
                                       trigger="click"
-                                      open={copyPopover?.columnKey === column.key && copyPopover?.dayKey === day.key}
+                                      open={copyPopover?.columnKey === column.key && copyPopover?.weekKey === weekKey}
                                       onOpenChange={(open) => {
                                         if (open) {
-                                          setCopyPopover({ columnKey: column.key, dayKey: day.key });
+                                          setCopyPopover({ columnKey: column.key, weekKey });
                                           setCopyTargets([]);
-                                        } else if (copyPopover?.columnKey === column.key && copyPopover?.dayKey === day.key) {
+                                        } else if (copyPopover?.columnKey === column.key && copyPopover?.weekKey === weekKey) {
                                           setCopyPopover(null);
                                           setCopyTargets([]);
                                         }
                                       }}
                                       content={(
                                         <div className="w-56 space-y-3">
-                                          <div className="text-xs text-gray-500">کپی این روز برای چه روزهایی انجام شود؟</div>
+                                          <div className="text-xs text-gray-500">ساعت‌های این هفته برای کدام هفته‌های بعدیِ همین بازه کپی شود؟</div>
                                           <Checkbox.Group
                                             value={copyTargets}
-                                            onChange={(values) => setCopyTargets(values as DayKey[])}
+                                            onChange={(values) => setCopyTargets(values.map((value) => String(value)))}
                                             className="flex flex-col gap-2"
                                           >
-                                            {DAYS.filter((x) => x.key !== day.key).map((x) => (
-                                              <Checkbox key={x.key} value={x.key}>
-                                                {x.label}
+                                            {calendarWeeks.filter((week) => week.key > weekKey).map((week, index) => (
+                                              <Checkbox key={week.key} value={week.key}>
+                                                هفته بعد {toPersianNumber(index + 1)} ({toPersianNumber(safeJalaliFormat(week.dates[0] ? dateKeyFromDate(week.dates[0]) : week.key, 'MM/DD') || '')})
                                               </Checkbox>
                                             ))}
                                           </Checkbox.Group>
@@ -954,7 +1022,7 @@ const WorkSchedulesPage: React.FC = () => {
                                             >
                                               انصراف
                                             </Button>
-                                            <Button type="primary" size="small" onClick={() => applyCopyDay(column.key, day.key)}>
+                                            <Button type="primary" size="small" onClick={() => applyCopyWeek(column.key, weekKey)}>
                                               کپی
                                             </Button>
                                           </div>
@@ -970,7 +1038,7 @@ const WorkSchedulesPage: React.FC = () => {
                                   <PersianDatePicker
                                     type="TIME"
                                     value={item.start}
-                                    onChange={(value) => updateCell(column.key, day.key, shift.key, 'start', value)}
+                                    onChange={(value) => updateCell(column.key, date, shift.key, 'start', value)}
                                     disabled={disabled}
                                     placeholder="شروع"
                                     className="w-full"
@@ -981,7 +1049,7 @@ const WorkSchedulesPage: React.FC = () => {
                                   <PersianDatePicker
                                     type="TIME"
                                     value={item.end}
-                                    onChange={(value) => updateCell(column.key, day.key, shift.key, 'end', value)}
+                                    onChange={(value) => updateCell(column.key, date, shift.key, 'end', value)}
                                     disabled={disabled}
                                     placeholder="پایان"
                                     className="w-full"

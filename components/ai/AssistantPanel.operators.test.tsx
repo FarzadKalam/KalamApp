@@ -170,6 +170,9 @@ describe('AssistantPanel AI operators', () => {
         if (messageText.includes('ویرایش')) {
           return { data: { success: true, capabilities: ['record_creation'], targetModuleId: 'customers', mutationMode: 'update' }, error: null };
         }
+        if (messageText.includes('هزینه')) {
+          return { data: { success: true, capabilities: ['record_creation'], targetModuleId: 'expense_documents', mutationMode: 'create' }, error: null };
+        }
         if (messageText.includes('تصویر')) {
           return { data: { success: true, capabilities: ['image_generation'], targetModuleId: null }, error: null };
         }
@@ -220,7 +223,7 @@ describe('AssistantPanel AI operators', () => {
     ['deep_reasoning', 'cap-deep_reasoning', 'chat_stream', 'deep_reasoning', 'ارسال'],
     ['legal_assistant', 'cap-legal_assistant', 'chat_stream', 'legal_assistant', 'ارسال'],
     ['process_operation', 'cap-process_operation', 'process_operation_from_prompt', 'record_chat', 'پیشنهاد اقدام'],
-    ['record_creation', 'cap-record_creation', 'create_record_from_prompt', 'dashboard_chat', 'پیشنهاد ساخت'],
+    ['record_creation', 'cap-record_creation', 'create_record_from_prompt', 'dashboard_chat', 'آماده‌سازی پیش‌نویس'],
   ])('sends the %s operator through the expected assistant action', async (_name, capabilityButton, expectedAction, expectedCapability, sendButtonName) => {
     await renderPanel();
     fireEvent.click(screen.getAllByText(capabilityButton)[0]);
@@ -320,6 +323,18 @@ describe('AssistantPanel AI operators', () => {
     await waitFor(() => expect(findBody('create_record_from_prompt') || findBody('run_task_bundle')).toBeTruthy());
     const body = findBody('run_task_bundle') || findBody('create_record_from_prompt');
     expect(body?.recordCreation?.moduleId).toBe('customers');
+  });
+
+  it('routes an insurance expense to an editable expense draft instead of a manual CRM reply', async () => {
+    await renderPanel();
+    await typeAndSend('مبلغ ۱۱۷۶۱۰۶۱۸ ریال بابت بیمه ثبت هزینه کن', 'ارسال');
+    await waitFor(() => expect(findBody('suggest_auto_capabilities')).toBeTruthy());
+    await waitFor(() => expect(findBody('run_task_bundle')).toBeTruthy());
+    const body = findBody('run_task_bundle');
+    expect(body?.capabilities).toContain('record_creation');
+    expect(body?.recordCreation?.moduleId).toBe('expense_documents');
+    expect(body?.recordMutationMode).toBe('create');
+    expect(body?.previewOnly).toBe(true);
   });
 
   it('routes record edits through the confirmed multi-record update path', async () => {

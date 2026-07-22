@@ -59,6 +59,7 @@ type AiCapabilityComposerActionsProps = {
   onRecordCreationTargetModuleChange?: (moduleId: string | null) => void;
   mediaSettings?: AiMediaSettings;
   onMediaSettingsChange?: (next: AiMediaSettings) => void;
+  mediaModelId?: string | null;
   onApplyPrompt?: (text: string) => void;
   promptRecord?: Record<string, any> | null;
 };
@@ -80,7 +81,7 @@ const CAPABILITY_META: Array<{
   { key: 'web_search', label: 'جستجوی گوگل', description: 'استفاده از اطلاعات بروز وب', icon: <GlobalOutlined />, kind: 'toggle' },
   { key: 'deep_reasoning', label: 'تفکر عمیق', description: 'استفاده از مدل reasoning سازمان', icon: <ThunderboltOutlined />, kind: 'toggle' },
   { key: 'legal_assistant', label: 'دستیار حقوقی', description: 'پاسخ حقوقی با تکیه بر اسناد و وب', icon: <SafetyCertificateOutlined />, kind: 'toggle' },
-  { key: 'record_creation', label: 'ساخت رکورد', description: 'پیشنهاد ساخت فاکتور، مشتری، محصول و...', icon: <PlusOutlined />, kind: 'toggle' },
+  { key: 'record_creation', label: 'ایجاد/ویرایش رکورد', description: 'پیشنهاد ایجاد یا ویرایش فاکتور، هزینه، مشتری، محصول و...', icon: <PlusOutlined />, kind: 'toggle' },
   { key: 'process_operation', label: 'اقدام فرآیندی', description: 'پیشنهاد اجرای فرآیند یا تغییر مرحله', icon: <ThunderboltOutlined />, kind: 'toggle' },
 ];
 
@@ -120,6 +121,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   onRecordCreationTargetModuleChange,
   mediaSettings = {},
   onMediaSettingsChange,
+  mediaModelId,
   onApplyPrompt,
   promptRecord = null,
 }) => {
@@ -285,6 +287,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           onSettingsChange={onMediaSettingsChange}
           disabled={disabled || loading}
           size={actionSize}
+          modelId={mediaModelId}
         />
       ) : null}
 
@@ -347,7 +350,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           value={recordCreationTargetModuleId || undefined}
           options={recordCreationModuleOptions}
           optionFilterProp="label"
-          placeholder="نوع رکورد"
+          placeholder="نوع رکورد برای ایجاد/ویرایش"
           disabled={disabled || loading}
           onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
         />

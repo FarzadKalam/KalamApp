@@ -1048,6 +1048,7 @@ const Dashboard: React.FC = () => {
   const [dashboardRecordCreationTargetModuleId, setDashboardRecordCreationTargetModuleId] = useState<string | null>(null);
   const [dashboardMediaSettings, setDashboardMediaSettings] = useState<AiMediaSettings>({});
   const [dashboardMediaSourceImages, setDashboardMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
+  const [dashboardModelOverrides, setDashboardModelOverrides] = useState<Record<string, string>>({});
   const dashboardModelOverrideRef = useRef<string | null>(null);
 
   // ─── استوری‌ها ───────────────────────────────
@@ -1075,6 +1076,14 @@ const Dashboard: React.FC = () => {
   const dashboardRecordCreationModuleOptions = useMemo(() => buildAiRecordModuleOptions(), []);
   const dashboardImageMode = dashboardAiCapabilities.includes('image_generation');
   const dashboardVoiceOutputMode = dashboardAiCapabilities.includes('voice_output');
+  const dashboardVideoMode = dashboardAiCapabilities.includes('video_generation');
+  const dashboardMediaModelId = dashboardImageMode
+    ? dashboardModelOverrides.image_generation || dashboardModelOverrideRef.current
+    : dashboardVideoMode
+      ? dashboardModelOverrides.video_generation || dashboardModelOverrideRef.current
+      : dashboardVoiceOutputMode
+        ? dashboardModelOverrides.voice_output || dashboardModelOverrideRef.current
+        : null;
   const dashboardNeedsRecordModule = dashboardAiCapabilities.includes('record_creation') && !dashboardRecordCreationTargetModuleId;
   const dashboardAiSendDisabled = !dashboardAiQuestion.trim() || dashboardNeedsRecordModule;
 
@@ -1442,7 +1451,7 @@ const Dashboard: React.FC = () => {
                       size="small"
                       disabled={dashboardAiSendDisabled}
                       onClick={handleSubmitDashboardAiQuestion}
-                      aria-label={dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
+                      aria-label={dashboardVideoMode ? 'ساخت ویدیو با هوش مصنوعی' : dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}
                     />
                     <AiCapabilityComposerActions
                       selected={dashboardAiCapabilities}
@@ -1462,13 +1471,25 @@ const Dashboard: React.FC = () => {
                       onRecordCreationTargetModuleChange={setDashboardRecordCreationTargetModuleId}
                       mediaSettings={dashboardMediaSettings}
                       onMediaSettingsChange={setDashboardMediaSettings}
+                      mediaModelId={dashboardMediaModelId}
                     />
                   </div>
                   <div className="mt-1 px-7">
                     <AiComposeModelBar
                       selectedCapabilities={dashboardAiCapabilities}
                       fallbackCapability="dashboard_chat"
-                      onModelOverrideChange={(model) => { dashboardModelOverrideRef.current = model; }}
+                      persistedOverrides={dashboardModelOverrides}
+                      onModelOverrideChange={(model, capability) => {
+                        dashboardModelOverrideRef.current = model;
+                        const key = String(capability || '').trim();
+                        if (!key) return;
+                        setDashboardModelOverrides((prev) => {
+                          if (model) return { ...prev, [key]: model };
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        });
+                      }}
                     />
                   </div>
                 </div>

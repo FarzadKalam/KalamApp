@@ -3,6 +3,7 @@ import { Button, Checkbox, Drawer, Grid, Input, InputNumber, Popover, Select, Sl
 import type { ButtonProps } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { scheduleOverlayLockRelease } from '../../utils/overlayLocks';
+import { supabase } from '../../supabaseClient';
 
 export type AiMediaSourceImage = {
   data: string;
@@ -38,6 +39,10 @@ export type AiMediaSettings = {
   referenceVoicePreviewUrl?: string;
   // video
   seconds?: number;
+  videoQuality?: 'standard' | 'high';
+  videoStyle?: string;
+  videoMotion?: string;
+  videoCamera?: string;
   // document
   format?: string;
 };
@@ -48,10 +53,11 @@ type AiMediaSettingsPopoverProps = {
   onSettingsChange: (next: AiMediaSettings) => void;
   disabled?: boolean;
   size?: ButtonProps['size'];
+  /** The selected media model. When omitted, the organization's default is used. */
+  modelId?: string | null;
 };
 
-// Voices valid on AvalAI /v1/audio/speech (OpenAI + ElevenLabs compatible set).
-const VOICE_OPTIONS = [
+const FALLBACK_VOICE_OPTIONS = [
   { value: 'alloy', label: 'Alloy' },
   { value: 'ash', label: 'Ash' },
   { value: 'ballad', label: 'Ballad' },
@@ -69,7 +75,17 @@ const IMAGE_SIZE_OPTIONS = [
   { value: 'auto', label: 'خودکار' },
   { value: '1024x1024', label: 'مربع (۱۰۲۴×۱۰۲۴)' },
   { value: '1024x1536', label: 'عمودی (۱۰۲۴×۱۵۳۶)' },
+  { value: '1080x1920', label: 'عمودی تمام‌صفحه (۱۰۸۰×۱۹۲۰)' },
   { value: '1536x1024', label: 'افقی (۱۵۳۶×۱۰۲۴)' },
+  { value: '1920x1080', label: 'افقی تمام‌صفحه (۱۹۲۰×۱۰۸۰)' },
+];
+
+const VIDEO_SIZE_OPTIONS = [
+  { value: '1280x720', label: 'افقی HD (۱۲۸۰×۷۲۰)' },
+  { value: '1920x1080', label: 'افقی تمام‌صفحه (۱۹۲۰×۱۰۸۰)' },
+  { value: '720x1280', label: 'عمودی HD (۷۲۰×۱۲۸۰)' },
+  { value: '1080x1920', label: 'عمودی تمام‌صفحه (۱۰۸۰×۱۹۲۰)' },
+  { value: '1024x1024', label: 'مربع (۱۰۲۴×۱۰۲۴)' },
 ];
 
 const IMAGE_QUALITY_OPTIONS = [
@@ -120,10 +136,45 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
   onSettingsChange,
   disabled = false,
   size,
+  modelId,
 }) => {
   const screens = Grid.useBreakpoint();
   const [open, setOpen] = useState(false);
+  const [defaultVoiceModelId, setDefaultVoiceModelId] = useState<string | null>(null);
+  const [voiceOptionsByModel, setVoiceOptionsByModel] = useState<Record<string, Array<{ value: string; label: string }>>>({});
+  const [voiceOptionsLoaded, setVoiceOptionsLoaded] = useState(false);
   const isMobile = !screens.md;
+
+  useEffect(() => {
+    if (capability !== 'voice_output') return;
+    let mounted = true;
+    void (async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('ai-assistant', { body: { action: 'get_compose_models' } });
+        if (error || !mounted) return;
+        const info = data?.capabilities?.voice_output;
+        setDefaultVoiceModelId(String(info?.model || '').trim() || null);
+        if (info?.voiceOptionsByModel && typeof info.voiceOptionsByModel === 'object') {
+          setVoiceOptionsByModel(info.voiceOptionsByModel);
+        }
+      } catch {
+        // Without a catalog response we do not display another provider's voices.
+      } finally {
+        if (mounted) setVoiceOptionsLoaded(true);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [capability]);
+
+  const activeVoiceModelId = String(modelId || defaultVoiceModelId || '').trim();
+  const voiceOptions = voiceOptionsByModel[activeVoiceModelId]?.length
+    ? voiceOptionsByModel[activeVoiceModelId]
+    : activeVoiceModelId
+      ? []
+      : FALLBACK_VOICE_OPTIONS;
+  const selectedVoice = voiceOptions.some((option) => option.value === settings.voice)
+    ? settings.voice
+    : voiceOptions[0]?.value || 'alloy';
 
   useEffect(() => () => {
     scheduleOverlayLockRelease(0);
@@ -136,14 +187,14 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
       update({
         orientationHorizontal: checked,
         orientationVertical: checked ? false : settings.orientationVertical,
-        size: checked ? '1536x1024' : settings.orientationVertical ? '1024x1536' : settings.size,
+        size: checked ? '1920x1080' : settings.orientationVertical ? '1080x1920' : settings.size,
       });
       return;
     }
     update({
       orientationVertical: checked,
       orientationHorizontal: checked ? false : settings.orientationHorizontal,
-      size: checked ? '1024x1536' : settings.orientationHorizontal ? '1536x1024' : settings.size,
+      size: checked ? '1080x1920' : settings.orientationHorizontal ? '1920x1080' : settings.size,
     });
   };
 
@@ -240,11 +291,19 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
             <Select
               size="small"
               className="w-full"
-              value={settings.voice || 'alloy'}
-              options={VOICE_OPTIONS}
+              value={selectedVoice}
+              options={voiceOptions}
+              loading={Boolean(activeVoiceModelId) && !voiceOptionsLoaded}
+              disabled={disabled || (Boolean(activeVoiceModelId) && voiceOptions.length === 0)}
+              notFoundContent={voiceOptionsLoaded ? 'گوینده سازگار برای این مدل ثبت نشده است' : 'در حال دریافت گوینده‌های سازگار...'}
               onChange={(value) => update({ voice: String(value) })}
             />
           </div>
+          {activeVoiceModelId ? (
+            <div className="text-[10px] leading-4 text-gray-400">
+              گوینده‌های سازگار با موتور انتخاب‌شده نمایش داده می‌شوند.
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div>
               <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">زبان</div>
@@ -337,30 +396,57 @@ const AiMediaSettingsPopover: React.FC<AiMediaSettingsPopoverProps> = ({
 
       {capability === 'video_generation' ? (
         <>
-          <div>
+          <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-[10px] leading-5 text-blue-700 dark:border-blue-900/40 dark:bg-blue-950/20 dark:text-blue-200">
+            تنظیمات زیر برای ساخت همین ویدیو اعمال می‌شوند. در صورت ارسال تصویر، همان تصویر به‌عنوان مبنا استفاده می‌شود.
+          </div>
+          <div className="rounded-lg border border-violet-100 bg-violet-50/40 p-2 dark:border-violet-400/20 dark:bg-violet-950/15">
+            <div className="mb-2 text-xs font-semibold text-violet-800 dark:text-violet-100">قاب و کارگردانی ویدیو</div>
             <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">ابعاد ویدیو</div>
             <Select
               size="small"
               className="w-full"
-              value={settings.size || '1280x720'}
-              options={[
-                { value: '1280x720', label: 'افقی (۱۲۸۰×۷۲۰)' },
-                { value: '720x1280', label: 'عمودی (۷۲۰×۱۲۸۰)' },
-                { value: '1024x1024', label: 'مربع (۱۰۲۴×۱۰۲۴)' },
-              ]}
+              value={settings.size || '1080x1920'}
+              options={VIDEO_SIZE_OPTIONS}
               onChange={(value) => update({ size: String(value) })}
             />
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">سبک</div>
+                <Select size="small" className="w-full" value={settings.videoStyle || 'cinematic'} options={[{ value: 'cinematic', label: 'سینمایی' }, { value: 'realistic', label: 'واقع‌گرایانه' }, { value: 'animation', label: 'انیمیشنی' }, { value: 'product', label: 'معرفی محصول' }]} onChange={(value) => update({ videoStyle: String(value) })} />
+              </div>
+              <div>
+                <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">حرکت</div>
+                <Select size="small" className="w-full" value={settings.videoMotion || 'gentle'} options={[{ value: 'gentle', label: 'ملایم' }, { value: 'dynamic', label: 'پویا' }, { value: 'static', label: 'ثابت' }]} onChange={(value) => update({ videoMotion: String(value) })} />
+              </div>
+            </div>
+            <div className="mt-2">
+              <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">نمای دوربین</div>
+              <Select size="small" className="w-full" value={settings.videoCamera || 'auto'} options={[{ value: 'auto', label: 'انتخاب خودکار' }, { value: 'close_up', label: 'نمای نزدیک' }, { value: 'wide', label: 'نمای باز' }, { value: 'tracking', label: 'دنبال‌کننده' }]} onChange={(value) => update({ videoCamera: String(value) })} />
+            </div>
           </div>
-          <div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
             <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">مدت (ثانیه)</div>
             <InputNumber
               size="small"
               className="w-full"
-              min={1}
+              min={4}
               max={20}
-              value={settings.seconds || 5}
-              onChange={(value) => update({ seconds: Number(value) || 5 })}
+              step={1}
+              value={settings.seconds || 4}
+              onChange={(value) => update({ seconds: Number(value) || 4 })}
             />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-semibold text-gray-600 dark:text-gray-300">کیفیت</div>
+              <Select
+                size="small"
+                className="w-full"
+                value={settings.videoQuality || 'standard'}
+                options={[{ value: 'standard', label: 'استاندارد' }, { value: 'high', label: 'بالاتر' }]}
+                onChange={(value) => update({ videoQuality: value as AiMediaSettings['videoQuality'] })}
+              />
+            </div>
           </div>
         </>
       ) : null}

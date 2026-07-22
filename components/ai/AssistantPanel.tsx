@@ -103,9 +103,6 @@ const DIRECT_IMAGE_GENERATION_PATTERNS = [
   /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:را|رو).*(?:بساز|تولید کن|ایجاد کن|طراحی کن)/i,
 ];
 
-const isRecordUpdateRequest = (text: string) =>
-  /(?:ویرایش|اصلاح|تغییر|بروزرسانی|به‌روزرسانی|آپدیت)/i.test(String(text || ''));
-
 const IMAGE_PROMPT_WORD_PATTERN = /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:تصویر|عکس|پوستر|بنر|کاور|image)|(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور)/i;
 
 const isImagePromptOnlyRequest = (text: string) => {
@@ -125,7 +122,7 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
   if (set.has('web_search')) return 'در حال جستجو...';
   if (set.has('deep_reasoning')) return 'در حال فکر کردن...';
   if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
-  if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
+  if (set.has('record_creation')) return 'در حال آماده‌سازی پیش‌نویس رکورد...';
   return fallback;
 };
 
@@ -317,8 +314,15 @@ const buildGenerationSettingsRows = (kind: string, settings?: AiMediaSettings | 
     if (extra?.sourceImageCount) rows.push({ label: 'تصویر مبنا', value: `${Number(extra.sourceImageCount).toLocaleString('fa-IR')} تصویر` });
   }
   if (kind === 'video_generation') {
+    const videoStyleLabels: Record<string, string> = { cinematic: 'سینمایی', realistic: 'واقع‌گرایانه', animation: 'انیمیشنی', product: 'معرفی محصول' };
+    const videoMotionLabels: Record<string, string> = { gentle: 'ملایم', dynamic: 'پویا', static: 'ثابت' };
+    const videoCameraLabels: Record<string, string> = { auto: 'انتخاب خودکار', close_up: 'نمای نزدیک', wide: 'نمای باز', tracking: 'دنبال‌کننده' };
     rows.push({ label: 'ابعاد', value: String(settings?.size || 'پیش‌فرض') });
     rows.push({ label: 'مدت', value: settings?.seconds ? `${Number(settings.seconds).toLocaleString('fa-IR')} ثانیه` : 'پیش‌فرض' });
+    rows.push({ label: 'کیفیت', value: settings?.videoQuality === 'high' ? 'بالاتر' : 'استاندارد' });
+    if (settings?.videoStyle) rows.push({ label: 'سبک', value: videoStyleLabels[String(settings.videoStyle)] || String(settings.videoStyle) });
+    if (settings?.videoMotion) rows.push({ label: 'حرکت', value: videoMotionLabels[String(settings.videoMotion)] || String(settings.videoMotion) });
+    if (settings?.videoCamera) rows.push({ label: 'دوربین', value: videoCameraLabels[String(settings.videoCamera)] || String(settings.videoCamera) });
     if (extra?.sourceImageCount) rows.push({ label: 'تصویر مبنا', value: `${Number(extra.sourceImageCount).toLocaleString('fa-IR')} تصویر` });
   }
   if (kind === 'voice_output') {
@@ -739,6 +743,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const voiceOutputMode = selectedCapabilities.includes('voice_output');
   const videoMode = selectedCapabilities.includes('video_generation');
   const documentMode = selectedCapabilities.includes('document_generation');
+  const activeMediaModelId = imageMode
+    ? modelOverrides.image_generation || modelOverrideRef.current
+    : videoMode
+      ? modelOverrides.video_generation || modelOverrideRef.current
+      : voiceOutputMode
+        ? modelOverrides.voice_output || modelOverrideRef.current
+        : null;
   const textChatMode = selectedCapabilities.includes('text_chat');
   const workflowCapabilityCount = selectedCapabilities.filter((capability) => (
     capability === 'record_creation'
@@ -1639,6 +1650,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       };
 
       let plannedAutoRoute: any = null;
+      let plannedRecordMutationMode: 'create' | 'update' = pendingAiAction?.actionType === 'update_record_from_prompt'
+        ? 'update'
+        : 'create';
+      if (activeRecordCreationSchema) {
+        const route = await requestAutoRoute({
+          messageText: assistantText,
+          inputKind,
+          forceNewThread: shouldStartProcessGuideThread,
+        });
+        plannedAutoRoute = route;
+        if (route?.mutationMode === 'update') plannedRecordMutationMode = 'update';
+        if (route?.agentPlan) {
+          setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id ? {
+            ...item,
+            metadata: { ...(item.metadata || {}), agent_plan: route.agentPlan },
+          } : item));
+        }
+      }
       if (!processOperationMode && !activeRecordCreationSchema) {
         let streamCapabilities: AiComposerCapability[] = selectedCapabilities.filter((capability) => capability !== 'text_chat');
         let streamCapability = selectedCapabilities.includes('legal_assistant')
@@ -1711,8 +1740,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         modelOverride: modelOverrideRef.current,
         previewOnly: true,
       } : activeRecordCreationSchema ? {
-        action: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record_from_prompt' : 'create_record_from_prompt',
-        outputMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantText) ? 'update_record' : 'create_record',
+        action: plannedRecordMutationMode === 'update' ? 'update_record_from_prompt' : 'create_record_from_prompt',
+        outputMode: plannedRecordMutationMode === 'update' ? 'update_record' : 'create_record',
         capability: contextWithSelection.mode === 'record' ? 'record_chat' : 'dashboard_chat',
         capabilities: selectedCapabilities.filter((capability) => capability !== 'text_chat'),
         message: assistantText,
@@ -2204,6 +2233,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     setSubmitting(true);
     try {
       const inputs = await buildBundleInputPayloads();
+      const recordRoute = activeRecordCreationSchema
+        ? await requestAutoRoute({
+          messageText: assistantPrompt,
+          inputKind: 'task_bundle',
+          bundlePayload: inputs,
+        })
+        : null;
+      const recordMutationMode = pendingAiAction?.actionType === 'update_record_from_prompt'
+        ? 'update'
+        : recordRoute?.mutationMode === 'update'
+          ? 'update'
+          : 'create';
+      if (recordRoute?.agentPlan) {
+        setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id ? {
+          ...item,
+          metadata: { ...(item.metadata || {}), agent_plan: recordRoute.agentPlan },
+        } : item));
+      }
       const data = await (effectiveCapabilities.length === 0 && !processOperationMode && !activeRecordCreationSchema
         ? executeAutoRoute({
           messageText: assistantPrompt,
@@ -2222,7 +2269,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current,
           settings: mediaSettings,
           recordCreation: activeRecordCreationSchema,
-          recordMutationMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantPrompt) ? 'update' : 'create',
+          recordMutationMode,
           previewOnly: true,
         }));
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
@@ -2320,7 +2367,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setSubmitting(false);
     }
-  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, selectedCapabilities, submitting, threadId]);
+  }, [activeRecordCreationSchema, buildBundleInputPayloads, bundleInputs, callAssistant, contextWithSelection, executeAutoRoute, input, message, pendingAiAction, processOperationMode, requestAutoRoute, selectedCapabilities, submitting, threadId]);
 
   useEffect(() => {
     if (!active || !autoSubmitInitialPrompt || !initialFile || submitting || loadingThread || bundleInputs.length === 0) return;
@@ -2946,6 +2993,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                       settings={mediaSettings}
                       onSettingsChange={setMediaSettings}
                       size="small"
+                      modelId={String(pendingAiAction?.confirmBody?.modelOverride || activeMediaModelId || '').trim() || null}
                     />
                   </div>
                 ) : null}
@@ -3075,6 +3123,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             onRecordCreationTargetModuleChange={setRecordCreationTargetModuleId}
             mediaSettings={mediaSettings}
             onMediaSettingsChange={setMediaSettings}
+            mediaModelId={activeMediaModelId}
             onApplyPrompt={(text) => setInput((prev) => (String(prev || '').trim() ? `${prev}\n${text}` : text))}
           />
           <Button
@@ -3086,7 +3135,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             onClick={() => void (shouldUseTaskBundle ? submitTaskBundle() : documentMode ? submitDocumentPrompt() : videoMode ? submitVideoPrompt() : voiceOutputMode ? submitVoiceOutputPrompt() : imageMode ? submitImagePrompt() : submitChat())}
             size="small"
           >
-            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'پیشنهاد ساخت' : 'ارسال'}
+            {shouldUseTaskBundle ? 'ارسال' : documentMode ? 'ساخت فایل' : videoMode ? 'ساخت ویدیو' : voiceOutputMode ? 'تولید صدا' : imageMode ? 'ساخت تصویر' : processOperationMode ? 'پیشنهاد اقدام' : activeRecordCreationSchema ? 'آماده‌سازی پیش‌نویس' : 'ارسال'}
           </Button>
         </div>
       </div>

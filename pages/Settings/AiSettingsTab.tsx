@@ -58,7 +58,7 @@ const CAPABILITIES: Array<{
   { key: 'voice_input', label: 'دریافت و تحلیل صدا', description: 'تبدیل ویس به متن و تحلیل آن', phase: 'active' },
   { key: 'voice_output', label: 'تولید صدا', description: 'پاسخگویی با ویس', phase: 'active' },
   { key: 'image_generation', label: 'تولید تصویر', description: 'ساخت تصویر با پرامپت', phase: 'active' },
-  { key: 'video_generation', label: 'تولید ویدیو', description: 'ساخت ویدیو با پرامپت', phase: 'next' },
+  { key: 'video_generation', label: 'تولید ویدیو', description: 'ساخت ویدیو با متن یا تصویر', phase: 'active' },
   { key: 'document_generation', label: 'ساخت فایل', description: 'تولید فایل Word، Excel، PDF یا CSV', phase: 'active' },
   { key: 'voip_auto_reply', label: 'پاسخگویی خودکار VOIP', description: 'پاسخ صوتی خودکار در تماس‌ها', phase: 'next' },
   { key: 'customer_auto_reply', label: 'پاسخگویی خودکار مشتریان', description: 'مدل پاسخ خودکار بات‌ها و گفتگوهای مشتریان', phase: 'active' },

@@ -61,6 +61,7 @@ import {
   type PayrollLedgerEntry,
   type PayrollSlipLine,
 } from '../utils/payrollLedger';
+import { resolveWorkScheduleDayPlan } from '../utils/workSchedulePlan';
 import {
   HR_QUERY_KEY_EMPLOYEES,
   buildHrFilterQuery,
@@ -3000,10 +3001,12 @@ const HRPage: React.FC = () => {
         const isLegacyDirectEmployeeSchedule = String(schedule.employee_id || '') === String(employeeId);
         if (!matchedColumn && !isLegacyDirectEmployeeSchedule) continue;
 
-        const normalizedPlan = matchedColumn
-          ? normalizeSchedulePlan(matchedColumn?.weeklyPlan)
-          : normalizeSchedulePlan(schedule.weekly_plan);
-        const currentDayPlan = normalizedPlan?.[dayKey];
+        const currentDayPlan = resolveWorkScheduleDayPlan({
+          monthlyPlan: matchedColumn?.monthlyPlan,
+          weeklyPlan: matchedColumn ? matchedColumn?.weeklyPlan : schedule.weekly_plan,
+          dateKey: targetDate.format('YYYY-MM-DD'),
+          weekdayKey: dayKey,
+        });
         if (!currentDayPlan) continue;
 
         const shifts: AttendanceScheduleShift[] = (['shift1', 'shift2'] as const)
@@ -3465,12 +3468,14 @@ const HRPage: React.FC = () => {
       const presenceMinutes = calculateAttendanceRowPresenceMinutes(row);
       const hourlyRate = resolvePayrollHourlyRateForProfile(profile, presenceMinutes, requiredMinutes);
       const overtimeMinutes = calculateAttendanceOvertimeMinutes(row);
-      const overtimeRate = toNumber(profile?.overtime_rate) || hourlyRate;
+      // پاداش اضافه‌کاری فقط با نرخ صریح همان کارمند محاسبه می‌شود؛ نرخ خالی/صفر مجوز جایگزینی با دستمزد ساعتی نیست.
+      const overtimeRate = Math.max(0, toNumber(profile?.overtime_rate));
       const earlyBonusMinutes = calculateAttendanceEarlyBonusMinutes(row);
       const earlyBonusRate = toNumber(profile?.early_bonus_rate) || hourlyRate;
       const paidLeaveMinutes = paidLeaveEligibleMinutesByAttendanceRowKey.get(row.key) || 0;
       const delayAbsenceMinutes = calculateAttendanceDelayAbsenceMinutes(row, profile, paidLeaveMinutes);
-      const delayAbsenceRate = toNumber(profile?.late_penalty_rate) || hourlyRate;
+      // جریمه تاخیر و غیبت نیز باید صریحاً برای کارمند تنظیم شده باشد.
+      const delayAbsenceRate = Math.max(0, toNumber(profile?.late_penalty_rate));
 
       current.presenceMinutes += presenceMinutes;
       current.hourlyAmount += Math.round((presenceMinutes / 60) * hourlyRate);
@@ -5115,7 +5120,7 @@ const HRPage: React.FC = () => {
 
     if (sourceType === 'attendance_overtime') {
       const minutes = calculateAttendanceOvertimeMinutes(row);
-      const rate = toNumber(employee?.overtime_rate) || hourlyRate;
+      const rate = Math.max(0, toNumber(employee?.overtime_rate));
       return {
         sourceKey: buildAttendanceOvertimeSourceKey(row),
         sourceType,
@@ -5151,7 +5156,7 @@ const HRPage: React.FC = () => {
         paidLeaveMinutes,
       );
       const breakdown = calculateAttendanceDelayAbsenceBreakdown(row, employee || null, paidLeaveMinutes);
-      const rate = toNumber(employee?.late_penalty_rate) || hourlyRate;
+      const rate = Math.max(0, toNumber(employee?.late_penalty_rate));
       return {
         sourceKey: buildAttendanceDelayAbsenceSourceKey(row),
         sourceType,
