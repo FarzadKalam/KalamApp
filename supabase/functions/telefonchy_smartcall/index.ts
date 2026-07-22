@@ -2,7 +2,7 @@
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
 
-const FUNCTION_BUILD = 'telefonchy-smartcall-2026-07-12-tehran-time';
+const FUNCTION_BUILD = 'telefonchy-smartcall-2026-07-22-recording-state';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -286,6 +286,12 @@ const mapStatus = (value: any, talkSeconds: number | null) => {
   return 'unknown';
 };
 
+const hasTelefonchyRecording = (item: Record<string, any>, callId: string, fileId: string) => Boolean(
+  firstValue(item.file_record, item.fileRecord, item.recording_file, item.recordingFile)
+  && callId
+  && fileId
+);
+
 const extractCallsArray = (value: any): any[] => {
   if (Array.isArray(value)) return value;
   const candidates = [
@@ -387,15 +393,20 @@ const normalizeProviderCallRow = (
   const destinationNumber = normalizePhone(firstValue(item.call_dest, item.destination_number, item.destination, item.to, item.callee));
   const exten = item?.exten && typeof item.exten === 'object' && !Array.isArray(item.exten) ? item.exten : {};
   const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
+  const callId = firstValue(item.call_id, item.callId, item.cuid, item.unique_id);
+  const fileId = firstValue(item.file_id, item.fileId, item.record_id);
+  const recordingAvailable = hasTelefonchyRecording(item, callId, fileId);
 
   return {
     org_id: orgId,
     provider: 'telefonchy',
     service_id: firstValue(item.service_id, item.serviceId, serviceId) || null,
-    call_id: firstValue(item.call_id, item.callId, item.cuid, item.unique_id) || null,
+    call_id: callId || null,
     object_id: firstValue(item.object_id, item.objectId, item.id) || null,
     direction,
-    status: mapStatus(firstValue(item.status, item.call_status, item.disposition), talkSeconds),
+    status: direction === 'incoming' && !recordingAvailable
+      ? 'missed'
+      : mapStatus(firstValue(item.status, item.call_status, item.disposition), talkSeconds),
     source_number: sourceNumber || null,
     destination_number: destinationNumber || null,
     extension: firstValue(item.extension, item.operator_extension, exten.number, exten.caller_id) || null,
@@ -405,13 +416,15 @@ const normalizeProviderCallRow = (
     ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(item.ended_at, item.end_at, item.end_time, item.updated_at)),
     wait_seconds: toIntegerOrNull(firstValue(item.time_wait, item.wait_seconds)),
     talk_seconds: talkSeconds,
-    file_id: firstValue(item.file_id, item.fileId, item.record_id) || null,
+    file_id: recordingAvailable ? fileId : null,
     recording_url: firstValue(item.recording_url, item.recordingUrl, item.file_url, item.audio_url) || null,
     title: counterpartyPhone || sourceNumber || destinationNumber || 'تماس VoIP',
     metadata: {
       provider: 'telefonchy',
       action: 'sync_recent_calls',
       build: FUNCTION_BUILD,
+      recording_available: recordingAvailable,
+      recording_file: recordingAvailable ? firstValue(item.file_record, item.fileRecord, item.recording_file, item.recordingFile) : null,
       provider_row: item,
     },
   };

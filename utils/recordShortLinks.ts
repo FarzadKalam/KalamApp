@@ -26,8 +26,11 @@ const generateCode = (length = 7) => {
   return Array.from(values).map((value) => CODE_ALPHABET[value % CODE_ALPHABET.length]).join('');
 };
 
-export const buildDirectRecordPath = (moduleId: string, recordId: string) =>
-  `/${encodeURIComponent(String(moduleId || '').trim())}/${encodeURIComponent(String(recordId || '').trim())}`;
+export const buildDirectRecordPath = (moduleId: string, recordId: string) => {
+  const normalizedModuleId = String(moduleId || '').trim();
+  const path = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(String(recordId || '').trim())}`;
+  return normalizedModuleId === 'tasks' ? `${path}?process_v2=1` : path;
+};
 
 export const buildShortRecordUrl = (code?: string | null) => {
   const normalized = String(code || '').trim();
@@ -38,12 +41,13 @@ export const getOrCreateShortRecordUrl = async (moduleId: string, recordId: stri
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
   if (!normalizedModuleId || !normalizedRecordId) return '';
+  const isProcessTask = normalizedModuleId === 'tasks';
   const targetUrl = absoluteUrl(buildDirectRecordPath(normalizedModuleId, normalizedRecordId));
 
   try {
     const { data: existing, error: existingError } = await supabase
       .from('short_links')
-      .select('code')
+      .select('code, metadata')
       .eq('link_type', 'generic')
       .eq('module_id', normalizedModuleId)
       .eq('record_id', normalizedRecordId)
@@ -53,7 +57,8 @@ export const getOrCreateShortRecordUrl = async (moduleId: string, recordId: stri
       .limit(1)
       .maybeSingle();
     if (existingError) throw existingError;
-    if (existing?.code) return buildShortRecordUrl(existing.code) || targetUrl;
+    const matchesTaskModal = !isProcessTask || (existing as any)?.metadata?.task_process_v2 === true;
+    if (existing?.code && matchesTaskModal) return buildShortRecordUrl(existing.code) || targetUrl;
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const { data, error } = await supabase
@@ -64,7 +69,11 @@ export const getOrCreateShortRecordUrl = async (moduleId: string, recordId: stri
           target_url: targetUrl,
           module_id: normalizedModuleId,
           record_id: normalizedRecordId,
-          metadata: { kind: 'record', internal_record_link: true },
+          metadata: {
+            kind: 'record',
+            internal_record_link: true,
+            ...(isProcessTask ? { task_process_v2: true } : {}),
+          },
         })
         .select('code')
         .single();
@@ -77,4 +86,3 @@ export const getOrCreateShortRecordUrl = async (moduleId: string, recordId: stri
   }
   return targetUrl;
 };
-

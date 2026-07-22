@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-const FUNCTION_BUILD = 'telefonchy-recording-2026-06-14-01';
+const FUNCTION_BUILD = 'telefonchy-recording-2026-07-22-operator-access';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -67,9 +67,12 @@ const verifyUser = async (supabaseUrl: string, serviceRoleKey: string, token: st
 
 const canReadCallRecording = (profile: any, permissions: any, call: any) => {
   const profileId = String(profile?.id || '').trim();
-  const extension = String(profile?.voip_extension || '').trim();
+  const normalizeOperatorValue = (value: any) => String(value ?? '').trim().replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit))).replace(/\D/g, '');
+  const extension = normalizeOperatorValue(profile?.voip_extension);
+  const operatorCode = normalizeOperatorValue(profile?.voip_operator_code);
   if (profileId && String(call?.assignee_id || '').trim() === profileId) return true;
-  if (extension && String(call?.extension || '').trim() === extension) return true;
+  if (extension && normalizeOperatorValue(call?.extension) === extension) return true;
+  if (operatorCode && normalizeOperatorValue(call?.operator_code) === operatorCode) return true;
 
   const voipPerm = permissions?.__voip || {};
   if (voipPerm?.view === true && voipPerm?.fields?.all_call_notifications === true) return true;
@@ -100,11 +103,11 @@ Deno.serve(async (req) => {
     const user = await verifyUser(supabaseUrl, serviceRoleKey, userToken);
     const profile = await restSingle(supabaseUrl, serviceRoleKey, 'profiles', {
       id: `eq.${user.id}`,
-      select: 'id,org_id,role_id,voip_extension',
+      select: 'id,org_id,role_id,voip_extension,voip_operator_code',
     });
     const call = await restSingle(supabaseUrl, serviceRoleKey, 'voip_call_logs', {
       id: `eq.${callLogId}`,
-      select: 'id,org_id,provider,call_id,file_id,extension,assignee_id',
+      select: 'id,org_id,provider,call_id,file_id,extension,operator_code,assignee_id',
     });
     if (!profile?.org_id || !call?.org_id || String(profile.org_id) !== String(call.org_id)) {
       return json(403, { success: false, message: 'دسترسی به فایل صوتی این تماس مجاز نیست.' });

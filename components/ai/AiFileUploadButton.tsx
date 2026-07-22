@@ -17,6 +17,7 @@ type AiFileUploadButtonProps = {
   disabled?: boolean;
   loading?: boolean;
   size?: ButtonProps['size'];
+  className?: string;
   moduleId?: string | null;
   recordId?: string | null;
   directUpload?: boolean;
@@ -29,6 +30,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
   disabled = false,
   loading = false,
   size,
+  className,
   moduleId,
   recordId,
   directUpload = false,
@@ -149,6 +151,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
           disabled={disabled || loading || preparing}
           loading={preparing || loading}
           size={size}
+          className={className}
           onClick={() => {
             if (directUpload) {
               openDirectUpload();

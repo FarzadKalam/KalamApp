@@ -76,12 +76,12 @@ describe('workflow record link variables', () => {
     })).resolves.toBe(`${window.location.origin}/customers/record-1`);
   });
 
-  it('resolves the current process task link as an absolute URL', async () => {
+  it('resolves the current process task link to the V2 activity modal', async () => {
     await expect(resolveWorkflowFieldValue({
       fieldKey: `__task__${WORKFLOW_RECORD_LINK_FIELD_KEY}`,
       currentRecord: { task_id: 'task-1' },
       moduleId: 'customers',
-    })).resolves.toBe(`${window.location.origin}/tasks/task-1`);
+    })).resolves.toBe(`${window.location.origin}/tasks/task-1?process_v2=1`);
   });
 });
 

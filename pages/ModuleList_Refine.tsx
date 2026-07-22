@@ -5373,7 +5373,7 @@ export const ModuleListRefine: React.FC<{
         }}
         placement="left"
         width="min(92vw, 440px)"
-        title="هوش مصنوعی تازه سیستم"
+        title="دستیار هوشمند سازمان"
         classNames={{ body: "!p-0" }}
         destroyOnHidden
         getContainer={typeof document === "undefined" ? undefined : () => document.body}

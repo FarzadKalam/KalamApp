@@ -631,7 +631,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
     return [
       { key: '/', icon: <DashboardOutlined />, label: 'داشبورد' },
       { key: '/messages', icon: <MessageOutlined />, label: 'پیام‌رسانی', disabled: !communicationsAccess.canUseWorkspace },
-      { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'هوش مصنوعی تازه سیستم', disabled: !communicationsAccess.canUseWorkspace },
+      { key: '/ai', icon: <AiSparkleIcon className="h-4 w-4" />, label: 'دستیار هوشمند سازمان', disabled: !communicationsAccess.canUseWorkspace },
       {
         key: 'resources',
         icon: <AppstoreOutlined />,

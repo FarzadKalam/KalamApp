@@ -15,7 +15,7 @@ const AiAssistantLauncher: React.FC<AiAssistantLauncherProps> = ({
   buttonClassName,
   buttonSize = 'middle',
   disabled = false,
-  tooltipTitle = 'باز کردن هوش مصنوعی تازه سیستم',
+  tooltipTitle = 'باز کردن دستیار هوشمند سازمان',
 }) => {
   const navigate = useNavigate();
 

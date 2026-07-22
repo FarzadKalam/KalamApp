@@ -102,6 +102,11 @@ type LiveProfile = {
   canViewAllSms: boolean;
 };
 
+type VoipOperatorIdentity = {
+  name: string;
+  avatarUrl: string | null;
+};
+
 type BotGroupRow = {
   id: string;
   customer_id?: string | null;
@@ -860,6 +865,28 @@ const fetchVoipCalls = async (profile: LiveProfile) => {
   return data || [];
 };
 
+const fetchVoipOperatorIdentities = async (orgId: string | null, calls: any[]) => {
+  const assigneeIds = Array.from(new Set((calls || [])
+    .map((call) => String(call?.assignee_id || '').trim())
+    .filter(Boolean)));
+  if (!orgId || assigneeIds.length === 0) return {} as Record<string, VoipOperatorIdentity>;
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id,full_name,avatar_url')
+    .eq('org_id', orgId)
+    .in('id', assigneeIds);
+  if (error) throw error;
+  return (data || []).reduce<Record<string, VoipOperatorIdentity>>((result, row: any) => {
+    const id = String(row?.id || '').trim();
+    if (!id) return result;
+    result[id] = {
+      name: String(row?.full_name || '').trim() || 'اپراتور',
+      avatarUrl: String(row?.avatar_url || '').trim() || null,
+    };
+    return result;
+  }, {});
+};
+
 const fetchBotGroups = async (profile: LiveProfile) => {
   const { data, error } = await supabase
     .from('counterparty_bot_groups')
@@ -1033,7 +1060,12 @@ const formatDuration = (row: any) => {
   return `مدت تماس: ${toPersianNumber(minutes)} دقیقه و ${toPersianNumber(remaining)} ثانیه`;
 };
 
-const buildVoipLiveModels = (voipCalls: any[], recordTitleMap: Record<string, string>, readStateKeys: Set<string>) => {
+const buildVoipLiveModels = (
+  voipCalls: any[],
+  recordTitleMap: Record<string, string>,
+  readStateKeys: Set<string>,
+  operatorIdentities: Record<string, VoipOperatorIdentity>,
+) => {
   const isNotificationRead = createNotificationReadChecker(readStateKeys);
   const voipThreads = buildVoipThreads({
     calls: voipCalls,
@@ -1075,28 +1107,35 @@ const buildVoipLiveModels = (voipCalls: any[], recordTitleMap: Record<string, st
     thread.calls.slice().reverse().map((row: any) => {
       const directionValue = String(row?.direction || '').trim().toLowerCase();
       const outgoing = directionValue === 'outgoing';
+      const operator = operatorIdentities[String(row?.assignee_id || '').trim()];
+      const extension = String(row?.extension || '').trim();
+      const operatorCode = String(row?.operator_code || '').trim();
+      const operatorLabel = operator?.name
+        || (extension ? `داخلی ${toPersianNumber(extension)}` : '')
+        || (operatorCode ? `کد اپراتور ${toPersianNumber(operatorCode)}` : '')
+        || 'اپراتور نامشخص';
       const relatedRecordLabel = getRecordLabel(
         recordTitleMap,
         row?.related_module_id || row?.module_id,
         row?.related_record_id || row?.record_id,
         row?.title,
       );
-      const recordingName = String(row?.recording_url || row?.file_id || row?.call_id || '').trim();
+      const recordingName = String(row?.recording_url || row?.file_id || '').trim();
       return {
         id: `live-call-${String(row?.id || `${thread.id}-${row?.created_at || row?.started_at || Math.random()}`)}`,
         sourceRow: row,
         conversationKey: `live:${thread.id}`,
         kind: 'call' as const,
         direction: outgoing ? 'outbound' : 'inbound',
-        author: outgoing ? 'اپراتور' : (thread.title || row?.source_number || 'تماس‌گیرنده'),
+        author: outgoing ? operatorLabel : (thread.title || row?.source_number || 'تماس‌گیرنده'),
         text: `${outgoing ? 'تماس خروجی' : 'تماس ورودی'}${row?.status ? ` - ${resolveVoipStatusLabel(row.status)}` : ''}`,
         time: formatTime(row?.started_at || row?.created_at),
         status: formatDuration(row),
         attachments: recordingName ? [{ name: recordingName, kind: 'audio' as const, url: row?.recording_url || null }] : undefined,
         relatedRecordLabel: relatedRecordLabel || undefined,
         callDirection: outgoing ? 'outgoing' : 'incoming',
-        caller: outgoing ? String(row?.extension || 'اپراتور') : String(row?.source_number || thread.phone || ''),
-        responder: outgoing ? String(row?.destination_number || thread.phone || '') : String(row?.extension || 'اپراتور'),
+        caller: outgoing ? operatorLabel : String(row?.source_number || thread.phone || ''),
+        responder: outgoing ? String(row?.destination_number || thread.phone || '') : operatorLabel,
         callType: outgoing ? 'خروجی' : 'ورودی',
       };
     }),
@@ -1303,6 +1342,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   });
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
+  const [voipOperatorIdentities, setVoipOperatorIdentities] = useState<Record<string, VoipOperatorIdentity>>({});
   const [botGroups, setBotGroups] = useState<BotGroupRow[]>([]);
   const [botGroupMessages, setBotGroupMessages] = useState<BotMessageRow[]>([]);
   const [botDirectThreads, setBotDirectThreads] = useState<BotDirectThreadRow[]>([]);
@@ -1384,6 +1424,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           setVoipCalls(rows || []);
           return rows || [];
         });
+      const voipOperatorIdentityPromise = callPromise
+        .then((rows) => safeLiveFetch('voip-operators', () => fetchVoipOperatorIdentities(profile.orgId, rows), {} as Record<string, VoipOperatorIdentity>))
+        .then((identities) => {
+          setVoipOperatorIdentities(identities || {});
+          return identities || {};
+        });
       const botGroupPromise = safeLiveFetch('bot-groups', () => fetchBotGroups(profile), [] as BotGroupRow[])
         .then((rows) => {
           setBotGroups(rows || []);
@@ -1401,6 +1447,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         botDirectThreadPromise,
       ]);
       await readStatePromise;
+      await voipOperatorIdentityPromise;
       const [botMessageRows, botDirectMessageRows] = await Promise.all([
         safeLiveFetch('bot-group-messages', () => fetchBotGroupMessages(botGroupRows), [] as BotMessageRow[]),
         safeLiveFetch('bot-direct-messages', () => fetchBotDirectMessages(botDirectThreadRows), [] as BotMessageRow[]),
@@ -1742,7 +1789,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
 
   return useMemo(() => {
     const smsModels = buildSmsLiveModels(smsMessages, recordTitleMap, readStateKeys);
-    const voipModels = buildVoipLiveModels(voipCalls, recordTitleMap, readStateKeys);
+    const voipModels = buildVoipLiveModels(voipCalls, recordTitleMap, readStateKeys, voipOperatorIdentities);
     const botGroupModels = buildBotGroupLiveModels(botGroups, botGroupMessages, recordTitleMap, readStateKeys, botSenderBindings);
     const botDirectModels = buildBotDirectLiveModels(botDirectThreads, botDirectMessages, recordTitleMap, readStateKeys, botSenderBindings);
     return {
@@ -1766,5 +1813,5 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       ].filter(Boolean).join('، '),
       getModuleLabel,
     };
-  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, loading, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls]);
+  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, loading, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls, voipOperatorIdentities]);
 };

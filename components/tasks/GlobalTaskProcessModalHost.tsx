@@ -198,6 +198,19 @@ const GlobalTaskProcessModalHost: React.FC = () => {
     };
   }, [message]);
 
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('process_v2') !== '1') return;
+    const match = window.location.pathname.match(/^\/tasks\/([^/]+)$/);
+    const taskId = match?.[1] ? decodeURIComponent(match[1]) : '';
+    if (!taskId) return;
+
+    window.dispatchEvent(new CustomEvent(OPEN_TASK_PROCESS_MODAL_EVENT, { detail: { taskId } }));
+    searchParams.delete('process_v2');
+    const search = searchParams.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`);
+  }, []);
+
   return (
     <>
       {!loading && modalPayload ? (

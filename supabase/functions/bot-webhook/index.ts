@@ -1,5 +1,7 @@
 // @ts-nocheck
 
+import { normalizeAgentPlan, shouldEscalateCustomerAutoReply } from '../_shared/ai-agent-contract.ts';
+
 type BotChannel = 'telegram' | 'bale' | 'rubika';
 
 type IntegrationSettings = {
@@ -2466,7 +2468,16 @@ const sendBotTextMessage = async ({
 const normalizeAiBaseUrl = (value: any) => {
   const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
   if (!raw) return DEFAULT_AI_BASE_URL;
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(normalized);
+    if (/(^|\.)avalai\.ir$|(^|\.)avalapis\.ir$/i.test(url.hostname) && !/\/v\d+$/i.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`.replace(/^([^/])/, '/$1');
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return normalized;
+  }
 };
 
 const botAiBaseUrls = () => {
@@ -2504,6 +2515,40 @@ const restSelectRows = async (
   if (!response.ok) throw new Error(raw || `Could not select ${table}`);
   const parsed = raw ? JSON.parse(raw) : [];
   return Array.isArray(parsed) ? parsed : [];
+};
+
+const loadBotTenantIdentity = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
+  const normalizedOrgId = String(orgId || '').trim();
+  if (!normalizedOrgId) return { organization_name: null, company_name: null, trade_name: null };
+  const [companyRows, organizationRows] = await Promise.all([
+    restSelectRows(supabaseUrl, serviceRoleKey, 'company_settings', {
+      org_id: `eq.${normalizedOrgId}`,
+      select: 'company_name,company_full_name,trade_name',
+      limit: 1,
+    }).catch(() => []),
+    restSelectRows(supabaseUrl, serviceRoleKey, 'organizations', {
+      id: `eq.${normalizedOrgId}`,
+      select: 'name',
+      limit: 1,
+    }).catch(() => []),
+  ]);
+  const company = companyRows[0] || {};
+  const organization = organizationRows[0] || {};
+  return {
+    organization_name: String(organization?.name || '').trim() || null,
+    company_name: String(company?.company_name || company?.company_full_name || organization?.name || '').trim() || null,
+    trade_name: String(company?.trade_name || '').trim() || null,
+  };
+};
+
+const isRecentBotConversation = (conversation: any[]) => {
+  const latestAt = (conversation || [])
+    .map((item) => Date.parse(String(item?.created_at || '')))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => right - left)[0];
+  return Number.isFinite(latestAt)
+    && Date.now() - Number(latestAt) >= 0
+    && Date.now() - Number(latestAt) < 6 * 60 * 60 * 1000;
 };
 
 const loadBotAiProviderConfig = async (supabaseUrl: string, serviceRoleKey: string, orgId: string) => {
@@ -2547,12 +2592,18 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
   if (!providerConfig?.apiKey) throw new Error('کلید مرکزی AI برای پاسخ خودکار بات تنظیم نشده است.');
   const model = String(providerConfig.model || '').trim();
   const isReasoningModel = [/^o\d/i, /\bo[34][-_]/i, /^gpt-5/i, /deepseek-r\d/i, /\bqwq\b/i, /\breasonin/i].some((pattern) => pattern.test(model));
+  const tenantName = [payload?.tenant?.trade_name, payload?.tenant?.company_name, payload?.tenant?.organization_name]
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+  const continuityInstruction = isRecentBotConversation(payload?.conversation)
+    ? 'این گفتگو در شش ساعت اخیر فعال بوده است؛ reply را بدون سلام، معرفی یا شروع دوباره مکالمه بنویس.'
+    : 'اگر گفتگو تازه است، فقط در صورت طبیعی‌بودن یک خوش‌آمدگویی کوتاه بنویس.';
   const requestBody: Record<string, any> = {
     model,
     messages: [
       {
         role: 'system',
-        content: 'شما دستیار پاسخگویی خودکار سازمانی هستید. فقط متن قابل ارسال به مشتری را بنویس. پاسخ فارسی، کوتاه، حرفه‌ای و محتاط باشد. اگر اطلاعات کافی نیست، سوال کوتاه بپرس. هیچ توضیح فرایندی، Markdown یا عنوان ننویس.',
+        content: `شما عامل پاسخگویی خودکار سازمان «${tenantName || 'فعلی'}» هستید؛ KalamApp فقط بستر نرم‌افزاری است. ${continuityInstruction} فقط JSON معتبر برگردان: {"reply":"...","risk":"low|medium|high","confidence":"low|medium|high","requires_handoff":true|false,"reason":"..."}. پاسخ reply فارسی، کوتاه، حرفه‌ای و محتاط باشد. اگر اطلاعات کافی نیست، requires_handoff را true کن و یک سوال کوتاه در reply بنویس. برای قیمت، امور مالی، حقوقی، تغییر داده یا هر ادعای بدون منبع، risk را low نگذار و requires_handoff را true کن. هیچ Markdown یا متن خارج از JSON ننویس.`,
       },
       {
         role: 'user',
@@ -2597,8 +2648,18 @@ const callBotAutoReplyAi = async (providerConfig: any, payload: Record<string, a
   let parsed: any = {};
   try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = { raw }; }
   if (!response.ok) throw new Error(String(parsed?.error?.message || parsed?.message || raw || `AI request failed: ${response.status}`));
+  const rawContent = String(parsed?.choices?.[0]?.message?.content || '').replace(/^["'`]+|["'`]+$/g, '').trim();
+  let agentOutput: any = null;
+  try { agentOutput = rawContent ? JSON.parse(rawContent) : null; } catch { agentOutput = null; }
+  const agentPlan = normalizeAgentPlan(agentOutput || {}, {
+    policy: 'customer_auto_reply',
+    allowedCapabilities: [],
+    isKnownModule: () => false,
+  });
   return {
-    text: String(parsed?.choices?.[0]?.message?.content || '').replace(/^["'`]+|["'`]+$/g, '').trim(),
+    text: String(agentOutput?.reply || rawContent || '').trim(),
+    agentPlan,
+    requiresHandoff: agentOutput?.requires_handoff === true || shouldEscalateCustomerAutoReply(agentPlan),
     usage: parsed?.usage || null,
     requestId: response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null,
   };
@@ -2627,7 +2688,10 @@ const maybeSendBotAiAutoReply = async ({
   const text = String(inboundText || '').trim();
   const metadata = matchedGroup?.metadata && typeof matchedGroup.metadata === 'object' ? matchedGroup.metadata : {};
   if (!orgId || !groupId || !chatId || !text || contact?.isGroup !== true || metadata?.ai_auto_reply_enabled !== true) return;
-  const providerConfig = await loadBotAiProviderConfig(supabaseUrl, serviceRoleKey, orgId);
+  const [providerConfig, tenant] = await Promise.all([
+    loadBotAiProviderConfig(supabaseUrl, serviceRoleKey, orgId),
+    loadBotTenantIdentity(supabaseUrl, serviceRoleKey, orgId),
+  ]);
   if (!providerConfig?.model) return;
   const recentRows = await loadConversationCounterpartyBotMessages(supabaseUrl, serviceRoleKey, {
     orgId,
@@ -2648,6 +2712,7 @@ const maybeSendBotAiAutoReply = async ({
     }))
     .filter((row: any) => row.text);
   const aiResult = await callBotAutoReplyAi(providerConfig, {
+    tenant,
     channel,
     counterparty: {
       label: counterpartyLabel || null,
@@ -2660,6 +2725,16 @@ const maybeSendBotAiAutoReply = async ({
   });
   const replyText = String(aiResult?.text || '').trim();
   if (!replyText) return;
+  if (aiResult?.requiresHandoff) {
+    await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, groupId, {
+      metadata: {
+        ...metadata,
+        last_ai_auto_reply_handoff_at: new Date().toISOString(),
+        last_ai_auto_reply_handoff_reason: String(aiResult?.agentPlan?.reason || 'نیازمند بررسی انسانی').slice(0, 500),
+      },
+    }).catch(() => null);
+    return;
+  }
   const sent = await sendBotTextMessage({
     channel,
     settings: (integration?.settings || {}) as IntegrationSettings,
@@ -2681,6 +2756,7 @@ const maybeSendBotAiAutoReply = async ({
       model: providerConfig.model,
       avalai_request_id: aiResult.requestId,
       usage: aiResult.usage || null,
+      agent_plan: aiResult.agentPlan || null,
     },
   });
   await patchCounterpartyBotGroup(supabaseUrl, serviceRoleKey, groupId, {

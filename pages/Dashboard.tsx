@@ -1431,7 +1431,7 @@ const Dashboard: React.FC = () => {
                         event.preventDefault();
                         handleSubmitDashboardAiQuestion();
                       }}
-                      placeholder="از هوش مصنوعی تازه سیستم بپرسید..."
+                      placeholder="از دستیار هوشمند سازمان بپرسید..."
                       autoSize={{ minRows: 1, maxRows: 4 }}
                       className="!leading-6"
                     />
@@ -1439,6 +1439,7 @@ const Dashboard: React.FC = () => {
                       type="primary"
                       shape="circle"
                       icon={<SendOutlined />}
+                      size="small"
                       disabled={dashboardAiSendDisabled}
                       onClick={handleSubmitDashboardAiQuestion}
                       aria-label={dashboardVoiceOutputMode ? 'تولید صدا با هوش مصنوعی' : dashboardImageMode ? 'ساخت تصویر با هوش مصنوعی' : 'ارسال پیام به هوش مصنوعی'}

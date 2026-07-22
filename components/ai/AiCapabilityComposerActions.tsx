@@ -130,6 +130,9 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const autoMode = selectedSet.size === 0;
   const autoSuggestedSet = useMemo(() => new Set(autoSuggested), [autoSuggested]);
+  const actionSize = size || 'small';
+  const iconActionClass = '!flex !h-7 !w-7 !items-center !justify-center !rounded-lg !p-0';
+  const capabilityTagClass = 'm-0 !inline-flex !h-7 !items-center !rounded-md !px-2 !text-[11px]';
   const effectiveSelected = autoMode && autoSuggested.length > 0 ? autoSuggested : selected;
   const effectiveSelectedSet = useMemo(() => new Set(effectiveSelected), [effectiveSelected]);
   // Only one media-generation capability is active at a time.
@@ -208,12 +211,12 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
   const triggerButton = (
     <Tooltip title="انتخاب عملکرد هوش مصنوعی">
-      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={size} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" />
+      <Button icon={<PlusOutlined />} disabled={disabled || loading} size={actionSize} className={iconActionClass} onClick={() => handleOpenChange(true)} aria-label="انتخاب عملکرد هوش مصنوعی" />
     </Tooltip>
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center gap-1.5" dir="rtl">
       {isMobile ? (
         <>
           {triggerButton}
@@ -251,7 +254,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
 
       <Space size={[4, 4]} wrap>
         {autoMode ? (
-          <Tag className="m-0">تصمیم‌گیری خودکار</Tag>
+          <Tag className={capabilityTagClass}>تصمیم‌گیری خودکار</Tag>
         ) : null}
         {effectiveSelected
           .filter((key) => CAPABILITY_META.some((item) => item.key === key))
@@ -267,7 +270,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
                   event.preventDefault();
                   setCapability(key, false);
                 }}
-                className="m-0"
+                className={capabilityTagClass}
               >
                 {autoMode ? `تشخیص: ${meta.label}` : meta.label}
               </Tag>
@@ -281,7 +284,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           settings={mediaSettings}
           onSettingsChange={onMediaSettingsChange}
           disabled={disabled || loading}
-          size={size}
+          size={actionSize}
         />
       ) : null}
 
@@ -290,7 +293,8 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           <Tooltip title="پرامپت‌های آماده">
             <Button
               icon={<SnippetsOutlined />}
-              size={size}
+              size={actionSize}
+              className={iconActionClass}
               disabled={disabled || loading}
               onClick={() => setPromptModalOpen(true)}
             />
@@ -316,7 +320,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
       ) : null}
 
       {(selectedSet.has('voice_input') || autoMode) && isCapabilityUsable(capabilityAvailability, 'voice_input') ? (
-        <AiVoiceRecorder disabled={disabled} loading={voiceLoading} onSend={onVoiceSend} />
+        <AiVoiceRecorder disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
       ) : null}
 
       {(selectedSet.has('document_analysis') || autoMode) && isCapabilityUsable(capabilityAvailability, 'document_analysis') ? (
@@ -329,7 +333,8 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           multiple={allowMultipleFiles}
           moduleId={moduleId}
           recordId={recordId}
-          size={size}
+          size={actionSize}
+          className={iconActionClass}
         />
       ) : null}
 
@@ -338,7 +343,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           allowClear
           showSearch
           className="min-w-[210px]"
-          size={size}
+          size={actionSize}
           value={recordCreationTargetModuleId || undefined}
           options={recordCreationModuleOptions}
           optionFilterProp="label"

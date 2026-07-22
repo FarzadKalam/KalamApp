@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { App, Button, Modal, Slider, Spin } from 'antd';
+import { App, Button, Slider, Spin } from 'antd';
 import {
   DownloadOutlined,
   FastBackwardOutlined,
@@ -9,9 +9,9 @@ import {
   PlayCircleOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { supabase } from '../../supabaseClient';
 import { buildAiUploadedFilePrompt } from '../../utils/aiUploadedFilePrompt';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
+import { useNavigate } from 'react-router-dom';
 import type { NoteAttachment } from '../../utils/noteContent';
 import {
   getVoipRecordingFileName,
@@ -36,6 +36,7 @@ const formatDuration = (value: number) => {
 
 const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact = false, onForward }) => {
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [audioUrl, setAudioUrl] = useState(String(call.recording_url || '').trim());
@@ -45,7 +46,6 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
   const [duration, setDuration] = useState(0);
   const [forwarding, setForwarding] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
-  const [analysis, setAnalysis] = useState('');
 
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
@@ -116,29 +116,18 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
       const blob = await loadVoipRecordingBlob(call);
       const file = new File([blob], getVoipRecordingFileName(call), { type: blob.type || 'audio/mpeg' });
       const prepared = await buildAiUploadedFilePrompt(file);
-      const { data, error } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          action: 'chat_with_file',
-          capabilities: ['document_analysis'],
-          message: 'این مکالمه تلفنی را تحلیل کن؛ خلاصه، موضوعات مهم، تعهدها، احساس کلی و اقدام‌های پیشنهادی را به فارسی بنویس.',
-          file: {
-            filename: prepared.fileName,
-            mimeType: prepared.mimeType,
-            size: prepared.size,
-            data: prepared.data || null,
-          },
-          context: {
-            mode: 'record',
-            moduleId: 'voip_call_reports',
-            recordId: String(call.id || '').trim() || null,
-          },
+      navigate('/ai', {
+        state: {
+          forceNewThread: true,
+          aiAutoSubmitInitial: false,
+          aiInitialInputKind: 'task_bundle',
+          aiInitialCapabilities: [],
+          aiInitialFiles: [prepared],
+          aiInitialPrompt: 'فایل صوتی این تماس پیوست شده است. ابتدا اگر امکان تبدیل مستقیم صوت به متن داری، متن مکالمه را استخراج کن؛ در غیر این صورت از عملگر تحلیل صدا استفاده کن. سپس خلاصه، موضوعات مهم، تعهدها، احساس کلی و اقدام‌های پیشنهادی را به فارسی آماده کن. اگر برای نتیجه‌ی دقیق به اطلاعات بیشتری نیاز داری، پیش از حدس‌زدن سوال کوتاه بپرس.',
         },
       });
-      if (error) throw error;
-      if (!data?.success) throw new Error(String(data?.message || 'تحلیل صوت تماس ناموفق بود.'));
-      setAnalysis(String(data?.answer || '').trim() || 'نتیجه‌ای برای نمایش دریافت نشد.');
     } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'تحلیل صوت تماس با هوش مصنوعی ناموفق بود.'));
+      message.error(toFaErrorMessage(error, 'آماده‌سازی صوت تماس برای گفت‌وگوی هوش مصنوعی ناموفق بود.'));
     } finally {
       setAnalyzing(false);
     }
@@ -190,9 +179,6 @@ const VoipRecordingPlayer: React.FC<VoipRecordingPlayerProps> = ({ call, compact
           ) : null}
         </div>
       </div>
-      <Modal open={Boolean(analysis)} title="تحلیل هوش مصنوعی مکالمه" footer={null} onCancel={() => setAnalysis('')}>
-        <div className="whitespace-pre-wrap text-sm leading-7 text-gray-700 dark:text-gray-200">{analysis}</div>
-      </Modal>
     </>
   );
 };

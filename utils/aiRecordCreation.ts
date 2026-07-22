@@ -9,6 +9,8 @@ export type AiRecordFieldSpec = {
   required?: boolean;
   options?: Array<{ label: string; value: string | number }>;
   relationTargetModule?: string | null;
+  readonly?: boolean;
+  aiWritable?: boolean;
 };
 
 export type AiRecordCreationSchema = {
@@ -16,6 +18,8 @@ export type AiRecordCreationSchema = {
   moduleLabel: string;
   table: string;
   fields: AiRecordFieldSpec[];
+  /** All configured fields are supplied as context; only `fields` is writable. */
+  contextFields?: AiRecordFieldSpec[];
 };
 
 const SYSTEM_FIELD_KEYS = new Set([
@@ -52,6 +56,22 @@ const normalizeOptionValue = (value: any) => {
   return typeof value === 'number' ? value : String(value);
 };
 
+const toFieldSpec = (field: ModuleField, moduleId: string, aiWritable: boolean): AiRecordFieldSpec => ({
+  key: String(field.key),
+  label: getFieldLabelFa(field as any, { moduleId }),
+  type: String(field.type || 'text'),
+  required: (field as any)?.validation?.required === true,
+  readonly: (field as any)?.readonly === true || (field as any)?.nature === 'system',
+  aiWritable,
+  options: Array.isArray((field as any).options)
+    ? (field as any).options.slice(0, 80).map((option: any) => ({
+        label: String(option?.label ?? option?.title ?? option?.name ?? option?.value ?? '').trim(),
+        value: normalizeOptionValue(option?.value ?? option?.id ?? option?.key ?? option?.label),
+      })).filter((option: any) => option.label || option.value !== '')
+    : undefined,
+  relationTargetModule: String((field as any)?.relationConfig?.targetModule || '').trim() || null,
+});
+
 export const buildAiRecordCreationSchema = (
   moduleId: string,
   allowedFieldKeys?: string[] | null,
@@ -67,29 +87,20 @@ export const buildAiRecordCreationSchema = (
   );
   const hasExplicitAllowedFields = allowed.size > 0;
 
+  const contextFields = (moduleConfig.fields || [])
+    .filter((field) => Boolean(field?.key))
+    .map((field) => toFieldSpec(field, normalizedModuleId, isAiWritableModuleField(field)));
   const fields = (moduleConfig.fields || [])
     .filter(isAiWritableModuleField)
     .filter((field) => !hasExplicitAllowedFields || allowed.has(String(field.key)))
-    .slice(0, 80)
-    .map((field) => ({
-      key: String(field.key),
-      label: getFieldLabelFa(field as any, { moduleId: normalizedModuleId }),
-      type: String(field.type || 'text'),
-      required: (field as any)?.validation?.required === true,
-      options: Array.isArray((field as any).options)
-        ? (field as any).options.slice(0, 80).map((option: any) => ({
-            label: String(option?.label ?? option?.title ?? option?.name ?? option?.value ?? '').trim(),
-            value: normalizeOptionValue(option?.value ?? option?.id ?? option?.key ?? option?.label),
-          })).filter((option: any) => option.label || option.value !== '')
-        : undefined,
-      relationTargetModule: String((field as any)?.relationConfig?.targetModule || '').trim() || null,
-    }));
+    .map((field) => toFieldSpec(field, normalizedModuleId, true));
 
   return {
     moduleId: normalizedModuleId,
     moduleLabel: moduleConfig.titles?.fa || normalizedModuleId,
     table: moduleConfig.table || normalizedModuleId,
     fields,
+    contextFields,
   };
 };
 

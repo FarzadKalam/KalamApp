@@ -2436,63 +2436,11 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
     };
   }, [liveData.profile.id]);
   const cacheScopeKey = liveData.profile.orgId || liveData.profile.id || 'messaging-v2';
-  const loadInternalConversationFallback = useMemo(() => {
-    const currentUserId = String(liveData.profile.id || '').trim();
-    const currentRoleId = String(liveData.profile.roleId || '').trim();
-    const currentOrgId = String(liveData.profile.orgId || '').trim();
-    if (!currentUserId || !currentOrgId) return undefined;
-    return async () => {
-      const [authoredResult, mentionedResult, mentionedRoleResult] = await Promise.all([
-        supabase
-          .from('notes')
-          .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
-          .eq('org_id', currentOrgId)
-          .eq('author_id', currentUserId)
-          .order('created_at', { ascending: false })
-          .limit(180),
-        supabase
-          .from('notes')
-          .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
-          .eq('org_id', currentOrgId)
-          .contains('mention_user_ids', [currentUserId])
-          .order('created_at', { ascending: false })
-          .limit(180),
-        currentRoleId
-          ? supabase
-              .from('notes')
-              .select('id,org_id,module_id,record_id,content,author_id,author_name,mention_user_ids,mention_role_ids,created_at,updated_at,reply_to,source_type,metadata,is_edited,edited_at')
-              .eq('org_id', currentOrgId)
-              .contains('mention_role_ids', [currentRoleId])
-              .order('created_at', { ascending: false })
-              .limit(180)
-          : Promise.resolve({ data: [] as any[], error: null }),
-      ]);
-      if (authoredResult.error) throw authoredResult.error;
-      if (mentionedResult.error) throw mentionedResult.error;
-      if (mentionedRoleResult.error) throw mentionedRoleResult.error;
-      const uniqueRows = new Map<string, any>();
-      [
-        ...(authoredResult.data || []),
-        ...(mentionedResult.data || []),
-        ...(mentionedRoleResult.data || []),
-      ].forEach((row: any) => {
-        const key = String(row?.id || '').trim();
-        if (key) uniqueRows.set(key, row);
-      });
-      return buildInternalConversationFallbackSummaries(
-        Array.from(uniqueRows.values()),
-        currentUserId,
-        currentRoleId,
-      );
-    };
-  }, [liveData.profile.id, liveData.profile.orgId, liveData.profile.roleId]);
   const internalConversations = useNotificationConversationList({
     supabase,
     section: 'notes',
     enabled: Boolean(liveData.profile.id),
     cacheScopeKey,
-    fallbackLoadInitial: loadInternalConversationFallback,
-    mergeFallbackInitial: true,
   });
   const botConversations = useNotificationConversationList({
     supabase,

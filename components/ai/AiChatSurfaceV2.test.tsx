@@ -127,7 +127,7 @@ describe('AiChatSurfaceV2', () => {
     renderSurface(['/ai']);
 
     expect(screen.getByTestId('ai-chat-v2')).toBeInTheDocument();
-    expect(screen.getAllByText('هوش مصنوعی تازه سیستم')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('دستیار هوشمند سازمان')[0]).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText(/مصرف امروز:/)[0]).toHaveTextContent('۱۲٬۰۰۰'));
     await waitFor(() => expect(screen.getAllByText('گفتگوی واقعی فروش').length).toBeGreaterThan(0));
     expect(invokeMock).toHaveBeenCalledWith('ai-assistant', expect.objectContaining({ body: expect.objectContaining({ action: 'list_threads' }) }));

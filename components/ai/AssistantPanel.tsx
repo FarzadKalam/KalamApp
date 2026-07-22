@@ -29,7 +29,9 @@ import MessageAttachmentGallery from '../messaging/MessageAttachmentGallery';
 import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils/aiMessageParts';
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 import AiMessageRenderer from './AiMessageRenderer';
-import AiRecordMutationApprovalCard, { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
+import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
+import AiAgentPlanCard from './AiAgentPlanCard';
+import QuickRecordFormModal from './QuickRecordFormModal';
 
 type ChatMessage = {
   id: string;
@@ -443,6 +445,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [recordCreationTargetModuleId, setRecordCreationTargetModuleId] = useState<string | null>(null);
   const [processOperationMode, setProcessOperationMode] = useState(false);
   const [pendingAiAction, setPendingAiAction] = useState<any | null>(null);
+  const [quickRecordFormOpen, setQuickRecordFormOpen] = useState(false);
   const [confirmingAiAction, setConfirmingAiAction] = useState(false);
   const [rememberGenerationPreference, setRememberGenerationPreference] = useState(false);
   const [skipGenerationConfirmationByKind, setSkipGenerationConfirmationByKind] = useState<Record<string, boolean>>({});
@@ -570,6 +573,13 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
 
   useEffect(() => {
     if (pendingAiAction?.actionType === 'confirm_generation') setRememberGenerationPreference(false);
+  }, [pendingAiAction?.id, pendingAiAction?.actionType]);
+
+  useEffect(() => {
+    const actionType = String(pendingAiAction?.actionType || '');
+    if (actionType === 'create_record_from_prompt' || actionType === 'update_record_from_prompt') {
+      setQuickRecordFormOpen(true);
+    }
   }, [pendingAiAction?.id, pendingAiAction?.actionType]);
 
   useEffect(() => {
@@ -966,6 +976,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       targetModuleId: String(data?.targetModuleId || '').trim() || null,
       mutationMode: String(data?.mutationMode || '').trim() === 'update' ? 'update' as const : 'create' as const,
       voiceTranscripts: Array.isArray(data?.voiceTranscripts) ? data.voiceTranscripts : [],
+      agentPlan: data?.agentPlan && typeof data.agentPlan === 'object' ? data.agentPlan : null,
     };
     setAutoSuggestedCapabilities(result.suggestedCapabilities);
     return result;
@@ -976,14 +987,29 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     inputKind: string;
     bundlePayload?: any[];
     forceNewThread?: boolean;
+    route?: any;
   }) => {
     const bundlePayload = Array.isArray(params.bundlePayload) ? params.bundlePayload : [];
-    const route = await requestAutoRoute({
+    const route = params.route || await requestAutoRoute({
       messageText: params.messageText,
       inputKind: params.inputKind,
       bundlePayload,
       forceNewThread: params.forceNewThread,
     });
+    const clarificationQuestions = Array.isArray(route?.agentPlan?.clarification_questions)
+      ? route.agentPlan.clarification_questions.map((item: any) => String(item || '').trim()).filter(Boolean).slice(0, 3)
+      : [];
+    const withAgentPlan = async (result: any) => ({
+      ...(await result),
+      ...(route?.agentPlan ? { agentPlan: route.agentPlan } : {}),
+    });
+    if (clarificationQuestions.length > 0) {
+      return {
+        success: true,
+        answer: `برای انجام دقیق درخواست، لطفاً این موارد را مشخص کنید:\n${clarificationQuestions.map((question: string) => `• ${question}`).join('\n')}`,
+        agentPlan: route.agentPlan,
+      };
+    }
     const routeCapabilities = route.suggestedCapabilities;
     const capabilitySet = new Set(routeCapabilities);
     const mutationTargetModuleId = route.targetModuleId
@@ -992,7 +1018,11 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       ? buildAiRecordCreationSchema(mutationTargetModuleId)
       : null;
     if (capabilitySet.has('record_creation') && !autoRecordSchema) {
-      throw new Error('برای ساخت خودکار، نوع رکورد هنوز روشن نیست. لطفاً نوع رکورد را در پیام مشخص کنید.');
+      return {
+        success: true,
+        answer: 'برای ساخت یا ویرایش دقیق، نوع رکورد و در صورت ویرایش، رکورد هدف را مشخص کنید.',
+        agentPlan: route.agentPlan,
+      };
     }
 
     if (capabilitySet.has('image_generation')) {
@@ -1019,8 +1049,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         sourceImages: autoSourceImages,
         sourceImageUrls: imageEditSourceUrl ? [imageEditSourceUrl] : [],
       };
-      if (skipGenerationConfirmationByKind.image_generation === true) return await callAssistant(confirmBody);
-      return buildLocalGenerationConfirmation({
+      if (skipGenerationConfirmationByKind.image_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'image_generation',
         prompt,
         settings: mediaSettings,
@@ -1028,7 +1058,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           sourceImageCount: autoSourceImages.length + (imageEditSourceUrl ? 1 : 0),
         }),
         confirmBody,
-      });
+      }));
     }
 
     if (capabilitySet.has('voice_output') && !capabilitySet.has('voice_input') && bundlePayload.length === 0) {
@@ -1044,14 +1074,14 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         modelOverride: modelOverrideRef.current,
         settings: mediaSettings,
       };
-      if (skipGenerationConfirmationByKind.voice_output === true) return await callAssistant(confirmBody);
-      return buildLocalGenerationConfirmation({
+      if (skipGenerationConfirmationByKind.voice_output === true) return await withAgentPlan(callAssistant(confirmBody));
+      return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'voice_output',
         prompt,
         settings: mediaSettings,
         rows: buildGenerationSettingsRows('voice_output', mediaSettings),
         confirmBody,
-      });
+      }));
     }
 
     if (capabilitySet.has('video_generation')) {
@@ -1069,8 +1099,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         settings: mediaSettings,
         sourceImages: autoSourceImages,
       };
-      if (skipGenerationConfirmationByKind.video_generation === true) return await callAssistant(confirmBody);
-      return buildLocalGenerationConfirmation({
+      if (skipGenerationConfirmationByKind.video_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'video_generation',
         prompt,
         settings: mediaSettings,
@@ -1078,7 +1108,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           sourceImageCount: autoSourceImages.length,
         }),
         confirmBody,
-      });
+      }));
     }
 
     if (capabilitySet.has('document_generation')) {
@@ -1112,8 +1142,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           modelOverride: modelOverrideRef.current,
           settings: mediaSettings,
         };
-      if (skipGenerationConfirmationByKind.document_generation === true) return await callAssistant(confirmBody);
-      return buildLocalGenerationConfirmation({
+      if (skipGenerationConfirmationByKind.document_generation === true) return await withAgentPlan(callAssistant(confirmBody));
+      return await withAgentPlan(buildLocalGenerationConfirmation({
         kind: 'document_generation',
         prompt,
         settings: mediaSettings,
@@ -1122,7 +1152,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           bundleInputCount: bundlePayload.length,
         }),
         confirmBody,
-      });
+      }));
     }
 
     const executionBundlePayload = bundlePayload.map((item) => {
@@ -1138,7 +1168,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       || capabilitySet.has('voice_input')
       || capabilitySet.has('record_creation')
       || capabilitySet.has('process_operation')) {
-      return await callAssistant({
+      return await withAgentPlan(callAssistant({
         action: 'run_task_bundle',
         capabilities: routeCapabilities,
         message: params.messageText || (autoRecordSchema
@@ -1156,10 +1186,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         recordCreation: autoRecordSchema,
         recordMutationMode: route.mutationMode,
         previewOnly: true,
-      });
+      }));
     }
 
-    return await callAssistant({
+    return await withAgentPlan(callAssistant({
       action: 'chat',
       capability: routeCapabilities.includes('legal_assistant')
         ? 'legal_assistant'
@@ -1175,7 +1205,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       forceNewThread: params.forceNewThread === true,
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
-    });
+    }));
   }, [callAssistant, contextWithSelection, imageEditSourceUrl, mediaSettings, mediaSourceImages, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
@@ -1589,6 +1619,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         }
       };
 
+      let plannedAutoRoute: any = null;
       if (!processOperationMode && !activeRecordCreationSchema) {
         let streamCapabilities: AiComposerCapability[] = selectedCapabilities.filter((capability) => capability !== 'text_chat');
         let streamCapability = selectedCapabilities.includes('legal_assistant')
@@ -1605,9 +1636,19 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             inputKind,
             forceNewThread: shouldStartProcessGuideThread,
           });
+          plannedAutoRoute = route;
+          if (route.agentPlan) {
+            setMessages((prev) => prev.map((item) => item.id === thinkingMessage.id ? {
+              ...item,
+              metadata: { ...(item.metadata || {}), agent_plan: route.agentPlan },
+            } : item));
+          }
           streamCapabilities = route.suggestedCapabilities;
           const capabilitySet = new Set(streamCapabilities);
-          canStream = streamCapabilities.every((capability) => !NON_STREAM_CHAT_CAPABILITIES.has(capability));
+          const hasClarificationQuestions = Array.isArray(route?.agentPlan?.clarification_questions)
+            && route.agentPlan.clarification_questions.some((item: any) => String(item || '').trim());
+          canStream = !hasClarificationQuestions
+            && streamCapabilities.every((capability) => !NON_STREAM_CHAT_CAPABILITIES.has(capability));
           streamCapability = capabilitySet.has('legal_assistant')
             ? 'legal_assistant'
             : capabilitySet.has('deep_reasoning')
@@ -1637,6 +1678,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           messageText: assistantText,
           inputKind,
           forceNewThread: shouldStartProcessGuideThread,
+          route: plannedAutoRoute,
         })
         : callAssistant(processOperationMode ? {
         action: 'process_operation_from_prompt',
@@ -1751,9 +1793,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           id: data.messageId || `assistant-${Date.now()}`,
           role: 'assistant',
           content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'پاسخی دریافت نشد.'),
-          metadata: {
-            usage: data.usage,
-            attachments: Array.isArray(data.attachments) ? data.attachments : [],
+            metadata: {
+              usage: data.usage,
+              ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
+              attachments: Array.isArray(data.attachments) ? data.attachments : [],
             ...(data?.file ? { file: data.file } : {}),
             ...(data?.image ? { image: data.image } : {}),
           },
@@ -2243,6 +2286,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             content: normalizeAiMessageText(data.answer) || (data?.autoAction === 'generate_voice_output' ? 'فایل صوتی آماده شد.' : 'نتیجه آماده شد.'),
             metadata: {
               usage: data.usage,
+              ...(data?.agentPlan ? { agent_plan: data.agentPlan } : {}),
               capability: activeRecordCreationSchema ? 'record_creation' : processOperationMode ? 'process_operation' : 'document_analysis',
               ...(data?.file ? { file: data.file } : {}),
               ...(data?.image ? { image: data.image } : {}),
@@ -2324,8 +2368,16 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         const data = await callAssistant(finalConfirmBody);
         message.success('درخواست تایید شد و اجرا شد.');
         setPendingAiAction(null);
+        setQuickRecordFormOpen(false);
         const nextThreadId = String(data?.threadId || finalConfirmBody?.threadId || threadId || '').trim();
         if (data?.threadId) setThreadId(String(data.threadId));
+        if (rememberGenerationPreference && generationKind && nextThreadId) {
+          await callAssistant({
+            action: 'save_agent_confirmation_grant',
+            threadId: nextThreadId,
+            operatorKey: generationKind,
+          }).catch(() => undefined);
+        }
         if (nextThreadId) {
           await loadThread(nextThreadId);
         }
@@ -2345,6 +2397,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       });
       message.success('اقدام تایید و اجرا شد.');
       setPendingAiAction(null);
+      setQuickRecordFormOpen(false);
       await loadThread();
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'اجرای اقدام تاییدشده ناموفق بود.'));
@@ -2504,6 +2557,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} />
+            {!isUser && item.metadata?.agent_plan ? <AiAgentPlanCard plan={item.metadata.agent_plan} /> : null}
             {!pendingKind && providerRawText && attachments.length === 0 ? (
               <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
                 <summary className="cursor-pointer text-right font-semibold" dir="rtl">
@@ -2897,20 +2951,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               </div>
             ) : null}
             {pendingRecordMutationType && pendingRecordMutationRecords.length > 0 ? (
-              <AiRecordMutationApprovalCard
-                actionType={pendingRecordMutationType}
-                moduleId={String(pendingAiAction?.targetModuleId || pendingAiAction?.proposedPayload?.target_module_id || '').trim()}
-                schema={pendingAiAction?.schema}
-                records={pendingRecordMutationRecords}
-                onChange={(records) => setPendingAiAction((current: any) => current ? {
-                  ...current,
-                  proposedPayload: {
-                    ...(current.proposedPayload || {}),
-                    records,
-                    payload: records[0]?.fields || {},
-                  },
-                } : current)}
-              />
+              <Button size="small" onClick={() => setQuickRecordFormOpen(true)}>
+                بررسی و ویرایش فرم
+              </Button>
             ) : null}
             <div className="mt-2">
               {String(pendingAiAction?.actionType || '') === 'confirm_generation'
@@ -3019,6 +3062,27 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           </Button>
         </div>
       </div>
+      {pendingRecordMutationType && pendingAiAction ? (
+        <QuickRecordFormModal
+          open={quickRecordFormOpen}
+          actionType={pendingRecordMutationType}
+          moduleId={String(pendingAiAction?.targetModuleId || pendingAiAction?.proposedPayload?.target_module_id || '').trim()}
+          moduleLabel={pendingAiAction?.title || pendingAiAction?.schema?.moduleLabel || null}
+          schema={pendingAiAction?.schema}
+          records={pendingRecordMutationRecords}
+          loading={confirmingAiAction}
+          onChange={(records) => setPendingAiAction((current: any) => current ? {
+            ...current,
+            proposedPayload: {
+              ...(current.proposedPayload || {}),
+              records,
+              payload: records[0]?.fields || {},
+            },
+          } : current)}
+          onCancel={() => setQuickRecordFormOpen(false)}
+          onConfirm={() => void confirmPendingAiAction()}
+        />
+      ) : null}
       <Drawer
         open={threadListOpen}
         onClose={() => setThreadListOpen(false)}

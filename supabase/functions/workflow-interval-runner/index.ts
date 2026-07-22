@@ -802,7 +802,9 @@ async function buildServerRecordUrl(url: string, key: string, orgId: string, mod
   const normalizedModuleId = String(moduleId || '').trim();
   const normalizedRecordId = String(recordId || '').trim();
   if (!normalizedModuleId || !normalizedRecordId) return '';
-  const path = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(normalizedRecordId)}`;
+  const isProcessTask = normalizedModuleId === 'tasks';
+  const recordPath = `/${encodeURIComponent(normalizedModuleId)}/${encodeURIComponent(normalizedRecordId)}`;
+  const path = isProcessTask ? `${recordPath}?process_v2=1` : recordPath;
   const baseUrl = await getOrgPublicBaseUrl(url, key, orgId);
   const targetUrl = baseUrl ? `${baseUrl}${path}` : path;
   try {
@@ -811,7 +813,10 @@ async function buildServerRecordUrl(url: string, key: string, orgId: string, mod
       key,
       `short_links?org_id=eq.${encodeURIComponent(orgId)}&link_type=eq.generic&module_id=eq.${encodeURIComponent(normalizedModuleId)}&record_id=eq.${encodeURIComponent(normalizedRecordId)}&is_active=eq.true&select=code,metadata&order=created_at.desc&limit=10`,
     );
-    const existing = existingRows.find((row: any) => row?.metadata?.kind === 'record');
+    const existing = existingRows.find((row: any) =>
+      row?.metadata?.kind === 'record'
+      && (!isProcessTask || row?.metadata?.task_process_v2 === true)
+    );
     if (existing?.code) {
       const shortPath = `/r/${encodeURIComponent(String(existing.code))}`;
       return baseUrl ? `${baseUrl}${shortPath}` : shortPath;
@@ -829,7 +834,11 @@ async function buildServerRecordUrl(url: string, key: string, orgId: string, mod
           target_url: targetUrl,
           module_id: normalizedModuleId,
           record_id: normalizedRecordId,
-          metadata: { kind: 'record', internal_record_link: true },
+          metadata: {
+            kind: 'record',
+            internal_record_link: true,
+            ...(isProcessTask ? { task_process_v2: true } : {}),
+          },
         });
         const shortPath = `/r/${encodeURIComponent(String(inserted?.code || code))}`;
         return baseUrl ? `${baseUrl}${shortPath}` : shortPath;
@@ -2575,7 +2584,16 @@ async function assertWorkflowAiEnabled(url: string, key: string, orgId: string):
 function normalizeAiBaseUrl(value: string): string {
   const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
   if (!raw) return DEFAULT_AI_BASE_URL;
-  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(normalized);
+    if (/(^|\.)avalai\.ir$|(^|\.)avalapis\.ir$/i.test(url.hostname) && !/\/v\d+$/i.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`.replace(/^([^/])/, '/$1');
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return normalized;
+  }
 }
 
 function workflowAiBaseUrls(): string[] {
@@ -2723,7 +2741,7 @@ async function loadWorkflowProcessContext(url: string, key: string, orgId: strin
 
 function buildWorkflowProcessPrompt(prompt: string, input: Record<string, any>): string {
   return [
-    'شما دستیار اجرای خودکار فرآیند تازه سیستم هستید. فقط JSON معتبر برگردان و هیچ توضیح خارج از JSON ننویس.',
+    'شما دستیار اجرای خودکار فرآیند سازمان فعلی هستید. فقط JSON معتبر برگردان و هیچ توضیح خارج از JSON ننویس.',
     'فقط از الگوها، اجراها، مرحله‌ها و taskهایی که در context آمده استفاده کن. UUID تازه یا ساختگی نساز.',
     'حذف فیزیکی مرحله مجاز نیست؛ برای کم کردن مرحله از cancel_stage_task استفاده کن.',
     'operationهای مجاز: materialize_template_to_tasks، create_raw_process_with_tasks، add_stage_task، update_stage_task، cancel_stage_task.',
@@ -2982,10 +3000,10 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
       {
         role: 'system',
         content: processOperationContext
-          ? 'شما دستیار اجرای خودکار فرآیند تازه سیستم هستید. خروجی فقط JSON معتبر باشد و عملیات واقعی را فقط از context مجاز بساز.'
+          ? 'شما دستیار اجرای خودکار فرآیند سازمان فعلی هستید. خروجی فقط JSON معتبر باشد و عملیات واقعی را فقط از context مجاز بساز.'
           : schema
           ? [
-              'شما دستیار هوش مصنوعی تازه سیستم برای اجرای خودکار گردش کار هستید.',
+              'شما دستیار هوشمند سازمان فعلی برای اجرای خودکار گردش کار هستید.',
               'خروجی فقط JSON معتبر باشد و متن اضافی ننویس.',
               'فقط کلیدهای مجاز schema را در fields برگردان. org_id، id، system_code، created_at، updated_at، created_by و updated_by را برنگردان.',
               mutationMode === 'update_record'
@@ -2996,7 +3014,7 @@ async function callWorkflowAiPrompt(url: string, key: string, orgId: string, pro
               fieldLines,
               'قالب خروجی: {"reply":"پیام کوتاه فارسی","record":{"fields":{}}}',
             ].join('\n')
-          : 'شما دستیار هوش مصنوعی تازه سیستم برای اجرای خودکار گردش کار هستید. پاسخ را کوتاه، دقیق و قابل ارسال به کاربر بنویس.',
+          : 'شما دستیار هوشمند سازمان فعلی برای اجرای خودکار گردش کار هستید. پاسخ را کوتاه، دقیق و قابل ارسال به کاربر بنویس.',
       },
       { role: 'user', content: userPrompt },
     ],

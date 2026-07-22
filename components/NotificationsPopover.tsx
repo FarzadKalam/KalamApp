@@ -950,7 +950,7 @@ const NotificationsPopover: React.FC<NotificationsPopoverProps> = ({
   const [panelVisibleCounts, setPanelVisibleCounts] = useState({ tasks: MAX_ITEMS, responsibilities: MAX_ITEMS });
   const [taskViewKey, setTaskViewKey] = useState<TaskViewPresetKey>('all');
   const [taskSortDirection, setTaskSortDirection] = useState<CreatedSortDirection>('desc');
-  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; can_view_all_calls?: boolean; software_role?: string | null }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
+  const [profile, setProfile] = useState<{ id: string | null; role_id: string | null; org_id?: string | null; full_name?: string | null; avatar_url?: string | null; voip_extension?: string | null; voip_operator_code?: string | null; can_view_all_calls?: boolean; software_role?: string | null }>({ id: null, role_id: null, org_id: null, full_name: null, avatar_url: null });
   const [currentPermissionMap, setCurrentPermissionMap] = useState<PermissionMap | null>(null);
 
   // ── Activity & Responsibility hooks (optimized: cache + efficient queries) ──
@@ -2145,6 +2145,7 @@ useEffect(() => {
         full_name: snapshot.profile?.full_name || snapshot.user?.user_metadata?.full_name || null,
         avatar_url: snapshot.profile?.avatar_url || snapshot.user?.user_metadata?.avatar_url || null,
         voip_extension: snapshot.profile?.voip_extension ? String(snapshot.profile.voip_extension) : null,
+        voip_operator_code: snapshot.profile?.voip_operator_code ? String(snapshot.profile.voip_operator_code) : null,
         can_view_all_calls: voipAccess.canViewAllCallNotifications,
         software_role: snapshot.profile?.role ? String(snapshot.profile.role) : null,
       });
@@ -4530,10 +4531,18 @@ useEffect(() => {
   const hasVoipCallMatch = useCallback((row: any) => {
     if (!row || typeof row !== 'object') return false;
     if (profile.can_view_all_calls) return true;
-    const extension = String(profile.voip_extension || '').trim();
-    if (!extension) return false;
-    return String(row.extension || '').trim() === extension;
-  }, [profile.can_view_all_calls, profile.voip_extension]);
+    if (String(row.assignee_id || '').trim() === String(profile.id || '').trim()) return true;
+    const normalizeOperatorValue = (value: any) => String(value ?? '').trim()
+      .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+      .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+      .replace(/\D/g, '');
+    const extension = normalizeOperatorValue(profile.voip_extension);
+    const operatorCode = normalizeOperatorValue(profile.voip_operator_code);
+    return Boolean(
+      (extension && normalizeOperatorValue(row.extension) === extension)
+      || (operatorCode && normalizeOperatorValue(row.operator_code) === operatorCode)
+    );
+  }, [profile.can_view_all_calls, profile.id, profile.voip_extension, profile.voip_operator_code]);
   const scheduleLiveRefresh = useCallback((section?: NotificationSectionKey) => {
     if (liveRefreshTimerRef.current !== null && typeof window !== 'undefined') {
       window.clearTimeout(liveRefreshTimerRef.current);

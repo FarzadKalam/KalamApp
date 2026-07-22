@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Space, App, Empty, Typography, Spin, Select, InputNumber, Popover, Input, Modal, Checkbox } from 'antd';
-import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined, PlusOutlined, SaveOutlined, CloseOutlined, CloseCircleOutlined, RightOutlined, CopyOutlined, FileTextOutlined, EnvironmentOutlined, CalendarOutlined, AppstoreOutlined, CheckOutlined, EyeOutlined, DownloadOutlined, ShareAltOutlined, PrinterOutlined, UpOutlined, DownOutlined, ClockCircleOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
 import { supabase } from '../supabaseClient';
 import { FieldType, ModuleField, RowCalculationType } from '../types';
 import { calculateRow } from '../utils/calculations';
@@ -58,6 +58,13 @@ const normalizeDigitsToEnglish = (raw: any): string => {
     .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
     .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
 };
+
+const normalizeCatalogItemSearchText = (raw: any): string => normalizeDigitsToEnglish(raw)
+  .toLocaleLowerCase('fa-IR')
+  .replace(/[يى]/g, 'ی')
+  .replace(/ك/g, 'ک')
+  .replace(/\s+/g, ' ')
+  .trim();
 
 const normalizeNumericString = (raw: any): string => {
   if (raw === null || raw === undefined) return '';
@@ -237,6 +244,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const [localDynamicOptions, setLocalDynamicOptions] = useState<Record<string, any[]>>({});
   const [invoicePriceLists, setInvoicePriceLists] = useState<Array<{ id: string; name: string; items: any[] }>>([]);
   const [priceRefreshLoading, setPriceRefreshLoading] = useState(false);
+  const [catalogItemSearchQuery, setCatalogItemSearchQuery] = useState('');
   const [eligibleReceivedChequeOptions, setEligibleReceivedChequeOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [rowReloadVersion, setRowReloadVersion] = useState<Record<string, number>>({});
   const [notePopoverRowKey, setNotePopoverRowKey] = useState<string | null>(null);
@@ -4956,6 +4964,36 @@ const EditableTable: React.FC<EditableTableProps> = ({
       || String(row?.gateway_transaction_id || '').trim() !== ''
     );
 
+  const sourceRows = isEditing ? tempData : data;
+  const catalogItemRows = useMemo(() => {
+    if (!isCatalogProductItems) return sourceRows;
+    const query = normalizeCatalogItemSearchText(catalogItemSearchQuery);
+    if (!query) return sourceRows;
+    return sourceRows.filter((row: any) => {
+      const productOption = getCatalogProductRelationOptions(row)
+        .find((option: any) => String(option?.value || '') === String(row?.product_id || ''));
+      const searchableValues = [
+        productOption?.label,
+        row?.product_name,
+        row?.selected_product_name,
+        row?.name,
+        row?.description,
+        row?.unit_name,
+        row?.main_unit,
+        row?.price,
+        row?.unit_price,
+        row?.total_price,
+        row?.quantity,
+      ];
+      return normalizeCatalogItemSearchText(searchableValues.filter((value) => value !== null && value !== undefined).join(' ')).includes(query);
+    });
+  }, [catalogItemSearchQuery, isCatalogProductItems, sourceRows]);
+  const resolveRenderedRowIndex = (record: any, fallbackIndex: number) => {
+    if (!isCatalogProductItems) return fallbackIndex;
+    const sourceIndex = sourceRows.indexOf(record);
+    return sourceIndex >= 0 ? sourceIndex : fallbackIndex;
+  };
+
   const columns = [
     ...(canReorderRows
       ? [
@@ -4963,15 +5001,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
             title: '',
             key: 'row_reorder',
             width: 52,
-            render: (_: any, _row: any, index: number) => (
+            render: (_: any, _row: any, index: number) => {
+              const rowIndex = resolveRenderedRowIndex(_row, index);
+              return (
               <div className="flex flex-col items-center justify-center leading-none">
                 <Button
                   type="text"
                   size="small"
                   className="!h-5 !w-5 !min-w-5 !px-0 text-gray-500"
                   icon={<UpOutlined />}
-                  onClick={() => moveRow(index, 'up')}
-                  disabled={index === 0}
+                  onClick={() => moveRow(rowIndex, 'up')}
+                  disabled={rowIndex === 0}
                   title="جابجایی به بالا"
                 />
                 <Button
@@ -4979,12 +5019,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   size="small"
                   className="!h-5 !w-5 !min-w-5 !px-0 text-gray-500"
                   icon={<DownOutlined />}
-                  onClick={() => moveRow(index, 'down')}
-                  disabled={index === ((isEditing ? tempData : data).length - 1)}
+                  onClick={() => moveRow(rowIndex, 'down')}
+                  disabled={rowIndex === (sourceRows.length - 1)}
                   title="جابجایی به پایین"
                 />
               </div>
-            ),
+              );
+            },
           },
         ]
       : []),
@@ -4995,7 +5036,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
       key: col.key,
       type: col.type,
       width: getColWidth(col),
-      render: (text: any, record: any, index: number) => renderColumnEditor(col, record, index, text),
+      render: (text: any, record: any, index: number) => renderColumnEditor(col, record, resolveRenderedRowIndex(record, index), text),
     })) || []),
     ...(isEditing
         ? [
@@ -5003,13 +5044,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
             title: '',
             key: 'actions',
             width: canCopyRows ? 84 : 50,
-            render: (_: any, row: any, i: number) => (
+            render: (_: any, row: any, i: number) => {
+              const rowIndex = resolveRenderedRowIndex(row, i);
+              return (
               <Space size={0}>
                 {canCopyRows ? (
                   <Button
                     type="text"
                     icon={<CopyOutlined />}
-                    onClick={() => copyRow(i)}
+                    onClick={() => copyRow(rowIndex)}
                     disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                   />
                 ) : null}
@@ -5017,17 +5060,17 @@ const EditableTable: React.FC<EditableTableProps> = ({
                   danger
                   type="text"
                   icon={<DeleteOutlined />}
-                  onClick={() => removeRow(i)}
+                  onClick={() => removeRow(rowIndex)}
                   disabled={(isProductStockMovements && row?._readonly) || isGatewayLockedPaymentRow(row)}
                 />
               </Space>
-            ),
+              );
+            },
           },
         ]
       : []),
   ];
 
-  const sourceRows = isEditing ? tempData : data;
   const updateInvoiceGlobalDiscount = (patch: Partial<{ type: 'percent' | 'amount'; amount: number }>) => {
     const nextType = patch.type || currentInvoiceGlobalDiscountType;
     const nextAmount = Math.max(0, toSafeNumber(
@@ -5298,8 +5341,22 @@ const EditableTable: React.FC<EditableTableProps> = ({
             {renderStackedSummary()}
           </div>
         ) : (
+        <>
+          {isCatalogProductItems && (
+            <div className="mb-4 max-w-xl">
+              <Input
+                allowClear
+                size="large"
+                prefix={<SearchOutlined className="text-gray-400" />}
+                value={catalogItemSearchQuery}
+                onChange={(event) => setCatalogItemSearchQuery(event.target.value)}
+                placeholder="جست‌وجوی لحظه‌ای در اقلام جدول"
+                aria-label="جست‌وجوی اقلام جدول"
+              />
+            </div>
+          )}
         <Table
-          dataSource={isEditing ? tempData : data}
+          dataSource={catalogItemRows}
           columns={columns}
           pagination={false}
           size="middle"
@@ -5482,6 +5539,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
             );
           }}
         />
+        </>
         )
       )}
       {isEditing && mode !== 'local' && !isCollapsed && (

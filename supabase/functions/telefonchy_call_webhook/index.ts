@@ -2,7 +2,7 @@
 
 import { parseTehranProviderDateTimeToUtcIso } from '../_shared/tehran-datetime.ts';
 
-const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-07-12-tehran-time';
+const FUNCTION_BUILD = 'telefonchy-call-webhook-2026-07-22-recording-state';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -94,6 +94,7 @@ const normalizeTelefonchyPayload = (payload: Record<string, any>) => {
     object_id: firstValue(data.object_id, data.id, payload.object_id, payload.objectId),
     extension: firstValue(data.extension, data.operator_extension, exten.number, exten.id, payload.extension, payload.operator_extension),
     file_id: firstValue(data.file_id, data.record_id, payload.file_id, payload.fileId, payload.record_id),
+    file_record: firstValue(data.file_record, data.fileRecord, data.recording_file, payload.file_record, payload.fileRecord, payload.recording_file),
     trunk: firstValue(data.trunk, data.trunk_number, payload.trunk, payload.trunk_number),
     started_at: firstValue(data.started_at, data.start_at, data.start_time, data.datetime, data.created_at, payload.started_at, payload.start_at, payload.start_time, payload.created_at),
     ended_at: firstValue(data.ended_at, data.end_at, data.end_time, payload.ended_at, payload.end_at, payload.end_time, payload.updated_at),
@@ -180,6 +181,12 @@ const mapStatus = (value: any, talkSeconds: number | null) => {
   if (raw.includes('complete') || raw.includes('end') || raw.includes('ok') || raw.includes('success')) return 'completed';
   return 'unknown';
 };
+
+const hasTelefonchyRecording = (payload: Record<string, any>, callId: string, fileId: string) => Boolean(
+  firstValue(payload.file_record, payload.fileRecord, payload.recording_file, payload.recordingFile)
+  && callId
+  && fileId
+);
 
 const fetchCandidateSettings = async (
   supabaseUrl: string,
@@ -385,13 +392,18 @@ Deno.serve(async (req) => {
         : ''
     );
     const counterpartyPhone = direction === 'incoming' ? sourceNumber : destinationNumber;
-    const status = mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
+    const callId = firstValue(providerPayload.call_id, providerPayload.callId, providerPayload.cuid, providerPayload.unique_id);
+    const fileId = firstValue(providerPayload.file_id, providerPayload.fileId, providerPayload.record_id);
+    const recordingAvailable = hasTelefonchyRecording(providerPayload, callId, fileId);
+    const status = direction === 'incoming' && !recordingAvailable
+      ? 'missed'
+      : mapStatus(firstValue(providerPayload.status, providerPayload.call_status, providerPayload.disposition), talkSeconds);
 
     await saveCallLog(supabaseUrl, serviceRoleKey, {
       org_id: settingsRow.org_id,
       provider,
       service_id: firstValue(providerPayload.service_id, providerPayload.serviceId, settings.service_id) || null,
-      call_id: firstValue(providerPayload.call_id, providerPayload.callId, providerPayload.cuid, providerPayload.unique_id) || null,
+      call_id: callId || null,
       object_id: firstValue(providerPayload.object_id, providerPayload.objectId) || null,
       direction,
       status,
@@ -404,7 +416,7 @@ Deno.serve(async (req) => {
       ended_at: parseTehranProviderDateTimeToUtcIso(firstValue(providerPayload.ended_at, providerPayload.end_at, providerPayload.end_time, providerPayload.updated_at)),
       wait_seconds: toIntegerOrNull(firstValue(providerPayload.time_wait, providerPayload.wait_seconds)),
       talk_seconds: talkSeconds,
-      file_id: firstValue(providerPayload.file_id, providerPayload.fileId, providerPayload.record_id) || null,
+      file_id: recordingAvailable ? fileId : null,
       recording_url: firstValue(providerPayload.recording_url, providerPayload.recordingUrl, providerPayload.file_url, providerPayload.audio_url) || null,
       title: counterpartyPhone || sourceNumber || destinationNumber || 'تماس VoIP',
       metadata: {
@@ -414,6 +426,8 @@ Deno.serve(async (req) => {
         query: scrubSecrets(query),
         payload: scrubSecrets(payload),
         provider_payload: scrubSecrets(providerPayload),
+        recording_available: recordingAvailable,
+        recording_file: recordingAvailable ? firstValue(providerPayload.file_record, providerPayload.fileRecord, providerPayload.recording_file, providerPayload.recordingFile) : null,
         user_agent: req.headers.get('user-agent') || null,
       },
     });

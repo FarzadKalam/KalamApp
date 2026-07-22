@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { App, Button, Space, Tooltip } from 'antd';
+import type { ButtonProps } from 'antd';
 import { AudioOutlined, CloseOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import AiAudioPlayer from './AiAudioPlayer';
@@ -15,6 +16,8 @@ type RecordedVoice = {
 type AiVoiceRecorderProps = {
   disabled?: boolean;
   loading?: boolean;
+  size?: ButtonProps['size'];
+  className?: string;
   onSend: (voice: RecordedVoice) => void | Promise<void>;
 };
 
@@ -25,7 +28,7 @@ const formatSeconds = (ms: number) => {
   return `${minutes.toLocaleString('fa-IR')}:${seconds.toString().padStart(2, '0')}`;
 };
 
-const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loading = false, onSend }) => {
+const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loading = false, size, className, onSend }) => {
   const { message } = App.useApp();
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -150,8 +153,9 @@ const AiVoiceRecorder: React.FC<AiVoiceRecorderProps> = ({ disabled = false, loa
         danger={recording}
         disabled={disabled || loading}
         loading={loading && !recording}
+        size={size}
         onClick={recording ? stopRecording : () => void startRecording()}
-        className={recording ? 'animate-pulse' : ''}
+        className={[className, recording ? 'animate-pulse' : ''].filter(Boolean).join(' ')}
       >
         {recording ? formatSeconds(durationMs) : null}
       </Button>

@@ -38,7 +38,11 @@ import { normalizeWorkflowValueByFieldType } from '../../utils/filterUtils';
 import { supportsWorkflowProcessTemplateActions } from '../../utils/workflowHelpers';
 import { createProcessLinkedFieldKey, parseProcessLinkedFieldKey } from '../../utils/processTargets';
 import { supabase } from '../../supabaseClient';
-import { AdaptivePickerMode, resolveOverlayPopupContainer } from '../../utils/popupContainer';
+import {
+  AdaptivePickerMode,
+  resolveModalPopupContainer,
+  resolveOverlayPopupContainer,
+} from '../../utils/popupContainer';
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { buildAiRecordCreationSchema } from '../../utils/aiRecordCreation';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
@@ -382,6 +386,10 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     (node?: HTMLElement | null) => popupContainerProp?.(node) || resolveOverlayPopupContainer(node),
     [popupContainerProp]
   );
+  const identityPickerPopupContainer = useCallback(
+    (node?: HTMLElement | null) => resolveModalPopupContainer(node),
+    []
+  );
 
   const commonSelectProps = {
     showSearch: true,
@@ -605,6 +613,11 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       placeholder={placeholder}
       pickerTitle="انتخاب کاربر، نقش یا گروه داخلی"
       className="w-full"
+      getPopupContainer={identityPickerPopupContainer}
+      modalContainer={identityPickerPopupContainer}
+      preferLocalPopupContainer
+      overlayZIndexBase={overlayZIndexBase}
+      adaptiveMode={adaptiveMode}
     />
   );
   const [workflowAssigneeRoleOptions, setWorkflowAssigneeRoleOptions] = useState<Array<{ label: string; value: string }>>([]);

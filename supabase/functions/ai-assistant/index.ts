@@ -1,5 +1,12 @@
 // @ts-nocheck
 
+import {
+  normalizeAgentPlan,
+  shouldEscalateCustomerAutoReply,
+  type AgentExecutionPolicy,
+} from '../_shared/ai-agent-contract.ts';
+import { resolvePersianCalendarContext } from '../_shared/persian-calendar-resolver.ts';
+
 type AssistantAction =
   | 'chat'
   | 'chat_stream'
@@ -16,6 +23,7 @@ type AssistantAction =
   | 'delete_thread'
   | 'propose_note'
   | 'confirm_action'
+  | 'save_agent_confirmation_grant'
   | 'suggest_reply'
   | 'bot_customer_agent_turn'
   | 'get_ai_settings'
@@ -168,95 +176,6 @@ const AUTO_ROUTER_CAPABILITIES = [
   'process_operation',
 ];
 
-const ALLOWED_MODULES = new Set([
-  'productBundles',
-  'purchaseInvoices',
-  'priceLists',
-  'marketingLeads',
-  'deliveryForms',
-  'salesCatalog',
-  'stockTransfers',
-  'productionBOM',
-  'productionOrders',
-  'productionGroupOrders',
-  'fiscalYears',
-  'chartOfAccounts',
-  'journalEntries',
-  'accountingEventRules',
-  'costCenters',
-  'cashBoxes',
-  'bankAccounts',
-  'pettyFunds',
-  'cashBankOperations',
-  'expenseDocuments',
-  'attendanceLogs',
-  'workSchedules',
-  'leaveRequests',
-  'overtimeRequests',
-  'missionRequests',
-  'employeeAdvances',
-  'employeeBonusRequests',
-  'employeePenaltyRequests',
-  'employeeContracts',
-  'jobDescriptions',
-  'jobDescription',
-  'payrollSlips',
-  'recruitmentApplicants',
-  'processTemplates',
-  'processRuns',
-  'webForms',
-  'secretariatDocuments',
-  'products',
-  'billboards',
-  'product_bundles',
-  'warehouses',
-  'shelves',
-  'stock_transfers',
-  'production_boms',
-  'production_orders',
-  'production_group_orders',
-  'customers',
-  'suppliers',
-  'invoices',
-  'purchase_invoices',
-  'projects',
-  'marketing_leads',
-  'process_templates',
-  'process_runs',
-  'tasks',
-  'calculation_formulas',
-  'fiscal_years',
-  'chart_of_accounts',
-  'journal_entries',
-  'accounting_event_rules',
-  'cost_centers',
-  'cash_boxes',
-  'bank_accounts',
-  'petty_funds',
-  'cheques',
-  'barters',
-  'cash_bank_operations',
-  'employees',
-  'job_descriptions',
-  'attendance_logs',
-  'work_schedules',
-  'leave_requests',
-  'overtime_requests',
-  'mission_requests',
-  'price_lists',
-  'web_forms',
-  'warehouses',
-  'shelves',
-  'stock_transfers',
-  'cost_centers',
-  'cash_boxes',
-  'bank_accounts',
-  'fiscal_years',
-  'expense_documents',
-  'assets',
-  'employee_advances',
-]);
-
 const MODULE_TABLE_MAP: Record<string, string> = {
   productBundles: 'product_bundles',
   purchaseInvoices: 'purchase_invoices',
@@ -310,7 +229,16 @@ const MODULE_TABLE_MAP: Record<string, string> = {
   process_runs: 'process_runs',
 };
 
-const getModuleTable = (moduleId: string) => MODULE_TABLE_MAP[String(moduleId || '').trim()] || String(moduleId || '').trim();
+// This is data registry, not a decision rule. It is the backend-safe projection
+// of the frontend module registry until Edge Functions consume the generated manifest.
+const AI_MODULE_REGISTRY = Object.freeze(Object.fromEntries(
+  Object.entries(MODULE_TABLE_MAP).map(([id, table]) => [id, { id, table }]),
+));
+const isRegisteredAiModule = (moduleId: string) => {
+  const normalized = String(moduleId || '').trim();
+  return Boolean(AI_MODULE_REGISTRY[normalized] || MODULE_ALIASES?.[normalized] || MODULE_SEARCH_FIELDS?.[normalized]);
+};
+const getModuleTable = (moduleId: string) => AI_MODULE_REGISTRY[String(moduleId || '').trim()]?.table || String(moduleId || '').trim();
 
 const MODULE_ALIASES: Record<string, string[]> = {
   customers: ['مشتری', 'مشتریان', 'customer', 'customers', 'خریدار', 'کارفرما', 'مشتریم', 'خریداران', 'طرف حساب'],
@@ -551,8 +479,18 @@ const normalizeAiContentAttachments = (value: any): Array<Record<string, any>> =
 const normalizeBaseUrl = (value: string) => {
   const raw = String(value || DEFAULT_AI_BASE_URL).trim().replace(/\/+$/, '');
   if (!raw) return DEFAULT_AI_BASE_URL;
-  if (/^https?:\/\//i.test(raw)) return raw;
-  return `https://${raw}`;
+  const normalized = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const url = new URL(normalized);
+    // AvalAI documents its OpenAI-compatible API below /v1. Accept a bare
+    // host in environment settings without silently producing /chat/... URLs.
+    if (/(^|\.)avalai\.ir$|(^|\.)avalapis\.ir$/i.test(url.hostname) && !/\/v\d+$/i.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/+$/, '')}/v1`.replace(/^([^/])/, '/$1');
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return normalized;
+  }
 };
 
 const normalizeBaseUrlList = (value: string, fallback = '') =>
@@ -736,6 +674,48 @@ const restPatch = async (
     throw new Error(typeof parsed === 'string' ? parsed : JSON.stringify(parsed || {}));
   }
   return Array.isArray(parsed) ? parsed : [];
+};
+
+const recordAgentPlan = async (
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  authContext: any,
+  threadId: string | null,
+  agentPlan: any,
+  sourceMetadata: Record<string, any> = {},
+) => {
+  if (!authContext?.orgId || !agentPlan) return null;
+  try {
+    const rows = await restInsert(supabaseUrl, serviceRoleKey, 'ai_agent_runs', [{
+      org_id: authContext.orgId,
+      thread_id: threadId || null,
+      initiated_by: authContext.userId || null,
+      execution_policy: agentPlan.policy || 'interactive_chat',
+      status: Array.isArray(agentPlan.steps) && agentPlan.steps.some((step: any) => step?.requires_confirmation)
+        ? 'waiting_confirmation'
+        : 'planned',
+      confidence: agentPlan.confidence || 'low',
+      risk: agentPlan.risk || 'medium',
+      agent_plan: agentPlan,
+      source_metadata: sourceMetadata,
+    }]);
+    const run = rows[0] || null;
+    if (run?.id && Array.isArray(agentPlan.steps) && agentPlan.steps.length) {
+      await restInsert(supabaseUrl, serviceRoleKey, 'ai_agent_steps', agentPlan.steps.map((step: any) => ({
+        org_id: authContext.orgId,
+        run_id: run.id,
+        step_key: String(step?.id || crypto.randomUUID()),
+        operator_key: String(step?.operator || 'context_retrieval'),
+        status: step?.requires_confirmation ? 'waiting_confirmation' : 'planned',
+        status_message: String(step?.status_message || ''),
+        reason: step?.reason || null,
+      })));
+    }
+    return run;
+  } catch (error) {
+    console.warn('AI agent audit write skipped', error);
+    return null;
+  }
 };
 
 const restDelete = async (
@@ -929,6 +909,7 @@ const canManageAiSettings = (authContext: any) => {
 };
 
 const canRebuildInstructionAiContext = (authContext: any) => {
+  if (canViewSaasAdmin(authContext)) return true;
   const permissions = authContext?.permissions;
   if (!permissions || typeof permissions !== 'object') return true;
   const perm = permissions?.instructions || {};
@@ -1321,6 +1302,21 @@ const canAccessAssignedRecord = (record: any, authContext: any, recordScope = 'a
 
 const canViewModule = (perm: any) => perm?.view !== false;
 const canCreateModule = (perm: any) => perm?.create !== false && perm?.edit !== false && perm?.view !== false;
+const agentPlanMutationAllowed = (perm: any, isUpdate: boolean) => isUpdate
+  ? perm?.view !== false && perm?.edit !== false
+  : canCreateModule(perm);
+const buildPermittedAgentModuleCatalog = (authContext: any) => {
+  const ids = new Set([
+    ...Object.keys(AI_MODULE_REGISTRY),
+    ...Object.keys(MODULE_ALIASES || {}),
+    ...Object.keys(MODULE_SEARCH_FIELDS || {}),
+  ]);
+  return Array.from(ids)
+    .filter((moduleId) => isRegisteredAiModule(moduleId))
+    .filter((moduleId) => canViewModule(getModulePermission(authContext?.permissions, moduleId)))
+    .sort()
+    .map((moduleId) => ({ id: moduleId, table: getModuleTable(moduleId) }));
+};
 
 const canViewReports = (authContext: any) => {
   const perm = authContext?.permissions?.__reports || {};
@@ -1495,7 +1491,7 @@ const fetchPermittedRows = async (
   params: Record<string, string | number>,
   limit = 8,
 ) => {
-  if (!moduleId || !ALLOWED_MODULES.has(moduleId)) return [];
+  if (!moduleId || !isRegisteredAiModule(moduleId)) return [];
   const perm = getModulePermission(authContext.permissions, moduleId);
   if (!canViewModule(perm)) return [];
   const recordScope = getRecordScope(perm);
@@ -1649,7 +1645,7 @@ const buildPermittedPageContext = async (
   if (reportContext) return reportContext;
 
   const moduleId = String(context.moduleId || '').trim();
-  if (!moduleId || !ALLOWED_MODULES.has(moduleId)) {
+  if (!moduleId || !isRegisteredAiModule(moduleId)) {
     return {
       context,
       permitted: false,
@@ -1820,7 +1816,7 @@ const detectRelevantModuleIds = (message: string, pageContext: any) => {
       result.add(moduleId);
     }
   });
-  if (pageContext?.moduleId && ALLOWED_MODULES.has(pageContext.moduleId)) result.add(pageContext.moduleId);
+  if (pageContext?.moduleId && isRegisteredAiModule(pageContext.moduleId)) result.add(pageContext.moduleId);
   return Array.from(result).slice(0, MAX_RETRIEVED_CONTEXTS + 1);
 };
 
@@ -1837,7 +1833,7 @@ const fetchModuleRowsForQuery = async (
   moduleId: string,
   message: string,
 ) => {
-  if (!moduleId || !ALLOWED_MODULES.has(moduleId)) return [];
+  if (!moduleId || !isRegisteredAiModule(moduleId)) return [];
   const perm = getModulePermission(authContext.permissions, moduleId);
   if (!canViewModule(perm)) return [];
   const recordScope = getRecordScope(perm);
@@ -2641,6 +2637,38 @@ const buildPersianCalendarPromptContext = () => {
   };
 };
 
+const CONTINUATION_GREETING_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+const buildTenantAssistantIdentity = (companyContext: any) => {
+  const tenantName = [
+    companyContext?.trade_name,
+    companyContext?.company_name,
+    companyContext?.company_full_name,
+    companyContext?.organization_name,
+  ]
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+  return tenantName
+    ? `شما دستیار هوشمند سازمان «${tenantName}» هستید. KalamApp فقط بستر نرم‌افزاری این سازمان است و هویت شما دستیار همین tenant است، نه دستیار خود KalamApp یا یک دستیار عمومی.`
+    : 'شما دستیار هوشمند سازمان فعلی هستید. KalamApp فقط بستر نرم‌افزاری است و هویت شما دستیار همین tenant است، نه دستیار خود KalamApp یا یک دستیار عمومی.';
+};
+
+const buildConversationContinuityInstruction = (historyRows: any[]) => {
+  const conversationRows = (historyRows || [])
+    .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
+  const latestAt = conversationRows
+    .map((item) => Date.parse(String(item?.created_at || item?.updated_at || '')))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => right - left)[0];
+  const isRecent = conversationRows.length > 0 && (
+    !Number.isFinite(latestAt)
+    || (Date.now() - Number(latestAt) >= 0 && Date.now() - Number(latestAt) < CONTINUATION_GREETING_WINDOW_MS)
+  );
+  return isRecent
+    ? ' این گفت‌وگو در شش ساعت اخیر فعال بوده است؛ آن را ادامه بده و سلام، معرفی، خوش‌آمدگویی یا شروع مجدد مکالمه را تکرار نکن.'
+    : ' اگر این شروع واقعی یک گفت‌وگوی تازه است، فقط در صورت طبیعی‌بودن می‌توانی یک خوش‌آمدگویی کوتاه داشته باشی؛ از سلام‌های تکراری پرهیز کن.';
+};
+
 const matchesDirectoryKeywords = (values: Array<unknown>, keywords: string[]) => {
   const haystack = values
     .map((value) => String(value || '').trim().toLowerCase())
@@ -2783,6 +2811,7 @@ const buildPromptMessages = (
     selectedCapabilities?: string[];
     businessAnalytics?: any;
     compressedContext?: any;
+    calendarContext?: any;
   } = {},
 ) => {
   const knowledge = knowledgeChunks.map((chunk, index) => ({
@@ -2810,7 +2839,7 @@ const buildPromptMessages = (
   );
   const contextPayload = {
     company: companyContext,
-    calendar: buildPersianCalendarPromptContext(),
+    calendar: options.calendarContext || buildPersianCalendarPromptContext(),
     current_user: buildUserPromptContext(authContext),
     organization_directory: orgPeopleContext,
     current_page: {
@@ -2852,9 +2881,11 @@ const buildPromptMessages = (
         : ' حالت تفکر عمیق فعال است و این اولین پیام است: هنوز تحلیل کامل را شروع نکن. ابتدا (۱) برداشت کوتاهت از خواسته را بگو، (۲) حداکثر ۳ تا ۵ سوال دقیق برای رفع ابهام بپرس، (۳) یک طرح کوتاه از مراحل کاری که انجام خواهی داد ارائه بده، و در پایان صریح از کاربر بخواه که تایید کند یا اطلاعات بدهد تا تفکر عمیق را شروع کنی. تا تایید نگرفته‌ای وارد تحلیل عمیق نشو.')
     : '';
   const copyableOutputInstruction = ' اگر بخشی از خروجی متن آماده استفاده برای کپی کردن است، مثل متن اصلی نامه، شرح شغل، قرارداد، پیام، پرامپت، آگهی، دستورالعمل یا هر متن نهایی قابل استفاده، آن بخش را با Markdown blockquote و شروع هر خط با > بفرست. اگر خروجی کد، JSON، SQL، قالب فنی یا متن ساختاریافته ماشینی است، آن را داخل code fence سه‌تایی با زبان مناسب بفرست. توضیح و راهنمایی را بیرون از blockquote/code نگه دار و فقط متن نهایی قابل کپی را داخل آن‌ها قرار بده.';
-  const jalaliAndReportsInstruction = ' تاریخ و زمان را برای مخاطب فارسی‌زبان با تقویم شمسی/جلالی و منطقه زمانی تهران بیان کن؛ تاریخ میلادی را فقط وقتی لازم است کنار تاریخ شمسی بیاور. روز هفته و روز/ماه شمسی را از calendar context بشناس. برای مناسبت‌ها فقط با داده معتبر context یا دانش قطعی عمومی پیشنهاد بده و اگر مطمئن نیستی صریح بگو نیاز به بررسی تقویم سازمان است. اگر retrieved_permitted_contexts شامل reports بود، برای سوال‌های تحلیلی و مدیریتی اول از گزارش‌ها و sample_rows همان گزارش استفاده کن؛ اگر گزارش مرتبط موجود نبود، به کاربر پیشنهاد بده از بخش گزارشات پیشرفته گزارش جدید بسازد یا گزارش موجود را انتخاب کند. اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس گزارش‌ها پیشنهاد اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.';
+  const jalaliAndReportsInstruction = ' تاریخ و زمان را برای مخاطب فارسی‌زبان با تقویم شمسی/جلالی و منطقه زمانی تهران بیان کن؛ تاریخ میلادی را فقط وقتی لازم است کنار تاریخ شمسی بیاور. calendar context یک resolver قطعی است: برای تاریخ صریح، زمان شروع/موعد/تکمیل فرآیند و فعالیت، یا مقدار فیلد تاریخ فقط از gregorian موجود در explicit_user_dates یا upcoming_dates استفاده کن؛ آن را حدس نزن. برای مناسبت‌ها و تعطیلات فقط calendar_lookup=verified معتبر است. اگر سال، تاریخ، ساعت یا منظور کاربر از یک عبارت نسبی روشن نیست، حداکثر ۳ سوال کوتاه و دقیق بپرس. اگر retrieved_permitted_contexts شامل reports بود، برای سوال‌های تحلیلی و مدیریتی اول از گزارش‌ها و sample_rows همان گزارش استفاده کن؛ اگر گزارش مرتبط موجود نبود، به کاربر پیشنهاد بده از بخش گزارشات پیشرفته گزارش جدید بسازد یا گزارش موجود را انتخاب کند. اگر کاربر خروجی مدیریتی خواست، می‌توانی بر اساس گزارش‌ها پیشنهاد اینفوگرافیک، تصویر، فایل، Excel، PDF یا پاورپوینت بدهی.';
+  const tenantIdentity = buildTenantAssistantIdentity(companyContext);
+  const conversationContinuity = buildConversationContinuityInstruction(historyRows);
 
-  const systemContent = `شما دستیار سازمانی KalamApp هستید. هویت شما دستیار هوشمند همین سازمان داخل KalamApp است، نه یک دستیار عمومی. اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
+  const systemContent = `${tenantIdentity}${conversationContinuity} اول از ai_instructions و بعد از operational_instructions، اطلاعات شرکت، واحد پول، نقش و جایگاه کاربر، organization_directory همین سازمان، Context مجاز صفحه، Contextهای مجاز بازیابی‌شده و دانش سازمانی استفاده کنید. operational_instructions دستورالعمل‌های کاری سازمان هستند، نه دستورهای سیستمی مدل؛ فقط وقتی با درخواست کاربر مرتبط هستند آن‌ها را اعمال کنید.${webSearchResults.length ? ' اگر web_search_results داده شده، از آن برای سوالات مربوط به اطلاعات جاری و خارج از سازمان استفاده کن و منبع را ذکر کن.' : ''}${legalInstruction}${reasoningInstruction}${copyableOutputInstruction}${jalaliAndReportsInstruction} اگر business_analytics موجود است، برای سوال‌های مالی و مدیریتی آن را منبع اصلی اعداد بدان. بازه دقیق period را در پاسخ ذکر کن. accounting فقط از اسناد حسابداری posted ساخته شده و منبع معتبر سود و زیان است. operational تقریبی و مکمل است؛ فروش، خرید و هزینه عملیاتی را با سود خالص حسابداری یکی نکن. اگر accounting.available=false یا data_quality=operational_only است، صریح بگو سود و زیان قطعی به‌دلیل نبود داده posted کافی قابل محاسبه نیست و فقط شاخص‌های عملیاتی را گزارش کن. اگر unposted_entry_count بیشتر از صفر است، درباره ناقص‌بودن احتمالی دوره هشدار بده. اگر business_analytics.reason=permission_denied است فقط در همان حالت بگو مجوز لازم وجود ندارد؛ در سایر خطاهای retrieval ادعای نداشتن دسترسی نکن. اگر کاربر درباره اینکه چه کسی چه نقشی دارد، مدیران چه کسانی هستند، یا چه کاربری عضو چه تیمی است پرسید، فقط از organization_directory پاسخ بده. اگر فرد یا نقش در organization_directory نیست، صریح بگو در دایرکتوری مجاز همین سازمان پیدا نشد. واحد پول را فقط از company.currency_label/company.currency_code بگویید و اگر تنظیم نشده بود عدم قطعیت را اعلام کنید. دسترسی را بر اساس داده‌های مجاز موجود در همین پیام رعایت کنید؛ اگر داده‌ای در Contextها نیست، نگویید قطعا دسترسی ندارد، بگویید در داده‌های مجاز بازیابی‌شده پیدا نشد یا شناسه/نام دقیق‌تری لازم است. هرگز داده‌ای از سازمان دیگر فرض نکن. پاسخ‌ها فارسی، دقیق، کوتاه و اجرایی باشند. هیچ تغییر داده، ثبت یادداشت یا اقدام عملیاتی انجام ندهید. اگر درخواست کاربر مبهم است یا برای پاسخ درست به اطلاعات بیشتری نیاز داری، به‌جای حدس‌زدن، اول حداکثر ۲ تا ۳ سوال کوتاه و دقیق بپرس. وقتی خروجی به‌صورت فایل قابل‌دانلود (Word، Excel، PDF) برای کاربر مفیدتر است (مثل گزارش، جدول داده، قرارداد، صورت‌حساب یا فهرست بلند)، در پایان پاسخ به‌صورت کوتاه پیشنهاد بده که می‌توانی همان را به‌صورت فایل بسازی و از کاربر بخواه عملگر «ساخت فایل» را فعال کند.`;
 
   const historyMessages = (historyRows || [])
     .filter((item) => ['user', 'assistant'].includes(String(item?.role || '')))
@@ -3718,15 +3749,27 @@ const callChatCompletionsStream = async (
       requestBody.max_tokens = options?.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS;
     }
 
-    const result = await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+    const requestStream = async (body: Record<string, any>) => await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${providerConfig.apiKey}`,
         'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
     }, { disableFallback: true });
+    let result = await requestStream(requestBody);
+    // stream_options is OpenAI-compatible, but some AvalAI-backed models do
+    // not expose usage chunks. Keep streaming available for those models.
+    if (!result.response.ok && result.response.status === 400) {
+      const rawError = await result.response.clone().text();
+      if (/stream_options|include_usage|unsupported.*stream/i.test(rawError)) {
+        const fallbackBody = { ...requestBody };
+        delete fallbackBody.stream_options;
+        result = await requestStream(fallbackBody);
+      }
+    }
     baseUrl = result.baseUrl;
     const response = result.response;
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
@@ -5445,6 +5488,25 @@ const handleGetComposeModels = async (supabaseUrl: string, serviceRoleKey: strin
   return json(200, { success: true, capabilities });
 };
 
+const handleSaveAgentConfirmationGrant = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  const threadId = normalizeId(body?.threadId || body?.thread_id);
+  const operatorKey = String(body?.operatorKey || body?.operator_key || '').trim();
+  if (!threadId || !operatorKey || operatorKey.length > 80) {
+    return json(400, { success: false, message: 'اطلاعات تایید این گفتگو معتبر نیست.' });
+  }
+  const thread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, threadId);
+  if (!thread) return json(403, { success: false, message: 'دسترسی به گفتگوی موردنظر تایید نشد.' });
+  await restUpsert(supabaseUrl, serviceRoleKey, 'ai_agent_confirmation_grants', [{
+    org_id: authContext.orgId,
+    thread_id: threadId,
+    user_id: authContext.userId,
+    operator_key: operatorKey,
+    granted_at: new Date().toISOString(),
+    metadata: { source: 'interactive_chat' },
+  }], 'org_id,thread_id,user_id,operator_key');
+  return json(200, { success: true });
+};
+
 const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const requestedThreadId = normalizeId(body?.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
@@ -5781,10 +5843,11 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
   const aiUsageAccess = await assertAiUsageAllowed(supabaseUrl, serviceRoleKey, authContext);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const [knowledgeChunks, companyContext, orgPeopleContext] = await Promise.all([
+  const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, message, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, message),
+    resolvePersianCalendarContext(message),
   ]);
   const [retrievedContexts, businessAnalytics] = await Promise.all([
     fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, message, pageContext),
@@ -5858,6 +5921,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       selectedCapabilities,
       businessAnalytics,
       compressedContext,
+      calendarContext,
     },
   );
 
@@ -5874,6 +5938,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
     companyContext,
     retrievedContexts,
     businessAnalytics,
+    calendarContext,
     webSearchResults,
     forceWebSearch,
     aiUsageAccess,
@@ -6467,10 +6532,11 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
-  const [knowledgeChunks, companyContext, orgPeopleContext] = await Promise.all([
+  const [knowledgeChunks, companyContext, orgPeopleContext, calendarContext] = await Promise.all([
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId }) : Promise.resolve([]),
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
+    resolvePersianCalendarContext(prompt),
   ]);
   const retrievedContexts = await fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext);
 
@@ -6484,6 +6550,9 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     forceNew: body?.forceNewThread === true,
   });
   const previousMessages = await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 30);
+  const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
+    ? thread.metadata.compressed_context
+    : null;
 
   const userContentForDb = [
     prompt,
@@ -6530,6 +6599,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       deepReasoning: selectedCapabilitySet.has('deep_reasoning'),
       selectedCapabilities,
       compressedContext,
+      calendarContext,
     },
   );
   const lastUserIndex = promptMessages.map((item) => item.role).lastIndexOf('user');
@@ -6723,7 +6793,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
 
   const schema = body?.recordCreation || body?.record_creation || {};
   const targetModuleId = String(schema?.moduleId || body?.targetModuleId || body?.target_module_id || '').trim();
-  if (!targetModuleId || !ALLOWED_MODULES.has(targetModuleId)) {
+  if (!targetModuleId || !isRegisteredAiModule(targetModuleId)) {
     return json(400, { success: false, message: `ماژول مقصد برای ${mutationVerb} رکورد معتبر نیست.` });
   }
   const requestedFields = Array.isArray(schema?.fields) ? schema.fields : [];
@@ -6804,12 +6874,13 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     model: providerConfig.model,
     forceNew: body?.forceNewThread === true,
   });
-  const [companyContext, orgPeopleContext, knowledgeChunks, retrievedContexts, previousMessages] = await Promise.all([
+  const [companyContext, orgPeopleContext, knowledgeChunks, retrievedContexts, previousMessages, calendarContext] = await Promise.all([
     loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
     loadOrgPeopleContext(supabaseUrl, serviceRoleKey, authContext, prompt),
     canUseKnowledge ? fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, prompt, { moduleId: pageContext.moduleId || targetModuleId }) : Promise.resolve([]),
     fetchRelevantModuleContexts(supabaseUrl, serviceRoleKey, authContext, prompt, pageContext),
     fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 20),
+    resolvePersianCalendarContext(filePrompt),
   ]);
   const compressedContext = thread?.metadata?.compressed_context && typeof thread.metadata.compressed_context === 'object'
     ? thread.metadata.compressed_context
@@ -6846,6 +6917,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
         ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
         : ['record_creation'],
       compressedContext,
+      calendarContext,
     },
   );
   const updateTargetPrompt = isUpdate
@@ -7299,71 +7371,6 @@ const buildTaskBundlePrompt = (body: any, inputs: any[], transcripts: any[], pre
   ].filter(Boolean).join('\n\n').trim();
 };
 
-const AUTO_RECORD_CREATION_PATTERNS = [
-  /(?:بساز|ایجاد کن|ثبت کن|اضافه کن).*(?:رکورد|مشتری|تامین|تأمین|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند)/i,
-  /(?:به عنوان|تبدیل به).*(?:مشتری|تامین کننده|تامین‌کننده|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند)/i,
-];
-
-const AUTO_RECORD_UPDATE_PATTERNS = [
-  /(?:ویرایش|اصلاح|تغییر|بروزرسانی|به‌روزرسانی|آپدیت).*(?:رکورد|مشتری|تامین|تأمین|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند|انتخاب)/i,
-  /(?:رکورد|مشتری|تامین|تأمین|فاکتور|پروژه|محصول|کارمند|فعالیت|درخواست|سند|انتخاب).*(?:ویرایش|اصلاح|تغییر|بروزرسانی|به‌روزرسانی|آپدیت)/i,
-];
-
-const detectRecordMutationMode = (prompt: string) =>
-  AUTO_RECORD_UPDATE_PATTERNS.some((pattern) => pattern.test(String(prompt || ''))) ? 'update' : 'create';
-
-const AUTO_PROCESS_OPERATION_PATTERNS = [
-  /(?:فرآیند|فرایند|گردش کار|گردش‌کار|مرحله|فعالیت).*(?:اجرا|ارجاع|اقدام|تغییر|ببر|منتقل|بروزرسانی|به‌روزرسانی)/i,
-  /(?:اقدام فرآیندی|اقدام فرایندی|process operation|workflow action)/i,
-];
-
-const AUTO_IMAGE_GENERATION_PATTERNS = [
-  /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:بساز|ایجاد کن|طراحی کن|درست کن)/i,
-  /(?:تصویر|عکس).*(?:اصلاح|ادیت|ویرایش|تغییر)/i,
-  /(?:لوگو|بنر|پوستر|کاور).*(?:بساز|طراحی کن)/i,
-];
-
-const IMAGE_PROMPT_ONLY_PATTERNS = [
-  /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:برای|جهت).*(?:تولید|ساخت|ایجاد).*(?:تصویر|عکس|پوستر|بنر|کاور|image)/i,
-  /(?:برای|جهت).*(?:تولید|ساخت|ایجاد).*(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور).*(?:بنویس|بده|تهیه کن|آماده کن)/i,
-  /(?:پرامپت|prompt).*(?:تصویر|عکس|image).*(?:بنویس|بده|تهیه کن|آماده کن)/i,
-];
-
-const DIRECT_IMAGE_GENERATION_PATTERNS = [
-  /(?:خودت|مستقیماً|مستقیم|همین حالا).*(?:تصویر|عکس|پوستر|بنر|کاور).*(?:بساز|تولید کن|ایجاد کن)/i,
-  /(?:تصویر|عکس|پوستر|بنر|کاور).*(?:را|رو).*(?:بساز|تولید کن|ایجاد کن|طراحی کن)/i,
-];
-
-const IMAGE_PROMPT_WORD_PATTERN = /(?:پرامپت|prompt|متن|توضیح|دستور).*(?:تصویر|عکس|پوستر|بنر|کاور|image)|(?:تصویر|عکس|پوستر|بنر|کاور|image).*(?:پرامپت|prompt|متن|توضیح|دستور)/i;
-
-const wantsImagePromptOnly = (text: string) => {
-  const value = String(text || '').trim();
-  const asksForPrompt = IMAGE_PROMPT_ONLY_PATTERNS.some((pattern) => pattern.test(value));
-  const explicitDirectGeneration = DIRECT_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(value))
-    && !IMAGE_PROMPT_WORD_PATTERN.test(value);
-  return asksForPrompt && !explicitDirectGeneration;
-};
-
-const AUTO_VOICE_OUTPUT_PATTERNS = [
-  /(?:صدا|ویس|فایل صوتی).*(?:بساز|تولید کن|بخوان|بگو|تبدیل کن)/i,
-  /(?:متن|این نوشته).*(?:را|رو).*(?:به صدا|به ویس|صوتی)/i,
-];
-
-const AUTO_DOCUMENT_GENERATION_PATTERNS = [
-  /(?:فایل|ورد|اکسل|pdf|پی دی اف|گزارش|خروجی|csv).*(?:بساز|درست کن|ایجاد کن|تولید کن)/i,
-  /(?:فرم|نامه|قرارداد|پیشنهاد|گزارش).*(?:تهیه کن|بساز|در قالب)/i,
-];
-
-const AUTO_LEGAL_PATTERNS = [
-  /(?:حقوقی|قانون|قرارداد|شکایت|تعهد|مسئولیت|دادرسی|دادگاه|آیین نامه|آیین‌نامه)/i,
-  /(?:legal|contract|law|compliance)/i,
-];
-
-const AUTO_DEEP_REASONING_PATTERNS = [
-  /(?:عمیق|قدم به قدم|مرحله به مرحله|تحلیل کن|مقایسه کن|استدلال کن|سناریو)/i,
-  /(?:reasoning|analyze deeply|step by step)/i,
-];
-
 const buildAutoRouterHistoryText = (messages: any[], limit = 8) =>
   (messages || [])
     .filter((item: any) => item && (item.role === 'user' || item.role === 'assistant'))
@@ -7375,65 +7382,6 @@ const buildAutoRouterHistoryText = (messages: any[], limit = 8) =>
     })
     .filter(Boolean)
     .join('\n');
-
-const pickAutoTargetModuleId = (
-  suggestedModuleId: string | null,
-  message: string,
-  pageContext: any,
-  authContext: any,
-  mutationMode: 'create' | 'update' = 'create',
-) => {
-  const requested = String(suggestedModuleId || '').trim();
-  const canUseModule = (moduleId: string) => {
-    if (!moduleId || !ALLOWED_MODULES.has(moduleId)) return false;
-    const permission = getModulePermission(authContext.permissions, moduleId);
-    return mutationMode === 'update'
-      ? permission?.view !== false && permission?.edit !== false
-      : canCreateModule(permission);
-  };
-  if (canUseModule(requested)) return requested;
-  const detected = detectRelevantModuleIds(message, pageContext).filter((moduleId) => canUseModule(moduleId));
-  if (detected.length === 1) return detected[0];
-  if (pageContext?.moduleId && canUseModule(String(pageContext.moduleId))) return String(pageContext.moduleId);
-  return null;
-};
-
-const detectHeuristicAutoRoute = (
-  prompt: string,
-  inputs: any[],
-  transcripts: any[],
-  availableCapabilities: string[],
-) => {
-  const available = new Set((availableCapabilities || []).map((item) => String(item || '').trim()));
-  const text = String(prompt || '').trim();
-  const normalized = text.toLowerCase();
-  const hasImageInput = inputs.some((input) => input.type === 'image' || String(input?.file?.mimeType || '').toLowerCase().startsWith('image/'));
-  const hasFileInput = inputs.some((input) => input.file);
-  const hasVoiceInput = transcripts.length > 0 || inputs.some((input) => input.audio);
-  const suggestions: string[] = [];
-
-  const add = (capability: string) => {
-    if (!available.has(capability) || suggestions.includes(capability)) return;
-    suggestions.push(capability);
-  };
-
-  if (hasVoiceInput) add('voice_input');
-  if (hasFileInput) add('document_analysis');
-  if (!wantsImagePromptOnly(normalized) && AUTO_IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('image_generation');
-  if (AUTO_VOICE_OUTPUT_PATTERNS.some((pattern) => pattern.test(normalized))) add('voice_output');
-  if (AUTO_DOCUMENT_GENERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('document_generation');
-  if (AUTO_PROCESS_OPERATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('process_operation');
-  if (AUTO_RECORD_CREATION_PATTERNS.some((pattern) => pattern.test(normalized))) add('record_creation');
-  if (AUTO_RECORD_UPDATE_PATTERNS.some((pattern) => pattern.test(normalized))) add('record_creation');
-  if (AUTO_LEGAL_PATTERNS.some((pattern) => pattern.test(normalized))) add('legal_assistant');
-  if (!suggestions.includes('legal_assistant') && shouldTriggerWebSearch(normalized)) add('web_search');
-  if (AUTO_DEEP_REASONING_PATTERNS.some((pattern) => pattern.test(normalized))) add('deep_reasoning');
-  if (hasImageInput && suggestions.includes('image_generation')) {
-    const next = suggestions.filter((item) => item !== 'document_analysis');
-    return Array.from(new Set(next));
-  }
-  return Array.from(new Set(suggestions));
-};
 
 const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const rawContext = normalizeContext(body?.context || {});
@@ -7460,33 +7408,18 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     : String(body?.message || body?.prompt || '').trim();
   if (!prompt) return json(400, { success: false, message: 'متن یا ورودی کافی برای تصمیم‌گیری خودکار دریافت نشد.' });
 
-  const heuristicCapabilities = detectHeuristicAutoRoute(prompt, inputs, transcripts, availableCapabilities);
-  if (inputs.length === 0 && heuristicCapabilities.length === 0) {
-    return json(200, {
-      success: true,
-      capabilities: [],
-      targetModuleId: null,
-      capability: baseCapability,
-      reason: 'plain_chat',
-      confidence: 'low',
-      provider: providerConfig.provider,
-      model: providerConfig.model,
-      usage: null,
-      ledger: null,
-    });
-  }
-
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const previousMessages = existingThread
     ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, existingThread.id, 20)
     : [];
 
   const routerSystemPrompt = [
-    'شما فقط موتور تصمیم‌گیرنده برای انتخاب عملگرهای هوش مصنوعی هستید.',
+    'شما عامل برنامه‌ریز هوش مصنوعی سازمان هستید؛ فقط برنامه اجرا می‌سازید و هیچ داده‌ای را تغییر نمی‌دهید.',
     'پاسخ شما باید فقط JSON معتبر باشد و هیچ متن اضافه‌ای نداشته باشد.',
     'فقط از capabilityهای مجاز زیر انتخاب کن و capability جدید نساز:',
     availableCapabilities.length ? availableCapabilities.join(', ') : 'هیچ capability فعال نیست',
     'اگر کاربر فقط گفتگوی عادی می‌خواهد، capabilities را خالی برگردان.',
+    'هرگز اطلاعات سازمان، قیمت، وضعیت فرآیند، نام رکورد یا فیلدهای لازم را حدس نزن. ابتدا ابزارهای خواندنی و context مجاز را برای بررسی انتخاب کن؛ اگر پس از آن داده کافی نیست، capabilities را خالی بگذار و حداکثر سه پرسش دقیق را در clarification_questions برگردان.',
     'اگر کاربر از فایل، تصویر یا ویس چیزی فرستاده و می‌خواهد آن را بررسی یا از آن اطلاعات استخراج شود، document_analysis و در صورت وجود صوت voice_input را انتخاب کن.',
     'اگر کاربر خواسته از روی ورودی‌ها یک یا چند رکورد ساخته یا یک یا چند رکورد موجود ویرایش شود، record_creation را انتخاب کن و اگر نوع رکورد روشن است target_module_id را هم بده.',
     'برای ساخت رکورد mutation_mode=create و برای ویرایش رکورد موجود mutation_mode=update برگردان.',
@@ -7500,25 +7433,19 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
     'اگر سوال پیچیده و نیازمند تحلیل چندمرحله‌ای است، deep_reasoning را انتخاب کن.',
     'چند capability را فقط وقتی باهم برگردان که واقعاً برای انجام همان درخواست لازم باشند.',
     'برای record_creation اگر نوع رکورد روشن نیست target_module_id را null بگذار.',
+    'risk را low، medium یا high و confidence را low، medium یا high انتخاب کن.',
+    'steps باید به ترتیب اجرا باشد و هر step شامل id، operator، status_message و reason باشد.',
     'قالب خروجی:',
-    '{"capabilities":[],"target_module_id":null,"mutation_mode":"create|update","reason":"...","confidence":"low|medium|high"}',
+    '{"capabilities":[],"target_module_id":null,"mutation_mode":"create|update","reason":"...","confidence":"low|medium|high","risk":"low|medium|high","clarification_questions":[],"steps":[{"id":"context","operator":"document_analysis","status_message":"...","reason":"..."}]}',
   ].join('\n');
   const routingUserPrompt = [
     `درخواست اصلی کاربر:\n${prompt}`,
-    heuristicCapabilities.length ? `پیشنهاد اولیه heuristic:\n${heuristicCapabilities.join(', ')}` : '',
     previousMessages.length ? `خلاصه گفتگوی قبلی:\n${buildAutoRouterHistoryText(previousMessages)}` : '',
     inputs.length ? `نوع ورودی‌ها:\n${inputs.map((input) => `- ${input.type}: ${input.label}`).join('\n')}` : '',
+    pageContext?.context?.moduleId ? `ماژول صفحه فعلی: ${pageContext.context.moduleId}` : '',
+    `فهرست ماژول‌های قابل‌دسترسی کاربر:\n${JSON.stringify(buildPermittedAgentModuleCatalog(authContext))}`,
   ].filter(Boolean).join('\n\n');
 
-  let capabilities = heuristicCapabilities;
-  let targetModuleId: string | null = null;
-  let mutationMode = detectRecordMutationMode(prompt);
-  let routeReason = heuristicCapabilities.length
-    ? `heuristic:${heuristicCapabilities.join(',')}`
-    : 'plain_chat';
-  let routeConfidence = heuristicCapabilities.length ? 'medium' : 'low';
-  let usageWithBilling: any = null;
-  let ledger: any = null;
   try {
     const routingMessages = [
       { role: 'system', content: routerSystemPrompt },
@@ -7529,18 +7456,28 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       responseFormat: { type: 'json_object' },
     });
     const parsed = extractJsonObjectFromText(routeResult.content) || {};
-    const suggestedCapabilities = Array.isArray(parsed?.capabilities)
-      ? parsed.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
-      : [];
-    const filtered = suggestedCapabilities
-      .filter((capability: string) => availableCapabilities.includes(capability))
-      .filter((capability: string) => !(capability === 'image_generation' && wantsImagePromptOnly(prompt.toLowerCase())));
-    capabilities = filtered.length ? Array.from(new Set(filtered)) : heuristicCapabilities;
-    mutationMode = String(parsed?.mutation_mode || '').trim() === 'update' ? 'update' : detectRecordMutationMode(prompt);
-    targetModuleId = pickAutoTargetModuleId(String(parsed?.target_module_id || '').trim() || null, prompt, pageContext, authContext, mutationMode);
-    routeReason = String(parsed?.reason || routeReason || '').trim() || routeReason;
-    routeConfidence = String(parsed?.confidence || routeConfidence || '').trim() || routeConfidence;
-    ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+    const agentPlan = normalizeAgentPlan(parsed, {
+      policy: 'interactive_chat' as AgentExecutionPolicy,
+      allowedCapabilities: availableCapabilities,
+      isKnownModule: (moduleId) => {
+        if (!isRegisteredAiModule(moduleId)) return false;
+        const perm = getModulePermission(authContext.permissions, moduleId);
+        return agentPlanMutationAllowed(perm, String(parsed?.mutation_mode) === 'update');
+      },
+    });
+    const agentRun = await recordAgentPlan(
+      supabaseUrl,
+      serviceRoleKey,
+      authContext,
+      existingThread?.id || null,
+      agentPlan,
+      {
+        context_module_id: pageContext?.context?.moduleId || null,
+        input_count: inputs.length,
+        input_types: inputs.map((input: any) => input.type),
+      },
+    );
+    const ledger = await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
       threadId: existingThread?.id || null,
       requestId: routeResult.requestId,
       capability: baseCapability,
@@ -7548,47 +7485,48 @@ const handleSuggestAutoCapabilities = async (supabaseUrl: string, serviceRoleKey
       model: routeResult.model,
       usageMetadata: routeResult.usageMetadata,
       metadata: {
-        source: 'auto_router',
-        suggested_capabilities: capabilities,
-        target_module_id: targetModuleId,
-        confidence: routeConfidence,
+        source: 'agent_plan',
+        agent_plan: agentPlan,
       },
     });
-    usageWithBilling = withCustomerBilling(routeResult.usageMetadata, ledger);
     return json(200, {
       success: true,
-      capabilities,
-      targetModuleId,
-      mutationMode,
+      capabilities: agentPlan.capabilities,
+      targetModuleId: agentPlan.target_module_id,
+      mutationMode: agentPlan.mutation_mode,
       voiceTranscripts: transcripts,
       capability: baseCapability,
-      reason: routeReason,
-      confidence: routeConfidence,
+      reason: agentPlan.reason,
+      confidence: agentPlan.confidence,
+      agentPlan,
+      agentRunId: agentRun?.id || null,
       provider: routeResult.provider,
       model: routeResult.model,
-      usage: usageWithBilling,
+      usage: withCustomerBilling(routeResult.usageMetadata, ledger),
       ledger,
     });
   } catch (error) {
-    console.warn('AI auto-router fell back to heuristics', error);
+    console.warn('AI agent planner failed', error);
   }
 
-  if (capabilities.includes('record_creation')) {
-    targetModuleId = pickAutoTargetModuleId(null, prompt, pageContext, authContext, mutationMode);
-  }
   return json(200, {
     success: true,
-    capabilities,
-    targetModuleId,
-    mutationMode,
+    capabilities: [],
+    targetModuleId: null,
+    mutationMode: 'create',
     voiceTranscripts: transcripts,
     capability: baseCapability,
-    reason: routeReason,
-    confidence: routeConfidence,
+    reason: 'agent_planner_unavailable',
+    confidence: 'low',
+    agentPlan: normalizeAgentPlan({}, {
+      policy: 'interactive_chat',
+      allowedCapabilities: availableCapabilities,
+      isKnownModule: isRegisteredAiModule,
+    }),
     provider: providerConfig.provider,
     model: providerConfig.model,
-    usage: usageWithBilling,
-    ledger,
+    usage: null,
+    ledger: null,
   });
 };
 
@@ -10024,7 +9962,7 @@ const fetchPermittedSingleRecord = async (
   moduleId: string,
   recordId: string,
 ) => {
-  if (!moduleId || !recordId || !ALLOWED_MODULES.has(moduleId) || !isUuid(recordId)) return null;
+  if (!moduleId || !recordId || !isRegisteredAiModule(moduleId) || !isUuid(recordId)) return null;
   const perm = getModulePermission(authContext.permissions, moduleId);
   if (!canViewModule(perm)) return null;
   const recordScope = getRecordScope(perm);
@@ -10190,10 +10128,36 @@ const fetchReplyCrossModuleContext = async (
     })
     : [];
 
+  const effectivePricing = {
+    generated_at: new Date().toISOString(),
+    price_lists: (priceLists || []).map((row: any) => ({
+      id: row?.id || null,
+      name: row?.name || null,
+      status: row?.status || null,
+      last_updated_at: row?.updated_at || row?.created_at || null,
+      items: Array.isArray(row?.items) ? row.items.slice(0, 40) : [],
+    })),
+    packages: (productBundles || []).map((row: any) => ({
+      id: row?.id || null,
+      name: row?.name || row?.title || null,
+      description: row?.description || null,
+      status: row?.status || null,
+      last_updated_at: row?.updated_at || row?.created_at || null,
+      items: Array.isArray(row?.products) ? row.products.slice(0, 40) : [],
+    })),
+    products: (products || []).map((row: any) => ({
+      id: row?.id || null,
+      name: row?.name || row?.title || null,
+      description: row?.description || row?.details || null,
+      status: row?.status || null,
+      last_updated_at: row?.updated_at || row?.created_at || null,
+    })),
+  };
   return {
     products,
     product_bundles: productBundles,
     price_lists: priceLists,
+    effective_pricing: effectivePricing,
     purchase_invoices: purchaseInvoices,
     recent_customers: recentCustomers,
     recent_suppliers: recentSuppliers,
@@ -10356,6 +10320,13 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     { moduleId: counterparty?.moduleId || contextForReply.moduleId || null },
   );
   const userContext = buildUserPromptContext(authContext);
+  const latestConversationAt = recentMessages
+    .map((item: any) => Date.parse(String(item?.created_at || '')))
+    .filter((value: number) => Number.isFinite(value))
+    .sort((left: number, right: number) => right - left)[0];
+  const conversationActiveWithinSixHours = Number.isFinite(latestConversationAt)
+    && Date.now() - Number(latestConversationAt) >= 0
+    && Date.now() - Number(latestConversationAt) < CONTINUATION_GREETING_WINDOW_MS;
 
   const payload = {
     request: {
@@ -10381,6 +10352,10 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     },
     cross_module_context: crossModuleContext,
     conversation: recentMessages.slice(-16),
+    conversation_continuity: {
+      active_within_six_hours: conversationActiveWithinSixHours,
+      last_message_at: Number.isFinite(latestConversationAt) ? new Date(Number(latestConversationAt)).toISOString() : null,
+    },
     retrieved_contexts: retrievedContexts.slice(0, 4),
     targeted_retrieval: {
       query: retrievalMetadata.retrieval_query,
@@ -10399,7 +10374,7 @@ const handleSuggestReply = async (supabaseUrl: string, serviceRoleKey: string, a
     {
       role: 'system',
       content:
-        'شما دستیار پاسخ‌دهی سازمانی KalamApp هستید. فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. ابتدا customer_response_guide و ai_instructions را رعایت کنید، سپس operational_instructions مرتبط را بر دانش عمومی مدل مقدم بدانید، و بعد از organization_knowledge مرتبط استفاده کنید. اگر سند یا دستورالعمل مرتبط در payload نیست، وانمود نکنید که وجود دارد. در conversation مقدار author_name هویت فرستنده همان پیام است؛ در گفتگوی گروهی هر author_name را یک شخص یا مخاطب مستقل بدانید، پیام اعضا را با هم ادغام نکنید و پاسخ را با توجه به آخرین درخواست و فرستنده مرتبط بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز و اسناد/قوانین سازمان استفاده کنید. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید یا یک سوال کوتاه بپرسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.',
+        `${buildTenantAssistantIdentity(companyContext)} فقط متن «پاسخ پیشنهادی قابل ارسال برای مشتری» را بنویسید. اگر آخرین پیام مکالمه در شش ساعت اخیر است، گفتگو را بدون سلام، معرفی یا شروع مجدد ادامه بده. ابتدا customer_response_guide و ai_instructions را رعایت کنید، سپس operational_instructions مرتبط را بر دانش عمومی مدل مقدم بدانید، و بعد از organization_knowledge مرتبط استفاده کنید. اگر سند یا دستورالعمل مرتبط در payload نیست، وانمود نکنید که وجود دارد. در conversation مقدار author_name هویت فرستنده همان پیام است؛ در گفتگوی گروهی هر author_name را یک شخص یا مخاطب مستقل بدانید، پیام اعضا را با هم ادغام نکنید و پاسخ را با توجه به آخرین درخواست و فرستنده مرتبط بنویسید. از پیام‌های مکالمه اخیر، نقش سازمانی کاربر، وضعیت مشتری/تامین‌کننده، سوابق فاکتور/پروژه/پرداخت مجاز، اطلاعات کالا/خدمت، لیست قیمت، پکیج‌ها، فاکتورهای خرید، اطلاعات مشتریان/کاربران مجاز و اسناد/قوانین سازمان استفاده کنید. برای اعلام قیمت فقط از effective_pricing استفاده کن؛ نام لیست قیمت و زمان last_updated_at آن را در پاسخ روشن کن و اگر قیمت/اعتبار آن مشخص نیست، قیمت قطعی اعلام نکن. اگر اطلاعات قطعی نیست، با عبارت محتاطانه و بدون ادعای قطعی بنویسید یا یک سوال کوتاه بپرسید. خروجی باید فارسی، حرفه‌ای، روشن، کوتاه و اجرایی باشد. Markdown، عنوان، توضیح فرایند و متن اضافی ننویسید.`,
     },
     {
       role: 'user',
@@ -11194,8 +11169,11 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
     return json(403, { success: false, message: 'برای پیشنهاد یادداشت باید روی یک رکورد قابل دسترس باشید.' });
   }
 
-  const knowledgeChunks = await fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, userMessage, { moduleId: pageContext.moduleId });
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext);
+  const [knowledgeChunks, companyContext, providerConfig] = await Promise.all([
+    fetchKnowledgeChunks(supabaseUrl, serviceRoleKey, authContext, userMessage, { moduleId: pageContext.moduleId }),
+    loadCompanyContext(supabaseUrl, serviceRoleKey, authContext),
+    resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext),
+  ]);
   const thread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
     threadId: body?.threadId || null,
     title: `یادداشت ${pageContext.moduleId}`,
@@ -11208,7 +11186,7 @@ const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, au
     {
       role: 'system',
       content:
-        'شما دستیار KalamApp هستید. بر اساس Context مجاز، فقط متن یک یادداشت فارسی کوتاه، روشن و قابل ثبت روی رکورد بسازید. هیچ توضیح اضافه، عنوان، نقل قول یا markdown ننویسید.',
+        `${buildTenantAssistantIdentity(companyContext)} بر اساس Context مجاز، فقط متن یک یادداشت فارسی کوتاه، روشن و قابل ثبت روی رکورد بسازید. هیچ توضیح اضافه، عنوان، نقل قول یا markdown ننویسید.`,
     },
     {
       role: 'user',
@@ -11600,7 +11578,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
     const mutationVerb = isUpdate ? 'ویرایش' : 'ساخت';
     const proposed = action.proposed_payload || {};
     const targetModuleId = String(proposed.target_module_id || '').trim();
-    if (!targetModuleId || !ALLOWED_MODULES.has(targetModuleId)) {
+    if (!targetModuleId || !isRegisteredAiModule(targetModuleId)) {
       await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
         status: 'failed',
         result_payload: { error: 'invalid_target_module' },
@@ -11933,6 +11911,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'save_agent_confirmation_grant') return await handleSaveAgentConfirmationGrant(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'compress_thread_context') return await handleCompressThreadContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'delete_thread') return await handleDeleteThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'suggest_auto_capabilities') return await handleSuggestAutoCapabilities(supabaseUrl, serviceRoleKey, authContext, body);
