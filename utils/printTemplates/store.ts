@@ -4,6 +4,7 @@ import { supabase } from '../../supabaseClient';
 import { getCachedAuthUser } from '../sessionCache';
 import { getResolvedCurrentOrgId } from '../companySettings';
 import { loadScopedIntegrationSettings } from '../integrationSettings';
+import { attachAbortSignalIfSupported, runWithSupabaseTimeout } from '../supabaseTimeout';
 import { buildCatalogFullPageLayout } from './catalogFullPageLayout';
 import { DEFAULT_PRINT_IMAGE_DISPLAY_MODE, type PrintImageDisplayMode } from './imageDisplay';
 import { buildDefaultPrintFooterTemplate } from './footerLayout';
@@ -13,6 +14,7 @@ import { getPrintVariableProviderOptions } from './variableProviders';
 
 export const PRINT_TEMPLATES_CONNECTION_TYPE = 'print_templates';
 const PRINT_TEMPLATES_LOCAL_KEY = 'kalamapp.print_templates.v1';
+const PRINT_TEMPLATES_SAVE_TIMEOUT_MS = 15_000;
 
 export interface StoredPrintTemplate {
   id: string;
@@ -627,9 +629,29 @@ const normalizeStore = (settings: any): Record<string, StoredPrintTemplate[]> =>
   return result;
 };
 
+/**
+ * قالب‌های سیستمی در زمان بارگذاری از تعریف ماژول ساخته می‌شوند. ذخیرهٔ دوبارهٔ آن‌ها
+ * برای هر ماژول، اندازهٔ ردیف تنظیمات را بی‌دلیل بزرگ می‌کرد و باعث کندی ذخیره می‌شد.
+ */
+export const getPersistedPrintTemplatesByModule = (
+  templatesByModule: Record<string, StoredPrintTemplate[]>
+): Record<string, StoredPrintTemplate[]> => {
+  const result: Record<string, StoredPrintTemplate[]> = {};
+
+  Object.entries(templatesByModule || {}).forEach(([moduleId, templates]) => {
+    if (!Array.isArray(templates)) return;
+    const customTemplates = templates.filter((template) => template?.isSystem !== true);
+    if (customTemplates.length > 0) {
+      result[moduleId] = customTemplates;
+    }
+  });
+
+  return result;
+};
+
 export const loadPrintTemplatesStore = async () => {
   try {
-    const { data, error } = await loadScopedIntegrationSettings(supabase as any, {
+    const { data, error, scope } = await loadScopedIntegrationSettings(supabase as any, {
       connectionType: PRINT_TEMPLATES_CONNECTION_TYPE,
       columns: 'id, provider, settings',
     });
@@ -648,7 +670,9 @@ export const loadPrintTemplatesStore = async () => {
     }
 
     return {
-      rowId: row?.id ? String(row.id) : null,
+      // ردیف fallback عمومی، متعلق به سازمان فعال نیست و نباید در upsert سازمانی
+      // به‌عنوان کلید اصلی ارسال شود.
+      rowId: scope === 'org' && row?.id ? String(row.id) : null,
       provider: String(row?.provider || 'tiptap'),
       templatesByModule: Object.keys(templatesByModule).length > 0 ? templatesByModule : normalizeStore(readLocalStore()),
       storage: Object.keys(templatesByModule).length > 0 ? 'remote' : 'local',
@@ -669,10 +693,20 @@ export const savePrintTemplatesStore = async (params: {
   provider?: string;
   templatesByModule: Record<string, StoredPrintTemplate[]>;
 }) => {
-  writeLocalStore(params.templatesByModule);
+  const persistedTemplatesByModule = getPersistedPrintTemplatesByModule(params.templatesByModule);
+  writeLocalStore(persistedTemplatesByModule);
   const authUser = await getCachedAuthUser(supabase);
   const userId = authUser?.id || null;
   const currentOrgId = await getResolvedCurrentOrgId(supabase as any);
+
+  if (!currentOrgId) {
+    return {
+      rowId: null,
+      storage: 'local' as const,
+      errorCode: 'ORG_CONTEXT_MISSING',
+      errorMessage: 'سازمان فعال برای ذخیره قالب چاپ مشخص نیست.',
+    };
+  }
 
   const payload: Record<string, any> = {
     org_id: currentOrgId,
@@ -681,17 +715,20 @@ export const savePrintTemplatesStore = async (params: {
     is_active: true,
     updated_by: userId,
     settings: {
-      modules: params.templatesByModule,
+      modules: persistedTemplatesByModule,
     },
   };
-  if (params.rowId) payload.id = params.rowId;
 
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('integration_settings')
-      .upsert([payload], { onConflict: 'org_id,connection_type' })
+      .upsert(payload, { onConflict: 'org_id,connection_type' })
       .select('id')
       .single();
+    const { data, error } = await runWithSupabaseTimeout(
+      (signal) => attachAbortSignalIfSupported(query, signal),
+      PRINT_TEMPLATES_SAVE_TIMEOUT_MS,
+    );
 
     if (error) throw error;
     return { rowId: data?.id ? String(data.id) : null, storage: 'remote' as const };

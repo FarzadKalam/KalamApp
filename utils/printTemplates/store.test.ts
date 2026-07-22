@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDefaultTemplatesForModule,
   buildSystemTemplateFieldOptionsForModule,
+  getPersistedPrintTemplatesByModule,
   getPrintTemplateVariables,
   getSystemTemplateFieldOptions,
   isPrintTemplateAvailableForModule,
@@ -74,5 +75,36 @@ describe('print template store grouping', () => {
         contentHtml: '{{system.list_catalog_fullpage}}',
       })
     ).toBe(false);
+  });
+
+  it('persists only custom templates because system templates are generated at runtime', () => {
+    const stored = getPersistedPrintTemplatesByModule({
+      products: [
+        {
+          id: 'default_products_compact_a4',
+          title: 'پیش‌فرض',
+          moduleId: 'products',
+          contentHtml: '<p>پیش‌فرض</p>',
+          isActive: true,
+          isSystem: true,
+          createdAt: '2026-07-22T00:00:00.000Z',
+          updatedAt: '2026-07-22T00:00:00.000Z',
+        },
+        {
+          id: 'custom-products-template',
+          title: 'قالب فروش',
+          moduleId: 'products',
+          contentHtml: '<p>فروش</p>',
+          isActive: true,
+          isSystem: false,
+          createdAt: '2026-07-22T00:00:00.000Z',
+          updatedAt: '2026-07-22T00:00:00.000Z',
+        },
+      ],
+    });
+
+    expect(stored).toEqual({
+      products: [expect.objectContaining({ id: 'custom-products-template' })],
+    });
   });
 });
