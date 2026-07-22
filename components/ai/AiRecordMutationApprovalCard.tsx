@@ -9,6 +9,8 @@ import SmartFieldRenderer from '../SmartFieldRenderer';
 export type AiRecordMutationDraft = {
   record_id?: string | null;
   record_title?: string | null;
+  /** هر پیش‌نویس در مودال افزودن سریع جداگانه انتخاب و تایید می‌شود. */
+  selected?: boolean;
   fields: Record<string, any>;
 };
 
@@ -52,6 +54,12 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
   const updateField = (recordIndex: number, fieldKey: string, value: any) => {
     onChange(records.map((record, index) => index === recordIndex
       ? { ...record, fields: { ...(record.fields || {}), [fieldKey]: value } }
+      : record));
+  };
+
+  const updateSelection = (recordIndex: number, selected: boolean) => {
+    onChange(records.map((record, index) => index === recordIndex
+      ? { ...record, selected }
       : record));
   };
 
@@ -103,6 +111,17 @@ const AiRecordMutationApprovalCard: React.FC<Props> = ({
                   {recordTitle}
                 </div>
               ) : null}
+              <div className="mb-2 flex items-center justify-between gap-3 rounded-lg border border-amber-100/80 bg-amber-50/50 px-2 py-1.5 dark:border-white/10 dark:bg-black/15">
+                <span className="font-semibold text-amber-900 dark:text-amber-100">
+                  {actionType === 'update_record_from_prompt' ? 'این مورد ویرایش شود' : 'این مورد ثبت شود'}
+                </span>
+                <Switch
+                  size="small"
+                  checked={record.selected !== false}
+                  onChange={(checked) => updateSelection(recordIndex, checked)}
+                  aria-label={actionType === 'update_record_from_prompt' ? 'انتخاب برای ویرایش' : 'انتخاب برای ثبت'}
+                />
+              </div>
               <div className="grid grid-cols-1 gap-x-3 sm:grid-cols-2">
                 {visibleFields.map((field) => (
                   <div key={field.key} className="min-w-0 [&_.ant-form-item]:mb-2 [&_.ant-form-item-label]:pb-0.5">

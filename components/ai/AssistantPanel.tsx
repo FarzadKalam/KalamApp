@@ -30,7 +30,6 @@ import { extractAiMessageAttachments, normalizeAiMessageText } from '../../utils
 import ComposerAttachmentChips, { type ComposerAttachmentChipItem } from '../common/ComposerAttachmentChips';
 import AiMessageRenderer from './AiMessageRenderer';
 import { type AiRecordMutationDraft } from './AiRecordMutationApprovalCard';
-import AiAgentPlanCard from './AiAgentPlanCard';
 import QuickRecordFormModal from './QuickRecordFormModal';
 
 type ChatMessage = {
@@ -128,6 +127,24 @@ const buildAiPendingStatusText = (capabilities: string[], fallback = 'در حا�
   if (set.has('process_operation')) return 'در حال بررسی اقدام فرآیندی...';
   if (set.has('record_creation')) return 'در حال آماده‌سازی پیشنهاد ساخت...';
   return fallback;
+};
+
+const buildTaskBundlePendingStatusText = (inputs: Array<{ type?: string }>, capabilities: string[]) => {
+  const types = (inputs || []).map((item) => String(item?.type || '').trim());
+  const imageCount = types.filter((type) => type === 'image').length;
+  const voiceCount = types.filter((type) => type === 'voice').length;
+  const fileCount = types.filter((type) => type === 'file').length;
+  const imageLabel = imageCount > 1 ? 'تصاویر' : 'تصویر';
+  const voiceLabel = voiceCount > 1 ? 'فایل‌های صوتی' : 'فایل صوتی';
+  const fileLabel = fileCount > 1 ? 'فایل‌ها' : 'فایل';
+
+  if (imageCount && voiceCount) return `در حال تحلیل ${imageLabel} و ${voiceLabel} ارسالی شما هستم…`;
+  if (imageCount && fileCount) return `در حال تحلیل ${imageLabel} و ${fileLabel} ارسالی شما هستم…`;
+  if (voiceCount && fileCount) return `در حال تحلیل ${voiceLabel} و ${fileLabel} ارسالی شما هستم…`;
+  if (imageCount) return `در حال تحلیل ${imageLabel} ارسالی شما هستم…`;
+  if (voiceCount) return `در حال تحلیل ${voiceLabel} ارسالی شما هستم…`;
+  if (fileCount) return `در حال تحلیل ${fileLabel} ارسالی شما هستم…`;
+  return buildAiPendingStatusText(capabilities, 'در حال آماده‌سازی پاسخ…');
 };
 
 const GENERATION_PENDING_KINDS = new Set<AiGenerationKind>([
@@ -1121,6 +1138,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           action: 'run_task_bundle',
           capabilities: routeCapabilities,
           message: prompt,
+          userMessageText: params.messageText,
           inputKind: 'task_bundle',
           bundle: { inputs: bundlePayload },
           threadId: params.forceNewThread ? null : threadId,
@@ -1176,6 +1194,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           : capabilitySet.has('process_operation')
           ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.'
           : 'ورودی‌های پیوست‌شده را بررسی کن.'),
+        userMessageText: params.messageText,
         inputKind: bundlePayload.length > 0 ? 'task_bundle' : params.inputKind,
         bundle: executionBundlePayload.length ? { inputs: executionBundlePayload } : undefined,
         threadId: params.forceNewThread ? null : threadId,
@@ -1721,9 +1740,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         context: contextWithSelection,
         modelOverride: modelOverrideRef.current,
       }));
-      if (!data?.proposedAction && activeRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
-        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
-      }
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
       applyThreadTitleFromResponse(data, text);
@@ -2175,9 +2191,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const thinkingMessage: ChatMessage = {
       id: `assistant-bundle-pending-${Date.now()}`,
       role: 'assistant',
-      content: effectiveCapabilities.length > 0
-        ? buildAiPendingStatusText(effectiveCapabilities, 'در حال پردازش ورودی‌ها...')
-        : 'در حال تصمیم‌گیری و بررسی ورودی‌ها...',
+      content: buildTaskBundlePendingStatusText(bundleInputs, effectiveCapabilities),
       created_at: new Date().toISOString(),
       metadata: {
         pending_status: true,
@@ -2200,6 +2214,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           action: 'run_task_bundle',
           capabilities: effectiveCapabilities,
           message: assistantPrompt || (activeRecordCreationSchema ? 'از ورودی‌های پیوست‌شده یک رکورد جدید بساز.' : processOperationMode ? 'با توجه به ورودی‌های پیوست‌شده، اقدام لازم را پیشنهاد بده.' : 'ورودی‌های پیوست‌شده را تحلیل کن.'),
+          userMessageText: assistantPrompt,
           inputKind: 'task_bundle',
           bundle: { inputs },
           threadId,
@@ -2210,9 +2225,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
           recordMutationMode: pendingAiAction?.actionType === 'update_record_from_prompt' || isRecordUpdateRequest(assistantPrompt) ? 'update' : 'create',
           previewOnly: true,
         }));
-      if (!data?.proposedAction && activeRecordCreationSchema && Array.isArray(data?.createdRecords) && data.createdRecords.length > 0) {
-        message.success('رکورد جدید با هوش مصنوعی ساخته شد.');
-      }
       if (data?.proposedAction?.id) setPendingAiAction(data.proposedAction);
       if (data.threadId) setThreadId(String(data.threadId));
       if (data?.autoAction === 'generate_image') {
@@ -2388,14 +2400,24 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
         return;
       }
       const proposedRecords = Array.isArray(pendingAiAction?.proposedPayload?.records)
-        ? pendingAiAction.proposedPayload.records
+        ? pendingAiAction.proposedPayload.records.filter((record: any) => record?.selected !== false)
         : null;
-      await callAssistant({
+      if (Array.isArray(proposedRecords) && proposedRecords.length === 0) {
+        throw new Error('حداقل یک رکورد را برای اجرا انتخاب کنید.');
+      }
+      const data = await callAssistant({
         action: 'confirm_action',
         actionLogId: actionId,
         proposedRecords,
       });
-      message.success('اقدام تایید و اجرا شد.');
+      const executedRecords = [
+        ...(Array.isArray(data?.createdRecords) ? data.createdRecords : []),
+        ...(Array.isArray(data?.updatedRecords) ? data.updatedRecords : []),
+      ];
+      if (data?.executed !== true || executedRecords.length === 0) {
+        throw new Error('ثبت یا ویرایش رکورد نتیجه قابل تایید نداشت.');
+      }
+      message.success(`${executedRecords.length.toLocaleString('fa-IR')} رکورد با موفقیت ثبت یا ویرایش شد.`);
       setPendingAiAction(null);
       setQuickRecordFormOpen(false);
       await loadThread();
@@ -2557,7 +2579,6 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
               />
             )}
             <MessageAttachmentGallery attachments={attachments} />
-            {!isUser && item.metadata?.agent_plan ? <AiAgentPlanCard plan={item.metadata.agent_plan} /> : null}
             {!pendingKind && providerRawText && attachments.length === 0 ? (
               <details className="mt-2 rounded-lg border border-white/20 bg-black/5 p-2 text-left text-[10px] leading-4 dark:bg-black/20" dir="ltr">
                 <summary className="cursor-pointer text-right font-semibold" dir="rtl">
@@ -2652,11 +2673,12 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       return proposedPayload.records.map((record: any) => ({
         record_id: String(record?.record_id || '').trim() || null,
         record_title: String(record?.record_title || '').trim() || null,
+        selected: record?.selected !== false,
         fields: record?.fields && typeof record.fields === 'object' ? record.fields : {},
       }));
     }
     return proposedPayload?.payload && typeof proposedPayload.payload === 'object'
-      ? [{ fields: proposedPayload.payload }]
+      ? [{ selected: true, fields: proposedPayload.payload }]
       : [];
   }, [pendingAiAction, pendingRecordMutationType]);
   const pendingGenerationCanChooseModel = pendingAiAction?.actionType === 'confirm_generation'
@@ -2961,9 +2983,15 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                 : 'برای اصلاح، توضیح جدید را در کادر پیام بنویسید یا ویس بفرستید؛ دستیار آن را به همین پیش‌نویس اضافه می‌کند.'}
             </div>
             <Space size={6} className="mt-2">
-              <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
-                تایید و اجرا
-              </Button>
+              {pendingRecordMutationType ? (
+                <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => setQuickRecordFormOpen(true)}>
+                  بررسی و تایید در فرم
+                </Button>
+              ) : (
+                <Button type="primary" size="small" loading={confirmingAiAction} onClick={() => void confirmPendingAiAction()}>
+                  تایید و اجرا
+                </Button>
+              )}
               <Button size="small" onClick={() => setInput((prev) => String(prev || '').trim() ? prev : String(pendingAiAction?.actionType || '') === 'confirm_generation' ? 'دستور ساخت را این‌طور اصلاح کن: ' : 'این پیش‌نویس را این‌طور اصلاح کن: ')} disabled={confirmingAiAction}>
                 ویرایش با پیام
               </Button>

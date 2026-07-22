@@ -126,6 +126,7 @@ const AI_CAPABILITY_FEATURE_KEYS: Record<string, string> = {
   embedding: 'ai_document_analysis',
   voice_input: 'ai_voice_input',
   image_generation: 'ai_image_generation',
+  image_edit: 'ai_image_generation',
   voice_output: 'ai_voice_output',
   video_generation: 'ai_video_generation',
   document_generation: 'ai_document_analysis',
@@ -147,6 +148,7 @@ const TENANT_READY_AI_CAPABILITIES = new Set([
   'voice_input',
   'voice_output',
   'image_generation',
+  'image_edit',
   'video_generation',
   'document_generation',
   'auto_decision',
@@ -160,6 +162,8 @@ const CAPABILITY_SELECTION_ALIASES: Record<string, string[]> = {
   auto_decision: ['deep_reasoning'],
   customer_reply_suggestion: ['customer_auto_reply'],
   customer_auto_reply: ['customer_reply_suggestion'],
+  image_generation: ['image_edit'],
+  image_edit: ['image_generation'],
 };
 
 const AUTO_ROUTER_CAPABILITIES = [
@@ -613,6 +617,16 @@ const safeRestSelect = async (
     return [];
   }
 };
+
+const isInternalAgentStepMessage = (message: any) =>
+  message?.metadata?.internal_agent_step === true
+  || String(message?.metadata?.input_kind || '').startsWith('task_bundle_analysis')
+  // Messages written by an older bundle runner did not have metadata. Keep
+  // that narrow legacy prompt out of the conversation as well.
+  || String(message?.content || '').trim().startsWith('این مرحله تحلیل مشترک باندل است.');
+
+const filterVisibleAiMessages = (messages: any[]) =>
+  (messages || []).filter((message: any) => !isInternalAgentStepMessage(message));
 
 const restInsert = async (
   supabaseUrl: string,
@@ -4010,13 +4024,16 @@ const normalizeAiClarificationQuestions = (value: any) =>
     .filter(Boolean)
     .slice(0, 5);
 
+const hideUserVisibleUuids = (value: any) => String(value || '')
+  .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '');
+
 const buildAiClarificationReply = (reply: string, questions: string[]) => {
-  const base = reply.trim() || 'برای انجام دقیق این درخواست به چند اطلاعات تکمیلی نیاز دارم.';
+  const base = hideUserVisibleUuids(reply).trim() || 'برای انجام دقیق این درخواست به چند اطلاعات تکمیلی نیاز دارم.';
   if (!questions.length) return base;
   return [
     base,
     '',
-    ...questions.map((question, index) => `${index + 1}. ${question}`),
+    ...questions.map((question, index) => `${index + 1}. ${hideUserVisibleUuids(question).trim()}`),
   ].join('\n');
 };
 
@@ -5511,7 +5528,7 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
   const requestedThreadId = normalizeId(body?.threadId);
   if (requestedThreadId && isUuid(requestedThreadId)) {
     const thread = await fetchThreadForRead(supabaseUrl, serviceRoleKey, authContext, requestedThreadId);
-    const messages = thread ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 200) : [];
+    const messages = thread ? filterVisibleAiMessages(await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 200)) : [];
     return json(200, {
       success: true,
       thread,
@@ -5522,7 +5539,7 @@ const handleGetThread = async (supabaseUrl: string, serviceRoleKey: string, auth
   const context = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(context);
   const thread = await findThreadByContextKey(supabaseUrl, serviceRoleKey, authContext, contextKey);
-  const messages = thread ? await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 200) : [];
+  const messages = thread ? filterVisibleAiMessages(await fetchThreadMessages(supabaseUrl, serviceRoleKey, authContext, thread.id, 200)) : [];
   return json(200, {
     success: true,
     thread: thread ? {
@@ -5891,6 +5908,7 @@ const prepareChatRequest = async (supabaseUrl: string, serviceRoleKey: string, a
       context_key: contextKey,
       context_summary: pageContext.summary,
       input_kind: String(body?.inputKind || body?.input_kind || 'text').trim() || 'text',
+      internal_agent_step: body?.metadata?.internal_agent_step === true || body?.metadata?.internal_agent_input === true,
       capabilities: selectedCapabilities,
       file: body?.file ? {
         filename: body.file?.filename || body.file?.fileName || body.file?.name || null,
@@ -6207,6 +6225,7 @@ const handleChat = async (supabaseUrl: string, serviceRoleKey: string, authConte
       usage: aiResult.usageMetadata,
       avalai_request_id: aiResult.requestId || null,
       capability,
+      internal_agent_step: prepared.body?.metadata?.internal_agent_step === true,
       business_analytics: businessAnalytics ? {
         intent: businessAnalytics.intent || null,
         period: businessAnalytics.period || null,
@@ -6496,6 +6515,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     ? body.capabilities.map((item: any) => String(item || '').trim()).filter(Boolean)
     : [];
   const selectedCapabilitySet = new Set(selectedCapabilities);
+  const internalAgentStep = body?.metadata?.internal_agent_step === true;
 
   if (extractedText) {
     const textMessage = [
@@ -6527,8 +6547,11 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
 
   const rawContext = normalizeContext(body?.context || {});
   const capability = 'document_analysis';
+  const primaryCapability = rawContext.mode === 'record' ? 'record_chat' : 'dashboard_chat';
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, capability, { modelOverride: body?.modelOverride });
+  // Give the organization's primary model the first opportunity to understand
+  // multimodal input. A dedicated document model is only a fallback.
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, primaryCapability, { modelOverride: body?.modelOverride });
   const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, capability);
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
   const canUseKnowledge = isAiCapabilityPlanAvailable(planContext, 'document_analysis');
@@ -6570,7 +6593,8 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
       context: pageContext.context,
       context_key: contextKey,
       context_summary: pageContext.summary,
-      input_kind: 'file',
+      input_kind: String(body?.inputKind || body?.input_kind || 'file').trim() || 'file',
+      internal_agent_step: internalAgentStep,
       file: {
         filename,
         mime_type: mimeType,
@@ -6659,6 +6683,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
         capability,
         failed: true,
         status: 'failed',
+        internal_agent_step: internalAgentStep,
         error: providerFailure,
         file: {
           filename,
@@ -6720,6 +6745,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
         mime_type: mimeType,
       },
       analysis_fallback: aiResult?.analysisFallback || null,
+      internal_agent_step: internalAgentStep,
     },
   });
 
@@ -6732,7 +6758,7 @@ const handleChatWithFile = async (supabaseUrl: string, serviceRoleKey: string, a
     model: aiResult.model,
     usageMetadata: aiResult.usageMetadata,
     metadata: {
-      source: 'chat_with_file',
+      source: internalAgentStep ? 'internal_task_bundle_file_analysis' : 'chat_with_file',
       context_key: contextKey,
       filename,
       analysis_fallback: aiResult?.analysisFallback || null,
@@ -6850,6 +6876,9 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     isUpdate
       ? 'فقط رکوردهای مجاز ارائه‌شده در زمینه را ویرایش کن و برای هر رکورد record_id همان رکورد را بدون تغییر برگردان.'
       : 'اگر درخواست کاربر شامل چند مورد مستقل است، برای هر مورد یک عضو جدا در آرایه records بساز.',
+    isUpdate && permittedUpdateRecords.length > 1
+      ? 'اگر از متن کاربر نتوانستی با اطمینان یک یا چند رکورد را تشخیص بدهی، records را خالی بگذار و needs_clarification=true برگردان. در reply فقط عنوان‌های انسانیِ گزینه‌های مرتبط را کوتاه و شماره‌دار بنویس؛ هرگز شناسه، UUID یا داده فنی نشان نده.'
+      : '',
     `اگر برای ${mutationVerb} قابل اتکا اطلاعات کافی نیست، یا برای خواسته کاربر ابهام مهمی وجود دارد، تغییری ایجاد نکن و needs_clarification=true بده.`,
     'سوال‌ها را فقط به اطلاعات لازم برای تکمیل همان درخواست محدود کن؛ فقط به فیلدهای اجباری اکتفا نکن و داده‌های مهم کسب‌وکاری را هم بسنج.',
     'خروجی باید فقط JSON معتبر باشد؛ هیچ متن اضافی قبل یا بعد JSON ننویس.',
@@ -6896,6 +6925,7 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
       context: pageContext.context,
       context_key: contextKey,
       input_kind: String(body?.inputKind || body?.input_kind || (file ? 'file' : 'text')).trim() || 'text',
+      internal_agent_step: body?.metadata?.internal_agent_input === true,
       action: mutationAction,
       target_module_id: targetModuleId,
     },
@@ -6982,10 +7012,17 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
 
   if (previewOnly || needsClarification) {
     const hasPayload = !needsClarification && recordDrafts.length > 0;
-    const reply = generatedReply
-      ? (needsClarification ? buildAiClarificationReply(generatedReply, clarificationQuestions) : generatedReply)
+    const candidateSelectionHint = needsClarification && isUpdate && permittedUpdateRecords.length > 1
+      ? `\n\nرکوردهای قابل انتخاب:\n${permittedUpdateRecords
+        .map((record: any, index: number) => `${(index + 1).toLocaleString('fa-IR')}. ${buildAiRecordTitle(record, `رکورد ${(index + 1).toLocaleString('fa-IR')}`)}`)
+        .join('\n')}\n\nلطفاً نام یا شماره مورد درست را بفرستید تا فرم ویرایش آن باز شود.`
+      : '';
+    // A preview is never an executed mutation. Do not let a model-written
+    // reply claim that a record was created before the user confirms it.
+    const reply = needsClarification
+      ? `${buildAiClarificationReply(generatedReply || `برای ${mutationVerb} دقیق این رکورد اطلاعات کافی ندارم.`, clarificationQuestions)}${candidateSelectionHint}`
       : (hasPayload
-        ? `پیش‌نویس ${recordDrafts.length.toLocaleString('fa-IR')} ${moduleLabel} آماده شد و برای ${mutationVerb} نیاز به تایید شما دارد.`
+        ? `پیش‌نویس ${recordDrafts.length.toLocaleString('fa-IR')} ${moduleLabel} آماده شد. اطلاعات را بررسی و سپس تایید کنید؛ هنوز چیزی ثبت نشده است.`
         : buildAiClarificationReply(`برای ${mutationVerb} دقیق این رکورد اطلاعات کافی ندارم.`, clarificationQuestions));
     const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
       thread_id: thread.id,
@@ -7141,14 +7178,13 @@ const handleRecordMutationFromPrompt = async (supabaseUrl: string, serviceRoleKe
     }
   }
 
-  const reply = generatedReply
-    || (isUpdate
-      ? (updatedRecords.length > 0
-          ? `${moduleLabel} با اطلاعات استخراج‌شده به‌روزرسانی شد.`
-          : 'اطلاعات کافی برای ویرایش رکورد پیدا نشد.')
-      : (createdRecords.length > 0
-          ? `${moduleLabel} با اطلاعات استخراج‌شده ساخته شد.`
-          : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.'));
+  const reply = isUpdate
+    ? (updatedRecords.length > 0
+        ? `${moduleLabel} با اطلاعات استخراج‌شده به‌روزرسانی شد.`
+        : 'اطلاعات کافی برای ویرایش رکورد پیدا نشد.')
+    : (createdRecords.length > 0
+        ? `${moduleLabel} با اطلاعات استخراج‌شده ساخته شد.`
+        : 'اطلاعات کافی برای ساخت رکورد پیدا نشد.');
   const assistantMessage = await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
     thread_id: thread.id,
     role: 'assistant',
@@ -7649,6 +7685,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   }
   const inputs = normalizeTaskBundleInputs(body);
   const baseMessage = String(body?.message || body?.prompt || body?.bundle?.message || '').trim();
+  const visibleUserMessage = String(body?.userMessageText || body?.user_message_text || '').trim();
   if (!baseMessage && inputs.length === 0) {
     return json(400, { success: false, message: 'متن، فایل یا ویس برای ارسال به هوش مصنوعی دریافت نشد.' });
   }
@@ -7703,6 +7740,45 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
   let usage: any = null;
   let ledger: any = null;
 
+  // Store exactly what the user supplied once. All following prompts are
+  // private agent steps and must never replace this visible conversation turn.
+  const bundlePageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
+  const publicThread = await ensureThread(supabaseUrl, serviceRoleKey, authContext, {
+    threadId: workingThreadId,
+    title: baseMessage || 'پیوست‌های ارسالی برای هوش مصنوعی',
+    pageContext: bundlePageContext,
+    contextKey: buildContextKey(rawContext),
+    provider: decisionProviderConfig.provider,
+    model: decisionProviderConfig.model,
+    forceNew: body?.forceNewThread === true,
+  });
+  workingThreadId = String(publicThread?.id || workingThreadId || '').trim() || null;
+  provider = decisionProviderConfig.provider || null;
+  model = decisionProviderConfig.model || null;
+  const publicInputSummary = inputs.map((input: any) => {
+    if (input?.audio) return `فایل صوتی: ${String(input?.label || input?.audio?.filename || 'ویس').trim() || 'ویس'}`;
+    const file = input?.file || {};
+    const label = String(file?.filename || input?.label || (input?.type === 'image' ? 'تصویر' : 'فایل')).trim() || 'فایل';
+    return `${input?.type === 'image' ? 'تصویر' : 'پیوست'}: ${label}`;
+  });
+  await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
+    thread_id: workingThreadId,
+    role: 'user',
+    content: [visibleUserMessage, ...publicInputSummary].filter(Boolean).join('\n') || 'پیوست‌های ارسالی',
+    provider: decisionProviderConfig.provider,
+    model: decisionProviderConfig.model,
+    metadata: {
+      input_kind: 'task_bundle',
+      task_bundle: bundleMeta,
+      attachments: inputs.map((input: any) => ({
+        type: input?.type || null,
+        label: input?.label || null,
+        filename: input?.file?.filename || input?.audio?.filename || null,
+        mime_type: input?.file?.mimeType || input?.audio?.mimeType || null,
+      })),
+    },
+  });
+
   const runStep = async (stepName: string, promise: Promise<Response>) => {
     const data = await parseAssistantJsonResponse(await promise);
     if (data?.threadId) workingThreadId = String(data.threadId);
@@ -7746,11 +7822,11 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
           inputKind: 'task_bundle_analysis',
           file: currentFile,
           threadId: workingThreadId,
-          metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, bundle_file_index: fileIndex },
+          metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, bundle_file_index: fileIndex, internal_agent_step: true },
         }));
         if (analysisData?.success === false) {
           if (files.length === 1) {
-            return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: collectedMessages });
+            return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: filterVisibleAiMessages(collectedMessages) });
           }
           continue;
         }
@@ -7766,10 +7842,10 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
         message: analysisPrompt,
         inputKind: 'task_bundle_analysis',
         threadId: workingThreadId,
-        metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+        metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_step: true },
       }));
       if (analysisData?.success === false) {
-        return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: collectedMessages });
+        return json(200, { ...analysisData, taskBundle: bundleMeta, results: collectedResults, messages: filterVisibleAiMessages(collectedMessages) });
       }
       const part = String(analysisData?.answer || analysisData?.message || '').trim();
       if (part) analysisParts.push(part);
@@ -7797,7 +7873,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       file: firstFile,
       threadId: workingThreadId,
       previewOnly: true,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -7811,7 +7887,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       file: firstFile,
       threadId: workingThreadId,
       previewOnly: true,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -7829,7 +7905,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       prompt: documentPrompt,
       inputKind: 'task_bundle_document',
       threadId: workingThreadId,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -7841,7 +7917,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
       message: sharedPrompt || prompt,
       inputKind: 'task_bundle',
       threadId: workingThreadId,
-      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta },
+      metadata: { ...(body?.metadata || {}), task_bundle: bundleMeta, internal_agent_input: true },
     }));
     if (data?.answer) finalAnswerParts.push(String(data.answer));
   }
@@ -7910,7 +7986,7 @@ const handleRunTaskBundle = async (supabaseUrl: string, serviceRoleKey: string, 
     } : null,
     taskBundle: bundleMeta,
     results: collectedResults,
-    messages: threadMessages.length ? threadMessages : collectedMessages,
+    messages: filterVisibleAiMessages(threadMessages.length ? threadMessages : collectedMessages),
   });
 };
 
@@ -8481,6 +8557,7 @@ const handleProcessOperationFromPrompt = async (supabaseUrl: string, serviceRole
     model: providerConfig.model,
     metadata: {
       input_kind: String(body?.inputKind || body?.input_kind || (file ? 'file' : 'process_operation')).trim() || 'process_operation',
+      internal_agent_step: body?.metadata?.internal_agent_input === true,
       context_key: contextKey,
       context: pageContext.context,
       file: file ? {
@@ -8954,8 +9031,18 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
   if (!prompt) return json(400, { success: false, message: 'متن درخواست تصویر خالی است.' });
   const rawContext = normalizeContext(body?.context || {});
   const contextKey = buildContextKey(rawContext);
-  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'image_generation', { modelOverride: body?.modelOverride });
-  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, 'image_generation');
+  const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
+  const requestedSourceImages = Array.isArray(body?.sourceImages) ? body.sourceImages
+    : Array.isArray(imageSettings.sourceImages) ? imageSettings.sourceImages
+    : [];
+  const requestedSourceUrls = Array.isArray(body?.sourceImageUrls) ? body.sourceImageUrls
+    : Array.isArray(imageSettings.sourceImageUrls) ? imageSettings.sourceImageUrls
+    : [];
+  const imageCapability = requestedSourceImages.length > 0 || requestedSourceUrls.length > 0
+    ? 'image_edit'
+    : 'image_generation';
+  const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, imageCapability, { modelOverride: body?.modelOverride });
+  const planContext = await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, providerConfig.orgAiSettings, imageCapability);
   const modelCatalogRow = await loadModelPricing(supabaseUrl, serviceRoleKey, providerConfig.model);
   const imageProviderConfig = {
     ...providerConfig,
@@ -8963,7 +9050,6 @@ const handleGenerateImage = async (supabaseUrl: string, serviceRoleKey: string, 
     supportedEndpoints: Array.isArray(modelCatalogRow?.metadata?.supported_endpoints) ? modelCatalogRow.metadata.supported_endpoints : undefined,
   };
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, rawContext);
-  const imageSettings = (body?.settings && typeof body.settings === 'object') ? body.settings : {};
   const useOrganizationContext = imageSettings.useOrganizationContext === true;
   const canUseKnowledge = useOrganizationContext && isAiCapabilityPlanAvailable(planContext, 'document_analysis');
   const [companyContext, knowledgeChunks] = await Promise.all([
@@ -9675,7 +9761,14 @@ const handleGenerateDocument = async (supabaseUrl: string, serviceRoleKey: strin
     content: prompt,
     provider: providerConfig.provider,
     model: providerConfig.model,
-    metadata: { context: pageContext.context, context_key: contextKey, input_kind: 'document_prompt', capability: 'document_generation', format },
+    metadata: {
+      context: pageContext.context,
+      context_key: contextKey,
+      input_kind: 'document_prompt',
+      capability: 'document_generation',
+      format,
+      internal_agent_step: body?.metadata?.internal_agent_input === true,
+    },
   });
 
   // Ask the model for a strict JSON document spec.
@@ -11676,7 +11769,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         return json(403, { success: false, message: 'دسترسی ویرایش همه رکوردهای پیشنهادی تایید نشد.' });
       }
       for (const draft of mutationDrafts) {
-        await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
+        const patchedRows = await restPatch(supabaseUrl, serviceRoleKey, targetTable, {
           id: `eq.${draft.record_id}`,
           org_id: `eq.${authContext.orgId}`,
         }, {
@@ -11684,6 +11777,8 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
           updated_by: authContext.userId || null,
           updated_at: new Date().toISOString(),
         });
+        const patchedRecord = patchedRows.find((row: any) => String(row?.id || '') === String(draft.record_id));
+        if (!patchedRecord) continue;
         updatedRecords.push({
           module_id: targetModuleId,
           table: targetTable,
@@ -11706,14 +11801,25 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         });
       });
     }
-    const mutationSucceeded = isUpdate ? updatedRecords.length > 0 : createdRecords.length > 0;
+    const mutationRecords = isUpdate ? updatedRecords : createdRecords;
+    const mutationSucceeded = mutationRecords.length === mutationDrafts.length && mutationRecords.length > 0;
     await restPatch(supabaseUrl, serviceRoleKey, 'ai_action_logs', { id: `eq.${actionLogId}` }, {
-      status: mutationSucceeded ? 'executed' : 'skipped',
+      status: mutationSucceeded ? 'executed' : 'failed',
       confirmed_by: authContext.userId,
       executed_at: new Date().toISOString(),
       result_payload: { created_records: createdRecords, updated_records: updatedRecords },
       result: { created_records: createdRecords, updated_records: updatedRecords },
     });
+    if (!mutationSucceeded) {
+      return json(422, {
+        success: false,
+        executed: false,
+        message: `${mutationVerb} رکورد تایید شد اما نتیجه ثبت کامل دریافت نشد. هیچ موفقیتی اعلام نشد؛ لطفاً نتیجه را بررسی و دوباره تلاش کنید.`,
+        actionLogId,
+        createdRecords,
+        updatedRecords,
+      });
+    }
     if (action.thread_id) {
       await insertAiMessage(supabaseUrl, serviceRoleKey, authContext, {
         thread_id: action.thread_id,
@@ -11750,7 +11856,7 @@ const handleConfirmAction = async (supabaseUrl: string, serviceRoleKey: string, 
         },
       }).catch(() => []);
     }
-    return json(200, { success: true, actionLogId, threadId: action.thread_id || null, createdRecords, updatedRecords });
+    return json(200, { success: true, executed: true, actionLogId, threadId: action.thread_id || null, createdRecords, updatedRecords });
   }
 
   if (String(action.action_type) === 'process_operation_from_prompt') {
