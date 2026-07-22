@@ -36,7 +36,7 @@ import {
 } from './_runtime-deps/workflowMessagingContract.ts';
 import { evaluateFormulaExpression } from './_runtime-deps/formulaRuntime.ts';
 
-const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-19-self-contained-deploy';
+const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-23-event-record-context-and-report-recovery';
 const MAX_WORKFLOWS = 30;
 const MAX_REPORTS = 20;
 const DEFAULT_BATCH_SIZE = 300;
@@ -868,7 +868,15 @@ async function getOrgTenantBaseUrl(url: string, key: string, orgId: string): Pro
   return getOrgPublicBaseUrl(url, key, orgId);
 }
 
-async function formatFieldValue(value: any, fieldKey: string, url: string, key: string, orgId: string, moduleId = ''): Promise<string> {
+async function formatFieldValue(
+  value: any,
+  fieldKey: string,
+  record: Record<string, any>,
+  url: string,
+  key: string,
+  orgId: string,
+  moduleId = '',
+): Promise<string> {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'بله' : 'خیر';
   const str = String(value);
@@ -910,7 +918,7 @@ async function formatFieldValue(value: any, fieldKey: string, url: string, key: 
     return value.toLocaleString('fa-IR', { maximumFractionDigits: 6 });
   }
   if (Array.isArray(value)) {
-    const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, url, key, orgId, moduleId)));
+    const rendered = await Promise.all(value.map((item) => formatFieldValue(item, fieldKey, record, url, key, orgId, moduleId)));
     return rendered.filter(Boolean).join('، ');
   }
   const optionLabel = await resolveServerOptionLabel(
@@ -979,7 +987,7 @@ async function renderTemplateAsync(
   const rendered = await renderCentralTemplateAsync(
     template,
     (fieldKey) => resolveWorkflowFieldValue(url, key, fieldKey, record, orgId, moduleId),
-    (value, fieldKey) => formatFieldValue(value, fieldKey, url, key, orgId, moduleId),
+    (value, fieldKey) => formatFieldValue(value, fieldKey, record, url, key, orgId, moduleId),
     { bold, unresolved: 'blank' },
   );
   return absolutizeTenantPublicLinksInText(rendered, url, key, orgId);
@@ -4848,6 +4856,19 @@ async function processIntervalJob(url: string, key: string, job: WorkflowInterva
 async function drainIntervalJobs(url: string, key: string): Promise<Record<string, number>> {
   const stats = { claimed: 0, succeeded: 0, retried: 0, failed: 0, reconciledReports: 0 };
   await callRpc(url, key, 'requeue_stale_workflow_interval_jobs', {}).catch(() => 0);
+  // گزارش اجرا باید مستقل از پردازش actionها قابل بازیابی باشد. این RPC هم
+  // گزارش‌های جاافتادهٔ صف قبلی را برمی‌گرداند و هم در صورت قطع runner، ثبت
+  // گزارش هر اجرای نهایی‌شده را اتمیک و idempotent انجام می‌دهد.
+  const databaseReconciledReports = await callRpc(
+    url,
+    key,
+    'reconcile_workflow_interval_execution_reports',
+    { p_limit: 500 },
+  ).catch((error) => {
+    console.warn('[workflow-runner] Database interval report reconciliation failed:', error?.message || error);
+    return 0;
+  });
+  stats.reconciledReports += Number(databaseReconciledReports || 0);
   const reportCandidates = await dbGet(url, key,
     'workflow_interval_jobs?job_kind=eq.workflow_action&is_terminal_action=eq.true&report_logged_at=is.null&status=in.(succeeded,failed,skipped)&select=*&order=completed_at.asc&limit=100'
   ).catch(() => []) as WorkflowIntervalJob[];

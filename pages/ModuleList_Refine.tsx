@@ -122,6 +122,7 @@ const DeleteModuleRecordsModal = React.lazy(() => import("../components/moduleDe
 const OnlineCatalogManagerModal = React.lazy(() => import("../components/onlineCatalog/OnlineCatalogManagerModal"));
 
 const DEFAULT_LIST_PAGE_SIZE = 20;
+const SELECTED_RECORD_FETCH_CHUNK_SIZE = 25;
 const TAG_VIEW_FILTER_FIELD = "__tag_view_filter__";
 const MODULE_LIST_LIVE_WATERMARK_STORAGE_PREFIX = "kalam:module-list-live-watermark";
 
@@ -4002,12 +4003,18 @@ export const ModuleListRefine: React.FC<{
   const fetchSelectedRecords = useCallback(async () => {
     if (!selectedRowKeys.length || !moduleConfig || !resolvedModuleId) return [];
     const tableName = moduleConfig.table || resolvedModuleId;
-    const ids = selectedRowKeys.map((id) => String(id));
-    const { data: rows, error } = await supabase
-      .from(tableName)
-      .select('*')
-      .in('id', ids);
-    if (error) throw error;
+    const ids = Array.from(new Set(selectedRowKeys.map((id) => String(id).trim()).filter(Boolean)));
+    const rowChunks: any[][] = [];
+    for (let index = 0; index < ids.length; index += SELECTED_RECORD_FETCH_CHUNK_SIZE) {
+      const idChunk = ids.slice(index, index + SELECTED_RECORD_FETCH_CHUNK_SIZE);
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('*')
+        .in('id', idChunk);
+      if (error) throw error;
+      rowChunks.push(data || []);
+    }
+    const rows = rowChunks.flat();
 
     const orderMap = new Map(ids.map((id, index) => [id, index]));
     return (rows || []).slice().sort((a: any, b: any) => {
@@ -4205,29 +4212,22 @@ export const ModuleListRefine: React.FC<{
 
       const {
         buildListPrintableFields,
-        escapeCsvCell,
         formatListCellValue,
       } = await import("../utils/listPrintExport");
+      const XLSX = await import('xlsx');
       const exportFields = buildListPrintableFields(moduleConfig, canViewField, visibleColumns, dynamicOptions);
       const currencyLabel = readCurrencyConfig().label || '';
-      const headers = exportFields.map((field) => escapeCsvCell(field.label)).join(',');
-      const rows = recordsToExport
-        .map((row: any) =>
-          exportFields
-            .map((field) => escapeCsvCell(formatListCellValue(field, row, relationOptions, currencyLabel, 'en')))
-            .join(',')
-        )
-        .join('\n');
-      const csvContent = `\uFEFF${headers}\n${rows}`;
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `${resolvedModuleId}_export_${Date.now()}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const sheet = XLSX.utils.aoa_to_sheet([
+        exportFields.map((field) => field.label),
+        ...recordsToExport.map((row: any) =>
+          exportFields.map((field) => formatListCellValue(field, row, relationOptions, currencyLabel, 'fa')),
+        ),
+      ]);
+      sheet['!views'] = [{ rightToLeft: true }];
+      sheet['!cols'] = exportFields.map((field) => ({ wch: Math.min(48, Math.max(14, String(field.label || '').length + 4)) }));
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, sheet, 'گزارش');
+      XLSX.writeFile(workbook, `${resolvedModuleId}_export_${Date.now()}.xlsx`);
       showListMessage('success', 'خروجی آماده شد.');
     } catch (error: any) {
       showListMessage('error', toFaErrorMessage(error, 'خروجی گرفتن ناموفق بود.'));
