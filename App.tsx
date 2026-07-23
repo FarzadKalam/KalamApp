@@ -122,6 +122,7 @@ const loadOrgKnowledgeBusinessModelCanvasPage = () => import("./pages/OrgKnowled
 const loadSaasAdminDashboard = () => import("./pages/SaasAdmin/SaasAdminDashboard");
 const loadSaasAdminPlans = () => import("./pages/SaasAdmin/SaasAdminPlans");
 const loadSaasAdminAiSettings = () => import("./pages/SaasAdmin/SaasAdminAiSettings");
+const loadSaasAdminSeniorityRates = () => import("./pages/SaasAdmin/SaasAdminSeniorityRates");
 const loadCmsPostEditor = () => import("./pages/SaasAdmin/CmsPostEditor");
 const loadLandingPageEditor = () => import("./pages/SaasAdmin/LandingPageEditor");
 const loadCmsPageEditor = () => import("./pages/SaasAdmin/CmsPageEditor");
@@ -175,6 +176,7 @@ const OrgKnowledgeBusinessModelCanvasPage = lazy(loadOrgKnowledgeBusinessModelCa
 const SaasAdminDashboard = lazy(loadSaasAdminDashboard);
 const SaasAdminPlans = lazy(loadSaasAdminPlans);
 const SaasAdminAiSettings = lazy(loadSaasAdminAiSettings);
+const SaasAdminSeniorityRates = lazy(loadSaasAdminSeniorityRates);
 const CmsPostEditor = lazy(loadCmsPostEditor);
 const LandingPageEditor = lazy(loadLandingPageEditor);
 const CmsPageEditor = lazy(loadCmsPageEditor);
@@ -228,7 +230,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   } else if (section === "work_schedules") {
     preloader = loadWorkSchedulesPage;
   } else if (section === "taze-system") {
-    preloader = detail === "plans" ? loadSaasAdminPlans : detail === "api-docs" ? loadApiDocsPage : detail === "ai-settings" ? loadSaasAdminAiSettings : loadSaasAdminDashboard;
+    preloader = detail === "plans" ? loadSaasAdminPlans : detail === "api-docs" ? loadApiDocsPage : detail === "ai-settings" ? loadSaasAdminAiSettings : detail === "seniority-rates" ? loadSaasAdminSeniorityRates : loadSaasAdminDashboard;
   } else {
     preloader = detail === "create" ? loadModuleCreate : detail ? loadModuleShow : loadModuleListRefine;
   }
@@ -818,6 +820,7 @@ function App() {
             <Route path="/taze-system/landing" element={<LandingPageEditor />} />
             <Route path="/taze-system/api-docs" element={<ApiDocsPage isAdmin />} />
             <Route path="/taze-system/ai-settings" element={<SaasAdminAiSettings />} />
+            <Route path="/taze-system/seniority-rates" element={<SaasAdminSeniorityRates />} />
             {/* CMS — blog */}
             <Route path="/taze-system/blog/new" element={<CmsPostEditor />} />
             <Route path="/taze-system/blog/:id" element={<CmsPostEditor />} />

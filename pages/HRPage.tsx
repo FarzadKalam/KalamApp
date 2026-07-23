@@ -1481,6 +1481,7 @@ const HRPage: React.FC = () => {
   const [editingPayrollWizardFieldKey, setEditingPayrollWizardFieldKey] = useState<string | null>(null);
   const [payrollWizardDraftValues, setPayrollWizardDraftValues] = useState<Record<string, any>>({});
   const [savingPayrollWizardFieldKey, setSavingPayrollWizardFieldKey] = useState<string | null>(null);
+  const [calculatingPayrollWizardSeniority, setCalculatingPayrollWizardSeniority] = useState(false);
   const [creatingPayrollSlip, setCreatingPayrollSlip] = useState(false);
   const [savingGoalLedger, setSavingGoalLedger] = useState(false);
   const [hrActiveGoalId, setHrActiveGoalId] = useState<string | null>(null);
@@ -4041,6 +4042,7 @@ const HRPage: React.FC = () => {
     setPayrollWizardStep(0);
     setEditingPayrollWizardFieldKey(null);
     setPayrollWizardDraftValues({});
+    setCalculatingPayrollWizardSeniority(false);
   }, []);
 
   const closeAttendanceModal = useCallback(() => {
@@ -5695,6 +5697,38 @@ const HRPage: React.FC = () => {
     prepareAttendancePayrollLedgerEntriesForRows,
     refreshPayrollPeriodState,
   ]);
+
+  const handleCalculatePayrollWizardSeniority = useCallback(async () => {
+    const profile = payrollWizardSummary?.profile;
+    const employeeId = String(profile?.source_id || '').trim();
+    const hireDate = String(profile?.hire_date || '').trim();
+    const periodStart = toNativeGregorianDateString(monthStart);
+    const periodEnd = toNativeGregorianDateString(monthEnd);
+    if (profile?.seniority_mode !== 'labor_law') {
+      message.warning('برای این کارمند، فرمول سنوات باید روی «پایه سنوات - قانون کار ایران (خودکار)» باشد.');
+      return;
+    }
+    if (!employeeId || !hireDate || !periodStart || !periodEnd) {
+      message.error('تاریخ شروع همکاری یا بازه فیش برای محاسبه سنوات کامل نیست.');
+      return;
+    }
+
+    setCalculatingPayrollWizardSeniority(true);
+    try {
+      const amount = await syncSeniorityPayrollEntry(supabase as any, {
+        employeeId,
+        hireDate,
+        periodStart,
+        periodEnd,
+      });
+      await refreshPayrollPeriodState();
+      message.success(amount > 0 ? 'سنوات این ماه محاسبه و به اقلام فیش اضافه شد.' : 'برای این بازه، کارمند هنوز شرایط دریافت پایه سنوات را ندارد.');
+    } catch (error: any) {
+      message.error(toFaErrorMessage(error, 'محاسبه سنوات ناموفق بود.'));
+    } finally {
+      setCalculatingPayrollWizardSeniority(false);
+    }
+  }, [message, monthEnd, monthStart, payrollWizardSummary?.profile, refreshPayrollPeriodState]);
 
   const handleCreatePayrollSlipFromWizard = useCallback(async () => {
     const row = payrollWizardSummary;
@@ -7889,6 +7923,19 @@ const HRPage: React.FC = () => {
                         <div className="text-xs text-gray-500 mb-1">پایه سنوات (قانون کار)</div>
                         <div className="persian-number text-2xl font-black text-emerald-700">{formatMoney(payrollWizardSeniorityAmount)}</div>
                         <div className="text-xs text-gray-400 mt-1">{toPersianNumber(payrollWizardSeniorityYears)} سال سابقه</div>
+                        <div className="mt-3">
+                          <label className="mb-1 block text-xs text-gray-500">سنوات این ماه</label>
+                          <Input readOnly value={formatMoney(payrollWizardSeniorityAmount)} className="persian-number" />
+                        </div>
+                        <Button
+                          className="mt-2 w-full"
+                          size="small"
+                          type="primary"
+                          loading={calculatingPayrollWizardSeniority}
+                          onClick={() => void handleCalculatePayrollWizardSeniority()}
+                        >
+                          محاسبه سنوات این ماه
+                        </Button>
                       </Card>
                     </Col>
                   ) : null}
@@ -8103,6 +8150,7 @@ const HRPage: React.FC = () => {
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">کارکرد فعالیت‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardSummary.taskWageTotal)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">ردیف‌ها و مساعده‌ها</div><div className="persian-number text-2xl font-black">{formatMoney(payrollWizardLedgerNet - payrollWizardAdvanceDeductionTotal)}</div></Card></Col>
                   <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">بیمه سهم کارمند</div><div className="persian-number text-2xl font-black text-red-700">{formatMoney(payrollWizardInsurance.employee)}</div></Card></Col>
+                  {payrollWizardSummary.profile?.seniority_mode === 'labor_law' ? <Col xs={24} md={6}><Card><div className="text-xs text-gray-500 mb-1">سنوات این ماه</div><div className="persian-number text-2xl font-black text-emerald-700">{formatMoney(payrollWizardSeniorityAmount)}</div></Card></Col> : null}
                 </Row>
                 <Card>
                   <div className="mb-3 text-sm font-bold text-gray-700 dark:text-gray-200">اقلامی که در فیش پیش‌نویس قرار می‌گیرند</div>

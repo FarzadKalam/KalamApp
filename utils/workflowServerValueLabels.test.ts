@@ -27,12 +27,14 @@ describe('server workflow value labels', () => {
     expect(parseWorkflowIdentityReference('check_out')).toBeNull();
   });
 
-  it('formats monetary strings with Persian digits, grouping and decimals', () => {
-    expect(formatWorkflowNumericValue('total_amount', '1234567.5')).toBe('۱٬۲۳۴٬۵۶۸');
-    expect(formatWorkflowNumericValue('invoice_price', '۱۲۳۴۵۶۷')).toBe('۱٬۲۳۴٬۵۶۷');
-    expect(formatWorkflowNumericValue('__workflow_related__customer::invoices::total_amount', 1250000)).toBe('۱٬۲۵۰٬۰۰۰');
+  it('formats only fields explicitly configured as price', () => {
+    expect(formatWorkflowNumericValue('total_amount', '1234567.5')).toBeNull();
+    expect(formatWorkflowNumericValue('invoice_price', '۱۲۳۴۵۶۷')).toBeNull();
+    expect(formatWorkflowNumericValue('total_amount', '1234567.5', true)).toBe('۱٬۲۳۴٬۵۶۸');
+    expect(formatWorkflowNumericValue('invoice_price', '۱۲۳۴۵۶۷', true)).toBe('۱٬۲۳۴٬۵۶۷');
+    expect(formatWorkflowNumericValue('__workflow_related__customer::invoices::total_amount', 1250000, true)).toBe('۱٬۲۵۰٬۰۰۰');
     expect(formatWorkflowNumericValue('custom-field-uuid', '1250000.25', true)).toBe('۱٬۲۵۰٬۰۰۰');
-    expect(formatWorkflowNumericValue('description', '1234567')).toBeNull();
+    expect(formatWorkflowNumericValue('description', '1234567', true)).toBe('۱٬۲۳۴٬۵۶۷');
   });
 
   it('uses the organization currency label with code-based Persian fallbacks', () => {

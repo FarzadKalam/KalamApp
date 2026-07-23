@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../supabaseClient';
 import { MODULES } from '../../../moduleRegistry';
 import { fetchSessionBootstrap } from '../../../utils/sessionCache';
-import { normalizeViewConditionGroup, resolveVoipAccessPermissions, type ViewConditionGroup } from '../../../utils/permissions';
+import { normalizeViewConditionGroup, resolveCommunicationsPermissions, resolveVoipAccessPermissions, type ViewConditionGroup } from '../../../utils/permissions';
+import { canAccessCounterpartyBotGroup } from '../../../utils/botGroupAccess';
 import { isMissingTableLikeError } from '../../../utils/notificationAssigneeHelpers';
 import { isMissingRpcError } from '../../../utils/notificationConversationRpc';
 import {
@@ -100,6 +101,7 @@ type LiveProfile = {
   voipRecordScope: 'all' | 'own' | 'team' | 'subtree';
   voipViewConditions: ViewConditionGroup;
   canViewAllSms: boolean;
+  canAccessAllBotGroups: boolean;
 };
 
 type VoipOperatorIdentity = {
@@ -549,21 +551,8 @@ const collectBotBindingRecordReferences = (rows: BotIdentityBindingRow[]) =>
     }))
     .filter((item) => item.module_id && item.record_id);
 
-const canSeeRestrictedBotRow = (row: any, profile: LiveProfile) => {
-  const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-  const allowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
-    ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-    : [];
-  const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
-    ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-    : [];
-  const ownerId = String(row?.created_by || row?.profile_id || '').trim();
-  if (!allowedUserIds.length && !allowedRoleIds.length) return Boolean(profile.id && ownerId === profile.id);
-  if (profile.id && ownerId === profile.id) return true;
-  if (profile.id && allowedUserIds.includes(profile.id)) return true;
-  if (profile.roleId && allowedRoleIds.includes(profile.roleId)) return true;
-  return false;
-};
+const canSeeRestrictedBotRow = (row: any, profile: LiveProfile, allowAll = false) =>
+  canAccessCounterpartyBotGroup(row, { userId: profile.id, roleId: profile.roleId, canAccessAll: allowAll });
 
 const sortByActivityDesc = <T extends Record<string, any>>(rows: T[]) =>
   rows.slice().sort((left, right) => {
@@ -895,7 +884,7 @@ const fetchBotGroups = async (profile: LiveProfile) => {
     .order('updated_at', { ascending: false, nullsFirst: false })
     .limit(160);
   if (error) throw error;
-  const rows = ((data || []) as BotGroupRow[]).filter((row) => canSeeRestrictedBotRow(row, profile));
+  const rows = ((data || []) as BotGroupRow[]).filter((row) => canSeeRestrictedBotRow(row, profile, profile.canAccessAllBotGroups));
   const deduped = rows.reduce<BotGroupRow[]>((acc, row) => {
     const channel = String(row?.channel_type || '').trim();
     const chatId = String(row?.bot_chat_id || '').trim();
@@ -1339,6 +1328,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     voipRecordScope: 'own',
     voipViewConditions: { conditions_all: [], conditions_any: [] },
     canViewAllSms: false,
+    canAccessAllBotGroups: false,
   });
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
@@ -1368,6 +1358,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     void fetchSessionBootstrap(supabase).then((snapshot) => {
       if (disposed) return;
       const voipAccess = resolveVoipAccessPermissions(snapshot.permissions || null);
+      const communicationsAccess = resolveCommunicationsPermissions(snapshot.permissions || null);
       const canViewAllSms = resolveCanViewAllSms(snapshot.permissions || null);
       setProfile({
         id: snapshot.profile?.id ? String(snapshot.profile.id) : null,
@@ -1378,6 +1369,7 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
         voipRecordScope: voipAccess.recordScope,
         voipViewConditions: voipAccess.viewConditions,
         canViewAllSms,
+        canAccessAllBotGroups: communicationsAccess.canAccessAllBotGroups,
       });
     }).catch(() => {
       if (!disposed) setLoading(false);

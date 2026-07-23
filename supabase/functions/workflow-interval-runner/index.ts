@@ -3758,6 +3758,7 @@ async function executeAction(
     ]);
     const text = [renderedTitle.trim(), renderedMessage.trim()].filter(Boolean).join('\n');
     const attachments = await resolveServerWorkflowMessageAttachments({ url, key, orgId, moduleId, recordId, config, record });
+    const groupText = renderedMessage.trim() || (attachments.length > 0 ? 'پیوست ارسال شد' : '');
     if (!text && attachments.length === 0) return actionResult(action, 'skipped', 'متن و فایل پیام بات خالی است.');
     const effectiveText = text || 'پیوست ارسال شد';
     const preferredChannels = explicitChannel
@@ -3811,7 +3812,8 @@ async function executeAction(
       if (!botSettings) continue;
       const botGroup = target.group || await findServerBotGroup(url, key, orgId, target.channel, target.chatId);
       if (botGroup) {
-        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, effectiveText, botSettings, automatedSenderPayload, attachments);
+        if (!groupText) continue;
+        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, groupText, botSettings, automatedSenderPayload, attachments);
       } else {
         await sendBotMessageWithAttachments(url, key, target.chatId, effectiveText, botSettings, target.channel, attachments, automatedSenderPayload);
       }
@@ -3830,6 +3832,7 @@ async function executeAction(
     ]);
     const text = [renderedTitle.trim(), renderedMessage.trim()].filter(Boolean).join('\n');
     const attachments = await resolveServerWorkflowMessageAttachments({ url, key, orgId, moduleId, recordId, config, record });
+    const groupText = renderedMessage.trim() || (attachments.length > 0 ? 'پیوست ارسال شد' : '');
     if (!text && attachments.length === 0) return actionResult(action, 'skipped', 'متن و فایل پیام روبیکا خالی است.');
     const effectiveText = text || 'پیوست ارسال شد';
     const botSettings = await getOrgBotSettings(url, key, orgId, 'rubika');
@@ -3839,7 +3842,8 @@ async function executeAction(
     for (const chatId of chatIds) {
       const botGroup = await findServerBotGroup(url, key, orgId, 'rubika', chatId);
       if (botGroup) {
-        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, effectiveText, botSettings, {
+        if (!groupText) continue;
+        await sendAndArchiveAutomatedBotGroupMessage(url, key, orgId, botGroup, groupText, botSettings, {
           workflow_action_type: action.type,
           workflow_action_id: action.id || null,
           source_type: 'workflow',

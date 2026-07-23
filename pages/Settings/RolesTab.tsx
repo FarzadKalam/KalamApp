@@ -45,6 +45,7 @@ import {
   VOIP_PERMISSION_KEY,
   COMMUNICATIONS_PERMISSION_KEY,
   COMMUNICATIONS_PERMISSION_FIELDS,
+  BOT_GROUP_ACCESS_PERMISSION_KEY,
   CUSTOMER_CLUB_PERMISSION_KEY,
   CUSTOMER_CLUB_PERMISSION_FIELDS,
   STORIES_PERMISSION_KEY,
@@ -441,7 +442,7 @@ const RolesTab: React.FC = () => {
   // ─── Permissions ──────────────────────────────────────────────────────────
   const handlePermissionChange = (
     moduleId: string,
-    type: 'view' | 'edit' | 'delete' | 'field' | 'scope',
+    type: 'view' | 'edit' | 'delete' | 'field' | 'field_value' | 'scope',
     fieldKey?: string,
     checked?: boolean | string
   ) => {
@@ -452,6 +453,8 @@ const RolesTab: React.FC = () => {
       const target = { ...(next[moduleId] || {}), fields: { ...(next[moduleId]?.fields || {}) } };
       if (type === 'field' && fieldKey) {
         target.fields![fieldKey] = checked !== false;
+      } else if (type === 'field_value' && fieldKey) {
+        target.fields![fieldKey] = checked;
       } else if (type === 'scope') {
         target.record_scope = String(checked || 'all') as RecordScope;
       } else {
@@ -872,7 +875,12 @@ const RolesTab: React.FC = () => {
 
               {/* Module permissions */}
               <Collapse defaultActiveKey={[Object.values(MODULES)[0]?.id || 'products']} className="dark:bg-transparent dark:border-gray-800">
-                {Object.values(MODULES).filter((module) => !isSaasAdminModuleId(module.id) && module.id !== 'voip_call_reports').map((module) => {
+                {Object.values(MODULES).filter((module) => (
+                  !isSaasAdminModuleId(module.id)
+                  && module.id !== 'voip_call_reports'
+                  // دسترسی پیام‌رسانی گروه‌های بات فقط در بخش «ارتباطات» و با دو حالت مشخص تنظیم می‌شود.
+                  && module.id !== 'counterparty_bot_groups'
+                )).map((module) => {
                   const modPerms = getModulePerms(module.id);
                   const fields = collectModulePermissionFields(module);
                   const disabled = modPerms.view === false;
@@ -1074,6 +1082,16 @@ const RolesTab: React.FC = () => {
                   <div className="pl-6 pt-2">
                     <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 border-gray-200 dark:border-gray-700">دسترسی‌های ارتباطات</Divider>
                     {renderFieldSwitches(COMMUNICATIONS_PERMISSION_KEY, COMMUNICATIONS_PERMISSION_FIELDS, getModulePerms(COMMUNICATIONS_PERMISSION_KEY).view === false)}
+                    <Divider orientation="left" className="text-xs text-gray-400 m-0 mb-3 mt-5 border-gray-200 dark:border-gray-700">دسترسی به گروه‌های بات</Divider>
+                    <Radio.Group
+                      value={getModulePerms(COMMUNICATIONS_PERMISSION_KEY).fields?.[BOT_GROUP_ACCESS_PERMISSION_KEY] === 'all' ? 'all' : 'inherited'}
+                      onChange={(event) => handlePermissionChange(COMMUNICATIONS_PERMISSION_KEY, 'field_value', BOT_GROUP_ACCESS_PERMISSION_KEY, event.target.value)}
+                      disabled={getModulePerms(COMMUNICATIONS_PERMISSION_KEY).view === false}
+                      className="flex flex-col gap-2"
+                    >
+                      <Radio value="all">دسترسی به همه گروه‌ها</Radio>
+                      <Radio value="inherited">ارث‌بری از تنظیمات دسترسی هر گروه بات</Radio>
+                    </Radio.Group>
                   </div>
                 </Panel>
 

@@ -33,7 +33,8 @@ import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { getRecordDisplayLabel } from '../utils/recordLabel';
 import { buildRecordReferenceKey, fetchRecordReferenceLabels } from '../utils/recordReference';
 import { selectByIdsWithCompatibleColumns } from '../utils/selectCompat';
-import { canUseRecordLockPermission, resolveVoipAccessPermissions, type PermissionMap } from '../utils/permissions';
+import { canUseRecordLockPermission, resolveCommunicationsPermissions, resolveVoipAccessPermissions, type PermissionMap } from '../utils/permissions';
+import { canAccessCounterpartyBotGroup } from '../utils/botGroupAccess';
 import {
   buildNoteConversations,
   buildSmsThreads,
@@ -3611,21 +3612,8 @@ useEffect(() => {
     const baseRows = (data || []) as CounterpartyBotGroupRow[];
     const userId = String(profile.id || '').trim();
     const roleId = String(profile.role_id || '').trim();
-    const rows = baseRows.filter((row) => {
-      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-      const allowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
-        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-        : [];
-      const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
-        ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-        : [];
-      const createdBy = String(row?.created_by || '').trim();
-      if (!allowedUserIds.length && !allowedRoleIds.length) return Boolean(userId && createdBy === userId);
-      if (userId && createdBy === userId) return true;
-      if (userId && allowedUserIds.includes(userId)) return true;
-      if (roleId && allowedRoleIds.includes(roleId)) return true;
-      return false;
-    });
+    const canAccessAll = resolveCommunicationsPermissions(currentPermissionMap).canAccessAllBotGroups;
+    const rows = baseRows.filter((row) => canAccessCounterpartyBotGroup(row, { userId, roleId, canAccessAll }));
     const dedupedRows = rows.reduce<CounterpartyBotGroupRow[]>((acc, row) => {
       const chatId = String(row?.bot_chat_id || '').trim();
       const channel = String(row?.channel_type || '').trim();
@@ -3875,21 +3863,7 @@ useEffect(() => {
     const baseRows = Array.from(dedupedThreadMap.values());
     const userId = String(profile.id || '').trim();
     const roleId = String(profile.role_id || '').trim();
-    const visibleRows = baseRows.filter((row) => {
-      const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-      const allowedUserIds = Array.isArray((metadata as any)?.allowed_user_ids)
-        ? (metadata as any).allowed_user_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-        : [];
-      const allowedRoleIds = Array.isArray((metadata as any)?.allowed_role_ids)
-        ? (metadata as any).allowed_role_ids.map((id: any) => String(id || '').trim()).filter(Boolean)
-        : [];
-      const ownerId = String(row?.created_by || row?.profile_id || '').trim();
-      if (!allowedUserIds.length && !allowedRoleIds.length) return Boolean(userId && ownerId === userId);
-      if (userId && ownerId === userId) return true;
-      if (userId && allowedUserIds.includes(userId)) return true;
-      if (roleId && allowedRoleIds.includes(roleId)) return true;
-      return false;
-    });
+    const visibleRows = baseRows.filter((row) => canAccessCounterpartyBotGroup(row, { userId, roleId }));
     const rows = await enrichBotDirectThreads(visibleRows);
     setBotDirectThreads(rows);
     return rows;

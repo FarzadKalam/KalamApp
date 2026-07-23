@@ -769,6 +769,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/taze-system/plans', label: 'پلن‌ها' },
           { key: '/taze-system/api-docs', label: 'مستندات API' },
           { key: '/taze-system/ai-settings', label: 'تنظیمات هوش مصنوعی' },
+          { key: '/taze-system/seniority-rates', label: 'نرخ سنوات' },
           {
             key: 'cms_group',
             icon: <ReadOutlined />,
@@ -825,6 +826,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
         case '/taze-system/plans':
         case '/taze-system/api-docs':
         case '/taze-system/ai-settings':
+        case '/taze-system/seniority-rates':
         case '/cms_blog_posts':
         case '/cms_tutorial_posts':
         case '/cms_tutorial_series':

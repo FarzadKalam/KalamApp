@@ -7,6 +7,13 @@ type SeniorityAnnualRate = {
   monthly_rate_31day_rials: number;
 };
 
+type SeniorityPeriodCalculation = {
+  amount: number;
+  eligibleDays: number;
+  yearsOfService: number;
+  rateDetails: Array<{ persianYear: number; dailyRateRials: number; eligibleDays: number }>;
+};
+
 const TEHRAN_TZ = 'Asia/Tehran';
 const PERSIAN_CALENDAR_LOCALE = 'fa-IR-u-ca-persian';
 
@@ -33,6 +40,23 @@ const getJalaliParts = (date: Date): { year: number; month: number; day: number 
     month: parseLocaleInteger(parts.find((p) => p.type === 'month')?.value),
     day: parseLocaleInteger(parts.find((p) => p.type === 'day')?.value),
   };
+};
+
+const getIsoDateOnly = (value: string) => String(value || '').trim().slice(0, 10);
+
+const getIsoDatesInRange = (periodStart: string, periodEnd: string): string[] => {
+  const start = getIsoDateOnly(periodStart);
+  const end = getIsoDateOnly(periodEnd);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end) || start > end) return [];
+
+  const dates: string[] = [];
+  const cursor = new Date(`${start}T12:00:00.000Z`);
+  const last = new Date(`${end}T12:00:00.000Z`);
+  while (cursor <= last) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
 };
 
 /**
@@ -67,8 +91,8 @@ export const getJalaliDaysInMonth = (dateIso: string): number => {
  * محاسبه بر اساس تقویم شمسی با تایم‌زون تهران انجام می‌شود.
  */
 export const calcYearsOfService = (hireDateIso: string, periodEndIso: string): number => {
-  const hireDate = new Date(hireDateIso);
-  const endDate = new Date(periodEndIso + 'T23:59:59');
+  const hireDate = new Date(`${getIsoDateOnly(hireDateIso)}T12:00:00+03:30`);
+  const endDate = new Date(`${getIsoDateOnly(periodEndIso)}T23:59:59+03:30`);
   if (isNaN(hireDate.getTime()) || isNaN(endDate.getTime())) return 0;
   if (endDate <= hireDate) return 0;
 
@@ -84,6 +108,18 @@ export const calcYearsOfService = (hireDateIso: string, periodEndIso: string): n
 };
 
 /**
+ * روزهای واجد دریافت پایه سنوات را در بازه فیش برمی‌گرداند.
+ * مبنای روزشمار، تقویم شمسی و لحظه تکمیل یک سال سابقه است؛ بنابراین
+ * اگر سالگرد استخدام در میانه ماه باشد، فقط روزهای واجد شرایط محاسبه می‌شوند.
+ */
+export const getEligibleSeniorityDays = (
+  hireDateIso: string,
+  periodStart: string,
+  periodEnd: string,
+) => getIsoDatesInRange(periodStart, periodEnd)
+  .filter((date) => calcYearsOfService(hireDateIso, date) >= 1);
+
+/**
  * نرخ سالانه پایه سنوات را برای یک سال شمسی مشخص از دیتابیس می‌خواند.
  */
 export const fetchSeniorityAnnualRate = async (
@@ -91,7 +127,7 @@ export const fetchSeniorityAnnualRate = async (
   persianYear: number,
 ): Promise<SeniorityAnnualRate | null> => {
   const { data, error } = await supabase
-    .from('seniority_annual_rates')
+    .from('saas_seniority_annual_rates')
     .select('daily_rate_rials, monthly_rate_30day_rials, monthly_rate_31day_rials')
     .eq('persian_year', persianYear)
     .maybeSingle();
@@ -120,6 +156,44 @@ export const calcMonthlySeniorityPay = (
   return monthlyRate;
 };
 
+const calculateSeniorityForPeriod = async (
+  supabase: SupabaseClient,
+  hireDate: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<SeniorityPeriodCalculation> => {
+  const eligibleDates = getEligibleSeniorityDays(hireDate, periodStart, periodEnd);
+  const yearsOfService = calcYearsOfService(hireDate, periodEnd);
+  if (eligibleDates.length === 0) {
+    return { amount: 0, eligibleDays: 0, yearsOfService, rateDetails: [] };
+  }
+
+  const eligibleDaysByPersianYear = eligibleDates.reduce<Map<number, number>>((result, date) => {
+    const persianYear = getPersianYear(date);
+    result.set(persianYear, (result.get(persianYear) || 0) + 1);
+    return result;
+  }, new Map());
+  const ratesByYear = new Map<number, SeniorityAnnualRate>();
+  await Promise.all(Array.from(eligibleDaysByPersianYear.keys()).map(async (persianYear) => {
+    const rate = await fetchSeniorityAnnualRate(supabase, persianYear);
+    if (!rate || rate.daily_rate_rials <= 0) {
+      throw new Error(`نرخ مصوب پایه سنوات سال ${persianYear} ثبت نشده است.`);
+    }
+    ratesByYear.set(persianYear, rate);
+  }));
+
+  const rateDetails = Array.from(eligibleDaysByPersianYear.entries()).map(([persianYear, eligibleDays]) => ({
+    persianYear,
+    eligibleDays,
+    dailyRateRials: ratesByYear.get(persianYear)?.daily_rate_rials || 0,
+  }));
+  const amount = Math.round(rateDetails.reduce(
+    (sum, item) => sum + (item.dailyRateRials * item.eligibleDays),
+    0,
+  ));
+  return { amount, eligibleDays: eligibleDates.length, yearsOfService, rateDetails };
+};
+
 /**
  * یک entry پایه سنوات در payroll_calculation_entries ایجاد یا آپدیت می‌کند.
  * اگر `seniority_mode !== 'labor_law'` یا `hire_date` خالی باشد، مقدار صفر برمی‌گردد.
@@ -139,8 +213,8 @@ export const syncSeniorityPayrollEntry = async (
     periodEnd: string;
   },
 ): Promise<number> => {
-  const yearsOfService = calcYearsOfService(hireDate, periodEnd);
-  if (yearsOfService < 1) {
+  const calculation = await calculateSeniorityForPeriod(supabase, hireDate, periodStart, periodEnd);
+  if (calculation.eligibleDays === 0) {
     // اگر entry قبلاً وجود دارد و سابقه کافی نیست، void می‌کنیم
     await supabase
       .from('payroll_calculation_entries')
@@ -152,13 +226,7 @@ export const syncSeniorityPayrollEntry = async (
       .in('status', ['draft', 'proposed']);
     return 0;
   }
-
-  const persianYear = getPersianYear(periodEnd);
-  const rate = await fetchSeniorityAnnualRate(supabase, persianYear);
-  if (!rate) return 0;
-
-  const daysInMonth = getJalaliDaysInMonth(periodEnd);
-  const amount = calcMonthlySeniorityPay(yearsOfService, rate, daysInMonth);
+  const amount = calculation.amount;
   if (amount <= 0) return 0;
 
   // بررسی entry موجود
@@ -186,12 +254,11 @@ export const syncSeniorityPayrollEntry = async (
     rate: null as null,
     status: 'proposed',
     details: {
-      persian_year: persianYear,
-      years_of_service: yearsOfService,
+      persian_year: getPersianYear(periodEnd),
+      years_of_service: calculation.yearsOfService,
       hire_date: hireDate,
-      daily_rate_rials: rate.daily_rate_rials,
-      days_in_month: daysInMonth,
-      monthly_rate_rials: daysInMonth >= 31 ? rate.monthly_rate_31day_rials : rate.monthly_rate_30day_rials,
+      eligible_days: calculation.eligibleDays,
+      rate_details: calculation.rateDetails,
     },
     updated_at: new Date().toISOString(),
   };

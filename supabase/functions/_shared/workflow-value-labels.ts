@@ -59,13 +59,10 @@ export const parseWorkflowIdentityReference = (
   };
 };
 
-export const formatWorkflowNumericValue = (fieldKey: unknown, value: unknown, forcePrice = false): string | null => {
-  const normalizedFieldKey = normalizeText(fieldKey).toLowerCase();
-  const monetaryTokens = new Set(['price', 'amount', 'cost', 'total', 'balance', 'wage', 'salary', 'fee', 'credit', 'debit', 'payment']);
-  const fieldTokens = normalizedFieldKey.split(/[^a-z0-9]+/).filter(Boolean);
-  if (!forcePrice && !fieldTokens.some((token) => monetaryTokens.has(token))) {
-    return null;
-  }
+// Monetary formatting must be based on the configured field type, never inferred from
+// a field key such as "amount" or "total". Numeric fields can use those keys too.
+export const formatWorkflowNumericValue = (_fieldKey: unknown, value: unknown, isPriceField = false): string | null => {
+  if (!isPriceField) return null;
   const normalizedValue = normalizeText(value)
     .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
     .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))

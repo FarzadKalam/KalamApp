@@ -55,6 +55,7 @@ export const VOIP_PERMISSION_KEY = '__voip';
 export const STORIES_PERMISSION_KEY = '__stories';
 export const SAAS_ADMIN_PERMISSION_KEY = '__saas_admin';
 export const COMMUNICATIONS_PERMISSION_KEY = '__communications';
+export const BOT_GROUP_ACCESS_PERMISSION_KEY = 'bot_group_access';
 export { CUSTOMER_CLUB_PERMISSION_KEY };
 export const SAAS_ADMIN_MODULE_IDS = ['saas_orgs', 'saas_demo_requests', 'saas_users', 'saas_user_announcements'] as const;
 const SAAS_ADMIN_MODULE_ID_SET = new Set<string>(SAAS_ADMIN_MODULE_IDS);
@@ -458,6 +459,7 @@ export const buildDefaultPermissions = (modules: Record<string, ModuleDefinition
     fields: {
       ...createFieldsMap([...COMMUNICATIONS_PERMISSION_FIELDS]),
       audit_all_conversations: false,
+      [BOT_GROUP_ACCESS_PERMISSION_KEY]: 'inherited',
     },
   };
 
@@ -878,6 +880,7 @@ export const resolveCommunicationsPermissions = (permissions: PermissionMap | nu
   const perm = permissions?.[COMMUNICATIONS_PERMISSION_KEY] || {};
   const fields = perm.fields || {};
   const canViewRoot = perm.view !== false;
+  const botGroupAccess = fields[BOT_GROUP_ACCESS_PERMISSION_KEY] === 'all' ? 'all' : 'inherited';
 
   return {
     canUsePanel: canViewRoot && fields.panel_access !== false,
@@ -889,6 +892,8 @@ export const resolveCommunicationsPermissions = (permissions: PermissionMap | nu
     canUseVoip: canViewRoot && fields.use_voip !== false,
     canViewSystemFeed: canViewRoot && fields.view_system_feed !== false,
     canAuditAllConversations: canViewRoot && fields.audit_all_conversations === true,
+    botGroupAccess,
+    canAccessAllBotGroups: canViewRoot && botGroupAccess === 'all',
   };
 };
 
