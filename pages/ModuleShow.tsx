@@ -84,6 +84,7 @@ import {
   withProcessTaskCustomFieldValues,
 } from '../utils/processTaskCustomFields';
 import { getTaskStatusOptions } from '../utils/processTaskStatusOptions';
+import { openTaskProcessModal } from '../utils/taskProcessModalEvents';
 import { isRecycleBinEnabledModule } from '../utils/recycleBin';
 import { isOnlineCatalogModule } from '../utils/onlineCatalog';
 import type { BotChannel, BotPlatformState } from '../components/bot/CounterpartyBotStatusModal';
@@ -475,6 +476,9 @@ const ModuleShow: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [allRoles, setAllRoles] = useState<any[]>([]);
+  const taskStatusOptions = useMemo(() => (
+    moduleId === 'tasks' ? getTaskStatusOptions(data) : []
+  ), [data?.recurrence_info, data?.status, moduleId]);
   const taskProcessCustomFields = useMemo(() => {
     if (moduleId !== 'tasks' || !data?.recurrence_info) return [] as any[];
     const recurrence = data.recurrence_info && typeof data.recurrence_info === 'object' ? data.recurrence_info : {};
@@ -489,25 +493,30 @@ const ModuleShow: React.FC = () => {
   }, [data?.recurrence_info, moduleId]);
   const moduleConfig = useMemo(() => {
     let nextConfig = baseModuleConfig;
-    if (moduleId === 'tasks' && taskProcessCustomFields.length > 0) {
+    if (moduleId === 'tasks') {
       const existingFieldKeys = new Set((nextConfig?.fields || []).map((field: any) => String(field?.key || '').trim()));
       const extraFields = taskProcessCustomFields.filter((field: any) => !existingFieldKeys.has(String(field?.key || '').trim()));
-      if (extraFields.length > 0) {
-        const hasCustomBlock = (nextConfig?.blocks || []).some((block: any) => String(block?.id || '') === 'process_task_custom_fields');
-        nextConfig = {
-          ...nextConfig,
-          fields: [...(nextConfig?.fields || []), ...extraFields],
-          blocks: [
-            ...(nextConfig?.blocks || []),
-            ...(hasCustomBlock ? [] : [{
-              id: 'process_task_custom_fields',
-              titles: { fa: 'فیلدهای اختصاصی فعالیت', en: 'Activity Custom Fields' },
-              type: BlockType.FIELD_GROUP,
-              order: 1.6,
-            }]),
-          ],
-        };
-      }
+      const hasCustomBlock = (nextConfig?.blocks || []).some((block: any) => String(block?.id || '') === 'process_task_custom_fields');
+      nextConfig = {
+        ...nextConfig,
+        fields: [
+          ...(nextConfig?.fields || []).map((field: any) => (
+            String(field?.key || '').trim() === 'status'
+              ? { ...field, options: taskStatusOptions }
+              : field
+          )),
+          ...extraFields,
+        ],
+        blocks: [
+          ...(nextConfig?.blocks || []),
+          ...(taskProcessCustomFields.length > 0 && !hasCustomBlock ? [{
+            id: 'process_task_custom_fields',
+            titles: { fa: 'فیلدهای اختصاصی فعالیت', en: 'Activity Custom Fields' },
+            type: BlockType.FIELD_GROUP,
+            order: 1.6,
+          }] : []),
+        ],
+      };
     }
     if (moduleId === INSTRUCTIONS_MODULE_ID && nextConfig) {
       nextConfig = buildInstructionModuleConfig(nextConfig, {
@@ -526,7 +535,7 @@ const ModuleShow: React.FC = () => {
       nextConfig = buildSurveyRuntimeModule(nextConfig, data.template_schema_snapshot, 'show');
     }
     return nextConfig;
-  }, [allRoles, allUsers, baseModuleConfig, data?.template_schema_snapshot, moduleId, taskProcessCustomFields]);
+  }, [allRoles, allUsers, baseModuleConfig, data?.template_schema_snapshot, moduleId, taskProcessCustomFields, taskStatusOptions]);
   const moduleTable = moduleConfig?.table || moduleId;
   const displayData = useMemo(
     () => mergeSurveyTemplateValuesIntoRecord(normalizeModuleFormValues(moduleId, data || {})) || normalizeModuleFormValues(moduleId, data || {}),
@@ -6147,6 +6156,14 @@ const ModuleShow: React.FC = () => {
       label: 'ایجاد پروژه',
       variant: 'default',
       onClick: () => handleHeaderAction('create_project')
+    });
+  }
+  if (moduleId === 'tasks' && id) {
+    headerActions.push({
+      id: 'process_task_card',
+      label: 'کارت فعالیت',
+      variant: 'default',
+      onClick: () => openTaskProcessModal({ taskId: id || null, task: data }),
     });
   }
   if (moduleId === 'marketing_leads' && canEditModule && data?.lead_type === 'new_lead' && !data?.customer_id) {

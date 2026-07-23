@@ -61,7 +61,7 @@ export const marketingLeadsModule: ModuleDefinition = {
       type: FieldType.STATUS,
       location: FieldLocation.HEADER,
       order: 3,
-      defaultValue: 'new',
+      defaultValue: 'draft',
       options: [
         { label: 'پیش‌نویس', value: 'draft', color: 'default' },
         { label: 'جدید', value: 'new', color: 'blue' },

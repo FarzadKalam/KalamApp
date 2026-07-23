@@ -142,19 +142,30 @@ const mergeStaticFieldOptions = (
   if (!Array.isArray(baseField.options) || baseField.options.length === 0) return incomingField;
   if (!Array.isArray(incomingField.options)) return incomingField;
 
-  const configuredValues = new Set(
+  const configuredOptionsByValue = new Map(
     incomingField.options
+      .map((option) => [String(option?.value ?? '').trim(), option] as const)
+      .filter(([value]) => Boolean(value))
+  );
+  const baseOptionValues = new Set(
+    baseField.options
       .map((option) => String(option?.value ?? '').trim())
       .filter(Boolean)
   );
-  const missingBaseOptions = baseField.options.filter(
-    (option) => !configuredValues.has(String(option?.value ?? '').trim())
-  );
+  const orderedOptions = [
+    ...baseField.options.map((option) => {
+      const configuredOption = configuredOptionsByValue.get(String(option?.value ?? '').trim());
+      return configuredOption ? { ...option, ...configuredOption } : cloneDeep(option);
+    }),
+    ...incomingField.options.filter(
+      (option) => !baseOptionValues.has(String(option?.value ?? '').trim())
+    ),
+  ];
 
-  if (missingBaseOptions.length === 0) return incomingField;
+  if (JSON.stringify(orderedOptions) === JSON.stringify(incomingField.options)) return incomingField;
   return {
     ...incomingField,
-    options: [...incomingField.options, ...cloneDeep(missingBaseOptions)],
+    options: orderedOptions,
   };
 };
 
