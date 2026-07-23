@@ -1563,6 +1563,11 @@ const mapLegacyMarketingLeadStatus = (value: unknown): string | null => {
   if (!normalized) return null;
 
   if ([
+    "draft",
+    normalizeKey("پیش‌نویس"),
+    normalizeKey("پیش نویس"),
+  ].includes(normalized)) return "draft";
+  if ([
     "new",
     normalizeKey("جدید"),
   ].includes(normalized)) return "new";
@@ -1602,6 +1607,7 @@ const mapLegacyMarketingLeadStatus = (value: unknown): string | null => {
 };
 
 const MARKETING_LEAD_ALLOWED_STATUS_VALUES = new Set([
+  "draft",
   "new",
   "in_follow_up",
   "overdue_follow_up",

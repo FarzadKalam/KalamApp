@@ -135,6 +135,29 @@ const mergeRequiredTagsField = (
   return [...incomingFields, cloneDeep(baseTagsField)];
 };
 
+const mergeStaticFieldOptions = (
+  baseField: ModuleField,
+  incomingField: ModuleField
+): ModuleField => {
+  if (!Array.isArray(baseField.options) || baseField.options.length === 0) return incomingField;
+  if (!Array.isArray(incomingField.options)) return incomingField;
+
+  const configuredValues = new Set(
+    incomingField.options
+      .map((option) => String(option?.value ?? '').trim())
+      .filter(Boolean)
+  );
+  const missingBaseOptions = baseField.options.filter(
+    (option) => !configuredValues.has(String(option?.value ?? '').trim())
+  );
+
+  if (missingBaseOptions.length === 0) return incomingField;
+  return {
+    ...incomingField,
+    options: [...incomingField.options, ...cloneDeep(missingBaseOptions)],
+  };
+};
+
 const mergeSchemaFieldsWithBase = (
   baseFields: ModuleField[],
   incomingFields: ModuleField[]
@@ -147,9 +170,8 @@ const mergeSchemaFieldsWithBase = (
   const mergedIncomingFields = (incomingFields || []).map((field) => {
     const fieldKey = String(field?.key || '').trim();
     const baseField = fieldKey ? baseFieldMap.get(fieldKey) : null;
-    return baseField
-      ? { ...cloneDeep(baseField), ...field }
-      : field;
+    if (!baseField) return field;
+    return mergeStaticFieldOptions(baseField, { ...cloneDeep(baseField), ...field });
   });
 
   const incomingKeys = new Set(
