@@ -58,7 +58,7 @@ const existing = async (supabase: SupabaseClient, moduleId: TreasuryAccountingMo
 
 const getSource = (record: any, moduleId: TreasuryAccountingModule) => {
   if (moduleId === 'cash_bank_operations') return { date: record.operation_date, label: record.description || 'بدون عنوان' };
-  if (moduleId === 'cheques') return { date: record.issue_date || record.due_date, label: record.serial_no || record.sayad_id || 'بدون عنوان' };
+  if (moduleId === 'cheques') return { date: record.due_date || record.issue_date, label: record.serial_no || record.sayad_id || 'بدون عنوان' };
   return { date: record.barter_date, label: record.name || record.system_code || 'بدون عنوان' };
 };
 
@@ -130,10 +130,22 @@ const buildLines = async (supabase: SupabaseClient, moduleId: TreasuryAccounting
             : null;
   missing(warnings, treasuryAccount, isCheque ? (isReceipt ? 'اسناد دریافتنی' : 'اسناد پرداختنی') : 'حساب صندوق/بانک');
   missing(warnings, counterparty, 'حساب طرف عملیات');
-  if (!treasuryAccount || !counterparty) return [];
-  return isReceipt
+  if (!treasuryAccount) return [];
+  const lines: any[] = !counterparty ? [] : (isReceipt
     ? [{ account_id: treasuryAccount, debit: amount, credit: 0, description: 'دریافت در خزانه' }, { account_id: counterparty, debit: 0, credit: amount, description: 'تسویه طرف حساب' }]
-    : [{ account_id: counterparty, debit: amount, credit: 0, description: 'تسویه طرف حساب' }, { account_id: treasuryAccount, debit: 0, credit: amount, description: 'پرداخت از خزانه' }];
+    : [{ account_id: counterparty, debit: amount, credit: 0, description: 'تسویه طرف حساب' }, { account_id: treasuryAccount, debit: 0, credit: amount, description: 'پرداخت از خزانه' }]);
+  const transferFee = !isReceipt ? Math.max(0, n(record.transfer_fee)) : 0;
+  if (transferFee > 0) {
+    const expenseAccount = defaults.default_expense_account_id;
+    missing(warnings, expenseAccount, 'هزینه پیش‌فرض برای کارمزد انتقال');
+    if (expenseAccount) {
+      lines.push(
+        { account_id: expenseAccount, debit: transferFee, credit: 0, description: 'هزینه کارمزد انتقال' },
+        { account_id: treasuryAccount, debit: 0, credit: transferFee, description: 'پرداخت کارمزد انتقال' },
+      );
+    }
+  }
+  return lines;
 };
 
 export const syncTreasuryAccountingEntry = async (

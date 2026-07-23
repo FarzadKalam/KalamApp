@@ -190,6 +190,7 @@ const BLOCKS = {
       },
       { key: 'date', title: 'تاریخ', type: FieldType.DATE, width: 120 },
       { key: 'amount', title: 'مبلغ', type: FieldType.PRICE, width: 150, showTotal: true },
+      { key: 'transfer_fee', title: 'کارمزد انتقال', type: FieldType.PRICE, width: 150 },
       { key: 'description', title: 'توضیحات', type: FieldType.LONG_TEXT, width: 220 },
     ],
   },

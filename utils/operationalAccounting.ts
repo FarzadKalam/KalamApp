@@ -213,7 +213,6 @@ const buildPaymentLines = async (
   label: string,
   warnings: string[],
 ) => {
-  if (moduleId === 'employee_advances') return [];
   const payments = parseOperationalPayments(record?.payments);
   const lines: JournalLine[] = [];
   for (const payment of payments) {
@@ -241,12 +240,27 @@ const buildPaymentLines = async (
     }
     addMissing(warnings, ledgerAccountId, isCheque ? 'اسناد پرداختنی' : 'حساب صندوق/بانک پرداخت');
     const payable = moduleId === 'payroll_slips' ? defaults[ACCOUNT_KEYS.payrollPayable] : defaults[ACCOUNT_KEYS.payable];
-    addMissing(warnings, payable, moduleId === 'payroll_slips' ? 'حقوق پرداختنی' : 'پرداختنی');
-    if (!ledgerAccountId || !payable) continue;
-    lines.push(
-      { account_id: payable, debit: amount, credit: 0, description: `تسویه پرداخت - ${label}` },
-      { account_id: ledgerAccountId, debit: 0, credit: amount, description: `ثبت خروج وجه - ${label}` },
-    );
+    if (moduleId !== 'employee_advances') {
+      addMissing(warnings, payable, moduleId === 'payroll_slips' ? 'حقوق پرداختنی' : 'پرداختنی');
+      if (ledgerAccountId && payable) {
+        lines.push(
+          { account_id: payable, debit: amount, credit: 0, description: `تسویه پرداخت - ${label}` },
+          { account_id: ledgerAccountId, debit: 0, credit: amount, description: `ثبت خروج وجه - ${label}` },
+        );
+      }
+    }
+
+    const transferFee = Math.max(0, toNumber(payment?.transfer_fee));
+    if (transferFee > 0) {
+      const expenseAccount = defaults[ACCOUNT_KEYS.expense];
+      addMissing(warnings, expenseAccount, 'هزینه پیش‌فرض برای کارمزد انتقال');
+      if (ledgerAccountId && expenseAccount) {
+        lines.push(
+          { account_id: expenseAccount, debit: transferFee, credit: 0, description: `هزینه کارمزد انتقال - ${label}` },
+          { account_id: ledgerAccountId, debit: 0, credit: transferFee, description: `پرداخت کارمزد انتقال - ${label}` },
+        );
+      }
+    }
   }
   return lines;
 };

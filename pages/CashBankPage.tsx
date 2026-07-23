@@ -483,7 +483,7 @@ const CashBankPage: React.FC = () => {
       sourceRecordId: String(c.id),
       paymentType: 'cheque',
       status: String(c?.status || ''),
-      date: c?.issue_date || c?.due_date || null,
+      date: c?.due_date || c?.issue_date || null,
       amount: Number(c?.amount || 0),
       invoiceLabel: '-',
       personLabel: resolvePartyLabel(String(c?.party_type || ''), c?.party_id ? String(c.party_id) : undefined),

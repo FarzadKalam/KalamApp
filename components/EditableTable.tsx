@@ -2547,6 +2547,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         status: rowStatus,
         operation_date: issueDate || sourceOperationDate || getTodayLocalDateValue(),
         amount,
+        transfer_fee: Math.max(0, toSafeNumber(row?.transfer_fee)),
         customer_id: customerId,
         supplier_id: supplierId,
         assignee_id: assigneeId || null,
@@ -5085,7 +5086,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
     ? ['target_account', 'responsible_id', 'description']
-    : ['source_account', 'use_existing_received_cheque', 'spent_cheque_id', 'responsible_id', 'description'];
+    : ['source_account', 'transfer_fee', 'use_existing_received_cheque', 'spent_cheque_id', 'responsible_id', 'description'];
   const stackedColumnsByKey = new Map<string, any>(visibleColumns.map((col: any) => [col.key, col]));
 
   const renderStackedField = (row: any, rowIndex: number, key: string) => {

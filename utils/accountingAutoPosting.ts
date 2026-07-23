@@ -17,6 +17,7 @@ interface DefaultAccounts {
   default_cogs_id?: string | null;
   default_sales_tax_id?: string | null;
   default_purchase_tax_id?: string | null;
+  default_expense_account_id?: string | null;
 }
 
 type ValidAccountIdSet = Set<string>;
@@ -59,6 +60,7 @@ interface PaymentRow {
   target_account?: string | null;
   source_account?: string | null;
   payment_type?: string | null;
+  transfer_fee?: number | string | null;
 }
 
 interface InvoiceRow {
@@ -313,6 +315,8 @@ const fetchDefaultAccounts = async (supabase: SupabaseClient): Promise<DefaultAc
       pickValidAccountId(configured.default_sales_tax_id, null, validAccountIds),
     default_purchase_tax_id:
       pickValidAccountId(configured.default_purchase_tax_id, null, validAccountIds),
+    default_expense_account_id:
+      pickValidAccountId(configured.default_expense_account_id, null, validAccountIds),
   };
 };
 
@@ -664,6 +668,7 @@ const buildPaymentLines = async (
 
   for (const payment of payments) {
     const paymentAmount = toNumber(payment.amount);
+    const transferFee = Math.max(0, toNumber(payment.transfer_fee));
     if (paymentAmount <= 0) continue;
     if (!isPaymentSettled(payment.status)) continue;
 
@@ -698,6 +703,17 @@ const buildPaymentLines = async (
         credit: moduleId === 'sales_return_invoices' ? 0 : paymentAmount,
         description: `${moduleId === 'sales_return_invoices' ? 'ایجاد طلب بابت برگشت' : 'تسویه حساب دریافتنی'} - ${getInvoiceLabel(invoice, '')}`,
       });
+      if (moduleId === 'sales_return_invoices' && transferFee > 0) {
+        const expenseAccount = defaults.default_expense_account_id;
+        if (!expenseAccount) {
+          pushSyncError(result, 'حساب هزینه پیش‌فرض برای ثبت کارمزد انتقال تعریف نشده است.');
+          continue;
+        }
+        lines.push(
+          { account_id: String(expenseAccount), debit: transferFee, credit: 0, description: `هزینه کارمزد انتقال - ${getInvoiceLabel(invoice, '')}` },
+          { account_id: String(paymentAccountId), debit: 0, credit: transferFee, description: `پرداخت کارمزد انتقال - ${getInvoiceLabel(invoice, '')}` },
+        );
+      }
       continue;
     }
 
@@ -720,6 +736,19 @@ const buildPaymentLines = async (
       credit: isPurchaseReturn ? 0 : paymentAmount,
       description: `${isPurchaseReturn ? 'ثبت دریافت وجه از تامین‌کننده' : 'ثبت پرداخت وجه'} - ${getInvoiceLabel(invoice, '')}`,
     });
+
+    const isPaymentOperation = moduleId === 'purchase_invoices' || moduleId === 'sales_return_invoices';
+    if (isPaymentOperation && transferFee > 0) {
+      const expenseAccount = defaults.default_expense_account_id;
+      if (!expenseAccount) {
+        pushSyncError(result, 'حساب هزینه پیش‌فرض برای ثبت کارمزد انتقال تعریف نشده است.');
+        continue;
+      }
+      lines.push(
+        { account_id: String(expenseAccount), debit: transferFee, credit: 0, description: `هزینه کارمزد انتقال - ${getInvoiceLabel(invoice, '')}` },
+        { account_id: String(paymentAccountId), debit: 0, credit: transferFee, description: `پرداخت کارمزد انتقال - ${getInvoiceLabel(invoice, '')}` },
+      );
+    }
   }
 
   return lines;

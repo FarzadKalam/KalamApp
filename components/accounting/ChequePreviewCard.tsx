@@ -97,10 +97,9 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
   const selectedBankAccountId = String(source.bank_account_id || '').trim();
   const selectedBankMeta = selectedBankAccountId ? bankMetaById[selectedBankAccountId] : null;
 
-  const issueDateValue = typeof source.issue_date === 'string' ? source.issue_date : null;
-  const issueDateRaw = source.issue_date || source.due_date;
-  const issueDateNumeric = safeJalaliFormat(issueDateRaw, 'YYYY/MM/DD');
-  const issueDateWords = jalaliDateToPersianWords(issueDateRaw);
+  const dueDateValue = typeof source.due_date === 'string' ? source.due_date : null;
+  const dueDateNumeric = safeJalaliFormat(source.due_date, 'YYYY/MM/DD');
+  const dueDateWords = jalaliDateToPersianWords(source.due_date);
 
   const amount = normalizeAmount(source.amount);
   const amountNumeric = amount === null ? '-' : toPersianNumber(Math.round(amount).toLocaleString('en-US', { maximumFractionDigits: 0 }));
@@ -119,9 +118,9 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
   const sayadId = formatSayadId(sayadIdRaw);
 
   const dateDisplay = useMemo(() => {
-    if (!issueDateNumeric) return '----/--/--';
-    return toPersianNumber(issueDateNumeric);
-  }, [issueDateNumeric]);
+    if (!dueDateNumeric) return '----/--/--';
+    return toPersianNumber(dueDateNumeric);
+  }, [dueDateNumeric]);
 
   const handleFieldChange = (fieldKey: string, value: any) => {
     if (!onFieldChange) return;
@@ -158,25 +157,16 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
         }}
       />
 
-      <div
-        aria-hidden
-        className="pointer-events-none absolute right-8 left-8 top-3 h-[5px] rounded-full"
-        style={{
-          background: 'rgba(var(--brand-600-rgb),0.42)',
-          boxShadow: 'inset 1px 1px 2px rgba(255,255,255,0.7), 2px 2px 5px rgba(148,163,184,0.22)',
-        }}
-      />
-
       <div className="relative">
         <div className="flex items-start justify-between gap-4">
           <div className="text-right w-full max-w-[240px]">
-            <div className="text-[11px] text-slate-700 dark:text-slate-300">تاریخ</div>
+            <div className="text-[11px] text-slate-700 dark:text-slate-300">تاریخ سررسید</div>
             {editable ? (
               <div className="mt-1">
                 <PersianDatePicker
                   type="DATE"
-                  value={issueDateValue}
-                  onChange={(val) => handleFieldChange('issue_date', val)}
+                  value={dueDateValue}
+                  onChange={(val) => handleFieldChange('due_date', val)}
                   disabled={disabled}
                   placeholder="انتخاب تاریخ"
                 />
@@ -184,7 +174,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
             ) : (
               <div className="text-sm md:text-base font-bold persian-number text-slate-900 dark:text-slate-100">{dateDisplay}</div>
             )}
-            <div className="mt-1 text-[11px] md:text-xs text-slate-700 dark:text-slate-200">{issueDateWords || '-'}</div>
+            <div className="mt-1 text-[11px] md:text-xs text-slate-700 dark:text-slate-200">{dueDateWords || '-'}</div>
           </div>
 
           <div className="text-left w-full max-w-[280px]">
@@ -340,10 +330,9 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
           </div>
 
           <div
-            className="rounded-2xl border-2 px-4 py-3 min-w-[190px] md:min-w-[240px] shadow-sm bg-[rgba(var(--brand-200-rgb),0.72)] dark:bg-[rgba(var(--brand-700-rgb),0.46)]"
+            className="rounded-2xl px-4 py-3 min-w-[190px] md:min-w-[240px] shadow-sm bg-[rgba(var(--brand-200-rgb),0.72)] dark:bg-[rgba(var(--brand-700-rgb),0.46)]"
             style={{
-              borderColor: 'rgba(var(--brand-600-rgb),0.78)',
-              boxShadow: '0 8px 20px -12px rgba(var(--brand-600-rgb),0.5)',
+              boxShadow: '0 8px 20px -12px rgba(var(--brand-600-rgb),0.35), inset 0 0 0 1px rgba(var(--brand-600-rgb),0.18)',
             }}
           >
             <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-100">مبلغ عددی چک ({currencyLabel})</div>
@@ -353,7 +342,7 @@ const ChequePreviewCard: React.FC<ChequePreviewCardProps> = ({
                 controls={false}
                 stringMode
                 disabled={disabled}
-                value={source.amount as any}
+                value={normalizeNumericString(source.amount)}
                 formatter={(val, info) => formatNumericForInput(info?.input ?? val, true)}
                 parser={(val) => normalizeNumericString(val)}
                 onKeyDown={preventNonNumericKeyDown}

@@ -29,6 +29,7 @@ describe('operationalCashBankSources', () => {
         status: 'paid',
         source_account: 'cash-box-1',
         amount: '۲۵۰٬۰۰۰',
+        transfer_fee: '۱٬۵۰۰',
         date: '2026-04-28',
       },
       rowKey: 'row-1',
@@ -37,6 +38,7 @@ describe('operationalCashBankSources', () => {
 
     expect(payload.status).toBe('received');
     expect(payload.amount).toBe(250000);
+    expect(payload.transfer_fee).toBe(1500);
     expect(payload.payment_cash_box_id).toBe('cash-box-1');
     expect(payload.bank_account_id).toBeNull();
     expect(payload.cash_box_id).toBeNull();

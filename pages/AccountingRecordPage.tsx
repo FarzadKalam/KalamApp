@@ -72,7 +72,7 @@ const isNumericField = (fieldType: FieldType) =>
   fieldType === FieldType.STOCK;
 
 const CHEQUE_INLINE_FIELD_KEYS = new Set<string>([
-  'issue_date',
+  'due_date',
   'serial_no',
   'sayad_id',
   'bank_name',
@@ -206,6 +206,7 @@ const AccountingRecordPage: React.FC = () => {
     const patch: Record<string, any> = {};
     if (paymentType !== 'cheque' && formData?.cheque_id) patch.cheque_id = null;
     if (paymentType !== 'barter' && formData?.barter_id) patch.barter_id = null;
+    if (operationType !== 'payment' && Number(formData?.transfer_fee || 0) !== 0) patch.transfer_fee = 0;
     if (operationType === 'transfer') {
       [
         'bank_account_id',
@@ -591,9 +592,7 @@ const AccountingRecordPage: React.FC = () => {
 
       if (isCreate) {
         const initialValues = ((location.state as any)?.initialValues || {}) as Record<string, any>;
-        const normalizedInitialValues = isChequeModule
-          ? { ...initialValues, due_date: initialValues.issue_date || initialValues.due_date || null }
-          : initialValues;
+        const normalizedInitialValues = initialValues;
         const createInitialValues = { ...normalizedInitialValues };
         if (!String(createInitialValues.code || '').trim()) {
           try {
@@ -617,9 +616,7 @@ const AccountingRecordPage: React.FC = () => {
       const { data, error } = await supabase.from(moduleConfig.table).select('*').eq('id', id).single();
       if (error) throw error;
       const row = (data || {}) as Record<string, any>;
-      const normalizedRow = isChequeModule
-        ? { ...row, due_date: row.issue_date || row.due_date || null }
-        : moduleId === 'cash_bank_operations'
+      const normalizedRow = moduleId === 'cash_bank_operations'
           ? normalizeModuleFormValues(moduleId, row)
           : row;
       const lockState = await fetchRecordLockState(moduleId, id);

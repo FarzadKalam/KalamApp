@@ -79,6 +79,22 @@ export const cashBankOperationsConfig: ModuleDefinition = {
       validation: { required: true },
       nature: FieldNature.PREDEFINED,
     },
+    {
+      key: 'transfer_fee',
+      labels: { fa: 'کارمزد انتقال', en: 'Transfer Fee' },
+      type: FieldType.PRICE,
+      location: FieldLocation.HEADER,
+      order: 5.05,
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+      logic: {
+        visibleIf: {
+          field: 'operation_type',
+          operator: LogicOperator.EQUALS,
+          value: 'payment',
+        },
+      },
+    },
     
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 5.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {

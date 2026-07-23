@@ -1,4 +1,4 @@
-import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature } from '../types';
+import { ModuleDefinition, ModuleNature, ViewMode, FieldType, FieldLocation, BlockType, FieldNature, LogicOperator } from '../types';
 
 export const chequesConfig: ModuleDefinition = {
   id: 'cheques',
@@ -62,13 +62,19 @@ export const chequesConfig: ModuleDefinition = {
     },
     {
       key: 'issue_date',
-      labels: { fa: 'تاریخ چک', en: 'Cheque Date' },
+      labels: { fa: 'تاریخ وصول چک', en: 'Cheque Collection Date' },
       type: FieldType.DATE,
       location: FieldLocation.HEADER,
       order: 5,
       isTableColumn: true,
       nature: FieldNature.STANDARD,
-      validation: { required: true },
+      logic: {
+        visibleIf: {
+          field: 'status',
+          operator: LogicOperator.EQUALS,
+          value: 'cleared',
+        },
+      },
     },
     {
       key: 'due_date',
@@ -79,8 +85,42 @@ export const chequesConfig: ModuleDefinition = {
       isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
+    {
+      key: 'spent_date',
+      labels: { fa: 'تاریخ خرج چک', en: 'Cheque Spent Date' },
+      type: FieldType.DATE,
+      location: FieldLocation.HEADER,
+      order: 6.01,
+      isTableColumn: true,
+      nature: FieldNature.STANDARD,
+      logic: {
+        visibleIf: {
+          field: 'status',
+          operator: LogicOperator.EQUALS,
+          value: 'paid',
+        },
+      },
+    },
     
     { key: 'assignee_id', labels: { fa: 'مسئول پیگیری', en: 'Assignee' }, type: FieldType.RELATION, location: FieldLocation.HEADER, order: 6.05, relationConfig: { targetModule: 'profiles', targetField: 'full_name' }, nature: FieldNature.STANDARD, isTableColumn: true },
+    {
+      key: 'party_id',
+      labels: { fa: 'طرف حساب مرتبط', en: 'Related Party' },
+      type: FieldType.RELATION,
+      location: FieldLocation.HEADER,
+      order: 6.075,
+      relationConfig: {
+        targetModule: 'customers',
+        targetField: 'business_name',
+        sourceModules: [
+          { targetModule: 'customers', targetField: 'business_name', tagLabel: 'مشتری', tagColor: 'blue' },
+          { targetModule: 'suppliers', targetField: 'business_name', tagLabel: 'تأمین‌کننده', tagColor: 'orange' },
+          { targetModule: 'employees', targetField: 'full_name', tagLabel: 'کارمند', tagColor: 'green' },
+        ],
+      },
+      nature: FieldNature.STANDARD,
+      isTableColumn: true,
+    },
     { key: 'tags', labels: { fa: 'برچسب‌ها', en: 'Tags' }, type: FieldType.TAGS, location: FieldLocation.HEADER, order: 6.1, nature: FieldNature.STANDARD, isTableColumn: true },
     {
       key: 'amount',
@@ -148,6 +188,7 @@ export const chequesConfig: ModuleDefinition = {
       location: FieldLocation.BLOCK,
       blockId: 'issuance',
       order: 7,
+      isTableColumn: true,
       nature: FieldNature.STANDARD,
     },
     {

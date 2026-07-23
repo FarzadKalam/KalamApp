@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { attendanceLogsModule } from '../modules/attendanceLogsConfig';
 import { cashBankOperationsConfig } from '../modules/cashBankOperationsConfig';
+import { chequesConfig } from '../modules/chequesConfig';
 import { buildResolvedConditionalFieldSettings } from './conditionalFieldDefaults';
 import { FieldType, type ModuleField } from '../types';
 import {
@@ -77,6 +78,36 @@ describe('conditionalFieldRules', () => {
     expect(chequeState.visible).toBe(true);
     expect(chequeState.required).toBe(true);
     expect(cashState.visible).toBe(false);
+  });
+
+  it('shows the transfer fee only for cash-bank payments', () => {
+    const settings = buildResolvedConditionalFieldSettings(cashBankOperationsConfig);
+    const feeField = getField('transfer_fee');
+
+    expect(resolveConditionalFieldState(
+      feeField,
+      { operation_type: 'payment', payment_type: 'bank' },
+      settings,
+      cashBankOperationsConfig.fields,
+    ).visible).toBe(true);
+    expect(resolveConditionalFieldState(
+      feeField,
+      { operation_type: 'receipt', payment_type: 'bank' },
+      settings,
+      cashBankOperationsConfig.fields,
+    ).visible).toBe(false);
+  });
+
+  it('shows cheque collection and spent dates only for their matching statuses', () => {
+    const settings = buildResolvedConditionalFieldSettings(chequesConfig);
+    const collectionDate = chequesConfig.fields.find((field) => field.key === 'issue_date');
+    const spentDate = chequesConfig.fields.find((field) => field.key === 'spent_date');
+    if (!collectionDate || !spentDate) throw new Error('Cheque date fields not found');
+
+    expect(resolveConditionalFieldState(collectionDate, { status: 'cleared' }, settings, chequesConfig.fields).visible).toBe(true);
+    expect(resolveConditionalFieldState(collectionDate, { status: 'paid' }, settings, chequesConfig.fields).visible).toBe(false);
+    expect(resolveConditionalFieldState(spentDate, { status: 'paid' }, settings, chequesConfig.fields).visible).toBe(true);
+    expect(resolveConditionalFieldState(spentDate, { status: 'cleared' }, settings, chequesConfig.fields).visible).toBe(false);
   });
 
   it('shows only the matching attendance manual datetime field for the selected log type', () => {

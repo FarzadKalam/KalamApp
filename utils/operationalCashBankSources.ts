@@ -306,6 +306,9 @@ export const buildCashBankOperationPayloadFromPaymentRow = (args: {
       status: normalizePaymentRowStatus(row?.status),
       operation_date: resolvePaymentRowDate(row, record, source.dateField),
       amount: Math.abs(toOperationalSafeNumber(row?.amount)),
+      transfer_fee: source.operationType === 'payment'
+        ? Math.max(0, toOperationalSafeNumber(row?.transfer_fee))
+        : 0,
       payment_account_id: source.operationType === 'payment' ? accountId : null,
       receipt_account_id: source.operationType === 'receipt' ? accountId : null,
       customer_id: normalizeOperationalText(record?.customer_id) || null,
