@@ -24,6 +24,7 @@ import {
   actionTypeOptions,
   createWorkflowNoteRecipientFieldKey,
   createWorkflowMultiRelationFieldKey,
+  createWorkflowRelatedFieldKey,
   createWorkflowId,
   parseWorkflowNoteRecipientFieldKey,
   parseWorkflowRelatedFieldKey,
@@ -46,6 +47,7 @@ import {
 import { fetchAssigneeDirectory } from '../../utils/referenceData';
 import { buildAiRecordCreationSchema } from '../../utils/aiRecordCreation';
 import { getFieldLabelFa } from '../../utils/fieldLabel';
+import { getCanonicalModuleFields } from '../../utils/recordVariableCatalog';
 import {
   getCreateRelatedRecordRelationFieldOptions,
   getCreateRelatedRecordTargetModuleOptions,
@@ -435,8 +437,15 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     [currentModuleFields, variableFields]
   );
   const communicationFieldSource = useMemo(
-    () => (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields),
-    [currentModuleFields, variableFields]
+    () => Array.from(new Map(
+      [
+        ...(Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields),
+        ...getCanonicalModuleFields(currentModuleId),
+      ]
+        .filter((field) => !!String(field?.key || '').trim())
+        .map((field) => [String(field.key).trim(), field] as const)
+    ).values()),
+    [currentModuleFields, currentModuleId, variableFields]
   );
   const relatedVariableFieldOptions = useMemo(
     () => variableFieldOptions.filter((item) => {
@@ -518,6 +527,43 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       }),
     [communicationFieldSource]
   );
+  // مرجع یکپارچهٔ فیلدهای مقصد پیام: فیلد مستقیم، رابطهٔ تکی/چندتایی و شناسه‌های سیستمی کاربر.
+  // با اضافه‌شدن فیلد جدید به کانفیگ ماژول مقصد، این مسیر نیز بدون تغییر جداگانه آن را پوشش می‌دهد.
+  const getCommunicationTargetFieldOptions = useCallback((
+    matcher: (targetField: ModuleField, targetModuleId: string) => boolean,
+    fallbackLabel: string,
+  ) => {
+    const options = communicationFieldSource.flatMap((field) => {
+      const fieldKey = String(field?.key || '').trim();
+      if (!fieldKey) return [];
+
+      const directOption = matcher(field, currentModuleId)
+        ? [{ label: getFieldLabel(field), value: fieldKey }]
+        : [];
+      const targetModuleId = isProfileRecipientField(field)
+        ? 'profiles'
+        : getRelationTargetModuleId(field);
+      if (!targetModuleId || ![
+        FieldType.RELATION,
+        FieldType.MULTI_RELATION,
+        FieldType.USER,
+      ].includes(field.type)) {
+        return directOption;
+      }
+
+      const targetFields = MODULES[targetModuleId]?.fields || [];
+      const relatedOptions = targetFields
+        .filter((targetField) => !!String(targetField?.key || '').trim() && matcher(targetField, targetModuleId))
+        .map((targetField) => ({
+          label: `${getFieldLabel(field)} (${getFieldLabelFa(targetField, { fallback: fallbackLabel })})`,
+          value: field.type === FieldType.MULTI_RELATION
+            ? createWorkflowMultiRelationFieldKey(fieldKey, targetModuleId, String(targetField.key || '').trim())
+            : createWorkflowRelatedFieldKey(fieldKey, targetModuleId, String(targetField.key || '').trim()),
+        }));
+      return [...directOption, ...relatedOptions];
+    });
+    return Array.from(new Map(options.map((item) => [String(item.value), item] as const)).values());
+  }, [communicationFieldSource, currentModuleId]);
   const multiRelationProfileRecipientFields = useMemo(
     () => getMultiRelationTargetFieldOptions(
       (targetField, targetModuleId) => {
@@ -552,40 +598,63 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ]).values()),
     [recipientFieldOptions, noteScopedRecipientFieldOptions, multiRelationProfileRecipientFields, multiRelationRoleRecipientFields]
   );
-  const multiRelationPhoneFieldOptions = useMemo(
-    () => getMultiRelationTargetFieldOptions(
-      (targetField) => targetField.type === FieldType.PHONE || /mobile|phone/i.test(String(targetField?.key || '')),
+  const smsCommunicationFieldOptions = useMemo(
+    () => getCommunicationTargetFieldOptions(
+      (field) => field.type === FieldType.PHONE || /mobile|phone/i.test(String(field?.key || '')),
       'شماره',
     ),
-    [getMultiRelationTargetFieldOptions]
+    [getCommunicationTargetFieldOptions]
   );
-  const multiRelationEmailFieldOptions = useMemo(
-    () => getMultiRelationTargetFieldOptions(
-      (targetField) => /email/i.test(String(targetField?.key || '')),
+  const emailCommunicationFieldOptions = useMemo(
+    () => getCommunicationTargetFieldOptions(
+      (field) => /email/i.test(String(field?.key || '')),
       'ایمیل',
     ),
-    [getMultiRelationTargetFieldOptions]
+    [getCommunicationTargetFieldOptions]
   );
-  const multiRelationTelegramFieldOptions = useMemo(
-    () => getMultiRelationTargetFieldOptions(
-      (targetField) => String(targetField?.key || '').trim() === 'telegram_chat_id',
+  const telegramCommunicationFieldOptions = useMemo(
+    () => getCommunicationTargetFieldOptions(
+      (field) => String(field?.key || '').trim() === 'telegram_chat_id',
       'تلگرام',
     ),
-    [getMultiRelationTargetFieldOptions]
+    [getCommunicationTargetFieldOptions]
   );
-  const multiRelationBaleFieldOptions = useMemo(
-    () => getMultiRelationTargetFieldOptions(
-      (targetField) => String(targetField?.key || '').trim() === 'bale_chat_id',
+  const baleCommunicationFieldOptions = useMemo(
+    () => getCommunicationTargetFieldOptions(
+      (field) => String(field?.key || '').trim() === 'bale_chat_id',
       'بله',
     ),
-    [getMultiRelationTargetFieldOptions]
+    [getCommunicationTargetFieldOptions]
   );
-  const multiRelationRubikaFieldOptions = useMemo(
-    () => getMultiRelationTargetFieldOptions(
-      (targetField) => String(targetField?.key || '').trim() === 'rubika_chat_id',
+  const rubikaCommunicationFieldOptions = useMemo(
+    () => getCommunicationTargetFieldOptions(
+      (field) => String(field?.key || '').trim() === 'rubika_chat_id',
       'روبیکا',
     ),
-    [getMultiRelationTargetFieldOptions]
+    [getCommunicationTargetFieldOptions]
+  );
+  const smsRecipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...smsCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+    ]).values()),
+    [recipientFieldOptions, smsCommunicationFieldOptions]
+  );
+  const emailRecipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...emailCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+    ]).values()),
+    [recipientFieldOptions, emailCommunicationFieldOptions]
+  );
+  const botRecipientFieldOptions = useMemo(
+    () => Array.from(new Map([
+      ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
+      ...telegramCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+      ...baleCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+      ...rubikaCommunicationFieldOptions.map((item) => [String(item.value), item] as const),
+    ]).values()),
+    [noteRecipientFieldOptions, telegramCommunicationFieldOptions, baleCommunicationFieldOptions, rubikaCommunicationFieldOptions]
   );
   const noteRecipientOptionValueSet = useMemo(
     () => new Set(noteRecipientFieldOptions.map((item) => String(item.value || '').trim()).filter(Boolean)),
@@ -1407,29 +1476,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const relationModuleLocked = webFormRelationModuleOptions.length <= 1;
       const activeWebFormOptions = webFormOptions;
 
-      const phoneFields = communicationFieldSource
-        .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const smsRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...phoneFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-      const emailFields = communicationFieldSource
-        .filter((f) => /email/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const emailRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...emailFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-      const botRecipientFieldOptions = Array.from(new Map([
-        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-
       const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
         updateActionConfig(action.id, {
           channel_configs: {
@@ -1522,7 +1568,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   mode="multiple"
                   value={Array.isArray(smsConfig.recipient_fields) ? smsConfig.recipient_fields : []}
                   disabled={disabled}
-                  options={smsRecipientOptions}
+                  options={smsRecipientFieldOptions}
                   onChange={(nextVal) => updateChannelConfig('sms', { recipient_fields: nextVal })}
                   placeholder="فیلدهای مقصد شماره تماس"
                 />
@@ -1561,7 +1607,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                   mode="multiple"
                   value={Array.isArray(emailConfig.recipient_fields) ? emailConfig.recipient_fields : []}
                   disabled={disabled}
-                  options={emailRecipientOptions}
+                  options={emailRecipientFieldOptions}
                   onChange={(nextVal) => updateChannelConfig('email', { recipient_fields: nextVal })}
                   placeholder="فیلدهای ایمیل مقصد"
                 />
@@ -1701,28 +1747,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const smsConfig = channelConfigs.sms || {};
       const emailConfig = channelConfigs.email || {};
       const botConfig = channelConfigs.bot || {};
-      const phoneFields = communicationFieldSource
-        .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const smsRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...phoneFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-      const emailFields = communicationFieldSource
-        .filter((f) => /email/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const emailRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...emailFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-      const botRecipientFieldOptions = Array.from(new Map([
-        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
       const updateChannelConfig = (channelKey: 'sms' | 'email' | 'bot' | 'note', patch: Record<string, any>) => {
         updateActionConfig(action.id, {
           channel_configs: {
@@ -1914,7 +1938,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 mode="multiple"
                 value={Array.isArray(smsConfig.recipient_fields) ? smsConfig.recipient_fields : []}
                 disabled={disabled}
-                options={smsRecipientOptions}
+                options={smsRecipientFieldOptions}
                 onChange={(nextVal) => updateChannelConfig('sms', { recipient_fields: nextVal })}
                 placeholder="فیلدهای مقصد شماره تماس"
                 maxTagCount="responsive"
@@ -1938,7 +1962,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                 mode="multiple"
                 value={Array.isArray(emailConfig.recipient_fields) ? emailConfig.recipient_fields : []}
                 disabled={disabled}
-                options={emailRecipientOptions}
+                options={emailRecipientFieldOptions}
                 onChange={(nextVal) => updateChannelConfig('email', { recipient_fields: nextVal })}
                 placeholder="فیلدهای ایمیل مقصد"
                 maxTagCount="responsive"
@@ -2002,15 +2026,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
     if (actionType === 'send_sms') {
-      const phoneFields = communicationFieldSource
-        .filter((f) => f.type === FieldType.PHONE || /mobile|phone/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const smsRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...phoneFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationPhoneFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-
       return (
         <div className="space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -2019,7 +2034,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={smsRecipientOptions}
+              options={smsRecipientFieldOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="فیلدهای مقصد شماره تماس"
             />
@@ -2055,15 +2070,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       );
     }
     if (actionType === 'send_email') {
-      const emailFields = communicationFieldSource
-        .filter((f) => /email/i.test(f.key))
-        .map((f) => ({ label: getFieldLabel(f), value: f.key }));
-      const emailRecipientOptions = Array.from(new Map([
-        ...recipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...emailFields.map((item) => [String(item.value), item] as const),
-        ...multiRelationEmailFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
-
       return (
         <div className="space-y-2">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -2072,7 +2078,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={Array.isArray(config.recipient_fields) ? config.recipient_fields : []}
               disabled={disabled}
-              options={emailRecipientOptions}
+              options={emailRecipientFieldOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal })}
               placeholder="فیلد(های) ایمیل مقصد"
             />
@@ -2111,12 +2117,6 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (actionType === 'send_bot_message') {
-      const botRecipientFieldOptions = Array.from(new Map([
-        ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const),
-        ...multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const),
-      ]).values());
       return (
         <div className="space-y-2">
           <div className="rounded-lg border border-[rgba(var(--brand-200-rgb),0.65)] bg-[rgba(var(--brand-50-rgb),0.45)] p-2 text-xs text-gray-700 dark:border-[rgba(var(--brand-300-rgb),0.18)] dark:bg-white/5 dark:text-gray-300">
@@ -2178,13 +2178,13 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       const isTelegram = actionType === 'send_telegram_bot';
       const isRubika = actionType === 'send_rubika_bot';
       const providerLabel = isRubika ? 'روبیکا' : (isTelegram ? 'تلگرام' : 'بله');
-      const botRecipientFieldOptions = Array.from(new Map([
+      const providerRecipientFieldOptions = Array.from(new Map([
         ...noteRecipientFieldOptions.map((item) => [String(item.value), item] as const),
         ...(isRubika
-          ? multiRelationRubikaFieldOptions.map((item) => [String(item.value), item] as const)
+          ? rubikaCommunicationFieldOptions.map((item) => [String(item.value), item] as const)
           : isTelegram
-            ? multiRelationTelegramFieldOptions.map((item) => [String(item.value), item] as const)
-            : multiRelationBaleFieldOptions.map((item) => [String(item.value), item] as const)),
+            ? telegramCommunicationFieldOptions.map((item) => [String(item.value), item] as const)
+            : baleCommunicationFieldOptions.map((item) => [String(item.value), item] as const)),
       ]).values());
       return (
         <div className="space-y-2">
@@ -2197,7 +2197,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               mode="multiple"
               value={getWorkflowRecipientConfig(config).recipientFields}
               disabled={disabled}
-              options={botRecipientFieldOptions}
+              options={providerRecipientFieldOptions}
               onChange={(nextVal) => updateActionConfig(action.id, { recipient_fields: nextVal, related_recipient_fields: [] })}
               placeholder={`گیرنده‌های ${providerLabel} از روی فیلدها`}
               maxTagCount="responsive"
