@@ -80,6 +80,29 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.selected_amount).toBe(25000);
   });
 
+  it('calculates from invoice lines when older invoices do not have stored total columns', () => {
+    const [row] = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-schema-compatible',
+        status: 'final',
+        invoice_date: '2026-05-10',
+        assignee_id: 'profile-1',
+        payments: [{ amount: 250000, status: 'settled', payment_type: 'cash', date: '2026-05-12' }],
+        invoiceItems: [{ line_total: 500000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_settled_invoices',
+      percentMode: 'product_default',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+
+    expect(row.invoice_total_amount).toBe(500000);
+    expect(row.event_pool_amount).toBe(250000);
+    expect(row.selected_amount).toBe(25000);
+  });
+
   it('recognizes full settlement in the month the final real receipt was recorded', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{

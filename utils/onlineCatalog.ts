@@ -35,6 +35,37 @@ export const isOnlineCatalogModule = (moduleId?: string | null): moduleId is Onl
 export const getOnlineCatalogModuleTitle = (moduleId: string) =>
   String(MODULES[moduleId]?.titles?.fa || moduleId || 'ماژول').replace(/^مدیریت\s+/u, '');
 
+const isCatalogDisplayField = (moduleId: string, field: any) => {
+  const key = String(field?.key || '').trim();
+  if (!key || key === 'product_id' || key === 'process_template_id') return false;
+  if (moduleId === 'price_lists' && ['buy_price', 'profit_percentage'].includes(key)) return false;
+  return field?.type !== 'json' && field?.type !== 'image' && field?.nature !== 'system' && field?.printable !== false;
+};
+
+/**
+ * Fields that may be published for a catalog.  Price lists and packages are
+ * catalogues of their table rows, so their row columns are included alongside
+ * ordinary module fields.
+ */
+export const getOnlineCatalogDisplayFields = (moduleId: string) => {
+  const moduleConfig = MODULES[moduleId];
+  const moduleFields = Array.isArray(moduleConfig?.fields) ? moduleConfig.fields : [];
+  const rowFields = ['price_lists', 'product_bundles'].includes(moduleId)
+    ? (Array.isArray(moduleConfig?.blocks) ? moduleConfig.blocks : [])
+      .flatMap((block: any) => Array.isArray(block?.tableColumns) ? block.tableColumns : [])
+      .map((field: any) => ({
+        ...field,
+        labels: field?.labels || { fa: field?.title || field?.key },
+      }))
+    : [];
+  const uniqueFields = new Map<string, any>();
+  [...moduleFields, ...rowFields].forEach((field: any) => {
+    const key = String(field?.key || '').trim();
+    if (key && !uniqueFields.has(key) && isCatalogDisplayField(moduleId, field)) uniqueFields.set(key, field);
+  });
+  return Array.from(uniqueFields.values());
+};
+
 const normalizeRow = (row: any): OnlineCatalogRow => ({
   ...row,
   source_record_ids: Array.isArray(row?.source_record_ids) ? row.source_record_ids.map(String) : [],

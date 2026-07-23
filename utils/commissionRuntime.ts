@@ -191,6 +191,13 @@ const resolveInvoiceItemNetAmount = (item: any) => {
   return Math.max(0, total - vat);
 };
 
+const resolveInvoiceTotalAmount = (invoice: CommissionInvoiceRecord) => {
+  const recordedTotal = toNumber(invoice.total_invoice_amount);
+  if (recordedTotal > 0) return recordedTotal;
+  return (Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [])
+    .reduce((sum, item) => sum + resolveInvoiceItemNetAmount(item), 0);
+};
+
 const resolvePaymentAmount = (payment: any) => {
   const amount = toNumber(payment?.amount);
   return amount > 0 ? amount : 0;
@@ -324,7 +331,7 @@ const getInvoiceEvent = (
   periodStart: string,
   periodEnd: string,
 ) => {
-  const invoiceTotal = Math.max(0, toNumber(invoice.total_invoice_amount));
+  const invoiceTotal = Math.max(0, resolveInvoiceTotalAmount(invoice));
   if (invoiceTotal <= 0) {
     return {
       eventType: null,
@@ -747,7 +754,7 @@ export const buildCommissionDraftRows = ({
       invoice_name: normalizeText(invoice.name) || String(invoice.id || 'فاکتور فروش'),
       invoice_date: invoice.invoice_date || null,
       invoice_status: invoice.status || null,
-      invoice_total_amount: Math.max(0, toNumber(invoice.total_invoice_amount)),
+      invoice_total_amount: Math.max(0, resolveInvoiceTotalAmount(invoice)),
       invoice_received_amount: Math.max(0, resolveInvoiceReceivedAmount(invoice)),
       invoice_tags: invoice.tags ?? null,
       basis,

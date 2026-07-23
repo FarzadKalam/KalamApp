@@ -79,6 +79,12 @@ import {
 const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
 const COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE = 8;
+const COMMISSION_INVOICE_SELECT =
+  'id, name, status, invoice_date, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
+// بعضی نصب‌های قدیمی هنوز ستون‌های کمکی جدید فاکتور را ندارند. محاسبه باید با
+// اطلاعات پایه و سطرهای پرداخت ادامه پیدا کند و نباید به علت یک ستون نمایشی متوقف شود.
+const COMMISSION_INVOICE_SELECT_FALLBACK =
+  'id, name, status, invoice_date, assignee_id, invoiceItems, payments';
 const HR_GOAL_SELECT =
   'id, org_id, module_id, name, description, goal_scope, period_unit, subperiod_unit, metric_type, metric_field_key, date_field_key, target_value, levels_enabled, bronze_value, silver_value, gold_value, assignee_user_ids, assignee_role_ids, conditions_all, conditions_any, config, is_active, created_at, updated_at, created_by, updated_by';
 const HR_EMPLOYEE_SELECT =
@@ -1645,11 +1651,11 @@ const HRPage: React.FC = () => {
     persistHrRange([monthStart, monthEnd]);
     const nextPath = employeeId ? `/hr/${employeeId}` : '/hr';
     const nextUrl = `${nextPath}?${buildHrFilterQuery([monthStart, monthEnd], selectedEmployeeIds)}`;
-    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    const currentUrl = `${location.pathname}${location.search}`;
     if (currentUrl !== nextUrl) {
-      window.history.replaceState(window.history.state, '', nextUrl);
+      navigate(nextUrl, { replace: true });
     }
-  }, [employeeFilterInitialized, employeeId, location.search, monthEnd, monthStart, selectedEmployeeIds]);
+  }, [employeeFilterInitialized, employeeId, location.pathname, location.search, monthEnd, monthStart, navigate, selectedEmployeeIds]);
 
   const updateSelectedRangeDates = useCallback((value: PersianDateRangeValue | null) => {
     const startDate = parseDateValue(value?.[0] || null);
@@ -4181,14 +4187,20 @@ const HRPage: React.FC = () => {
       setCommissionLoading(true);
       const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id);
       const assigneeId = String(selectedProfile.related_profile_id || selectedProfile.id || '').trim();
+      const fetchCommissionInvoices = async (select: string) => supabase
+        .from('invoices')
+        .select(select)
+        .eq('assignee_id', assigneeId)
+        .lte('invoice_date', periodEnd)
+        .order('invoice_date', { ascending: false })
+        .limit(HR_STATS_FETCH_LIMIT);
+      const invoicesPromise = fetchCommissionInvoices(COMMISSION_INVOICE_SELECT)
+        .then(async (result) => {
+          if (!result.error || !isMissingSelectColumnError(result.error)) return result;
+          return fetchCommissionInvoices(COMMISSION_INVOICE_SELECT_FALLBACK);
+        });
       const [invoicesResult, existingResult, draftsResult] = await Promise.all([
-        supabase
-          .from('invoices')
-          .select('id, name, status, invoice_date, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags')
-          .eq('assignee_id', assigneeId)
-          .lte('invoice_date', periodEnd)
-          .order('invoice_date', { ascending: false })
-          .limit(HR_STATS_FETCH_LIMIT),
+        invoicesPromise,
         supabase
           .from('payroll_calculation_entries')
           .select('id, details, status')

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { App, Button, Checkbox, Empty, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd';
 import { CopyOutlined, EditOutlined, LinkOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
-import { MODULES } from '../../moduleRegistry';
 import { supabase } from '../../supabaseClient';
 import { fileStorageClient, FILE_STORAGE_BUCKET } from '../../utils/storageClient';
 import { isUploadCanceledError, uploadFileWithProgress } from '../../utils/uploadFileWithProgress';
@@ -13,6 +12,7 @@ import { hasOnlineCatalogFeature } from '../../utils/onlineCatalogs';
 import {
   getOrCreateShortOnlineCatalogUrl,
   getOnlineCatalogModuleTitle,
+  getOnlineCatalogDisplayFields,
   listOnlineCatalogs,
   saveOnlineCatalog,
   setOnlineCatalogActive,
@@ -42,10 +42,7 @@ const OnlineCatalogManagerModal: React.FC<Props> = ({ open, moduleId, sourceReco
   const [catalogTagOptions, setCatalogTagOptions] = useState<CatalogTag[]>([]);
   const [form] = Form.useForm();
   const presentation = Form.useWatch('presentation', form) || {};
-  const moduleConfig = MODULES[moduleId];
-  const displayFields = useMemo(() => (moduleConfig?.fields || []).filter((field: any) =>
-    field?.type !== 'json' && field?.type !== 'image' && field?.nature !== 'system' && field?.printable !== false
-  ), [moduleConfig]);
+  const displayFields = useMemo(() => getOnlineCatalogDisplayFields(moduleId), [moduleId]);
 
   const load = async () => {
     setLoading(true);
@@ -79,7 +76,7 @@ const OnlineCatalogManagerModal: React.FC<Props> = ({ open, moduleId, sourceReco
       is_active: row?.is_active !== false,
       display_field_keys: row?.display_field_keys || displayFields.slice(0, 6).map((field: any) => field.key),
       tags: Array.isArray(row?.tags) ? row.tags.map((item: any) => String(item?.id || item?.value || '')).filter(Boolean) : [],
-      presentation: row?.presentation || {},
+      presentation: { images_enabled: row?.presentation?.images_enabled !== false, ...(row?.presentation || {}) },
     });
     setEditorOpen(true);
   };
@@ -167,7 +164,8 @@ const OnlineCatalogManagerModal: React.FC<Props> = ({ open, moduleId, sourceReco
         <Form.Item name="template_id" label="قالب نمایش"><Select options={[{ value: 'catalog_grid', label: 'قالب شبکه‌ای' }, { value: 'catalog_fullpage', label: 'قالب اسلایدی' }]} /></Form.Item>
         <Form.Item name="public_description" label="توضیحات قابل‌نمایش"><Input.TextArea rows={3} /></Form.Item>
         <Form.Item name="internal_description" label="توضیحات داخلی"><Input.TextArea rows={2} /></Form.Item>
-        <Form.Item name="display_field_keys" label="فیلدهای قابل‌نمایش"><Select mode="multiple" options={displayFields.map((field: any) => ({ value: field.key, label: getFieldLabelFa(field, { moduleId, fallback: field.labels?.fa || field.key }) }))} /></Form.Item>
+        <Form.Item name="display_field_keys" label="فیلدهای قابل‌نمایش هر ردیف"><Select mode="multiple" options={displayFields.map((field: any) => ({ value: field.key, label: getFieldLabelFa(field, { moduleId, fallback: field.labels?.fa || field.title || field.key }) }))} /></Form.Item>
+        <Form.Item name={['presentation', 'images_enabled']} valuePropName="checked"><Checkbox>تصاویر فعال باشند</Checkbox></Form.Item>
         <Form.Item name="tags" label="برچسب‌ها"><Select mode="multiple" showSearch optionFilterProp="label" options={catalogTagOptions} placeholder="برچسب‌های پروژه را انتخاب کنید" /></Form.Item>
         <Form.Item name={['presentation', 'organization_intro']} label="متن معرفی سازمان"><Input.TextArea rows={3} /></Form.Item>
         <Form.Item name={['presentation', 'advisor_name']} label="نام مشاور شما"><Input /></Form.Item>
