@@ -319,6 +319,8 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           rootClassName="print-select-modal"
           style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
           styles={{
+            mask: { zIndex: modalZIndex },
+            wrapper: { zIndex: modalZIndex + 1 },
             content: isMobile
               ? {
                   borderRadius: 0,

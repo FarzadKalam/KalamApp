@@ -147,6 +147,9 @@ import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
 
+const COMMISSION_MODAL_Z_INDEX = 14000;
+const COMMISSION_PRINT_MODAL_Z_INDEX = COMMISSION_MODAL_Z_INDEX + 100;
+
 type TaskRecord = {
   id: string;
   name?: string | null;
@@ -8512,6 +8515,7 @@ const HRPage: React.FC = () => {
         footer={null}
         width={1200}
         destroyOnHidden
+        zIndex={COMMISSION_MODAL_Z_INDEX}
       >
         <div className="space-y-4">
           <Form form={commissionForm} layout="vertical">
@@ -8968,7 +8972,7 @@ const HRPage: React.FC = () => {
         allowFieldSelectionTab={commissionListPrintManager.allowFieldSelectionTab}
         showImageDisplayModeControl={commissionListPrintManager.showImageDisplayModeControl}
         previewMeta={commissionListPrintManager.previewMeta}
-        modalZIndex={1200}
+        modalZIndex={COMMISSION_PRINT_MODAL_Z_INDEX}
       />
 
       <Modal

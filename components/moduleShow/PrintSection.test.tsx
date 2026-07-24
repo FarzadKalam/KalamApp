@@ -66,6 +66,30 @@ describe('PrintSection', () => {
     expect(screen.getByText('انتخاب قالب چاپ')).toBeInTheDocument();
   }, 10000);
 
+  it('places the print modal above the modal that opened it', async () => {
+    setDesktopViewport();
+
+    render(
+      <PrintSection
+        isPrintModalOpen
+        onClose={vi.fn()}
+        onPrint={vi.fn()}
+        printTemplates={templates}
+        selectedTemplateId="custom:a4"
+        onSelectTemplate={vi.fn()}
+        renderPrintCard={() => <div data-testid="print-card">سند چاپی</div>}
+        printMode={false}
+        modalZIndex={14100}
+      />
+    );
+
+    await screen.findByText('انتخاب قالب چاپ');
+    const modalWrap = document.querySelector('.print-select-modal .ant-modal-wrap') as HTMLElement | null;
+    const modalMask = document.querySelector('.print-select-modal .ant-modal-mask') as HTMLElement | null;
+    expect(modalWrap?.style.zIndex).toBe('14101');
+    expect(modalMask?.style.zIndex).toBe('14100');
+  });
+
   it('selects another template without duplicating the heavy preview node', async () => {
     setDesktopViewport();
     const user = userEvent.setup();
