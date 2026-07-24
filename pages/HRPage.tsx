@@ -80,9 +80,9 @@ const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
 const COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE = 8;
 const COMMISSION_INVOICE_SELECT =
-  'id, name, status, invoice_date, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
-// بعضی نصب‌های قدیمی هنوز ستون‌های کمکی جدید فاکتور را ندارند. محاسبه باید با
-// اطلاعات پایه و سطرهای پرداخت ادامه پیدا کند و نباید به علت یک ستون نمایشی متوقف شود.
+  'id, name, status, invoice_date, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
+// این انتخاب حداقلی فقط تا زمان اعمال migrationهای موردنیاز در محیط‌های قدیمی
+// استفاده می‌شود تا محاسبه متوقف نشود؛ schema رسمی شامل تاریخ‌های چرخهٔ فاکتور است.
 const COMMISSION_INVOICE_SELECT_FALLBACK =
   'id, name, status, invoice_date, assignee_id, invoiceItems, payments';
 const HR_GOAL_SELECT =
@@ -4236,11 +4236,28 @@ const HRPage: React.FC = () => {
       if (invoiceIds.length > 0) {
         const { data: operationRows, error: operationError } = await supabase
           .from('cash_bank_operations')
-          .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_status, amount, created_at')
+          .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_id, amount, created_at')
           .in('sales_invoice_id', invoiceIds)
           .neq('operation_type', 'transfer')
           .in('status', ['received', 'approved', 'paid', 'posted', 'settled', 'completed', 'cleared', 'done']);
         if (operationError) throw operationError;
+        const chequeIds = Array.from(new Set(
+          (operationRows || [])
+            .map((operation: any) => String(operation?.cheque_id || '').trim())
+            .filter(Boolean),
+        ));
+        const chequeStatusById = new Map<string, string>();
+        if (chequeIds.length > 0) {
+          const { data: chequeRows, error: chequeError } = await supabase
+            .from('cheques')
+            .select('id, status')
+            .in('id', chequeIds);
+          if (chequeError) throw chequeError;
+          (chequeRows || []).forEach((cheque: any) => {
+            const chequeId = String(cheque?.id || '').trim();
+            if (chequeId) chequeStatusById.set(chequeId, String(cheque?.status || '').trim());
+          });
+        }
         (operationRows || []).forEach((operation: any) => {
           if (String(operation?.operation_type || '').trim().toLowerCase() === 'payment') return;
           if (invoicePaymentOperationIds.has(String(operation?.id || '').trim())) return;
@@ -4252,7 +4269,7 @@ const HRPage: React.FC = () => {
             amount: operation.amount,
             status: operation.status,
             payment_type: operation.payment_type,
-            cheque_status: operation.cheque_status,
+            cheque_status: chequeStatusById.get(String(operation?.cheque_id || '').trim()) || null,
             date: operation.operation_date || operation.created_at || null,
           });
           operationPaymentsByInvoiceId.set(invoiceId, rows);
