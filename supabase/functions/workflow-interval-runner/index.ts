@@ -2074,9 +2074,9 @@ async function insertSmsAudit(url: string, key: string, payload: {
     channel_type: 'sms',
     direction: 'outbound',
     provider: 'meli_payamak',
-    module_id: payload.moduleId || null,
-    record_id: payload.recordId || null,
-    customer_id: payload.moduleId === 'customers' ? payload.recordId || null : null,
+    related_module_id: payload.moduleId || null,
+    related_record_id: payload.recordId || null,
+    customer_id: null,
     recipient: payload.recipient || null,
     title: 'ارسال پیامک خودکار',
     message_text: payload.text,
@@ -4499,7 +4499,38 @@ async function deliverScheduledReport(
   if (deliveryChannels.includes('sms')) {
     const phones = Array.from(new Set(recipients.filter(isActiveProfileRow).flatMap((item: any) => [item.mobile_1, item.mobile_2, item.mobile]).map(normalizePhone).filter(isValidIranMobile)));
     const smsSettings = await getOrgSmsSettings(url, key, report.org_id);
-    if (phones.length > 0 && smsSettings) deliveredCount += (await sendSmsViaProvider(smsSettings, phones, message, url, key)).length;
+    if (phones.length > 0 && smsSettings) {
+      try {
+        const sentRecipients = await sendSmsViaProvider(smsSettings, phones, message, url, key);
+        deliveredCount += sentRecipients.length;
+        await auditSmsBatch(url, key, {
+          orgId: report.org_id,
+          moduleId: 'reports',
+          recordId: report.id,
+          recipients: sentRecipients,
+          text: message,
+          status: 'provider_accepted',
+          metadata: {
+            source_type: 'scheduled_report',
+            scheduled_report_id: report.id,
+            report_module_id: report.module_id,
+            scheduled_due_at: scheduledDueAt.toISOString(),
+          },
+        });
+      } catch (error: any) {
+        await auditSmsBatch(url, key, {
+          orgId: report.org_id,
+          moduleId: 'reports',
+          recordId: report.id,
+          recipients: phones,
+          text: message,
+          status: 'failed',
+          errorMessage: String(error?.message || error),
+          metadata: { source_type: 'scheduled_report', scheduled_report_id: report.id },
+        });
+        throw error;
+      }
+    }
   }
   if (deliveryChannels.includes('bot_group')) {
     deliveredCount += await sendScheduledReportToBotGroups(url, key, report.org_id, botGroupIds, message, report.id);

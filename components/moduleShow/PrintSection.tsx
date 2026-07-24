@@ -58,6 +58,7 @@ interface PrintSectionProps {
     paperSize?: 'A4' | 'A5' | 'A6';
     orientation?: 'portrait' | 'landscape';
   };
+  modalZIndex?: number;
 }
 
 const getPaperFrame = (
@@ -114,6 +115,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
   onChangePrintSignatureSignerId = () => {},
   onSearchPrintSignatureOptions = () => Promise.resolve(),
   previewMeta,
+  modalZIndex = 1000,
 }) => {
   const { message } = App.useApp();
   const [activeTab, setActiveTab] = useState('preview');
@@ -313,7 +315,7 @@ const PrintSection: React.FC<PrintSectionProps> = ({
           width={isMobile ? '100vw' : 1180}
           destroyOnHidden
           centered={!isMobile}
-          zIndex={1000}
+          zIndex={modalZIndex}
           rootClassName="print-select-modal"
           style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
           styles={{

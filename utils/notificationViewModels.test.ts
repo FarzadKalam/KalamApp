@@ -26,6 +26,7 @@ describe('notification view models', () => {
           message_text: 'سلام',
           module_id: 'customers',
           record_id: 'customer-1',
+          phone_match_status: 'matched',
           message_at: '2026-04-15T08:00:00Z',
         },
         {
@@ -35,6 +36,7 @@ describe('notification view models', () => {
           message_text: 'پیگیری شد',
           module_id: 'customers',
           record_id: 'customer-1',
+          phone_match_status: 'matched',
           message_at: '2026-04-15T09:00:00Z',
         },
       ],
@@ -75,6 +77,32 @@ describe('notification view models', () => {
     expect(threads).toHaveLength(1);
     expect(threads[0].id).toBe('sms:9123456789');
     expect(threads[0].messages.map((item) => item.id)).toEqual(['sms-1', 'sms-2']);
+  });
+
+  it('does not treat a workflow source record as the SMS counterparty', () => {
+    const threads = buildSmsThreads({
+      messages: [{
+        id: 'sms-task-source',
+        direction: 'outbound',
+        recipient: '09121234567',
+        module_id: 'tasks',
+        record_id: 'task-1',
+        related_module_id: 'tasks',
+        related_record_id: 'task-1',
+        phone_match_status: 'unknown',
+        message_text: 'یادآوری',
+        message_at: '2026-07-24T08:00:00Z',
+      }],
+      recordTitleMap: { 'tasks:task-1': 'فعالیت پیگیری' },
+      isNotificationRead: unread,
+    });
+
+    expect(threads[0]).toMatchObject({
+      title: '09121234567',
+      moduleId: null,
+      recordId: null,
+      phoneMatchStatus: null,
+    });
   });
 
   it('groups voip calls and sorts newest thread first', () => {

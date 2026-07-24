@@ -60,6 +60,35 @@ export type ConversationListViewModel = {
   isGroup?: boolean;
 };
 
+const PHONE_CONTACT_MODULE_IDS = new Set(['customers', 'suppliers', 'employees', 'profiles']);
+
+const resolveSmsContactIdentity = (row: any, recordTitleMap: Record<string, string>) => {
+  const phoneMatchStatus = String(row?.phone_match_status || '').trim();
+  const moduleId = String(row?.module_id || '').trim();
+  const recordId = String(row?.record_id || '').trim();
+  const isResolvedContact = (
+    (phoneMatchStatus === 'matched' || phoneMatchStatus === 'manual')
+    && PHONE_CONTACT_MODULE_IDS.has(moduleId)
+    && !!recordId
+  );
+
+  if (!isResolvedContact) {
+    return {
+      moduleId: null,
+      recordId: null,
+      phoneMatchStatus: null,
+      title: '',
+    };
+  }
+
+  return {
+    moduleId,
+    recordId,
+    phoneMatchStatus,
+    title: recordTitleMap[buildRecordReferenceKey(moduleId, recordId)] || String(row?.title || '').trim(),
+  };
+};
+
 const getTime = (value: any) => {
   const time = new Date(value || 0).getTime();
   return Number.isFinite(time) ? time : 0;
@@ -149,14 +178,8 @@ export const buildSmsThreads = ({
     const messageAt = getTime(row?.message_at || row?.created_at);
     const phone = resolveSmsCounterpartyPhone(row);
     const phoneNumberId = String(row?.phone_number_id || '').trim();
-    const phoneMatchStatus = String(row?.phone_match_status || '').trim();
-    const moduleId = String(row?.module_id || '').trim();
-    const recordId = String(row?.record_id || '').trim();
-    const title = (
-      moduleId && recordId
-        ? recordTitleMap[buildRecordReferenceKey(moduleId, recordId)]
-        : ''
-    ) || String(row?.title || '').trim() || phone || 'شماره ناشناس';
+    const contactIdentity = resolveSmsContactIdentity(row, recordTitleMap);
+    const title = contactIdentity.title || phone || 'شماره ناشناس';
     const preview = String(row?.message_text || '').trim() || (String(row?.direction || '').trim() === 'inbound' ? 'پیامک ورودی' : 'پیامک');
     const sourceId = String(row?.id || '').trim();
     const unreadCount = (
@@ -169,14 +192,14 @@ export const buildSmsThreads = ({
         id: threadId,
         phone,
         phoneNumberId: phoneNumberId || null,
-        phoneMatchStatus: phoneMatchStatus || null,
+        phoneMatchStatus: contactIdentity.phoneMatchStatus,
         title,
         preview,
         unreadCount,
         latestMessageAt: messageAt,
         messages: [row],
-        moduleId: moduleId || null,
-        recordId: recordId || null,
+        moduleId: contactIdentity.moduleId,
+        recordId: contactIdentity.recordId,
       });
       return;
     }
@@ -185,12 +208,12 @@ export const buildSmsThreads = ({
     if (messageAt >= current.latestMessageAt) {
       current.latestMessageAt = messageAt;
       current.preview = preview;
-      current.title = title;
+      if (contactIdentity.title) current.title = contactIdentity.title;
       current.phone = phone;
       current.phoneNumberId = phoneNumberId || current.phoneNumberId;
-      current.phoneMatchStatus = phoneMatchStatus || current.phoneMatchStatus;
-      current.moduleId = moduleId || current.moduleId;
-      current.recordId = recordId || current.recordId;
+      current.phoneMatchStatus = contactIdentity.phoneMatchStatus || current.phoneMatchStatus;
+      current.moduleId = contactIdentity.moduleId || current.moduleId;
+      current.recordId = contactIdentity.recordId || current.recordId;
     }
   });
 

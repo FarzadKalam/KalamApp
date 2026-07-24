@@ -133,7 +133,7 @@ export type CommissionDraftRow = {
   is_from_previous_period: boolean;
 };
 
-const APPROVED_STATUSES = new Set(['confirmed', 'final', 'settled', 'completed']);
+const APPROVED_STATUSES = new Set(['confirmed', 'final', 'prepayment', 'settled', 'completed']);
 const FINAL_PAYMENT_STATUSES = new Set(['approved', 'paid', 'posted', 'settled', 'completed', 'received', 'cleared', 'done']);
 // «paid» در وضعیت خود چک، یعنی چک دریافت‌شده در یک پرداخت معتبر خرج شده است.
 const COLLECTED_CHEQUE_STATUSES = new Set(['cleared', 'collected', 'cashed', 'settled', 'completed', 'passed', 'paid']);
@@ -166,6 +166,11 @@ const isInPeriod = (value: unknown, periodStart?: string | null, periodEnd?: str
 
 const paymentDate = (payment: any) =>
   payment?.date || payment?.operation_date || payment?.payment_date || payment?.paid_at || payment?.created_at || null;
+
+const chequeCollectionDate = (payment: any) =>
+  payment?.cheque_cleared_at || payment?.cleared_at || payment?.spent_date || paymentDate(payment);
+
+const receiptDate = (payment: any) => isChequePayment(payment) ? chequeCollectionDate(payment) : paymentDate(payment);
 
 const discountAmount = (item: any, gross: number) => {
   const discount = Math.max(0, toNumber(item?.discount));
@@ -286,30 +291,51 @@ const sumPaymentsInPeriod = (
   periodStart: string,
   periodEnd: string,
   filter: (payment: any) => boolean,
+  dateResolver: (payment: any) => unknown = paymentDate,
 ) =>
   payments
-    .filter((payment) => filter(payment) && isInPeriod(paymentDate(payment), periodStart, periodEnd))
+    .filter((payment) => filter(payment) && isInPeriod(dateResolver(payment), periodStart, periodEnd))
     .reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
 
-const findLatestPaymentDate = (payments: any[], filter: (payment: any) => boolean) => {
+const sumPaymentsUntil = (
+  payments: any[],
+  periodEnd: string,
+  filter: (payment: any) => boolean,
+  dateResolver: (payment: any) => unknown = paymentDate,
+) => payments
+  .filter((payment) => {
+    if (!filter(payment)) return false;
+    const at = parseDateTime(dateResolver(payment));
+    const end = parseDateTime(`${periodEnd}T23:59:59.999`);
+    return at !== null && end !== null && at <= end;
+  })
+  .reduce((sum, payment) => sum + resolvePaymentAmount(payment), 0);
+
+const findLatestPaymentDate = (
+  payments: any[],
+  filter: (payment: any) => boolean,
+  dateResolver: (payment: any) => unknown = paymentDate,
+) => {
   const latest = payments
     .filter(filter)
-    .map((payment) => parseDateTime(paymentDate(payment)))
+    .map((payment) => parseDateTime(dateResolver(payment)))
     .filter((value): value is number => value !== null)
     .sort((a, b) => b - a)[0];
   return latest ? new Date(latest).toISOString() : null;
 };
 
 const resolveFullSettlementAt = (
-  payments: any[],
+  invoice: CommissionInvoiceRecord,
   invoiceTotal: number,
   calculationEnd: string,
 ) => {
   const end = parseDateTime(`${calculationEnd}T23:59:59.999`);
   if (end === null) return null;
 
+  const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
+  // تسویهٔ کامل به وصول چک وابسته نیست؛ کافی است پرداخت معتبر ثبت شده باشد.
   const validPayments = payments
-    .filter((payment) => isValidReceiptPayment(payment) && resolvePaymentAmount(payment) > 0)
+    .filter((payment) => isFinalPayment(payment) && resolvePaymentAmount(payment) > 0)
     .map((payment) => ({ payment, at: parseDateTime(paymentDate(payment)) }))
     .filter((entry): entry is { payment: any; at: number } => entry.at !== null && entry.at <= end)
     .sort((left, right) => left.at - right.at);
@@ -318,6 +344,14 @@ const resolveFullSettlementAt = (
   for (const entry of validPayments) {
     receivedAmount += resolvePaymentAmount(entry.payment);
     if (receivedAmount >= invoiceTotal) return new Date(entry.at).toISOString();
+  }
+  const recordedReceived = clamp(toNumber(invoice.total_received_amount), 0, invoiceTotal);
+  const hasZeroRemainingBalance = normalizeText(invoice.remaining_balance) !== ''
+    && toNumber(invoice.remaining_balance) <= 0;
+  const settledAt = normalizeText(invoice.settled_at || invoice.completed_at || invoice.updated_at || invoice.invoice_date) || null;
+  if ((recordedReceived >= invoiceTotal || hasZeroRemainingBalance) && settledAt) {
+    const settledTime = parseDateTime(settledAt);
+    if (settledTime !== null && settledTime <= end) return settledAt;
   }
   return null;
 };
@@ -363,7 +397,7 @@ const getInvoiceEvent = (
   }
 
   if (basis === 'settled_invoices') {
-    const settledAt = resolveFullSettlementAt(payments, invoiceTotal, periodEnd);
+    const settledAt = resolveFullSettlementAt(invoice, invoiceTotal, periodEnd);
     if (!settledAt || !isInPeriod(settledAt, periodStart, periodEnd)) {
       return {
         eventType: 'invoice_settlement',
@@ -381,7 +415,7 @@ const getInvoiceEvent = (
   }
 
   if (basis === 'full_settlement_only') {
-    const collectedAt = resolveFullSettlementAt(payments, invoiceTotal, periodEnd);
+    const collectedAt = resolveFullSettlementAt(invoice, invoiceTotal, periodEnd);
     if (!collectedAt || !isInPeriod(collectedAt, periodStart, periodEnd)) {
       return {
         eventType: 'full_collection',
@@ -404,12 +438,19 @@ const getInvoiceEvent = (
       periodStart,
       periodEnd,
       isValidReceiptPayment,
+      receiptDate,
     );
     if (paidAmount > 0) {
       return {
         eventType: 'payment_collection',
-        eventAt: findLatestPaymentDate(payments, (payment) => isValidReceiptPayment(payment) && isInPeriod(paymentDate(payment), periodStart, periodEnd)),
-        poolAmount: clamp(paidAmount, 0, invoiceTotal),
+        eventAt: findLatestPaymentDate(
+          payments,
+          (payment) => isValidReceiptPayment(payment) && isInPeriod(receiptDate(payment), periodStart, periodEnd),
+          receiptDate,
+        ),
+        // سهم این دوره از جمع دریافتی‌های معتبر تا پایان دوره به دست می‌آید؛
+        // سهم‌های ثبت‌شدهٔ قبلی در مرحلهٔ تخصیص کم می‌شوند.
+        poolAmount: clamp(sumPaymentsUntil(payments, periodEnd, isValidReceiptPayment, receiptDate), 0, invoiceTotal),
         exclusionReason: null,
       };
     }
@@ -466,6 +507,53 @@ const getInvoiceEvent = (
     };
   }
 
+  if (basis === 'settled_and_collected_cheques') {
+    const settledAt = resolveFullSettlementAt(invoice, invoiceTotal, periodEnd);
+    if (!settledAt) {
+      return {
+        eventType: 'invoice_settlement',
+        eventAt: null,
+        poolAmount: 0,
+        exclusionReason: 'فاکتور تا پایان این بازه به‌طور کامل تسویه نشده است',
+      };
+    }
+    const collectedInPeriod = sumPaymentsInPeriod(
+      payments,
+      periodStart,
+      periodEnd,
+      (payment) => isFinalPayment(payment) && isChequePayment(payment) && isCollectedChequePayment(payment),
+      chequeCollectionDate,
+    );
+    if (collectedInPeriod <= 0) {
+      return {
+        eventType: 'cheque_collection',
+        eventAt: null,
+        poolAmount: 0,
+        exclusionReason: 'چک وصول‌شده‌ای از این فاکتور در این بازه وجود ندارد',
+      };
+    }
+    return {
+      eventType: 'cheque_collection',
+      eventAt: findLatestPaymentDate(
+        payments,
+        (payment) => (
+          isFinalPayment(payment)
+          && isChequePayment(payment)
+          && isCollectedChequePayment(payment)
+          && isInPeriod(chequeCollectionDate(payment), periodStart, periodEnd)
+        ),
+        chequeCollectionDate,
+      ),
+      poolAmount: clamp(sumPaymentsUntil(
+        payments,
+        periodEnd,
+        (payment) => isFinalPayment(payment) && isChequePayment(payment) && isCollectedChequePayment(payment),
+        chequeCollectionDate,
+      ), 0, invoiceTotal),
+      exclusionReason: null,
+    };
+  }
+
   const clearedChequeAmount = sumPaymentsInPeriod(
     payments,
     periodStart,
@@ -502,7 +590,8 @@ const getInvoiceEvent = (
 const buildPostedAllocationMap = (allocations: CommissionPostedAllocation[]) => {
   const map = new Map<string, number>();
   allocations.forEach((entry) => {
-    const key = `${entry.basis}::${entry.percent_mode}::${entry.invoice_id}::${entry.invoice_item_key}`;
+    // یک قلم فاکتور، حتی اگر روش محاسبه بعداً تغییر کند، نباید دوباره پرداخت شود.
+    const key = `${entry.invoice_id}::${entry.invoice_item_key}`;
     map.set(key, (map.get(key) || 0) + Math.max(0, toNumber(entry.posted_amount)));
   });
   return map;
@@ -701,7 +790,7 @@ export const buildCommissionDraftRows = ({
       });
       const savedDraft = currentDraftIndex.get(sourceKey);
       if (savedDraft) consumedDraftKeys.add(sourceKey);
-      const postedKey = `${basis}::${percentMode}::${invoice.id}::${itemKey}`;
+      const postedKey = `${invoice.id}::${itemKey}`;
       const netAmount = resolveInvoiceItemNetAmount(item);
       const percent = getItemCommissionPercent(item, employeeId, percentMode, employeeDefaultCommissionByEmployeeId);
       return {
@@ -745,7 +834,7 @@ export const buildCommissionDraftRows = ({
       };
     });
 
-    rows.push(recomputeCommissionDraftRow({
+    const calculatedRow = recomputeCommissionDraftRow({
       key: `commission_row:${employeeId}:${invoice.id}:${basis}:${percentMode}:${periodStart}:${periodEnd}`,
       mode: 'pool',
       employee_id: employeeId,
@@ -773,15 +862,22 @@ export const buildCommissionDraftRows = ({
       lines,
       exclusion_reason: event.exclusionReason,
       is_from_previous_period: false,
-    }));
+    });
+    // فاکتورهای قدیمی که برای این دوره هیچ رویداد تازه یا تصمیم دستی ندارند،
+    // نباید در معوق یا مستثنا نمایش داده شوند.
+    if (includeNotCalculated || calculatedRow.lines.some((line) => line.selected_amount > 0 || line.decision_status !== 'auto')) {
+      rows.push(calculatedRow);
+    }
   }
 
   const backlogDrafts = matchingDrafts.filter((draft) =>
     normalizeDraftStatus(draft.draft_status) !== 'posted'
     && !consumedDraftKeys.has(draft.source_key)
-    && (draft.remaining_amount > 0 || draft.decision_status === 'defer_to_next_period')
+    && draft.decision_status === 'defer_to_next_period'
+    && draft.remaining_amount > 0
   );
 
+  const backlogByInvoiceId = new Map<string, Array<{ draft: CommissionPersistedDraft; line: CommissionDraftLine }>>();
   backlogDrafts.forEach((draft) => {
     const details = draft.details || {};
     const line: CommissionDraftLine = {
@@ -821,34 +917,45 @@ export const buildCommissionDraftRows = ({
       exclusion_reason: null,
     };
 
+    const invoiceKey = `${draft.employee_id}::${draft.invoice_id}`;
+    const invoiceLines = backlogByInvoiceId.get(invoiceKey) || [];
+    invoiceLines.push({ draft, line });
+    backlogByInvoiceId.set(invoiceKey, invoiceLines);
+  });
+
+  backlogByInvoiceId.forEach((entries) => {
+    const first = entries[0];
+    if (!first) return;
+    const details = first.draft.details || {};
+    const lines = entries.map((entry) => entry.line);
     rows.push(recomputeCommissionDraftRow({
-      key: `commission_backlog:${draft.source_key}`,
+      key: `commission_backlog:${first.draft.employee_id}:${first.draft.invoice_id}`,
       mode: 'fixed',
-      employee_id: draft.employee_id,
-      assignee_id: normalizeText(draft.assignee_id),
-      invoice_id: draft.invoice_id,
-      invoice_name: String(details.invoice_name || draft.invoice_id || 'فاکتور فروش'),
+      employee_id: first.draft.employee_id,
+      assignee_id: normalizeText(first.draft.assignee_id),
+      invoice_id: first.draft.invoice_id,
+      invoice_name: String(details.invoice_name || first.draft.invoice_id || 'فاکتور فروش'),
       invoice_date: details.invoice_date || null,
       invoice_status: details.invoice_status || null,
       invoice_total_amount: Math.max(0, toNumber(details.invoice_total_amount)),
       invoice_received_amount: Math.max(0, toNumber(details.invoice_received_amount)),
       invoice_tags: details.invoice_tags ?? null,
-      basis: draft.source_basis,
-      percent_mode: draft.percent_mode,
-      source_period_start: draft.period_start,
-      source_period_end: draft.period_end,
-      eligibility_event_type: draft.eligibility_event_type || null,
-      eligibility_event_at: draft.eligibility_event_at || null,
+      basis: first.draft.source_basis,
+      percent_mode: first.draft.percent_mode,
+      source_period_start: first.draft.period_start,
+      source_period_end: first.draft.period_end,
+      eligibility_event_type: first.draft.eligibility_event_type || null,
+      eligibility_event_at: first.draft.eligibility_event_at || null,
       event_pool_amount: Math.max(0, toNumber(details.event_pool_amount)),
-      base_amount: Math.max(0, toNumber(details.net_amount)),
-      entitled_amount: Math.max(0, toNumber(draft.entitled_amount)),
-      posted_amount: Math.max(0, toNumber(draft.posted_amount)),
-      remaining_amount: Math.max(0, toNumber(draft.remaining_amount)),
+      base_amount: 0,
+      entitled_amount: 0,
+      posted_amount: 0,
+      remaining_amount: 0,
       selected_amount: 0,
-      item_count: 1,
-      lines: [line],
+      item_count: lines.length,
+      lines,
       exclusion_reason: null,
-      is_from_previous_period: draft.period_start !== periodStart || draft.period_end !== periodEnd,
+      is_from_previous_period: true,
     }));
   });
 

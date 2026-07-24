@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GoalProgressSnapshot } from './goalTypes';
 
-const { executeGoalProgressMock } = vi.hoisted(() => ({
-  executeGoalProgressMock: vi.fn(),
+const { executeGoalProgressForSubjectsMock } = vi.hoisted(() => ({
+  executeGoalProgressForSubjectsMock: vi.fn(),
 }));
 
 vi.mock('./goals', () => ({
-  executeGoalProgress: executeGoalProgressMock,
+  executeGoalProgressForSubjects: executeGoalProgressForSubjectsMock,
   normalizeGoalRecord: (goal: any) => goal,
   isGoalVisibleToUser: (goal: any, userId: string | null, roleId: string | null) => {
     const userIds = Array.isArray(goal?.assignee_user_ids) ? goal.assignee_user_ids : [];
@@ -60,11 +60,11 @@ const snapshot: GoalProgressSnapshot = {
 
 describe('goalRewardPayrollSync', () => {
   beforeEach(() => {
-    executeGoalProgressMock.mockReset();
+    executeGoalProgressForSubjectsMock.mockReset();
   });
 
   it('builds payroll ledger drafts from goal reward rules', async () => {
-    executeGoalProgressMock.mockResolvedValue(snapshot);
+    executeGoalProgressForSubjectsMock.mockResolvedValue([snapshot]);
 
     const drafts = await collectGoalRewardLedgerDrafts({
       profiles: [{

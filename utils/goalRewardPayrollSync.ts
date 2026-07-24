@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { GoalRecord } from './goalTypes';
-import { executeGoalProgress, isGoalVisibleToUser, normalizeGoalRecord } from './goals';
+import { executeGoalProgressForSubjects, isGoalVisibleToUser, normalizeGoalRecord } from './goals';
 import { evaluateGoalRewardRules, type GoalRewardFormula } from './goalRewardRuntime';
 import { isMissingPayrollLedgerError } from './payrollLedger';
 
@@ -86,32 +86,38 @@ export const collectGoalRewardLedgerDrafts = async ({
 }): Promise<GoalRewardLedgerDraft[]> => {
   const drafts: GoalRewardLedgerDraft[] = [];
 
-  for (const profile of profiles) {
-    if (!profile.employeeId || !profile.profileUserId) continue;
+  const eligibleProfiles = profiles.filter((profile) => profile.employeeId && profile.profileUserId);
+  const goalRowsCache = new Map<string, any[]>();
+  for (const rawGoal of goals) {
+    const goal = normalizeGoalRecord(rawGoal);
+    // برای هر هدف، داده‌های مبنا فقط یک‌بار خوانده می‌شوند و خروجی تمام کارکنان
+    // از همان snapshot مشترک ساخته می‌شود. این کار تعداد queryها را از «کارمند × هدف» به «هدف» کاهش می‌دهد.
+    const goalProfiles = eligibleProfiles.filter((profile) =>
+      isGoalVisibleToUser(goal, profile.profileUserId, profile.profileRoleId || null)
+    );
+    if (goalProfiles.length === 0) continue;
 
-    for (const rawGoal of goals) {
-      try {
-        const goal = normalizeGoalRecord(rawGoal);
-        // اجرای progress با subject صریح، کنترل دسترسی را دور می‌زند؛ پس باید پیش از آن
-        // عضویت همین کارمند در هدف کنترل شود تا پاداش هدفِ فرد دیگری وارد فیش نشود.
-        if (!isGoalVisibleToUser(goal, profile.profileUserId, profile.profileRoleId || null)) continue;
-        const snapshot = await executeGoalProgress(goal, {
+    try {
+      const snapshots = await executeGoalProgressForSubjects(goal, {
+        userId: goalProfiles[0].profileUserId,
+        roleId: goalProfiles[0].profileRoleId || null,
+        permissions: null,
+        cache: goalRowsCache,
+        subjects: goalProfiles.map((profile) => ({
           userId: profile.profileUserId,
           roleId: profile.profileRoleId || null,
-          permissions: null,
-          subjectUserId: profile.profileUserId,
-          subjectRoleId: profile.profileRoleId || null,
-          overridePeriodRange: {
-            startIso: `${periodStart}T00:00:00.000Z`,
-            endIso: `${periodEnd}T23:59:59.999Z`,
-          },
-        });
-        if (!snapshot || snapshot.achievedValue <= 0) continue;
+          label: profile.profileName || null,
+        })),
+        overridePeriodRange: {
+          startIso: `${periodStart}T00:00:00.000Z`,
+          endIso: `${periodEnd}T23:59:59.999Z`,
+        },
+      });
 
-        const rewardEntries = evaluateGoalRewardRules({
-          snapshot,
-          formulas,
-        });
+      snapshots.forEach((snapshot, index) => {
+        const profile = goalProfiles[index];
+        if (!profile || snapshot.achievedValue <= 0) return;
+        const rewardEntries = evaluateGoalRewardRules({ snapshot, formulas });
 
         rewardEntries.forEach((entry) => {
           const amount = toNumber(entry.amount);
@@ -152,9 +158,9 @@ export const collectGoalRewardLedgerDrafts = async ({
             },
           });
         });
-      } catch {
-        continue;
-      }
+      });
+    } catch {
+      continue;
     }
   }
 
@@ -177,7 +183,7 @@ export const syncGoalRewardEntriesForPayroll = async (
   if (employeeIds.length === 0) return;
 
   const [goalsResult, formulasResult, initialExistingResult] = await Promise.all([
-    supabase.from('goals').select('*').eq('is_active', true),
+    supabase.from('goals').select('id, module_id, name, goal_scope, period_unit, subperiod_unit, metric_type, metric_field_key, date_field_key, target_value, levels_enabled, bronze_value, silver_value, gold_value, assignee_user_ids, assignee_role_ids, conditions_all, conditions_any, config').eq('is_active', true),
     supabase
       .from('calculation_formulas')
       .select('id, name, expression_config, output_type, config')
@@ -258,7 +264,10 @@ export const syncGoalRewardEntriesForPayroll = async (
   }
 
   if (updates.length > 0) {
-    await Promise.all(updates.map(async ({ draft, existing }) => {
+    // محدودیت هم‌زمانی جلوی هجوم PATCHهای تک‌ردیفی و timeout شدن مرورگر را می‌گیرد.
+    const updateConcurrency = 6;
+    for (let index = 0; index < updates.length; index += updateConcurrency) {
+      await Promise.all(updates.slice(index, index + updateConcurrency).map(async ({ draft, existing }) => {
       if (!existing?.id) return;
       const { error } = await supabase
         .from('payroll_calculation_entries')
@@ -270,10 +279,11 @@ export const syncGoalRewardEntriesForPayroll = async (
           details: draft.details,
           status: 'proposed',
           updated_at: new Date().toISOString(),
-        })
+      })
         .eq('id', existing.id);
       if (error && !isMissingPayrollLedgerError(error)) throw error;
-    }));
+      }));
+    }
   }
 
   if (voidIds.length > 0) {

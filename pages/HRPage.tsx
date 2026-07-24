@@ -29,6 +29,7 @@ import {
   EyeOutlined,
   HistoryOutlined,
   PlusOutlined,
+  PrinterOutlined,
   ReloadOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
@@ -46,7 +47,7 @@ import { useCurrencyConfig } from '../utils/currency';
 import { buildClientFallbackSystemCode } from '../utils/systemCode';
 import GoalProgressSlider from '../components/goals/GoalProgressSlider';
 import GoalsManager from '../components/goals/GoalsManager';
-import { ensureDefaultHrTaskGoals, executeGoalProgress, normalizeGoalRecord, resolveGoalAssignedMembers } from '../utils/goals';
+import { ensureDefaultHrTaskGoals, executeGoalProgressForSubjects, normalizeGoalRecord, resolveGoalAssignedMembers } from '../utils/goals';
 import FormulaEditorModal from '../components/formulas/FormulaEditorModal';
 import ActivityPerformanceRulesManager from '../components/hr/ActivityPerformanceRulesManager';
 import AdaptiveSelectField from '../components/AdaptiveSelectField';
@@ -85,6 +86,8 @@ const COMMISSION_INVOICE_SELECT =
 // استفاده می‌شود تا محاسبه متوقف نشود؛ schema رسمی شامل تاریخ‌های چرخهٔ فاکتور است.
 const COMMISSION_INVOICE_SELECT_FALLBACK =
   'id, name, status, invoice_date, assignee_id, invoiceItems, payments';
+const COMMISSION_CHEQUE_SELECT = 'id, status, cleared_at, spent_date, updated_at';
+const COMMISSION_CHEQUE_SELECT_FALLBACK = 'id, status, updated_at';
 const HR_GOAL_SELECT =
   'id, org_id, module_id, name, description, goal_scope, period_unit, subperiod_unit, metric_type, metric_field_key, date_field_key, target_value, levels_enabled, bronze_value, silver_value, gold_value, assignee_user_ids, assignee_role_ids, conditions_all, conditions_any, config, is_active, created_at, updated_at, created_by, updated_by';
 const HR_EMPLOYEE_SELECT =
@@ -141,6 +144,8 @@ import { fetchCurrentUserRecordAccessContext, fetchCurrentUserRolePermissions, t
 import { evaluateLegacyVisibilityRule } from '../utils/conditionalFieldRules';
 import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensation } from '../utils/payrollSalaryType';
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
+import PrintSection from '../components/moduleShow/PrintSection';
+import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
 
 type TaskRecord = {
   id: string;
@@ -265,6 +270,8 @@ type EmployeeSummaryRow = {
 type PayrollFormValues = {
   [key: string]: any;
 };
+
+type CommissionModalTab = CommissionReviewBucket | 'previous_calculations';
 
 type CommissionCalculationFormValues = {
   period_range: PersianDateRangeValue | null;
@@ -555,19 +562,77 @@ const RELATED_MODULE_FA: Record<string, string> = {
   tasks: 'فعالیت ها',
 };
 
-const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis }> = [
-  { label: 'بر اساس فاکتورهای تایید شده', value: 'approved_invoices' },
-  { label: 'بر اساس فاکتورهای تسویه شده', value: 'settled_invoices' },
-  { label: 'بر اساس تسویه کامل و وصول آخرین بخش', value: 'full_settlement_only' },
-  { label: 'بر اساس دریافتی‌های واقعی معتبر', value: 'prepaid_and_settled_invoices' },
-  { label: 'بر اساس فاکتورهای پیش پرداخت و چک های وصول شده', value: 'prepaid_and_collected_cheques' },
-  { label: 'بر اساس فاکتورهای تسویه شده و چک های وصول شده', value: 'settled_and_collected_cheques' },
+const COMMISSION_BASIS_OPTIONS: Array<{ label: string; value: CommissionBasis; description: string }> = [
+  {
+    label: 'محاسبه فاکتورهای تایید شده و سطح بالاتر',
+    value: 'approved_invoices',
+    description: 'تمامی فاکتورهای تاییدشده، نهایی، پیش‌پرداخت، تسویه‌شده و تکمیل‌شده محاسبه می‌شوند.',
+  },
+  {
+    label: 'فاکتورهای تسویه شده',
+    value: 'settled_invoices',
+    description: 'فقط فاکتورهای کاملاً تسویه‌شده محاسبه می‌شوند؛ وصول چک ملاک نیست.',
+  },
+  {
+    label: 'فاکتورهای تسویه شده و چک‌های وصول شده',
+    value: 'settled_and_collected_cheques',
+    description: 'فاکتور باید کامل تسویه شده باشد و فقط چک‌هایی که در این بازه وصول شده‌اند محاسبه می‌شوند.',
+  },
+  {
+    label: 'بر اساس مبلغ دریافت شده‌ی فاکتورها',
+    value: 'prepaid_and_settled_invoices',
+    description: 'پورسانت متناسب با دریافتی واقعی محاسبه می‌شود و هر پرداخت تازه در دورهٔ خودش لحاظ خواهد شد.',
+  },
 ];
 
 const COMMISSION_PERCENT_MODE_OPTIONS: Array<{ label: string; value: CommissionPercentMode }> = [
   { label: 'درصد پیش فرض هر کالا یا خدمات', value: 'product_default' },
   { label: 'درصد پورسانت پیش فرض بازاریاب (کارمند)', value: 'employee_default' },
 ];
+
+const COMMISSION_INVOICE_STATUS_LABELS: Record<string, string> = {
+  draft: 'پیش‌نویس',
+  pending: 'در انتظار',
+  confirmed: 'تأییدشده',
+  final: 'نهایی',
+  prepayment: 'پیش‌پرداخت',
+  settled: 'تسویه‌شده',
+  completed: 'تکمیل‌شده',
+  canceled: 'لغوشده',
+  cancelled: 'لغوشده',
+};
+
+const COMMISSION_LIST_PRINT_FIELDS = [
+  { key: 'review_bucket', label: 'بخش محاسبه', type: 'text', group: 'وضعیت محاسبه' },
+  { key: 'employee_name', label: 'بازاریاب', type: 'text', group: 'اطلاعات فاکتور' },
+  { key: 'invoice_name', label: 'فاکتور', type: 'text', group: 'اطلاعات فاکتور' },
+  { key: 'invoice_status', label: 'وضعیت فاکتور', type: 'text', group: 'اطلاعات فاکتور' },
+  { key: 'invoice_date', label: 'تاریخ فاکتور', type: 'date', group: 'اطلاعات فاکتور' },
+  { key: 'items_label', label: 'اقلام فاکتور', type: 'long_text', group: 'اطلاعات فاکتور' },
+  { key: 'item_count', label: 'تعداد اقلام', type: 'number', group: 'اطلاعات فاکتور' },
+  { key: 'invoice_total_amount', label: 'جمع نهایی فاکتور', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'invoice_received_amount', label: 'جمع دریافتی', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'entitled_amount', label: 'پورسانت احرازشده', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'posted_amount', label: 'پورسانت ثبت‌شده قبلی', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'selected_amount', label: 'پورسانت این محاسبه', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'remaining_amount', label: 'مانده پورسانت', type: 'price', group: 'مبالغ پورسانت' },
+  { key: 'eligibility_event_at', label: 'تاریخ احراز', type: 'date', group: 'وضعیت محاسبه' },
+  { key: 'eligibility_event_type', label: 'رویداد احراز', type: 'text', group: 'وضعیت محاسبه' },
+  { key: 'exclusion_reason', label: 'علت عدم لحاظ', type: 'long_text', group: 'وضعیت محاسبه' },
+] as const;
+
+const COMMISSION_LIST_PRINT_MODULE = {
+  id: 'commission_calculations',
+  titles: { fa: 'فهرست پورسانت‌ها', en: 'Commission calculations' },
+  fields: COMMISSION_LIST_PRINT_FIELDS.map((field) => ({
+    key: field.key,
+    labels: { fa: field.label, en: field.label },
+    type: field.type,
+    isTableColumn: true,
+  })),
+  blocks: [],
+  table: 'payroll_calculation_entries',
+};
 
 const HR_PAYROLL_CONFIG_BLOCK_IDS = new Set(['attendance_policy_info', 'payroll_info', 'insurance_info']);
 const HR_PAYROLL_CONFIG_BLOCKS = employeesModule.blocks
@@ -1473,7 +1538,10 @@ const HRPage: React.FC = () => {
   const [commissionLoading, setCommissionLoading] = useState(false);
   const [calculatedCommissionRows, setCalculatedCommissionRows] = useState<CommissionLedgerRow[]>([]);
   const [calculatedCommissionLoading, setCalculatedCommissionLoading] = useState(false);
-  const [commissionReviewTab, setCommissionReviewTab] = useState<CommissionReviewBucket>('current_period');
+  const [commissionReviewTab, setCommissionReviewTab] = useState<CommissionModalTab>('current_period');
+  const [commissionSearch, setCommissionSearch] = useState('');
+  const [commissionHistoryRows, setCommissionHistoryRows] = useState<CommissionLedgerRow[]>([]);
+  const [commissionHistoryIndex, setCommissionHistoryIndex] = useState(0);
   const [payrollPeriodSlips, setPayrollPeriodSlips] = useState<PayrollPeriodSlipRow[]>([]);
   const [payrollLedgerRows, setPayrollLedgerRows] = useState<PayrollDashboardLedgerRow[]>([]);
   const [employeeAdvanceRows, setEmployeeAdvanceRows] = useState<EmployeeAdvanceDashboardRow[]>([]);
@@ -1496,6 +1564,7 @@ const HRPage: React.FC = () => {
   const [commissionModalSaving, setCommissionModalSaving] = useState(false);
   const [commissionInvoicePaymentsById, setCommissionInvoicePaymentsById] = useState<Map<string, any[]>>(new Map());
   const [commissionForm] = Form.useForm<CommissionCalculationFormValues>();
+  const watchedCommissionFormValues = (Form.useWatch([], commissionForm) || {}) as Partial<CommissionCalculationFormValues>;
   const [commissionInitialValues, setCommissionInitialValues] = useState<Partial<CommissionCalculationFormValues> | null>(null);
   const [lineQuantityById, setLineQuantityById] = useState<Record<string, number>>({});
   const [orderQuantityById, setOrderQuantityById] = useState<Record<string, number>>({});
@@ -2526,6 +2595,7 @@ const HRPage: React.FC = () => {
             .filter((entry): entry is readonly [string, { employeeId: string; employeeName: string; userId: string; roleId: string | null }] => !!entry)
         );
         const nextRows: EmployeeGoalTouchRow[] = [];
+        const goalRowsCache = new Map<string, any[]>();
 
         for (const rawGoal of (goalsResult.data || [])) {
           const goal = normalizeGoalRecord(rawGoal as GoalRecord);
@@ -2542,21 +2612,28 @@ const HRPage: React.FC = () => {
             })
             .filter((member): member is { userId: string; roleId: string | null; label: string; employeeId: string; employeeName: string } => !!member);
 
-          for (const member of assignedMembers) {
-            try {
-              const snapshot = await executeGoalProgress(goal, {
-                userId: roleContext.userId,
-                roleId: roleContext.roleId,
-                orgId: roleContext.orgId,
-                allowedRoleIds: roleContext.allowedRoleIds,
-                allowedUserIds: roleContext.allowedUserIds,
-                permissions: roleContext.permissions,
-                subjectUserId: member.userId,
-                subjectRoleId: member.roleId,
-                subjectLabel: member.label,
-                overridePeriodRange: { startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() },
-              });
-              if (!snapshot) continue;
+          if (assignedMembers.length === 0) continue;
+          try {
+            // اجرای گروهی داده‌های این هدف را فقط یک‌بار می‌خواند؛ پیش از این برای
+            // هر کارمند همان داده‌ها جداگانه درخواست می‌شد.
+            const snapshots = await executeGoalProgressForSubjects(goal, {
+              userId: roleContext.userId,
+              roleId: roleContext.roleId,
+              orgId: roleContext.orgId,
+              allowedRoleIds: roleContext.allowedRoleIds,
+              allowedUserIds: roleContext.allowedUserIds,
+              permissions: roleContext.permissions,
+              cache: goalRowsCache,
+              overridePeriodRange: { startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() },
+              subjects: assignedMembers.map((member) => ({
+                userId: member.userId,
+                roleId: member.roleId,
+                label: member.label,
+              })),
+            });
+            snapshots.forEach((snapshot, index) => {
+              const member = assignedMembers[index];
+              if (!member) return;
               const rewardEntries = evaluateGoalRewardRules({
                 snapshot,
                 formulas: rewardFormulas,
@@ -2605,9 +2682,9 @@ const HRPage: React.FC = () => {
                 payrollSlipId: matchingLedger?.payroll_slip_id || null,
                 payrollSlipName: relatedSlip?.name || null,
               });
-            } catch {
-              continue;
-            }
+            });
+          } catch {
+            continue;
           }
         }
 
@@ -3746,6 +3823,105 @@ const HRPage: React.FC = () => {
     return empty;
   }, [commissionRows]);
 
+  const filterCommissionInvoiceRows = useCallback((rows: CommissionDraftRow[]) => {
+    const query = commissionSearch.trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter((row) => [
+      row.invoice_name,
+      row.invoice_status,
+      row.invoice_date,
+      ...row.lines.flatMap((line) => [line.product_label, line.product_id]),
+    ].some((value) => String(value || '').toLowerCase().includes(query)));
+  }, [commissionSearch]);
+
+  const filteredCommissionRowsByBucket = useMemo(() => ({
+    current_period: filterCommissionInvoiceRows(commissionRowsByBucket.current_period),
+    backlog: filterCommissionInvoiceRows(commissionRowsByBucket.backlog),
+    excluded: filterCommissionInvoiceRows(commissionRowsByBucket.excluded),
+  }), [commissionRowsByBucket, filterCommissionInvoiceRows]);
+
+  const selectedPreviousCommission = commissionHistoryRows[commissionHistoryIndex] || null;
+
+  const commissionPrintRows = useMemo(() => {
+    const reviewBucketLabels: Record<CommissionReviewBucket, string> = {
+      current_period: 'پورسانت‌های این ماه',
+      backlog: 'معوق / بازمانده',
+      excluded: 'مستثنا / عدم‌لحاظ',
+    };
+    const selectedEmployeeId = String(watchedCommissionFormValues.employee_profile_id || '').trim();
+    const selectedEmployeeName = profiles.find((profile) => String(profile.id || '') === selectedEmployeeId)?.full_name || '';
+    const toPrintableRow = (row: any, bucketLabel: string, employeeName = selectedEmployeeName) => ({
+      review_bucket: bucketLabel,
+      employee_name: employeeName || '—',
+      invoice_name: row?.invoice_name || 'بدون عنوان',
+      invoice_status: COMMISSION_INVOICE_STATUS_LABELS[String(row?.invoice_status || '').trim().toLowerCase()] || row?.invoice_status || '—',
+      invoice_date: row?.invoice_date || null,
+      items_label: (Array.isArray(row?.lines) ? row.lines : [])
+        .map((line: any) => String(line?.product_label || '').trim())
+        .filter(Boolean)
+        .join('، '),
+      item_count: toNumber(row?.item_count || (Array.isArray(row?.lines) ? row.lines.length : 0)),
+      invoice_total_amount: toNumber(row?.invoice_total_amount),
+      invoice_received_amount: toNumber(row?.invoice_received_amount),
+      entitled_amount: toNumber(row?.entitled_amount),
+      posted_amount: toNumber(row?.posted_amount),
+      selected_amount: toNumber(row?.selected_amount ?? row?.commission_amount),
+      remaining_amount: toNumber(row?.remaining_amount),
+      eligibility_event_at: row?.eligibility_event_at || null,
+      eligibility_event_type: row?.eligibility_event_type || '',
+      exclusion_reason: row?.exclusion_reason || '',
+    });
+
+    if (commissionReviewTab === 'previous_calculations') {
+      const previousRows = Array.isArray(selectedPreviousCommission?.details?.rows)
+        ? selectedPreviousCommission.details.rows
+        : [];
+      return previousRows
+        .filter((row: any) => {
+          const query = commissionSearch.trim().toLowerCase();
+          if (!query) return true;
+          return [
+            row?.invoice_name,
+            row?.invoice_status,
+            row?.invoice_date,
+            ...(Array.isArray(row?.lines) ? row.lines.flatMap((line: any) => [line?.product_label, line?.product_id]) : []),
+          ].some((value) => String(value || '').toLowerCase().includes(query));
+        })
+        .map((row: any) => toPrintableRow(row, 'محاسبهٔ ثبت‌شدهٔ قبلی', selectedPreviousCommission?.employee_name || selectedEmployeeName));
+    }
+
+    return filteredCommissionRowsByBucket[commissionReviewTab]
+      .map((row) => toPrintableRow(row, reviewBucketLabels[commissionReviewTab]));
+  }, [commissionReviewTab, commissionSearch, filteredCommissionRowsByBucket, profiles, selectedPreviousCommission, watchedCommissionFormValues.employee_profile_id]);
+
+  const commissionListPrintManager = useListPrintManager({
+    moduleId: 'commission_calculations',
+    moduleConfig: COMMISSION_LIST_PRINT_MODULE,
+    rows: commissionPrintRows,
+    printableFields: COMMISSION_LIST_PRINT_FIELDS as any,
+    contextTitle: 'اطلاعات محاسبه پورسانت',
+    contextValues: {
+      employee_name: selectedPreviousCommission?.employee_name || '',
+      period_start: selectedPreviousCommission?.period_start || watchedCommissionFormValues.period_range?.[0] || null,
+      period_end: selectedPreviousCommission?.period_end || watchedCommissionFormValues.period_range?.[1] || null,
+    },
+    summary: {
+      title: 'جمع فهرست فعلی',
+      fields: [
+        { key: 'invoice_count', label: 'تعداد فاکتور', type: 'number' },
+        { key: 'commission_total', label: 'جمع پورسانت', type: 'price' },
+      ],
+      values: {
+        invoice_count: commissionPrintRows.length,
+        commission_total: commissionPrintRows.reduce((sum, row) => sum + toNumber(row.selected_amount), 0),
+      },
+    },
+  });
+
+  useEffect(() => {
+    setCommissionHistoryIndex((current) => Math.min(current, Math.max(commissionHistoryRows.length - 1, 0)));
+  }, [commissionHistoryRows.length]);
+
   const commissionDraftTotals = useMemo(() => ({
     selected: commissionRows.reduce((sum, row) => sum + row.selected_amount, 0),
     deferred: commissionRows.reduce(
@@ -4129,6 +4305,47 @@ const HRPage: React.FC = () => {
     }
   }, [attendanceForm, attendanceModalMode, attendanceModalRecord?.id, closeAttendanceModal, fetchData, message, profileById]);
 
+  const loadCommissionHistory = useCallback(async (
+    employeeIdValue: string,
+    employeeName: string,
+    beforePeriodStart: string,
+  ) => {
+    if (!employeeIdValue) {
+      setCommissionHistoryRows([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from('payroll_calculation_entries')
+      .select('id, period_start, period_end, title, amount, status, details, created_at, updated_at')
+      .eq('source_type', 'commission')
+      .eq('employee_id', employeeIdValue)
+      .neq('status', 'voided')
+      .order('period_end', { ascending: false })
+      .limit(HR_STATS_FETCH_LIMIT);
+    if (error) throw error;
+    setCommissionHistoryRows(((data || []) as any[])
+      .map((entry) => ({
+        id: String(entry?.id || ''),
+        employee_id: employeeIdValue,
+        employee_name: employeeName,
+        period_start: entry?.period_start || null,
+        period_end: entry?.period_end || null,
+        entry_type: 'commission',
+        title: entry?.title || null,
+        amount: toNumber(entry?.amount),
+        status: entry?.status || null,
+        source_record_id: null,
+        created_at: entry?.created_at || null,
+        updated_at: entry?.updated_at || null,
+        created_by: null,
+        updated_by: null,
+        assignee_id: null,
+        details: entry?.details || null,
+      } as CommissionLedgerRow))
+      .filter((entry) => entry.id && entry.period_end && entry.period_end < beforePeriodStart));
+    setCommissionHistoryIndex(0);
+  }, []);
+
   const openCommissionModal = useCallback(() => {
     const defaultProfileId =
       (selectedEmployeeIds.length === 1 ? selectedEmployeeIds[0] : null) ||
@@ -4146,8 +4363,19 @@ const HRPage: React.FC = () => {
     });
     setCommissionRows([]);
     setCommissionReviewTab('current_period');
+    setCommissionSearch('');
+    setCommissionHistoryRows([]);
+    setCommissionHistoryIndex(0);
     setCommissionModalOpen(true);
-  }, [profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
+    const defaultProfile = profiles.find((profile) => String(profile.id) === String(defaultProfileId));
+    if (defaultProfile?.source_id) {
+      void loadCommissionHistory(
+        String(defaultProfile.source_id),
+        defaultProfile.full_name || 'بازاریاب انتخاب‌شده',
+        toNativeGregorianDateString(selectedRange[0]) || '',
+      ).catch((error) => console.warn('Could not load commission history:', error));
+    }
+  }, [loadCommissionHistory, profiles, selectedEmployeeIds, selectedRange, visibleSummaries]);
 
   useEffect(() => {
     if (!commissionModalOpen || !commissionInitialValues) return;
@@ -4203,7 +4431,7 @@ const HRPage: React.FC = () => {
         invoicesPromise,
         supabase
           .from('payroll_calculation_entries')
-          .select('id, details, status')
+          .select('id, period_start, period_end, title, amount, status, details, created_at, updated_at')
           .eq('source_type', 'commission')
           .eq('employee_id', employeeIdValue)
           .neq('status', 'voided')
@@ -4220,6 +4448,29 @@ const HRPage: React.FC = () => {
       if (invoicesResult.error) throw invoicesResult.error;
       if (existingResult.error && !isMissingPayrollLedgerError(existingResult.error)) throw existingResult.error;
       if (draftsResult.error && !isMissingCommissionDraftsError(draftsResult.error)) throw draftsResult.error;
+
+      setCommissionHistoryRows(((existingResult.data || []) as any[])
+        .map((entry) => ({
+          id: String(entry?.id || ''),
+          employee_id: employeeIdValue,
+          employee_name: selectedProfile.full_name || 'بازاریاب انتخاب‌شده',
+          period_start: entry?.period_start || null,
+          period_end: entry?.period_end || null,
+          entry_type: 'commission',
+          title: entry?.title || null,
+          amount: toNumber(entry?.amount),
+          status: entry?.status || null,
+          source_record_id: null,
+          created_at: entry?.created_at || null,
+          updated_at: entry?.updated_at || null,
+          created_by: null,
+          updated_by: null,
+          assignee_id: assigneeId || null,
+          details: entry?.details || null,
+        } as CommissionLedgerRow))
+        .filter((entry) => entry.id && entry.period_end && entry.period_end < periodStart)
+        .sort((left, right) => String(right.period_end).localeCompare(String(left.period_end))));
+      setCommissionHistoryIndex(0);
 
       const invoices = ((invoicesResult.data || []) as any[]).map((invoice) => ({
         ...invoice,
@@ -4247,15 +4498,25 @@ const HRPage: React.FC = () => {
             .filter(Boolean),
         ));
         const chequeStatusById = new Map<string, string>();
+        const chequeCollectionDateById = new Map<string, string>();
         if (chequeIds.length > 0) {
-          const { data: chequeRows, error: chequeError } = await supabase
+          const fetchCommissionCheques = async (select: string) => supabase
             .from('cheques')
-            .select('id, status')
+            .select(select)
             .in('id', chequeIds);
+          const primaryChequeResult = await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT);
+          const { data: chequeRows, error: chequeError } = (
+            primaryChequeResult.error && isMissingSelectColumnError(primaryChequeResult.error)
+              ? await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT_FALLBACK)
+              : primaryChequeResult
+          );
           if (chequeError) throw chequeError;
           (chequeRows || []).forEach((cheque: any) => {
             const chequeId = String(cheque?.id || '').trim();
-            if (chequeId) chequeStatusById.set(chequeId, String(cheque?.status || '').trim());
+            if (!chequeId) return;
+            chequeStatusById.set(chequeId, String(cheque?.status || '').trim());
+            const collectionDate = cheque?.cleared_at || cheque?.spent_date || cheque?.updated_at || null;
+            if (collectionDate) chequeCollectionDateById.set(chequeId, String(collectionDate));
           });
         }
         (operationRows || []).forEach((operation: any) => {
@@ -4270,6 +4531,7 @@ const HRPage: React.FC = () => {
             status: operation.status,
             payment_type: operation.payment_type,
             cheque_status: chequeStatusById.get(String(operation?.cheque_id || '').trim()) || null,
+            cheque_cleared_at: chequeCollectionDateById.get(String(operation?.cheque_id || '').trim()) || null,
             date: operation.operation_date || operation.created_at || null,
           });
           operationPaymentsByInvoiceId.set(invoiceId, rows);
@@ -4326,6 +4588,25 @@ const HRPage: React.FC = () => {
         const entryPercentMode = String(details?.percent_mode || values.percent_mode || '').trim() as CommissionPercentMode;
         const invoiceId = String(details?.invoice_id || entry?.source_record_id || '').trim();
         const lines = Array.isArray(details?.lines) ? details.lines : [];
+        const invoiceRows = Array.isArray(details?.rows) ? details.rows : [];
+        if (invoiceRows.length > 0) {
+          invoiceRows.forEach((invoiceRow: any) => {
+            const rowInvoiceId = String(invoiceRow?.invoice_id || '').trim();
+            const rowLines = Array.isArray(invoiceRow?.lines) ? invoiceRow.lines : [];
+            rowLines.forEach((line: any) => {
+              const itemKey = String(line?.item_key || line?.invoice_item_key || '').trim();
+              if (!rowInvoiceId || !itemKey) return;
+              postedAllocations.push({
+                basis: entryBasis,
+                percent_mode: entryPercentMode,
+                invoice_id: rowInvoiceId,
+                invoice_item_key: itemKey,
+                posted_amount: toNumber(line?.commission_amount ?? line?.selected_amount ?? 0),
+              });
+            });
+          });
+          return;
+        }
         if (lines.length > 0) {
           lines.forEach((line: any) => {
             const itemKey = String(line?.item_key || line?.invoice_item_key || '').trim();
@@ -4385,7 +4666,7 @@ const HRPage: React.FC = () => {
           remaining_amount: toNumber(row.remaining_amount),
           decision_status: String(row.decision_status || 'auto') as CommissionDecisionStatus,
         })) as CommissionPersistedDraft[],
-        includeNotCalculated: true,
+        includeNotCalculated: false,
       });
       setCommissionRows(previewRows);
       setCommissionReviewTab(previewRows.some((row) => row.selected_amount > 0) ? 'current_period' : 'backlog');
@@ -6714,10 +6995,10 @@ const HRPage: React.FC = () => {
   ];
 
   const commissionBasisLabel: Record<CommissionBasis, string> = {
-    approved_invoices: 'فاکتور تاییدشده',
+    approved_invoices: 'تاییدشده و سطح بالاتر',
     settled_invoices: 'فاکتور تسویه‌شده',
     full_settlement_only: 'تسویه کامل',
-    prepaid_and_settled_invoices: 'دریافتی واقعی معتبر',
+    prepaid_and_settled_invoices: 'بر اساس مبلغ دریافتی',
     prepaid_and_collected_cheques: 'پیش‌پرداخت و چک وصول‌شده',
     settled_and_collected_cheques: 'تسویه و چک وصول‌شده',
   };
@@ -8285,10 +8566,36 @@ const HRPage: React.FC = () => {
               >
                 <AdaptiveSelectField
                   options={COMMISSION_BASIS_OPTIONS}
+                  optionRender={(option) => {
+                    const item = option?.data || option;
+                    return (
+                      <div className="py-1">
+                        <div className="font-bold">{item?.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-gray-500">{item?.description}</div>
+                      </div>
+                    );
+                  }}
+                  renderMobileOption={(option) => (
+                    <div className="py-1">
+                      <div className="font-bold">{option.label}</div>
+                      <div className="mt-1 text-xs leading-5 text-gray-500">{option.description}</div>
+                    </div>
+                  )}
                   getPopupContainer={resolveSelectPopupContainer}
                   modalContainer={resolveSelectPopupContainer}
                   overlayZIndexBase={14000}
                 />
+              </Form.Item>
+              <Form.Item noStyle shouldUpdate={(previous, current) => previous.basis !== current.basis}>
+                {({ getFieldValue }) => {
+                  const selectedBasis = getFieldValue('basis') as CommissionBasis | undefined;
+                  const selectedOption = COMMISSION_BASIS_OPTIONS.find((item) => item.value === selectedBasis);
+                  return selectedOption ? (
+                    <div className="-mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-200">
+                      {selectedOption.description}
+                    </div>
+                  ) : null;
+                }}
               </Form.Item>
               <Form.Item
                 name="percent_mode"
@@ -8338,16 +8645,31 @@ const HRPage: React.FC = () => {
             </div>
             {commissionLoading ? (
               <div className="py-10 flex items-center justify-center"><Spin /></div>
-            ) : commissionRows.length === 0 ? (
-              <Empty description="برای مشاهده ردیف‌ها، محاسبه را اجرا کنید." />
             ) : (
+              <>
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <Input
+                    value={commissionSearch}
+                    onChange={(event) => setCommissionSearch(event.target.value)}
+                    allowClear
+                    placeholder="جستجو در فاکتورها و اقلام..."
+                    className="max-w-md"
+                  />
+                  <Button
+                    icon={<PrinterOutlined />}
+                    disabled={commissionPrintRows.length === 0}
+                    onClick={() => commissionListPrintManager.setIsPrintModalOpen(true)}
+                  >
+                    پیش‌نمایش چاپ
+                  </Button>
+                </div>
               <Tabs
                 activeKey={commissionReviewTab}
-                onChange={(key) => setCommissionReviewTab(key as CommissionReviewBucket)}
+                onChange={(key) => setCommissionReviewTab(key as CommissionModalTab)}
                 items={[
                   {
                     key: 'current_period',
-                    label: `پورسانت‌های این ماه (${toPersianNumber(commissionRowsByBucket.current_period.length)})`,
+                    label: `پورسانت‌های این ماه (${toPersianNumber(filteredCommissionRowsByBucket.current_period.length)})`,
                     children: (
                       <div className="space-y-3">
                         <div className="flex flex-wrap gap-2">
@@ -8356,13 +8678,13 @@ const HRPage: React.FC = () => {
                           <Button size="small" danger onClick={() => applyCommissionDecisionToBucket('current_period', 'exclude')}>عدم لحاظ همه</Button>
                           <Button size="small" onClick={() => applyCommissionDecisionToBucket('current_period', 'auto')}>بازگشت به خودکار</Button>
                         </div>
-                        {commissionRowsByBucket.current_period.length === 0 ? (
+                        {filteredCommissionRowsByBucket.current_period.length === 0 ? (
                           <Empty description="ردیف احرازشده‌ای در این دوره باقی نمانده است." />
                         ) : (
                           <Table
                             rowKey="key"
                             columns={commissionInvoiceColumns}
-                            dataSource={commissionRowsByBucket.current_period}
+                            dataSource={filteredCommissionRowsByBucket.current_period}
                             pagination={{ pageSize: 10, showSizeChanger: false }}
                             scroll={{ x: 1400 }}
                             expandable={{
@@ -8426,14 +8748,14 @@ const HRPage: React.FC = () => {
                   },
                   {
                     key: 'backlog',
-                    label: `معوق / بازمانده (${toPersianNumber(commissionRowsByBucket.backlog.length)})`,
-                    children: commissionRowsByBucket.backlog.length === 0 ? (
+                    label: `معوق / بازمانده (${toPersianNumber(filteredCommissionRowsByBucket.backlog.length)})`,
+                    children: filteredCommissionRowsByBucket.backlog.length === 0 ? (
                       <Empty description="ردیف معوق یا منتقل‌شده‌ای وجود ندارد." />
                     ) : (
                       <Table
                         rowKey="key"
                         columns={commissionInvoiceColumns}
-                        dataSource={commissionRowsByBucket.backlog}
+                        dataSource={filteredCommissionRowsByBucket.backlog}
                         pagination={{ pageSize: 10, showSizeChanger: false }}
                         scroll={{ x: 1400 }}
                         expandable={{
@@ -8492,14 +8814,14 @@ const HRPage: React.FC = () => {
                   },
                   {
                     key: 'excluded',
-                    label: `مستثنا / عدم‌لحاظ (${toPersianNumber(commissionRowsByBucket.excluded.length)})`,
-                    children: commissionRowsByBucket.excluded.length === 0 ? (
+                    label: `مستثنا / عدم‌لحاظ (${toPersianNumber(filteredCommissionRowsByBucket.excluded.length)})`,
+                    children: filteredCommissionRowsByBucket.excluded.length === 0 ? (
                       <Empty description="ردیف مستثنا یا عدم‌لحاظی وجود ندارد." />
                     ) : (
                       <Table
                         rowKey="key"
                         columns={commissionInvoiceColumns}
-                        dataSource={commissionRowsByBucket.excluded}
+                        dataSource={filteredCommissionRowsByBucket.excluded}
                         pagination={{ pageSize: 10, showSizeChanger: false }}
                         scroll={{ x: 1400 }}
                         expandable={{
@@ -8529,12 +8851,125 @@ const HRPage: React.FC = () => {
                       />
                     ),
                   },
+                  {
+                    key: 'previous_calculations',
+                    label: `پورسانت‌های محاسبه‌شدهٔ قبلی (${toPersianNumber(commissionHistoryRows.length)})`,
+                    children: !selectedPreviousCommission ? (
+                      <Empty description="برای این بازاریاب، محاسبهٔ ثبت‌شده‌ای پیش از این بازه وجود ندارد." />
+                    ) : (() => {
+                      const historyRows = (Array.isArray(selectedPreviousCommission.details?.rows)
+                        ? selectedPreviousCommission.details.rows
+                        : [])
+                        .filter((row: any) => {
+                          const query = commissionSearch.trim().toLowerCase();
+                          if (!query) return true;
+                          return [
+                            row?.invoice_name,
+                            row?.invoice_status,
+                            row?.invoice_date,
+                            ...(Array.isArray(row?.lines) ? row.lines.flatMap((line: any) => [line?.product_label, line?.product_id]) : []),
+                          ].some((value) => String(value || '').toLowerCase().includes(query));
+                        });
+                      const statusMeta = commissionLedgerStatusMeta[String(selectedPreviousCommission.status || '')] || {
+                        color: 'default',
+                        label: selectedPreviousCommission.status || '-',
+                      };
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3 dark:border-gray-800 dark:bg-white/5">
+                            <div className="min-w-0">
+                              <div className="font-bold text-gray-800 dark:text-gray-100">{selectedPreviousCommission.title || 'محاسبه پورسانت'}</div>
+                              <div className="mt-1 text-xs text-gray-500">
+                                بازه: {toPersianNumber(safeJalaliFormat(selectedPreviousCommission.period_start, 'YYYY/MM/DD'))} تا {toPersianNumber(safeJalaliFormat(selectedPreviousCommission.period_end, 'YYYY/MM/DD'))}
+                              </div>
+                            </div>
+                            <Space wrap>
+                              <Tag color={statusMeta.color}>{statusMeta.label}</Tag>
+                              <span className="font-black text-green-700 persian-number">{formatMoney(selectedPreviousCommission.amount)}</span>
+                              <Button size="small" disabled={commissionHistoryIndex >= commissionHistoryRows.length - 1} onClick={() => setCommissionHistoryIndex((current) => current + 1)}>قبلی</Button>
+                              <Button size="small" disabled={commissionHistoryIndex <= 0} onClick={() => setCommissionHistoryIndex((current) => current - 1)}>بعدی</Button>
+                            </Space>
+                          </div>
+                          {historyRows.length === 0 ? (
+                            <Empty description="جزئیات فاکتورهای این محاسبه ثبت نشده است." />
+                          ) : (
+                            <Table
+                              rowKey={(row: any, index) => `${row?.invoice_id || 'invoice'}:${index}`}
+                              columns={commissionInvoiceColumns}
+                              dataSource={historyRows.map((row: any) => ({
+                                ...row,
+                                employee_id: selectedPreviousCommission.employee_id,
+                              }))}
+                              pagination={{ pageSize: 10, showSizeChanger: false }}
+                              scroll={{ x: 1400 }}
+                              expandable={{
+                                expandedRowRender: (invoiceRow: any) => (
+                                  <Table
+                                    rowKey={(line: any, index) => line?.item_key || line?.source_key || index}
+                                    size="small"
+                                    pagination={false}
+                                    dataSource={Array.isArray(invoiceRow?.lines) ? invoiceRow.lines : []}
+                                    columns={[
+                                      { title: 'قلم', dataIndex: 'product_label', key: 'product_label' },
+                                      { title: 'مبلغ نهایی', dataIndex: 'net_amount', key: 'net_amount', render: (value: number) => <span className="persian-number">{formatMoney(toNumber(value))}</span> },
+                                      { title: 'درصد', dataIndex: 'commission_percent', key: 'commission_percent', render: (value: number) => <span className="persian-number">{toPersianNumber(value)}٪</span> },
+                                      { title: 'پورسانت ثبت‌شده', dataIndex: 'commission_amount', key: 'commission_amount', render: (value: number) => <span className="persian-number font-bold text-green-700">{formatMoney(toNumber(value))}</span> },
+                                    ]}
+                                  />
+                                ),
+                              }}
+                            />
+                          )}
+                        </div>
+                      );
+                    })(),
+                  },
                 ]}
               />
+              </>
             )}
           </Card>
         </div>
       </Modal>
+
+      <PrintSection
+        isPrintModalOpen={commissionListPrintManager.isPrintModalOpen}
+        onClose={() => commissionListPrintManager.setIsPrintModalOpen(false)}
+        onPreparePrint={commissionListPrintManager.preparePrint}
+        onPrint={commissionListPrintManager.handlePrint}
+        printTemplates={commissionListPrintManager.printTemplates}
+        selectedTemplateId={commissionListPrintManager.selectedTemplateId}
+        onSelectTemplate={commissionListPrintManager.setSelectedTemplateId}
+        renderPrintCard={commissionListPrintManager.renderPrintCard}
+        printMode={commissionListPrintManager.printMode}
+        printableFields={commissionListPrintManager.printableFieldsForTemplate}
+        selectedPrintFields={commissionListPrintManager.selectedPrintFields}
+        onTogglePrintField={commissionListPrintManager.handleTogglePrintField}
+        onTogglePrintFieldGroup={commissionListPrintManager.handleTogglePrintFieldGroup}
+        onMovePrintField={commissionListPrintManager.handleMovePrintField}
+        imageDisplayMode={commissionListPrintManager.imageDisplayMode}
+        onChangeImageDisplayMode={commissionListPrintManager.handleChangeImageDisplayMode}
+        onSavePrintFields={commissionListPrintManager.handleSavePrintFields}
+        savingPrintFields={commissionListPrintManager.savingPrintFields}
+        printSignatureRows={commissionListPrintManager.printSignatureStates}
+        printSignatureQuickAddOptions={commissionListPrintManager.printSignatureQuickAddOptions}
+        signatureOptionsByRow={commissionListPrintManager.signatureOptionsByRow}
+        onAddPrintSignatureRow={commissionListPrintManager.handleAddPrintSignatureRow}
+        onRemovePrintSignatureRow={commissionListPrintManager.handleRemovePrintSignatureRow}
+        onMovePrintSignatureRow={commissionListPrintManager.handleMovePrintSignatureRow}
+        onTogglePrintSignatureEnabled={commissionListPrintManager.handleTogglePrintSignatureEnabled}
+        onTogglePrintSignatureAutomatic={commissionListPrintManager.handleTogglePrintSignatureAutomatic}
+        onChangePrintSignatureName={commissionListPrintManager.handleChangePrintSignatureName}
+        onChangePrintSignatureSubtitle={commissionListPrintManager.handleChangePrintSignatureSubtitle}
+        onChangePrintSignatureSignerModule={commissionListPrintManager.handleChangePrintSignatureSignerModule}
+        onChangePrintSignatureSignerId={commissionListPrintManager.handleChangePrintSignatureSignerId}
+        onSearchPrintSignatureOptions={commissionListPrintManager.loadSignatureSignerOptions}
+        onRefreshPreview={commissionListPrintManager.refreshTemplates}
+        allowFieldSelectionTab={commissionListPrintManager.allowFieldSelectionTab}
+        showImageDisplayModeControl={commissionListPrintManager.showImageDisplayModeControl}
+        previewMeta={commissionListPrintManager.previewMeta}
+        modalZIndex={1200}
+      />
 
       <Modal
         title={attendanceModalMode === 'create' ? 'افزودن سریع رکورد تردد' : attendanceModalMode === 'edit' ? 'ویرایش رکورد تردد' : 'نمایش رکورد تردد'}

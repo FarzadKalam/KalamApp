@@ -35,6 +35,27 @@ describe('commissionRuntime', () => {
     expect(rows[0]?.lines).toHaveLength(2);
   });
 
+  it('includes prepayment invoices in the approved-and-higher calculation', () => {
+    const rows = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-prepayment',
+        status: 'prepayment',
+        invoice_date: '2026-05-10',
+        updated_at: '2026-05-12T09:00:00.000Z',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'approved_invoices',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+
+    expect(rows[0]?.selected_amount).toBe(100000);
+  });
+
   it('keeps settled_invoices at zero until full settlement happens in the period', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{
@@ -78,6 +99,91 @@ describe('commissionRuntime', () => {
 
     expect(rows[0]?.event_pool_amount).toBe(250000);
     expect(rows[0]?.selected_amount).toBe(25000);
+  });
+
+  it('only pays the new portion of cumulative receipts after a previous commission', () => {
+    const rows = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-partial',
+        status: 'final',
+        invoice_date: '2026-04-10',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        payments: [
+          { amount: 300000, status: 'settled', payment_type: 'cash', date: '2026-04-15' },
+          { amount: 200000, status: 'settled', payment_type: 'cash', date: '2026-05-15' },
+        ],
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_settled_invoices',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      postedAllocations: [{
+        basis: 'approved_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-partial',
+        invoice_item_key: 'inv-partial:0:item',
+        posted_amount: 30000,
+      }],
+    });
+
+    expect(rows[0]?.entitled_amount).toBe(50000);
+    expect(rows[0]?.selected_amount).toBe(20000);
+  });
+
+  it('does not show an already paid item again when the calculation basis changes', () => {
+    const rows = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-paid',
+        status: 'settled',
+        invoice_date: '2026-05-10',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        payments: [{ amount: 1000000, status: 'settled', payment_type: 'cash', date: '2026-05-12' }],
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'settled_invoices',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      postedAllocations: [{
+        basis: 'approved_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-paid',
+        invoice_item_key: 'inv-paid:0:item',
+        posted_amount: 100000,
+      }],
+    });
+
+    expect(rows).toHaveLength(0);
+  });
+
+  it('requires full settlement and uses only cheques collected in this period', () => {
+    const [row] = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-cheque-only',
+        status: 'settled',
+        invoice_date: '2026-04-10',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        payments: [
+          { amount: 500000, status: 'settled', payment_type: 'cash', date: '2026-04-15' },
+          { amount: 500000, status: 'settled', payment_type: 'cheque', cheque_status: 'cleared', date: '2026-04-20', cheque_cleared_at: '2026-05-12' },
+        ],
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'settled_and_collected_cheques',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+
+    expect(row.event_pool_amount).toBe(500000);
+    expect(row.selected_amount).toBe(50000);
   });
 
   it('calculates from invoice lines when older invoices do not have stored total columns', () => {
@@ -147,7 +253,7 @@ describe('commissionRuntime', () => {
       periodEnd: '2026-05-31',
     };
 
-    expect(buildCommissionDraftRows({ ...baseArgs, basis: 'prepaid_and_settled_invoices', percentMode: 'product_default' })[0]?.event_pool_amount).toBe(500000);
+    expect(buildCommissionDraftRows({ ...baseArgs, basis: 'prepaid_and_settled_invoices', percentMode: 'product_default' })[0]?.event_pool_amount).toBe(1000000);
     expect(buildCommissionDraftRows({ ...baseArgs, basis: 'settled_invoices', percentMode: 'product_default' })[0]?.event_pool_amount).toBe(1000000);
   });
 
@@ -343,6 +449,58 @@ describe('commissionRuntime', () => {
 
     expect(includedRow.selected_amount).toBe(50000);
     expect(getCommissionLineReviewBucket(includedRow, includedRow.lines[0])).toBe('current_period');
+  });
+
+  it('groups deferred items from one invoice under a single backlog row', () => {
+    const existingDrafts: CommissionPersistedDraft[] = [
+      {
+        source_key: 'commission_draft:employee-1:prepaid_and_settled_invoices:product_default:inv-group:item-1:2026-04-01:2026-04-30',
+        employee_id: 'employee-1',
+        assignee_id: 'profile-1',
+        period_start: '2026-04-01',
+        period_end: '2026-04-30',
+        source_basis: 'prepaid_and_settled_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-group',
+        invoice_item_key: 'item-1',
+        entitled_amount: 20000,
+        posted_amount: 0,
+        remaining_amount: 20000,
+        decision_status: 'defer_to_next_period',
+        details: { invoice_name: 'فاکتور گروهی', product_label: 'قلم اول', net_amount: 200000, commission_percent: 10 },
+      },
+      {
+        source_key: 'commission_draft:employee-1:prepaid_and_settled_invoices:product_default:inv-group:item-2:2026-04-01:2026-04-30',
+        employee_id: 'employee-1',
+        assignee_id: 'profile-1',
+        period_start: '2026-04-01',
+        period_end: '2026-04-30',
+        source_basis: 'prepaid_and_settled_invoices',
+        percent_mode: 'product_default',
+        invoice_id: 'inv-group',
+        invoice_item_key: 'item-2',
+        entitled_amount: 30000,
+        posted_amount: 0,
+        remaining_amount: 30000,
+        decision_status: 'defer_to_next_period',
+        details: { invoice_name: 'فاکتور گروهی', product_label: 'قلم دوم', net_amount: 300000, commission_percent: 10 },
+      },
+    ];
+
+    const rows = buildCommissionDraftRows({
+      invoices: [],
+      employeeIdByAssigneeId: {},
+      employeeDefaultCommissionByEmployeeId: {},
+      basis: 'prepaid_and_settled_invoices',
+      percentMode: 'product_default',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+      existingDrafts,
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.invoice_name).toBe('فاکتور گروهی');
+    expect(rows[0]?.lines).toHaveLength(2);
   });
 
   it('reallocates current-period pool amounts after excluding a line', () => {

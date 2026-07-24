@@ -1391,11 +1391,17 @@ const MessagingConversationList: React.FC<{
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
+  hasMoreSms?: boolean;
+  hasMoreCalls?: boolean;
+  loadingMoreSms?: boolean;
+  loadingMoreCalls?: boolean;
+  onLoadMoreSms?: () => void;
+  onLoadMoreCalls?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
   unreadSummary?: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
-  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms = false, hasMoreCalls = false, loadingMoreSms = false, loadingMoreCalls = false, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary = EMPTY_MESSAGING_UNREAD_SUMMARY }) => (
+  <MessagingConversationListInner conversations={conversations} selectedKey={selectedKey} onSelect={onSelect} compact={compact} loading={loading} onRefresh={onRefresh} refreshing={refreshing} onCreateInternalGroup={onCreateInternalGroup} hasMoreSms={hasMoreSms} hasMoreCalls={hasMoreCalls} loadingMoreSms={loadingMoreSms} loadingMoreCalls={loadingMoreCalls} onLoadMoreSms={onLoadMoreSms} onLoadMoreCalls={onLoadMoreCalls} activeFilter={activeFilter} onChangeFilter={onChangeFilter} unreadSummary={unreadSummary} />
 );
 
 const MessagingConversationListInner: React.FC<{
@@ -1407,10 +1413,16 @@ const MessagingConversationListInner: React.FC<{
   onRefresh?: () => void;
   refreshing?: boolean;
   onCreateInternalGroup?: () => void;
+  hasMoreSms: boolean;
+  hasMoreCalls: boolean;
+  loadingMoreSms: boolean;
+  loadingMoreCalls: boolean;
+  onLoadMoreSms?: () => void;
+  onLoadMoreCalls?: () => void;
   activeFilter: ChannelKind | 'all';
   onChangeFilter: (value: ChannelKind | 'all') => void;
   unreadSummary: MessagingUnreadSummary;
-}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, activeFilter, onChangeFilter, unreadSummary }) => {
+}> = ({ conversations, selectedKey, onSelect, compact = false, loading = false, onRefresh, refreshing = false, onCreateInternalGroup, hasMoreSms, hasMoreCalls, loadingMoreSms, loadingMoreCalls, onLoadMoreSms, onLoadMoreCalls, activeFilter, onChangeFilter, unreadSummary }) => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const normalizedSearch = String(searchValue || '').trim().toLocaleLowerCase('fa');
@@ -1599,6 +1611,20 @@ const MessagingConversationListInner: React.FC<{
           </button>
         );
       })}
+      {!loading && (activeFilter === 'all' || activeFilter === 'sms' || activeFilter === 'call') ? (
+        <div className={`flex flex-col gap-1.5 ${compact ? 'pt-1' : 'px-1 pb-2 pt-2'}`}>
+          {hasMoreSms && (activeFilter === 'all' || activeFilter === 'sms') ? (
+            <Button size="small" block loading={loadingMoreSms} onClick={onLoadMoreSms} className="!h-8 !rounded-lg !text-xs">
+              مشاهده پیامک‌های قدیمی‌تر
+            </Button>
+          ) : null}
+          {hasMoreCalls && (activeFilter === 'all' || activeFilter === 'call') ? (
+            <Button size="small" block loading={loadingMoreCalls} onClick={onLoadMoreCalls} className="!h-8 !rounded-lg !text-xs">
+              مشاهده تماس‌های قدیمی‌تر
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       </div>
     </div>
   );
@@ -4829,6 +4855,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
             onRefresh={() => void refreshMessagingSurface()}
             refreshing={refreshingMessages}
             onCreateInternalGroup={openCreateInternalGroupModal}
+            hasMoreSms={liveData.hasMoreSms}
+            hasMoreCalls={liveData.hasMoreCalls}
+            loadingMoreSms={liveData.loadingMoreSms}
+            loadingMoreCalls={liveData.loadingMoreCalls}
+            onLoadMoreSms={() => void liveData.loadMoreSms()}
+            onLoadMoreCalls={() => void liveData.loadMoreCalls()}
             activeFilter={conversationFilter}
             onChangeFilter={changeConversationFilter}
             unreadSummary={messagingUnreadSummary}
@@ -4845,6 +4877,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
               onSelect={selectConversation}
               compact
               loading={initialMessagingLoading}
+              hasMoreSms={liveData.hasMoreSms}
+              hasMoreCalls={liveData.hasMoreCalls}
+              loadingMoreSms={liveData.loadingMoreSms}
+              loadingMoreCalls={liveData.loadingMoreCalls}
+              onLoadMoreSms={() => void liveData.loadMoreSms()}
+              onLoadMoreCalls={() => void liveData.loadMoreCalls()}
               activeFilter={conversationFilter}
               onChangeFilter={changeConversationFilter}
               unreadSummary={messagingUnreadSummary}
@@ -4866,6 +4904,12 @@ const MessagingSurfacePrototype: React.FC<MessagingSurfacePrototypeProps> = ({ i
                 onRefresh={() => void refreshMessagingSurface()}
                 refreshing={refreshingMessages}
                 onCreateInternalGroup={openCreateInternalGroupModal}
+                hasMoreSms={liveData.hasMoreSms}
+                hasMoreCalls={liveData.hasMoreCalls}
+                loadingMoreSms={liveData.loadingMoreSms}
+                loadingMoreCalls={liveData.loadingMoreCalls}
+                onLoadMoreSms={() => void liveData.loadMoreSms()}
+                onLoadMoreCalls={() => void liveData.loadMoreCalls()}
                 activeFilter={conversationFilter}
                 onChangeFilter={changeConversationFilter}
                 unreadSummary={messagingUnreadSummary}

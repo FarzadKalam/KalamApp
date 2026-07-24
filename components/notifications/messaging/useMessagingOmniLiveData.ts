@@ -607,10 +607,53 @@ const isRpcSchemaCompatibilityError = (error: any) => {
     || code === '42703'
     || code === 'PGRST204'
     || code === 'PGRST301'
+    || code === 'PGRST202'
     || message.includes('schema cache')
     || message.includes('failed to fetch')
     || (message.includes('column') && message.includes('does not exist'))
   );
+};
+
+const COMMUNICATION_PAGE_SIZE = 80;
+
+type CommunicationPage = {
+  rows: any[];
+  hasMore: boolean;
+};
+
+type CommunicationPageCursor = {
+  at: string | null;
+  id: string | null;
+};
+
+const toCommunicationPage = (rows: any[]): CommunicationPage => ({
+  rows: (rows || []).slice(0, COMMUNICATION_PAGE_SIZE),
+  hasMore: (rows || []).length > COMMUNICATION_PAGE_SIZE,
+});
+
+const getSmsPageCursor = (rows: any[]): CommunicationPageCursor => {
+  const last = (rows || [])[rows.length - 1] || {};
+  return {
+    at: String(last?.message_at || last?.received_at || last?.sent_at || last?.created_at || '').trim() || null,
+    id: String(last?.id || '').trim() || null,
+  };
+};
+
+const getVoipPageCursor = (rows: any[]): CommunicationPageCursor => {
+  const last = (rows || [])[rows.length - 1] || {};
+  return {
+    at: String(last?.started_at || last?.created_at || '').trim() || null,
+    id: String(last?.id || '').trim() || null,
+  };
+};
+
+const appendDistinctRows = (currentRows: any[], nextRows: any[]) => {
+  const rowsById = new Map<string, any>();
+  [...(currentRows || []), ...(nextRows || [])].forEach((row) => {
+    const id = String(row?.id || '').trim();
+    if (id) rowsById.set(id, row);
+  });
+  return Array.from(rowsById.values());
 };
 
 const resolveCanViewAllSms = (permissions: any) => {
@@ -799,59 +842,93 @@ const shouldHydrateBotDirectMessageMedia = (
   return true;
 };
 
-const fetchSmsMessagesFallback = async (profile: LiveProfile) => {
-  if (!profile.id || !profile.orgId || !profile.canViewAllSms) return [];
+const fetchSmsMessagesFallback = async (profile: LiveProfile, offset = 0): Promise<CommunicationPage> => {
+  if (!profile.id || !profile.orgId || !profile.canViewAllSms) return { rows: [], hasMore: false };
   const { data, error } = await supabase
     .from('outbound_messages')
     .select('id,title,module_id,record_id,related_module_id,related_record_id,customer_id,assignee_id,assignee_type,assignee_role_id,direction,provider,provider_message_id,sender,recipient,phone_number_id,phone_match_status,message_text,status,error_message,metadata,sent_at,received_at,created_at,updated_at')
     .eq('org_id', profile.orgId)
     .eq('channel_type', 'sms')
     .order('created_at', { ascending: false })
-    .limit(80);
+    .range(offset, offset + COMMUNICATION_PAGE_SIZE);
   if (error) {
-    if (isMissingTableLikeError(error) || isRpcSchemaCompatibilityError(error)) return [];
+    if (isMissingTableLikeError(error) || isRpcSchemaCompatibilityError(error)) return { rows: [], hasMore: false };
     throw error;
   }
-  return (data || []).map((row: any) => ({
+  return toCommunicationPage((data || []).map((row: any) => ({
     ...row,
     phone_number: String(row?.direction || '').trim() === 'inbound' ? row?.sender : row?.recipient,
     message_at: row?.received_at || row?.sent_at || row?.created_at || null,
-  }));
+  })));
 };
 
-const fetchSmsMessages = async (profile: LiveProfile) => {
+const fetchSmsMessages = async (
+  profile: LiveProfile,
+  options?: { offset?: number; cursor?: CommunicationPageCursor | null },
+): Promise<CommunicationPage> => {
   // Full-scope users are already protected by tenant RLS and the explicit
   // org_id predicate in the fallback query. Avoid the per-record access RPC
   // for them; on large organizations that RPC can exhaust statement_timeout.
-  if (profile.canViewAllSms) return fetchSmsMessagesFallback(profile);
-  const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports', { p_limit: 80 });
+  const offset = Math.max(0, Number(options?.offset || 0));
+  if (profile.canViewAllSms) return fetchSmsMessagesFallback(profile, offset);
+  const cursor = options?.cursor;
+  const rpcArgs: Record<string, any> = { p_limit: COMMUNICATION_PAGE_SIZE + 1 };
+  if (cursor?.at && cursor?.id) {
+    rpcArgs.p_before_at = cursor.at;
+    rpcArgs.p_before_id = cursor.id;
+  }
+  const rpcResult = await supabase.rpc('get_accessible_sms_delivery_reports_page', rpcArgs);
   if (!rpcResult.error) {
-    const rows = rpcResult.data || [];
-    return rows;
+    return toCommunicationPage(rpcResult.data || []);
   }
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
-  return fetchSmsMessagesFallback(profile);
+  if (!cursor?.at || !cursor.id) {
+    const legacyResult = await supabase.rpc('get_accessible_sms_delivery_reports', {
+      p_limit: COMMUNICATION_PAGE_SIZE + 1,
+    });
+    if (!legacyResult.error) return toCommunicationPage(legacyResult.data || []);
+    if (!isRpcSchemaCompatibilityError(legacyResult.error)) throw legacyResult.error;
+  }
+  return fetchSmsMessagesFallback(profile, offset);
 };
 
-const fetchVoipCalls = async (profile: LiveProfile) => {
-  if (!profile.id) return [];
-  const rpcResult = await supabase.rpc('get_accessible_voip_call_logs', { p_limit: 80 });
-  if (!rpcResult.error) return rpcResult.data || [];
+const fetchVoipCalls = async (
+  profile: LiveProfile,
+  options?: { offset?: number; cursor?: CommunicationPageCursor | null },
+): Promise<CommunicationPage> => {
+  if (!profile.id) return { rows: [], hasMore: false };
+  const offset = Math.max(0, Number(options?.offset || 0));
+  const cursor = options?.cursor;
+  const rpcArgs: Record<string, any> = { p_limit: COMMUNICATION_PAGE_SIZE + 1 };
+  if (cursor?.at && cursor?.id) {
+    rpcArgs.p_before_at = cursor.at;
+    rpcArgs.p_before_id = cursor.id;
+  }
+  const rpcResult = await supabase.rpc('get_accessible_voip_call_logs_page', rpcArgs);
+  if (!rpcResult.error) return toCommunicationPage(rpcResult.data || []);
   if (!isRpcSchemaCompatibilityError(rpcResult.error)) throw rpcResult.error;
+
+  if (!cursor?.at || !cursor.id) {
+    const legacyResult = await supabase.rpc('get_accessible_voip_call_logs', {
+      p_limit: COMMUNICATION_PAGE_SIZE + 1,
+    });
+    if (!legacyResult.error) return toCommunicationPage(legacyResult.data || []);
+    if (!isRpcSchemaCompatibilityError(legacyResult.error)) throw legacyResult.error;
+  }
 
   let query = supabase
     .from('voip_call_logs')
     .select('id, title, direction, status, source_number, destination_number, extension, module_id, record_id, related_module_id, related_record_id, phone_number_id, phone_match_status, assignee_id, assignee_type, assignee_role_id, started_at, ended_at, created_at, talk_seconds, wait_seconds, call_id, file_id, recording_url')
     .order('started_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
-    .limit(80);
+    .range(offset, offset + COMMUNICATION_PAGE_SIZE);
 
   const { data, error } = await query;
   if (error) {
-    if (isMissingTableLikeError(error)) return [];
+    if (isMissingTableLikeError(error)) return { rows: [], hasMore: false };
     throw error;
   }
-  return data || [];
+  return toCommunicationPage(data || []);
 };
 
 const fetchVoipOperatorIdentities = async (orgId: string | null, calls: any[]) => {
@@ -1332,6 +1409,10 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   });
   const [smsMessages, setSmsMessages] = useState<any[]>([]);
   const [voipCalls, setVoipCalls] = useState<any[]>([]);
+  const [hasMoreSms, setHasMoreSms] = useState(false);
+  const [hasMoreCalls, setHasMoreCalls] = useState(false);
+  const [loadingMoreSms, setLoadingMoreSms] = useState(false);
+  const [loadingMoreCalls, setLoadingMoreCalls] = useState(false);
   const [voipOperatorIdentities, setVoipOperatorIdentities] = useState<Record<string, VoipOperatorIdentity>>({});
   const [botGroups, setBotGroups] = useState<BotGroupRow[]>([]);
   const [botGroupMessages, setBotGroupMessages] = useState<BotMessageRow[]>([]);
@@ -1348,6 +1429,10 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const hydratingRubikaMessageIdsRef = useRef<Set<string>>(new Set());
   const rubikaHydrationFailuresRef = useRef<Map<string, { attempts: number; lastAttemptAt: number }>>(new Map());
   const loggedRubikaHydrationFailuresRef = useRef<Set<string>>(new Set());
+  const smsPageOffsetRef = useRef(0);
+  const voipPageOffsetRef = useRef(0);
+  const smsPageCursorRef = useRef<CommunicationPageCursor | null>(null);
+  const voipPageCursorRef = useRef<CommunicationPageCursor | null>(null);
 
   useEffect(() => {
     recordTitleMapRef.current = recordTitleMap;
@@ -1382,6 +1467,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
   const applyCachedSnapshot = useCallback((snapshot: MessagingOmniCacheSnapshot) => {
     setSmsMessages(snapshot.smsMessages || []);
     setVoipCalls(snapshot.voipCalls || []);
+    smsPageOffsetRef.current = (snapshot.smsMessages || []).length;
+    voipPageOffsetRef.current = (snapshot.voipCalls || []).length;
+    smsPageCursorRef.current = getSmsPageCursor(snapshot.smsMessages || []);
+    voipPageCursorRef.current = getVoipPageCursor(snapshot.voipCalls || []);
+    setHasMoreSms(false);
+    setHasMoreCalls(false);
     setBotGroups(snapshot.botGroups || []);
     setBotGroupMessages(snapshot.botGroupMessages || []);
     setBotDirectThreads(snapshot.botDirectThreads || []);
@@ -1405,17 +1496,29 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
           setReadStateKeys(nextReadStateKeys || new Set());
           return nextReadStateKeys;
         });
-      const smsPromise = safeLiveFetch('sms', () => fetchSmsMessages(profile), [] as any[])
-        .then((rows) => {
-          setSmsMessages(rows || []);
-          return rows || [];
+      const smsPromise = safeLiveFetch('sms', () => fetchSmsMessages(profile), { rows: [], hasMore: false })
+        .then((page) => {
+          const rows = page?.rows || [];
+          setSmsMessages(rows);
+          setHasMoreSms(Boolean(page?.hasMore));
+          smsPageOffsetRef.current = rows.length;
+          smsPageCursorRef.current = getSmsPageCursor(rows);
+          return rows;
         });
-      const callPromise = safeLiveFetch('voip', () => fetchVoipCalls(profile), [] as any[])
-        .then((rows) => filterVoipCallsByPermissionConditions(rows || [], profile))
-        .then((rows) => {
-          setVoipCalls(rows || []);
-          return rows || [];
-        });
+      const callPromise = safeLiveFetch('voip', () => fetchVoipCalls(profile), { rows: [], hasMore: false })
+        .then(async (page) => ({
+          rows: await filterVoipCallsByPermissionConditions(page?.rows || [], profile),
+          hasMore: Boolean(page?.hasMore),
+          sourceRows: page?.rows || [],
+        }))
+        .then((page) => {
+          const rows = page.rows || [];
+          setVoipCalls(rows);
+          setHasMoreCalls(page.hasMore);
+          voipPageOffsetRef.current = (page.sourceRows || []).length;
+          voipPageCursorRef.current = getVoipPageCursor(page.sourceRows || []);
+          return rows;
+        })
       const voipOperatorIdentityPromise = callPromise
         .then((rows) => safeLiveFetch('voip-operators', () => fetchVoipOperatorIdentities(profile.orgId, rows), {} as Record<string, VoipOperatorIdentity>))
         .then((identities) => {
@@ -1495,6 +1598,71 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
     }
     void refresh({ background: Boolean(cached) });
   }, [applyCachedSnapshot, profile, refresh]);
+
+  const mergeRecordLabels = useCallback(async (rows: any[]) => {
+    const labels = await safeLiveFetch(
+      'more-record-labels',
+      () => fetchRecordReferenceLabels(supabase, collectRecordReferences(rows || [])),
+      {} as Record<string, string>,
+    );
+    if (Object.keys(labels || {}).length === 0) return;
+    setRecordTitleMap((current) => {
+      const next = { ...current, ...labels };
+      recordTitleMapRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const loadMoreSms = useCallback(async () => {
+    if (!profile.id || loadingMoreSms || !hasMoreSms) return;
+    setLoadingMoreSms(true);
+    try {
+      const page = await fetchSmsMessages(profile, {
+        offset: smsPageOffsetRef.current,
+        cursor: smsPageCursorRef.current,
+      });
+      const rows = page.rows || [];
+      smsPageOffsetRef.current += rows.length;
+      smsPageCursorRef.current = getSmsPageCursor(rows);
+      setHasMoreSms(Boolean(page.hasMore && rows.length > 0));
+      setSmsMessages((current) => appendDistinctRows(current, rows));
+      await mergeRecordLabels(rows);
+    } catch (error) {
+      console.warn('Messaging v2 could not load older SMS messages.', error);
+    } finally {
+      setLoadingMoreSms(false);
+    }
+  }, [hasMoreSms, loadingMoreSms, mergeRecordLabels, profile]);
+
+  const loadMoreCalls = useCallback(async () => {
+    if (!profile.id || loadingMoreCalls || !hasMoreCalls) return;
+    setLoadingMoreCalls(true);
+    try {
+      const page = await fetchVoipCalls(profile, {
+        offset: voipPageOffsetRef.current,
+        cursor: voipPageCursorRef.current,
+      });
+      const sourceRows = page.rows || [];
+      const rows = await filterVoipCallsByPermissionConditions(sourceRows, profile);
+      voipPageOffsetRef.current += sourceRows.length;
+      voipPageCursorRef.current = getVoipPageCursor(sourceRows);
+      setHasMoreCalls(Boolean(page.hasMore && sourceRows.length > 0));
+      setVoipCalls((current) => appendDistinctRows(current, rows));
+      await mergeRecordLabels(rows);
+      const identities = await safeLiveFetch(
+        'more-voip-operators',
+        () => fetchVoipOperatorIdentities(profile.orgId, rows),
+        {} as Record<string, VoipOperatorIdentity>,
+      );
+      if (Object.keys(identities).length > 0) {
+        setVoipOperatorIdentities((current) => ({ ...current, ...identities }));
+      }
+    } catch (error) {
+      console.warn('Messaging v2 could not load older calls.', error);
+    } finally {
+      setLoadingMoreCalls(false);
+    }
+  }, [hasMoreCalls, loadingMoreCalls, mergeRecordLabels, profile]);
 
   const hydrateBotGroupMessageMedia = useCallback(async (rows: BotMessageRow[], groups: BotGroupRow[]) => {
     const groupById = new Map((groups || []).map((group) => [String(group?.id || '').trim(), group] as const));
@@ -1796,6 +1964,12 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       botDirectThreads,
       botSenderBindings,
       refresh,
+      hasMoreSms,
+      hasMoreCalls,
+      loadingMoreSms,
+      loadingMoreCalls,
+      loadMoreSms,
+      loadMoreCalls,
       profile,
       liveSummary: [
         botGroupModels.conversations.length ? `${toPersianNumber(botGroupModels.conversations.length)} گروه بات` : '',
@@ -1805,5 +1979,5 @@ export const useMessagingOmniLiveData = (options?: { realtimeEnabled?: boolean }
       ].filter(Boolean).join('، '),
       getModuleLabel,
     };
-  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, loading, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls, voipOperatorIdentities]);
+  }, [botDirectMessages, botDirectThreads, botGroupMessages, botGroups, botSenderBindings, hasMoreCalls, hasMoreSms, loadMoreCalls, loadMoreSms, loading, loadingMoreCalls, loadingMoreSms, profile, readStateKeys, recordTitleMap, refresh, smsMessages, voipCalls, voipOperatorIdentities]);
 };

@@ -43,6 +43,12 @@ const GOAL_PROGRESS_STALE_CACHE_TTL_MS = 15 * 60_000;
 const GOAL_PROGRESS_CACHE_STORAGE_KEY = 'goal-progress-cards-cache-v1';
 const GOAL_PROGRESS_COMPUTE_CONCURRENCY = 3;
 const GOAL_PROGRESS_REFRESH_EVENT = 'kalam:goal-progress-refresh';
+const GOAL_PROGRESS_SELECT_FIELDS = [
+  'id', 'org_id', 'module_id', 'name', 'description', 'goal_scope', 'period_unit', 'subperiod_unit',
+  'metric_type', 'metric_field_key', 'date_field_key', 'target_value', 'levels_enabled', 'bronze_value',
+  'silver_value', 'gold_value', 'assignee_user_ids', 'assignee_role_ids', 'conditions_all', 'conditions_any',
+  'config', 'is_active', 'created_at', 'updated_at', 'created_by', 'updated_by',
+].join(', ');
 
 type GoalProgressCacheEntry = {
   data: GoalProgressSnapshot[];
@@ -326,7 +332,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
       const cardsPromise = (async () => {
         let query = supabase
           .from('goals')
-          .select('*')
+          .select(GOAL_PROGRESS_SELECT_FIELDS)
           .eq('is_active', true)
           .order('updated_at', { ascending: false });
 
