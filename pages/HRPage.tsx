@@ -2524,7 +2524,7 @@ const HRPage: React.FC = () => {
   useEffect(() => {
     // Handle both 'goals' and 'goal_fulfillment' tab keys for backwards compatibility
     const isGoalTab = activeTab === 'goals' || activeTab === 'goal_fulfillment';
-    if (!isGoalTab) return;
+    if (!isGoalTab && !payrollWizardOpen) return;
 
     const run = async () => {
       setGoalTouchLoading(true);
@@ -2673,7 +2673,7 @@ const HRPage: React.FC = () => {
     };
 
     void run();
-  }, [activeTab, monthEnd, monthStart, payrollLedgerRows, payrollSlipById, visibleSummaries]);
+  }, [activeTab, monthEnd, monthStart, payrollLedgerRows, payrollSlipById, payrollWizardOpen, visibleSummaries]);
 
   const fetchCalculatedCommissionRows = useCallback(async () => {
     const periodStart = toNativeGregorianDateString(monthStart);
@@ -4117,6 +4117,7 @@ const HRPage: React.FC = () => {
           advance.reason || '',
         ].filter(Boolean).join('؛ ');
         return {
+          key: 'employee_advance',
           line_type: 'deduction' as const,
           title,
           amount,
@@ -8377,7 +8378,9 @@ const HRPage: React.FC = () => {
                     افزودن همه به فیش
                   </Button>
                 </div>
-                {payrollWizardGoalRows.length === 0 ? (
+                {goalTouchLoading ? (
+                  <div className="flex justify-center py-8"><Spin /></div>
+                ) : payrollWizardGoalRows.length === 0 ? (
                   <Empty description="هدف فعالی برای این بازه لمس نشده است." />
                 ) : (
                   <div className="space-y-3">

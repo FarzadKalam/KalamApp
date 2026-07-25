@@ -52,6 +52,7 @@ type AssistantAction =
   | 'embed_document_chunks'
   | 'rebuild_instruction_ai_context'
   | 'rebuild_job_description_ai_context'
+  | 'analyze_mbti_assessment'
   | 'saas_ai';
 
 type RequestContext = {
@@ -951,6 +952,17 @@ const canRebuildJobDescriptionAiContext = (authContext: any) => {
   return perm?.view !== false
     && perm?.edit !== false
     && fields?.__action_rebuild_job_description_ai_context !== false;
+};
+
+const canAnalyzeMbtiAssessment = (authContext: any) => {
+  if (canViewSaasAdmin(authContext)) return true;
+  const permissions = authContext?.permissions;
+  if (!permissions || typeof permissions !== 'object') return true;
+  const perm = permissions?.mbti_assessments || {};
+  const fields = perm?.fields || {};
+  return perm?.view !== false
+    && perm?.edit !== false
+    && fields?.__action_mbti_analyze_report !== false;
 };
 
 const canViewSaasAdmin = (authContext: any) => {
@@ -11338,6 +11350,152 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
   });
 };
 
+const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
+  if (!canAnalyzeMbtiAssessment(authContext)) {
+    return json(403, { success: false, message: 'دسترسی تحلیل هوشمند تست MBTI را ندارید.' });
+  }
+  const assessmentId = normalizeId(body?.mbtiAssessmentId || body?.mbti_assessment_id);
+  if (!isUuid(assessmentId)) return json(400, { success: false, message: 'شناسه تست معتبر نیست.' });
+
+  const modulePerm = getModulePermission(authContext?.permissions, 'mbti_assessments');
+  if (!canViewModule(modulePerm)) {
+    return json(403, { success: false, message: 'دسترسی مشاهده تست MBTI را ندارید.' });
+  }
+  const [assessment] = await restSelect(supabaseUrl, serviceRoleKey, 'mbti_assessments', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `eq.${assessmentId}`,
+    select: 'id,org_id,respondent_name,position_title,related_employee_id,related_applicant_id,related_job_description_id,mbti_type,result_status,ei_score_e,ei_score_i,sn_score_s,sn_score_n,tf_score_t,tf_score_f,jp_score_j,jp_score_p,consent_given,ai_analysis_status',
+    limit: 1,
+  });
+  if (!assessment || !canAccessAssignedRecord(assessment, authContext, getRecordScope(modulePerm))) {
+    return json(404, { success: false, message: 'این تست در سازمان شما پیدا نشد یا مجاز نیست.' });
+  }
+  if (assessment.consent_given !== true) {
+    return json(400, { success: false, message: 'تا پیش از ثبت رضایت پاسخ‌دهنده، تحلیل هوشمند قابل انجام نیست.' });
+  }
+  if (assessment.result_status !== 'ready' || !/^[EISNTFJP]{4}$/.test(String(assessment.mbti_type || ''))) {
+    return json(400, { success: false, message: 'برای تحلیل هوشمند، همه پرسش‌های اصلی باید کامل و نتیجه قابل محاسبه باشد.' });
+  }
+
+  const [settings, planContext] = await Promise.all([
+    ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
+    loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
+  ]);
+  if (!canViewSaasAdmin(authContext) && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
+    return json(403, { success: false, message: 'ویژگی تحلیل هوشمند MBTI در پلن این سازمان فعال نیست.' });
+  }
+  await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
+
+  const employeeId = normalizeId(assessment.related_employee_id);
+  const applicantId = normalizeId(assessment.related_applicant_id);
+  const explicitJobDescriptionId = normalizeId(assessment.related_job_description_id);
+  const [employeeRows, applicantRows] = await Promise.all([
+    employeeId ? restSelect(supabaseUrl, serviceRoleKey, 'employees', {
+      org_id: `eq.${authContext.orgId}`,
+      id: `eq.${employeeId}`,
+      select: 'id,job_title,job_description_id',
+      limit: 1,
+    }) : Promise.resolve([]),
+    applicantId ? restSelect(supabaseUrl, serviceRoleKey, 'recruitment_applicants', {
+      org_id: `eq.${authContext.orgId}`,
+      id: `eq.${applicantId}`,
+      select: 'id,position_title',
+      limit: 1,
+    }) : Promise.resolve([]),
+  ]);
+  const employee = employeeRows[0] || null;
+  const applicant = applicantRows[0] || null;
+  const jobDescriptionId = explicitJobDescriptionId || normalizeId(employee?.job_description_id);
+  const jobDescriptionRows = jobDescriptionId ? await restSelect(supabaseUrl, serviceRoleKey, 'job_descriptions', {
+    org_id: `eq.${authContext.orgId}`,
+    id: `eq.${jobDescriptionId}`,
+    select: 'id,name,job_goal,job_responsibilities,job_duties,job_requirements,behavioral_traits,competency_ksa,role_relationships,performance_kpi',
+    limit: 1,
+  }) : [];
+  const jobDescription = jobDescriptionRows[0] || null;
+  const positionTitle = String(applicant?.position_title || employee?.job_title || assessment.position_title || jobDescription?.name || '').trim();
+  const jobContext = [
+    positionTitle ? `عنوان جایگاه: ${positionTitle}` : 'عنوان جایگاه ثبت نشده است.',
+    jobDescription?.job_goal ? `هدف نقش: ${String(jobDescription.job_goal).slice(0, 1200)}` : '',
+    jobDescription?.job_responsibilities ? `مسئولیت‌ها: ${String(jobDescription.job_responsibilities).slice(0, 1600)}` : '',
+    jobDescription?.job_duties ? `وظایف: ${String(jobDescription.job_duties).slice(0, 1600)}` : '',
+    jobDescription?.job_requirements ? `شرایط احراز: ${String(jobDescription.job_requirements).slice(0, 1200)}` : '',
+    jobDescription?.behavioral_traits ? `ویژگی‌های رفتاری تعریف‌شده: ${String(jobDescription.behavioral_traits).slice(0, 1000)}` : '',
+    jobDescription?.competency_ksa ? `شایستگی‌ها: ${String(jobDescription.competency_ksa).slice(0, 1200)}` : '',
+  ].filter(Boolean).join('\n\n');
+
+  const scores = [
+    `E/I: E=${assessment.ei_score_e}، I=${assessment.ei_score_i}`,
+    `S/N: S=${assessment.sn_score_s}، N=${assessment.sn_score_n}`,
+    `T/F: T=${assessment.tf_score_t}، F=${assessment.tf_score_f}`,
+    `J/P: J=${assessment.jp_score_j}، P=${assessment.jp_score_p}`,
+  ].join('\n');
+  const prompt = [
+    'برای یک گزارش توسعه‌ای منابع انسانی به فارسی تحلیل بنویس.',
+    'این داده‌ها یک خودارزیابی غیررسمی مبتنی بر ترجیح‌های MBTI هستند، نه آزمون تشخیصی یا ابزار معتبر انتخاب استخدام.',
+    'هرگز از واژه‌های مناسب/نامناسب برای استخدام، رتبه، امتیاز پذیرش، تشخیص روان‌شناختی یا نتیجه قطعی استفاده نکن.',
+    'نتیجه را فقط برای خودشناسی، گفت‌وگوی سازنده، شیوه ارتباط و رشد در نقش شغلی تفسیر کن؛ تفاوت‌ها را ارزشمند و وابسته به موقعیت بدان.',
+    'ساختار پاسخ: «جمع‌بندی ترجیح‌ها»، «همکاری و ارتباط در نقش»، «شرایط کمک‌کننده برای رشد»، «پرسش‌های پیشنهادی برای گفت‌وگو». هر بخش کوتاه و عملی باشد.',
+    '',
+    `تیپ محاسبه‌شده: ${assessment.mbti_type}`,
+    `امتیازها:\n${scores}`,
+    '',
+    `زمینه شغلی:\n${jobContext}`,
+  ].join('\n');
+
+  await restPatch(supabaseUrl, serviceRoleKey, 'mbti_assessments', {
+    id: `eq.${assessmentId}`,
+    org_id: `eq.${authContext.orgId}`,
+  }, {
+    ai_analysis_status: 'processing',
+    ai_analysis_error: null,
+    updated_at: new Date().toISOString(),
+  });
+  try {
+    const providerConfig = await resolveProviderConfig(supabaseUrl, serviceRoleKey, authContext, 'document_analysis');
+    const result = await callChatCompletions(providerConfig, [
+      { role: 'system', content: 'تو یک دستیار توسعه سازمانی محتاط هستی. فقط بر داده‌های داده‌شده تکیه کن و محدودیت‌های اخلاقی درخواست را رعایت کن.' },
+      { role: 'user', content: prompt },
+    ], {
+      maxTokens: 1100,
+      safetyIdentifier: `org_${authContext.orgId}_user_${authContext.userId}_mbti_${assessmentId}`,
+    });
+    const analysis = String(result.content || '').trim();
+    if (!analysis) throw new Error('هوش مصنوعی متن قابل نمایش برنگرداند.');
+    await restPatch(supabaseUrl, serviceRoleKey, 'mbti_assessments', {
+      id: `eq.${assessmentId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      ai_analysis: analysis,
+      ai_analysis_status: 'ready',
+      ai_analysis_error: null,
+      ai_analysis_at: new Date().toISOString(),
+      ai_analysis_model: result.model || providerConfig.model || null,
+      updated_at: new Date().toISOString(),
+    });
+    await recordAiUsageLedger(supabaseUrl, serviceRoleKey, authContext, {
+      capability: 'document_analysis',
+      provider: result.provider,
+      model: result.model,
+      requestId: result.requestId,
+      usageMetadata: result.usageMetadata,
+      metadata: { source: 'mbti_assessment_report', mbti_assessment_id: assessmentId },
+    });
+    return json(200, { success: true, analysis, model: result.model || providerConfig.model || null });
+  } catch (error: any) {
+    const failure = shortenProviderError(String(error?.message || error || 'mbti_analysis_failed'));
+    await restPatch(supabaseUrl, serviceRoleKey, 'mbti_assessments', {
+      id: `eq.${assessmentId}`,
+      org_id: `eq.${authContext.orgId}`,
+    }, {
+      ai_analysis_status: 'failed',
+      ai_analysis_error: failure.slice(0, 1000),
+      updated_at: new Date().toISOString(),
+    }).catch(() => []);
+    throw error;
+  }
+};
+
 const handleProposeNote = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   const userMessage = String(body?.message || '').trim() || 'برای این رکورد یک یادداشت کوتاه و کاربردی پیشنهاد بده.';
   const pageContext = await buildPermittedPageContext(supabaseUrl, serviceRoleKey, authContext, {
@@ -12103,6 +12261,7 @@ Deno.serve(async (req: Request) => {
     if (action === 'embed_document_chunks') return await handleEmbedDocumentChunks(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_instruction_ai_context') return await handleRebuildInstructionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'rebuild_job_description_ai_context') return await handleRebuildJobDescriptionAiContext(supabaseUrl, serviceRoleKey, authContext, body);
+    if (action === 'analyze_mbti_assessment') return await handleAnalyzeMbtiAssessment(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'get_thread') return await handleGetThread(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'save_agent_confirmation_grant') return await handleSaveAgentConfirmationGrant(supabaseUrl, serviceRoleKey, authContext, body);
     if (action === 'compress_thread_context') return await handleCompressThreadContext(supabaseUrl, serviceRoleKey, authContext, body);

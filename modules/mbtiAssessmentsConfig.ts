@@ -1,0 +1,83 @@
+import {
+  BlockType,
+  FieldLocation,
+  FieldNature,
+  FieldType,
+  ModuleDefinition,
+  ModuleNature,
+  ViewMode,
+} from '../types';
+import { MBTI_QUESTIONS } from '../utils/mbtiAssessment';
+
+const questionBlockTitle: Record<string, string> = {
+  ei: 'شیوه دریافت انرژی',
+  sn: 'شیوه دریافت اطلاعات',
+  tf: 'شیوه تصمیم‌گیری',
+  jp: 'شیوه برخورد با کارها',
+};
+
+export const mbtiAssessmentsModule: ModuleDefinition = {
+  id: 'mbti_assessments',
+  titles: { fa: 'تست‌های MBTI', faSingular: 'تست MBTI', en: 'MBTI Assessments' },
+  nature: ModuleNature.STANDARD,
+  table: 'mbti_assessments',
+  relationDisplay: {
+    labelTemplate: '{{title}}',
+    searchFields: ['title', 'respondent_name', 'respondent_phone', 'position_title', 'mbti_type'],
+  },
+  supportedViewModes: [ViewMode.LIST, ViewMode.GRID],
+  defaultViewMode: ViewMode.LIST,
+  fields: [
+    { key: 'title', labels: { fa: 'عنوان', en: 'Title' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1, isKey: true, isTableColumn: true, readonly: true, nature: FieldNature.PREDEFINED },
+    { key: 'respondent_name', labels: { fa: 'نام پاسخ‌دهنده', en: 'Respondent Name' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.1, isTableColumn: true, validation: { required: true }, nature: FieldNature.PREDEFINED },
+    { key: 'respondent_phone', labels: { fa: 'شماره موبایل', en: 'Phone' }, type: FieldType.PHONE, location: FieldLocation.HEADER, order: 1.2, isTableColumn: true, nature: FieldNature.STANDARD },
+    { key: 'respondent_email', labels: { fa: 'ایمیل', en: 'Email' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.3, nature: FieldNature.STANDARD },
+    { key: 'mbti_type', labels: { fa: 'تیپ محاسبه‌شده', en: 'Calculated Type' }, type: FieldType.TEXT, location: FieldLocation.HEADER, order: 1.4, isTableColumn: true, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'result_status', labels: { fa: 'وضعیت نتیجه', en: 'Result Status' }, type: FieldType.STATUS, location: FieldLocation.HEADER, order: 1.5, isTableColumn: true, readonly: true, defaultValue: 'incomplete', options: [{ label: 'ناقص', value: 'incomplete', color: 'gold' }, { label: 'آماده', value: 'ready', color: 'green' }], nature: FieldNature.SYSTEM },
+    { key: 'related_employee_id', labels: { fa: 'کارمند مرتبط', en: 'Related Employee' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'career_context', order: 1, relationConfig: { targetModule: 'employees', targetField: 'full_name' }, nature: FieldNature.STANDARD },
+    { key: 'related_applicant_id', labels: { fa: 'متقاضی استخدام مرتبط', en: 'Related Applicant' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'career_context', order: 2, relationConfig: { targetModule: 'recruitment_applicants', targetField: 'name' }, nature: FieldNature.STANDARD },
+    { key: 'related_job_description_id', labels: { fa: 'شرح شغل مرتبط', en: 'Related Job Description' }, type: FieldType.RELATION, location: FieldLocation.BLOCK, blockId: 'career_context', order: 3, relationConfig: { targetModule: 'job_descriptions', targetField: 'name' }, nature: FieldNature.STANDARD },
+    { key: 'position_title', labels: { fa: 'عنوان جایگاه شغلی', en: 'Position Title' }, type: FieldType.TEXT, location: FieldLocation.BLOCK, blockId: 'career_context', order: 4, nature: FieldNature.STANDARD },
+    { key: 'consent_given', labels: { fa: 'با ثبت پاسخ‌ها و استفاده از نتیجه برای گفت‌وگوی توسعه‌ای موافقم', en: 'Consent Given' }, type: FieldType.CHECKBOX, location: FieldLocation.BLOCK, blockId: 'consent', order: 1, validation: { required: true }, nature: FieldNature.STANDARD },
+    { key: 'consent_at', labels: { fa: 'زمان ثبت رضایت', en: 'Consent At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'consent', order: 2, readonly: true, nature: FieldNature.SYSTEM },
+    ...MBTI_QUESTIONS.map((question, index) => ({
+      key: question.key,
+      labels: { fa: question.label, en: question.label },
+      type: FieldType.SELECT,
+      location: FieldLocation.BLOCK,
+      blockId: `mbti_${question.axis}`,
+      order: index + 1,
+      validation: { required: true },
+      options: question.options,
+      nature: FieldNature.PREDEFINED,
+    })),
+    { key: 'ei_score_e', labels: { fa: 'امتیاز E', en: 'E Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 1, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'ei_score_i', labels: { fa: 'امتیاز I', en: 'I Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 2, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'sn_score_s', labels: { fa: 'امتیاز S', en: 'S Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 3, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'sn_score_n', labels: { fa: 'امتیاز N', en: 'N Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 4, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'tf_score_t', labels: { fa: 'امتیاز T', en: 'T Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 5, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'tf_score_f', labels: { fa: 'امتیاز F', en: 'F Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 6, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'jp_score_j', labels: { fa: 'امتیاز J', en: 'J Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 7, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'jp_score_p', labels: { fa: 'امتیاز P', en: 'P Score' }, type: FieldType.NUMBER, location: FieldLocation.BLOCK, blockId: 'result', order: 8, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'ai_analysis', labels: { fa: 'تحلیل هوش مصنوعی', en: 'AI Analysis' }, type: FieldType.SUPER_LONG_TEXT, location: FieldLocation.BLOCK, blockId: 'ai_analysis', order: 1, readonly: true, nature: FieldNature.SYSTEM },
+    { key: 'ai_analysis_status', labels: { fa: 'وضعیت تحلیل هوشمند', en: 'AI Analysis Status' }, type: FieldType.STATUS, location: FieldLocation.BLOCK, blockId: 'ai_analysis', order: 2, readonly: true, options: [{ label: 'درخواست نشده', value: 'not_requested', color: 'default' }, { label: 'در حال تحلیل', value: 'processing', color: 'blue' }, { label: 'آماده', value: 'ready', color: 'green' }, { label: 'خطا', value: 'failed', color: 'red' }], nature: FieldNature.SYSTEM },
+    { key: 'created_at', labels: { fa: 'زمان ثبت', en: 'Created At' }, type: FieldType.DATETIME, location: FieldLocation.BLOCK, blockId: 'system_info', order: 1, readonly: true, nature: FieldNature.SYSTEM },
+  ],
+  blocks: [
+    { id: 'career_context', titles: { fa: 'ارتباط شغلی', en: 'Career Context' }, type: BlockType.FIELD_GROUP, order: 1 },
+    { id: 'consent', titles: { fa: 'رضایت و آگاهی', en: 'Consent' }, type: BlockType.FIELD_GROUP, order: 1.1 },
+    ...Object.entries(questionBlockTitle).map(([axis, title], index) => ({ id: `mbti_${axis}`, titles: { fa: title, en: title }, type: BlockType.FIELD_GROUP, order: 2 + index })),
+    { id: 'result', titles: { fa: 'نتیجه محاسبه‌شده', en: 'Calculated Result' }, type: BlockType.FIELD_GROUP, order: 6 },
+    { id: 'ai_analysis', titles: { fa: 'تحلیل هوشمند', en: 'AI Analysis' }, type: BlockType.FIELD_GROUP, order: 7 },
+    { id: 'system_info', titles: { fa: 'اطلاعات سیستمی', en: 'System Info' }, type: BlockType.FIELD_GROUP, order: 99 },
+  ],
+  recordActions: [
+    {
+      id: 'mbti_analyze_report',
+      label: 'تحلیل و گزارش نتیجه',
+      placement: 'header',
+      variant: 'primary',
+      navigateTo: (record) => `/mbti_assessments/${String(record?.id || '').trim()}/report`,
+    },
+  ],
+};

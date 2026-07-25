@@ -99,6 +99,7 @@ const loadInquiryForm = () => import("./pages/InquiryForm");
 const loadProductionGroupOrdersList = () => import("./pages/ProductionGroupOrdersList");
 const loadProductionGroupOrderWizard = () => import("./pages/ProductionGroupOrderWizard");
 const loadHRPage = () => import("./pages/HRPage");
+const loadMbtiAssessmentReportPage = () => import("./pages/MbtiAssessmentReportPage");
 const loadFilesGalleryPage = () => import("./pages/FilesGalleryPage");
 const loadWebFormsHubPage = () => import("./pages/WebFormsHubPage");
 const loadWebFormBuilderPage = () => import("./pages/WebFormBuilderPage");
@@ -153,6 +154,7 @@ const InquiryForm = lazy(loadInquiryForm);
 const ProductionGroupOrdersList = lazy(loadProductionGroupOrdersList);
 const ProductionGroupOrderWizard = lazy(loadProductionGroupOrderWizard);
 const HRPage = lazy(loadHRPage);
+const MbtiAssessmentReportPage = lazy(loadMbtiAssessmentReportPage);
 const FilesGalleryPage = lazy(loadFilesGalleryPage);
 const WebFormsHubPage = lazy(loadWebFormsHubPage);
 const WebFormBuilderPage = lazy(loadWebFormBuilderPage);
@@ -203,6 +205,7 @@ const preloadAuthenticatedRouteChunk = (targetPath?: string): Promise<unknown> =
   else if (section === "recycle-bin") preloader = loadRecycleBinPage;
   else if (section === "search") preloader = loadGlobalSearchPage;
   else if (section === "hr") preloader = loadHRPage;
+  else if (section === "mbti_assessments" && detail && segments[2] === 'report') preloader = loadMbtiAssessmentReportPage;
   else if (section === "production_group_orders") {
     preloader = detail ? loadProductionGroupOrderWizard : loadProductionGroupOrdersList;
   } else if (section === "web_forms") {
@@ -777,6 +780,7 @@ function App() {
             <Route path="/production_group_orders/:id" element={<ProductionGroupOrderWizard />} />
             <Route path="/hr" element={<HRPage />} />
             <Route path="/hr/:employeeId" element={<HRPage />} />
+            <Route path="/mbti_assessments/:id/report" element={<MbtiAssessmentReportPage />} />
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/gallery" element={<FilesGalleryPage />} />
             <Route path="/org-knowledge" element={<OrgKnowledgePage />} />

@@ -31,5 +31,11 @@ describe('payrollSlipDraft', () => {
       'مساعده',
       'بیمه سهم کارمند',
     ]);
+    expect(draft.lines.find((line) => line.key === 'base_salary')).toMatchObject({ amount: 10_000_000 });
+    expect(draft.lines.find((line) => line.key === 'task_wage')).toMatchObject({ amount: 1_000_000 });
+    expect(draft.lines.find((line) => line.key === 'employee_insurance')).toMatchObject({
+      amount: 805_000,
+      metadata: { employer_insurance_amount: 2_645_000 },
+    });
   });
 });

@@ -351,6 +351,22 @@ const resolveOperationSourceModuleId = (operation: any) => {
 // نگه‌داشتن فیلتر محدود اینجا باعث می‌شد یک شخص با چند نقش، بخشی از گردش خود را نبیند.
 export const isEmployeeFinancialOverviewOperation = (_operation: any) => true;
 
+/**
+ * مساعده‌ای که در فیش حقوقی کسر شده، یک‌بار در خالص همان فیش منعکس شده است.
+ * برای سازگاری با فیش‌های قدیمی، هم اتصال مستقیم و هم snapshot فیش بررسی می‌شود.
+ */
+export const isEmployeeAdvanceIncludedInPayroll = (advance: any, payrollSlips: any[] = []) => {
+  if (normalizeOperationalText(advance?.related_payroll_slip_id)) return true;
+  const advanceId = normalizeOperationalText(advance?.id);
+  if (!advanceId) return false;
+  return (Array.isArray(payrollSlips) ? payrollSlips : []).some((slip) => {
+    const advanceIds = Array.isArray(slip?.performance_snapshot?.employee_advance_ids)
+      ? slip.performance_snapshot.employee_advance_ids
+      : [];
+    return advanceIds.some((id: unknown) => normalizeOperationalText(id) === advanceId);
+  });
+};
+
 const buildExistingSourceOperationKeys = (operations: any[]) => {
   const keys = new Set<string>();
   (operations || []).forEach((operation) => {
@@ -557,13 +573,13 @@ const fetchSingleOperationalFinancialOverview = async ({
         .eq('supplier_id', normalizedEntityId)
         .limit(3000)
       : supabase.from('payroll_slips')
-        .select('id, name, system_code, period_end, status, net_amount, payments, created_at')
+        .select('id, name, system_code, period_end, status, net_amount, payments, performance_snapshot, created_at')
         .eq('employee_id', employeeScope?.employeeId || normalizedEntityId)
         .limit(3000);
 
   const secondarySourceQuery: PromiseLike<any> = entityType === 'employee'
     ? supabase.from('employee_advances')
-      .select('id, name, system_code, request_date, status, amount, paid_amount, remaining_amount, payments, created_at')
+      .select('id, name, system_code, request_date, status, amount, paid_amount, remaining_amount, related_payroll_slip_id, payments, created_at')
       .eq('employee_id', employeeScope?.employeeId || normalizedEntityId)
       .limit(3000)
     : Promise.resolve({ data: [], error: null });
@@ -624,6 +640,15 @@ const fetchSingleOperationalFinancialOverview = async ({
   const rows: Array<Omit<OperationalFinancialRow, 'balance' | 'printableFields'>> = [];
   const openingRow = buildPreviousSystemOpeningRow(entityType, entityRecord);
   if (openingRow) rows.push(openingRow);
+  const payrollSlips = entityType === 'employee'
+    ? primaryRows.filter((slip) => PAYROLL_VISIBLE_STATUSES.has(normalizeStatus(slip?.status)))
+    : [];
+  const payrollDeductedAdvanceIds = new Set(
+    secondaryRows
+      .filter((advance) => isEmployeeAdvanceIncludedInPayroll(advance, payrollSlips))
+      .map((advance) => normalizeOperationalText(advance?.id))
+      .filter(Boolean),
+  );
 
   if (entityType === 'customer') {
     const invoices = ((primaryRes?.data || []) as any[])
@@ -694,8 +719,6 @@ const fetchSingleOperationalFinancialOverview = async ({
       accountById,
     })));
   } else {
-    const payrollSlips = ((primaryRes?.data || []) as any[])
-      .filter((slip) => PAYROLL_VISIBLE_STATUSES.has(normalizeStatus(slip?.status)));
     payrollSlips.forEach((slip) => {
       const amount = toNumber(slip?.net_amount);
       if (amount <= 0) return;
@@ -728,7 +751,10 @@ const fetchSingleOperationalFinancialOverview = async ({
     })));
 
     const advances = ((secondaryRes?.data || []) as any[])
-      .filter((advance) => ADVANCE_VISIBLE_STATUSES.has(normalizeStatus(advance?.status)));
+      .filter((advance) => (
+        ADVANCE_VISIBLE_STATUSES.has(normalizeStatus(advance?.status))
+        && !payrollDeductedAdvanceIds.has(normalizeOperationalText(advance?.id))
+      ));
     advances.forEach((advance) => {
       const amount = toNumber(advance?.amount);
       if (amount <= 0) return;
@@ -799,6 +825,12 @@ const fetchSingleOperationalFinancialOverview = async ({
       const operationType = normalizeOperationalText(operation?.operation_type);
       if (operationType === 'transfer') return false;
       if (String(operation?.payment_type || '').trim().toLowerCase() === 'cheque' && isFailedCheque(operation?.cheque_status)) return false;
+      const metadata = parseCashBankMetadata(operation?.metadata);
+      const sourceModuleId = resolveOperationSourceModuleId(operation);
+      const advanceId = sourceModuleId === 'employee_advances'
+        ? normalizeOperationalText(operation?.employee_advance_id || metadata?.source_record_id)
+        : '';
+      if (advanceId && payrollDeductedAdvanceIds.has(advanceId)) return false;
       return isSettledOperationStatus(operation?.status);
     })
     .forEach((operation) => {

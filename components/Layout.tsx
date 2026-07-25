@@ -701,6 +701,7 @@ const Layout: React.FC<LayoutProps> = ({ children, isDarkMode, toggleTheme, bran
           { key: '/tasks', label: 'فعالیت ها' },
           { key: '/employees', label: 'کارکنان' },
           { key: '/job_descriptions', label: 'شرح شغل‌ها', disabled: !canViewModule('job_descriptions') },
+          { key: '/mbti_assessments', label: 'تست‌های MBTI', disabled: !canViewModule('mbti_assessments') },
           { key: '/employee_contracts', label: 'قراردادهای کارکنان', disabled: !canViewModule('employee_contracts') },
           { key: '/recruitment_applicants', label: 'متقاضیان استخدام', disabled: !canViewModule('recruitment_applicants') },
           { key: '/attendance_logs', label: 'تردد' },

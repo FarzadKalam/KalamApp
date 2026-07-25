@@ -54,12 +54,14 @@ export const buildPayrollSlipDraft = ({
   const ledgerLines = groupPayrollLedgerEntriesToSlipLines(ledgerEntries, currencyLabel);
   const linesBeforeInsurance: PayrollSlipLine[] = [
     ...(resolvedBaseSalary > 0 ? [{
+      key: 'base_salary',
       line_type: 'earning' as const,
       title: baseSalaryTitle,
       amount: resolvedBaseSalary,
       description: baseSalaryDescription,
     }] : []),
     ...(resolvedTaskWageTotal > 0 ? [{
+      key: 'task_wage',
       line_type: 'earning' as const,
       title: 'حقوق عملکردی فعالیت‌ها',
       amount: resolvedTaskWageTotal,
@@ -81,11 +83,13 @@ export const buildPayrollSlipDraft = ({
     : (insuranceBase * Math.max(0, toNumber(employerInsuranceRate))) / 100;
   const lines: PayrollSlipLine[] = [
     ...linesBeforeInsurance,
-    ...(employeeInsuranceAmount > 0 ? [{
+    ...(employeeInsuranceAmount > 0 || employerInsuranceAmount > 0 ? [{
+      key: 'employee_insurance',
       line_type: 'deduction' as const,
       title: 'بیمه سهم کارمند',
       amount: employeeInsuranceAmount,
       description: 'برآورد از تنظیمات پرسنل',
+      metadata: { employer_insurance_amount: employerInsuranceAmount },
     }] : []),
   ];
   const totals = calculatePayrollSlipTotals({ lines, payments: [] });

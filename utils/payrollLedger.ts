@@ -15,10 +15,12 @@ export type PayrollLedgerEntry = {
 };
 
 export type PayrollSlipLine = {
+  key?: string;
   line_type: 'earning' | 'bonus' | 'deduction';
   title: string;
   amount: number;
   description: string;
+  metadata?: Record<string, any>;
   source_entry_id?: string;
   source_entry_ids?: string[];
 };
