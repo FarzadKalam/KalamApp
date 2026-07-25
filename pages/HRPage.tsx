@@ -146,6 +146,11 @@ import { DEFAULT_SALARY_TYPE, getSalaryTypeLabelFa, resolvePayrollBaseCompensati
 import { getHolidaySummaryForDate } from '../utils/holidayCalendar';
 import PrintSection from '../components/moduleShow/PrintSection';
 import { useListPrintManager } from '../utils/printTemplates/useListPrintManager';
+import {
+  getAttendanceCheckInAt,
+  getAttendanceCheckOutAt,
+  getAttendanceDateValue,
+} from '../utils/attendancePresence';
 
 const COMMISSION_MODAL_Z_INDEX = 14000;
 const COMMISSION_PRINT_MODAL_Z_INDEX = COMMISSION_MODAL_Z_INDEX + 100;
@@ -1180,44 +1185,11 @@ const summarizeAttendanceDelta = (
   };
 };
 
-const getAttendanceDateBase = (row: AttendanceLogRecord) =>
-  row.attendance_date ||
-  parseDate(row.manual_check_in_time || null)?.format('YYYY-MM-DD') ||
-  parseDate(row.manual_check_out_time || null)?.format('YYYY-MM-DD') ||
-  parseDate(row.actual_check_in_time || null)?.format('YYYY-MM-DD') ||
-  parseDate(row.actual_check_out_time || null)?.format('YYYY-MM-DD') ||
-  parseDate(row.occurred_at || null)?.format('YYYY-MM-DD') ||
-  null;
-
-const combineAttendanceDateTime = (row: AttendanceLogRecord, timeValue: string | null | undefined) => {
-  const trimmed = String(timeValue || '').trim();
-  const match = trimmed.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (!match) return null;
-  const date = getAttendanceDateBase(row);
-  if (!date) return null;
-  return `${date}T${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
-};
-
-const getAttendanceCheckInAt = (row: AttendanceLogRecord) => {
-  return combineAttendanceDateTime(row, row.check_in_time) ||
-    row.manual_check_in_time ||
-    row.actual_check_in_time ||
-    null;
-};
-
 type AttendanceSegment = {
   key: string;
   checkInAt: string | null;
   checkOutAt: string | null;
   presenceMinutes: number;
-};
-
-const getAttendanceCheckOutAt = (row: AttendanceLogRecord) => {
-  const checkOutFromTime = combineAttendanceDateTime(row, row.check_out_time);
-  if (checkOutFromTime) return checkOutFromTime;
-  return row.manual_check_out_time ||
-    row.actual_check_out_time ||
-    null;
 };
 
 const calculateAttendanceRowPresenceMinutes = (row: AttendanceComputedRow) => {
@@ -3148,7 +3120,7 @@ const HRPage: React.FC = () => {
         const checkOutAt = getAttendanceCheckOutAt(row);
         const baseAt = checkInAt || checkOutAt || row.occurred_at || null;
         const parsedBaseAt = parseDate(baseAt);
-        const attendanceBaseDate = getAttendanceDateBase(row) || baseAt;
+        const attendanceBaseDate = getAttendanceDateValue(row) || baseAt;
         const attendanceDate = toIsoDateKey(parseDate(attendanceBaseDate || null));
         const approvedLeaveRequestsByEmployee = employeeId && attendanceDate
           ? approvedLeaveByEmployeeDate.get(String(employeeId))?.get(attendanceDate) || []

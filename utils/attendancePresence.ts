@@ -5,15 +5,10 @@ const parseTimestamp = (value: unknown): Date | null => {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const combineDateTime = (dateValue: unknown, timeValue: unknown): Date | null => {
-  const date = String(dateValue ?? '').trim();
-  const time = String(timeValue ?? '').trim();
-  if (!date || !time) return null;
-  const normalizedTime = time.length === 5 ? `${time}:00` : time;
-  return parseTimestamp(`${date}T${normalizedTime}`);
-};
+const getAttendanceLogType = (row: any): string =>
+  String(row?.log_type || '').trim().toLowerCase();
 
-const getAttendanceDateKey = (row: any): string => {
+export const getAttendanceDateValue = (row: any): string => {
   const direct = String(row?.attendance_date || '').trim();
   if (direct) return direct.slice(0, 10);
   const source = row?.manual_check_in_time
@@ -23,6 +18,15 @@ const getAttendanceDateKey = (row: any): string => {
     || row?.occurred_at;
   const parsed = parseTimestamp(source);
   return parsed ? parsed.toISOString().slice(0, 10) : '';
+};
+
+const combineAttendanceDateTime = (row: any, timeValue: unknown): string | null => {
+  const date = getAttendanceDateValue(row);
+  const time = String(timeValue ?? '').trim();
+  if (!date || !time) return null;
+  const match = time.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return `${date}T${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
 };
 
 const getAttendancePersonKey = (row: any): string => {
@@ -39,24 +43,26 @@ const getAttendancePersonKey = (row: any): string => {
 const getAttendanceGroupKey = (row: any): string => {
   const orgId = String(row?.org_id ?? '').trim() || 'no-org';
   const personKey = getAttendancePersonKey(row);
-  const dateKey = getAttendanceDateKey(row);
+  const dateKey = getAttendanceDateValue(row);
   return dateKey ? `${orgId}|${personKey}|${dateKey}` : '';
 };
 
-const getCheckInAt = (row: any): Date | null => {
-  const logType = String(row?.log_type || 'check_in').trim();
-  return parseTimestamp(row?.manual_check_in_time)
-    || parseTimestamp(row?.actual_check_in_time)
-    || combineDateTime(row?.attendance_date, row?.check_in_time)
-    || (logType === 'check_in' ? parseTimestamp(row?.occurred_at) : null);
+export const getAttendanceCheckInAt = (row: any): string | null => {
+  const logType = getAttendanceLogType(row);
+  if (logType === 'check_out') return null;
+  return String(row?.manual_check_in_time || '').trim()
+    || String(row?.actual_check_in_time || '').trim()
+    || combineAttendanceDateTime(row, row?.check_in_time)
+    || (logType === 'check_in' ? String(row?.occurred_at || '').trim() || null : null);
 };
 
-const getCheckOutAt = (row: any): Date | null => {
-  const logType = String(row?.log_type || '').trim();
-  return parseTimestamp(row?.manual_check_out_time)
-    || parseTimestamp(row?.actual_check_out_time)
-    || combineDateTime(row?.attendance_date, row?.check_out_time)
-    || (logType === 'check_out' ? parseTimestamp(row?.occurred_at) : null);
+export const getAttendanceCheckOutAt = (row: any): string | null => {
+  const logType = getAttendanceLogType(row);
+  if (logType === 'check_in') return null;
+  return String(row?.manual_check_out_time || '').trim()
+    || String(row?.actual_check_out_time || '').trim()
+    || combineAttendanceDateTime(row, row?.check_out_time)
+    || (logType === 'check_out' ? String(row?.occurred_at || '').trim() || null : null);
 };
 
 export const buildAttendancePresenceByGroup = (rows: any[] = []) => {
@@ -64,8 +70,8 @@ export const buildAttendancePresenceByGroup = (rows: any[] = []) => {
   (Array.isArray(rows) ? rows : []).forEach((row) => {
     const groupKey = getAttendanceGroupKey(row);
     if (!groupKey) return;
-    const checkInAt = getCheckInAt(row);
-    const checkOutAt = getCheckOutAt(row);
+    const checkInAt = parseTimestamp(getAttendanceCheckInAt(row));
+    const checkOutAt = parseTimestamp(getAttendanceCheckOutAt(row));
     if (!checkInAt && !checkOutAt) return;
     const group = grouped.get(groupKey) || { checkIns: [], checkOuts: [] };
     if (checkInAt) group.checkIns.push(checkInAt);
