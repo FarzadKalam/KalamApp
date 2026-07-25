@@ -18,7 +18,7 @@ const questionBlockTitle: Record<string, string> = {
 
 export const mbtiAssessmentsModule: ModuleDefinition = {
   id: 'mbti_assessments',
-  titles: { fa: 'تست‌های MBTI', faSingular: 'تست MBTI', en: 'MBTI Assessments' },
+  titles: { fa: 'تست‌های شخصیت‌شناسی', faSingular: 'تست شخصیت‌شناسی', en: 'Personality Assessments' },
   nature: ModuleNature.STANDARD,
   table: 'mbti_assessments',
   relationDisplay: {

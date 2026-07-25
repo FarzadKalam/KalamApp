@@ -11352,14 +11352,14 @@ const handleRebuildJobDescriptionAiContext = async (supabaseUrl: string, service
 
 const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: string, authContext: any, body: any) => {
   if (!canAnalyzeMbtiAssessment(authContext)) {
-    return json(403, { success: false, message: 'دسترسی تحلیل هوشمند تست MBTI را ندارید.' });
+    return json(403, { success: false, message: 'دسترسی تحلیل هوشمند تست شخصیت‌شناسی را ندارید.' });
   }
   const assessmentId = normalizeId(body?.mbtiAssessmentId || body?.mbti_assessment_id);
   if (!isUuid(assessmentId)) return json(400, { success: false, message: 'شناسه تست معتبر نیست.' });
 
   const modulePerm = getModulePermission(authContext?.permissions, 'mbti_assessments');
   if (!canViewModule(modulePerm)) {
-    return json(403, { success: false, message: 'دسترسی مشاهده تست MBTI را ندارید.' });
+    return json(403, { success: false, message: 'دسترسی مشاهده تست شخصیت‌شناسی را ندارید.' });
   }
   const [assessment] = await restSelect(supabaseUrl, serviceRoleKey, 'mbti_assessments', {
     org_id: `eq.${authContext.orgId}`,
@@ -11382,7 +11382,7 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
     loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
   if (!canViewSaasAdmin(authContext) && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
-    return json(403, { success: false, message: 'ویژگی تحلیل هوشمند MBTI در پلن این سازمان فعال نیست.' });
+    return json(403, { success: false, message: 'ویژگی تحلیل هوشمند تست شخصیت‌شناسی در پلن این سازمان فعال نیست.' });
   }
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
 

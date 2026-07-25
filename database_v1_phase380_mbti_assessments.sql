@@ -10,7 +10,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.mbti_assessments (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.organizations(id) on delete cascade default public.current_org_id(),
-  title text not null default 'تست MBTI',
+  title text not null default 'تست شخصیت‌شناسی',
   respondent_name text not null,
   respondent_phone text,
   respondent_email text,
@@ -183,7 +183,7 @@ begin
   end;
   if new.consent_given and new.consent_at is null then new.consent_at := now(); end if;
   if not new.consent_given then new.consent_at := null; end if;
-  if tg_op = 'INSERT' or nullif(trim(coalesce(new.title, '')), '') is null then new.title := 'تست MBTI - ' || coalesce(nullif(trim(new.respondent_name), ''), 'بدون نام'); end if;
+  if tg_op = 'INSERT' or nullif(trim(coalesce(new.title, '')), '') is null then new.title := 'تست شخصیت‌شناسی - ' || coalesce(nullif(trim(new.respondent_name), ''), 'بدون نام'); end if;
   if v_questions_changed then
     new.ai_analysis := null;
     new.ai_analysis_status := 'not_requested';
