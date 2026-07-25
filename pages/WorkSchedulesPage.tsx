@@ -894,7 +894,7 @@ const WorkSchedulesPage: React.FC = () => {
                     return (
                       <th
                         key={column.key}
-                        className="align-top bg-gray-50 dark:bg-[#171717] border-b border-r border-gray-200 dark:border-gray-800 px-4 py-4 min-w-[330px]"
+                        className="sticky top-0 z-30 align-top bg-gray-50 dark:bg-[#171717] border-b border-r border-gray-200 dark:border-gray-800 px-4 py-4 min-w-[330px]"
                       >
                         <div className="space-y-3">
                           <div className="flex items-center gap-2">
