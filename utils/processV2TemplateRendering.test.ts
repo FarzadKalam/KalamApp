@@ -74,4 +74,16 @@ describe('process v2 template rendering', () => {
     expect(renderProcessV2TemplateValueFromRecord('پیگیری {{name}}', context)).toBe('پیگیری پروژه آذرخش');
     expect(renderProcessV2TemplateValueFromRecord('توضیحات: {{description}}', context)).toBe('توضیحات: شرح پروژه');
   });
+
+  it('resolves the shared Jalali system date variables in process templates', async () => {
+    const context = await buildProcessV2TemplateContext({
+      supabaseClient: createSupabaseMock({}),
+      moduleId: 'projects',
+      recordId: 'project-1',
+      recordData: { id: 'project-1', name: 'پروژه آذرخش' },
+    });
+
+    expect(renderProcessV2TemplateValueFromRecord('{{current_date_numeric}}', context)).toMatch(/^[۰-۹]{4}\/[۰-۹]{2}\/[۰-۹]{2}$/);
+    expect(renderProcessV2TemplateValueFromRecord('{{تاریخ امروز (حروف)}}', context)).not.toContain('{{');
+  });
 });

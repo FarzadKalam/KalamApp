@@ -31,6 +31,11 @@ import {
 } from '../../utils/workflowTypes';
 import { getWorkflowActionOutputVariables } from '../../shared/workflowActionContract';
 import {
+  getCompatibleWorkflowSourceFields,
+  getWorkflowDateCriteria,
+  isWorkflowAssigneeField as isCentralWorkflowAssigneeField,
+} from '../../shared/workflowMutationContract';
+import {
   buildDefaultWorkflowAttachmentConfig,
   getWorkflowRecipientConfig,
   shouldIncludeStarredWorkflowAttachments,
@@ -86,12 +91,15 @@ interface WorkflowActionsBuilderProps {
 type CreateRelatedFieldMapping = {
   id: string;
   field: string;
+  field_type?: string;
+  source_field_type?: string;
   mode: 'static' | 'from_source' | 'from_related' | 'formula';
   value?: any;
   source_field?: string;
   formula_name?: string;
   formula_expression_text?: string;
   formula_expression_config?: any;
+  date_criterion?: 'manual' | 'today' | 'yesterday' | 'now';
 };
 
 type BasicSelectOption = { label: string; value: string };
@@ -436,6 +444,14 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         })),
     [currentModuleFields, variableFields]
   );
+  const variableFieldCatalog = useMemo(
+    () => Array.from(new Map(
+      (Array.isArray(variableFields) && variableFields.length > 0 ? variableFields : currentModuleFields)
+        .filter((field) => !!String(field?.key || '').trim())
+        .map((field) => [String(field.key).trim(), field] as const)
+    ).values()),
+    [currentModuleFields, variableFields],
+  );
   const communicationFieldSource = useMemo(
     () => Array.from(new Map(
       [
@@ -447,19 +463,23 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     ).values()),
     [currentModuleFields, currentModuleId, variableFields]
   );
-  const relatedVariableFieldOptions = useMemo(
-    () => variableFieldOptions.filter((item) => {
-      const value = String(item.value || '');
-      return value.startsWith('__linked__') || value.startsWith('__workflow_related__');
+  const sourceVariableFields = useMemo(
+    () => variableFieldCatalog.filter((field) => {
+      const key = String(field.key || '');
+      return !key.startsWith('__linked__')
+        && !key.startsWith('__workflow_related__')
+        && !key.startsWith('previous_stage__');
     }),
-    [variableFieldOptions]
+    [variableFieldCatalog],
   );
-  const sourceVariableFieldOptions = useMemo(
-    () => variableFieldOptions.filter((item) => {
-      const value = String(item.value || '');
-      return !value.startsWith('__linked__') && !value.startsWith('__workflow_related__');
+  const relatedVariableFields = useMemo(
+    () => variableFieldCatalog.filter((field) => {
+      const key = String(field.key || '');
+      return key.startsWith('__linked__')
+        || key.startsWith('__workflow_related__')
+        || key.startsWith('previous_stage__');
     }),
-    [variableFieldOptions]
+    [variableFieldCatalog],
   );
   const assigneeRecipientFieldOptions = useMemo(
     () =>
@@ -971,16 +991,67 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     );
   };
 
+  const getCompatibleSourceFieldOptions = (
+    targetField: ModuleField | undefined,
+    sourceScope: 'source' | 'related',
+  ) => {
+    const sourceFields = sourceScope === 'related' ? relatedVariableFields : sourceVariableFields;
+    return getCompatibleWorkflowSourceFields(targetField, sourceFields)
+      .map((field) => ({ label: getFieldLabel(field), value: String(field.key || '') }))
+      .filter((option) => Boolean(option.value));
+  };
+
   const renderTypedValueInput = (
     field: ModuleField | undefined,
     value: any,
-    onValueChange: (nextValue: any) => void
+    onValueChange: (nextValue: any) => void,
+    dateCriterion: 'manual' | 'today' | 'yesterday' | 'now' = 'manual',
+    onDateCriterionChange?: (nextValue: 'manual' | 'today' | 'yesterday' | 'now') => void,
   ) => {
     if (!field) {
       return <Input disabled placeholder="ابتدا فیلد را انتخاب کنید" />;
     }
 
     const options = getFieldSelectOptions(field);
+
+    if (isAssigneeValueField(field) || isCentralWorkflowAssigneeField(field)) {
+      return (
+        <AdaptiveIdentityPicker
+          value={value || undefined}
+          onChange={(nextValue) => onValueChange(nextValue || null)}
+          scopes={['user', 'role']}
+          disabled={disabled}
+          className="w-full"
+          placeholder="انتخاب مسئول یا نقش"
+          pickerTitle={getFieldLabel(field)}
+          adaptiveMode={adaptiveMode}
+          overlayZIndexBase={overlayZIndexBase}
+        />
+      );
+    }
+
+    const dateCriteria = getWorkflowDateCriteria(field);
+    const renderDateCriterion = (input: React.ReactNode) => dateCriteria.length > 0 && onDateCriterionChange ? (
+      <div className="space-y-2">
+        <div className="text-xs text-gray-500">
+          {field.type === FieldType.DATETIME ? 'معیار تاریخ و زمان' : 'معیار تاریخ'}
+        </div>
+        <AdaptiveSelectField
+          {...commonSelectProps}
+          value={dateCriterion}
+          options={dateCriteria}
+          disabled={disabled}
+          onChange={(nextValue) => onDateCriterionChange(String(nextValue || 'manual') as any)}
+          placeholder="معیار تاریخ"
+          pickerTitle="معیار تاریخ یا تاریخ و زمان"
+        />
+        {dateCriterion === 'manual' ? input : (
+          <div className="h-10 flex items-center rounded-md border border-dashed border-blue-200 bg-blue-50 px-3 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
+            مقدار در لحظهٔ اجرای گردش کار و بر اساس زمان تهران تعیین می‌شود.
+          </div>
+        )}
+      </div>
+    ) : input;
 
     if (field.dynamicOptionsCategory) {
       return (
@@ -1053,7 +1124,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (field.type === FieldType.DATE) {
-      return (
+      return renderDateCriterion(
         <PersianDatePicker
           type="DATE"
           value={value || null}
@@ -1085,7 +1156,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     }
 
     if (field.type === FieldType.DATETIME) {
-      return (
+      return renderDateCriterion(
         <PersianDatePicker
           type="DATETIME"
           value={value || null}
@@ -1197,14 +1268,21 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
     const targetField = targetFields.find((f) => f.key === targetFieldKey);
     const valueMode = String(action?.config?.value_mode || 'static');
     if (valueMode === 'from_source' || valueMode === 'from_related') {
-      const options = valueMode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions;
+      const options = getCompatibleSourceFieldOptions(
+        targetField,
+        valueMode === 'from_related' ? 'related' : 'source',
+      );
       return (
         <AdaptiveSelectField
           {...commonSelectProps}
           value={action?.config?.source_field}
           options={options}
           disabled={disabled}
-          onChange={(nextVal) => updateActionConfig(action.id, { source_field: nextVal })}
+          onChange={(nextVal) => {
+            const sourceField = (valueMode === 'from_related' ? relatedVariableFields : sourceVariableFields)
+              .find((field) => field.key === String(nextVal || '').trim());
+            updateActionConfig(action.id, { source_field: nextVal, source_field_type: sourceField?.type || '' });
+          }}
           placeholder={valueMode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
           pickerTitle={valueMode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
         />
@@ -1231,8 +1309,12 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
         </div>
       );
     }
-    return renderTypedValueInput(targetField, action?.config?.value, (nextVal) =>
-      updateActionConfig(action.id, { value: nextVal })
+    return renderTypedValueInput(
+      targetField,
+      action?.config?.value,
+      (nextVal) => updateActionConfig(action.id, { value: nextVal }),
+      String(action?.config?.date_criterion || 'manual') as any,
+      (date_criterion) => updateActionConfig(action.id, { date_criterion }),
     );
   };
 
@@ -1273,7 +1355,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
       targetModuleId: string,
       relationFieldKey: string,
       mappings: CreateRelatedFieldMapping[]
-    ) => {
+    ): CreateRelatedFieldMapping[] => {
       const requiredFields = getRequiredTargetFields(targetModuleId, relationFieldKey);
       if (requiredFields.length === 0) return mappings;
 
@@ -1285,7 +1367,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
           field: field.key,
           mode: 'static' as const,
           value: '',
-        }));
+        } as CreateRelatedFieldMapping));
 
       if (missing.length === 0) return mappings;
       return [...mappings, ...missing];
@@ -2360,15 +2442,21 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
               value={config.field}
               disabled={disabled || (isProcessStageTransfer && targetOptions.length === 0)}
               options={targetOptions}
-              onChange={(nextVal) => updateActionConfig(action.id, {
-                field: nextVal,
-                value: null,
-                source_field: '',
-                formula_name: '',
-                formula_expression_text: '',
-                formula_expression_config: null,
-                value_mode: 'static',
-              })}
+              onChange={(nextVal) => {
+                const targetField = (isProcessStageTransfer ? nextStageFields : currentModuleFields)
+                  ?.find((field) => field.key === String(nextVal || '').trim());
+                updateActionConfig(action.id, {
+                  field: nextVal,
+                  target_field_type: targetField?.type || '',
+                  value: null,
+                  source_field: '',
+                  date_criterion: 'manual',
+                  formula_name: '',
+                  formula_expression_text: '',
+                  formula_expression_config: null,
+                  value_mode: 'static',
+                });
+              }}
               placeholder={isProcessStageTransfer && targetOptions.length === 0 ? 'فیلد قابل انتقالی پیدا نشد' : 'فیلد مقصد'}
             />
           </div>
@@ -2547,15 +2635,16 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                         value={mapping.field}
                         disabled={disabled || !targetModuleId}
                         options={targetWritableOptions}
-                        onChange={(nextVal) =>
+                        onChange={(nextVal) => {
+                          const selectedField = targetFields.find((field) => field.key === String(nextVal || '').trim());
                           updateActionConfig(action.id, {
                             field_mappings: fieldMappings.map((item) =>
                               item.id === mapping.id
-                                ? { ...item, field: nextVal, value: '', source_field: '', mode: 'static' }
+                                ? { ...item, field: nextVal, field_type: selectedField?.type || '', value: '', source_field: '', date_criterion: 'manual', mode: 'static' }
                                 : item
                             ),
-                          })
-                        }
+                          });
+                        }}
                         placeholder="فیلد مقصد"
                       />
                     </div>
@@ -2568,6 +2657,7 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                         options={[
                           { label: 'مقدار ثابت', value: 'static' },
                           { label: 'از فیلد رکورد جاری', value: 'from_source' },
+                          { label: 'از فیلد رکورد مرتبط', value: 'from_related' },
                           ...(canFieldUseFormula(targetField) ? [{ label: 'محاسبه با فرمول', value: 'formula' }] : []),
                         ]}
                         onChange={(nextVal) =>
@@ -2584,20 +2674,25 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                     </div>
                     <div className="md:col-span-4">
                       <div className="mb-1 text-xs text-gray-500">مقدار</div>
-                      {mapping.mode === 'from_source' ? (
+                      {mapping.mode === 'from_source' || mapping.mode === 'from_related' ? (
                         <Select
                           {...commonSelectProps}
                           value={mapping.source_field}
                           disabled={disabled}
-                          options={sourceVariableFieldOptions}
-                          onChange={(nextVal) =>
+                          options={getCompatibleSourceFieldOptions(
+                            targetField,
+                            mapping.mode === 'from_related' ? 'related' : 'source',
+                          )}
+                          onChange={(nextVal) => {
+                            const sourceField = (mapping.mode === 'from_related' ? relatedVariableFields : sourceVariableFields)
+                              .find((field) => field.key === String(nextVal || '').trim());
                             updateActionConfig(action.id, {
                               field_mappings: fieldMappings.map((item) =>
-                                item.id === mapping.id ? { ...item, source_field: nextVal } : item
+                                item.id === mapping.id ? { ...item, source_field: nextVal, source_field_type: sourceField?.type || '' } : item
                               ),
-                            })
-                          }
-                          placeholder="فیلد منبع"
+                            });
+                          }}
+                          placeholder={mapping.mode === 'from_related' ? 'فیلد رکورد مرتبط' : 'فیلد رکورد جاری'}
                         />
                       ) : mapping.mode === 'formula' ? (
                         <Button
@@ -2616,12 +2711,20 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           {mapping.formula_name || 'تعریف فرمول'}
                         </Button>
                       ) : (
-                        renderTypedValueInput(targetField, mapping.value, (nextVal) =>
-                            updateActionConfig(action.id, {
+                        renderTypedValueInput(
+                          targetField,
+                          mapping.value,
+                          (nextVal) => updateActionConfig(action.id, {
                               field_mappings: fieldMappings.map((item) =>
                                 item.id === mapping.id ? { ...item, value: nextVal } : item
                               ),
-                            })
+                            }),
+                          String(mapping.date_criterion || 'manual') as any,
+                          (date_criterion) => updateActionConfig(action.id, {
+                            field_mappings: fieldMappings.map((item) =>
+                              item.id === mapping.id ? { ...item, date_criterion } : item
+                            ),
+                          }),
                         )
                       )}
                     </div>
@@ -2796,15 +2899,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                         value={mapping.field}
                         disabled={disabled || !targetModuleId}
                         options={targetWritableOptions}
-                        onChange={(nextVal) =>
+                        onChange={(nextVal) => {
+                          const selectedField = targetFields.find((field) => field.key === String(nextVal || '').trim());
                           updateRelatedFieldMappings(action.id, (current) =>
                             current.map((item) =>
                               item.id === mapping.id
                                 ? {
                                     ...item,
                                     field: nextVal,
+                                    field_type: selectedField?.type || '',
                                     value: '',
                                     source_field: '',
+                                    date_criterion: 'manual',
                                     mode: 'static',
                                     formula_name: '',
                                     formula_expression_text: '',
@@ -2812,8 +2918,8 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                                   }
                                 : item
                             )
-                          )
-                        }
+                          );
+                        }}
                         placeholder="فیلد مقصد"
                       />
                     </div>
@@ -2864,14 +2970,19 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           {...commonSelectProps}
                           value={mapping.source_field}
                           disabled={disabled || !mapping.field}
-                          options={mapping.mode === 'from_related' ? relatedVariableFieldOptions : sourceVariableFieldOptions}
-                          onChange={(nextVal) =>
+                          options={getCompatibleSourceFieldOptions(
+                            targetField,
+                            mapping.mode === 'from_related' ? 'related' : 'source',
+                          )}
+                          onChange={(nextVal) => {
+                            const sourceField = (mapping.mode === 'from_related' ? relatedVariableFields : sourceVariableFields)
+                              .find((field) => field.key === String(nextVal || '').trim());
                             updateRelatedFieldMappings(action.id, (current) =>
                               current.map((item) =>
-                                item.id === mapping.id ? { ...item, source_field: nextVal } : item
+                                item.id === mapping.id ? { ...item, source_field: nextVal, source_field_type: sourceField?.type || '' } : item
                               )
-                            )
-                          }
+                            );
+                          }}
                           placeholder={mapping.mode === 'from_related' ? 'فیلد از رکورد مرتبط' : 'فیلد از رکورد جاری'}
                         />
                       ) : mapping.mode === 'formula' ? (
@@ -2893,12 +3004,18 @@ const WorkflowActionsBuilder: React.FC<WorkflowActionsBuilderProps> = ({
                           </div>
                         </div>
                       ) : (
-                        renderTypedValueInput(targetField, mapping.value, (nextVal) =>
-                          updateRelatedFieldMappings(action.id, (current) =>
+                        renderTypedValueInput(
+                          targetField,
+                          mapping.value,
+                          (nextVal) => updateRelatedFieldMappings(action.id, (current) =>
                             current.map((item) =>
                               item.id === mapping.id ? { ...item, value: nextVal } : item
                             )
-                          )
+                          ),
+                          String(mapping.date_criterion || 'manual') as any,
+                          (date_criterion) => updateRelatedFieldMappings(action.id, (current) =>
+                            current.map((item) => item.id === mapping.id ? { ...item, date_criterion } : item)
+                          ),
                         )
                       )}
                     </div>

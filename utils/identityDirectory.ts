@@ -93,6 +93,22 @@ export const buildUnavailableIdentityOption = (token: IdentityToken): IdentityOp
   };
 };
 
+export const buildLoadingIdentityOption = (token: IdentityToken): IdentityOption => {
+  const parsed = parseIdentityToken(token);
+  const kind = parsed.kind || 'user';
+  return {
+    kind,
+    id: parsed.id || '',
+    token,
+    label: kind === 'role' ? 'در حال بارگذاری نقش' : kind === 'chat_group' ? 'در حال بارگذاری گروه' : 'در حال بارگذاری کاربر',
+    subtitle: 'در حال دریافت اطلاعات سازمان',
+    iconKey: kind === 'role' ? 'team' : null,
+    active: true,
+    disabled: true,
+    searchText: 'در حال بارگذاری',
+  };
+};
+
 const mapRpcRow = (row: any): IdentityOption | null => {
   const kind = normalizeText(row?.kind).toLowerCase() as IdentityKind;
   const id = normalizeText(row?.id);
@@ -199,6 +215,7 @@ const fallbackIdentitySearch = async (
 
   if (exactTokens.length > 0) {
     const exactUsers = exactTokens.filter((token) => token.startsWith('user:')).map((token) => parseIdentityToken(token).id).filter(Boolean) as string[];
+    const exactRoles = exactTokens.filter((token) => token.startsWith('role:')).map((token) => parseIdentityToken(token).id).filter(Boolean) as string[];
     const missingUserIds = exactUsers.filter((id) => !users.some((user: any) => normalizeText(user?.id) === id));
     if (missingUserIds.length > 0) {
       const session = await fetchSessionBootstrap(supabaseClient);
@@ -210,6 +227,19 @@ const fallbackIdentitySearch = async (
           .eq('org_id', orgId)
           .in('id', missingUserIds);
         users = [...users, ...(data || [])];
+      }
+    }
+    const missingRoleIds = exactRoles.filter((id) => !roles.some((role: any) => normalizeText(role?.id) === id));
+    if (missingRoleIds.length > 0) {
+      const session = await fetchSessionBootstrap(supabaseClient);
+      const orgId = normalizeText(session?.orgId);
+      if (orgId) {
+        const { data } = await supabaseClient
+          .from('org_roles')
+          .select('id, title, icon_key, parent_id, sort_order')
+          .eq('org_id', orgId)
+          .in('id', missingRoleIds);
+        roles = [...roles, ...(data || [])];
       }
     }
   }

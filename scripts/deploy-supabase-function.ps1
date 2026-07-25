@@ -275,6 +275,8 @@ try {
     $runtimeDepsRoot = Join-Path $archiveStagingRoot 'workflow-interval-runner/_runtime-deps'
     New-Item -ItemType Directory -Path $runtimeDepsRoot -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/recordRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'recordRuntime.ts') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/processTemplateSystemVariables.ts') -Destination (Join-Path $runtimeDepsRoot 'processTemplateSystemVariables.ts') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMutationContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMutationContract.ts') -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMessagingContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMessagingContract.ts') -Force
     Copy-Item -LiteralPath (Join-Path $repoRoot 'utils/formulaRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'formulaRuntime.ts') -Force
     $archiveSourceRoot = $archiveStagingRoot

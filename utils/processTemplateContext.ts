@@ -1,5 +1,16 @@
 import { MODULES } from '../moduleRegistry';
 import { getFieldLabelFa } from './fieldLabel';
+import {
+  assignProcessTemplateSystemVariableValues,
+  getProcessTemplateSystemVariableValues,
+  PROCESS_TEMPLATE_SYSTEM_VARIABLES,
+} from '../shared/processTemplateSystemVariables';
+
+export {
+  assignProcessTemplateSystemVariableValues,
+  getProcessTemplateSystemVariableValues,
+  PROCESS_TEMPLATE_SYSTEM_VARIABLES,
+};
 
 const normalizeText = (value: unknown) => String(value || '').trim();
 const parseContextObject = (value: unknown): Record<string, any> => {

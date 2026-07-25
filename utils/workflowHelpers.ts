@@ -17,6 +17,7 @@ import { PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS } from './processModuleSupp
 import {
   PROCESS_LANE_NAME_TEMPLATE_FIELD_KEY,
   PROCESS_NAME_TEMPLATE_FIELD_KEY,
+  PROCESS_TEMPLATE_SYSTEM_VARIABLES,
 } from './processTemplateContext';
 import {
   buildRelatedVariableLabel,
@@ -238,6 +239,13 @@ export const getProcessTemplateIdentityFields = (): ModuleField[] => ([
     nature: 'system' as any,
     readonly: true,
   },
+  ...PROCESS_TEMPLATE_SYSTEM_VARIABLES.map(({ key, labelFa }) => ({
+    key,
+    labels: { fa: labelFa, en: labelFa },
+    type: FieldType.TEXT,
+    nature: 'system' as any,
+    readonly: true,
+  })),
 ]);
 
 export const getProcessAutomationConditionFields = (moduleId?: string | null): ModuleField[] => {

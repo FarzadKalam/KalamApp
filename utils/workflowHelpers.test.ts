@@ -86,6 +86,8 @@ describe('workflowHelpers', () => {
     expect(getProcessTemplateIdentityFields()).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'process_name', labels: expect.objectContaining({ fa: 'نام فرآیند' }) }),
       expect.objectContaining({ key: 'process_lane_name', labels: expect.objectContaining({ fa: 'نام ردیف' }) }),
+      expect.objectContaining({ key: 'current_date_numeric', labels: expect.objectContaining({ fa: 'تاریخ امروز (عددی)' }) }),
+      expect.objectContaining({ key: 'current_week', labels: expect.objectContaining({ fa: 'هفته جاری' }) }),
     ]));
   });
 });

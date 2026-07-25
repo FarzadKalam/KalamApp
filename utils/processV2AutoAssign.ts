@@ -39,6 +39,7 @@ import {
 import {
   assignProcessTemplateIdentityAliases,
   assignProcessTemplateModuleAliases,
+  assignProcessTemplateSystemVariableValues,
   resolveProcessTemplateTokenValue,
   resolveProcessTemplateLaneName,
 } from './processTemplateContext';
@@ -271,6 +272,7 @@ export const buildProcessV2TemplateContext = async ({
   const cache = new Map<string, Record<string, any>>();
   const source = await loadRecord(supabaseClient, moduleId, recordId, recordData).catch(() => recordData || {});
   Object.assign(record, source || {});
+  assignProcessTemplateSystemVariableValues(record);
   record[WORKFLOW_ASSIGNEE_FIELD_KEY] = buildResolvedAssigneeCombo(source);
   assignProcessLinkedRecordFields(record, moduleId, source);
 

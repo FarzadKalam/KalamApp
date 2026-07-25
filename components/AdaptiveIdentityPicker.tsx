@@ -5,6 +5,7 @@ import IdentityAvatar from './common/IdentityAvatar';
 import { supabase } from '../supabaseClient';
 import {
   buildUnavailableIdentityOption,
+  buildLoadingIdentityOption,
   normalizeIdentityTokens,
   parseIdentityToken,
   searchIdentityOptions,
@@ -90,6 +91,7 @@ const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
   const [loading, setLoading] = useState(false);
   const [offset, setOffset] = useState(0);
   const [totalByKind, setTotalByKind] = useState<Partial<Record<IdentityKind, number>>>({});
+  const [resolvedSelectedTokens, setResolvedSelectedTokens] = useState<Set<IdentityToken>>(new Set());
   const requestGenerationRef = useRef(0);
 
   useEffect(() => {
@@ -103,9 +105,6 @@ const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
         ? new Map(Array.from(current.entries()).filter(([token]) => selectedTokens.includes(token as IdentityToken)))
         : new Map(current);
       items.forEach((item) => next.set(item.token, item));
-      selectedTokens.forEach((token) => {
-        if (!next.has(token)) next.set(token, buildUnavailableIdentityOption(token));
-      });
       return next;
     });
   }, [selectedTokens]);
@@ -148,6 +147,7 @@ const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
           return legacyResolution[rawId] || token;
         });
         mergeItems(effectiveTokens.map((token) => hydrated.get(token) || buildUnavailableIdentityOption(token)));
+        setResolvedSelectedTokens((current) => new Set([...current, ...effectiveTokens]));
       })
       .catch((error) => {
         if (!cancelled) onLoadError?.(toFaErrorMessage(error, 'خواندن مقدار انتخاب‌شده ناموفق بود.'));
@@ -194,9 +194,15 @@ const AdaptiveIdentityPicker: React.FC<AdaptiveIdentityPickerProps> = ({
   const selectedOptionRows = useMemo(
     () => {
       const extras = new Map(additionalOptions.map((item) => [item.token, item]));
-      return selectedTokens.map((token) => extras.get(token) || itemsByToken.get(token) || buildUnavailableIdentityOption(token));
+      return selectedTokens.map((token) => {
+        const resolved = extras.get(token) || itemsByToken.get(token);
+        if (resolved) return resolved;
+        return resolvedSelectedTokens.has(token)
+          ? buildUnavailableIdentityOption(token)
+          : buildLoadingIdentityOption(token);
+      });
     },
-    [additionalOptions, itemsByToken, selectedTokens]
+    [additionalOptions, itemsByToken, resolvedSelectedTokens, selectedTokens]
   );
   const groupOptions = useMemo(
     () => normalizedScopes.map((kind) => ({

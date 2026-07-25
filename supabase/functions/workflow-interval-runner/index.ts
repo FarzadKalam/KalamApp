@@ -26,6 +26,7 @@ import {
   evaluateCoreConditionOperator,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from './_runtime-deps/recordRuntime.ts';
+import { assignProcessTemplateSystemVariableValues } from './_runtime-deps/processTemplateSystemVariables.ts';
 import {
   getLegacyWorkflowAttachmentFields,
   getWorkflowRecipientConfig,
@@ -35,6 +36,12 @@ import {
   shouldIncludeStarredWorkflowAttachments,
 } from './_runtime-deps/workflowMessagingContract.ts';
 import { evaluateFormulaExpression } from './_runtime-deps/formulaRuntime.ts';
+import {
+  isWorkflowProtectedFieldKey,
+  isWorkflowFieldValueCompatible,
+  normalizeWorkflowAssigneeValue,
+  resolveWorkflowDateCriterion,
+} from './_runtime-deps/workflowMutationContract.ts';
 
 const FUNCTION_BUILD = 'workflow-interval-runner-2026-07-23-event-record-context-and-report-recovery';
 const MAX_WORKFLOWS = 30;
@@ -1361,10 +1368,16 @@ async function dbUpsert(supabaseUrl: string, key: string, table: string, body: a
   try { const d = await r.json(); return Array.isArray(d) ? d[0] : d; } catch { return null; }
 }
 
-async function dbPatch(supabaseUrl: string, key: string, table: string, filter: string, body: any): Promise<void> {
+async function dbPatch(supabaseUrl: string, key: string, table: string, filter: string, body: any): Promise<any[]> {
   const url = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/${table}?${filter}`;
-  const r = await fetch(url, { method: 'PATCH', headers: dbHeaders(key), body: JSON.stringify(body) });
+  const r = await fetch(url, { method: 'PATCH', headers: dbHeaders(key, { Prefer: 'return=representation' }), body: JSON.stringify(body) });
   if (!r.ok) { const t = await r.text(); throw new Error(`PATCH ${table} failed: ${t}`); }
+  try {
+    const payload = await r.json();
+    return Array.isArray(payload) ? payload : payload ? [payload] : [];
+  } catch {
+    return [];
+  }
 }
 
 async function callRpc(supabaseUrl: string, key: string, fn: string, args: any): Promise<any> {
@@ -2428,6 +2441,54 @@ function getModuleTable(moduleId: string): string {
   return TABLE_MAP[moduleId] || moduleId;
 }
 
+const WORKFLOW_MUTATION_MODULE_IDS = new Set([
+  'products', 'billboards', 'product_bundles', 'warehouses', 'shelves', 'stock_transfers',
+  'secretariat_documents', 'delivery_forms', 'production_boms', 'production_orders',
+  'production_group_orders', 'customers', 'suppliers', 'invoices', 'purchase_invoices',
+  'sales_return_invoices', 'purchase_return_invoices', 'projects', 'marketing_leads',
+  'personas', 'instructions', 'process_templates', 'process_runs', 'tasks',
+  'calculation_formulas', 'fiscal_years', 'chart_of_accounts', 'journal_entries',
+  'accounting_event_rules', 'cost_centers', 'cash_boxes', 'bank_accounts', 'petty_funds',
+  'cheques', 'barters', 'cash_bank_operations', 'profiles', 'employees', 'job_descriptions',
+  'attendance_logs', 'work_schedules', 'leave_requests', 'overtime_requests',
+  'mission_requests', 'price_lists', 'web_forms', 'automation_execution_reports',
+  'sms_delivery_reports', 'voip_call_reports', 'counterparty_bot_groups', 'expense_documents',
+  'assets', 'employee_advances', 'employee_bonus_requests', 'employee_penalty_requests',
+  'payroll_slips', 'employee_contracts', 'recruitment_applicants', 'surveys',
+  'productBundles', 'purchaseInvoices', 'priceLists', 'marketingLeads', 'deliveryForms',
+  'salesCatalog', 'stockTransfers', 'productionBOM', 'productionOrders', 'productionGroupOrders',
+  'fiscalYears', 'chartOfAccounts', 'journalEntries', 'accountingEventRules', 'costCenters',
+  'cashBoxes', 'bankAccounts', 'pettyFunds', 'cashBankOperations', 'expenseDocuments',
+  'attendanceLogs', 'assets', 'workSchedules', 'leaveRequests', 'overtimeRequests',
+  'missionRequests', 'employeeAdvances', 'employeeBonusRequests', 'employeePenaltyRequests',
+  'employeeContracts', 'jobDescriptions', 'jobDescription', 'payrollSlips',
+  'recruitmentApplicants', 'processTemplates', 'processRuns', 'webForms',
+  'secretariatDocuments', 'smsDeliveryReports', 'voipCallReports',
+  'automationExecutionReports', 'counterpartyBotGroups',
+]);
+
+const isSafeWorkflowMutationFieldKey = (fieldKey: unknown) => {
+  const normalized = String(fieldKey || '').trim();
+  return /^[a-z][a-z0-9_]*$/i.test(normalized)
+    && !isWorkflowProtectedFieldKey(normalized)
+    && !normalized.startsWith('__');
+};
+
+const assertWorkflowMutationModule = (moduleId: string) => {
+  if (!WORKFLOW_MUTATION_MODULE_IDS.has(String(moduleId || '').trim())) {
+    throw new Error('ماژول مقصد برای تغییر خودکار مجاز نیست.');
+  }
+};
+
+const sanitizeWorkflowMutationPayload = (payload: Record<string, any>) => {
+  const sanitized: Record<string, any> = {};
+  Object.entries(payload || {}).forEach(([fieldKey, value]) => {
+    if (!isSafeWorkflowMutationFieldKey(fieldKey)) return;
+    sanitized[fieldKey] = value;
+  });
+  return sanitized;
+};
+
 async function updateRecord(
   url: string,
   key: string,
@@ -2437,21 +2498,61 @@ async function updateRecord(
   actorUserId: string | null = null,
   orgId?: string | null,
 ): Promise<void> {
+  assertWorkflowMutationModule(moduleId);
   const table = getModuleTable(moduleId);
-  const payload = { ...patch, updated_at: new Date().toISOString() };
+  const payload = { ...sanitizeWorkflowMutationPayload(patch), updated_at: new Date().toISOString() };
+  if (Object.keys(payload).length === 1) throw new Error('هیچ فیلد قابل بروزرسانی برای این اقدام انتخاب نشده است.');
   if (actorUserId) payload.updated_by = actorUserId;
   const filter = orgId ? `id=eq.${recordId}&org_id=eq.${orgId}` : `id=eq.${recordId}`;
-  await dbPatch(url, key, table, filter, payload);
+  const updatedRows = await dbPatch(url, key, table, filter, payload);
+  if (updatedRows.length === 0) throw new Error('رکورد مقصد پیدا نشد یا امکان بروزرسانی آن وجود ندارد.');
 }
 
 async function createRecord(url: string, key: string, moduleId: string, orgId: string, payload: Record<string, any>, actorUserId: string | null = null): Promise<any> {
+  assertWorkflowMutationModule(moduleId);
   const table = getModuleTable(moduleId);
-  const body = { org_id: orgId, ...payload };
+  const body = { ...sanitizeWorkflowMutationPayload(payload), org_id: orgId };
   if (actorUserId) {
     if (!body.created_by) body.created_by = actorUserId;
     if (!body.updated_by) body.updated_by = actorUserId;
   }
   return await dbInsert(url, key, table, body);
+}
+
+async function updateProcessTaskAutomationField(
+  url: string,
+  key: string,
+  task: Record<string, any>,
+  fieldKey: string,
+  value: any,
+  actorUserId: string | null,
+  orgId: string,
+) {
+  const taskId = String(task?.task_id || task?.id || '').trim();
+  const normalizedFieldKey = String(fieldKey || '').replace(/^__task__/, '').trim();
+  if (!taskId || !normalizedFieldKey) throw new Error('فعالیت مقصد برای بروزرسانی مشخص نیست.');
+  const recurrence = parseObjectValue(task?.recurrence_info);
+  const customFields = Array.isArray(recurrence?.process_task_custom_fields)
+    ? recurrence.process_task_custom_fields
+    : [];
+  const isCustomField = customFields.some((field: any) => String(field?.key || '').trim() === normalizedFieldKey);
+  if (isCustomField) {
+    const currentValues = parseObjectValue(recurrence?.process_task_custom_field_values);
+    const nextRecurrence = {
+      ...recurrence,
+      process_task_custom_fields: customFields,
+      process_task_custom_field_values: { ...currentValues, [normalizedFieldKey]: value },
+    };
+    await updateRecord(url, key, 'tasks', taskId, { recurrence_info: nextRecurrence }, actorUserId, orgId);
+    task.recurrence_info = nextRecurrence;
+    task[`__task__${normalizedFieldKey}`] = value;
+    return;
+  }
+  const patch = normalizedFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY || normalizedFieldKey === 'assignee_id'
+    ? normalizeWorkflowAssigneeValue(value)
+    : { [normalizedFieldKey]: value };
+  await updateRecord(url, key, 'tasks', taskId, patch, actorUserId, orgId);
+  Object.assign(task, patch);
 }
 
 async function createWorkflowAiThread(
@@ -3200,6 +3301,7 @@ async function prepareProcessRunForAutomaticExecution(
     `process_run_stages?process_run_id=eq.${encodeURIComponent(processRunId)}&select=*&order=sort_order.asc&limit=500`
   ).catch(() => []);
   const templateRecord: Record<string, any> = { ...record };
+  assignProcessTemplateSystemVariableValues(templateRecord);
   const rawProcessName = String(runRows[0]?.process_name || '').trim() || 'فرآیند';
   assignProcessAutomationIdentityContext(templateRecord, rawProcessName, null);
   for (const [linkedModuleId, linkedRecordIdRaw] of Object.entries(processLinks)) {
@@ -3337,6 +3439,15 @@ async function resolveConfiguredActionValue(
 ): Promise<any> {
   const valueMode = String(config.value_mode || 'static');
   if (valueMode === 'from_source' || valueMode === 'from_related') {
+    const targetType = String(config.value_field_type || config.target_field_type || '').trim();
+    const sourceType = String(config.source_field_type || '').trim();
+    const hasRelationType = ['relation', 'multi_relation'].includes(targetType) || ['relation', 'multi_relation'].includes(sourceType);
+    if (targetType && sourceType && !hasRelationType && !isWorkflowFieldValueCompatible(
+      { key: String(config.target_field_key || config.field || ''), type: targetType },
+      { key: String(config.source_field || ''), type: sourceType },
+    )) {
+      throw new Error('نوع فیلد منبع با فیلد مقصد سازگار نیست.');
+    }
     const sourceField = String(config.source_field || '').trim();
     return sourceField ? await resolveWorkflowFieldValue(url, key, sourceField, record, orgId, moduleId) : null;
   }
@@ -3346,6 +3457,11 @@ async function resolveConfiguredActionValue(
       ? evaluateFormulaExpression(expression, record || {}).value
       : null;
   }
+  const automaticDateValue = resolveWorkflowDateCriterion(
+    { type: String(config.value_field_type || config.target_field_type || '').trim() },
+    config.date_criterion,
+  );
+  if (automaticDateValue !== undefined) return automaticDateValue;
   return config.value ?? null;
 }
 
@@ -3362,6 +3478,10 @@ async function resolveServerFieldMappingValue(
     source_field: mapping?.source_field,
     formula_expression_config: mapping?.formula_expression_config,
     value: mapping?.value,
+    date_criterion: mapping?.date_criterion,
+    value_field_type: mapping?.field_type,
+    target_field_key: mapping?.field,
+    source_field_type: mapping?.source_field_type,
   }, record, url, key, orgId, moduleId);
 }
 
@@ -3923,6 +4043,10 @@ async function executeAction(
     const fieldKey = String(config.field || '').trim();
     if (!fieldKey || !record?.id) return actionResult(action, 'skipped', 'فیلد یا رکورد مقصد برای بروزرسانی مشخص نیست.');
     const nextValue = await resolveConfiguredActionValue(config, record, url, key, orgId, moduleId);
+    if (fieldKey.startsWith('__task__')) {
+      await updateProcessTaskAutomationField(url, key, record, fieldKey, nextValue, actorUserId, orgId);
+      return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey, target_module_id: 'tasks' } });
+    }
     const processLinkedMeta = fieldKey.match(/^__linked__(.+?)__(.+)$/);
     const processLinks = parseObjectValue(record?.process_links || record?.process_link_map);
     const targetModuleId = String(processLinkedMeta?.[1] || moduleId).trim();
@@ -3931,7 +4055,10 @@ async function executeAction(
       ? String(processLinks?.[targetModuleId] || record?.[`__linked__${targetModuleId}__id`] || '').trim()
       : String(record.id);
     if (!targetRecordId) return actionResult(action, 'skipped', 'رکورد مقصد برای بروزرسانی پیدا نشد.');
-    await updateRecord(url, key, targetModuleId, targetRecordId, { [targetFieldKey]: nextValue }, actorUserId);
+    const patch = targetFieldKey === WORKFLOW_ASSIGNEE_FIELD_KEY || targetFieldKey === 'assignee_id'
+      ? normalizeWorkflowAssigneeValue(nextValue)
+      : { [targetFieldKey]: nextValue };
+    await updateRecord(url, key, targetModuleId, targetRecordId, patch, actorUserId, orgId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { field: fieldKey } });
   }
 
@@ -3944,7 +4071,12 @@ async function executeAction(
     for (const mapping of mappings) {
       const tf = String(mapping?.field || '').trim();
       if (!tf) continue;
-      payload[tf] = await resolveServerFieldMappingValue(mapping, record, url, key, orgId, moduleId);
+      const mappedValue = await resolveServerFieldMappingValue(mapping, record, url, key, orgId, moduleId);
+      if (tf === WORKFLOW_ASSIGNEE_FIELD_KEY || tf === 'assignee_id') {
+        Object.assign(payload, normalizeWorkflowAssigneeValue(mappedValue));
+      } else if (isSafeWorkflowMutationFieldKey(tf)) {
+        payload[tf] = mappedValue;
+      }
     }
     await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
@@ -3960,6 +4092,19 @@ async function executeAction(
       : String(processLinks?.[sourceModuleId] || record?.[`__linked__${sourceModuleId}__id`] || '').trim();
     const relationFieldKey = String(config.relation_field_key || (targetModuleId === 'tasks' ? 'source_record_id' : '')).trim();
     if (!targetModuleId || !relationFieldKey || !sourceRecordId) return actionResult(action, 'skipped', 'تنظیمات ایجاد رکورد مرتبط کامل نیست.');
+    assertWorkflowMutationModule(targetModuleId);
+    assertWorkflowMutationModule(sourceModuleId);
+    const sourceRows = await dbGet(
+      url,
+      key,
+      `${getModuleTable(sourceModuleId)}?id=eq.${encodeURIComponent(sourceRecordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=id&limit=1`,
+    ).catch(() => []);
+    if (sourceRows.length === 0) {
+      return actionResult(action, 'skipped', 'رکورد مرجع در سازمان جاری پیدا نشد.');
+    }
+    if (targetModuleId !== 'tasks' && !isSafeWorkflowMutationFieldKey(relationFieldKey)) {
+      return actionResult(action, 'skipped', 'فیلد ارتباط با رکورد مرجع معتبر نیست.');
+    }
     const payload: Record<string, any> = { [relationFieldKey]: sourceRecordId };
     if (targetModuleId === 'tasks') {
       payload.related_to_module = sourceModuleId;
@@ -3968,8 +4113,19 @@ async function executeAction(
     const mappings = Array.isArray(config.field_mappings) ? config.field_mappings : [];
     for (const mapping of mappings) {
       const tf = String(mapping?.field || '').trim();
-      if (!tf) continue;
-      payload[tf] = await resolveServerFieldMappingValue(mapping, record, url, key, orgId, moduleId);
+      if (!tf || tf === relationFieldKey || (targetModuleId === 'tasks' && ['source_record_id', 'related_to_module'].includes(tf))) continue;
+      const mappedValue = await resolveServerFieldMappingValue(mapping, record, url, key, orgId, moduleId);
+      if (tf === WORKFLOW_ASSIGNEE_FIELD_KEY || tf === 'assignee_id') {
+        Object.assign(payload, normalizeWorkflowAssigneeValue(mappedValue));
+      } else if (isSafeWorkflowMutationFieldKey(tf)) {
+        payload[tf] = mappedValue;
+      }
+    }
+    // پیوند اجباری باید پس از تمام mappingها تثبیت شود و هرگز توسط تنظیم کاربر تغییر نکند.
+    payload[relationFieldKey] = sourceRecordId;
+    if (targetModuleId === 'tasks') {
+      payload.related_to_module = sourceModuleId;
+      payload.source_record_id = sourceRecordId;
     }
     await createRecord(url, key, targetModuleId, orgId, payload, actorUserId);
     return actionResult(action, 'success', undefined, { affected_count: 1, details: { target_module_id: targetModuleId } });
@@ -4591,7 +4747,7 @@ async function runScheduledReportsTick(url: string, key: string, now: Date): Pro
 type WorkflowIntervalJob = {
   id: string;
   org_id: string;
-  job_kind: 'workflow_scan' | 'workflow_action';
+  job_kind: 'workflow_scan' | 'workflow_action' | 'process_automation_interval';
   workflow_id: string | null;
   module_id: string | null;
   record_id: string | null;
@@ -4869,11 +5025,30 @@ async function processWorkflowActionJob(url: string, key: string, job: WorkflowI
   return actionResultValue;
 }
 
+async function processProcessAutomationIntervalJob(url: string, key: string, job: WorkflowIntervalJob) {
+  const taskId = String(job.record_id || job.payload?.task_id || '').trim();
+  const rule = job.payload?.rule;
+  if (!taskId || !rule || typeof rule !== 'object') throw new Error('اطلاعات اجرای زمان‌دار اتوماسیون فعالیت ناقص است.');
+  const taskRows = await dbGet(url, key, `tasks?id=eq.${encodeURIComponent(taskId)}&org_id=eq.${encodeURIComponent(job.org_id)}&select=*&limit=1`);
+  const task = taskRows[0];
+  if (!task || ['done', 'completed'].includes(String(task?.status || '').trim().toLowerCase())) {
+    await completeIntervalJob(url, key, job, 'skipped', { reason: 'task_unavailable_or_completed' });
+    return { skipped: true };
+  }
+  const result = await runServerProcessAutomationRules(url, key, task, null, 'interval', [rule]);
+  await completeIntervalJob(url, key, job, result.succeeded > 0 ? 'succeeded' : 'skipped', { process_automation: result });
+  return result;
+}
+
 async function processIntervalJob(url: string, key: string, job: WorkflowIntervalJob) {
   try {
     if (job.job_kind === 'workflow_scan') {
       const result = await processWorkflowScanJob(url, key, job);
       await completeIntervalJob(url, key, job, 'succeeded', result);
+      return 'succeeded';
+    }
+    if (job.job_kind === 'process_automation_interval') {
+      await processProcessAutomationIntervalJob(url, key, job);
       return 'succeeded';
     }
     await processWorkflowActionJob(url, key, job);
@@ -4926,175 +5101,6 @@ async function drainIntervalJobs(url: string, key: string): Promise<Record<strin
     }
   }
   return stats;
-}
-
-async function runIntervalTick(url: string, key: string): Promise<Record<string, any>> {
-  const now = new Date();
-  const stats = { checkedWorkflows: 0, claimedWorkflows: 0, processedRecords: 0, executedActions: 0, failedRuns: 0 };
-
-  const workflows = await fetchQueuedWorkflows(url, key);
-  stats.checkedWorkflows = workflows.length;
-
-  for (const workflow of workflows) {
-    // Re-validate: check interval schedule + day condition (pg_cron doesn't check all of these)
-    const scheduledDueAt = getWorkflowScheduledDueAt(workflow, now);
-    if (!scheduledDueAt) {
-      await clearServerQueued(url, key, workflow.id);
-      continue;
-    }
-    if (!await checkIntervalDayCondition(
-      workflow.interval_day_condition,
-      scheduledDueAt,
-      workflow.interval_days_after_holiday,
-    )) {
-      await clearServerQueued(url, key, workflow.id);
-      continue;
-    }
-
-    const claimed = await claimWorkflow(url, key, workflow.id, workflow.last_run_at, scheduledDueAt);
-    if (!claimed) continue;
-    stats.claimedWorkflows++;
-
-    const configuredRecordLimit = Number(workflow.batch_size) > 0
-      ? Math.max(1, Math.min(50000, Number(workflow.batch_size)))
-      : Number.POSITIVE_INFINITY;
-    const conditionsAll = (Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [])
-      .filter((c) => !['changed', 'changed_from', 'changed_to'].includes(String(c?.operator || '')));
-    const conditionsAny = (Array.isArray(workflow.conditions_any) ? workflow.conditions_any : [])
-      .filter((c) => !['changed', 'changed_from', 'changed_to'].includes(String(c?.operator || '')));
-
-    const executionMode = String(workflow.execution_mode || 'first_match');
-    const actorUserId = resolveWorkflowActorId(workflow);
-    const targetModuleIds = Array.from(new Set(
-      workflow.scope_type === 'process_activator'
-        && !String(workflow.process_source_node_key || '').trim()
-        && Array.isArray(workflow.module_ids)
-        ? workflow.module_ids
-        : [workflow.module_id],
-    )).map((value) => String(value || '').trim()).filter(Boolean);
-
-    for (const targetModuleId of targetModuleIds) {
-      const targetTable = getModuleTable(targetModuleId);
-      let offset = 0;
-      let processedForModule = 0;
-      while (processedForModule < configuredRecordLimit) {
-        const remaining = Number.isFinite(configuredRecordLimit)
-          ? configuredRecordLimit - processedForModule
-          : DEFAULT_BATCH_SIZE;
-        const pageSize = Math.max(1, Math.min(DEFAULT_BATCH_SIZE, remaining));
-        const records = await fetchModuleRecordsPage(
-          url,
-          key,
-          targetTable,
-          workflow.org_id,
-          pageSize,
-          offset,
-        ).catch((e) => {
-          console.error('[workflow-runner] Record page fetch failed:', e.message);
-          return [];
-        });
-        if (records.length === 0) break;
-        offset += records.length;
-        processedForModule += records.length;
-
-        let executedRecordIds: Set<string> | null = null;
-        if (executionMode === 'first_match') {
-          const recordIds = records.map((r: any) => String(r?.id || '')).filter(Boolean);
-          if (recordIds.length > 0) {
-            const logs = await dbGet(url, key,
-              `workflow_logs?workflow_id=eq.${workflow.id}&run_type=eq.scheduled&module_id=eq.${targetModuleId}&status=eq.success&record_id=in.(${recordIds.join(',')})&select=record_id`
-            ).catch(() => []);
-            executedRecordIds = new Set(logs.map((l: any) => String(l?.record_id || '')));
-          }
-        }
-
-        for (const record of records) {
-          if (await shouldSkipWorkflowIntervalRecord(url, key, workflow.org_id, targetTable, record)) continue;
-
-          stats.processedRecords++;
-          const actionRecord = workflow.scope_type === 'process_activator'
-            ? buildProcessActivatorRecordContext(targetModuleId, record)
-            : record;
-          const matched = await evaluateConditions(conditionsAll, conditionsAny, actionRecord, null, {
-            url,
-            key,
-            orgId: workflow.org_id,
-            moduleId: targetModuleId,
-          });
-          if (!matched) continue;
-
-          const recordId = String(record?.id || '').trim();
-          if (executionMode === 'first_match' && recordId && executedRecordIds?.has(recordId)) continue;
-
-          const actions = Array.isArray(workflow.actions) ? workflow.actions : [];
-          const errors: string[] = [];
-          const actionResults: ActionExecutionResult[] = [];
-
-          for (const action of actions) {
-            try {
-              const result = await executeActionWithRetry(
-                action as WorkflowAction,
-                actionRecord,
-                targetModuleId,
-                workflow.org_id,
-                url,
-                key,
-                actorUserId,
-              );
-              actionResults.push(result);
-              if (result.status === 'success') stats.executedActions++;
-              if (result.status === 'failed') {
-                errors.push(result.message || String(action.type || 'action failed'));
-                stats.failedRuns++;
-              }
-            } catch (e: any) {
-              const errorMessage = String(e?.message || action.type || 'action failed');
-              errors.push(errorMessage);
-              actionResults.push({
-                action_type: String((action as any)?.type || ''),
-                action_id: (action as any)?.id || null,
-                status: 'failed',
-                message: errorMessage,
-              });
-              console.error(`[workflow-runner] Action failed (${workflow.name}/${action.type}):`, e.message);
-              stats.failedRuns++;
-            }
-          }
-
-          if (recordId) {
-            const hasFailedAction = actionResults.some((result) => result.status === 'failed');
-            const hasSuccessfulAction = actionResults.some((result) => result.status === 'success');
-            const runStatus = hasFailedAction ? 'failed' : hasSuccessfulAction ? 'success' : 'skipped';
-            const skippedMessage = !hasSuccessfulAction && errors.length === 0
-              ? 'هیچ اقدامی اجرا نشد یا گیرنده معتبر پیدا نشد.'
-              : undefined;
-            await insertWorkflowLog(url, key, {
-              workflow_id: workflow.id, org_id: workflow.org_id,
-              module_id: targetModuleId, record_id: recordId,
-              run_type: 'scheduled',
-              status: runStatus,
-              message: errors.length > 0 ? errors.join(' | ') : skippedMessage,
-              details: {
-                workflow_name: workflow.name,
-                action_count: actions.length,
-                action_results: actionResults,
-                timezone: 'Asia/Tehran',
-                scheduled_due_at: scheduledDueAt.toISOString(),
-                runner_build: FUNCTION_BUILD,
-                page_offset: offset - records.length,
-              },
-            });
-            if (executedRecordIds && runStatus === 'success') executedRecordIds.add(recordId);
-          }
-        }
-        if (records.length < pageSize) break;
-      }
-    }
-  }
-
-  const reportStats = await runScheduledReportsTick(url, key, now);
-  const processAutomationStats = await runServerProcessAutomationIntervalTick(url, key, now);
-  return { ...stats, ...reportStats, processAutomationStats };
 }
 
 function workflowTargetsModule(workflow: WorkflowRow, moduleId: string): boolean {
@@ -5188,19 +5194,40 @@ async function fetchEventWorkflows(
   ));
 }
 
-async function hasSuccessfulEventWorkflowLog(
+async function claimEventFirstMatchExecution(
+  url: string,
+  key: string,
+  orgId: string,
+  workflowId: string,
+  moduleId: string,
+  recordId: string,
+): Promise<boolean> {
+  return await callRpc(url, key, 'claim_workflow_event_first_match_execution', {
+    p_org_id: orgId,
+    p_workflow_id: workflowId,
+    p_module_id: moduleId,
+    p_record_id: recordId,
+    p_execution_key: intervalJobDedupeKey('event-first-match', workflowId, moduleId, recordId),
+  }).catch((error) => {
+    console.warn('[workflow-runner] Event first-match claim failed:', error?.message || error);
+    return false;
+  }) === true;
+}
+
+async function completeEventFirstMatchExecution(
   url: string,
   key: string,
   workflowId: string,
   moduleId: string,
   recordId: string,
-): Promise<boolean> {
-  const rows = await dbGet(
-    url,
-    key,
-    `workflow_logs?workflow_id=eq.${encodeURIComponent(workflowId)}&run_type=eq.event&module_id=eq.${encodeURIComponent(moduleId)}&record_id=eq.${encodeURIComponent(recordId)}&status=eq.success&select=id&limit=1`,
-  ).catch(() => []);
-  return rows.length > 0;
+  status: 'succeeded' | 'failed',
+  errorMessage: string | null = null,
+) {
+  await callRpc(url, key, 'complete_workflow_event_first_match_execution', {
+    p_execution_key: intervalJobDedupeKey('event-first-match', workflowId, moduleId, recordId),
+    p_status: status,
+    p_last_error: errorMessage,
+  });
 }
 
 async function runEventTick(
@@ -5259,6 +5286,7 @@ async function runEventTick(
     // Keep the module id used in logs and action context compatible with the
     // configured module id (some modules use a camelCase id and snake_case table).
     const workflowModuleId = resolveWorkflowModuleIdForSourceTable(workflow, moduleId);
+    let firstMatchClaimed = false;
     try {
       const matched = await evaluateConditions(
         Array.isArray(workflow.conditions_all) ? workflow.conditions_all : [],
@@ -5271,11 +5299,17 @@ async function runEventTick(
       stats.matchedWorkflows += 1;
 
       const executionMode = String(workflow.execution_mode || 'first_match');
-      if (
-        executionMode === 'first_match'
-        && recordIdForLog
-        && await hasSuccessfulEventWorkflowLog(url, key, workflow.id, workflowModuleId, recordIdForLog)
-      ) {
+      if (executionMode === 'first_match' && recordIdForLog) {
+        firstMatchClaimed = await claimEventFirstMatchExecution(
+          url,
+          key,
+          workflow.org_id,
+          workflow.id,
+          workflowModuleId,
+          recordIdForLog,
+        );
+      }
+      if (executionMode === 'first_match' && recordIdForLog && !firstMatchClaimed) {
         stats.skippedRuns += 1;
         await insertWorkflowLog(url, key, {
           workflow_id: workflow.id,
@@ -5352,6 +5386,17 @@ async function runEventTick(
       if (runStatus === 'success') {
         await dbPatch(url, key, 'workflows', `id=eq.${workflow.id}`, { last_run_at: new Date().toISOString() }).catch(() => {});
       }
+      if (firstMatchClaimed && recordIdForLog) {
+        await completeEventFirstMatchExecution(
+          url,
+          key,
+          workflow.id,
+          workflowModuleId,
+          recordIdForLog,
+          runStatus === 'success' ? 'succeeded' : 'failed',
+          errors.join(' | ') || null,
+        );
+      }
     } catch (error: any) {
       stats.failedRuns += 1;
       const errorMessage = String(error?.message || 'workflow event failed');
@@ -5367,6 +5412,17 @@ async function runEventTick(
           message: errorMessage,
           details: { source, event, runner_build: FUNCTION_BUILD },
         });
+      }
+      if (firstMatchClaimed && recordIdForLog) {
+        await completeEventFirstMatchExecution(
+          url,
+          key,
+          workflow.id,
+          workflowModuleId,
+          recordIdForLog,
+          'failed',
+          errorMessage,
+        ).catch(() => {});
       }
     }
   }
@@ -5389,8 +5445,9 @@ async function runEventTick(
 async function loadTaskSourceRecord(url: string, key: string, task: Record<string, any>) {
   const link = getTaskSourceLinkCore(task);
   if (!link.moduleId || !link.recordId) return { ...link, record: null as Record<string, any> | null };
+  if (!WORKFLOW_MUTATION_MODULE_IDS.has(String(link.moduleId || '').trim())) return { ...link, record: null as Record<string, any> | null };
   const rows = await dbGet(url, key,
-    `${getModuleTable(link.moduleId)}?id=eq.${encodeURIComponent(link.recordId)}&select=*&limit=1`
+    `${getModuleTable(link.moduleId)}?id=eq.${encodeURIComponent(link.recordId)}&org_id=eq.${encodeURIComponent(String(task?.org_id || '').trim())}&select=*&limit=1`
   ).catch(() => []);
   return { ...link, record: rows[0] || null };
 }
@@ -5483,9 +5540,10 @@ async function hydrateProcessLinkedFields(url: string, key: string, record: Reco
   for (const [moduleIdRaw, recordIdRaw] of Object.entries(links)) {
     const moduleId = String(moduleIdRaw || '').trim();
     const recordId = String(recordIdRaw || '').trim();
-    if (!moduleId || !recordId) continue;
+    const orgId = String(record?.org_id || '').trim();
+    if (!moduleId || !recordId || !orgId || !WORKFLOW_MUTATION_MODULE_IDS.has(moduleId)) continue;
     const rows = await dbGet(url, key,
-      `${getModuleTable(moduleId)}?id=eq.${encodeURIComponent(recordId)}&select=*&limit=1`
+      `${getModuleTable(moduleId)}?id=eq.${encodeURIComponent(recordId)}&org_id=eq.${encodeURIComponent(orgId)}&select=*&limit=1`
     ).catch(() => []);
     const linked = rows[0];
     if (!linked) continue;
@@ -5502,6 +5560,39 @@ async function hasSuccessfulProcessAutomationLog(url: string, key: string, ruleI
     `workflow_logs?run_type=eq.process_automation&status=eq.success&module_id=eq.tasks&record_id=eq.${encodeURIComponent(taskId)}&details=cs.${details}&select=id&limit=1`
   ).catch(() => []);
   return rows.length > 0;
+}
+
+const processAutomationFirstMatchExecutionKey = (ruleId: string, taskId: string) =>
+  `process-first-match:${ruleId}:${taskId}`;
+
+async function claimProcessAutomationFirstMatchExecution(
+  url: string,
+  key: string,
+  orgId: string,
+  ruleId: string,
+  taskId: string,
+) {
+  return await callRpc(url, key, 'claim_process_automation_first_match_execution', {
+    p_org_id: orgId,
+    p_rule_id: ruleId,
+    p_task_id: taskId,
+    p_execution_key: processAutomationFirstMatchExecutionKey(ruleId, taskId),
+  }) === true;
+}
+
+async function completeProcessAutomationFirstMatchExecution(
+  url: string,
+  key: string,
+  ruleId: string,
+  taskId: string,
+  status: 'succeeded' | 'failed',
+  errorMessage: string | null = null,
+) {
+  await callRpc(url, key, 'complete_process_automation_first_match_execution', {
+    p_execution_key: processAutomationFirstMatchExecutionKey(ruleId, taskId),
+    p_status: status,
+    p_last_error: errorMessage,
+  });
 }
 
 async function runServerProcessAutomationRules(
@@ -5536,10 +5627,6 @@ async function runServerProcessAutomationRules(
     if (trigger === 'on_create' && event !== 'create') continue;
     if (trigger === 'on_upsert' && !['create', 'update'].includes(event)) continue;
     const ruleId = String(rule?.id || '').trim();
-    if (String(rule?.execution_mode || 'every_match') === 'first_match' && ruleId && await hasSuccessfulProcessAutomationLog(url, key, ruleId, taskId)) {
-      stats.skipped += 1;
-      continue;
-    }
     const conditionsAll = runnableProcessConditionsCore(rule?.conditions_all).map((condition: any) => ({
       ...condition,
       field: String(condition?.field || '').startsWith('__task__') ? String(condition.field) : String(condition.field),
@@ -5552,6 +5639,11 @@ async function runServerProcessAutomationRules(
       previousActionRecord,
       evaluateConditionWithPrevious,
     )) continue;
+    const firstMatch = String(rule?.execution_mode || 'every_match') === 'first_match' && Boolean(ruleId);
+    if (firstMatch && !await claimProcessAutomationFirstMatchExecution(url, key, orgId, ruleId, taskId)) {
+      stats.skipped += 1;
+      continue;
+    }
     stats.matched += 1;
     const targetTokens = resolveProcessAutomationTargetTokensCore(rule, task, siblings);
     const actions = Array.isArray(rule?.actions) ? rule.actions : [];
@@ -5618,6 +5710,16 @@ async function runServerProcessAutomationRules(
         runner_build: FUNCTION_BUILD,
       },
     });
+    if (firstMatch) {
+      await completeProcessAutomationFirstMatchExecution(
+        url,
+        key,
+        ruleId,
+        taskId,
+        status === 'success' ? 'succeeded' : 'failed',
+        errors.join(' | ') || null,
+      ).catch((error) => console.warn('[workflow-runner] process first-match claim completion failed:', error?.message || error));
+    }
     if (status === 'success') stats.succeeded += 1;
     else if (status === 'failed') stats.failed += 1;
     else stats.skipped += 1;
@@ -5658,10 +5760,9 @@ async function getLastProcessAutomationSuccessAt(url: string, key: string, ruleI
 }
 
 async function runServerProcessAutomationIntervalTick(url: string, key: string, now: Date) {
-  const stats = { scannedTasks: 0, intervalCandidateTasks: 0, triggeredTasks: 0, failedTasks: 0 };
+  const stats = { scannedTasks: 0, intervalCandidateTasks: 0, queuedJobs: 0, failedTasks: 0 };
   const pageSize = 100;
-  const maxTasks = 3000;
-  for (let offset = 0; offset < maxTasks; offset += pageSize) {
+  for (let offset = 0; ; offset += pageSize) {
     const rows = await dbGet(url, key,
       `tasks?recurrence_info=not.is.null&status=not.in.(done,completed)&select=*&order=updated_at.desc&limit=${pageSize}&offset=${offset}`
     ).catch((error) => {
@@ -5674,7 +5775,7 @@ async function runServerProcessAutomationIntervalTick(url: string, key: string, 
       const taskId = String(task?.id || '').trim();
       const rules = getTaskProcessAutomationRulesCore(task).filter((rule: any) => String(rule?.trigger_type || '').trim() === 'interval');
       if (rules.length === 0 || !taskId) continue;
-      const dueRules: any[] = [];
+      const dueRules: Array<{ rule: any; scheduledDueAt: Date; dedupeAnchor: string }> = [];
       for (const rule of rules) {
         const ruleId = String(rule?.id || '').trim();
         const lastRunAt = ruleId ? await getLastProcessAutomationSuccessAt(url, key, ruleId, taskId) : null;
@@ -5692,16 +5793,40 @@ async function runServerProcessAutomationIntervalTick(url: string, key: string, 
           interval_day_condition: null,
           interval_days_after_holiday: null,
         } as WorkflowRow, now);
-        if (scheduledDueAt) dueRules.push(rule);
+        if (scheduledDueAt) {
+          dueRules.push({
+            rule,
+            scheduledDueAt,
+            // Before the first successful run there is no time anchor. A stable
+            // key prevents concurrent workers from creating duplicate first jobs.
+            dedupeAnchor: lastRunAt || 'initial',
+          });
+        }
       }
       if (dueRules.length === 0) continue;
       stats.intervalCandidateTasks += 1;
-      try {
-        await runServerProcessAutomationRules(url, key, task, null, 'interval', dueRules);
-        stats.triggeredTasks += 1;
-      } catch (error: any) {
-        stats.failedTasks += 1;
-        console.warn('[workflow-runner] Process automation interval task failed:', taskId, error?.message || error);
+      for (const candidate of dueRules) {
+        const ruleId = String(candidate.rule?.id || '').trim();
+        if (!ruleId) continue;
+        try {
+          await enqueueIntervalJob(url, key, {
+            org_id: String(task.org_id || '').trim(),
+            job_kind: 'process_automation_interval',
+            dedupe_key: intervalJobDedupeKey('process-automation-interval', taskId, ruleId, candidate.dedupeAnchor),
+            workflow_id: null,
+            module_id: 'tasks',
+            record_id: taskId,
+            scheduled_due_at: candidate.scheduledDueAt.toISOString(),
+            page_offset: 0,
+            action_index: null,
+            max_attempts: 3,
+            payload: { task_id: taskId, rule: candidate.rule },
+          });
+          stats.queuedJobs += 1;
+        } catch (error: any) {
+          stats.failedTasks += 1;
+          console.warn('[workflow-runner] Process automation interval enqueue failed:', taskId, error?.message || error);
+        }
       }
     }
     if (rows.length < pageSize) break;
