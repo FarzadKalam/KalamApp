@@ -18,6 +18,19 @@ export type MbtiAxisResult = {
   clarity: 'نامشخص' | 'نزدیک' | 'روشن' | 'پررنگ';
 };
 
+type MbtiAxisPreferenceGuide = {
+  code: string;
+  label: string;
+  description: string;
+};
+
+export type MbtiAxisGuide = {
+  title: string;
+  positive: MbtiAxisPreferenceGuide;
+  negative: MbtiAxisPreferenceGuide;
+  balanced: MbtiAxisPreferenceGuide;
+};
+
 const axisQuestions = (
   axis: MbtiAxis,
   positive: string,
@@ -83,6 +96,41 @@ const AXIS_META: Record<MbtiAxis, { positive: string; negative: string }> = {
   tf: { positive: 'T', negative: 'F' },
   jp: { positive: 'J', negative: 'P' },
 };
+
+export const MBTI_AXIS_GUIDES: Record<MbtiAxis, MbtiAxisGuide> = {
+  ei: {
+    title: 'شیوه دریافت انرژی',
+    positive: { code: 'E', label: 'برون‌گرایی', description: 'معمولاً از گفت‌وگو، تعامل و بیان ایده‌ها در جمع انرژی و وضوح بیشتری می‌گیرید.' },
+    negative: { code: 'I', label: 'درون‌گرایی', description: 'معمولاً با تمرکز فردی، فکرکردن پیش از بیان نظر و زمان تنهایی انرژی و وضوح بیشتری می‌گیرید.' },
+    balanced: { code: '', label: 'تعادل در دریافت انرژی', description: 'بسته به موقعیت، هم تعامل با دیگران و هم تمرکز فردی می‌تواند برایتان انرژی‌بخش و مؤثر باشد.' },
+  },
+  sn: {
+    title: 'شیوه دریافت اطلاعات',
+    positive: { code: 'S', label: 'واقع‌گرایی و جزئیات', description: 'معمولاً داده‌های مشخص، تجربه عملی و جزئیات قابل مشاهده را نقطه شروع مطمئن‌تری می‌دانید.' },
+    negative: { code: 'N', label: 'شهود و نگاه به امکان‌ها', description: 'معمولاً به تصویر کلی، الگوها، ایده‌های تازه و امکان‌های آینده بیشتر توجه می‌کنید.' },
+    balanced: { code: '', label: 'تعادل در دریافت اطلاعات', description: 'می‌توانید هم به واقعیت‌های موجود و هم به امکان‌ها و الگوهای آینده توجه کنید.' },
+  },
+  tf: {
+    title: 'شیوه تصمیم‌گیری',
+    positive: { code: 'T', label: 'منطق و معیارهای روشن', description: 'معمولاً برای تصمیم‌گیری به دلیل، معیارهای یکسان، استاندارد و کارآمدی توجه بیشتری می‌کنید.' },
+    negative: { code: 'F', label: 'ارزش‌ها و اثر بر افراد', description: 'معمولاً اثر تصمیم بر افراد، همدلی، ارزش‌ها و هماهنگی رابطه‌ها برایتان پررنگ‌تر است.' },
+    balanced: { code: '', label: 'تعادل در تصمیم‌گیری', description: 'در پاسخ‌ها برتری مشخصی دیده نمی‌شود؛ احتمالاً می‌توانید هم معیارهای منطقی و هم اثر تصمیم بر افراد را هم‌زمان بسنجید.' },
+  },
+  jp: {
+    title: 'شیوه برخورد با کارها',
+    positive: { code: 'J', label: 'ساختار و جمع‌بندی', description: 'معمولاً برنامه روشن، زمان‌بندی و جمع‌بندی زودتر کارها به شما آرامش و تمرکز می‌دهد.' },
+    negative: { code: 'P', label: 'انعطاف و بازگذاشتن گزینه‌ها', description: 'معمولاً انعطاف در مسیر، باز نگه‌داشتن گزینه‌ها و کشف راه‌حل در حین کار برایتان طبیعی‌تر است.' },
+    balanced: { code: '', label: 'تعادل در شیوه کار', description: 'بسته به شرایط، می‌توانید میان برنامه‌ریزی و انعطاف در مسیر کار جابه‌جا شوید.' },
+  },
+};
+
+export const getMbtiProfileSummary = (axes: MbtiAxisResult[]) => axes
+  .map((axis) => {
+    const guide = MBTI_AXIS_GUIDES[axis.axis];
+    if (!axis.preference) return guide.balanced.label;
+    return axis.preference === guide.positive.code ? guide.positive.label : guide.negative.label;
+  })
+  .join('، ');
 
 const clarityForMargin = (margin: number): MbtiAxisResult['clarity'] => {
   if (margin <= 0) return 'نامشخص';

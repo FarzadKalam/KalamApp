@@ -4,21 +4,20 @@ import { ArrowRightOutlined, RobotOutlined, ReloadOutlined } from '@ant-design/i
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { toFaErrorMessage } from '../utils/errorMessageFa';
-import { calculateMbtiResult, MBTI_TYPE_TITLES, type MbtiAxisResult } from '../utils/mbtiAssessment';
+import {
+  calculateMbtiResult,
+  getMbtiProfileSummary,
+  MBTI_AXIS_GUIDES,
+  MBTI_TYPE_TITLES,
+  type MbtiAxisResult,
+} from '../utils/mbtiAssessment';
 import { hasCurrentOrgPlanFeature } from '../utils/saasPlanFeatures';
 
 const { Paragraph, Text, Title } = Typography;
 
-const AXIS_LABELS: Record<MbtiAxisResult['axis'], string> = {
-  ei: 'دریافت انرژی: E / I',
-  sn: 'دریافت اطلاعات: S / N',
-  tf: 'تصمیم‌گیری: T / F',
-  jp: 'شیوه برخورد با کارها: J / P',
-};
-
-const axisPercent = (axis: MbtiAxisResult) => {
+const axisPositivePercent = (axis: MbtiAxisResult) => {
   const total = axis.positiveScore + axis.negativeScore;
-  return total > 0 ? Math.round((Math.max(axis.positiveScore, axis.negativeScore) / total) * 100) : 0;
+  return total > 0 ? Math.round((axis.positiveScore / total) * 100) : 0;
 };
 
 const MbtiAssessmentReportPage = () => {
@@ -53,7 +52,7 @@ const MbtiAssessmentReportPage = () => {
   useEffect(() => { void loadRecord(); }, [loadRecord]);
   useEffect(() => {
     let cancelled = false;
-    void hasCurrentOrgPlanFeature('mbti_ai_analysis').then((enabled) => {
+    void hasCurrentOrgPlanFeature('mbti_ai_analysis', { defaultEnabled: true }).then((enabled) => {
       if (!cancelled) setAiFeatureEnabled(enabled);
     });
     return () => { cancelled = true; };
@@ -61,9 +60,10 @@ const MbtiAssessmentReportPage = () => {
 
   const result = useMemo(() => calculateMbtiResult(record || {}), [record]);
   const jobContext = String(record?.position_title || '').trim();
+  const profileSummary = useMemo(() => getMbtiProfileSummary(result.axes), [result.axes]);
 
   const runAiAnalysis = async () => {
-    if (!id || !record?.mbti_type) {
+    if (!id || !result.isComplete) {
       message.warning('برای تحلیل هوشمند، همه پرسش‌های اصلی باید پاسخ داده شده باشند.');
       return;
     }
@@ -104,31 +104,44 @@ const MbtiAssessmentReportPage = () => {
         </Descriptions>
       </Card>
 
-      <Card>
+      <Card title="جمع‌بندی قابل فهم نتیجه">
         <div className="flex flex-wrap items-center gap-4">
           <div className="rounded-2xl bg-blue-50 px-6 py-4 text-center dark:bg-blue-950/30">
-            <div className="text-4xl font-black tracking-wider text-blue-700 dark:text-blue-300">{result.type || '—'}</div>
-            <div className="mt-1 text-sm text-blue-800 dark:text-blue-200">{result.type ? MBTI_TYPE_TITLES[result.type] : 'نیازمند تکمیل یا بررسی بیشتر'}</div>
+            <div className="text-2xl font-black text-blue-700 dark:text-blue-300">{result.type ? `تیپ ${result.type}` : 'پروفایل ترکیبی'}</div>
+            <div className="mt-1 text-sm text-blue-800 dark:text-blue-200">{result.type ? MBTI_TYPE_TITLES[result.type] : 'یک یا چند محور ترجیح متعادل دارد'}</div>
           </div>
-          <Paragraph className="!mb-0 max-w-2xl text-sm leading-7">
-            این کد فقط بیانگر ترجیح‌های پاسخ‌دهنده در زمان تکمیل فرم است. نزدیکی امتیازها یعنی هر دو شیوه ممکن است برای فرد قابل استفاده باشند.
-          </Paragraph>
+          <div className="max-w-2xl">
+            <Text strong className="text-base">ترجیح‌های دیده‌شده: {profileSummary || 'در انتظار تکمیل پاسخ‌ها'}</Text>
+            <Paragraph className="!mb-0 mt-2 text-sm leading-7">
+              {result.type
+                ? 'کد چهارحرفی، خلاصه‌ای از ترجیح‌های غالب است؛ هر محور را پایین‌تر با زبان ساده ببینید.'
+                : 'متعادل بودن یک محور «بی‌نتیجه» نیست؛ یعنی در این پاسخ‌ها برتری روشنی برای یکی از دو شیوه دیده نشده و هر دو شیوه می‌توانند برای فرد در دسترس باشند.'}
+            </Paragraph>
+          </div>
         </div>
+        {!result.isComplete ? <Alert className="mt-4" type="warning" showIcon message="برای تکمیل جمع‌بندی، همه پرسش‌های اصلی باید پاسخ داده شوند." /> : null}
       </Card>
 
       <Card title="چهار محور نتیجه">
         <div className="grid gap-5 md:grid-cols-2">
           {result.axes.map((axis) => (
             <div key={axis.axis} className="rounded-2xl border border-gray-100 p-4 dark:border-gray-700">
+              {(() => {
+                const guide = MBTI_AXIS_GUIDES[axis.axis];
+                const selected = axis.preference === guide.positive.code
+                  ? guide.positive
+                  : axis.preference === guide.negative.code ? guide.negative : guide.balanced;
+                return <>
               <div className="mb-2 flex items-center justify-between gap-3">
-                <Text strong>{AXIS_LABELS[axis.axis]}</Text>
-                <Tag color={axis.preference ? 'blue' : 'gold'}>{axis.preference || 'نزدیک'} · {axis.clarity}</Tag>
+                <Text strong>{guide.title}</Text>
+                <Tag color={axis.preference ? 'blue' : 'gold'}>{axis.clarity === 'نامشخص' ? 'متعادل' : axis.clarity}</Tag>
               </div>
-              <Progress percent={axisPercent(axis)} showInfo={false} strokeColor="#2563eb" trailColor="#e5e7eb" />
-              <div className="mt-2 flex justify-between text-sm text-gray-500">
-                <span>{axis.positive}: {axis.positiveScore}</span>
-                <span>{axis.negative}: {axis.negativeScore}</span>
-              </div>
+              <Text strong>{selected.label}</Text>
+              <Paragraph className="!mb-3 mt-1 text-sm leading-7">{selected.description}</Paragraph>
+              <Progress percent={axisPositivePercent(axis)} showInfo={false} strokeColor="#2563eb" trailColor="#dbeafe" />
+              <Text type="secondary" className="mt-2 block text-xs leading-6">از ۸ پاسخ این محور: {axis.positiveScore} پاسخ نزدیک به «{guide.positive.label}» و {axis.negativeScore} پاسخ نزدیک به «{guide.negative.label}» بوده است.</Text>
+                </>;
+              })()}
             </div>
           ))}
         </div>
@@ -154,7 +167,7 @@ const MbtiAssessmentReportPage = () => {
             type="primary"
             icon={analyzing ? <ReloadOutlined spin /> : <RobotOutlined />}
             loading={analyzing}
-            disabled={aiFeatureEnabled !== true || !result.type}
+            disabled={aiFeatureEnabled !== true || !result.isComplete}
             onClick={() => void runAiAnalysis()}
           >
             {record.ai_analysis ? 'بازسازی تحلیل هوشمند' : 'تولید تحلیل هوشمند'}

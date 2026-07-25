@@ -11373,7 +11373,7 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
   if (assessment.consent_given !== true) {
     return json(400, { success: false, message: 'تا پیش از ثبت رضایت پاسخ‌دهنده، تحلیل هوشمند قابل انجام نیست.' });
   }
-  if (assessment.result_status !== 'ready' || !/^[EISNTFJP]{4}$/.test(String(assessment.mbti_type || ''))) {
+  if (assessment.result_status !== 'ready') {
     return json(400, { success: false, message: 'برای تحلیل هوشمند، همه پرسش‌های اصلی باید کامل و نتیجه قابل محاسبه باشد.' });
   }
 
@@ -11381,7 +11381,8 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
     ensureOrgAiSettings(supabaseUrl, serviceRoleKey, authContext),
     loadTenantAiPlanContext(supabaseUrl, serviceRoleKey, authContext),
   ]);
-  if (!canViewSaasAdmin(authContext) && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
+  const hasMbtiAnalysisPlanSetting = Object.prototype.hasOwnProperty.call(planContext?.features || {}, 'mbti_ai_analysis');
+  if (!canViewSaasAdmin(authContext) && hasMbtiAnalysisPlanSetting && !truthyPlanFeature(planContext?.features?.mbti_ai_analysis)) {
     return json(403, { success: false, message: 'ویژگی تحلیل هوشمند تست شخصیت‌شناسی در پلن این سازمان فعال نیست.' });
   }
   await assertAiCapabilityEnabled(supabaseUrl, serviceRoleKey, authContext, settings, 'document_analysis');
@@ -11430,6 +11431,12 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
     `T/F: T=${assessment.tf_score_t}، F=${assessment.tf_score_f}`,
     `J/P: J=${assessment.jp_score_j}، P=${assessment.jp_score_p}`,
   ].join('\n');
+  const preferenceProfile = [
+    assessment.ei_score_e === assessment.ei_score_i ? 'دریافت انرژی: متعادل میان تعامل و تمرکز فردی' : `دریافت انرژی: ${assessment.ei_score_e > assessment.ei_score_i ? 'گرایش بیشتر به تعامل و بیان بیرونی' : 'گرایش بیشتر به تمرکز فردی و درون‌نگری'}`,
+    assessment.sn_score_s === assessment.sn_score_n ? 'دریافت اطلاعات: متعادل میان جزئیات و امکان‌ها' : `دریافت اطلاعات: ${assessment.sn_score_s > assessment.sn_score_n ? 'گرایش بیشتر به واقعیت‌ها و جزئیات' : 'گرایش بیشتر به الگوها و امکان‌های آینده'}`,
+    assessment.tf_score_t === assessment.tf_score_f ? 'تصمیم‌گیری: متعادل میان منطق و اثر بر افراد' : `تصمیم‌گیری: ${assessment.tf_score_t > assessment.tf_score_f ? 'گرایش بیشتر به منطق و معیارهای روشن' : 'گرایش بیشتر به ارزش‌ها و اثر تصمیم بر افراد'}`,
+    assessment.jp_score_j === assessment.jp_score_p ? 'شیوه کار: متعادل میان ساختار و انعطاف' : `شیوه کار: ${assessment.jp_score_j > assessment.jp_score_p ? 'گرایش بیشتر به ساختار و جمع‌بندی' : 'گرایش بیشتر به انعطاف و باز نگه‌داشتن گزینه‌ها'}`,
+  ].join('\n');
   const prompt = [
     'برای یک گزارش توسعه‌ای منابع انسانی به فارسی تحلیل بنویس.',
     'این داده‌ها یک خودارزیابی غیررسمی مبتنی بر ترجیح‌های MBTI هستند، نه آزمون تشخیصی یا ابزار معتبر انتخاب استخدام.',
@@ -11437,7 +11444,8 @@ const handleAnalyzeMbtiAssessment = async (supabaseUrl: string, serviceRoleKey: 
     'نتیجه را فقط برای خودشناسی، گفت‌وگوی سازنده، شیوه ارتباط و رشد در نقش شغلی تفسیر کن؛ تفاوت‌ها را ارزشمند و وابسته به موقعیت بدان.',
     'ساختار پاسخ: «جمع‌بندی ترجیح‌ها»، «همکاری و ارتباط در نقش»، «شرایط کمک‌کننده برای رشد»، «پرسش‌های پیشنهادی برای گفت‌وگو». هر بخش کوتاه و عملی باشد.',
     '',
-    `تیپ محاسبه‌شده: ${assessment.mbti_type}`,
+    `کد چهارحرفی (اگر همه محورهایش غالب باشند): ${assessment.mbti_type || 'تشکیل نشده؛ دست‌کم یک محور متعادل است.'}`,
+    `پروفایل ترجیح‌ها:\n${preferenceProfile}`,
     `امتیازها:\n${scores}`,
     '',
     `زمینه شغلی:\n${jobContext}`,
