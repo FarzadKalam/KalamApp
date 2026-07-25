@@ -5841,7 +5841,7 @@ const ModuleShow: React.FC = () => {
       );
     }
     if (moduleId === 'employees' && id) {
-      content.payroll_info = (
+      content.financial_history = (
         <React.Suspense fallback={<Skeleton active paragraph={{ rows: 3 }} />}>
           <OperationalFinancialOverviewPanel entityType="employee" entityId={id} entityPrintFields={printableFields.map((field: any) => ({
             key: field.key,

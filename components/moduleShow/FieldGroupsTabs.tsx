@@ -83,9 +83,10 @@ const FieldGroupsTabs: React.FC<FieldGroupsTabsProps> = ({
           !!block.tableColumns
           || (moduleId === 'products' && block.id === 'product_inventory')
           || (moduleId === 'shelves' && block.id === 'shelf_inventory');
-        return hasVisibleField || hasBlockTable;
+        const hasExtraBlockContent = Boolean(extraBlockContent?.[String(block.id)]);
+        return hasVisibleField || hasBlockTable || hasExtraBlockContent;
       })
-  ), [canViewField, checkVisibility, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
+  ), [canViewField, checkVisibility, extraBlockContent, fieldGroups, moduleConfig?.fields, moduleId, processStageFieldKeys, processTemplateFieldKeys]);
   const firstVisibleBlockId = String(visibleFieldGroups[0]?.id || '');
   const [activeBlockId, setActiveBlockId] = useState<string>(firstVisibleBlockId);
 

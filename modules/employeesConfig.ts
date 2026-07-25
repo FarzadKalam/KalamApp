@@ -460,6 +460,7 @@ export const employeesModule: ModuleDefinition = {
     { id: 'insurance_info', titles: { fa: 'بیمه' }, type: BlockType.FIELD_GROUP, order: 6 },
     { id: 'banking_info', titles: { fa: 'اطلاعات بانکی' }, type: BlockType.FIELD_GROUP, order: 7 },
     { id: 'previous_system_info', titles: { fa: 'اطلاعات سیستم قبلی' }, type: BlockType.FIELD_GROUP, order: 7.5 },
+    { id: 'financial_history', titles: { fa: 'اطلاعات مالی و سوابق' }, type: BlockType.FIELD_GROUP, order: 7.75 },
     { id: 'job_description_info', titles: { fa: 'شرح شغل' }, type: BlockType.FIELD_GROUP, order: 8 },
     { id: 'process', titles: { fa: 'فرآیند جذب و همکاری' }, type: BlockType.FIELD_GROUP, order: 8.5 },
     { id: 'notes_info', titles: { fa: 'یادداشت' }, type: BlockType.FIELD_GROUP, order: 9 },
