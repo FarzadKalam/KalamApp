@@ -127,6 +127,7 @@ type ProcessCardsV2RuntimeBlockProps = {
   fieldKey?: string | null;
   runtimeSnapshot?: ProcessRuntimeSnapshot | null;
   onRuntimeSnapshot?: (snapshot: ProcessRuntimeSnapshot) => void;
+  onDraftLoadRetry?: () => void | Promise<void>;
   variant?: ProcessV2Variant;
   enabled?: boolean;
   highlightedTaskId?: string | null;
@@ -1590,6 +1591,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   fieldKey,
   runtimeSnapshot,
   onRuntimeSnapshot,
+  onDraftLoadRetry,
   variant = 'full',
   enabled = true,
   highlightedTaskId,
@@ -1690,6 +1692,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
   const linkedDraftStagesRef = useRef<any[]>(linkedDraftStages);
   const recordDataRef = useRef<any>(recordData);
   const readOnlyVariant = variant !== 'full';
+  const draftLoadErrorText = normalizeText(recordData?.__process_draft_load_error);
   const liveRuntimeEnabled = variant === 'full';
   const directDraftStages = draftStagesOverride || (Array.isArray(draftStages) ? draftStages : EMPTY_STAGE_LIST);
   const effectiveDraftStages = useMemo(() => {
@@ -1798,6 +1801,12 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     setTemplateContextResolvedKey('');
   }, [cacheKey, draftStages, runtimeSnapshot, runtimeSnapshotReady]);
 
+  useEffect(() => {
+    if (draftLoadErrorText) {
+      setErrorText(draftLoadErrorText);
+    }
+  }, [draftLoadErrorText]);
+
   const loadDirectoryAndTemplates = useCallback(async () => {
     const applyReferencePayload = (payload: ProcessRuntimeReferencePayload) => {
       setOrgId(payload.orgId);
@@ -1817,7 +1826,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       referencePromise = (async () => {
         const [assignees, templateRows] = await Promise.all([
           fetchAssigneeDirectory(supabase).catch(() => null),
-          fetchProcessTemplateRows(supabase).catch(() => []),
+          fetchProcessTemplateRows(supabase),
         ]);
         const nextTemplates = (templateRows || [])
           .filter((row: any) => row?.is_active !== false)
@@ -1913,7 +1922,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
     }
     const cachedAtStart = processRuntimeBlockCache.get(cacheKey);
     const cacheFreshAtStart = Boolean(cachedAtStart && Date.now() - cachedAtStart.savedAt < PROCESS_RUNTIME_BLOCK_CACHE_TTL_MS);
-    setErrorText('');
+    setErrorText(draftLoadErrorText);
     setLoading((current) => current || force || readOnlyVariant || !cacheFreshAtStart);
     try {
       if (isProcessTemplateModule(normalizedModuleId)) {
@@ -2023,7 +2032,7 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
       setHasLoadedRuntime(true);
       setLoading(false);
     }
-  }, [cacheKey, enabled, liveRuntimeEnabled, loadLegacyLinkedDrafts, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime, variant]);
+  }, [cacheKey, draftLoadErrorText, enabled, liveRuntimeEnabled, loadLegacyLinkedDrafts, normalizedModuleId, normalizedRecordId, publishRuntimeSnapshot, readOnlyVariant, syncProjectStatusForRuntime, variant]);
 
   const refreshRef = useRef(refresh);
   useEffect(() => {
@@ -2236,7 +2245,9 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
 
   useEffect(() => {
     if (!enabled) return;
-    void loadDirectoryAndTemplates();
+    void loadDirectoryAndTemplates().catch((error) => {
+      console.warn('Could not load process runtime reference data', error);
+    });
   }, [enabled, loadDirectoryAndTemplates]);
 
   useEffect(() => {
@@ -4654,7 +4665,10 @@ const ProcessCardsV2RuntimeBlock: React.FC<ProcessCardsV2RuntimeBlockProps> = ({
             <Button
               className="!rounded-full !px-5"
               loading={loading}
-              onClick={() => void refresh(true)}
+              onClick={() => {
+                void refresh(true);
+                if (draftLoadErrorText) void onDraftLoadRetry?.();
+              }}
             >
               تلاش دوباره
             </Button>

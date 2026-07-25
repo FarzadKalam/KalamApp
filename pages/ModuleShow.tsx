@@ -1624,7 +1624,14 @@ const ModuleShow: React.FC = () => {
               .eq('id', id)
               .maybeSingle(),
           }).then((draftResult) => {
-            if (activeRecordRequestRef.current !== requestId || draftResult.error || !draftResult.data) return;
+            if (activeRecordRequestRef.current !== requestId) return;
+            if (draftResult.error || !draftResult.data) {
+              setData((previous: any) => ({
+                ...(previous || {}),
+                __process_draft_load_error: 'دریافت اطلاعات فرآیند کامل نشد. لطفاً دوباره تلاش کنید.',
+              }));
+              return;
+            }
             const draftPatch = recordProjection.deferredProcessDraftColumns.reduce<Record<string, any>>((patch, key) => {
               if (Object.prototype.hasOwnProperty.call(draftResult.data, key)) patch[key] = draftResult.data[key];
               return patch;
@@ -1632,10 +1639,19 @@ const ModuleShow: React.FC = () => {
             if (Object.keys(draftPatch).length === 0) return;
             const mergedRecord = { ...nextRecord, ...draftPatch };
             skipNextOptionsFetchRef.current = true;
-            setData((previous: any) => ({ ...(previous || {}), ...draftPatch }));
+            setData((previous: any) => ({
+              ...(previous || {}),
+              ...draftPatch,
+              __process_draft_load_error: undefined,
+            }));
             void fetchOptions(mergedRecord, requestId);
           }).catch((draftError) => {
             console.warn('Could not load process draft snapshot for ModuleShow', draftError);
+            if (activeRecordRequestRef.current !== requestId) return;
+            setData((previous: any) => ({
+              ...(previous || {}),
+              __process_draft_load_error: 'دریافت اطلاعات فرآیند کامل نشد. لطفاً دوباره تلاش کنید.',
+            }));
           });
         }
         void (async () => {
@@ -6410,6 +6426,7 @@ const ModuleShow: React.FC = () => {
         focusRowKey={focusRowKey}
         processRuntimeSnapshot={processRuntimeSnapshot}
         onProcessRuntimeSnapshot={setProcessRuntimeSnapshot}
+        onProcessDraftLoadRetry={() => void fetchRecord(true)}
       />
 
       {isDeleteModalOpen && id ? (

@@ -29,6 +29,7 @@ interface TablesSectionProps {
   focusRowKey?: string | null;
   processRuntimeSnapshot?: ProcessRuntimeSnapshot | null;
   onProcessRuntimeSnapshot?: (snapshot: ProcessRuntimeSnapshot) => void;
+  onProcessDraftLoadRetry?: () => void | Promise<void>;
 }
 
 const shouldShowInvoiceSummary = (summaryConfig: any) =>
@@ -48,6 +49,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
   focusRowKey,
   processRuntimeSnapshot,
   onProcessRuntimeSnapshot,
+  onProcessDraftLoadRetry,
 }) => {
   if (!module || !data) return null;
 
@@ -260,6 +262,7 @@ const TablesSection: React.FC<TablesSectionProps> = ({
                     onDraftStagesChange={handleDraftStagesChange}
                     runtimeSnapshot={processRuntimeSnapshot}
                     onRuntimeSnapshot={onProcessRuntimeSnapshot}
+                    onDraftLoadRetry={onProcessDraftLoadRetry}
                     variant="full"
                   />
                 </React.Suspense>
