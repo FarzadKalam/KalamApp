@@ -80,14 +80,37 @@ import {
 const HR_TASK_FETCH_LIMIT = 1500;
 const HR_STATS_FETCH_LIMIT = 1500;
 const COMMISSION_DRAFT_SOURCE_KEY_LOOKUP_CHUNK_SIZE = 8;
+const COMMISSION_QUERY_PAGE_SIZE = 250;
+const COMMISSION_QUERY_ID_CHUNK_SIZE = 200;
 const COMMISSION_INVOICE_SELECT =
-  'id, name, status, invoice_date, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
+  'id, name, status, invoice_date, approved_at, settled_at, completed_at, updated_at, total_invoice_amount, total_received_amount, remaining_balance, assignee_id, invoiceItems, payments, tags';
 // این انتخاب حداقلی فقط تا زمان اعمال migrationهای موردنیاز در محیط‌های قدیمی
 // استفاده می‌شود تا محاسبه متوقف نشود؛ schema رسمی شامل تاریخ‌های چرخهٔ فاکتور است.
 const COMMISSION_INVOICE_SELECT_FALLBACK =
   'id, name, status, invoice_date, assignee_id, invoiceItems, payments';
 const COMMISSION_CHEQUE_SELECT = 'id, status, cleared_at, spent_date, updated_at';
 const COMMISSION_CHEQUE_SELECT_FALLBACK = 'id, status, updated_at';
+
+const fetchAllCommissionPages = async <T,>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: any }>,
+) => {
+  const rows: T[] = [];
+  for (let from = 0; ; from += COMMISSION_QUERY_PAGE_SIZE) {
+    const result = await fetchPage(from, from + COMMISSION_QUERY_PAGE_SIZE - 1);
+    if (result.error) return { data: null, error: result.error };
+    const page = result.data || [];
+    rows.push(...page);
+    if (page.length < COMMISSION_QUERY_PAGE_SIZE) return { data: rows, error: null };
+  }
+};
+
+const chunkCommissionQueryIds = <T,>(items: T[]) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += COMMISSION_QUERY_ID_CHUNK_SIZE) {
+    chunks.push(items.slice(index, index + COMMISSION_QUERY_ID_CHUNK_SIZE));
+  }
+  return chunks;
+};
 const HR_GOAL_SELECT =
   'id, org_id, module_id, name, description, goal_scope, period_unit, subperiod_unit, metric_type, metric_field_key, date_field_key, target_value, levels_enabled, bronze_value, silver_value, gold_value, assignee_user_ids, assignee_role_ids, conditions_all, conditions_any, config, is_active, created_at, updated_at, created_by, updated_by';
 const HR_EMPLOYEE_SELECT =
@@ -125,7 +148,9 @@ import {
 import {
   buildCommissionDraftRows,
   buildCommissionDraftSourceKey,
+  buildCommissionInvoiceItemKey,
   getCommissionLineReviewBucket,
+  mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
   type CommissionBasis,
   type CommissionDecisionStatus,
@@ -2698,7 +2723,7 @@ const HRPage: React.FC = () => {
 
     setCalculatedCommissionLoading(true);
     try {
-      const { data, error } = await supabase
+      const { data, error } = await fetchAllCommissionPages<any>((from, to) => supabase
         .from('payroll_calculation_entries')
         .select('id, employee_id, period_start, period_end, entry_type, source_record_id, title, amount, status, details, created_by, updated_by, created_at, updated_at, assignee_id')
         .eq('source_type', 'commission')
@@ -2707,7 +2732,8 @@ const HRPage: React.FC = () => {
         .lte('period_start', periodEnd)
         .neq('status', 'voided')
         .order('created_at', { ascending: false })
-        .limit(1000);
+        .order('id', { ascending: false })
+        .range(from, to));
       if (error) throw error;
 
       const mappedRows = (data || []).map((row: any) => {
@@ -4399,13 +4425,14 @@ const HRPage: React.FC = () => {
       setCommissionLoading(true);
       const employeeIdValue = String(selectedProfile.source_id || selectedProfile.id);
       const assigneeId = String(selectedProfile.related_profile_id || selectedProfile.id || '').trim();
-      const fetchCommissionInvoices = async (select: string) => supabase
+      const fetchCommissionInvoices = async (select: string) => fetchAllCommissionPages<any>((from, to) => supabase
         .from('invoices')
         .select(select)
         .eq('assignee_id', assigneeId)
         .lte('invoice_date', periodEnd)
         .order('invoice_date', { ascending: false })
-        .limit(HR_STATS_FETCH_LIMIT);
+        .order('id', { ascending: false })
+        .range(from, to));
       const invoicesPromise = fetchCommissionInvoices(COMMISSION_INVOICE_SELECT)
         .then(async (result) => {
           if (!result.error || !isMissingSelectColumnError(result.error)) return result;
@@ -4413,21 +4440,23 @@ const HRPage: React.FC = () => {
         });
       const [invoicesResult, existingResult, draftsResult] = await Promise.all([
         invoicesPromise,
-        supabase
+        fetchAllCommissionPages<any>((from, to) => supabase
           .from('payroll_calculation_entries')
           .select('id, period_start, period_end, title, amount, status, details, created_at, updated_at')
           .eq('source_type', 'commission')
           .eq('employee_id', employeeIdValue)
           .neq('status', 'voided')
-          .limit(HR_STATS_FETCH_LIMIT),
-        supabase
+          .order('id', { ascending: true })
+          .range(from, to)),
+        fetchAllCommissionPages<any>((from, to) => supabase
           .from('commission_drafts')
           .select('id, source_key, employee_id, assignee_id, period_start, period_end, source_basis, percent_mode, eligibility_event_type, eligibility_event_at, invoice_id, invoice_item_key, entitled_amount, posted_amount, remaining_amount, decision_status, decision_reason, deferred_from_period, deferred_to_period, manual_decision_by, manual_decision_at, draft_status, details')
           .eq('employee_id', employeeIdValue)
           .eq('source_basis', values.basis)
           .eq('percent_mode', values.percent_mode)
           .neq('draft_status', 'canceled')
-          .limit(HR_STATS_FETCH_LIMIT),
+          .order('id', { ascending: true })
+          .range(from, to)),
       ]);
       if (invoicesResult.error) throw invoicesResult.error;
       if (existingResult.error && !isMissingPayrollLedgerError(existingResult.error)) throw existingResult.error;
@@ -4463,39 +4492,46 @@ const HRPage: React.FC = () => {
       }));
       const invoiceIds = invoices.map((invoice) => String(invoice.id || '').trim()).filter(Boolean);
       const operationPaymentsByInvoiceId = new Map<string, any[]>();
-      const invoicePaymentOperationIds = new Set(
-        invoices.flatMap((invoice) => invoice.payments || [])
-          .map((payment: any) => String(payment?._cash_bank_operation_id || '').trim())
-          .filter(Boolean),
-      );
       if (invoiceIds.length > 0) {
-        const { data: operationRows, error: operationError } = await supabase
-          .from('cash_bank_operations')
-          .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_id, amount, created_at')
-          .in('sales_invoice_id', invoiceIds)
-          .neq('operation_type', 'transfer')
-          .in('status', ['received', 'approved', 'paid', 'posted', 'settled', 'completed', 'cleared', 'done']);
-        if (operationError) throw operationError;
+        const operationRows: any[] = [];
+        for (const invoiceIdChunk of chunkCommissionQueryIds(invoiceIds)) {
+          const operationResult = await fetchAllCommissionPages<any>((from, to) => supabase
+            .from('cash_bank_operations')
+            .select('id, sales_invoice_id, operation_type, operation_date, payment_type, status, cheque_id, amount, created_at')
+            .in('sales_invoice_id', invoiceIdChunk)
+            .neq('operation_type', 'transfer')
+            .in('status', ['received', 'approved', 'paid', 'posted', 'settled', 'completed', 'cleared', 'done'])
+            .order('id', { ascending: true })
+            .range(from, to));
+          if (operationResult.error) throw operationResult.error;
+          operationRows.push(...(operationResult.data || []));
+        }
         const chequeIds = Array.from(new Set(
-          (operationRows || [])
+          operationRows
             .map((operation: any) => String(operation?.cheque_id || '').trim())
             .filter(Boolean),
         ));
         const chequeStatusById = new Map<string, string>();
         const chequeCollectionDateById = new Map<string, string>();
         if (chequeIds.length > 0) {
-          const fetchCommissionCheques = async (select: string) => supabase
-            .from('cheques')
-            .select(select)
-            .in('id', chequeIds);
-          const primaryChequeResult = await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT);
-          const { data: chequeRows, error: chequeError } = (
-            primaryChequeResult.error && isMissingSelectColumnError(primaryChequeResult.error)
-              ? await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT_FALLBACK)
-              : primaryChequeResult
-          );
-          if (chequeError) throw chequeError;
-          (chequeRows || []).forEach((cheque: any) => {
+          const chequeRows: any[] = [];
+          for (const chequeIdChunk of chunkCommissionQueryIds(chequeIds)) {
+            const fetchCommissionCheques = async (select: string) => fetchAllCommissionPages<any>((from, to) => supabase
+              .from('cheques')
+              .select(select)
+              .in('id', chequeIdChunk)
+              .order('id', { ascending: true })
+              .range(from, to));
+            const primaryChequeResult = await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT);
+            const chequeResult = (
+              primaryChequeResult.error && isMissingSelectColumnError(primaryChequeResult.error)
+                ? await fetchCommissionCheques(COMMISSION_CHEQUE_SELECT_FALLBACK)
+                : primaryChequeResult
+            );
+            if (chequeResult.error) throw chequeResult.error;
+            chequeRows.push(...(chequeResult.data || []));
+          }
+          chequeRows.forEach((cheque: any) => {
             const chequeId = String(cheque?.id || '').trim();
             if (!chequeId) return;
             chequeStatusById.set(chequeId, String(cheque?.status || '').trim());
@@ -4503,9 +4539,8 @@ const HRPage: React.FC = () => {
             if (collectionDate) chequeCollectionDateById.set(chequeId, String(collectionDate));
           });
         }
-        (operationRows || []).forEach((operation: any) => {
+        operationRows.forEach((operation: any) => {
           if (String(operation?.operation_type || '').trim().toLowerCase() === 'payment') return;
-          if (invoicePaymentOperationIds.has(String(operation?.id || '').trim())) return;
           const invoiceId = String(operation?.sales_invoice_id || '').trim();
           if (!invoiceId) return;
           const rows = operationPaymentsByInvoiceId.get(invoiceId) || [];
@@ -4530,29 +4565,37 @@ const HRPage: React.FC = () => {
       ));
       const productById = new Map<string, any>();
       if (productIds.length > 0) {
-        const { data: productsData, error: productsError } = await supabase
-          .from('products')
-          .select('id, name, commission_percentage')
-          .in('id', productIds);
-        if (productsError) throw productsError;
-        (productsData || []).forEach((product: any) => productById.set(String(product.id), product));
+        for (const productIdChunk of chunkCommissionQueryIds(productIds)) {
+          const productsResult = await fetchAllCommissionPages<any>((from, to) => supabase
+            .from('products')
+            .select('id, name, commission_percentage')
+            .in('id', productIdChunk)
+            .order('id', { ascending: true })
+            .range(from, to));
+          if (productsResult.error) throw productsResult.error;
+          (productsResult.data || []).forEach((product: any) => productById.set(String(product.id), product));
+        }
       }
       const billboardById = new Map<string, any>();
       if (productIds.length > 0) {
-        const { data: billboardsData, error: billboardsError } = await supabase
-          .from('billboards')
-          .select('id, name, address, commission_percentage')
-          .in('id', productIds);
-        if (billboardsError) throw billboardsError;
-        (billboardsData || []).forEach((billboard: any) => billboardById.set(String(billboard.id), billboard));
+        for (const productIdChunk of chunkCommissionQueryIds(productIds)) {
+          const billboardsResult = await fetchAllCommissionPages<any>((from, to) => supabase
+            .from('billboards')
+            .select('id, name, address, commission_percentage')
+            .in('id', productIdChunk)
+            .order('id', { ascending: true })
+            .range(from, to));
+          if (billboardsResult.error) throw billboardsResult.error;
+          (billboardsResult.data || []).forEach((billboard: any) => billboardById.set(String(billboard.id), billboard));
+        }
       }
 
       const enrichedInvoices = invoices.map((invoice) => ({
         ...invoice,
-        payments: [
-          ...(invoice.payments || []),
-          ...(operationPaymentsByInvoiceId.get(String(invoice.id || '')) || []),
-        ],
+        payments: mergeCommissionInvoicePayments(
+          invoice.payments,
+          operationPaymentsByInvoiceId.get(String(invoice.id || '')) || [],
+        ),
         invoiceItems: (invoice.invoiceItems || []).map((item: any) => {
           const product = productById.get(String(item?.product_id || ''));
           const billboard = billboardById.get(String(item?.product_id || ''));
@@ -4795,6 +4838,48 @@ const HRPage: React.FC = () => {
       });
   }, [commissionRows]);
 
+  const snapshotCalculatedCommissionRates = useCallback(async (percentMode: CommissionPercentMode) => {
+    if (percentMode !== 'product_default') return;
+
+    const ratesByInvoiceId = new Map<string, Map<string, number>>();
+    commissionRows.forEach((row) => {
+      row.lines.forEach((line) => {
+        if (line.selected_amount <= 0 || line.commission_percent <= 0) return;
+        const invoiceId = String(row.invoice_id || '').trim();
+        const itemKey = String(line.invoice_item_key || '').trim();
+        if (!invoiceId || !itemKey) return;
+        const rates = ratesByInvoiceId.get(invoiceId) || new Map<string, number>();
+        rates.set(itemKey, line.commission_percent);
+        ratesByInvoiceId.set(invoiceId, rates);
+      });
+    });
+
+    for (const [invoiceId, rates] of ratesByInvoiceId) {
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('invoices')
+        .select('id, invoiceItems')
+        .eq('id', invoiceId)
+        .maybeSingle();
+      if (invoiceError) throw invoiceError;
+      const invoiceItems = Array.isArray(invoice?.invoiceItems) ? invoice.invoiceItems : [];
+      let changed = false;
+      const nextItems = invoiceItems.map((item: any, index: number) => {
+        const itemKey = buildCommissionInvoiceItemKey(invoiceId, item, index);
+        const rate = rates.get(itemKey);
+        const savedSnapshot = toNumber(item?.commission_percentage_snapshot);
+        if (!rate || savedSnapshot > 0) return item;
+        changed = true;
+        return { ...item, commission_percentage_snapshot: rate };
+      });
+      if (!changed) continue;
+      const { error: updateError } = await supabase
+        .from('invoices')
+        .update({ invoiceItems: nextItems, updated_at: new Date().toISOString() })
+        .eq('id', invoiceId);
+      if (updateError) throw updateError;
+    }
+  }, [commissionRows]);
+
   const persistCommissionDraftPayloads = useCallback(async (payloads: any[]) => {
     if (payloads.length === 0) return;
 
@@ -4854,6 +4939,20 @@ const HRPage: React.FC = () => {
       const { error } = await supabase.from('commission_drafts').insert(insertPayloads);
       if (error && !isMissingCommissionDraftsError(error) && String(error?.code || '') !== '23505') throw error;
     }
+  }, []);
+
+  const saveCommissionCalculationAtomically = useCallback(async ({
+    ledgerPayload,
+    draftPayloads,
+  }: {
+    ledgerPayload: Record<string, any>;
+    draftPayloads: Record<string, any>[];
+  }) => {
+    const { error } = await supabase.rpc('save_commission_calculation', {
+      p_ledger_payload: ledgerPayload,
+      p_draft_payloads: draftPayloads,
+    });
+    if (error) throw error;
   }, []);
 
   const buildCommissionCalculationLedgerPayload = useCallback(({
@@ -5082,13 +5181,15 @@ const HRPage: React.FC = () => {
         return;
       }
       setCommissionModalSaving(true);
-      await persistCommissionDraftPayloads(payloads);
-      await syncCommissionCalculationLedgerEntry(buildCommissionCalculationLedgerPayload({
-        periodStart: periodValues.periodStart,
-        periodEnd: periodValues.periodEnd,
-        selectedProfile,
-        status: 'draft',
-      }));
+      await saveCommissionCalculationAtomically({
+        draftPayloads: payloads,
+        ledgerPayload: buildCommissionCalculationLedgerPayload({
+          periodStart: periodValues.periodStart,
+          periodEnd: periodValues.periodEnd,
+          selectedProfile,
+          status: 'draft',
+        }),
+      });
       message.success('پیش‌نویس پورسانت ذخیره شد.');
       await handleBuildCommissionPreview();
       await refreshPayrollPeriodState();
@@ -5099,7 +5200,7 @@ const HRPage: React.FC = () => {
     } finally {
       setCommissionModalSaving(false);
     }
-  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, fetchCalculatedCommissionRows, getCommissionPeriodValues, handleBuildCommissionPreview, message, persistCommissionDraftPayloads, profiles, refreshPayrollPeriodState, syncCommissionCalculationLedgerEntry]);
+  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, fetchCalculatedCommissionRows, getCommissionPeriodValues, handleBuildCommissionPreview, message, profiles, refreshPayrollPeriodState, saveCommissionCalculationAtomically]);
 
   const handleSaveCommissionCalculation = useCallback(async () => {
     try {
@@ -5127,19 +5228,19 @@ const HRPage: React.FC = () => {
       }
 
       setCommissionModalSaving(true);
+      await snapshotCalculatedCommissionRates(values.percent_mode);
       const payload = buildCommissionCalculationLedgerPayload({
         periodStart,
         periodEnd,
         selectedProfile,
         status: 'proposed',
       });
-      await syncCommissionCalculationLedgerEntry(payload);
       const draftPayloads = await buildCommissionDraftPayloads({
         periodStart,
         periodEnd,
         posting: true,
       });
-      await persistCommissionDraftPayloads(draftPayloads);
+      await saveCommissionCalculationAtomically({ ledgerPayload: payload, draftPayloads });
       message.success('محاسبه پورسانت ثبت شد.');
       setCommissionModalOpen(false);
       setCommissionRows([]);
@@ -5151,7 +5252,7 @@ const HRPage: React.FC = () => {
     } finally {
       setCommissionModalSaving(false);
     }
-  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, persistCommissionDraftPayloads, profiles, refreshPayrollPeriodState, syncCommissionCalculationLedgerEntry]);
+  }, [buildCommissionCalculationLedgerPayload, buildCommissionDraftPayloads, commissionForm, commissionRows, fetchCalculatedCommissionRows, getCommissionPeriodValues, message, profiles, refreshPayrollPeriodState, saveCommissionCalculationAtomically, snapshotCalculatedCommissionRates]);
 
   const handleEditCommissionDraft = useCallback((row: CommissionLedgerRow) => {
     const employeeProfile = profiles.find((profile) => (
@@ -5231,8 +5332,31 @@ const HRPage: React.FC = () => {
           if (sourceKeys.length > 0) {
             const { error } = await supabase
               .from('commission_drafts')
-              .update({ draft_status: 'canceled', updated_at: new Date().toISOString() })
+              .update({
+                draft_status: 'canceled',
+                posted_amount: 0,
+                remaining_amount: 0,
+                updated_at: new Date().toISOString(),
+              })
               .in('source_key', sourceKeys);
+            if (error && !isMissingCommissionDraftsError(error)) throw error;
+          }
+          const basis = String(row.details?.basis || '').trim();
+          const percentMode = String(row.details?.percent_mode || '').trim();
+          if (row.employee_id && row.period_start && row.period_end && basis && percentMode) {
+            const { error } = await supabase
+              .from('commission_drafts')
+              .update({
+                draft_status: 'canceled',
+                posted_amount: 0,
+                remaining_amount: 0,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('employee_id', row.employee_id)
+              .eq('period_start', row.period_start)
+              .eq('period_end', row.period_end)
+              .eq('source_basis', basis)
+              .eq('percent_mode', percentMode);
             if (error && !isMissingCommissionDraftsError(error)) throw error;
           }
           message.success('محاسبه پورسانت حذف شد و ردیف‌های آن دوباره قابل محاسبه هستند.');

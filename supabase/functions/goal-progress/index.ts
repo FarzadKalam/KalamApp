@@ -1,0 +1,331 @@
+// @ts-nocheck
+// مسیر سروری واکشی و فیلتر هدف‌ها. ارزیابی شرط‌ها از همان قرارداد مشترک
+// workflow-interval-runner استفاده می‌کند تا نتیجهٔ اهداف و گردش‌کارها هم‌معنا باشد.
+
+import {
+  evaluateWorkflowConditionCollectionWithResolver,
+  evaluateWorkflowConditionWithResolver,
+} from './_runtime-deps/workflowConditionRuntime.ts';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+const json = (status: number, payload: Record<string, unknown>) => new Response(JSON.stringify(payload), {
+  status,
+  headers: { ...corsHeaders, 'Content-Type': 'application/json; charset=utf-8' },
+});
+
+const PAGE_SIZE = 1000;
+const ROW_CACHE_TTL_MS = 60_000;
+const ROW_CACHE_MAX_ENTRIES = 240;
+const rowCache = new Map<string, { expiresAt: number; rows: any[] }>();
+const rowPromises = new Map<string, Promise<any[]>>();
+const CALENDAR_PUBLIC_BASE_URL = String(
+  Deno.env.get('KALAMAPP_PUBLIC_BASE_URL')
+  || Deno.env.get('PUBLIC_APP_URL')
+  || Deno.env.get('PUBLIC_SITE_URL')
+  || Deno.env.get('SITE_URL')
+  || '',
+).trim().replace(/\/+$/, '');
+const holidayYearCache = new Map<number, Promise<any[] | null>>();
+
+const safeTableName = (value: unknown) => /^[a-z][a-z0-9_]*$/.test(String(value || '').trim());
+const safeColumns = (value: unknown) => String(value || '')
+  .split(',')
+  .map((column) => column.trim())
+  .filter((column) => /^[a-z][a-z0-9_]*$/.test(column));
+
+const toEnglishDigits = (value: unknown) => String(value ?? '')
+  .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+  .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+const gregorianToJalali = (year: number, month: number, day: number): [number, number, number] => {
+  const jalaliDays = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29];
+  let gy = year - 1600, gm = month - 1, gd = day - 1;
+  let count = 365 * gy + Math.floor((gy + 3) / 4) - Math.floor((gy + 99) / 100) + Math.floor((gy + 399) / 400);
+  const gregorianDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  for (let index = 0; index < gm; index += 1) count += gregorianDays[index];
+  if (gm > 1 && ((gy % 4 === 0 && gy % 100 !== 0) || gy % 400 === 0)) count += 1;
+  count += gd; count -= 79;
+  const cycle = Math.floor(count / 12053); count %= 12053;
+  let jy = 979 + 33 * cycle + 4 * Math.floor(count / 1461); count %= 1461;
+  if (count >= 366) { jy += Math.floor((count - 1) / 365); count = (count - 1) % 365; }
+  let jm = 0;
+  for (; jm < 11 && count >= jalaliDays[jm]; jm += 1) count -= jalaliDays[jm];
+  return [jy, jm + 1, count + 1];
+};
+const getHolidayEvents = async (value: unknown): Promise<any[]> => {
+  const date = value ? new Date(String(value)) : null;
+  if (!date || Number.isNaN(date.getTime()) || !CALENDAR_PUBLIC_BASE_URL) return [];
+  const [year, month, day] = gregorianToJalali(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
+  if (!holidayYearCache.has(year)) holidayYearCache.set(year, (async () => {
+    const response = await fetch(`${CALENDAR_PUBLIC_BASE_URL}/calendar/${year}.json`, { cache: 'force-cache' });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return Array.isArray(payload) ? payload : null;
+  })().catch(() => null));
+  const months = await holidayYearCache.get(year)!;
+  const dayData = Array.isArray(months?.[month - 1]?.days)
+    ? months[month - 1].days.find((item: any) => Number(toEnglishDigits(item?.day?.jalali || 0)) === day) : null;
+  return Array.isArray(dayData?.events?.list) ? dayData.events.list : [];
+};
+const occasionValues = (value: any): string[] => (Array.isArray(value) ? value : [value])
+  .flatMap((item) => item && typeof item === 'object' ? [item.value, item.label, item.title, item.event] : [item])
+  .map((item) => toEnglishDigits(item).trim().toLocaleLowerCase('fa-IR')).filter(Boolean);
+const dateHasOccasion = async (value: unknown, expected: unknown) => {
+  const values = occasionValues(expected);
+  if (values.length === 0) return false;
+  const titles = (await getHolidayEvents(value)).map((event) => toEnglishDigits(event?.event).trim().toLocaleLowerCase('fa-IR')).filter(Boolean);
+  return titles.some((title) => values.some((candidate) => title === candidate || title.includes(candidate) || candidate.includes(title)));
+};
+
+const WORKFLOW_RELATED_FIELD_PREFIX = '__workflow_related__';
+const WORKFLOW_MULTI_RELATION_PREFIX = '__workflow_multi_relation__';
+const PROCESS_LINKED_FIELD_PREFIX = '__linked__';
+const SURVEY_TEMPLATE_FIELD_PREFIX = '__survey_template__::';
+
+const getFieldValue = (record: Record<string, any> | null | undefined, field: string) => {
+  if (!record) return null;
+  if (Object.prototype.hasOwnProperty.call(record, field)) return record[field];
+  return field.split('.').reduce((value, key) => value?.[key], record as any);
+};
+const parseRelatedField = (value: string) => {
+  const parts = String(value || '').trim().startsWith(WORKFLOW_RELATED_FIELD_PREFIX)
+    ? String(value).slice(WORKFLOW_RELATED_FIELD_PREFIX.length).split('::') : [];
+  return parts.length >= 3 && parts.every(Boolean)
+    ? { relationFieldKey: parts[0], targetModuleId: parts[1], targetFieldKey: parts[2] } : null;
+};
+const parseMultiRelationField = (value: string) => {
+  const parts = String(value || '').trim().startsWith(WORKFLOW_MULTI_RELATION_PREFIX)
+    ? String(value).slice(WORKFLOW_MULTI_RELATION_PREFIX.length).split('::') : [];
+  return parts.length >= 3 && parts.every(Boolean)
+    ? { fieldKey: parts[0], targetModuleId: parts[1], targetFieldKey: parts[2] } : null;
+};
+const normalizeIds = (value: any): string[] => {
+  if (Array.isArray(value)) return value.flatMap(normalizeIds);
+  if (value && typeof value === 'object') return [value.id, value.value, value.record_id].map(String).filter(Boolean);
+  if (typeof value === 'string' && value.trim().startsWith('{')) {
+    try { return normalizeIds(JSON.parse(value)); } catch { /* direct id below */ }
+  }
+  return value === null || value === undefined || value === '' ? [] : [String(value)];
+};
+const parseObject = (value: any): Record<string, any> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch { return {}; }
+  }
+  return {};
+};
+const resolveTable = (moduleId: string) => ({
+  productBundles: 'product_bundles', purchaseInvoices: 'purchase_invoices', priceLists: 'price_lists',
+  marketingLeads: 'marketing_leads', deliveryForms: 'delivery_forms', salesCatalog: 'sales_catalog',
+  stockTransfers: 'stock_transfers', productionBOM: 'production_bom', productionOrders: 'production_orders',
+  productionGroupOrders: 'production_group_orders', fiscalYears: 'fiscal_years', chartOfAccounts: 'chart_of_accounts',
+  journalEntries: 'journal_entries', accountingEventRules: 'accounting_event_rules', costCenters: 'cost_centers',
+  cashBoxes: 'cash_boxes', bankAccounts: 'bank_accounts', pettyFunds: 'petty_funds', cashBankOperations: 'cash_bank_operations',
+  expenseDocuments: 'expense_documents', attendanceLogs: 'attendance_logs', workSchedules: 'work_schedules',
+  leaveRequests: 'leave_requests', overtimeRequests: 'overtime_requests', missionRequests: 'mission_requests',
+  employeeAdvances: 'employee_advances', employeeBonusRequests: 'employee_bonus_requests', employeePenaltyRequests: 'employee_penalty_requests',
+  employeeContracts: 'employee_contracts', jobDescriptions: 'job_descriptions', payrollSlips: 'payroll_slips',
+  recruitmentApplicants: 'recruitment_applicants', processTemplates: 'process_templates', processRuns: 'process_runs',
+  webForms: 'web_forms', secretariatDocuments: 'secretariat_documents', smsDeliveryReports: 'sms_delivery_reports',
+  voipCallReports: 'voip_call_reports', automationExecutionReports: 'automation_execution_reports',
+  counterpartyBotGroups: 'counterparty_bot_groups',
+} as Record<string, string>)[moduleId] || moduleId;
+
+const getConditionResolver = ({ url, headers, orgId, moduleId }: any) => {
+  const relatedCache = new Map<string, Promise<Record<string, any> | null>>();
+  const tagCache = new Map<string, Promise<string[]>>();
+  const fetchRelated = (targetModuleId: string, id: string) => {
+    const table = resolveTable(targetModuleId);
+    const cacheKey = `${table}:${id}`;
+    if (!relatedCache.has(cacheKey)) relatedCache.set(cacheKey, (async () => {
+      if (!safeTableName(table) || !id) return null;
+      const query = new URL(`${url}/rest/v1/${table}`);
+      query.searchParams.set('select', '*'); query.searchParams.set('id', `eq.${id}`); query.searchParams.set('org_id', `eq.${orgId}`); query.searchParams.set('limit', '1');
+      const response = await fetch(query, { headers });
+      if (!response.ok) return null;
+      return (await response.json())?.[0] || null;
+    })());
+    return relatedCache.get(cacheKey)!;
+  };
+  const fetchTags = (targetModuleId: string, id: string) => {
+    const cacheKey = `${targetModuleId}:${id}`;
+    if (!tagCache.has(cacheKey)) tagCache.set(cacheKey, (async () => {
+      if (!targetModuleId || !id) return [];
+      const query = new URL(`${url}/rest/v1/record_tags`);
+      query.searchParams.set('select', 'tag_id'); query.searchParams.set('module_id', `eq.${targetModuleId}`); query.searchParams.set('record_id', `eq.${id}`); query.searchParams.set('org_id', `eq.${orgId}`);
+      const response = await fetch(query, { headers });
+      if (!response.ok) return [];
+      return Array.from(new Set((await response.json()).map((row: any) => String(row?.tag_id || '').trim()).filter(Boolean)));
+    })());
+    return tagCache.get(cacheKey)!;
+  };
+  const assignee = (record: any) => String(record?.assignee_type || '').toLowerCase() === 'role' || record?.assignee_role_id
+    ? (record?.assignee_role_id || record?.assignee_id ? `role:${record?.assignee_role_id || record?.assignee_id}` : null)
+    : (record?.assignee_id ? `user:${record.assignee_id}` : null);
+  const resolve = async (fieldKey: string, record: any): Promise<any> => {
+    if (!record) return null;
+    if (fieldKey === '__workflow_assignee') return assignee(record);
+    if (fieldKey === 'tags') return fetchTags(moduleId, String(record.id || ''));
+    const surveyField = fieldKey.startsWith(SURVEY_TEMPLATE_FIELD_PREFIX) ? fieldKey.slice(SURVEY_TEMPLATE_FIELD_PREFIX.length) : '';
+    if (surveyField) return record?.template_field_values?.[surveyField] ?? null;
+    const linked = fieldKey.match(/^__linked__(.+?)__(.+)$/);
+    if (linked?.[1] && linked?.[2]) {
+      const linkedId = String(parseObject(record?.process_links)[linked[1]] || parseObject(record?.process_link_map)[linked[1]] || record?.[`__linked__${linked[1]}__id`] || '').trim();
+      const linkedRecord = linkedId ? await fetchRelated(linked[1], linkedId) : null;
+      if (!linkedRecord) return linked[2] === 'tags' ? [] : null;
+      if (linked[2] === '__workflow_assignee') return assignee(linkedRecord);
+      if (linked[2] === 'tags') return fetchTags(linked[1], linkedId);
+      return getFieldValue(linkedRecord, linked[2]);
+    }
+    const related = parseRelatedField(fieldKey);
+    if (related) {
+      const relatedId = String(getFieldValue(record, related.relationFieldKey) || '').trim();
+      const relatedRecord = relatedId ? await fetchRelated(related.targetModuleId, relatedId) : null;
+      if (!relatedRecord) return related.targetFieldKey === 'tags' ? [] : null;
+      if (related.targetFieldKey === '__workflow_assignee') return assignee(relatedRecord);
+      if (related.targetFieldKey === 'tags') return fetchTags(related.targetModuleId, relatedId);
+      return getFieldValue(relatedRecord, related.targetFieldKey);
+    }
+    const multi = parseMultiRelationField(fieldKey);
+    if (multi) {
+      const records = await Promise.all(Array.from(new Set(normalizeIds(getFieldValue(record, multi.fieldKey)))).map((id) => fetchRelated(multi.targetModuleId, id)));
+      return records.flatMap((relatedRecord) => {
+        if (!relatedRecord) return [];
+        const value = multi.targetFieldKey === '__workflow_assignee' ? assignee(relatedRecord) : getFieldValue(relatedRecord, multi.targetFieldKey);
+        return Array.isArray(value) ? value : value === null || value === undefined || value === '' ? [] : [value];
+      });
+    }
+    return getFieldValue(record, fieldKey);
+  };
+  return resolve;
+};
+
+const evaluateAsyncWorkflowOperator = async ({ operator, currentValue, expectedValue }: any) => {
+  const date = currentValue ? new Date(String(currentValue)) : null;
+  if (operator === 'is_friday') return !!date && !Number.isNaN(date.getTime()) && date.getDay() === 5;
+  if (operator === 'is_official_holiday') return (await getHolidayEvents(currentValue)).some((event) => event?.isHoliday === true);
+  if (operator === 'occasion_eq' || operator === 'occasion_contains') return dateHasOccasion(currentValue, expectedValue);
+  if (operator === 'occasion_neq' || operator === 'occasion_not_contains') return !(await dateHasOccasion(currentValue, expectedValue));
+  if (operator === 'days_before_occasion') {
+    const config = expectedValue && typeof expectedValue === 'object' && !Array.isArray(expectedValue) ? expectedValue : {};
+    const days = Number(config.days ?? config.count ?? 0);
+    const occasion = config.occasion ?? config.event ?? config.value;
+    if (!date || Number.isNaN(date.getTime()) || !Number.isFinite(days) || days < 0 || occasionValues(occasion).length === 0) return false;
+    const target = new Date(date); target.setDate(target.getDate() + days);
+    return dateHasOccasion(target.toISOString(), occasion);
+  }
+  return false;
+};
+
+const passesConditions = async (record: Record<string, any>, conditionsAll: any[], conditionsAny: any[], resolveField: any) =>
+  evaluateWorkflowConditionCollectionWithResolver({
+    conditionsAll,
+    conditionsAny,
+    evaluate: (condition) => evaluateWorkflowConditionWithResolver({
+      condition,
+      resolveValues: async () => ({ currentValue: await resolveField(String(condition?.field || ''), record) }),
+      evaluateAsyncOperator: evaluateAsyncWorkflowOperator,
+    }),
+  });
+
+const fetchRows = async ({ url, headers, table, columns, orgId, dateField, startIso, endIso, cacheKey }: any) => {
+  const cached = rowCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+  const pending = rowPromises.get(cacheKey);
+  if (pending) return pending;
+  const request = (async () => {
+    const rows: any[] = [];
+    for (let offset = 0; ; offset += PAGE_SIZE) {
+      const query = new URL(`${url}/rest/v1/${table}`);
+      query.searchParams.set('select', columns.join(','));
+      query.searchParams.set('org_id', `eq.${orgId}`);
+      query.searchParams.set(dateField, `gte.${startIso}`);
+      query.searchParams.append(dateField, `lte.${endIso}`);
+      query.searchParams.set('offset', String(offset));
+      query.searchParams.set('limit', String(PAGE_SIZE));
+      const response = await fetch(query, { headers });
+      if (!response.ok) throw new Error(`goal_rows_fetch_failed:${response.status}`);
+      const page = await response.json();
+      rows.push(...(Array.isArray(page) ? page : []));
+      if (!Array.isArray(page) || page.length < PAGE_SIZE) break;
+    }
+    return rows;
+  })();
+  rowPromises.set(cacheKey, request);
+  try {
+    const rows = await request;
+    rowCache.set(cacheKey, { rows, expiresAt: Date.now() + ROW_CACHE_TTL_MS });
+    while (rowCache.size > ROW_CACHE_MAX_ENTRIES) {
+      const oldestKey = rowCache.keys().next().value;
+      if (!oldestKey) break;
+      rowCache.delete(oldestKey);
+    }
+    return rows;
+  } finally {
+    rowPromises.delete(cacheKey);
+  }
+};
+
+Deno.serve(async (request) => {
+  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (request.method !== 'POST') return json(405, { error: 'method_not_allowed' });
+  const authorization = String(request.headers.get('authorization') || '').trim();
+  const supabaseUrl = String(Deno.env.get('SUPABASE_URL') || '').replace(/\/+$/, '');
+  const anonKey = String(Deno.env.get('SUPABASE_ANON_KEY') || '');
+  if (!authorization || !supabaseUrl || !anonKey) return json(401, { error: 'unauthorized' });
+
+  try {
+    const body = await request.json();
+    const items = Array.isArray(body?.items) ? body.items : [];
+    const headers = { apikey: anonKey, authorization };
+    const output: Record<string, any> = {};
+    await Promise.all(items.map(async (item: any) => {
+      const key = String(item?.key || '').trim();
+      const goalId = String(item?.goalId || '').trim();
+      const table = String(item?.table || '').trim();
+      const moduleId = String(item?.moduleId || '').trim();
+      const dateField = String(item?.dateField || '').trim();
+      const columns = Array.from(new Set(['id', 'org_id', ...safeColumns(item?.selectColumns), dateField])).filter(Boolean);
+      const conditionsAll = Array.isArray(item?.conditionsAll) ? item.conditionsAll : [];
+      const conditionsAny = Array.isArray(item?.conditionsAny) ? item.conditionsAny : [];
+      if (!key || !goalId || !moduleId || !safeTableName(table) || !/^[a-z][a-z0-9_]*$/.test(dateField)) {
+        output[key] = { mode: 'fallback' };
+        return;
+      }
+      const goalUrl = new URL(`${supabaseUrl}/rest/v1/goals`);
+      goalUrl.searchParams.set('select', 'id,org_id,updated_at');
+      goalUrl.searchParams.set('id', `eq.${goalId}`);
+      goalUrl.searchParams.set('is_active', 'eq.true');
+      const goalResponse = await fetch(goalUrl, { headers });
+      if (!goalResponse.ok) throw new Error(`goal_access_failed:${goalResponse.status}`);
+      const goal = (await goalResponse.json())?.[0];
+      if (!goal?.org_id) {
+        output[key] = { mode: 'fallback' };
+        return;
+      }
+      const startIso = String(item?.startIso || '').trim();
+      const endIso = String(item?.endIso || '').trim();
+      if (!startIso || !endIso) {
+        output[key] = { mode: 'fallback' };
+        return;
+      }
+      // نتیجهٔ خام به تعریف یک هدف وابسته نیست؛ اشتراک آن بین هدف‌های هم‌ماژول
+      // فشار N×M را حذف می‌کند. کلید شامل کاربر و سازمان است تا پاسخ RLS هرگز
+      // میان دو کاربر یا tenant مشترک نشود.
+      const cacheKey = [authorization.slice(-32), goal.org_id, table, dateField, columns.join(','), startIso, endIso].join('::');
+      const rows = await fetchRows({ url: supabaseUrl, headers, table, columns, orgId: goal.org_id, dateField, startIso, endIso, cacheKey });
+      const resolveField = getConditionResolver({ url: supabaseUrl, headers, orgId: goal.org_id, moduleId });
+      const passed = await Promise.all(rows.map(async (row) =>
+        await passesConditions(row, conditionsAll, conditionsAny, resolveField) ? row : null
+      ));
+      output[key] = { mode: 'server', rows: passed.filter(Boolean) };
+    }));
+    return json(200, { items: output });
+  } catch (error) {
+    return json(500, { error: String((error as Error)?.message || 'goal_progress_failed') });
+  }
+});

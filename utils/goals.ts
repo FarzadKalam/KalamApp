@@ -55,6 +55,9 @@ type GoalProgressRowCacheEntry = {
 const sharedGoalProgressRowsCache = new Map<string, GoalProgressRowCacheEntry>();
 const sharedGoalProgressRowsPromiseCache = new Map<string, Promise<any[]>>();
 
+let serverGoalProgressAvailability: 'unknown' | 'available' | 'unavailable' = 'unknown';
+let serverGoalProgressRetryAfter = 0;
+
 export const invalidateGoalProgressRowsCache = () => {
   sharedGoalProgressRowsCache.clear();
   sharedGoalProgressRowsPromiseCache.clear();
@@ -586,6 +589,47 @@ const queryRowsByDateRange = async (
   return rows;
 };
 
+const loadServerFilteredGoalRanges = async (
+  goal: GoalRecord,
+  mainRange: { startIso: string; endIso: string },
+  subRange: { startIso: string; endIso: string },
+  selectColumns: string,
+) => {
+  if (serverGoalProgressAvailability === 'unavailable' && serverGoalProgressRetryAfter > Date.now()) return null;
+  try {
+    const module = MODULES[goal.module_id];
+    if (!module) return null;
+    const dateField = resolveFilterFieldKey(goal);
+    const buildItem = (key: string, range: { startIso: string; endIso: string }) => ({
+      key,
+      goalId: goal.id,
+      moduleId: goal.module_id,
+      table: module.table,
+      selectColumns,
+      dateField,
+      startIso: range.startIso,
+      endIso: range.endIso,
+      conditionsAll: goal.conditions_all || [],
+      conditionsAny: goal.conditions_any || [],
+    });
+    const { data, error } = await supabase.functions.invoke('goal-progress', {
+      body: { items: [buildItem('main', mainRange), buildItem('sub', subRange)] },
+    });
+    if (error || !data?.items?.main || !data?.items?.sub) throw error || new Error('goal_progress_response_invalid');
+    if (data.items.main.mode !== 'server' || data.items.sub.mode !== 'server') return null;
+    serverGoalProgressAvailability = 'available';
+    return {
+      mainRows: Array.isArray(data.items.main.rows) ? data.items.main.rows : [],
+      subRows: Array.isArray(data.items.sub.rows) ? data.items.sub.rows : [],
+    };
+  } catch {
+    // تا زمان deploy شدن Edge Function یا در خطای موقت، مسیر دقیق قبلی بدون تأخیرهای تکراری استفاده می‌شود.
+    serverGoalProgressAvailability = 'unavailable';
+    serverGoalProgressRetryAfter = Date.now() + 5 * 60_000;
+    return null;
+  }
+};
+
 const buildGoalProgressRowAccessKey = (
   goal: GoalRecord,
   range: { startIso: string; endIso: string },
@@ -846,31 +890,42 @@ const prepareGoalProgressRows = async (
   subRange = buildGoalRangeSnapshot(resolvedBounds.subBounds.start, resolvedBounds.subBounds.end);
 
   const cache = options.cache || new Map<string, any[]>();
-  const [mainRows, subRows] = await Promise.all([
-    loadScopedRows(goal, mainRange, {
-      userId: options.userId,
-      roleId: options.roleId,
-      orgId: options.orgId,
+  const selectColumns = buildGoalSelectColumns(goal);
+  const serverRows = await loadServerFilteredGoalRanges(goal, mainRange, subRange, selectColumns);
+  const modulePerm = options.permissions?.[goal.module_id] || {};
+  const filterScopedServerRows = (rows: any[], range: { startIso: string; endIso: string }) => rows.filter((row) => {
+    const dateValue = resolveGoalDateFilterValue(row, resolveFilterFieldKey(goal));
+    if (!dateValue) return false;
+    if (dateValue.getTime() < new Date(range.startIso).getTime() || dateValue.getTime() > new Date(range.endIso).getTime()) return false;
+    return canAccessAssignedRecord(row, options.userId, options.roleId, modulePerm.record_scope || 'all', {
+      currentOrgId: options.orgId,
       allowedRoleIds: options.allowedRoleIds,
       allowedUserIds: options.allowedUserIds,
-      permissions: options.permissions,
-      cache,
-    }),
-    loadScopedRows(goal, subRange, {
-      userId: options.userId,
-      roleId: options.roleId,
-      orgId: options.orgId,
-      allowedRoleIds: options.allowedRoleIds,
-      allowedUserIds: options.allowedUserIds,
-      permissions: options.permissions,
-      cache,
-    }),
-  ]);
+    });
+  });
 
-  const [filteredMainRows, filteredSubRows] = await Promise.all([
-    filterGoalRows(goal, mainRows),
-    filterGoalRows(goal, subRows),
-  ]);
+  const [filteredMainRows, filteredSubRows] = serverRows
+    ? [filterScopedServerRows(serverRows.mainRows, mainRange), filterScopedServerRows(serverRows.subRows, subRange)]
+    : await Promise.all([
+      loadScopedRows(goal, mainRange, {
+        userId: options.userId,
+        roleId: options.roleId,
+        orgId: options.orgId,
+        allowedRoleIds: options.allowedRoleIds,
+        allowedUserIds: options.allowedUserIds,
+        permissions: options.permissions,
+        cache,
+      }).then((rows) => filterGoalRows(goal, rows)),
+      loadScopedRows(goal, subRange, {
+        userId: options.userId,
+        roleId: options.roleId,
+        orgId: options.orgId,
+        allowedRoleIds: options.allowedRoleIds,
+        allowedUserIds: options.allowedUserIds,
+        permissions: options.permissions,
+        cache,
+      }).then((rows) => filterGoalRows(goal, rows)),
+    ]);
 
   return {
     goalRange,

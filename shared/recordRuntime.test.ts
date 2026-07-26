@@ -5,6 +5,10 @@ import {
   renderTypedTemplateValue,
   sanitizeOutboundDisplay,
 } from './recordRuntime';
+import {
+  evaluateWorkflowConditionCollectionWithResolver,
+  evaluateWorkflowConditionWithResolver,
+} from './workflowConditionRuntime';
 
 describe('record runtime shared contract', () => {
   it('blanks unresolved tokens and redacts raw UUID values', async () => {
@@ -66,5 +70,21 @@ describe('record runtime shared contract', () => {
     expect(evaluateCoreConditionOperator({ operator: 'contains', currentValue: ['فروش', 'ویژه'], expectedValue: 'ویژ', now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'not_contains', currentValue: ['فروش'], expectedValue: 'لغوشده', now })).toBe(true);
     expect(evaluateCoreConditionOperator({ operator: 'unsupported_operator', currentValue: 'x', now })).toBe(false);
+  });
+
+  it('uses the shared workflow condition contract for resolved server fields', async () => {
+    const values = { tags: ['فروش', 'ویژه'], score: 3 };
+    const evaluate = (condition: { field?: unknown; operator?: unknown; value?: unknown }) =>
+      evaluateWorkflowConditionWithResolver({
+        condition,
+        resolveValues: async () => ({ currentValue: values[String(condition.field || '') as keyof typeof values] }),
+        evaluateAsyncOperator: async () => false,
+      });
+
+    await expect(evaluateWorkflowConditionCollectionWithResolver({
+      conditionsAll: [{ field: 'tags', operator: 'multi_count_gt', value: 1 }],
+      conditionsAny: [{ field: 'score', operator: 'gte', value: 3 }],
+      evaluate,
+    })).resolves.toBe(true);
   });
 });

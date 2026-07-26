@@ -230,6 +230,36 @@ const isChequePayment = (payment: any) =>
 const isValidReceiptPayment = (payment: any) =>
   isFinalPayment(payment) && (!isChequePayment(payment) || isCollectedChequePayment(payment));
 
+/**
+ * ردیف‌های دریافت روی خود فاکتور، مرجع نمایش و محاسبه‌اند. عملیات خزانه فقط
+ * برای فاکتورهای قدیمیِ فاقد ردیف دریافت استفاده می‌شود؛ در غیر این صورت یک
+ * دریافتِ واحد که در هر دو محل همگام‌سازی شده، دوبار جمع می‌شود.
+ */
+export const mergeCommissionInvoicePayments = (
+  invoicePayments: unknown,
+  operationPayments: unknown,
+): any[] => {
+  const sourcePayments = Array.isArray(invoicePayments) ? invoicePayments : [];
+  const operations = Array.isArray(operationPayments) ? operationPayments : [];
+  if (sourcePayments.length === 0) return operations;
+
+  const operationById = new Map(
+    operations
+      .map((operation: any) => [normalizeText(operation?._cash_bank_operation_id), operation] as const)
+      .filter(([operationId]) => Boolean(operationId)),
+  );
+  return sourcePayments.map((payment: any) => {
+    const operation = operationById.get(normalizeText(payment?._cash_bank_operation_id));
+    if (!operation) return payment;
+    return {
+      ...operation,
+      ...payment,
+      cheque_status: payment?.cheque_status ?? operation?.cheque_status ?? null,
+      cheque_cleared_at: payment?.cheque_cleared_at ?? operation?.cheque_cleared_at ?? null,
+    };
+  });
+};
+
 const resolveInvoiceReceivedAmount = (invoice: CommissionInvoiceRecord) => {
   const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
   const datedValidReceipts = payments
@@ -264,7 +294,7 @@ const resolveLegacyRecordedCollection = (
   return { amount, recordedAt };
 };
 
-const buildInvoiceItemKey = (invoiceId: string, item: any, index: number) => {
+export const buildCommissionInvoiceItemKey = (invoiceId: string, item: any, index: number) => {
   const directId = normalizeText(item?.id || item?.row_id || item?.line_id || item?.uuid);
   if (directId) return `${invoiceId}:${directId}`;
   const product = normalizeText(item?.product_id || item?.package_id || item?.description || 'item');
@@ -282,7 +312,7 @@ const getItemCommissionPercent = (
   employeeDefaultCommissionByEmployeeId: Record<string, number>,
 ) => {
   if (mode === 'employee_default') return toNumber(employeeDefaultCommissionByEmployeeId[employeeId]);
-  const productPercent = toNumber(item?.commission_percentage);
+  const productPercent = toNumber(item?.commission_percentage_snapshot ?? item?.commission_percentage);
   return productPercent > 0 ? productPercent : toNumber(employeeDefaultCommissionByEmployeeId[employeeId]);
 };
 
@@ -357,7 +387,7 @@ const resolveFullSettlementAt = (
 };
 
 const resolveInvoiceApprovalDate = (invoice: CommissionInvoiceRecord) =>
-  normalizeText(invoice.approved_at || invoice.completed_at || invoice.updated_at || invoice.invoice_date) || null;
+  normalizeText(invoice.approved_at || invoice.completed_at || invoice.settled_at || invoice.invoice_date) || null;
 
 const getInvoiceEvent = (
   invoice: CommissionInvoiceRecord,
@@ -479,23 +509,32 @@ const getInvoiceEvent = (
       periodStart,
       periodEnd,
       (payment) => isValidReceiptPayment(payment) && isChequePayment(payment),
+      chequeCollectionDate,
     );
     const nonChequePaidAmount = sumPaymentsInPeriod(
       payments,
       periodStart,
       periodEnd,
       (payment) => isValidReceiptPayment(payment) && !isChequePayment(payment),
+      receiptDate,
     );
-    const poolAmount = clamp(collectedChequeAmount + nonChequePaidAmount, 0, invoiceTotal);
-    if (poolAmount > 0) {
+    if (collectedChequeAmount + nonChequePaidAmount > 0) {
       return {
         eventType: 'prepayment_or_collected_cheque',
         eventAt: findLatestPaymentDate(
           payments,
-          (payment) => isInPeriod(paymentDate(payment), periodStart, periodEnd)
+          (payment) => isInPeriod(receiptDate(payment), periodStart, periodEnd)
             && isValidReceiptPayment(payment),
+          receiptDate,
         ),
-        poolAmount,
+        // برای پرداخت مرحله‌ای، سهم قابل احراز باید تجمعی باشد تا پس از کم
+        // کردن پورسانتِ ثبت‌شدهٔ ماه‌های قبل، دقیقاً فقط مانده پرداخت شود.
+        poolAmount: clamp(sumPaymentsUntil(
+          payments,
+          periodEnd,
+          isValidReceiptPayment,
+          receiptDate,
+        ), 0, invoiceTotal),
         exclusionReason: null,
       };
     }
@@ -778,7 +817,7 @@ export const buildCommissionDraftRows = ({
     if (!includeNotCalculated && event.poolAmount <= 0) continue;
 
     const lines: CommissionDraftLine[] = invoiceItems.map((item, index) => {
-      const itemKey = buildInvoiceItemKey(String(invoice.id), item, index);
+      const itemKey = buildCommissionInvoiceItemKey(String(invoice.id), item, index);
       const sourceKey = buildCommissionDraftSourceKey({
         employeeId,
         basis,

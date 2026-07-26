@@ -2,11 +2,39 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCommissionDraftRows,
   getCommissionLineReviewBucket,
+  mergeCommissionInvoicePayments,
   recomputeCommissionDraftRow,
   type CommissionPersistedDraft,
 } from './commissionRuntime';
 
 describe('commissionRuntime', () => {
+  it('uses invoice receipt rows instead of adding their mirrored cash operations again', () => {
+    const payments = mergeCommissionInvoicePayments(
+      [
+        { amount: 15000000, status: 'received', payment_type: 'cash' },
+        { amount: 30000000, status: 'received', payment_type: 'cash' },
+      ],
+      [{ amount: 30000000, status: 'received', payment_type: 'cash', _cash_bank_operation_id: 'operation-1' }],
+    );
+
+    expect(payments).toHaveLength(2);
+    expect(payments.reduce((sum, payment) => sum + Number(payment.amount), 0)).toBe(45000000);
+  });
+
+  it('uses cash operations as a legacy fallback only when the invoice has no receipt rows', () => {
+    expect(mergeCommissionInvoicePayments([], [{ amount: 45000000 }])).toEqual([{ amount: 45000000 }]);
+  });
+
+  it('hydrates a linked invoice cheque from the cash operation without adding it twice', () => {
+    const payments = mergeCommissionInvoicePayments(
+      [{ amount: 45000000, status: 'received', payment_type: 'cheque', _cash_bank_operation_id: 'operation-1' }],
+      [{ amount: 45000000, status: 'received', payment_type: 'cheque', _cash_bank_operation_id: 'operation-1', cheque_status: 'cleared', cheque_cleared_at: '2026-06-12' }],
+    );
+
+    expect(payments).toHaveLength(1);
+    expect(payments[0]).toMatchObject({ cheque_status: 'cleared', cheque_cleared_at: '2026-06-12' });
+  });
+
   it('builds approved-invoice draft rows for the current period', () => {
     const rows = buildCommissionDraftRows({
       invoices: [{
@@ -365,6 +393,74 @@ describe('commissionRuntime', () => {
 
     expect(rows[0]?.event_pool_amount).toBe(500000);
     expect(rows[0]?.selected_amount).toBe(50000);
+  });
+
+  it('counts a cheque in the period it was collected, not the period it was issued', () => {
+    const [row] = buildCommissionDraftRows({
+      invoices: [{
+        id: 'inv-cheque-collection-date',
+        status: 'final',
+        invoice_date: '2026-04-10',
+        total_invoice_amount: 1000000,
+        assignee_id: 'profile-1',
+        payments: [
+          { amount: 500000, status: 'settled', payment_type: 'cheque', cheque_status: 'cleared', date: '2026-04-15', cheque_cleared_at: '2026-05-12' },
+        ],
+        invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+      }],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_collected_cheques',
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+
+    expect(row.event_pool_amount).toBe(500000);
+    expect(row.selected_amount).toBe(50000);
+  });
+
+  it('pays the remaining portion of a collected cheque commission in a later month', () => {
+    const invoice = {
+      id: 'inv-staged-collected-cheque',
+      status: 'final',
+      invoice_date: '2026-04-10',
+      total_invoice_amount: 1000000,
+      assignee_id: 'profile-1',
+      payments: [
+        { amount: 450000, status: 'settled', payment_type: 'cash', date: '2026-05-12' },
+        { amount: 550000, status: 'settled', payment_type: 'cheque', cheque_status: 'cleared', date: '2026-05-20', cheque_cleared_at: '2026-06-12' },
+      ],
+      invoiceItems: [{ line_total: 1000000, commission_percentage: 10 }],
+    };
+    const baseArgs = {
+      invoices: [invoice],
+      employeeIdByAssigneeId: { 'profile-1': 'employee-1' },
+      employeeDefaultCommissionByEmployeeId: { 'employee-1': 0 },
+      basis: 'prepaid_and_collected_cheques' as const,
+      percentMode: 'product_default' as const,
+    };
+
+    const mayRows = buildCommissionDraftRows({
+      ...baseArgs,
+      periodStart: '2026-05-01',
+      periodEnd: '2026-05-31',
+    });
+    const juneRows = buildCommissionDraftRows({
+      ...baseArgs,
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30',
+      postedAllocations: [{
+        basis: 'prepaid_and_collected_cheques',
+        percent_mode: 'product_default',
+        invoice_id: invoice.id,
+        invoice_item_key: `${invoice.id}:0:item`,
+        posted_amount: 45000,
+      }],
+    });
+
+    expect(mayRows[0]?.selected_amount).toBe(45000);
+    expect(juneRows[0]?.event_pool_amount).toBe(1000000);
+    expect(juneRows[0]?.selected_amount).toBe(55000);
   });
 
   it('treats deferred drafts from previous periods as fixed backlog rows', () => {

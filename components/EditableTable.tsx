@@ -369,6 +369,10 @@ const EditableTable: React.FC<EditableTableProps> = ({
     if (existingKey) return existingKey;
     return createLocalRowKey();
   };
+  const ensureInvoiceItemRowKey = (row: any) => {
+    const existingKey = String(row?.row_key || row?.id || '').trim();
+    return existingKey || createLocalRowKey();
+  };
   const normalizePaymentRows = (rows: any[]) => (
     (Array.isArray(rows) ? rows : []).map((row: any) => {
       if (!row || typeof row !== 'object' || (!isOperationalPayments && !isExpenseItems)) return row;
@@ -1738,6 +1742,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
         if (!nextRow.discount_type) nextRow.discount_type = 'amount';
         if (!nextRow.vat_type) nextRow.vat_type = 'percent';
         if (!nextRow.product_type) nextRow.product_type = 'goods';
+        nextRow.row_key = ensureInvoiceItemRowKey(nextRow);
       }
       if (isProductStockMovements) {
         if (!nextRow.voucher_type) nextRow.voucher_type = 'incoming';
@@ -1848,6 +1853,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       }
       newRow.row_key = ensurePaymentRowKey(newRow);
     }
+    if (isAnyInvoiceItems) {
+      newRow.row_key = createLocalRowKey();
+    }
     if (isExpenseItems) {
       newRow.row_key = createLocalRowKey();
     }
@@ -1916,6 +1924,9 @@ const EditableTable: React.FC<EditableTableProps> = ({
       copiedRow._barter_allocation_key = null;
     }
     if (isExpenseItems) {
+      copiedRow.row_key = createLocalRowKey();
+    }
+    if (isAnyInvoiceItems) {
       copiedRow.row_key = createLocalRowKey();
     }
     const newData = [...source];
@@ -3591,6 +3602,13 @@ const EditableTable: React.FC<EditableTableProps> = ({
         ...rest,
         total_price: calculateRow(rest, block.rowCalculationType),
       }));
+
+      if (isAnyInvoiceItems) {
+        dataToSave = dataToSave.map((row: any) => ({
+          ...row,
+          row_key: ensureInvoiceItemRowKey(row),
+        }));
+      }
 
       if (isOperationalPayments) {
         dataToSave.forEach((row: any, rowIndex: number) => {

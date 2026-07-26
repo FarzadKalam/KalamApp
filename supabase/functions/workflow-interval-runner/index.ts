@@ -23,9 +23,9 @@ import { renderProcessStageForTaskCreation } from '../_shared/process-stage-temp
 import { buildAutomatedBotSenderPayload, extractBotProviderMessageId } from '../_shared/bot-system-message.ts';
 import {
   evaluateConditionCollection as evaluateCentralConditionCollection,
-  evaluateCoreConditionOperator,
   renderTemplateAsync as renderCentralTemplateAsync,
 } from './_runtime-deps/recordRuntime.ts';
+import { evaluateWorkflowConditionWithResolver } from './_runtime-deps/workflowConditionRuntime.ts';
 import { assignProcessTemplateSystemVariableValues } from './_runtime-deps/processTemplateSystemVariables.ts';
 import {
   getLegacyWorkflowAttachmentFields,
@@ -1081,36 +1081,34 @@ async function evaluateConditionWithPrevious(
         : getFieldValueForCondition(previousRecord, field))
     : undefined;
 
-  const coreResult = evaluateCoreConditionOperator({
-    operator,
-    currentValue: current,
-    previousValue: previous,
-    expectedValue: expected,
-  });
-  if (coreResult !== undefined) return coreResult;
-
-  switch (operator) {
+  return evaluateWorkflowConditionWithResolver({
+    condition,
+    resolveValues: async () => ({ currentValue: current, previousValue: previous }),
+    evaluateAsyncOperator: async ({ operator, currentValue, expectedValue }) => {
+      switch (operator) {
     case 'is_friday': {
-      const date = current ? new Date(String(current)) : null;
+      const date = currentValue ? new Date(String(currentValue)) : null;
       return !!date && !isNaN(date.getTime()) && date.getDay() === 5;
     }
     case 'is_official_holiday': {
-      const events = await getHolidayEventsForDate(current);
+      const events = await getHolidayEventsForDate(currentValue);
       return events.some((event) => event?.isHoliday === true);
     }
     case 'occasion_eq':
     case 'occasion_contains':
-      return dateHasAnyOccasion(current, expected);
+      return dateHasAnyOccasion(currentValue, expectedValue);
     case 'occasion_neq':
     case 'occasion_not_contains':
-      return !(await dateHasAnyOccasion(current, expected));
+      return !(await dateHasAnyOccasion(currentValue, expectedValue));
     case 'days_before_occasion':
-      return dateIsDaysBeforeOccasion(current, expected);
+      return dateIsDaysBeforeOccasion(currentValue, expectedValue);
     default:
       console.warn(`[workflow-runner] Unknown operator: ${operator}`);
       // fail closed: یک عملگر ناشناخته نباید هیچ workflow یا automationی را اجرا کند.
       return false;
-  }
+      }
+    },
+  });
 }
 
 async function evaluateConditions(

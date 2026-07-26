@@ -264,7 +264,7 @@ try {
   # for frontend reuse, so materialize deploy-local copies before creating its
   # archive. This avoids unresolved /home/shared and /home/utils imports in Deno.
   $archiveSourceRoot = $functionsRoot
-  if ($selectedFunctions -contains 'workflow-interval-runner') {
+  if ($selectedFunctions -contains 'workflow-interval-runner' -or $selectedFunctions -contains 'goal-progress') {
     $archiveStagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kalamapp-functions-{0}" -f [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $archiveStagingRoot -Force | Out-Null
 
@@ -272,13 +272,19 @@ try {
       Copy-Item -LiteralPath (Join-Path $functionsRoot $functionName) -Destination (Join-Path $archiveStagingRoot $functionName) -Recurse -Force
     }
 
-    $runtimeDepsRoot = Join-Path $archiveStagingRoot 'workflow-interval-runner/_runtime-deps'
-    New-Item -ItemType Directory -Path $runtimeDepsRoot -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/recordRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'recordRuntime.ts') -Force
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/processTemplateSystemVariables.ts') -Destination (Join-Path $runtimeDepsRoot 'processTemplateSystemVariables.ts') -Force
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMutationContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMutationContract.ts') -Force
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMessagingContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMessagingContract.ts') -Force
-    Copy-Item -LiteralPath (Join-Path $repoRoot 'utils/formulaRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'formulaRuntime.ts') -Force
+    foreach ($functionName in @('workflow-interval-runner', 'goal-progress')) {
+      if (-not ($selectedFunctions -contains $functionName)) { continue }
+      $runtimeDepsRoot = Join-Path $archiveStagingRoot "$functionName/_runtime-deps"
+      New-Item -ItemType Directory -Path $runtimeDepsRoot -Force | Out-Null
+      Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/recordRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'recordRuntime.ts') -Force
+      Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowConditionRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowConditionRuntime.ts') -Force
+      if ($functionName -eq 'workflow-interval-runner') {
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/processTemplateSystemVariables.ts') -Destination (Join-Path $runtimeDepsRoot 'processTemplateSystemVariables.ts') -Force
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMutationContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMutationContract.ts') -Force
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'shared/workflowMessagingContract.ts') -Destination (Join-Path $runtimeDepsRoot 'workflowMessagingContract.ts') -Force
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'utils/formulaRuntime.ts') -Destination (Join-Path $runtimeDepsRoot 'formulaRuntime.ts') -Force
+      }
+    }
     $archiveSourceRoot = $archiveStagingRoot
   }
 
