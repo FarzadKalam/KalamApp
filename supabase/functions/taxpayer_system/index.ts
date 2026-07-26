@@ -180,12 +180,19 @@ const inquiryRowMessage = (row: any) => {
   if (data?.message) messages.push(String(data.message).trim());
   return Array.from(new Set(messages.filter(Boolean))).join(' | ');
 };
+const hasInquiryWarnings = (row: any) => {
+  const data = row?.data || row?.result || row;
+  return taxpayerMessageItems(data?.warning).length > 0 || taxpayerMessageItems(data?.warnings).length > 0;
+};
 const normalizeInquiryStatus = (row: any) => {
   const status = String(row?.status || row?.invoiceStatus || row?.processingStatus || row?.state || '').trim();
   if (!status) return 'inquired';
   const lower = status.toLowerCase();
   if (['failed', 'failure', 'rejected', 'reject'].includes(lower)) return lower === 'rejected' || lower === 'reject' ? 'rejected' : 'failed';
-  if (['success', 'succeeded', 'accepted', 'accept'].includes(lower)) return lower === 'success' || lower === 'succeeded' ? 'success' : 'accepted';
+  if (['success', 'succeeded', 'accepted', 'accept'].includes(lower)) {
+    if (hasInquiryWarnings(row)) return 'accepted_with_warnings';
+    return lower === 'success' || lower === 'succeeded' ? 'success' : 'accepted';
+  }
   return lower;
 };
 const readTaxResponse = async (response: Response) => {
@@ -677,13 +684,10 @@ const invoicePayload = (args: any) => {
   });
   const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  const createdAt = new Date(invoice.taxpayer_invoice_created_at || invoice.created_at || Date.now()).getTime();
-  if (!Number.isFinite(createdAt) || createdAt <= 0) throw new Error('تاریخ و زمان ثبت صورتحساب برای ارسال به سامانه مودیان معتبر نیست.');
   const header: Record<string, any> = {
     taxid: txid,
     inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'),
     indatim,
-    indati2m: createdAt,
     inty: Number(invoice.taxpayer_invoice_type || 1),
     inp,
     ins,
@@ -781,13 +785,6 @@ Deno.serve(async (req) => {
         currentSettings = { ...settings, server_information: info };
       }
       const bundle = await invoiceBundle(urlBase,key,orgId,invoiceId);
-      if (!bundle.invoice.taxpayer_invoice_created_at) {
-        const taxpayerInvoiceCreatedAt = String(bundle.invoice.created_at || new Date().toISOString());
-        await patch(urlBase, key, 'invoices', invoiceId, {
-          taxpayer_invoice_created_at: taxpayerInvoiceCreatedAt,
-        });
-        bundle.invoice.taxpayer_invoice_created_at = taxpayerInvoiceCreatedAt;
-      }
       const currency = String(company?.currency_code || 'IRT');
       const manualSettlement = String(body?.settlement_method || bundle.invoice.taxpayer_settlement_method || '').trim();
       const computed = !manualSettlement ? computeSettlement(bundle.receipts, currency) : null;
@@ -849,7 +846,10 @@ Deno.serve(async (req) => {
       const status = normalizeInquiryStatus(row);
       const errorMessage = inquiryRowMessage(row);
       const updated = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status, inquiry_payload: res || {}, error_message: errorMessage || null, last_inquiry_at: new Date().toISOString(), updated_at: new Date().toISOString() }));
-      return json(200, { success: true, message: 'استعلام وضعیت ارسال با موفقیت انجام شد.', submission: updated || sub });
+      const message = status === 'accepted_with_warnings'
+        ? 'صورتحساب پذیرفته شد، اما هشدارهای سامانه مودیان را بررسی کنید.'
+        : 'استعلام وضعیت ارسال با موفقیت انجام شد.';
+      return json(200, { success: true, message, submission: updated || sub });
     }
 
     return json(400, { success: false, message: 'عملیات درخواستی برای سامانه مودیان پشتیبانی نمی‌شود.' });

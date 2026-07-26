@@ -45,6 +45,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   sending: { label: 'در حال ارسال', color: 'processing' },
   sent: { label: 'ارسال شده', color: 'blue' },
   accepted: { label: 'پذیرفته شده', color: 'green' },
+  accepted_with_warnings: { label: 'پذیرفته با هشدار', color: 'gold' },
   success: { label: 'موفق', color: 'green' },
   failed: { label: 'ناموفق', color: 'red' },
   rejected: { label: 'رد شده', color: 'red' },
@@ -188,10 +189,10 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
     ? !!String(invoiceRecord?.source_invoice_id || '').trim()
     : hasPriorTaxpayerSubmission;
   const overlayZIndexBase = 1400;
-  const popupContainer = useCallback((triggerNode?: HTMLElement | null) => {
-    const modalBodyHost = triggerNode?.closest?.('.ant-modal-body, .ant-modal-content, .ant-modal') as HTMLElement | null;
-    return modalBodyHost || resolveOverlayPopupContainer(triggerNode);
-  }, []);
+  const popupContainer = useCallback(
+    (triggerNode?: HTMLElement | null) => resolveOverlayPopupContainer(triggerNode),
+    []
+  );
   const renderEditableField = useCallback((field: ModuleField) => {
     const isLockedReturnSubject = isReturnInvoiceModule && field.key === 'taxpayer_invoice_subject';
     const fieldOptions = field.key === 'taxpayer_invoice_subject'
@@ -353,25 +354,31 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         title: 'وضعیت',
         dataIndex: 'status',
         key: 'status',
-        render: (value: string) => {
-          const meta = getStatusMeta(value);
+        width: 132,
+        render: (value: string, record: TaxpayerSubmission) => {
+          const hasWarnings = /\[\d+\]\s*هشدار:|\[1301001\]|\[14003\]/.test(getSubmissionErrorMessage(record));
+          const meta = hasWarnings && ['success', 'accepted'].includes(String(value || '').toLowerCase())
+            ? STATUS_LABELS.accepted_with_warnings
+            : getStatusMeta(value);
           return <Tag color={meta.color}>{meta.label}</Tag>;
         },
       },
-      { title: 'مرحله', key: 'debug_stage', render: (_: unknown, record: TaxpayerSubmission) => getSubmissionDebug(record).stage || '-' },
-      { title: 'شماره مالیاتی', dataIndex: 'taxid', key: 'taxid', render: (value: string) => value || '-' },
+      { title: 'مرحله', key: 'debug_stage', width: 110, render: (_: unknown, record: TaxpayerSubmission) => getSubmissionDebug(record).stage || '-' },
+      { title: 'شماره مالیاتی', dataIndex: 'taxid', key: 'taxid', width: 208, ellipsis: true, render: (value: string) => value || '-' },
       {
         title: 'مسیر',
         dataIndex: 'integration_mode',
         key: 'integration_mode',
+        width: 112,
         render: (value: string) => value === 'no_certificate_legacy' ? 'بدون گواهی' : value === 'certificate_v2' ? 'نسخه ۲' : '-',
       },
-      { title: 'رسید', dataIndex: 'reference_number', key: 'reference_number', render: (value: string) => value || '-' },
-      { title: 'ارسال', dataIndex: 'sent_at', key: 'sent_at', render: formatDateTime },
-      { title: 'استعلام', dataIndex: 'last_inquiry_at', key: 'last_inquiry_at', render: formatDateTime },
+      { title: 'رسید', dataIndex: 'reference_number', key: 'reference_number', width: 180, ellipsis: true, render: (value: string) => value || '-' },
+      { title: 'ارسال', dataIndex: 'sent_at', key: 'sent_at', width: 140, render: formatDateTime },
+      { title: 'استعلام', dataIndex: 'last_inquiry_at', key: 'last_inquiry_at', width: 140, render: formatDateTime },
       {
         title: 'عملیات',
         key: 'actions',
+        width: 130,
         render: (_: unknown, record: TaxpayerSubmission) => (
           <Button
             size="small"
@@ -394,8 +401,10 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
       open={open}
       onCancel={onClose}
       footer={null}
-      width={980}
+      width="min(980px, calc(100vw - 16px))"
       destroyOnHidden
+      style={{ top: 8, paddingBottom: 8 }}
+      styles={{ body: { maxHeight: 'calc(100dvh - 112px)', overflowY: 'auto', overflowX: 'hidden', padding: '16px' } }}
     >
       <Space direction="vertical" className="w-full" size="middle">
         <Alert
@@ -440,6 +449,14 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
             description={lastError}
           />
         ) : null}
+        {history.some((record) => getSubmissionErrorMessage(record).includes('[1301001]')) ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="نوع شخص خریدار با اطلاعات سامانه مودیان همخوان نیست."
+            description="در پرونده مشتری، نوع شخص را بر اساس اطلاعات ثبت‌شده همان خریدار در سامانه مودیان اصلاح کنید؛ این مقدار از روی کد اقتصادی قابل حدس‌زدن یا تغییر خودکار نیست."
+          />
+        ) : null}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {TAXPAYER_FIELDS.map(renderEditableField)}
         </div>
@@ -460,6 +477,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
           columns={columns as any}
           dataSource={history}
           pagination={{ pageSize: 5 }}
+          scroll={{ x: 1152 }}
           expandable={{
             expandedRowRender: (record) => {
               const debug = getSubmissionDebug(record);
