@@ -125,7 +125,7 @@ const PwaInstallPrompt = () => {
         id: 'pwa-install-mobile',
         kind: 'assistant',
         kindLabel: 'نصب اپ',
-        title: isIos ? 'نسخه نصب‌شده TazeSystem را فعال کن' : 'اپ TazeSystem را نصب کن',
+        title: isIos ? 'نسخه نصب‌شده تازه سیستم را فعال کن' : 'اپ تازه سیستم را نصب کن',
         body: isIos
           ? 'برای نصب: Safari > Share > Add to Home Screen'
           : (deferredPrompt

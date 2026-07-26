@@ -57,7 +57,7 @@ const getFieldOptions = (
   if (field.dynamicOptionsCategory) {
     return dynamicOptions[field.dynamicOptionsCategory] || [];
   }
-  if (field.type === FieldType.SELECT || field.type === FieldType.STATUS) {
+  if (field.type === FieldType.SELECT || field.type === FieldType.STATUS || field.type === FieldType.CHECKLIST) {
     return (field.options || []).map((opt) => ({
       label: String(opt?.label ?? opt?.value ?? ''),
       value: String(opt?.value ?? ''),
@@ -67,6 +67,7 @@ const getFieldOptions = (
     (
       field.type === FieldType.RELATION
       || field.type === FieldType.MULTI_RELATION
+      || field.type === FieldType.CHECKLIST
       || field.type === FieldType.USER
       || field.type === FieldType.TAGS
     ) &&
@@ -371,16 +372,17 @@ const WorkflowConditionsGroup: React.FC<WorkflowConditionsGroupProps> = ({
     if (
       field.type === FieldType.SELECT ||
       field.type === FieldType.STATUS ||
+      field.type === FieldType.CHECKLIST ||
       field.type === FieldType.RELATION ||
       field.type === FieldType.MULTI_RELATION
     ) {
       return (
         <AdaptiveSelectField
           {...commonSelectProps}
-          mode={expectsListValue || field.type === FieldType.MULTI_RELATION ? 'multiple' : undefined}
+          mode={expectsListValue || field.type === FieldType.MULTI_RELATION || field.type === FieldType.CHECKLIST ? 'multiple' : undefined}
           options={options}
           value={
-            expectsListValue || field.type === FieldType.MULTI_RELATION
+            expectsListValue || field.type === FieldType.MULTI_RELATION || field.type === FieldType.CHECKLIST
               ? (Array.isArray(condition.value) ? condition.value : (condition.value ? [condition.value] : []))
               : condition.value
           }

@@ -493,4 +493,20 @@ describe('ExcelImportWizard import scenarios', () => {
       success_percentage: 45,
     });
   }, 15000);
+
+  it('does not save virtual bot fields when importing employees', async () => {
+    renderWizard('employees', MODULES.employees);
+    await uploadCsv(
+      [
+        'نام کامل,پلتفرم اصلی بات',
+        'کارمند تست,روبیکا',
+      ].join('\n')
+    );
+    await goToMappingStep('ثبت نکن');
+    await runImport();
+
+    expect(currentDb.employees).toHaveLength(1);
+    expect(currentDb.employees[0]).toMatchObject({ full_name: 'کارمند تست' });
+    expect(currentDb.employees[0]).not.toHaveProperty('bot_default_channel');
+  }, 15000);
 });

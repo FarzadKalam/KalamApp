@@ -165,6 +165,8 @@ const ViewManager: React.FC<ViewManagerProps> = ({
         'is_false',
         'is_null',
         'not_null',
+        'multi_count_gt',
+        'multi_count_lt',
         'is_today',
         'is_yesterday',
         'is_tomorrow',

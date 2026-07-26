@@ -42,6 +42,24 @@ import { formatPersianPrice, toPersianNumber } from './persianNumberFormatter';
 
 export const GOAL_ALL_USERS_VALUE = '__all_users__';
 
+const GOAL_PROGRESS_ROW_CACHE_TTL_MS = 60_000;
+const GOAL_PROGRESS_ROW_CACHE_MAX_ENTRIES = 240;
+
+type GoalProgressRowCacheEntry = {
+  data: any[];
+  expiresAt: number;
+};
+
+// این کش فقط پاسخ خامی را به اشتراک می‌گذارد که با شناسه سازمان و محدوده دسترسی
+// کاربر کلید شده است. فیلتر نهایی دسترسی نیز برای هر مصرف‌کننده جداگانه اعمال می‌شود.
+const sharedGoalProgressRowsCache = new Map<string, GoalProgressRowCacheEntry>();
+const sharedGoalProgressRowsPromiseCache = new Map<string, Promise<any[]>>();
+
+export const invalidateGoalProgressRowsCache = () => {
+  sharedGoalProgressRowsCache.clear();
+  sharedGoalProgressRowsPromiseCache.clear();
+};
+
 const GOAL_NUMERIC_FIELD_TYPES = new Set<FieldType>([
   FieldType.NUMBER,
   FieldType.PRICE,
@@ -568,6 +586,59 @@ const queryRowsByDateRange = async (
   return rows;
 };
 
+const buildGoalProgressRowAccessKey = (
+  goal: GoalRecord,
+  range: { startIso: string; endIso: string },
+  selectColumns: string,
+  options: {
+    userId: string | null;
+    roleId: string | null;
+    orgId?: string | null;
+    allowedRoleIds?: string[];
+    allowedUserIds?: string[];
+    permissions?: PermissionMap | null;
+  }
+) => {
+  const modulePermission = options.permissions?.[goal.module_id] || {};
+  const scopeKey = [
+    String(options.orgId || ''),
+    String(options.userId || ''),
+    String(options.roleId || ''),
+    String(modulePermission.record_scope || 'all'),
+    ...(options.allowedRoleIds || []).map(String).sort(),
+    ...(options.allowedUserIds || []).map(String).sort(),
+  ].join('|');
+  return [goal.module_id, resolveFilterFieldKey(goal), range.startIso, range.endIso, selectColumns, scopeKey].join('::');
+};
+
+const readSharedGoalProgressRows = async (key: string, loader: () => Promise<any[]>) => {
+  const cached = sharedGoalProgressRowsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const pending = sharedGoalProgressRowsPromiseCache.get(key);
+  if (pending) return pending;
+
+  const request = loader();
+  sharedGoalProgressRowsPromiseCache.set(key, request);
+  try {
+    const data = await request;
+    sharedGoalProgressRowsCache.set(key, {
+      data,
+      expiresAt: Date.now() + GOAL_PROGRESS_ROW_CACHE_TTL_MS,
+    });
+    while (sharedGoalProgressRowsCache.size > GOAL_PROGRESS_ROW_CACHE_MAX_ENTRIES) {
+      const oldestKey = sharedGoalProgressRowsCache.keys().next().value;
+      if (!oldestKey) break;
+      sharedGoalProgressRowsCache.delete(oldestKey);
+    }
+    return data;
+  } finally {
+    if (sharedGoalProgressRowsPromiseCache.get(key) === request) {
+      sharedGoalProgressRowsPromiseCache.delete(key);
+    }
+  }
+};
+
 const loadScopedRows = async (
   goal: GoalRecord,
   range: { startIso: string; endIso: string },
@@ -587,7 +658,7 @@ const loadScopedRows = async (
   const dateFieldKey = resolveFilterFieldKey(goal);
   const fieldMeta = module.fields.find((field) => field.key === dateFieldKey);
   const selectColumns = buildGoalSelectColumns(goal);
-  const cacheKey = `${goal.module_id}:${dateFieldKey}:${range.startIso}:${range.endIso}:${selectColumns}`;
+  const cacheKey = buildGoalProgressRowAccessKey(goal, range, selectColumns, options);
   if (options.cache.has(cacheKey)) {
     return options.cache.get(cacheKey) || [];
   }
@@ -601,20 +672,23 @@ const loadScopedRows = async (
       ? range.endIso.slice(0, 10)
       : range.endIso;
 
-  let rows: any[] = [];
-  try {
-    rows = await queryRowsByDateRange(module.table, selectColumns, dateFieldKey, startValue, endValue);
-  } catch {
-    rows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
-  }
-
-  if (rows.length === 0 && dateFieldKey) {
+  const rows = await readSharedGoalProgressRows(cacheKey, async () => {
+    let loadedRows: any[] = [];
     try {
-      rows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
+      loadedRows = await queryRowsByDateRange(module.table, selectColumns, dateFieldKey, startValue, endValue);
     } catch {
-      rows = [];
+      loadedRows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
     }
-  }
+
+    if (loadedRows.length === 0 && dateFieldKey) {
+      try {
+        loadedRows = await queryRowsByDateRange(module.table, selectColumns, '', range.startIso, range.endIso);
+      } catch {
+        loadedRows = [];
+      }
+    }
+    return loadedRows;
+  });
 
   const modulePerm = options.permissions?.[goal.module_id] || {};
   const filteredByDate = rows.filter((row) => {

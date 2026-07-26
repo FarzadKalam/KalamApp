@@ -223,6 +223,24 @@ describe('AiChatSurfaceV2', () => {
     expect(screen.queryByText('پاسخ هوش مصنوعی کامل دریافت نشد.')).not.toBeInTheDocument();
   }, 15000);
 
+  it('keeps streamed text when the connection closes without a terminal event', async () => {
+    fetchMock.mockResolvedValueOnce(streamResponse([
+      'event: meta\ndata: {"success":true,"threadId":"new-thread","userMessageId":"user-msg","provider":"avalai","model":"gpt-test"}\n\n',
+      'event: delta\ndata: {"text":"متن دریافت‌شده پیش از قطع اتصال"}\n\n',
+    ]));
+
+    renderSurface([{
+      pathname: '/ai',
+      state: {
+        aiInitialPrompt: 'پاسخ با اتصال ناپایدار',
+        forceNewThread: true,
+      },
+    }]);
+
+    await waitFor(() => expect(screen.getByText(/متن دریافت‌شده پیش از قطع اتصال/)).toBeInTheDocument());
+    expect(screen.getByText(/متن دریافت‌شده حفظ شد/)).toBeInTheDocument();
+  }, 15000);
+
   it('renames the active thread inline from the conversation header', async () => {
     renderSurface(['/ai']);
 

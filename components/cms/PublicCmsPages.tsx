@@ -236,7 +236,7 @@ export function BlogIndexPage() {
     // load featured + categories in parallel
     Promise.all([
       supabase.rpc('get_cms_blog_posts', { p_featured: true, p_limit: 5, p_offset: 0 }),
-      supabase.from('cms_categories').select('id, name, slug').in('type', ['blog', 'both']).order('sort_order'),
+      supabase.rpc('get_cms_public_categories', { p_content_type: 'blog' }),
     ]).then(([featuredRes, catRes]) => {
       setFeatured(featuredRes.data ?? []);
       setCategories(catRes.data ?? []);
@@ -484,8 +484,8 @@ export function TutorialIndexPage() {
   useEffect(() => {
     Promise.all([
       supabase.rpc('get_cms_tutorial_posts', { p_featured: true, p_limit: 5, p_offset: 0 }),
-      supabase.from('cms_tutorial_series').select('id, title, slug, description, cover_image_url, is_featured').order('sort_order').limit(6),
-      supabase.from('cms_categories').select('id, name, slug').in('type', ['tutorial', 'both']).order('sort_order'),
+      supabase.rpc('get_cms_public_tutorial_series'),
+      supabase.rpc('get_cms_public_categories', { p_content_type: 'tutorial' }),
     ]).then(([featuredRes, seriesRes, catRes]) => {
       setFeatured(featuredRes.data ?? []);
       setSeries(seriesRes.data ?? []);

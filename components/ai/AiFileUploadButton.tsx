@@ -59,26 +59,19 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
     }
   };
 
-  const prepareAttachment = async (attachment: NoteAttachment) => {
-    const url = String(attachment.url || '').trim();
-    if (!url) return;
-    setPreparing(true);
-    try {
-      const filePrompt = await buildAiUploadedFilePromptFromUrl({
-        url,
+  const prepareAttachments = async (attachments: NoteAttachment[]) => {
+    const prepared = await Promise.all(attachments
+      .filter((attachment) => String(attachment.url || '').trim())
+      .map((attachment) => buildAiUploadedFilePromptFromUrl({
+        url: String(attachment.url || '').trim(),
         name: attachment.name,
         mimeType: attachment.mimeType || null,
         assetId: attachment.assetId || null,
         entryId: attachment.entryId || null,
         moduleId: attachment.moduleId || normalizedModuleId,
         recordId: attachment.recordId || normalizedRecordId,
-      });
-      await onPrepared(filePrompt);
-    } catch (error: any) {
-      message.error(toFaErrorMessage(error, 'آماده‌سازی فایل برای هوش مصنوعی ناموفق بود.'));
-    } finally {
-      setPreparing(false);
-    }
+      })));
+    await dispatchPrepared(prepared);
   };
 
   const openPicker = async () => {
@@ -109,13 +102,12 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
       const safeFolderId = hasTargetRecord || (!targetModuleId && !targetRecordId)
         ? String(context?.folderId || '').trim() || null
         : null;
-      const attachments = await uploadAiFileAttachments(files.slice(0, 1), {
+      const attachments = await uploadAiFileAttachments(multiple ? files : files.slice(0, 1), {
         moduleId: hasTargetRecord ? targetModuleId : null,
         recordId: hasTargetRecord ? targetRecordId : null,
         folderId: safeFolderId,
       });
-      const attachment = attachments[0];
-      if (attachment) await prepareAttachment(attachment);
+      await prepareAttachments(attachments);
     } catch (error: any) {
       message.error(toFaErrorMessage(error, 'آپلود فایل در فایل‌منیجر ناموفق بود.'));
     } finally {
@@ -152,6 +144,7 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
           loading={preparing || loading}
           size={size}
           className={className}
+          aria-label="پیوست فایل به هوش مصنوعی"
           onClick={() => {
             if (directUpload) {
               openDirectUpload();
@@ -176,16 +169,18 @@ const AiFileUploadButton: React.FC<AiFileUploadButtonProps> = ({
         open={open}
         onClose={() => setOpen(false)}
         onSelect={(attachments) => {
-          const attachment = attachments[0];
+          const selectedAttachments = multiple ? attachments : attachments.slice(0, 1);
           setOpen(false);
-          if (attachment) void prepareAttachment(attachment);
+          if (selectedAttachments.length) void prepareAttachments(selectedAttachments).catch((error) => {
+            message.error(toFaErrorMessage(error, 'آماده‌سازی فایل برای هوش مصنوعی ناموفق بود.'));
+          });
         }}
         onUploadFiles={handleUploadFiles}
         moduleId={normalizedModuleId}
         recordId={normalizedRecordId}
         initialFolderKey={initialFolderKey}
         title="انتخاب یا آپلود فایل برای هوش مصنوعی"
-        multiple={false}
+        multiple={multiple}
         fileTypes={['file', 'image']}
       />
     </>

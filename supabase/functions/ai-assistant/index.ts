@@ -82,12 +82,17 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'ai-assistant-2026-07-14-01';
+const FUNCTION_BUILD = 'ai-assistant-2026-07-26-02';
 const DEFAULT_AI_BASE_URL = 'https://api.avalai.ir/v1';
 const DEFAULT_AI_FALLBACK_BASE_URL = 'https://api.avalapis.ir/v1';
 const DEFAULT_AI_MODEL = '';
 const DEFAULT_EMBEDDING_MODEL = 'text-embedding-3-small';
 const PROVIDER_REQUEST_TIMEOUT_MS = 45000;
+// A streamed reply can legitimately take longer than a normal request.  Do
+// not abort a healthy stream merely because its total duration passes the
+// normal request timeout; only abort when the provider stays silent.
+const STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS = 90000;
+const STREAM_HEARTBEAT_INTERVAL_MS = 15000;
 const IMAGE_PROVIDER_TIMEOUT_MS = 120000;
 const LONG_MEDIA_PROVIDER_TIMEOUT_MS = 45000;
 const IMAGE_STATUS_STALE_MS = 180000;
@@ -3800,17 +3805,44 @@ const callChatCompletionsStream = async (
       requestBody.max_tokens = options?.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS;
     }
 
-    const requestStream = async (body: Record<string, any>) => await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${providerConfig.apiKey}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(options?.timeoutMs ?? CHAT_COMPLETIONS_TIMEOUT_MS),
-    }, { disableFallback: true });
-    let result = await requestStream(requestBody);
+    const streamController = new AbortController();
+    const inactivityTimeoutMs = options?.timeoutMs ?? STREAM_PROVIDER_INACTIVITY_TIMEOUT_MS;
+    let inactivityTimer: number | null = null;
+    const resetInactivityTimer = () => {
+      if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => streamController.abort('stream_inactive'), inactivityTimeoutMs) as unknown as number;
+    };
+    const clearInactivityTimer = () => {
+      if (inactivityTimer !== null) clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    };
+    const requestStream = async (body: Record<string, any>) => {
+      resetInactivityTimer();
+      return await requestAvalaiWithFallback(providerConfig, '/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${providerConfig.apiKey}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify(body),
+        signal: streamController.signal,
+      }, { disableFallback: true });
+    };
+    let result: { response: Response; baseUrl: string };
+    try {
+      result = await requestStream(requestBody);
+    } catch (error) {
+      clearInactivityTimer();
+      if (content.trim()) {
+        if (continuation < CHAT_COMPLETION_CONTINUATION_LIMIT) {
+          currentMessages = buildContinuationMessages(messages, content);
+          continue;
+        }
+        throw buildIncompleteAiResponseError('stream_interrupted', content);
+      }
+      throw error;
+    }
     // stream_options is OpenAI-compatible, but some AvalAI-backed models do
     // not expose usage chunks. Keep streaming available for those models.
     if (!result.response.ok && result.response.status === 400) {
@@ -3818,7 +3850,19 @@ const callChatCompletionsStream = async (
       if (/stream_options|include_usage|unsupported.*stream/i.test(rawError)) {
         const fallbackBody = { ...requestBody };
         delete fallbackBody.stream_options;
-        result = await requestStream(fallbackBody);
+        try {
+          result = await requestStream(fallbackBody);
+        } catch (error) {
+          clearInactivityTimer();
+          if (content.trim()) {
+            if (continuation < CHAT_COMPLETION_CONTINUATION_LIMIT) {
+              currentMessages = buildContinuationMessages(messages, content);
+              continue;
+            }
+            throw buildIncompleteAiResponseError('stream_interrupted', content);
+          }
+          throw error;
+        }
       }
     }
     baseUrl = result.baseUrl;
@@ -3826,12 +3870,16 @@ const callChatCompletionsStream = async (
     const requestId = response.headers.get('x-request-id') || response.headers.get('x-avalai-request-id') || null;
     if (requestId) requestIds.push(requestId);
     if (!response.ok) {
+      clearInactivityTimer();
       const raw = await response.text();
       const parsed = parseJsonSafe(raw);
       const message = typeof parsed === 'string' ? parsed : (parsed?.error?.message || (raw && raw.length < 600 ? raw : `status ${response.status}`));
       throw new Error(`خطای provider هوش مصنوعی: ${shortenProviderError(message)}`);
     }
-    if (!response.body) throw new Error('پاسخ جریانی هوش مصنوعی در دسترس نیست.');
+    if (!response.body) {
+      clearInactivityTimer();
+      throw new Error('پاسخ جریانی هوش مصنوعی در دسترس نیست.');
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -3864,21 +3912,41 @@ const callChatCompletionsStream = async (
       }
     };
 
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop() || '';
-      for (const part of parts) {
-        if (part.trim()) await processEvent(part);
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        resetInactivityTimer();
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          if (part.trim()) await processEvent(part);
+        }
       }
+      buffer += decoder.decode();
+      if (buffer.trim()) await processEvent(buffer);
+    } catch (error) {
+      if (content.trim() && continuation < CHAT_COMPLETION_CONTINUATION_LIMIT) {
+        currentMessages = buildContinuationMessages(messages, content);
+        continue;
+      }
+      if (content.trim()) throw buildIncompleteAiResponseError('stream_interrupted', content);
+      throw error;
+    } finally {
+      clearInactivityTimer();
     }
-    buffer += decoder.decode();
-    if (buffer.trim()) await processEvent(buffer);
 
-    if (!doneMarker && !isCompleteChatFinishReason(finishReason)) {
-      if (content.trim()) break;
+    // A provider stream is only complete after its explicit [DONE] marker.
+    // Some gateways close a socket after sending several deltas but before the
+    // final marker; an empty finish reason must not turn that partial text into
+    // a successful, silently truncated answer.
+    if (!doneMarker) {
+      if (content.trim() && continuation < CHAT_COMPLETION_CONTINUATION_LIMIT) {
+        currentMessages = buildContinuationMessages(messages, content);
+        continue;
+      }
+      if (content.trim()) throw buildIncompleteAiResponseError('stream_interrupted', content);
       throw buildIncompleteAiResponseError('stream_interrupted', content);
     }
     if (String(finishReason || '').trim() === 'length' && continuation < CHAT_COMPLETION_CONTINUATION_LIMIT && content.trim()) {
@@ -4347,6 +4415,18 @@ const base64ToUint8Array = (value: string) => {
   return bytes;
 };
 
+const getSafeImageUploadFilename = (mimeType: string, index: number) => {
+  const mime = String(mimeType || '').toLowerCase();
+  const extension = mime.includes('jpeg') || mime.includes('jpg')
+    ? 'jpg'
+    : mime.includes('webp')
+      ? 'webp'
+      : mime.includes('gif')
+        ? 'gif'
+        : 'png';
+  return `source_${Math.max(1, index + 1)}.${extension}`;
+};
+
 const callAudioTranscription = async (
   providerConfig: any,
   audioBase64: string,
@@ -4605,8 +4685,10 @@ const callImageGeneration = async (
     sourceImages.forEach((src, index) => {
       const bytes = base64ToUint8Array(src.data);
       const mime = src.mimeType || 'image/png';
-      const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
-      formData.append('image', new Blob([bytes], { type: mime }), src.filename || `source_${index}.${ext}`);
+      // Provider multipart parsers are not consistently Unicode-safe. The
+      // original Persian filename remains in the app; only the provider-facing
+      // transport name is normalized.
+      formData.append('image', new Blob([bytes], { type: mime }), getSafeImageUploadFilename(mime, index));
     });
     if (options.extraBody && typeof options.extraBody === 'object') {
       Object.entries(options.extraBody).forEach(([key, value]) => {
@@ -4757,8 +4839,7 @@ const callVideoCreate = async (
     if (supportsQuality && (quality === 'standard' || quality === 'high')) formData.append('quality', quality);
     formData.append('safety_identifier', safetyIdentifier);
     const mime = options.inputReference.mimeType || 'image/png';
-    const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
-    formData.append('input_reference', new Blob([base64ToUint8Array(options.inputReference.data)], { type: mime }), `reference.${ext}`);
+    formData.append('input_reference', new Blob([base64ToUint8Array(options.inputReference.data)], { type: mime }), getSafeImageUploadFilename(mime, 0));
     init = { method: 'POST', headers: { Authorization: `Bearer ${providerConfig.apiKey}` }, body: formData, signal: AbortSignal.timeout(LONG_MEDIA_PROVIDER_TIMEOUT_MS) };
   } else {
     init = {
@@ -6372,9 +6453,16 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
   const encoder = new TextEncoder();
   return new Response(new ReadableStream({
     start(controller) {
+      let streamClosed = false;
       const send = (event: string, payload: Record<string, any>) => {
-        controller.enqueue(encoder.encode(ssePayload(event, payload)));
+        if (streamClosed) return;
+        try {
+          controller.enqueue(encoder.encode(ssePayload(event, payload)));
+        } catch {
+          streamClosed = true;
+        }
       };
+      const heartbeat = setInterval(() => send('ping', { at: Date.now() }), STREAM_HEARTBEAT_INTERVAL_MS);
       (async () => {
         let prepared: any = null;
         try {
@@ -6414,6 +6502,7 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
               avalai_request_id: aiResult.requestId || null,
               capability: prepared.capability,
               finish_reason: aiResult.finishReason || null,
+              incomplete: aiResult.incomplete === true,
               business_analytics: prepared.businessAnalytics ? {
                 intent: prepared.businessAnalytics.intent || null,
                 period: prepared.businessAnalytics.period || null,
@@ -6450,6 +6539,8 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             userMessageId: prepared.userMessage?.id || null,
             messageId: assistantMessage?.id || null,
             answer: aiResult.content,
+            incomplete: aiResult.incomplete === true,
+            finishReason: aiResult.finishReason || null,
             attachments: Array.isArray(aiResult.attachments) ? aiResult.attachments : [],
             provider: aiResult.provider,
             model: aiResult.model,
@@ -6574,9 +6665,17 @@ const handleChatStream = (supabaseUrl: string, serviceRoleKey: string, authConte
             finishReason: error?.finishReason || null,
           });
         } finally {
-          controller.close();
+          clearInterval(heartbeat);
+          if (!streamClosed) {
+            streamClosed = true;
+            controller.close();
+          }
         }
       })();
+    },
+    cancel() {
+      // The browser may close the panel while provider work is being saved.
+      // The async task handles its own completion; no extra enqueue is safe.
     },
   }), {
     status: 200,

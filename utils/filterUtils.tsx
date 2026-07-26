@@ -48,6 +48,8 @@ export const WORKFLOW_OPERATORS = {
   hours_passed_lt: 'کمتر از چند ساعت گذشته باشد',
   hours_remaining_gt: 'بیشتر از چند ساعت مانده باشد',
   hours_remaining_lt: 'کمتر از چند ساعت مانده باشد',
+  multi_count_gt: 'بیشتر از چه تعداد انتخاب شده باشد',
+  multi_count_lt: 'کمتر از چه تعداد انتخاب شده باشد',
 } as const;
 
 Object.assign(WORKFLOW_OPERATORS as Record<string, string>, {
@@ -107,6 +109,12 @@ const baseSelectOperators: WorkflowOperator[] = [
   'changed_to',
   'is_null',
   'not_null',
+];
+
+const multiValueSelectOperators: WorkflowOperator[] = [
+  ...baseSelectOperators,
+  'multi_count_gt',
+  'multi_count_lt',
 ];
 
 const baseBooleanOperators: WorkflowOperator[] = ['is_true', 'is_false'];
@@ -223,11 +231,13 @@ export const getWorkflowOperatorsForField = (field?: ModuleField | null): Workfl
     case FieldType.SELECT:
     case FieldType.STATUS:
     case FieldType.RELATION:
-    case FieldType.MULTI_RELATION:
     case FieldType.USER:
-    case FieldType.MULTI_SELECT:
-    case FieldType.TAGS:
       return baseSelectOperators;
+    case FieldType.MULTI_RELATION:
+    case FieldType.MULTI_SELECT:
+    case FieldType.CHECKLIST:
+    case FieldType.TAGS:
+      return multiValueSelectOperators;
     case FieldType.DATE:
       return baseDateOperators;
     case FieldType.TIME:
@@ -290,6 +300,8 @@ export const workflowOperatorNumericValue = (operator?: string) => {
     'day_of_month_neq',
     'day_of_week_eq',
     'day_of_week_neq',
+    'multi_count_gt',
+    'multi_count_lt',
   ].includes(String(operator || ''));
 };
 
@@ -301,6 +313,7 @@ export const normalizeWorkflowValueByFieldType = (field: ModuleField | undefined
   if (
     field.type === FieldType.MULTI_SELECT
     || field.type === FieldType.MULTI_RELATION
+    || field.type === FieldType.CHECKLIST
     || field.type === FieldType.TAGS
   ) {
     return Array.isArray(value) ? value : value ? [value] : [];

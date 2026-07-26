@@ -31,4 +31,10 @@ describe('processModuleSupport', () => {
     expect(result.fields.some((field) => field.key === 'process_template_id')).toBe(true);
     expect(result.fields.some((field) => field.key === 'execution_process_draft')).toBe(true);
   });
+
+  it('injects execution-process fields into SaaS announcements', () => {
+    const result = withProcessModuleSupport(buildModule('saas_user_announcements'));
+    expect(result.fields.some((field) => field.key === 'process_template_id')).toBe(true);
+    expect(result.fields.some((field) => field.key === 'execution_process_draft')).toBe(true);
+  });
 });

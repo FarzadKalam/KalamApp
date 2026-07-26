@@ -54,6 +54,7 @@ import { MODULES } from "../../moduleRegistry";
 import { normalizeAutoNameEnabled } from "../../utils/autoName";
 import { calculateRow } from "../../utils/calculations";
 import { resolveConfiguredDefaultValue } from "../../utils/defaultValues";
+import { isWorkflowVirtualField } from "../../utils/moduleFieldVisibility";
 
 type DuplicateStrategy = "skip" | "overwrite" | "merge";
 type EncodingType = "utf-8" | "windows-1256";
@@ -1813,6 +1814,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
     const fields = [...moduleConfig.fields]
       .filter((field) => {
         if (!IMPORTABLE_TYPES.has(field.type)) return false;
+        if (isWorkflowVirtualField(field)) return false;
         if (!isPersistableImportField(moduleId, field.key)) return false;
         if (
           supportsGroupedInvoiceImport &&
@@ -2212,6 +2214,7 @@ const ExcelImportWizard: React.FC<ExcelImportWizardProps> = ({
       const fields = (moduleConfig.fields || [])
         .filter((field) => {
           if (!RELATED_MODULE_IMPORTABLE_TYPES.has(field.type)) return false;
+          if (isWorkflowVirtualField(field)) return false;
           if (field.nature === FieldNature.SYSTEM) return false;
           if (field.readonly) return false;
           return true;

@@ -41,6 +41,16 @@ describe('record runtime shared contract', () => {
       currentValue: ['فعال'],
       expectedValue: ['لغوشده'],
     })).toBe(true);
+    expect(evaluateCoreConditionOperator({
+      operator: 'multi_count_gt',
+      currentValue: ['فروش', 'ویژه', 'اولویت‌دار'],
+      expectedValue: 2,
+    })).toBe(true);
+    expect(evaluateCoreConditionOperator({
+      operator: 'multi_count_lt',
+      currentValue: ['فروش'],
+      expectedValue: 2,
+    })).toBe(true);
   });
 
   it('covers change and date operators with deterministic values', () => {

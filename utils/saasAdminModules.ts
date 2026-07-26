@@ -1,6 +1,39 @@
 import { supabase } from '../supabaseClient';
 import type { ModuleFormAdapterContext, ModuleRecordAction } from '../types';
 
+const SAAS_RUNTIME_FIELD_KEYS = [
+  'assignee_type',
+  'assignee_id',
+  'assignee_role_id',
+  'process_template_id',
+  'execution_process_draft',
+] as const;
+
+const extractSaasRuntimePatch = (values: Record<string, any>) => {
+  const patch: Record<string, any> = {};
+  SAAS_RUNTIME_FIELD_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(values, key)) patch[key] = values[key] ?? null;
+  });
+  return patch;
+};
+
+const saveSaasRuntimePatch = async (
+  sourceKind: 'org' | 'request',
+  sourceId: string | null | undefined,
+  values: Record<string, any>,
+) => {
+  const patch = extractSaasRuntimePatch(values);
+  if (!sourceId || Object.keys(patch).length === 0) return;
+
+  const { data, error } = await supabase.rpc('admin_saas_update_candidate_runtime', {
+    p_source_kind: sourceKind,
+    p_source_id: sourceId,
+    p_patch: patch,
+  });
+  if (error) throw error;
+  if (data?.success === false) throw new Error(String(data?.message || 'ذخیره مسئول یا فرآیند ناموفق بود.'));
+};
+
 // ── ذخیره درخواست دمو از طریق admin_saas_edit_request RPC ──────────────────
 export const saveSaasDemoRequest = async ({ mode, recordId, values }: ModuleFormAdapterContext) => {
   if (mode !== 'update' || !recordId) {
@@ -30,6 +63,7 @@ export const saveSaasDemoRequest = async ({ mode, recordId, values }: ModuleForm
   if (data?.success === false) {
     throw new Error(String(data?.message || 'ذخیره درخواست ناموفق بود.'));
   }
+  await saveSaasRuntimePatch('request', String(recordId), values);
   return { id: String(recordId) };
 };
 
@@ -106,7 +140,9 @@ export const saveSaasOrgRecord = async ({ mode, recordId, values, currentValues 
   if (data?.success === false) {
     throw new Error(String(data?.message || 'ذخیره سازمان SaaS ناموفق بود.'));
   }
-  return { id: String(data?.source_id || data?.org_id || sourceId || '').trim() || null };
+  const nextRecordId = String(data?.source_id || data?.org_id || sourceId || '').trim() || null;
+  await saveSaasRuntimePatch(payload.source_kind, nextRecordId, values);
+  return { id: nextRecordId };
 };
 
 export const executeSaasModuleAction = async (

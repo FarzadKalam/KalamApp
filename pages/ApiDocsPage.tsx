@@ -180,7 +180,7 @@ const CodeBlock: React.FC<{ code: string; lang?: string }> = ({ code }) => {
 
 const IntroSection: React.FC = () => (
   <div>
-    <Title level={2}>TazeSystem API</Title>
+    <Title level={2}>API تازه سیستم</Title>
     <Paragraph>
       از طریق این API می‌توانید به داده‌های سازمان خود (مشتریان، فاکتورها، کارمندان و...) دسترسی داشته باشید
       و با سیستم‌های دیگر یکپارچه شوید.
@@ -365,7 +365,7 @@ const WebhooksDocsSection: React.FC = () => (
   <div>
     <Title level={2}>Webhooks خروجی</Title>
     <Paragraph>
-      با تعریف webhook در <strong>تنظیمات &gt; اتصالات</strong>، TazeSystem رویدادها را بلادرنگ به سرور شما ارسال می‌کند.
+      با تعریف webhook در <strong>تنظیمات &gt; اتصالات</strong>، تازه سیستم رویدادها را بلادرنگ به سرور شما ارسال می‌کند.
     </Paragraph>
 
     <Title level={4}>فرمت Payload</Title>
@@ -721,7 +721,7 @@ const ApiDocsPage: React.FC<ApiDocsPageProps> = ({ isAdmin: _isAdmin = false }) 
           <div style={{ padding: '16px 16px 8px', borderBottom: '1px solid #f0f0f0', marginBottom: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <ApiOutlined style={{ fontSize: 20, color: '#1677ff' }} />
-              <Text strong style={{ fontSize: 14 }}>TazeSystem API</Text>
+              <Text strong style={{ fontSize: 14 }}>API تازه سیستم</Text>
             </div>
           </div>
         )}

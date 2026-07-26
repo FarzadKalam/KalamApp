@@ -60,4 +60,27 @@ describe('AiCapabilityComposerActions', () => {
     const webSearchCheckbox = screen.getByText('جستجوی گوگل').closest('label')?.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
     expect(webSearchCheckbox?.checked).toBe(true);
   });
+
+  it('keeps the attachment control available for every selected operator', () => {
+    const { rerender } = render(
+      <AiCapabilityComposerActions
+        selected={['image_generation']}
+        onChange={vi.fn()}
+        onVoiceSend={vi.fn()}
+        onFilePrepared={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('پیوست فایل به هوش مصنوعی')).toBeInTheDocument();
+
+    rerender(
+      <AiCapabilityComposerActions
+        selected={['video_generation']}
+        onChange={vi.fn()}
+        onVoiceSend={vi.fn()}
+        onFilePrepared={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('پیوست فایل به هوش مصنوعی')).toBeInTheDocument();
+  });
 });

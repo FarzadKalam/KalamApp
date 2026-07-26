@@ -1,4 +1,5 @@
 import { BlockType, ModuleNature, type ModuleDefinition } from '../types';
+import { supportsModuleAssignee } from './assigneeSupport';
 import { isWorkflowVirtualField } from './moduleFieldVisibility';
 import { shouldSkipModuleListField } from './moduleListFieldSelection';
 
@@ -11,7 +12,9 @@ const BASE_RECORD_COLUMNS = [
   'updated_by',
   'system_code',
   'name',
-  'status',
+] as const;
+
+const ASSIGNEE_RECORD_COLUMNS = [
   'assignee_type',
   'assignee_id',
   'assignee_role_id',
@@ -56,6 +59,9 @@ export const buildModuleRecordProjection = (moduleConfig?: ModuleDefinition | nu
   }
 
   const initial = new Set<string>(BASE_RECORD_COLUMNS);
+  if (supportsModuleAssignee(moduleConfig)) {
+    ASSIGNEE_RECORD_COLUMNS.forEach((column) => initial.add(column));
+  }
   const deferredProcessDraftColumns: string[] = [];
 
   (moduleConfig.fields || []).forEach((field: any) => {

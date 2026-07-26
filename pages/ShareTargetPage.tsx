@@ -516,7 +516,7 @@ const ShareTargetPage: React.FC = () => {
       <Card>
         <div className="mb-4 flex items-center justify-between">
           <Title level={4} className="!mb-0">اشتراک‌گذاری ورودی</Title>
-          <Text type="secondary">TazeSystem</Text>
+          <Text type="secondary">تازه سیستم</Text>
         </div>
 
         <div className="space-y-4">

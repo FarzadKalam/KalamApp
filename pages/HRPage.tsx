@@ -1612,6 +1612,14 @@ const HRPage: React.FC = () => {
 
   const monthStart = useMemo(() => selectedRange[0].startOf('day'), [selectedRange]);
   const monthEnd = useMemo(() => selectedRange[1].endOf('day'), [selectedRange]);
+  const goalPeriodOverride = useMemo(
+    () => ({ startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() }),
+    [monthEnd, monthStart],
+  );
+  const handleHrActiveGoalCardChange = useCallback(
+    (card: { goal: { id: string } } | null) => setHrActiveGoalId(card?.goal.id || null),
+    [],
+  );
   const selectedRangeQuery = useMemo(() => {
     return buildHrFilterQuery([monthStart, monthEnd], selectedEmployeeIds);
   }, [monthEnd, monthStart, selectedEmployeeIds]);
@@ -7532,8 +7540,8 @@ const HRPage: React.FC = () => {
           autoPlay={false}
           showPlaybackControls={false}
           subjectUserIds={goalSubjectUserFilter}
-          onActiveCardChange={(card) => setHrActiveGoalId(card?.goal.id || null)}
-          periodOverride={{ startIso: monthStart.toISOString(), endIso: monthEnd.toISOString() }}
+          onActiveCardChange={handleHrActiveGoalCardChange}
+          periodOverride={goalPeriodOverride}
         />
       </Card>
       <Card>

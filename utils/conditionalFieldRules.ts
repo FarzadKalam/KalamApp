@@ -224,6 +224,10 @@ const evaluateWorkflowCondition = (
       return currentValue === null || currentValue === undefined || currentValue === '' || (Array.isArray(currentValue) && currentValue.length === 0);
     case 'not_null':
       return !(currentValue === null || currentValue === undefined || currentValue === '' || (Array.isArray(currentValue) && currentValue.length === 0));
+    case 'multi_count_gt':
+      return asArray(currentValue).length > Number(expectedValue ?? 0);
+    case 'multi_count_lt':
+      return asArray(currentValue).length < Number(expectedValue ?? 0);
     default:
       return false;
   }

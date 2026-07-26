@@ -11,6 +11,7 @@ import {
   ensureDefaultSalesInvoiceGoal,
   executeGoalProgress,
   formatGoalMetricValue,
+  invalidateGoalProgressRowsCache,
   normalizeGoalRecord,
   resolveGoalAssignedMembers,
 } from '../../utils/goals';
@@ -187,14 +188,29 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const fiscalYearRef = useRef<FiscalYearSnapshot | null>(null);
   const switchTimerRef = useRef<number | null>(null);
   const cardsRef = useRef<GoalProgressSnapshot[]>([]);
+  const onActiveCardChangeRef = useRef(onActiveCardChange);
 
   const placementField = placement === 'dashboard' ? 'dashboard_widget' : 'module_list_cards';
 
+  const subjectUserIdsKey = useMemo(
+    () => hasSubjectUserFilter
+      ? (subjectUserIds || []).map((id) => String(id || '').trim()).filter(Boolean).sort().join('|')
+      : '',
+    [hasSubjectUserFilter, subjectUserIds],
+  );
   const normalizedSubjectUserIds = useMemo(
     () => hasSubjectUserFilter
-      ? Array.from(new Set((subjectUserIds || []).map((id) => String(id || '').trim()).filter(Boolean))).sort()
+      ? Array.from(new Set(subjectUserIdsKey.split('|').filter(Boolean)))
       : [],
-    [hasSubjectUserFilter, subjectUserIds],
+    [hasSubjectUserFilter, subjectUserIdsKey],
+  );
+  const periodOverrideKey = `${periodOverride?.startIso || ''}__${periodOverride?.endIso || ''}`;
+  const normalizedPeriodOverride = useMemo(
+    () => periodOverrideKey === '__' ? undefined : {
+      startIso: String(periodOverride?.startIso || ''),
+      endIso: String(periodOverride?.endIso || ''),
+    },
+    [periodOverride?.endIso, periodOverride?.startIso, periodOverrideKey],
   );
 
   const loadFiscalYear = useCallback(async () => {
@@ -264,7 +280,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
         moduleId: moduleId || null,
         userId: roleContext.userId || null,
         roleId: roleContext.roleId || null,
-        periodOverride: periodOverride ? `${periodOverride.startIso}__${periodOverride.endIso}` : null,
+        periodOverride: periodOverrideKey === '__' ? null : periodOverrideKey,
         subjectUserIds: normalizedSubjectUserIds,
         selections: Object.keys(resolvedSelections)
           .sort()
@@ -401,7 +417,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
                 subjectRoleId: explicitSubject?.roleId || null,
                 subjectLabel: explicitSubject?.label || null,
                 fallbackSubjects: filteredSubjects,
-                overridePeriodRange: periodOverride,
+                overridePeriodRange: normalizedPeriodOverride,
               });
             } catch {
               return buildGoalFallbackProgressSnapshot(goal, {
@@ -440,7 +456,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [hasSubjectUserFilter, loadFiscalYear, moduleId, normalizedSubjectUserIds, periodOverride, placementField, subperiodSelections]);
+  }, [hasSubjectUserFilter, loadFiscalYear, moduleId, normalizedPeriodOverride, normalizedSubjectUserIds, periodOverrideKey, placementField, subperiodSelections]);
 
   useEffect(() => {
     cardsRef.current = cards;
@@ -450,6 +466,7 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
     rowCacheRef.current = new Map();
     goalProgressCardsCache.clear();
     goalProgressCardsPromiseCache.clear();
+    invalidateGoalProgressRowsCache();
   }, []);
 
   useEffect(() => {
@@ -539,8 +556,12 @@ const GoalProgressSlider: React.FC<GoalProgressSliderProps> = ({
   const canViewActiveGoalResults = !!activeCard;
 
   useEffect(() => {
-    onActiveCardChange?.(activeCard);
-  }, [activeCard, onActiveCardChange]);
+    onActiveCardChangeRef.current = onActiveCardChange;
+  }, [onActiveCardChange]);
+
+  useEffect(() => {
+    onActiveCardChangeRef.current?.(activeCard);
+  }, [activeCard]);
 
   const handleSubperiodChange = async (goalId: string, unit: GoalPeriodUnit) => {
     const nextSelections = {

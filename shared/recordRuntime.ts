@@ -246,6 +246,8 @@ export const evaluateCoreConditionOperator = ({
     case 'is_false': return currentValue === false || currentValue === 'false' || currentValue === 0;
     case 'is_null': case 'is_empty': return isEmpty;
     case 'not_null': case 'not_empty': return !isEmpty;
+    case 'multi_count_gt': return currentList.length > Number(expectedValue ?? 0);
+    case 'multi_count_lt': return currentList.length < Number(expectedValue ?? 0);
     case 'changed': return JSON.stringify(current ?? null) !== JSON.stringify(previous ?? null);
     case 'changed_from': return JSON.stringify(previous ?? null) === JSON.stringify(expected ?? null) && JSON.stringify(current ?? null) !== JSON.stringify(previous ?? null);
     case 'changed_to': return JSON.stringify(current ?? null) === JSON.stringify(expected ?? null) && JSON.stringify(current ?? null) !== JSON.stringify(previous ?? null);

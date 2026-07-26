@@ -19,6 +19,78 @@ describe('module record projection', () => {
     expect(projection.deferredProcessDraftColumns).toEqual(['execution_process_draft']);
   });
 
+  it('does not require a status column unless the module defines one', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'customers',
+      table: 'customers',
+      fields: [
+        { key: 'full_name', type: FieldType.TEXT },
+        { key: 'rank', type: FieldType.STATUS },
+      ],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'full_name', 'rank']));
+    expect(projection.initialColumns).not.toContain('status');
+  });
+
+  it('requests assignee columns for SaaS system views', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'saas_orgs',
+      table: 'saas_admin_org_candidates_view',
+      fields: [{ key: 'org_name', type: FieldType.TEXT }],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'org_name']));
+    expect(projection.initialColumns).toEqual(expect.arrayContaining([
+      'assignee_type',
+      'assignee_id',
+      'assignee_role_id',
+    ]));
+  });
+
+  it('keeps assignee columns for modules that support assignment', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'projects',
+      table: 'projects',
+      fields: [{ key: 'name', type: FieldType.TEXT }],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining([
+      'assignee_type',
+      'assignee_id',
+      'assignee_role_id',
+    ]));
+  });
+
+  it('keeps assignee columns for SaaS-managed CMS records', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'cms_pages',
+      table: 'cms_pages',
+      fields: [{ key: 'title', type: FieldType.TEXT }],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining([
+      'assignee_type',
+      'assignee_id',
+      'assignee_role_id',
+    ]));
+  });
+
+  it('does not request virtual bot settings from the employee table', () => {
+    const projection = buildModuleRecordProjection({
+      id: 'employees',
+      table: 'employees',
+      fields: [
+        { key: 'full_name', type: FieldType.TEXT },
+        { key: 'telegram_chat_id', type: FieldType.TEXT, botSettingsOnly: true },
+        { key: 'bot_default_channel', type: FieldType.SELECT, virtualBotField: true },
+      ],
+    } as any);
+
+    expect(projection.initialColumns).toEqual(expect.arrayContaining(['id', 'full_name', 'telegram_chat_id']));
+    expect(projection.initialColumns).not.toContain('bot_default_channel');
+  });
+
   it('always reads a complete financial document so invoice lines cannot be omitted', () => {
     const projection = buildModuleRecordProjection({
       id: 'invoices',

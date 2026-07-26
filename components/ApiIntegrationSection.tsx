@@ -408,7 +408,7 @@ const WebhooksSection: React.FC = () => {
           table: 'test',
           record_id: null,
           timestamp: new Date().toISOString(),
-          data: { message: 'این یک پیام آزمایشی از TazeSystem است.' },
+          data: { message: 'این یک پیام آزمایشی از تازه سیستم است.' },
         }),
       });
       if (res.ok) {
@@ -596,7 +596,7 @@ const ApiIntegrationSection: React.FC = () => (
       <Title level={4} className="!mb-0">یکپارچه‌سازی API</Title>
     </div>
     <Text type="secondary" className="block mb-6 text-sm">
-      با استفاده از توکن API و Webhooks می‌توانید ارتباط دوطرفه بین TazeSystem و سایر نرم‌افزارها برقرار کنید.
+      با استفاده از توکن API و Webhooks می‌توانید ارتباط دوطرفه بین تازه سیستم و سایر نرم‌افزارها برقرار کنید.
       {' '}<a href="/tazesystem/developers" target="_blank" rel="noopener noreferrer">مستندات API ↗</a>
     </Text>
 

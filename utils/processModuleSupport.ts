@@ -11,7 +11,6 @@ export const PROCESS_TEMPLATE_TARGET_MODULE_EXCLUDED_IDS = new Set([
   'process_runs',
   'tasks',
   'instructions',
-  'saas_user_announcements',
 ]);
 
 const PROCESS_DRAFT_FIELD_KEYS = new Set([

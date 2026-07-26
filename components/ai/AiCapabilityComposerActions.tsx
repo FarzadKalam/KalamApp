@@ -326,20 +326,18 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
         <AiVoiceRecorder disabled={disabled} loading={voiceLoading} size={actionSize} className={iconActionClass} onSend={onVoiceSend} />
       ) : null}
 
-      {(selectedSet.has('document_analysis') || autoMode) && isCapabilityUsable(capabilityAvailability, 'document_analysis') ? (
-        <AiFileUploadButton
-          disabled={disabled}
-          loading={fileLoading}
-          onPrepared={onFilePrepared}
-          onPreparedMany={onFilesPrepared}
-          directUpload={directFileUpload}
-          multiple={allowMultipleFiles}
-          moduleId={moduleId}
-          recordId={recordId}
-          size={actionSize}
-          className={iconActionClass}
-        />
-      ) : null}
+      <AiFileUploadButton
+        disabled={disabled}
+        loading={fileLoading}
+        onPrepared={onFilePrepared}
+        onPreparedMany={onFilesPrepared}
+        directUpload={directFileUpload}
+        multiple={allowMultipleFiles}
+        moduleId={moduleId}
+        recordId={recordId}
+        size={actionSize}
+        className={iconActionClass}
+      />
 
       {selectedSet.has('record_creation') && onRecordCreationTargetModuleChange ? (
         <Select
@@ -355,6 +353,7 @@ const AiCapabilityComposerActions: React.FC<AiCapabilityComposerActionsProps> = 
           onChange={(value) => onRecordCreationTargetModuleChange(value ? String(value) : null)}
         />
       ) : null}
+
     </div>
   );
 };

@@ -57,7 +57,7 @@ const Header = () => (
         <img src="/tazesystem_logo.png" alt="لوگوی تازه سیستم" className="h-11 w-11 rounded-xl object-contain" />
         <div className="leading-tight">
           <div className="text-lg font-black">تازه سیستم</div>
-          <div className="text-xs font-medium text-zinc-500">TazeSystem</div>
+          <div className="text-xs font-medium text-zinc-500">تازه سیستم</div>
         </div>
       </Link>
       <nav className="hidden items-center gap-7 text-sm font-semibold text-zinc-700 lg:flex">
@@ -98,7 +98,7 @@ const Footer = () => {
   const phoneHref = f?.phoneHref || 'tel:+982100000000';
   const email = f?.email || 'hello@tazesystem.ir';
   const address = f?.address || '';
-  const copyright = f?.copyright || `© ${new Date().getFullYear()} TazeSystem. تمام حقوق برای تازه سیستم محفوظ است.`;
+  const copyright = f?.copyright || `© ${new Date().getFullYear()} تازه سیستم. تمام حقوق محفوظ است.`;
 
   const legal: ReadonlyArray<readonly [string, string]> = [
     ['حریم خصوصی', sitePath('/privacy')],
@@ -168,6 +168,25 @@ type ProductUpdate = {
 };
 
 const recentProductUpdates: ProductUpdate[] = [
+  {
+    version: '2.41.0.0.0',
+    title: 'مسئول و فرآیند در همه ماژول‌ها',
+    summary: 'اکنون می‌توانید برای همه بخش‌های سامانه، از جمله منابع انسانی و محتوای سایت، مسئول و الگوی فرآیند تعیین کنید.',
+    details: [
+      'فرآیندهای اجرایی و مسئول هر رکورد در ماژول‌های باقی‌مانده نیز قابل تنظیم هستند.',
+      'اطلاعات داخلی فرآیندهای محتوای سایت فقط در پنل مدیریتی در دسترس است و در سایت عمومی نمایش داده نمی‌شود.',
+    ],
+  },
+  {
+    version: '2.40.0.0.0',
+    title: 'شرط‌های تعداد انتخاب‌ها',
+    summary: 'در شرط‌ها می‌توانید تعداد گزینه‌های انتخاب‌شده را هم معیار تصمیم‌گیری قرار دهید.',
+    details: [
+      'برای فیلدهای چندانتخابی، شرط «بیشتر از» و «کمتر از» تعداد انتخاب‌شده در دسترس است.',
+      'این شرط‌ها در گردش‌کارها، اتوماسیون‌ها، هدف‌ها، فعالیت‌ها و نماهای ذخیره‌شده قابل استفاده هستند.',
+      'هنگام ساخت شرط، مقدار موردنیاز به‌صورت عددی وارد می‌شود تا تنظیم آن روشن و سریع باشد.',
+    ],
+  },
   {
     version: '2.39.0.0.0',
     title: 'تست شخصیت‌شناسی به منابع انسانی اضافه شد',

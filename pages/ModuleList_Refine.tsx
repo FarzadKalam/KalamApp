@@ -7,6 +7,7 @@ import { MODULES } from "../moduleRegistry";
 import SmartTableRenderer from "../components/SmartTableRenderer";
 import { BlockType, FieldType, ModuleDefinition, SavedView, ViewMode } from "../types";
 import { supportsModuleAssignee } from "../utils/assigneeSupport";
+import { buildRecordScopeCrudFilters } from "../utils/recordScopeFilters";
 import { App, Badge, Button, Drawer, Dropdown, Empty, Skeleton } from "antd";
 import type { MenuProps } from "antd";
 import type { FilterValue } from "antd/es/table/interface";
@@ -220,6 +221,7 @@ const getTagViewFilterMeta = (filter: any, moduleConfig?: ModuleDefinition | nul
   return {
     fieldKey: tagFieldKey,
     sourceOperator: String(payload?.sourceOperator || filter._displayOperator || filter.operator || "eq").trim(),
+    selectedCount: payload?.selectedCount ?? filter._displayValue,
     tagIds,
   };
 };
@@ -819,6 +821,9 @@ export const ModuleListRefine: React.FC<{
   const [permissionViewConditions, setPermissionViewConditions] = useState<ViewConditionGroup | null>(null);
   const [permissionConditionAllowedIds, setPermissionConditionAllowedIds] = useState<Set<string> | null>(null);
   const [permissionConditionLoading, setPermissionConditionLoading] = useState(false);
+  const [clientPermissionPageRows, setClientPermissionPageRows] = useState<any[]>([]);
+  const [clientPermissionTotal, setClientPermissionTotal] = useState(0);
+  const [clientPermissionPaginationActive, setClientPermissionPaginationActive] = useState(false);
   const [permissionFilters, setPermissionFilters] = useState<CrudFilters>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserRoleId, setCurrentUserRoleId] = useState<string | null>(null);
@@ -983,13 +988,14 @@ export const ModuleListRefine: React.FC<{
     () =>
       (viewFiltersState || [])
         .map((item: any) => getTagViewFilterMeta(item, moduleConfig))
-        .filter(Boolean) as Array<{ fieldKey: string; sourceOperator: string; tagIds: string[] }>,
+        .filter(Boolean) as Array<{ fieldKey: string; sourceOperator: string; selectedCount?: unknown; tagIds: string[] }>,
     [moduleConfig, viewFiltersState]
   );
   const normalizedActiveTagViewFilters = useMemo(
     () =>
       activeTagViewFilters.map((item) => ({
         sourceOperator: String(item?.sourceOperator || "eq").trim(),
+        selectedCount: Number((item as any)?.selectedCount),
         tagIds: (Array.isArray(item?.tagIds) ? item.tagIds : [])
           .map((tagId) => String(tagId || "").trim())
           .filter(Boolean),
@@ -998,13 +1004,13 @@ export const ModuleListRefine: React.FC<{
   );
   const hasActiveTagViewFilters = activeTagViewFilters.length > 0;
   const loading = permissionConditionLoading || (isListView
-    ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading)
+    ? (clientPermissionPaginationActive ? permissionConditionLoading : hasActiveTagViewFilters ? tagViewFilterLoading : baseLoading)
     : nonListLoading);
   const queryPending = permissionConditionLoading || (isListView
-    ? (hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending)
+    ? (clientPermissionPaginationActive ? permissionConditionLoading : hasActiveTagViewFilters ? tagViewFilterLoading : baseQueryPending)
     : nonListLoading);
   const allData = isListView
-    ? (hasActiveTagViewFilters ? tagViewFilterRows : baseAllData)
+    ? (clientPermissionPaginationActive ? clientPermissionPageRows : hasActiveTagViewFilters ? tagViewFilterRows : baseAllData)
     : nonListRows;
   const effectiveBaseAllData = useMemo(() => {
     if (resolvedModuleId !== "cash_bank_operations" || cashBankFallbackRows.length === 0) return allData;
@@ -1062,7 +1068,9 @@ export const ModuleListRefine: React.FC<{
     [deferredModuleRowsById, effectiveBaseAllData]
   );
   const hasQueryResult = isListView
-    ? (hasActiveTagViewFilters
+    ? (clientPermissionPaginationActive
+      ? (!permissionConditionLoading || clientPermissionPageRows.length > 0)
+      : hasActiveTagViewFilters
       ? (!tagViewFilterLoading || tagViewFilterRows.length > 0)
       : baseHasQueryResult)
     : nonListReady;
@@ -1102,6 +1110,9 @@ export const ModuleListRefine: React.FC<{
       if (!isListView) {
         return Number(nonListTotal || effectiveAllData.length || 0);
       }
+      if (clientPermissionPaginationActive) {
+        return Number(clientPermissionTotal || 0);
+      }
       if (hasActiveTagViewFilters) {
         return Number(tagViewFilterTotal || 0);
       }
@@ -1109,13 +1120,21 @@ export const ModuleListRefine: React.FC<{
       const paginationTotal = Number(paginationConfig?.total || 0);
       return Number(paginationTotal || tableQueryResult.data?.total || 0);
     },
-    [cashBankFallbackRows.length, effectiveAllData.length, hasActiveTagViewFilters, isListView, nonListTotal, resolvedModuleId, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
+    [cashBankFallbackRows.length, clientPermissionPaginationActive, clientPermissionTotal, effectiveAllData.length, hasActiveTagViewFilters, isListView, nonListTotal, resolvedModuleId, tableProps?.pagination, tableQueryResult.data?.total, tagViewFilterTotal]
   );
   const effectiveTablePagination = useMemo(() => {
     if (resolvedModuleId === "cash_bank_operations" && cashBankFallbackRows.length > 0) {
       return {
         ...(tableProps.pagination || {}),
         total: effectiveAllData.length,
+        current: Math.max(1, Number(current || 1)),
+        pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
+      };
+    }
+    if (clientPermissionPaginationActive) {
+      return {
+        ...(tableProps.pagination || {}),
+        total: clientPermissionTotal,
         current: Math.max(1, Number(current || 1)),
         pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
       };
@@ -1127,7 +1146,7 @@ export const ModuleListRefine: React.FC<{
       current: Math.max(1, Number(current || 1)),
       pageSize: Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE)),
     };
-  }, [cashBankFallbackRows.length, current, effectiveAllData.length, hasActiveTagViewFilters, pageSize, resolvedModuleId, tableProps.pagination, tagViewFilterTotal]);
+  }, [cashBankFallbackRows.length, clientPermissionPaginationActive, clientPermissionTotal, current, effectiveAllData.length, hasActiveTagViewFilters, pageSize, resolvedModuleId, tableProps.pagination, tagViewFilterTotal]);
 
   const fetchRowsByIdsPreservingOrder = useCallback(async (ids: string[], serverFilters: CrudFilters) => {
     if (!ids.length || !resolvedModuleId) return [];
@@ -1285,7 +1304,7 @@ export const ModuleListRefine: React.FC<{
     const needsAllTaggedUniverse = normalizedActiveTagViewFilters.some(
       (item) => {
         const operator = String(item?.sourceOperator || "eq").trim();
-        return operator === "is_null" || operator === "not_null";
+        return operator === "is_null" || operator === "not_null" || operator === "multi_count_gt" || operator === "multi_count_lt";
       }
     );
     const hasNegativeTagFilter = normalizedActiveTagViewFilters.some((item) => {
@@ -1332,6 +1351,23 @@ export const ModuleListRefine: React.FC<{
     normalizedActiveTagViewFilters.forEach((tagFilter) => {
       const operator = String(tagFilter.sourceOperator || "eq").trim();
       const tagIds = tagFilter.tagIds;
+
+      if (operator === 'multi_count_gt' || operator === 'multi_count_lt') {
+        const selectedCount = Number(tagFilter.selectedCount);
+        if (!Number.isFinite(selectedCount) || selectedCount < 0) {
+          positiveMatchSets.push(new Set<string>());
+          return;
+        }
+        const matchedRecordIds = new Set<string>();
+        (taggedRecordIds || new Set<string>()).forEach((recordId) => {
+          const count = (allTagsByRecord.get(recordId) || new Set<string>()).size;
+          if ((operator === 'multi_count_gt' && count > selectedCount) || (operator === 'multi_count_lt' && count < selectedCount)) {
+            matchedRecordIds.add(recordId);
+          }
+        });
+        positiveMatchSets.push(matchedRecordIds);
+        return;
+      }
 
       if (operator === "not_null") {
         positiveMatchSets.push(taggedRecordIds || new Set<string>());
@@ -1414,6 +1450,14 @@ export const ModuleListRefine: React.FC<{
       for (const tagFilter of normalizedActiveTagViewFilters) {
         const op = String(tagFilter.sourceOperator || "eq");
         const tagIds = tagFilter.tagIds;
+
+        if (op === 'multi_count_gt' || op === 'multi_count_lt') {
+          const selectedCount = Number(tagFilter.selectedCount);
+          if (!Number.isFinite(selectedCount) || selectedCount < 0) return false;
+          if (op === 'multi_count_gt' && !(recordTagIds.size > selectedCount)) return false;
+          if (op === 'multi_count_lt' && !(recordTagIds.size < selectedCount)) return false;
+          continue;
+        }
 
         if (op === "is_null") {
           if (hasAnyTag) return false;
@@ -1738,6 +1782,15 @@ export const ModuleListRefine: React.FC<{
       }
       const modulePerms = permissions?.[resolvedModuleId] || {};
       const nextFieldPermissions = modulePerms.fields || {};
+      const nextRecordScope = modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all');
+      const recordScopeFilters = buildRecordScopeCrudFilters({
+        recordScope: nextRecordScope,
+        currentUserId: context.userId,
+        currentUserRoleId: context.roleId,
+        allowedUserIds: context.allowedUserIds,
+        allowedRoleIds: context.allowedRoleIds,
+        supportsAssignee: supportsModuleAssignee(moduleConfig),
+      });
       const normalizedViewConditions = normalizeViewConditionGroup(modulePerms.view_conditions);
       const workflowPerms = permissions?.[WORKFLOWS_PERMISSION_KEY] || {};
       const goalPerms = permissions?.[GOALS_PERMISSION_KEY] || {};
@@ -1746,7 +1799,7 @@ export const ModuleListRefine: React.FC<{
         view: modulePerms.view,
         edit: modulePerms.edit,
         delete: modulePerms.delete,
-        record_scope: modulePerms.record_scope ?? (modulePerms.view === false ? 'own' : 'all'),
+        record_scope: nextRecordScope,
       });
       setFieldPermissions(nextFieldPermissions);
       setFieldPermissionsModuleId(String(resolvedModuleId || ""));
@@ -1754,34 +1807,35 @@ export const ModuleListRefine: React.FC<{
       // build permission-level filters from view_conditions
       if (hasViewConditionGroupConditions(normalizedViewConditions)) {
         buildPermissionViewCrudFilters(normalizedViewConditions).then((pFilters) => {
-          setPermissionFilters(pFilters);
+          const nextPermissionFilters = [...recordScopeFilters, ...pFilters];
+          setPermissionFilters(nextPermissionFilters);
           applyCombinedFilters(
             effectiveInitialViewFilters as CrudFilters,
             persistedState?.searchTerm || '',
             persistedState?.columnFilters || {},
             false,
-            pFilters,
+            nextPermissionFilters,
             nextFieldPermissions
           );
         }).catch(() => {
-          setPermissionFilters([]);
+          setPermissionFilters(recordScopeFilters);
           applyCombinedFilters(
             effectiveInitialViewFilters as CrudFilters,
             persistedState?.searchTerm || '',
             persistedState?.columnFilters || {},
             false,
-            [],
+            recordScopeFilters,
             nextFieldPermissions
           );
         });
       } else {
-        setPermissionFilters([]);
+        setPermissionFilters(recordScopeFilters);
         applyCombinedFilters(
           effectiveInitialViewFilters as CrudFilters,
           persistedState?.searchTerm || '',
           persistedState?.columnFilters || {},
           false,
-          [],
+          recordScopeFilters,
           nextFieldPermissions
         );
       }
@@ -2071,26 +2125,41 @@ export const ModuleListRefine: React.FC<{
   }, [currentUserId, currentUserRoleId, normalizedPermissionViewConditions, permissionViewConditionsSignature]);
 
   useEffect(() => {
-    if (!resolvedModuleId || !shouldEvaluatePermissionConditionsOnClient) {
+    if (!isListView || !resolvedModuleId || !shouldEvaluatePermissionConditionsOnClient) {
       setPermissionConditionAllowedIds(null);
       setPermissionConditionLoading(false);
-      return;
-    }
-
-    const rows = Array.isArray(effectiveAllData) ? effectiveAllData : [];
-    if (rows.length === 0) {
-      setPermissionConditionAllowedIds(new Set());
-      setPermissionConditionLoading(false);
+      setClientPermissionPageRows((previous) => previous.length > 0 ? [] : previous);
+      setClientPermissionTotal((previous) => previous !== 0 ? 0 : previous);
+      setClientPermissionPaginationActive(false);
       return;
     }
 
     let isActive = true;
     const context = createWorkflowEvaluationContext(resolvedModuleId);
     setPermissionConditionLoading(true);
+    setClientPermissionPaginationActive(true);
     setPermissionConditionAllowedIds(null);
 
     const evaluateRows = async () => {
       try {
+        const serverFilters = buildMergedFilters(viewFiltersState, searchTerm, columnFilters);
+        const rows = hasActiveTagViewFilters
+          ? await (async () => {
+              const orderedIds = await resolveOrderedTagFilteredIds(serverFilters);
+              return orderedIds.length > 0
+                ? fetchRowsByIdsPreservingOrder(orderedIds, serverFilters)
+                : [];
+            })()
+          : (await fetchAllRowsForFilters(serverFilters)).rows;
+        if (!isActive) return;
+
+        if (rows.length === 0) {
+          setPermissionConditionAllowedIds(new Set());
+          setClientPermissionPageRows([]);
+          setClientPermissionTotal(0);
+          return;
+        }
+
         await prefetchWorkflowRecordTags({
           moduleId: resolvedModuleId,
           records: rows,
@@ -2117,7 +2186,21 @@ export const ModuleListRefine: React.FC<{
         );
 
         if (!isActive) return;
-        setPermissionConditionAllowedIds(new Set(entries.filter(Boolean) as string[]));
+        const allowedRecordIds = new Set(entries.filter(Boolean) as string[]);
+        const filteredRows = rows.filter((record: any) => allowedRecordIds.has(String(record?.id || '').trim()));
+        const safePageSize = Math.max(1, Number(pageSize || DEFAULT_LIST_PAGE_SIZE));
+        const maxPage = Math.max(1, Math.ceil(filteredRows.length / safePageSize));
+        const safeCurrent = Math.min(Math.max(1, Number(current || 1)), maxPage);
+        const fromIndex = (safeCurrent - 1) * safePageSize;
+
+        setPermissionConditionAllowedIds(new Set(
+          filteredRows.slice(fromIndex, fromIndex + safePageSize)
+            .map((record: any) => String(record?.id || '').trim())
+            .filter(Boolean)
+        ));
+        setClientPermissionPageRows(filteredRows.slice(fromIndex, fromIndex + safePageSize));
+        setClientPermissionTotal(filteredRows.length);
+        if (safeCurrent !== Number(current || 1)) setCurrent?.(safeCurrent);
       } finally {
         if (isActive) {
           setPermissionConditionLoading(false);
@@ -2130,7 +2213,23 @@ export const ModuleListRefine: React.FC<{
     return () => {
       isActive = false;
     };
-  }, [clientPermissionViewConditions, effectiveAllData, permissionViewConditionsSignature, resolvedModuleId, shouldEvaluatePermissionConditionsOnClient]);
+  }, [
+    clientPermissionViewConditions,
+    columnFilters,
+    current,
+    fetchAllRowsForFilters,
+    fetchRowsByIdsPreservingOrder,
+    hasActiveTagViewFilters,
+    isListView,
+    pageSize,
+    permissionViewConditionsSignature,
+    resolvedModuleId,
+    resolveOrderedTagFilteredIds,
+    searchTerm,
+    shouldEvaluatePermissionConditionsOnClient,
+    tagViewFilterRefreshSeed,
+    viewFiltersState,
+  ]);
 
   // ✅ Define field keys FIRST (before any useMemo/useEffect that uses them)
   const imageField = moduleConfig?.fields.find(f => f.type === FieldType.IMAGE)?.key;
@@ -3468,6 +3567,8 @@ export const ModuleListRefine: React.FC<{
       if (!field) continue;
 
       if (field.type === FieldType.TAGS) {
+        const isCountOperator = operator === 'multi_count_gt' || operator === 'multi_count_lt';
+        const selectedCount = Number(value);
         const normalizedTagIds = (Array.isArray(value) ? value : value !== undefined && value !== null && value !== "" ? [value] : [])
           .map((item) => String(item ?? "").trim())
           .filter(Boolean);
@@ -3478,17 +3579,38 @@ export const ModuleListRefine: React.FC<{
           value: {
             fieldKey,
             sourceOperator: operator,
-            tagIds: normalizedTagIds,
+            tagIds: isCountOperator ? [] : normalizedTagIds,
+            selectedCount: isCountOperator && Number.isFinite(selectedCount) ? Math.max(0, Math.floor(selectedCount)) : undefined,
           },
           _displayField: fieldKey,
           _displayOperator: operator,
-          _displayValue: normalizedTagIds,
+          _displayValue: isCountOperator ? selectedCount : normalizedTagIds,
           _isTagViewFilter: true,
         } as any);
         continue;
       }
 
       if (isJsonArrayViewFilterField(field)) {
+        if (operator === 'multi_count_gt' || operator === 'multi_count_lt') {
+          const selectedCount = Number(value);
+          if (!Number.isFinite(selectedCount) || selectedCount < 0) continue;
+          const { data: matchedRows, error } = await supabase.rpc('filter_records_by_json_array_count', {
+            p_table_name: moduleConfig.table,
+            p_field_name: fieldKey,
+            p_operator: operator === 'multi_count_gt' ? 'gt' : 'lt',
+            p_count: Math.floor(selectedCount),
+          });
+          if (error) throw error;
+          filters.push({
+            field: 'id',
+            operator: 'in',
+            value: (matchedRows || []).map((row: any) => String(row?.record_id || '').trim()).filter(Boolean),
+            _displayField: fieldKey,
+            _displayOperator: operator,
+            _displayValue: selectedCount,
+          } as any);
+          continue;
+        }
         const arrayFilters = buildJsonArrayViewCrudFilters(fieldKey, operator, value);
         if (arrayFilters.length > 0) {
           filters.push(...arrayFilters);

@@ -141,7 +141,7 @@ const toRgbChannels = (hex: string) => {
 export const DEFAULT_BRANDING: BrandingConfig = {
   brandName: 'اتوماسیون هوشمند تازه سیستم',
   shortName: 'تازه سیستم',
-  appTitle: 'TazeSystem',
+  appTitle: 'تازه سیستم',
   logoUrl: null,
   iconUrl: null,
   paletteKey: DEFAULT_PALETTE_KEY,

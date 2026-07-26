@@ -46,6 +46,12 @@ type AiBundleInput =
   | { id: string; type: 'file' | 'image'; label: string; file: AiUploadedFilePrompt }
   | { id: string; type: 'voice'; label: string; voice: RecordedVoice };
 
+const isAiImageFilePrompt = (file: Pick<AiUploadedFilePrompt, 'fileName' | 'mimeType'>) => {
+  const mimeType = String(file?.mimeType || '').toLowerCase();
+  const fileName = String(file?.fileName || '').toLowerCase();
+  return mimeType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(fileName);
+};
+
 const revokeBundleInputPreviewUrls = (items: AiBundleInput[]) => {
   if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
   items.forEach((item) => {
@@ -451,14 +457,30 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   const [mediaSettings, setMediaSettings] = useState<AiMediaSettings>({});
   const [mediaSourceImages, setMediaSourceImages] = useState<AiMediaSourceImage[]>([]);
   const [bundleInputs, setBundleInputs] = useState<AiBundleInput[]>([]);
-  const composerImageSources = useMemo(() => bundleInputs.flatMap((item) => {
-    if (item.type !== 'image' || !String(item.file.data || '').trim()) return [];
-    return [{
-      data: String(item.file.data || ''),
-      mimeType: String(item.file.mimeType || 'image/png'),
-      filename: String(item.file.fileName || 'image.png'),
-    }];
-  }), [bundleInputs]);
+  const composerImageSources = useMemo(() => {
+    const seen = new Set<string>();
+    const candidates = [
+      ...mediaSourceImages,
+      ...bundleInputs.flatMap((item) => {
+        if (item.type !== 'image' || !String(item.file.data || '').trim()) return [];
+        return [{
+          data: String(item.file.data || ''),
+          mimeType: String(item.file.mimeType || 'image/png'),
+          filename: String(item.file.fileName || 'image.png'),
+        }];
+      }),
+    ];
+    return candidates.flatMap((item) => {
+      const data = String(item?.data || '').trim();
+      if (!data || seen.has(data)) return [];
+      seen.add(data);
+      return [{
+        data,
+        mimeType: String(item?.mimeType || 'image/png'),
+        filename: String(item?.filename || 'image.png'),
+      }];
+    });
+  }, [bundleInputs, mediaSourceImages]);
   const bundleInputsRef = useRef<AiBundleInput[]>([]);
   const [contextRecordLabel, setContextRecordLabel] = useState<string | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
@@ -750,27 +772,21 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       : voiceOutputMode
         ? modelOverrides.voice_output || modelOverrideRef.current
         : null;
-  const textChatMode = selectedCapabilities.includes('text_chat');
   const workflowCapabilityCount = selectedCapabilities.filter((capability) => (
     capability === 'record_creation'
     || capability === 'process_operation'
     || capability === 'document_generation'
   )).length;
-  const shouldUseTaskBundle = !textChatMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
+  // Image and video generation consume attached images as provider references,
+  // so they must not be diverted into the generic analysis bundle.
+  const shouldUseTaskBundle = !imageMode && !videoMode && (bundleInputs.length > 0 || workflowCapabilityCount > 1);
   const handleComposerCapabilitiesChange = useCallback((next: AiComposerCapability[]) => {
     const normalizedNext = normalizeAiComposerCapabilities(next);
     setSelectedCapabilities(normalizedNext);
     setAutoSuggestedCapabilities([]);
     const wantsProcessOperation = normalizedNext.includes('process_operation');
     setProcessOperationMode(wantsProcessOperation);
-    if (normalizedNext.includes('text_chat')) {
-      setBundleInputs((current) => {
-        revokeBundleInputPreviewUrls(current);
-        return [];
-      });
-      setMediaSourceImages([]);
-      setPendingAiAction(null);
-    }
+    if (normalizedNext.includes('text_chat')) setPendingAiAction(null);
     if (!normalizedNext.includes('record_creation')) {
       setRecordCreationTargetModuleId(null);
     }
@@ -911,6 +927,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let terminalEventReceived = false;
+    let streamedText = '';
     const handleEvent = (rawEvent: string) => {
       const eventName = rawEvent.split(/\r?\n/).find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message';
       const dataText = rawEvent
@@ -922,23 +940,54 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       let payload: any = null;
       try { payload = JSON.parse(dataText); } catch { payload = { text: dataText }; }
       if (eventName === 'meta') handlers.onMeta?.(payload);
-      if (eventName === 'delta') handlers.onDelta?.(String(payload?.text || ''));
-      if (eventName === 'done') handlers.onDone?.(payload);
-      if (eventName === 'error') handlers.onError?.(payload);
+      if (eventName === 'delta') {
+        const text = String(payload?.text || '');
+        streamedText += text;
+        handlers.onDelta?.(text);
+      }
+      if (eventName === 'done') {
+        terminalEventReceived = true;
+        handlers.onDone?.(payload);
+      }
+      if (eventName === 'error') {
+        terminalEventReceived = true;
+        handlers.onError?.(payload);
+      }
     };
 
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
-      const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop() || '';
-      parts.forEach((part) => {
-        if (part.trim()) handleEvent(part);
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const parts = buffer.split(/\r?\n\r?\n/);
+        buffer = parts.pop() || '';
+        parts.forEach((part) => {
+          if (part.trim()) handleEvent(part);
+        });
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleEvent(buffer);
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      handlers.onError?.({
+        success: false,
+        message: 'ارتباط زنده با دستیار پیش از پایان پاسخ قطع شد.',
+        incomplete: true,
+        finishReason: 'stream_interrupted',
+        partialContent: streamedText,
+      });
+      return;
+    }
+    if (!terminalEventReceived) {
+      handlers.onError?.({
+        success: false,
+        message: 'ارتباط زنده با دستیار پیش از پایان پاسخ قطع شد.',
+        incomplete: true,
+        finishReason: 'stream_interrupted',
+        partialContent: streamedText,
       });
     }
-    buffer += decoder.decode();
-    if (buffer.trim()) handleEvent(buffer);
     if (streamAbortRef.current === controller) streamAbortRef.current = null;
   }, []);
 
@@ -1054,15 +1103,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     }
 
     if (capabilitySet.has('image_generation')) {
-      const autoSourceImages = [
-        ...bundlePayload
-          .filter((item) => String(item?.type || '') === 'image' && String(item?.file?.data || '').trim())
-          .map((item) => ({
-            data: String(item.file.data || ''),
-            mimeType: String(item.file.mimeType || 'image/png'),
-            filename: String(item.file.filename || 'image.png'),
-          })),
-      ];
+      const autoSourceImages = composerImageSources;
       const prompt = params.messageText || 'این تصویر را با توجه به درخواست کاربر اصلاح یا کامل کن.';
       const confirmBody = {
         action: 'generate_image',
@@ -1236,7 +1277,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       context: contextWithSelection,
       modelOverride: modelOverrideRef.current,
     }));
-  }, [callAssistant, contextWithSelection, imageEditSourceUrl, mediaSettings, mediaSourceImages, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
+  }, [callAssistant, composerImageSources, contextWithSelection, imageEditSourceUrl, mediaSettings, requestAutoRoute, skipGenerationConfirmationByKind, threadId]);
 
   const resolvePendingMessage = useCallback((pendingId: string, serverMsg: any) => {
     setMessages((prev) => prev.map((item) => item.id === pendingId ? {
@@ -1447,7 +1488,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
       .filter((item): item is AiUploadedFilePrompt & { message?: string | null } => Boolean(item?.fileName));
     setBundleInputs(seededFiles.map((filePrompt, index) => ({
       id: `initial-file-${Date.now()}-${index}`,
-      type: String(filePrompt.mimeType || '').toLowerCase().startsWith('image/') ? 'image' : 'file',
+      type: isAiImageFilePrompt(filePrompt) ? 'image' : 'file',
       label: filePrompt.fileName || 'فایل پیوست',
       file: filePrompt,
     })));
@@ -1609,6 +1650,9 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
                     ...(item.metadata || {}),
                     pending_status: false,
                     streaming: false,
+                    failed: false,
+                    incomplete: payload?.incomplete === true,
+                    finish_reason: payload?.finishReason || payload?.finish_reason || null,
                     usage: payload?.usage,
                     attachments: Array.isArray(payload?.attachments) ? payload.attachments : [],
                   },
@@ -1984,7 +2028,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setGeneratingImage(false);
     }
-  }, [callAssistant, contextWithSelection, generatingImage, imageEditSourceUrl, input, markPendingError, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+  }, [callAssistant, composerImageSources, contextWithSelection, generatingImage, imageEditSourceUrl, input, markPendingError, mediaSettings, message, submitting, threadId]);
 
   const handleEditImage = useCallback((url: string) => {
     const clean = String(url || '').trim();
@@ -2072,7 +2116,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setGeneratingVideo(false);
     }
-  }, [callAssistant, contextWithSelection, generatingVideo, input, markPendingError, mediaSettings, mediaSourceImages, message, submitting, threadId]);
+  }, [callAssistant, composerImageSources, contextWithSelection, generatingVideo, input, markPendingError, mediaSettings, message, submitting, threadId]);
 
   const submitDocumentPrompt = useCallback(async () => {
     const text = input.trim();
@@ -2120,15 +2164,28 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
   }, [callAssistant, contextWithSelection, generatingDocument, input, markPendingError, mediaSettings, message, submitting, threadId]);
 
   const queueUploadedFile = useCallback(async (filePrompt: AiUploadedFilePrompt) => {
-    const mimeType = String(filePrompt.mimeType || '').toLowerCase();
     setBundleInputs((prev) => [
       ...prev,
       {
         id: `file-${Date.now()}-${prev.length}`,
-        type: mimeType.startsWith('image/') ? 'image' : 'file',
+        type: isAiImageFilePrompt(filePrompt) ? 'image' : 'file',
         label: filePrompt.fileName || 'فایل پیوست',
         file: filePrompt,
       },
+    ]);
+  }, []);
+
+  const queueUploadedFiles = useCallback(async (filePrompts: AiUploadedFilePrompt[]) => {
+    const nextFiles = (filePrompts || []).filter((item) => String(item?.fileName || '').trim());
+    if (!nextFiles.length) return;
+    setBundleInputs((prev) => [
+      ...prev,
+      ...nextFiles.map((filePrompt, index) => ({
+        id: `file-${Date.now()}-${prev.length + index}`,
+        type: isAiImageFilePrompt(filePrompt) ? 'image' as const : 'file' as const,
+        label: filePrompt.fileName || 'فایل پیوست',
+        file: filePrompt,
+      })),
     ]);
   }, []);
 
@@ -2473,7 +2530,7 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     } finally {
       setConfirmingAiAction(false);
     }
-  }, [buildComposerPreferences, callAssistant, imageEditSourceUrl, loadThread, mediaSettings, mediaSourceImages, message, pendingAiAction, rememberGenerationPreference, skipGenerationConfirmationByKind, threadId]);
+  }, [buildComposerPreferences, callAssistant, composerImageSources, imageEditSourceUrl, loadThread, mediaSettings, message, pendingAiAction, rememberGenerationPreference, skipGenerationConfirmationByKind, threadId]);
 
   const saveThreadTitle = useCallback(async () => {
     if (renamingThreadRef.current) return;
@@ -2734,8 +2791,8 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
     const body = pendingAiAction?.confirmBody && typeof pendingAiAction.confirmBody === 'object' ? pendingAiAction.confirmBody : {};
     const bodySources = Array.isArray(body?.sourceImages) ? body.sourceImages.length : 0;
     const bodySourceUrls = Array.isArray(body?.sourceImageUrls) ? body.sourceImageUrls.length : 0;
-    return bodySources + bodySourceUrls + (bodySources || bodySourceUrls ? 0 : mediaSourceImages.length + (imageEditSourceUrl ? 1 : 0));
-  }, [imageEditSourceUrl, mediaSourceImages.length, pendingAiAction]);
+    return bodySources + bodySourceUrls + (bodySources || bodySourceUrls ? 0 : composerImageSources.length + (imageEditSourceUrl ? 1 : 0));
+  }, [composerImageSources.length, imageEditSourceUrl, pendingAiAction]);
   const pendingGenerationSettingsRows = useMemo(() => {
     if (!pendingGenerationCanChooseModel) return [];
     const body = pendingAiAction?.confirmBody && typeof pendingAiAction.confirmBody === 'object' ? pendingAiAction.confirmBody : {};
@@ -3115,8 +3172,10 @@ const AssistantPanel: React.FC<AssistantPanelProps> = ({
             recordId={fileRecordScope.recordId}
             onVoiceSend={queueVoiceInput}
             onFilePrepared={queueUploadedFile}
+            onFilesPrepared={queueUploadedFiles}
             voiceLoading={submitting}
             fileLoading={submitting}
+            allowMultipleFiles
             size="small"
             recordCreationModuleOptions={recordCreationModuleOptions}
             recordCreationTargetModuleId={recordCreationTargetModuleId}

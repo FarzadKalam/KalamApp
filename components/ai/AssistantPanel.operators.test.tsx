@@ -73,6 +73,14 @@ vi.mock('./AiCapabilityComposerActions', async () => {
       data: 'data:application/pdf;base64,AAAA',
       inputKind: 'file',
     })),
+    button('send-image', () => props.onFilePrepared({
+      fileName: 'تصویر مرجع فارسی.png',
+      mimeType: 'image/png',
+      size: 2400,
+      prompt: 'تصویر مرجع برای ساخت رسانه',
+      data: 'data:image/png;base64,aW1hZ2UtcmVmZXJlbmNl',
+      inputKind: 'image',
+    })),
     button('send-voice', () => props.onVoiceSend({
       blob: new Blob(['voice'], { type: 'audio/webm' }),
       mimeType: 'audio/webm',
@@ -275,6 +283,26 @@ describe('AssistantPanel AI operators', () => {
     expect(body?.capabilities).toContain('document_analysis');
     expect(body?.bundle?.inputs?.[0]?.file?.filename).toBe('proposal.pdf');
     expect(body?.bundle?.inputs?.[0]?.file?.data).toContain('data:application/pdf');
+  });
+
+  it.each([
+    ['image_generation', 'cap-image_generation', 'generate_image', 'ساخت تصویر'],
+    ['video_generation', 'cap-video_generation', 'generate_video', 'ساخت ویدیو'],
+  ])('sends an attached reference image directly to %s without routing it through document analysis', async (_capability, capabilityButton, expectedAction, sendButtonName) => {
+    await renderPanel();
+    fireEvent.click(screen.getAllByText(capabilityButton)[0]);
+    fireEvent.click(screen.getAllByText('send-image')[0]);
+    await typeAndSend('رسانه را با این تصویر مرجع بساز', sendButtonName);
+
+    await waitFor(() => expect(findBody(expectedAction)).toBeTruthy());
+    const body = findBody(expectedAction);
+    expect(body?.sourceImages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        data: 'data:image/png;base64,aW1hZ2UtcmVmZXJlbmNl',
+        filename: 'تصویر مرجع فارسی.png',
+      }),
+    ]));
+    expect(findBody('run_task_bundle')).toBeFalsy();
   });
 
   it('uses auto routing as the default text mode when no operator is selected', async () => {

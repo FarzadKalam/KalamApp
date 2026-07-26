@@ -228,6 +228,12 @@ export const MODULES: Record<string, ModuleDefinition> = {
       withStandardTagsField(withStandardAssigneeField(withProcessModuleSupport(module))),
     ])
   ),
-  // CMS modules — no process/assignee/tags wrappers needed
-  ...Object.fromEntries(CMS_MODULES.map(m => [m.id, m])),
+  // CMS records also participate in assignment and execution processes. Tags
+  // remain intentionally absent because public content uses its own taxonomy.
+  ...Object.fromEntries(
+    CMS_MODULES.map((module) => [
+      module.id,
+      withStandardAssigneeField(withProcessModuleSupport(module)),
+    ])
+  ),
 };
