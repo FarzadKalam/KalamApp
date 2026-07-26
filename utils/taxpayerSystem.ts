@@ -33,6 +33,8 @@ export const TAXPAYER_SETTLEMENT_METHOD_OPTIONS = [
   { label: 'نقد/نسیه', value: 'mixed' },
 ];
 
+export const TAXPAYER_MAX_INVOICE_AGE_DAYS = 12;
+
 const VERHOEFF_D = [
   [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
   [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
@@ -143,6 +145,18 @@ export const normalizeTaxpayerInvoiceDate = (value: unknown) => {
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   throw new Error('تاریخ فاکتور برای ارسال به سامانه مودیان معتبر نیست.');
 };
+
+export const getTaxpayerInvoiceAgeDays = (invoiceDate: unknown, now = new Date()) => {
+  const [year, month, day] = normalizeTaxpayerInvoiceDate(invoiceDate).split('-').map(Number);
+  const issueEnd = Date.UTC(year, month - 1, day, 23, 59, 59, 999);
+  return Math.floor((now.getTime() - issueEnd) / 86_400_000);
+};
+
+export const isTaxpayerInvoiceDateWithinSubmissionWindow = (
+  invoiceDate: unknown,
+  maxAgeDays = TAXPAYER_MAX_INVOICE_AGE_DAYS,
+  now = new Date()
+) => getTaxpayerInvoiceAgeDays(invoiceDate, now) <= maxAgeDays;
 
 export const isValidIranNationalCode = (value: unknown) => {
   const code = normalizeTaxpayerNumericId(value);

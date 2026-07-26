@@ -3,7 +3,9 @@ import {
   buildTaxpayerTaxDateHex,
   buildTaxpayerTaxId,
   buildTaxpayerVerhoeffInput,
+  getTaxpayerInvoiceAgeDays,
   isValidIranNationalCode,
+  isTaxpayerInvoiceDateWithinSubmissionWindow,
   mapTaxpayerSettlementMethodToSetm,
   normalizeTaxpayerInvoiceDate,
   normalizeTaxpayerNumericId,
@@ -32,6 +34,13 @@ describe('taxpayerSystem', () => {
     expect(buildTaxpayerTaxId({ fiscalId: 'A38MRA', invoiceDate: '1405/04/01', internalSerial: 455 })).toBe(
       'A38MRA0509200000001C76'
     );
+  });
+
+  it('guards the taxpayer submission window without changing the invoice date', () => {
+    const now = new Date('2026-07-26T12:00:00.000Z');
+    expect(getTaxpayerInvoiceAgeDays('2026-07-14', now)).toBe(11);
+    expect(isTaxpayerInvoiceDateWithinSubmissionWindow('2026-07-14', 12, now)).toBe(true);
+    expect(isTaxpayerInvoiceDateWithinSubmissionWindow('2026-07-12', 12, now)).toBe(false);
   });
 
   it('stable stringifies taxpayer JSON with sorted keys and escaped hashes', () => {

@@ -35,7 +35,10 @@
 ## Invoice Payload Rules
 - `sstid` remains a string. Do not coerce it to number.
 - `mu` must come from the official taxpayer-system measure unit code stored on the product or invoice row.
-- Real-person buyer national code (`bid`) is normalized as a 10-digit numeric string. If a leading zero was lost in stored customer data, 8-9 digit values are left-padded and then checked with the Iranian national-code checksum before sending.
+- `indatim` is the issue date/time and `indati2m` is the registration date/time; both are sent as valid Unix timestamps in milliseconds. The registration time is retained on the invoice when it is first sent.
+- For a legal buyer (`tob = 2`), only its 11-digit economic code is sent in `tinb`; `bid` and `bpc` are omitted.
+- For a real buyer (`tob = 1`), the national code (`bid`) is normalized as a 10-digit numeric string. If a leading zero was lost in stored customer data, 8-9 digit values are left-padded and then checked with the Iranian national-code checksum before sending. A real buyer with an economic code is sent using `tinb` instead.
+- The current product control prevents submission when the issue date is more than 12 days old. It does not alter the accounting date; any correction must reflect the actual financial event.
 - Money is sent in rial; company currency `IRT` is multiplied by 10 and `IRR` is sent as-is.
 - Settlement fields are mapped as:
   - cash: `setm = 1`, `cap = tbill`, `insp = null`
@@ -45,7 +48,8 @@
 ## Deployment Checklist
 1. Apply `database_v1_phase71_taxpayer_system.sql`.
 2. Apply `database_v1_phase134_taxpayer_system_dual_mode.sql`.
-3. Ensure `TAXPAYER_SECRET_ENCRYPTION_KEY` exists in the functions runtime.
-4. Deploy `taxpayer_system`.
-5. In settings, choose `certificate_v2` or `no_certificate_legacy`.
-6. Run `test_connection`, then send one normal sales invoice and run inquiry.
+3. Apply `database_v1_phase345_taxpayer_invoice_submission_metadata.sql`.
+4. Ensure `TAXPAYER_SECRET_ENCRYPTION_KEY` exists in the functions runtime.
+5. Deploy `taxpayer_system`.
+6. In settings, choose `certificate_v2` or `no_certificate_legacy`.
+7. Run `test_connection`, then send one normal sales invoice and run inquiry.

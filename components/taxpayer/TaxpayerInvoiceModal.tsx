@@ -6,7 +6,9 @@ import SmartFieldRenderer from '../SmartFieldRenderer';
 import {
   TAXPAYER_INVOICE_SUBJECT_OPTIONS,
   TAXPAYER_INVOICE_TYPE_OPTIONS,
+  TAXPAYER_MAX_INVOICE_AGE_DAYS,
   TAXPAYER_SETTLEMENT_METHOD_OPTIONS,
+  isTaxpayerInvoiceDateWithinSubmissionWindow,
 } from '../../utils/taxpayerSystem';
 import { toFaErrorMessage } from '../../utils/errorMessageFa';
 import { resolveOverlayPopupContainer } from '../../utils/popupContainer';
@@ -96,6 +98,12 @@ const getSubmissionErrorMessage = (record: TaxpayerSubmission) => {
 
 const TAXPAYER_FIELDS: ModuleField[] = [
   {
+    key: 'invoice_date',
+    labels: { fa: 'تاریخ صدور صورتحساب', en: 'Taxpayer Invoice Issue Date' },
+    type: FieldType.DATE,
+    nature: FieldNature.STANDARD,
+  },
+  {
     key: 'taxpayer_invoice_type',
     labels: { fa: 'نوع صورتحساب', en: 'Taxpayer Invoice Type' },
     type: FieldType.SELECT,
@@ -119,6 +127,7 @@ const TAXPAYER_FIELDS: ModuleField[] = [
 ];
 
 const getInitialTaxpayerValues = (moduleId: Props['moduleId'], invoiceRecord: any) => ({
+  invoice_date: String(invoiceRecord?.invoice_date || ''),
   taxpayer_invoice_type: String(invoiceRecord?.taxpayer_invoice_type || '1'),
   taxpayer_invoice_pattern: getTaxpayerInvoicePatternForModule(moduleId, invoiceRecord?.taxpayer_invoice_pattern),
   taxpayer_invoice_subject: getTaxpayerInvoiceSubjectForModule(moduleId, invoiceRecord?.taxpayer_invoice_subject),
@@ -163,6 +172,13 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
   const isReturnInvoiceModule = isReturnInvoiceModuleId(moduleId);
   const selectedSubject = getTaxpayerInvoiceSubjectForModule(moduleId, formValues.taxpayer_invoice_subject);
   const needsReferenceInvoice = isReferenceSubject(selectedSubject);
+  const isInvoiceDateInSubmissionWindow = useMemo(() => {
+    try {
+      return isTaxpayerInvoiceDateWithinSubmissionWindow(formValues.invoice_date, TAXPAYER_MAX_INVOICE_AGE_DAYS);
+    } catch {
+      return false;
+    }
+  }, [formValues.invoice_date]);
   const hasPriorTaxpayerSubmission = history.some((item) => {
     const taxid = String(item?.taxid || '').trim();
     const status = String(item?.status || '').trim().toLowerCase();
@@ -250,10 +266,15 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
       message.warning('روش تسویه را انتخاب کنید.');
       return;
     }
+    if (!isInvoiceDateInSubmissionWindow) {
+      message.warning(`تاریخ صدور برای ارسال به سامانه مودیان باید حداکثر مربوط به ${TAXPAYER_MAX_INVOICE_AGE_DAYS} روز گذشته باشد.`);
+      return;
+    }
     setSending(true);
     try {
       setLastError('');
       const nextInvoiceType = String(formValues.taxpayer_invoice_type || '1');
+      const nextInvoiceDate = String(formValues.invoice_date || '').trim();
       const nextInvoicePattern = getTaxpayerInvoicePatternForModule(moduleId, formValues.taxpayer_invoice_pattern);
       const nextInvoiceSubject = getTaxpayerInvoiceSubjectForModule(moduleId, formValues.taxpayer_invoice_subject);
       const nextSettlementMethod = String(settlementMethod || '').trim();
@@ -265,6 +286,9 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         return;
       }
       const updatePayload: Record<string, string> = {};
+      if (String(invoiceRecord?.invoice_date || '').trim() !== nextInvoiceDate) {
+        updatePayload.invoice_date = nextInvoiceDate;
+      }
       if (String(invoiceRecord?.taxpayer_invoice_type || '1') !== nextInvoiceType) {
         updatePayload.taxpayer_invoice_type = nextInvoiceType;
       }
@@ -290,7 +314,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'ارسال به سامانه مودیان ناموفق بود.'));
-      message.success(data.message || 'فاکتور با موفقیت به سامانه مودیان ارسال شد.');
+      message.success(data.message || 'فاکتور برای بررسی به سامانه مودیان ارسال شد. نتیجه نهایی را از استعلام وضعیت ببینید.');
       await fetchHistory();
       await onRefresh?.();
     } catch (err: any) {
@@ -378,8 +402,16 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
           type="info"
           showIcon
           message="ارسال مستقیم توسط خود مودی"
-          description="نوع، موضوع و روش تسویه صورتحساب را بر اساس وضعیت همین فاکتور انتخاب کنید. برای اصلاحی، ابطالی و برگشت از فروش، شماره مالیاتی صورتحساب مرجع به‌صورت خودکار از ارسال‌های قبلی یا فاکتور اصلی خوانده می‌شود."
+          description={`تاریخ صدور را فقط در صورتی اصلاح کنید که با رویداد مالی واقعی و ضوابط سازمان امور مالیاتی منطبق باشد. ارسال صورتحساب‌های قدیمی‌تر از ${TAXPAYER_MAX_INVOICE_AGE_DAYS} روز مسدود است. برای اصلاحی، ابطالی و برگشت از فروش، شماره مالیاتی صورتحساب مرجع به‌صورت خودکار از ارسال‌های قبلی یا فاکتور اصلی خوانده می‌شود.`}
         />
+        {!isInvoiceDateInSubmissionWindow ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="تاریخ صدور خارج از مهلت ارسال است."
+            description={`پیش از ارسال، تاریخ صدور را بررسی کنید. سامانه مودیان برای این مسیر حداکثر ${TAXPAYER_MAX_INVOICE_AGE_DAYS} روز فاصله را می‌پذیرد.`}
+          />
+        ) : null}
         {needsReferenceInvoice ? (
           <Alert
             type={hasReferenceInvoice ? 'success' : 'warning'}
@@ -416,7 +448,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void fetchHistory()}>
               بروزرسانی تاریخچه
             </Button>
-            <Button type="primary" icon={<SendOutlined />} loading={sending} disabled={!canSendInvoice} onClick={handleSend}>
+            <Button type="primary" icon={<SendOutlined />} loading={sending} disabled={!canSendInvoice || !isInvoiceDateInSubmissionWindow} onClick={handleSend}>
               ارسال فاکتور
             </Button>
           </Space>

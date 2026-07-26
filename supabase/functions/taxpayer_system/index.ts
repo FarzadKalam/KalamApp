@@ -6,10 +6,11 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const FUNCTION_BUILD = 'taxpayer-system-2026-07-07-invoice-date-normalization';
+const FUNCTION_BUILD = 'taxpayer-system-2026-07-26-invoice-submission-validation';
 const LEGACY_BASE_URL = 'https://tp.tax.gov.ir/req/api/self-tsp';
 const V2_BASE_URL = 'https://tp.tax.gov.ir/requestsmanager';
 const TAXPAYER_DAY_MEASURE_UNIT_CODE = '16104';
+const TAXPAYER_MAX_INVOICE_AGE_DAYS = 12;
 
 const json = (status: number, payload: Record<string, any>) =>
   new Response(JSON.stringify({ build: FUNCTION_BUILD, ...payload }), {
@@ -92,19 +93,31 @@ const isValidIranNationalCode = (value: string) => {
 };
 const normalizeBuyerIdentity = (customer: any) => {
   const buyerType = String(customer?.person_type || 'real') === 'legal' ? 2 : 1;
+  const economicCode = numericId(customer?.economic_code || '');
   if (buyerType === 2) {
-    const legalId = numericId(customer?.national_id || customer?.national_code || '');
-    if (!/^\d{11}$/.test(legalId)) throw new Error('شناسه ملی خریدار حقوقی باید ۱۱ رقم باشد.');
-    return { buyerType, buyerId: legalId, nationalCodeInvalid: false };
+    if (!/^\d{11}$/.test(economicCode)) {
+      throw new Error('برای خریدار حقوقی، شماره اقتصادی ۱۱ رقمی و ثبت‌شده در سامانه مودیان الزامی است.');
+    }
+    return { buyerType, buyerId: null, buyerEconomicCode: economicCode, buyerPostalCode: null, nationalCodeInvalid: false };
+  }
+  if (economicCode) {
+    if (!/^\d{14}$/.test(economicCode)) {
+      throw new Error('شماره اقتصادی خریدار حقیقی باید ۱۴ رقم باشد.');
+    }
+    return { buyerType, buyerId: null, buyerEconomicCode: economicCode, buyerPostalCode: null, nationalCodeInvalid: false };
   }
   const rawNationalCode = numericId(customer?.national_code || customer?.national_id || '');
-  if (!rawNationalCode) return { buyerType, buyerId: null, nationalCodeInvalid: false };
+  if (!rawNationalCode) return { buyerType, buyerId: null, buyerEconomicCode: null, buyerPostalCode: null, nationalCodeInvalid: false };
   const nationalCode = rawNationalCode.length >= 8 && rawNationalCode.length < 10
     ? rawNationalCode.padStart(10, '0')
     : rawNationalCode;
   if (!/^\d{10}$/.test(nationalCode)) throw new Error('کد ملی خریدار حقیقی باید ۱۰ رقم باشد.');
-  if (!isValidIranNationalCode(nationalCode)) return { buyerType, buyerId: null, nationalCodeInvalid: true };
-  return { buyerType, buyerId: nationalCode, nationalCodeInvalid: false };
+  if (!isValidIranNationalCode(nationalCode)) return { buyerType, buyerId: null, buyerEconomicCode: null, buyerPostalCode: null, nationalCodeInvalid: true };
+  const postalCode = numericId(customer?.postal_code || '');
+  if (!/^\d{10}$/.test(postalCode)) {
+    throw new Error('برای خریدار حقیقیِ فاقد شماره اقتصادی، کد پستی ۱۰ رقمی الزامی است.');
+  }
+  return { buyerType, buyerId: nationalCode, buyerEconomicCode: null, buyerPostalCode: postalCode, nationalCodeInvalid: false };
 };
 
 const bytesToBinary = (bytes: Uint8Array) => {
@@ -568,7 +581,14 @@ const requireSettings = async (urlBase: string, key: string, orgId: string) => {
 const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoiceId: string) => {
   const invoice = first(await select(urlBase, key, 'invoices', { id: `eq.${invoiceId}`, org_id: `eq.${orgId}`, select: '*', limit: '1' }));
   if (!invoice?.id) throw new Error('فاکتور فروش پیدا نشد.');
-  const customer = invoice.customer_id ? first(await select(urlBase, key, 'customers', { id: `eq.${invoice.customer_id}`, select: '*', limit: '1' })) : null;
+  const customer = invoice.customer_id
+    ? first(await select(urlBase, key, 'customers', {
+        id: `eq.${invoice.customer_id}`,
+        org_id: `eq.${orgId}`,
+        select: '*',
+        limit: '1',
+      }))
+    : null;
   const ids = Array.from(new Set((Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : []).map((x: any) => String(x?.product_id || '').trim()).filter(Boolean)));
   let products: Record<string,any> = {};
   let billboards: Record<string,any> = {};
@@ -613,15 +633,17 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
 const invoicePayload = (args: any) => {
   const { invoice, customer, products, billboards, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
   const invDate = normalizeInvoiceDate(invoice.invoice_date);
+  const invoiceAgeDays = Math.floor((Date.now() - new Date(`${invDate}T23:59:59.999Z`).getTime()) / 86400000);
+  if (invoiceAgeDays > TAXPAYER_MAX_INVOICE_AGE_DAYS) {
+    throw new Error(`تاریخ صدور این فاکتور از مهلت ${TAXPAYER_MAX_INVOICE_AGE_DAYS} روزه ارسال به سامانه مودیان گذشته است. تاریخ واقعی صورتحساب را بررسی و در صورت مجاز بودن اصلاح کنید.`);
+  }
   const items = Array.isArray(invoice.invoiceItems) ? invoice.invoiceItems : [];
   if (!items.length) throw new Error('فاکتور هیچ ردیفی برای ارسال به سامانه مودیان ندارد.');
   const currency = String(company?.currency_code || 'IRT');
   const settlementCode = setm(settlement);
   if (!customer?.id) throw new Error('اطلاعات هویتی مشتری برای ارسال به سامانه مودیان کامل نیست.');
-  const { buyerType, buyerId, nationalCodeInvalid } = normalizeBuyerIdentity(customer);
-  const tinb = numericId(customer?.economic_code || '') || null;
-  const bpc = numericId(customer?.postal_code || '') || null;
-  if (!buyerId && !tinb) throw new Error(nationalCodeInvalid ? 'کد ملی خریدار معتبر نیست و شماره اقتصادی نیز ثبت نشده است. برای ارسال فاکتور، یکی از این دو الزامی است.' : 'مشتری باید کد ملی معتبر یا شماره اقتصادی داشته باشد تا فاکتور به سامانه مودیان ارسال شود.');
+  const { buyerType, buyerId, buyerEconomicCode, buyerPostalCode, nationalCodeInvalid } = normalizeBuyerIdentity(customer);
+  if (!buyerId && !buyerEconomicCode) throw new Error(nationalCodeInvalid ? 'کد ملی خریدار معتبر نیست و شماره اقتصادی نیز ثبت نشده است. برای ارسال فاکتور، یکی از این دو الزامی است.' : 'مشتری باید کد ملی معتبر یا شماره اقتصادی داشته باشد تا فاکتور به سامانه مودیان ارسال شود.');
   const inp = Number(invoice.taxpayer_invoice_pattern || 1);
   const ins = Number(invoice.taxpayer_invoice_subject || 1);
   const irtaxid = [2, 3, 4].includes(ins) ? (originalTaxid || null) : null;
@@ -655,7 +677,33 @@ const invoicePayload = (args: any) => {
   });
   const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
-  const header: Record<string, any> = { taxid: txid, inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'), indatim, indati2m: null, inty: Number(invoice.taxpayer_invoice_type || 1), inp, ins, tins: settings.seller_economic_code, tob: buyerType, bid: buyerId, tinb, bpc, setm: settlementCode, tprdis, tdis, tadis, tvam, todam: 0, tbill, cap, insp, tvop, tax17: null };
+  const createdAt = new Date(invoice.taxpayer_invoice_created_at || invoice.created_at || Date.now()).getTime();
+  if (!Number.isFinite(createdAt) || createdAt <= 0) throw new Error('تاریخ و زمان ثبت صورتحساب برای ارسال به سامانه مودیان معتبر نیست.');
+  const header: Record<string, any> = {
+    taxid: txid,
+    inno: BigInt(serial).toString(16).toUpperCase().padStart(10,'0'),
+    indatim,
+    indati2m: createdAt,
+    inty: Number(invoice.taxpayer_invoice_type || 1),
+    inp,
+    ins,
+    tins: settings.seller_economic_code,
+    tob: buyerType,
+    ...(buyerId ? { bid: buyerId } : {}),
+    ...(buyerEconomicCode ? { tinb: buyerEconomicCode } : {}),
+    ...(buyerPostalCode ? { bpc: buyerPostalCode } : {}),
+    setm: settlementCode,
+    tprdis,
+    tdis,
+    tadis,
+    tvam,
+    todam: 0,
+    tbill,
+    cap,
+    insp,
+    tvop,
+    tax17: null,
+  };
   if (irtaxid) header.irtaxid = irtaxid;
   return { packetType: 'INVOICE.V01', data: { header, body, payments: [] } };
 };
@@ -733,6 +781,13 @@ Deno.serve(async (req) => {
         currentSettings = { ...settings, server_information: info };
       }
       const bundle = await invoiceBundle(urlBase,key,orgId,invoiceId);
+      if (!bundle.invoice.taxpayer_invoice_created_at) {
+        const taxpayerInvoiceCreatedAt = String(bundle.invoice.created_at || new Date().toISOString());
+        await patch(urlBase, key, 'invoices', invoiceId, {
+          taxpayer_invoice_created_at: taxpayerInvoiceCreatedAt,
+        });
+        bundle.invoice.taxpayer_invoice_created_at = taxpayerInvoiceCreatedAt;
+      }
       const currency = String(company?.currency_code || 'IRT');
       const manualSettlement = String(body?.settlement_method || bundle.invoice.taxpayer_settlement_method || '').trim();
       const computed = !manualSettlement ? computeSettlement(bundle.receipts, currency) : null;
@@ -759,7 +814,7 @@ Deno.serve(async (req) => {
         const row = asyncResultRow(res);
         if (row?.errorCode || row?.errorMessage || row?.errorDetail) throw new Error([row?.errorCode, row?.errorMessage || row?.errorDetail].filter(Boolean).join(' - '));
         sub = first(await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ uid: String(row?.uid || uid || '').trim() || null, reference_number: String(row?.referenceNumber || row?.reference_number || '').trim() || null, status: 'sent', response_payload: { ...(res || {}), _kalam_debug: { ...packetDebug, stage: 'send', send_debug: sendResult.debug } }, sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })) || sub;
-        return json(200, { success: true, message: 'فاکتور با موفقیت به سامانه مودیان ارسال شد.', submission: sub });
+        return json(200, { success: true, message: 'فاکتور برای بررسی به سامانه مودیان ارسال شد. نتیجه نهایی را از استعلام وضعیت ببینید.', submission: sub });
       } catch (e: any) {
         const message = String(e?.message || e);
         await patch(urlBase,key,'taxpayer_invoice_submissions',sub.id,{ status: 'failed', error_message: message, response_payload: { _kalam_debug: { ...debugPayload, stage: 'failed', kalam_debug: e?.kalamDebug || null } }, updated_at: new Date().toISOString() });
