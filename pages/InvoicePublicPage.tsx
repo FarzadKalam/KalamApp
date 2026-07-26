@@ -269,6 +269,18 @@ const buildItemSubLine = (row: Record<string, any>, cfg: OnlineConfig): string =
   return parts.join(' | ');
 };
 
+const applyBillboardTitles = (invoiceData: InvoiceData, titles: any) => {
+  const rows = Array.isArray(titles) ? titles : [];
+  if (!rows.some((item: any) => String(item?.title || '').trim())) return invoiceData;
+  return {
+    ...invoiceData,
+    items: (invoiceData.items || []).map((item, index) => ({
+      ...item,
+      product_name: String(rows[index]?.title || '').trim() || item.product_name,
+    })),
+  };
+};
+
 // ─── inner content component ─────────────────────────────────────────────────
 
 type ContentProps = {
@@ -326,10 +338,10 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
     let cancelled = false;
     const loadInvoice = async () => {
       try {
-        const { data: result, error: rpcErr } = await anonClient.rpc('get_public_invoice', {
-          p_system_code: code,
-          p_module: moduleId,
-        });
+        const [{ data: result, error: rpcErr }, { data: billboardTitles }] = await Promise.all([
+          anonClient.rpc('get_public_invoice', { p_system_code: code, p_module: moduleId }),
+          anonClient.rpc('get_public_invoice_billboard_titles', { p_system_code: code, p_module: moduleId }),
+        ]);
         if (cancelled) return;
         if (rpcErr || !result) {
           setError('خطا در بارگذاری فاکتور.');
@@ -342,7 +354,7 @@ const InvoicePublicContent = ({ primaryColor, onBrandingLoad }: ContentProps) =>
           return;
         }
 
-        const invData = result as InvoiceData;
+        const invData = applyBillboardTitles(result as InvoiceData, billboardTitles);
         setData(invData);
         setNotes(invData.notes || []);
         setPaymentState(null);

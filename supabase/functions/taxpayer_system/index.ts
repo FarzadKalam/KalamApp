@@ -119,6 +119,26 @@ const normalizeBuyerIdentity = (customer: any) => {
   }
   return { buyerType, buyerId: nationalCode, buyerEconomicCode: null, buyerPostalCode: postalCode, nationalCodeInvalid: false };
 };
+const billboardInvoiceItemTitle = (billboard: any) => {
+  const billboardType = String(billboard?.category || billboard?.billboard_type || '').trim();
+  const fullAddress = String(billboard?.address || '').trim();
+  const fallbackAddress = [String(billboard?.city_name || '').trim(), String(billboard?.name || '').trim()].filter(Boolean).join(' ');
+  const location = fullAddress || fallbackAddress;
+  return billboardType || location
+    ? ['اجاره تابلوی تبلیغاتی', billboardType, location].filter(Boolean).join(' ')
+    : '';
+};
+const taxpayerItemTitle = (item: any, product: any, billboard: any, includeItemDescriptions: boolean) => {
+  const baseTitle = billboard?.id
+    ? (billboardInvoiceItemTitle(billboard) || String(item?.product_name || item?.selected_product_name || billboard?.name || 'کالا/خدمت').trim())
+    : String(product?.name || item?.product_name || item?.selected_product_name || item?.name || 'کالا/خدمت').trim();
+  if (!includeItemDescriptions) return baseTitle;
+  const details = [
+    String(item?.description || '').trim() ? `توضیحات: ${String(item.description).trim()}` : '',
+    String(item?.delivery_time || '').trim() ? `زمان تحویل: ${String(item.delivery_time).trim()}` : '',
+  ].filter(Boolean).join(' | ');
+  return details ? `${baseTitle} | ${details}` : baseTitle;
+};
 
 const bytesToBinary = (bytes: Uint8Array) => {
   let binary = '';
@@ -602,7 +622,7 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
   if (ids.length) {
     const [productRows, billboardRows] = await Promise.all([
       select(urlBase, key, 'products', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,product_identifier,main_unit,taxpayer_measure_unit_code,vat_percentage,is_vat_exempt' }),
-      select(urlBase, key, 'billboards', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,address,product_identifier,taxpayer_measure_unit_code' }),
+      select(urlBase, key, 'billboards', { id: `in.(${ids.map(enc).join(',')})`, select: 'id,name,address,city_name,category,product_identifier,taxpayer_measure_unit_code' }),
     ]);
     products = productRows.reduce((acc: any, p: any) => ({ ...acc, [String(p.id)]: p }), {});
     billboards = billboardRows.reduce((acc: any, b: any) => ({ ...acc, [String(b.id)]: b }), {});
@@ -638,7 +658,7 @@ const invoiceBundle = async (urlBase: string, key: string, orgId: string, invoic
   return { invoice, customer, products, billboards, receipts: Array.isArray(receipts) ? receipts : [], originalTaxid };
 };
 const invoicePayload = (args: any) => {
-  const { invoice, customer, products, billboards, company, settings, txid, serial, settlement, cashOverride, originalTaxid } = args;
+  const { invoice, customer, products, billboards, company, settings, txid, serial, settlement, cashOverride, originalTaxid, includeItemDescriptions = false } = args;
   const invDate = normalizeInvoiceDate(invoice.invoice_date);
   const invoiceAgeDays = Math.floor((Date.now() - new Date(`${invDate}T23:59:59.999Z`).getTime()) / 86400000);
   if (invoiceAgeDays > TAXPAYER_MAX_INVOICE_AGE_DAYS) {
@@ -680,7 +700,7 @@ const invoicePayload = (args: any) => {
     const base = rial(a.base,currency), dis = rial(a.dis,currency), after = rial(a.after,currency), vat = rial(a.vat,currency), total = rial(a.total,currency);
     tprdis += base; tdis += dis; tadis += after; tvam += vat; tbill += total;
     const vop = settlementCode === 3 && cap !== null && preTbill > 0 ? Math.round(vat * cap / preTbill) : null;
-    return { sstid, sstt: String(item?.description || billboard?.address || sourceRecord?.name || 'کالا/خدمت'), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop, tsstam: total };
+    return { sstid, sstt: taxpayerItemTitle(item, product, billboard, includeItemDescriptions), mu, am: qty, fee: rial(item?.unit_price || 0,currency), cfee: null, cut: null, exr: null, prdis: base, dis, adis: after, vra: Number(a.vatRate || 0), vam: vat, odt: null, odr: null, odam: null, olt: null, olr: null, olam: null, consfee: null, spro: null, bros: null, tcpbs: null, cop: null, bsrn: null, vop, tsstam: total };
   });
   const tvop = body.reduce((s: number, r: any) => s + (r.vop || 0), 0) || null;
   const indatim = new Date(`${invDate}T00:00:00Z`).getTime();
@@ -785,6 +805,7 @@ Deno.serve(async (req) => {
         currentSettings = { ...settings, server_information: info };
       }
       const bundle = await invoiceBundle(urlBase,key,orgId,invoiceId);
+      const includeItemDescriptions = body?.include_item_descriptions === true;
       const currency = String(company?.currency_code || 'IRT');
       const manualSettlement = String(body?.settlement_method || bundle.invoice.taxpayer_settlement_method || '').trim();
       const computed = !manualSettlement ? computeSettlement(bundle.receipts, currency) : null;
@@ -794,7 +815,7 @@ Deno.serve(async (req) => {
       const debugPayload = { build: FUNCTION_BUILD, taxpayer_settings: { fiscal_id: currentSettings.fiscal_id, base_url: currentSettings.base_url, integration_mode: currentSettings.integration_mode } };
       let sub = first(await insert(urlBase,key,'taxpayer_invoice_submissions',[{ org_id: orgId, invoice_id: invoiceId, fiscal_id: currentSettings.fiscal_id, integration_mode: currentSettings.integration_mode, internal_serial: Number(serial), taxid: txid, status: 'sending', invoice_type: String(bundle.invoice.taxpayer_invoice_type || '1'), invoice_pattern: String(bundle.invoice.taxpayer_invoice_pattern || '1'), invoice_subject: String(bundle.invoice.taxpayer_invoice_subject || '1'), settlement_method: settlement, request_payload: { _kalam_debug: { ...debugPayload, stage: 'preflight' } }, created_by: user.id }]));
       try {
-        const payload = invoicePayload({ ...bundle, company, settings: currentSettings, txid, serial, settlement, cashOverride: computed?.cashAmount ?? null });
+        const payload = invoicePayload({ ...bundle, company, settings: currentSettings, txid, serial, settlement, cashOverride: computed?.cashAmount ?? null, includeItemDescriptions });
         const uid = crypto.randomUUID();
         const built = currentSettings.integration_mode === 'certificate_v2'
           ? await buildV2InvoicePacket(currentSettings, privateKey, certificatePem, payload, uid)

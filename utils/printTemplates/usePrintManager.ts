@@ -57,7 +57,7 @@ import { parseLocationValue } from '../location';
 import { SETTINGS_PERMISSION_KEY } from '../permissions';
 import { fetchAssigneeDirectory } from '../referenceData';
 import { fetchRelationOptionsForField } from '../relationOptions';
-import { buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
+import { buildBillboardInvoiceItemTitle, buildInvoiceAdjustmentDisplay, resolveInvoiceRowBaseAmount } from '../invoicePresentation';
 import { sanitizeOutboundDisplay } from '../../shared/recordRuntime';
 import {
   buildDefaultPrintSignatureConfigs,
@@ -608,7 +608,7 @@ export const usePrintManager = ({
     let mounted = true;
     supabase
       .from('billboards')
-      .select('id, address, name, system_code')
+      .select('id, address, city_name, category, name, system_code')
       .in('id', billboardPrintCandidateIds)
       .then(({ data: rows, error }) => {
         if (!mounted) return;
@@ -619,7 +619,8 @@ export const usePrintManager = ({
         const nextLabels: Record<string, string> = {};
         (rows || []).forEach((row: any) => {
           const id = String(row?.id || '').trim();
-          const label = String(row?.address || row?.name || row?.system_code || '').trim();
+          const label = buildBillboardInvoiceItemTitle(row)
+            || String(row?.address || row?.name || row?.system_code || '').trim();
           if (id && label) nextLabels[id] = label;
         });
         setBillboardPrintLabelsById(nextLabels);
@@ -1707,13 +1708,12 @@ export const usePrintManager = ({
     [sellerInfo?.currency_code, sellerInfo?.currency_label]
   );
   const resolveBillboardPrintLabel = useCallback((row: any) => {
-    const directLabel = String(
-      row?.billboard?.address ||
-      row?.billboard_address ||
-      row?.address ||
-      row?.selected_billboard_address ||
-      ''
-    ).trim();
+    const directLabel = buildBillboardInvoiceItemTitle(row?.billboard || {
+      address: row?.billboard_address || row?.selected_billboard_address || row?.address,
+      city_name: row?.billboard_city_name || row?.city_name,
+      category: row?.billboard_category || row?.category,
+      name: row?.selected_billboard_name || row?.billboard_name,
+    });
     if (directLabel) return directLabel;
 
     const candidateIds = [

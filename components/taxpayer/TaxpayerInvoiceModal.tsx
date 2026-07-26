@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, App, Button, Modal, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Modal, Space, Switch, Table, Tag, Typography } from 'antd';
 import { ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { supabase } from '../../supabaseClient';
 import SmartFieldRenderer from '../SmartFieldRenderer';
@@ -166,6 +166,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
   const [sending, setSending] = useState(false);
   const [inquiringId, setInquiringId] = useState<string | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>(() => getInitialTaxpayerValues(moduleId, invoiceRecord));
+  const [includeItemDescriptions, setIncludeItemDescriptions] = useState(false);
   const [lastError, setLastError] = useState<string>('');
   const invoiceStatus = String(invoiceRecord?.status || '').trim();
   const canSendInvoice = ['confirmed', 'final', 'settled', 'completed'].includes(invoiceStatus);
@@ -231,6 +232,7 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
   useEffect(() => {
     if (!open) return;
     setFormValues(getInitialTaxpayerValues(moduleId, invoiceRecord));
+    setIncludeItemDescriptions(false);
     setLastError('');
   }, [invoiceId, invoiceRecord, moduleId, open]);
 
@@ -311,7 +313,12 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         if (updateError) throw updateError;
       }
       const { data, error } = await supabase.functions.invoke('taxpayer_system', {
-        body: { action: 'send_invoice', invoice_id: invoiceId, settlement_method: nextSettlementMethod },
+        body: {
+          action: 'send_invoice',
+          invoice_id: invoiceId,
+          settlement_method: nextSettlementMethod,
+          include_item_descriptions: includeItemDescriptions,
+        },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(String(data?.message || 'ارسال به سامانه مودیان ناموفق بود.'));
@@ -459,6 +466,15 @@ const TaxpayerInvoiceModal: React.FC<Props> = ({ open, moduleId, invoiceId, invo
         ) : null}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {TAXPAYER_FIELDS.map(renderEditableField)}
+        </div>
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+          <div className="min-w-0">
+            <Typography.Text strong>ارسال توضیحات اقلام</Typography.Text>
+            <Typography.Paragraph className="!mb-0 text-xs text-slate-500">
+              در حالت پیش‌فرض فقط نام محصول ارسال می‌شود. با فعال‌سازی، توضیحات و زمان تحویل هر قلم نیز به متن ارسالی افزوده می‌شود.
+            </Typography.Paragraph>
+          </div>
+          <Switch checked={includeItemDescriptions} onChange={setIncludeItemDescriptions} aria-label="ارسال توضیحات اقلام" />
         </div>
         <div className="flex flex-wrap gap-2">
           <Space wrap>

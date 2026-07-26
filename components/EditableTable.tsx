@@ -40,7 +40,7 @@ import {
   normalizeSalesPackageItems,
 } from '../utils/salesCatalog';
 import PersianDatePicker from './PersianDatePicker';
-import { getImplicitCreateDefaultValue, getTodayLocalDateValue } from '../utils/defaultValues';
+import { getImplicitCreateDefaultValue, getTodayLocalDateValue, resolveConfiguredDefaultValue } from '../utils/defaultValues';
 import ResilientImage from './common/ResilientImage';
 import InvoicePaymentAllocationModal from './invoices/InvoicePaymentAllocationModal';
 import {
@@ -49,6 +49,7 @@ import {
   InvoicePaymentOverflowPlan,
 } from '../utils/invoicePaymentAllocation';
 import { applyInvoicePaymentAllocation } from '../utils/invoicePaymentAllocationRuntime';
+import { buildBillboardInvoiceItemTitle } from '../utils/invoicePresentation';
 
 const { Text } = Typography;
 
@@ -221,10 +222,15 @@ const EditableTable: React.FC<EditableTableProps> = ({
   const isExpenseItems = moduleId === 'expense_documents' && block?.id === 'items';
   const isExpensePayments = moduleId === 'expense_documents' && block?.id === 'payments';
   const isEmployeeAdvancePayments = moduleId === 'employee_advances' && block?.id === 'payments';
+  const isPayrollLines = moduleId === 'payroll_slips' && block?.id === 'lines';
   const isPayrollPayments = moduleId === 'payroll_slips' && block?.id === 'payments';
   const isAnyInvoicePayments = isInvoicePayments || isPurchaseInvoicePayments;
   const isAnyDocumentPayments = isAnyInvoicePayments || isExpensePayments;
   const isOperationalPayments = isAnyDocumentPayments || isEmployeeAdvancePayments || isPayrollPayments;
+  const isImprovedFinancialEditableTable = isAnyInvoiceItems
+    || isOperationalPayments
+    || isExpenseItems
+    || isPayrollLines;
   const supportsReceivedChequeSpending = isPurchaseInvoicePayments || isExpensePayments || isEmployeeAdvancePayments || isPayrollPayments;
   const useStackedInvoiceRows = isAnyInvoicePayments;
   const isShelfInventoryBlock = block?.id === 'product_inventory' || block?.id === 'shelf_inventory';
@@ -425,7 +431,8 @@ const EditableTable: React.FC<EditableTableProps> = ({
     row.discount_percent = 0;
   };
   const getBillboardDisplayName = (record: any) =>
-    String(record?.address || record?.name || record?.title || record?.system_code || record?.id || '').trim();
+    buildBillboardInvoiceItemTitle(record)
+    || String(record?.address || record?.name || record?.title || record?.system_code || '').trim();
   const getInvoiceProductRelationOptions = (record?: any) => {
     const specificKey = `${block.id}_product_id`;
     let options = relationOptions[specificKey] || relationOptions.product_id || [];
@@ -551,7 +558,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
       const { data: billboardRows, error: billboardError } = await supabase
         .from('billboards')
-        .select('id, name, address, system_code, daily_rent, monthly_rent, print_cost, width, height')
+        .select('id, name, address, city_name, category, system_code, daily_rent, monthly_rent, print_cost, width, height')
         .in('id', productIds);
       if (billboardError) throw billboardError;
       billboardMap = new Map((billboardRows || []).map((item: any) => [String(item.id), item]));
@@ -1812,12 +1819,29 @@ const EditableTable: React.FC<EditableTableProps> = ({
 
     if (isOperationalPayments) {
       newRow.date = newRow.date || getTodayLocalDateValue();
-      if (!newRow.status) {
-        const statusColumn = visibleColumns.find((col: any) => String(col?.key || '') === 'status');
-        const firstStatus = Array.isArray(statusColumn?.options)
-          ? statusColumn.options.find((option: any) => option?.value !== undefined)?.value
+      const paymentTypeColumn = visibleColumns.find((col: any) => String(col?.key || '') === 'payment_type');
+      if (!newRow.payment_type) {
+        const firstPaymentType = Array.isArray(paymentTypeColumn?.options)
+          ? paymentTypeColumn.options.find((option: any) => option?.value !== undefined)?.value
           : undefined;
-        if (firstStatus !== undefined) newRow.status = firstStatus;
+        if (firstPaymentType !== undefined) newRow.payment_type = firstPaymentType;
+      }
+      const statusColumn = visibleColumns.find((col: any) => String(col?.key || '') === 'status');
+      const configuredStatus = statusColumn?.defaultValue !== undefined
+        ? resolveConfiguredDefaultValue(statusColumn.defaultValue)
+        : undefined;
+      const receivedStatus = Array.isArray(statusColumn?.options)
+        ? statusColumn.options.find((option: any) => option?.value === 'received')?.value
+        : undefined;
+      const firstStatus = Array.isArray(statusColumn?.options)
+        ? statusColumn.options.find((option: any) => option?.value !== undefined)?.value
+        : undefined;
+      if (configuredStatus !== undefined) {
+        newRow.status = configuredStatus;
+      } else if (receivedStatus !== undefined) {
+        newRow.status = receivedStatus;
+      } else if (!newRow.status && firstStatus !== undefined) {
+        newRow.status = firstStatus;
       }
       if (colKeys.has('responsible_id') && !newRow.responsible_id) {
         try {
@@ -1988,7 +2012,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     setTempData(buildRowsForEditing());
   };
 
-  const addPaymentFromHeader = async () => {
+  const addRowFromHeader = async () => {
     if (isReadOnly) return;
     if (!isEditing) {
       setUserToggledCollapse(true);
@@ -5100,6 +5124,7 @@ const EditableTable: React.FC<EditableTableProps> = ({
     onInvoiceGlobalDiscountChange?.({ type: nextType, amount: nextAmount });
   };
   const hasPersistedRows = Array.isArray(data) && data.length > 0;
+  const directAddButtonLabel = isPaymentsTable ? `افزودن ${paymentsActionNounFa}` : 'افزودن ردیف';
   const resolveTableRowKey = (record: any) => ensureStableTableRowKey(record);
   const stackedRowGroupA = ['attachment', 'payment_type', 'cheque_id', 'barter_id', 'cheque_status', 'status', 'date', 'amount'];
   const stackedRowGroupB = isInvoicePayments
@@ -5293,12 +5318,12 @@ const EditableTable: React.FC<EditableTableProps> = ({
               محاسبه قیمت
             </Button>
           )}
-          {mode === 'db' && !isEditing && !isReadOnly && isPaymentsTable && !hasPersistedRows && (
-            <Button size="small" icon={<PlusOutlined />} onClick={() => { void addPaymentFromHeader(); }}>
-              {`افزودن ${paymentsActionNounFa}`}
+          {mode === 'db' && !isEditing && !isReadOnly && isImprovedFinancialEditableTable && !hasPersistedRows && (
+            <Button size="small" icon={<PlusOutlined />} onClick={() => { void addRowFromHeader(); }}>
+              {directAddButtonLabel}
             </Button>
           )}
-          {mode === 'db' && !isEditing && !isReadOnly && (!isPaymentsTable || hasPersistedRows) && (
+          {mode === 'db' && !isEditing && !isReadOnly && (!isImprovedFinancialEditableTable || hasPersistedRows) && (
             <Button size="small" icon={<EditOutlined />} onClick={startEdit}>
               {isPaymentsTable ? `ویرایش ${paymentsActionNounFa}` : 'ویرایش لیست'}
             </Button>

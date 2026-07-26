@@ -89,3 +89,30 @@ export const resolveInvoiceGlobalDiscountAmount = (subtotal: any, value: any, ty
     type,
     baseAmount: subtotal,
   });
+
+const invoiceText = (value: any) => String(value ?? '').trim();
+
+/** متن یکپارچه اجاره تابلو در فاکتور، چاپ و ارسال به سامانه مودیان. */
+export const buildBillboardInvoiceItemTitle = (billboard: any) => {
+  const fullAddress = invoiceText(billboard?.address || billboard?.full_address);
+  const fallbackAddress = [
+    invoiceText(billboard?.city_name || billboard?.city),
+    invoiceText(billboard?.name || billboard?.short_address),
+  ].filter(Boolean).join(' ');
+  const billboardType = invoiceText(billboard?.category || billboard?.billboard_type || billboard?.type);
+  const location = fullAddress || fallbackAddress;
+  if (!billboardType && !location) return '';
+  return [
+    'اجاره تابلوی تبلیغاتی',
+    billboardType,
+    location,
+  ].filter(Boolean).join(' ');
+};
+
+export const buildInvoiceItemDescriptionForTaxpayer = (item: any) => {
+  const parts = [
+    invoiceText(item?.description) ? `توضیحات: ${invoiceText(item.description)}` : '',
+    invoiceText(item?.delivery_time) ? `زمان تحویل: ${invoiceText(item.delivery_time)}` : '',
+  ].filter(Boolean);
+  return parts.join(' | ');
+};

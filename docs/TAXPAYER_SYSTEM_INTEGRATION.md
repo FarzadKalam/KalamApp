@@ -35,6 +35,7 @@
 ## Invoice Payload Rules
 - `sstid` remains a string. Do not coerce it to number.
 - `mu` must come from the official taxpayer-system measure unit code stored on the product or invoice row.
+- For a billboard item, `sstt` is built as `اجاره تابلوی تبلیغاتی + نوع تابلو + آدرس کامل`; when the full address is empty, city and short address are used. Regular products use only their product name unless the sender explicitly enables item details.
 - `indatim` is the issue date/time and is sent as a valid Unix timestamp in milliseconds. `indati2m` is not sent for ordinary invoices; the official specification reserves it for exceptional cases such as invoices issued under articles 9 and 12 of the taxpayer-terminal law.
 - For a legal buyer (`tob = 2`), only its 11-digit economic code is sent in `tinb`; `bid` and `bpc` are omitted.
 - For a real buyer (`tob = 1`), the national code (`bid`) is normalized as a 10-digit numeric string. If a leading zero was lost in stored customer data, 8-9 digit values are left-padded and then checked with the Iranian national-code checksum before sending. A real buyer with an economic code is sent using `tinb` instead.
